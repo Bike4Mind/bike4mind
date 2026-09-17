@@ -3,13 +3,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
+// The options are recorded on `state` rather than left to the call history, because
+// the handler is built once at import and `clearAllMocks` erases that call.
+const baseApiMock = vi.hoisted(() => {
+  const state: { options?: unknown } = {};
+  const fn = vi.fn((options?: unknown) => {
+    state.options = options;
+    return {
+      use: function () {
+        return this;
+      },
+      post: (handler: unknown) => handler,
+    };
+  });
+  return { fn, state };
+});
+
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    use: function () {
-      return this;
-    },
-    post: (fn: unknown) => fn,
-  }),
+  baseApi: baseApiMock.fn,
 }));
 
 vi.mock('@server/middlewares/requireStripeWebhook', () => ({
@@ -79,6 +90,12 @@ describe('POST /api/subscriptions/cancel', () => {
     mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
   });
 
+  it('is jwtOnly, so a leaked API key cannot cancel and void invoices', () => {
+    // ApiKeyScope has no billing scope to gate a key on, so this flag is the only
+    // thing between any valid key and an irreversible cancel + invoice void.
+    expect(baseApiMock.state.options).toEqual({ auth: 'jwtOnly' });
+  });
+
   it.each(['past_due', 'unpaid', 'incomplete'] as const)(
     'cancels immediately and voids open invoices when Stripe reports %s',
     async liveStatus => {
@@ -88,7 +105,7 @@ describe('POST /api/subscriptions/cancel', () => {
       // fall back to cancel_at_period_end.
       mockFindCancelable.mockResolvedValue(subscriptionRow({ status: liveStatus }));
       mockRetrieve.mockResolvedValue({ id: 'sub_1', status: liveStatus });
-      mockCancel.mockResolvedValue({ id: 'sub_1', canceled_at: 1700000000 });
+      mockCancel.mockResolvedValue({ id: 'sub_1', status: 'canceled', canceled_at: 1700000000 });
       mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_1'], failed: [] });
       const { req, res } = makeReq();
 
@@ -100,14 +117,20 @@ describe('POST /api/subscriptions/cancel', () => {
       expect(mockUpdate).not.toHaveBeenCalled();
       expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_1');
       expect(res.statusCode).toBe(200);
-      expect(res._getJSONData()).toEqual({ priceId: 'price_pro', canceledAt: '2023-11-14T22:13:20.000Z' });
+      expect(res._getJSONData()).toEqual({
+        priceId: 'price_pro',
+        canceledAt: '2023-11-14T22:13:20.000Z',
+        // Stripe's status, which the client patches into its cache - the local row
+        // is only synced later by the webhook.
+        status: 'canceled',
+      });
     }
   );
 
   it('cancels at period end and still voids when the subscription is in good standing', async () => {
     mockFindCancelable.mockResolvedValue(subscriptionRow({ status: 'active' }));
     mockRetrieve.mockResolvedValue({ id: 'sub_1', status: 'active' });
-    mockUpdate.mockResolvedValue({ id: 'sub_1', canceled_at: 1700000000 });
+    mockUpdate.mockResolvedValue({ id: 'sub_1', status: 'active', canceled_at: 1700000000 });
     const { req, res } = makeReq();
 
     await (handler as HandlerFn)(req, res);
@@ -116,6 +139,8 @@ describe('POST /api/subscriptions/cancel', () => {
     expect(mockCancel).not.toHaveBeenCalled();
     expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_1');
     expect(res.statusCode).toBe(200);
+    // Still 'active': the plan runs to period end, so the UI keeps showing it.
+    expect(res._getJSONData()).toMatchObject({ status: 'active' });
   });
 
   it('trusts Stripe over a stale local status when choosing the branch', async () => {
@@ -145,7 +170,11 @@ describe('POST /api/subscriptions/cancel', () => {
     expect(mockUpdate).not.toHaveBeenCalled();
     expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_1');
     expect(res.statusCode).toBe(200);
-    expect(res._getJSONData()).toEqual({ priceId: 'price_pro', canceledAt: '2023-11-14T22:13:20.000Z' });
+    expect(res._getJSONData()).toEqual({
+      priceId: 'price_pro',
+      canceledAt: '2023-11-14T22:13:20.000Z',
+      status: 'canceled',
+    });
   });
 
   it('turns a rejected Stripe call into a 400 rather than a 500 that alarms', async () => {
@@ -167,6 +196,26 @@ describe('POST /api/subscriptions/cancel', () => {
     // Only user-facing rejections are remapped - a Stripe outage is still an incident.
     mockFindCancelable.mockResolvedValue(subscriptionRow());
     const stripeFault = new Stripe.errors.StripeAPIError({ statusCode: 500, message: 'Stripe is down' });
+    mockRetrieve.mockRejectedValue(stripeFault);
+    const { req, res } = makeReq();
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toBe(stripeFault);
+  });
+
+  it.each([
+    {
+      label: 'a revoked API key (authentication)',
+      makeError: () => new Stripe.errors.StripeAuthenticationError({ statusCode: 401, message: 'Invalid API key' }),
+    },
+    {
+      label: 'rate limiting',
+      makeError: () => new Stripe.errors.StripeRateLimitError({ statusCode: 429, message: 'Too many requests' }),
+    },
+  ])('leaves $label as a 5xx so it still trips the alarm', async ({ makeError }) => {
+    // Neither is the user's doing. A statusCode threshold cannot tell them from a
+    // real rejection, which is why the remap is class-based.
+    mockFindCancelable.mockResolvedValue(subscriptionRow());
+    const stripeFault = makeError();
     mockRetrieve.mockRejectedValue(stripeFault);
     const { req, res } = makeReq();
 

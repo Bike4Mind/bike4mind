@@ -1,5 +1,9 @@
 import { BadRequestError } from '@bike4mind/utils';
-import { SubscriptionSource, TERMINAL_SUBSCRIPTION_STATUSES } from '@client/lib/subscriptions/types';
+import {
+  SubscriptionSource,
+  TERMINAL_SUBSCRIPTION_STATUSES,
+  isDelinquentSubscriptionStatus,
+} from '@client/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { stripe } from '@server/integrations/stripe/stripe';
@@ -13,11 +17,6 @@ import { z } from 'zod';
 const CancelSubscriptionSchema = z.object({
   priceId: z.string(),
 });
-
-// Stripe statuses where the current period is not paid for. Cancelling at period
-// end would only buy the delinquent customer more dunning email for access they
-// have not paid for, so these are cancelled outright.
-const DELINQUENT_STATUSES = new Set(['past_due', 'unpaid', 'incomplete']);
 
 /**
  * Ask Stripe to stop billing `subscriptionId`.
@@ -35,14 +34,15 @@ async function cancelAtStripe(subscriptionId: string): Promise<Stripe.Subscripti
     if (TERMINAL_SUBSCRIPTION_STATUSES.has(live.status)) return live;
 
     // Stripe owns the live status; the local row can lag a failed renewal.
-    return DELINQUENT_STATUSES.has(live.status)
+    return isDelinquentSubscriptionStatus(live.status)
       ? await stripe.subscriptions.cancel(subscriptionId)
       : await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
   } catch (error) {
     // StripeError exposes `statusCode`, not `status`, so the shared error handler
     // cannot map it and reports a 500 - which trips the LiveOps alarm for what is
-    // a user-facing rejection. Genuine Stripe faults (>4xx) stay 5xx.
-    if (error instanceof Stripe.errors.StripeError && (error.statusCode ?? 500) < 500) {
+    // a user-facing rejection. Only a real rejection is remapped: an auth, rate
+    // limit or Stripe-side fault keeps its 5xx so it still alarms.
+    if (error instanceof Stripe.errors.StripeInvalidRequestError) {
       throw new BadRequestError(`Stripe rejected the cancellation: ${error.message}`);
     }
     throw error;
@@ -94,9 +94,12 @@ const handler = baseApi({ auth: 'jwtOnly' })
       req.logger.error(`Failed to list open invoices on cancelled subscription ${subscriptionId}`, { error });
     }
 
+    // `status` is Stripe's, not the lagging local row's: the client patches it into
+    // its cache so an immediate cancel stops showing as a live plan right away.
     const result: Partial<IUserSubscription> = {
       canceledAt: subscription.canceled_at ? new Date(subscription.canceled_at * 1000) : null,
       priceId,
+      status: subscription.status,
     };
 
     return res.status(200).json(result);

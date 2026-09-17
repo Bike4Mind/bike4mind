@@ -29,6 +29,21 @@ export const TERMINAL_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.Sta
 export const isCancellableSubscriptionStatus = (status: Stripe.Subscription.Status): boolean =>
   !TERMINAL_SUBSCRIPTION_STATUSES.has(status);
 
+/**
+ * Statuses where Stripe's billing is stuck: the current period is unpaid and
+ * retries (and dunning email) keep running. Cancelling at period end would only
+ * buy the customer more email for access they have not paid for, so these are
+ * cancelled outright - and they are what the UI warns about.
+ */
+export const DELINQUENT_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.Status> = new Set([
+  'past_due',
+  'unpaid',
+  'incomplete',
+]);
+
+export const isDelinquentSubscriptionStatus = (status: Stripe.Subscription.Status): boolean =>
+  DELINQUENT_SUBSCRIPTION_STATUSES.has(status);
+
 export interface ISubscription {
   ownerType: SubscriptionOwnerType;
   /** The document ID of the owner of the subscription */
@@ -75,6 +90,23 @@ export interface ISubscription {
   customCreditsPerCycle?: number;
 }
 
+/**
+ * Resolve `source` defensively for rows that may pre-date the source-field
+ * migration. Mongoose schema defaults only fire on insert, not on read of
+ * pre-existing documents, so a Subscription written before the schema change
+ * comes back with `source === undefined`. Treat unknown legacy rows as Stripe-
+ * managed (the historical default) UNLESS the row carries the synthetic
+ * `admin_granted_*` subscriptionId pattern from the legacy grant endpoint.
+ *
+ * Lives here rather than in a service because the repository needs it too, and
+ * the repository must not import a service that imports the repository.
+ */
+export function resolveSubscriptionSource(sub: Pick<ISubscription, 'source' | 'subscriptionId'>): SubscriptionSource {
+  if (sub.source) return sub.source;
+  if (sub.subscriptionId?.startsWith('admin_granted_')) return SubscriptionSource.AdminGrant;
+  return SubscriptionSource.Stripe;
+}
+
 export type SubscriptionMetadata =
   | z.infer<typeof StripeSubscriptionMetadataSchema>
   | {
@@ -118,7 +150,7 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
    * Find the user subscription to cancel for `priceId` - anything except the two
    * terminal states. Unlike findActiveUserSubscriptions this includes
    * past_due/unpaid/incomplete rows, so a delinquent user can still stop dunning.
-   * An active row wins outright.
+   * A Stripe-managed row wins over an admin grant, then active over stale.
    */
   findCancelableUserSubscriptionByPriceId(priceId: string, userId: string): Promise<ISubscription | null>;
 

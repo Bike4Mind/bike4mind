@@ -5,6 +5,7 @@ import {
   SubscriptionOwnerType,
   SubscriptionSource,
   TERMINAL_SUBSCRIPTION_STATUSES,
+  resolveSubscriptionSource,
 } from '@client/lib/subscriptions/types';
 import BaseRepository from '@bike4mind/database';
 import { IMongoDocument } from '@bike4mind/common';
@@ -323,25 +324,40 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
    * cancel attempt (Stripe rejects it, the user gets a real error) rather than
    * silently 400 the user who wants out.
    *
-   * An active row wins outright. A re-subscribe after a failed renewal leaves a
-   * stale past_due/unpaid row at the same price (nothing blocks the second
-   * checkout), and cancelling that one would leave the live subscription billing.
-   * Newest-first breaks any remaining tie: `findOne` returns whatever the query
-   * plan picked, and that is not an ordering anything can rely on.
+   * Precedence, highest first:
+   *   1. a Stripe-managed row at this price;
+   *   2. an active row over a stale delinquent one - a re-subscribe after a failed
+   *      renewal leaves the old row behind (nothing blocks the second checkout),
+   *      and cancelling that one would leave the live subscription billing;
+   *   3. newest first - `findOne` returns whatever the query plan picked, and that
+   *      is not an ordering anything can rely on.
+   *
+   * The admin grant is only returned when nothing Stripe-managed matches, so the
+   * route can still reject it with a truthful 400.
    */
   async findCancelableUserSubscriptionByPriceId(
     priceId: string,
     userId: string
   ): Promise<(ISubscription & IMongoDocument) | null> {
-    const scope = { ownerType: SubscriptionOwnerType.User, ownerId: userId, priceId };
-
-    const active = await this.model.findOne({ ...scope, status: 'active' }).lean({ virtuals: true });
-    if (active) return active;
-
-    return this.model
-      .findOne({ ...scope, status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] } })
+    const candidates = await this.model
+      .find({
+        ownerType: SubscriptionOwnerType.User,
+        ownerId: userId,
+        priceId,
+        status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] },
+      })
       .sort({ createdAt: -1 })
       .lean({ virtuals: true });
+
+    // A Stripe-managed row wins over an admin grant: the grant is not the thing
+    // Stripe is dunning, and grant-subscription only refuses a comp when an
+    // *active* row exists - so a support agent comping a delinquent user leaves
+    // an active grant beside the real past_due row at the same price. Returning
+    // the grant would 400 the user while their card kept getting charged.
+    const stripeManaged = candidates.filter(c => resolveSubscriptionSource(c) === SubscriptionSource.Stripe);
+    const pool = stripeManaged.length ? stripeManaged : candidates;
+
+    return pool.find(c => c.status === 'active') ?? pool[0] ?? null;
   }
 
   /**

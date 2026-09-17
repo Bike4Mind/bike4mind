@@ -849,7 +849,7 @@ Structured multi-step plans created by the QuestMaster agent.
 | GET | /api/subscriptions/own | Get own subscription |
 | POST | /api/subscriptions/subscribe | Subscribe to a plan |
 | POST | /api/subscriptions/change | Change plan |
-| POST | /api/subscriptions/cancel | Cancel subscription |
+| POST | /api/subscriptions/cancel | Cancel subscription. Session (JWT) auth only - API keys are rejected, since this can cancel outright and void open invoices |
 | GET | /api/subscriptions/stats | Subscription statistics |
 | GET | /api/subscriptions/[ownerType]/[ownerId] | Get subscription by owner |
 | GET | /api/credits/transactions | Credit transaction history |

@@ -94,13 +94,19 @@ const CreditsModal = () => {
   );
 
   // The row the Payment Issues card is about, so its Cancel button has a target.
-  // Same predicate the card has always used to decide it is shown.
+  // Deliberately narrower than the card's own display predicate: an
+  // `incomplete_expired` row shows the card but is terminal, and the cancel route
+  // will not return it - so the button would only ever produce a 400.
   const paymentIssueSubscription = useMemo(
-    () => (subscriptions.data ?? []).find(sub => sub.status !== 'active' && sub.status !== 'canceled'),
+    () =>
+      (subscriptions.data ?? []).find(sub => sub.status !== 'active' && isCancellableSubscriptionStatus(sub.status)),
     [subscriptions.data]
   );
 
-  const hasPaymentIssues = Boolean(paymentIssueSubscription);
+  const hasPaymentIssues = useMemo(
+    () => (subscriptions.data ?? []).some(sub => sub.status !== 'active' && sub.status !== 'canceled'),
+    [subscriptions.data]
+  );
 
   // Hide Pay As You Go tab when selected account is an organization
   const showPayAsYouGoTab = useMemo(() => {

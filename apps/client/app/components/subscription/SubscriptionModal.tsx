@@ -2,7 +2,7 @@ import { useCreateTeamModal } from '@client/app/components/organizations/CreateT
 import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings';
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
-import { isCancellableSubscriptionStatus } from '@client/lib/subscriptions/types';
+import { isCancellableSubscriptionStatus, isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
 import {
   SubscriptionPlanInterval,
   UserSubscriptionTier,
@@ -224,6 +224,7 @@ const SubscriptionModalContent = () => {
                   features={plan.features}
                   isPopular={plan.name === 'Professional'}
                   isCurrentPlan={!!isCurrentPlan}
+                  hasPaymentIssue={!!isCurrentPlan && isDelinquentSubscriptionStatus(isCurrentPlan.status)}
                   currentPlanDetails={isCurrentPlan}
                   priceId={plan.priceId}
                   actionButton={

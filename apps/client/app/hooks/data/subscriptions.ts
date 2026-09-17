@@ -32,7 +32,15 @@ export const useCancelSubscription = () => {
       queryClient.setQueryData<IUserSubscription[]>(['subscriptions'], oldData => {
         return (oldData ?? []).map(subscription => {
           if (subscription.priceId === userSubscription.priceId) {
-            return { ...subscription, canceledAt: userSubscription.canceledAt };
+            // `status` matters as much as `canceledAt`: an immediate cancel returns
+            // Stripe's 'canceled', and that is what drops the row out of the
+            // "still cancellable" filters. Re-fetching here instead would race the
+            // webhook that owns the local row and could put the stale status back.
+            return {
+              ...subscription,
+              canceledAt: userSubscription.canceledAt,
+              status: userSubscription.status ?? subscription.status,
+            };
           }
           return subscription;
         });
