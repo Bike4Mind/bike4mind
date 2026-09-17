@@ -12,6 +12,7 @@ import {
   isOverlayHandler,
   planEntryPoints,
   dedupeMessages,
+  bundleEntryPoints,
 } from '../check-lambda-bundle.mjs';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -80,6 +81,34 @@ describe('collectHandlers', () => {
   it('throws when a handler is not a string literal', () => {
     const read = () => 'const f = { handler: handlerPath };';
     expect(() => collectHandlers(['a.ts'], read)).toThrow(/not a string literal/);
+  });
+
+  // "handler" is a common word here and infra/ already carries `* Handler:` in
+  // JSDoc and `// Handler:` in a line comment. Lowercase any of those under a
+  // raw-text scan and an unrelated PR either hard-fails with a wrong diagnosis
+  // or picks up the comment's example path as a real entry point.
+  it.each([
+    ['line comment', '// TODO: fix the handler: naming here'],
+    ['jsdoc', '/**\n * handler: apps/client/server/docs.example\n */'],
+    ['trailing comment', ' // handler: not this one'],
+    ['comment shaped like a literal', "// example: handler: 'docs/foo.bar'"],
+  ])('ignores a handler mentioned in a %s', (_label, comment) => {
+    const read = () => `${comment}\nconst f = { handler: 'apps/client/server/real.handler' };`;
+    expect(collectHandlers(['a.ts'], read)).toEqual([
+      { handler: 'apps/client/server/real.handler', declaredIn: 'a.ts' },
+    ]);
+  });
+
+  it('leaves a // inside a string literal alone', () => {
+    const read = () => "const u = 'https://example.com'; const f = { handler: 'apps/client/server/real.handler' };";
+    expect(collectHandlers(['a.ts'], read)).toEqual([
+      { handler: 'apps/client/server/real.handler', declaredIn: 'a.ts' },
+    ]);
+  });
+
+  it('does not read a suffixed key as an entry point', () => {
+    const read = () => "const f = { myhandler: 'not/an.entrypoint' };";
+    expect(collectHandlers(['a.ts'], read)).toEqual([]);
   });
 });
 
@@ -174,6 +203,50 @@ describe('dedupeMessages', () => {
       { text: 'No matching export for "hasOwn"', where: 'node_modules/x/index.js:1', count: 2 },
       { text: 'Could not resolve "y"', where: '', count: 1 },
     ]);
+  });
+});
+
+// The helpers above are pure; these run the real esbuild pass, which is the part
+// that has to actually notice a broken dependency graph.
+describe('bundleEntryPoints', () => {
+  it('reports no errors and a module count when the graph resolves', async () => {
+    const root = tempTree({
+      'a.ts': "import { v } from './dep';\nexport const handler = () => v;",
+      'dep.ts': 'export const v = 1;',
+    });
+    const { errors, modules } = await bundleEntryPoints({ root, files: ['a.ts'], external: [] });
+    expect(errors).toEqual([]);
+    expect(modules).toBe(2);
+  });
+
+  it('surfaces an unresolvable import, which is how a dependency break arrives', async () => {
+    const root = tempTree({ 'a.ts': "import 'no-such-package-anywhere';\nexport const handler = () => 1;" });
+    const { errors } = await bundleEntryPoints({ root, files: ['a.ts'], external: [] });
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors[0].text).toMatch(/Could not resolve/);
+  });
+
+  it('lets an external through unresolved, which is what the external list is for', async () => {
+    const root = tempTree({ 'a.ts': "import 'no-such-package-anywhere';\nexport const handler = () => 1;" });
+    const { errors } = await bundleEntryPoints({
+      root,
+      files: ['a.ts'],
+      external: ['no-such-package-anywhere'],
+    });
+    expect(errors).toEqual([]);
+  });
+
+  // The reporting path the script runs on failure: raw esbuild messages through
+  // dedupeMessages, which is what turns a wall of repeats into the real count.
+  it('feeds dedupeMessages a shape it can collapse', async () => {
+    const root = tempTree({
+      'a.ts': "import 'no-such-package-anywhere';\nexport const handler = () => 1;",
+      'b.ts': "import 'no-such-package-anywhere';\nexport const handler = () => 2;",
+    });
+    const { errors } = await bundleEntryPoints({ root, files: ['a.ts', 'b.ts'], external: [] });
+    const distinct = dedupeMessages(errors);
+    expect(distinct.length).toBeLessThanOrEqual(errors.length);
+    expect(distinct.every(d => d.count >= 1)).toBe(true);
   });
 });
 

@@ -29,6 +29,14 @@ on:
       - '**/package.json'
       - pnpm-lock.yaml
       - pnpm-workspace.yaml
+      # The guard itself, because nothing else in CI reaches it: root `scripts/`
+      # is not a workspace package so `pnpm -r test` skips it, ci.yml runs only
+      # `--dir infra` and `--dir scripts/codemods`, and audit-gate.yml filters
+      # its own run to `audit-gate`. Without these three, a PR that edits the
+      # guard gets no signal from the 16 tests that are the reason to trust it.
+      - scripts/check-lambda-bundle.mjs
+      - scripts/__tests__/check-lambda-bundle.test.mjs
+      - .github/workflows/lambda-bundle-guard.yml
   # Also run on the merge queue so the check reports there if it later becomes a
   # required check. It earns its keep in the queue specifically: two dependency
   # PRs that each bundle fine alone can resolve to a version neither one tested

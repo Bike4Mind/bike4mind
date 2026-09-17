@@ -29,7 +29,9 @@ import esbuild from 'esbuild';
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // sst's node runtime always externalizes these two; everything else comes from
-// sst.config.ts so the two lists cannot drift.
+// sst.config.ts so the two lists cannot drift. Not readable from the vendored JS
+// package - the bundling lives in sst's Go binary - so this is read off that
+// binary's string table, next to the other esbuild option names it sets.
 export const SST_BUILTIN_EXTERNAL = ['sharp', 'pg-native'];
 
 // Handler paths under here are re-exported from a premium overlay and only
@@ -40,11 +42,22 @@ const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.cts', '.js', '.mjs', '.cjs',
 
 // Every handler in infra/ is a plain string literal of the form
 // `path/to/file.exportName`. collectHandlers asserts that stays true.
-const HANDLER_PATTERN = /handler:\s*(['"`])([^'"`\n]+)\1/g;
+// The lookbehind keeps a `somethinghandler:` key from being read as an entry
+// point; `Handler:` in another case never matches in the first place.
+const HANDLER_PATTERN = /(?<![A-Za-z])handler:\s*(['"`])([^'"`\n]+)\1/g;
+const ANY_HANDLER_KEY = /(?<![A-Za-z])handler:/g;
 
 // sst.config.ts registers these as external on EVERY Function via $transform.
 // Read rather than copied: a fourth entry added there has to reach this guard,
 // and a guard that silently missed one would redden on an unrelated PR.
+//
+// Per-Function externals are deliberately NOT applied: `infra/mcp.ts` keeps
+// `@bike4mind/mcp` / `@bike4mind/common` plus its `install` list out of its
+// bundle, and `infra/queues.ts` repeats `isolated-vm` that ALWAYS_EXTERNAL
+// already covers. Inlining those bundles more than a deploy does, which is more
+// resolution coverage - but it cuts the other way too: a package that only works
+// kept external would fail here and deploy fine. That is the false red to expect,
+// and this list is where to add the package when it happens.
 export function parseAlwaysExternal(configSource) {
   const match = /const ALWAYS_EXTERNAL = \[([^\]]*)\]/.exec(configSource);
   if (!match) {
@@ -71,16 +84,30 @@ export function listInfraSources(infraDir) {
   return out.sort();
 }
 
+// Comments have to be gone before either pattern runs. "handler" is a common
+// word in exactly this codebase, and infra/ already carries `* Handler:` in
+// JSDoc and `// Handler:` in a line comment - lowercase any one of those and a
+// raw-text scan either hard-fails with a wrong diagnosis or extracts the
+// comment's example path as a real entry point. esbuild is the tokenizer
+// because it is already the thing doing the bundling, and unlike a line filter
+// it handles JSDoc, trailing comments, and `//` inside a string literal.
+export function stripComments(source, file = 'infra.ts') {
+  return esbuild.transformSync(source, {
+    loader: file.endsWith('.tsx') ? 'tsx' : 'ts',
+    legalComments: 'none',
+  }).code;
+}
+
 // Returns [{ handler, declaredIn }], deduped, in declaration order.
 export function collectHandlers(sources, readFile = f => fs.readFileSync(f, 'utf8')) {
   const seen = new Map();
   for (const file of sources) {
-    const source = readFile(file);
+    const source = stripComments(readFile(file), file);
 
     // A handler built from a variable would be invisible to the pattern above and
     // would drop a Lambda out of this guard with nothing to show for it.
     const literalCount = [...source.matchAll(HANDLER_PATTERN)].length;
-    const totalCount = [...source.matchAll(/handler:/g)].length;
+    const totalCount = [...source.matchAll(ANY_HANDLER_KEY)].length;
     if (literalCount !== totalCount) {
       throw new Error(
         `${file} declares a handler that is not a string literal. This guard finds entry points by reading those literals, so a computed handler is a Lambda it cannot bundle. Either keep the literal or add the entry point to this guard explicitly.`
@@ -140,6 +167,44 @@ export function dedupeMessages(messages) {
   return [...byKey.values()];
 }
 
+// One esbuild pass over every entry point. Returns the raw esbuild messages and
+// the resolved-module count; the caller decides what that means.
+export async function bundleEntryPoints({ root, files, external }) {
+  const result = await esbuild
+    .build({
+      absWorkingDir: root,
+      entryPoints: files,
+      bundle: true,
+      // Nothing is written: the guard is a build, not an artifact producer, and a
+      // CI job that leaves the tree dirty is its own problem.
+      write: false,
+      metafile: true,
+      platform: 'node',
+      format: 'esm',
+      target: 'esnext',
+      mainFields: ['module', 'main'],
+      keepNames: true,
+      external,
+      // Required for path computation under `splitting`; `write: false` means it
+      // is never created. Under node_modules so a future `write: true` debug run
+      // still cannot dirty the tree.
+      outdir: path.join(root, 'node_modules', '.cache', 'lambda-bundle-check'),
+      logLevel: 'silent',
+      // Code splitting is what makes this affordable. Without it esbuild emits a
+      // standalone bundle per handler and spends ~3 minutes printing 2.5 GB of
+      // duplicated output; with it the same 9,902 modules are resolved and linked
+      // in ~2 seconds. The input graph is identical either way, which is the only
+      // part this guard reads.
+      splitting: true,
+    })
+    .catch(error => error);
+
+  return {
+    errors: result.errors ?? [],
+    modules: result.metafile ? Object.keys(result.metafile.inputs).length : 0,
+  };
+}
+
 async function main() {
   const infraDir = path.join(repoRoot, 'infra');
   const handlers = collectHandlers(listInfraSources(infraDir));
@@ -175,37 +240,12 @@ async function main() {
   console.log(`External: ${external.join(', ')}`);
 
   const started = Date.now();
-  const result = await esbuild
-    .build({
-      absWorkingDir: repoRoot,
-      entryPoints: entries.map(e => e.file),
-      bundle: true,
-      // Nothing is written: the guard is a build, not an artifact producer, and a
-      // CI job that leaves the tree dirty is its own problem.
-      write: false,
-      metafile: true,
-      platform: 'node',
-      format: 'esm',
-      target: 'esnext',
-      mainFields: ['module', 'main'],
-      keepNames: true,
-      external,
-      // Required for path computation under `splitting`; `write: false` means it
-      // is never created. Under node_modules so a future `write: true` debug run
-      // still cannot dirty the tree.
-      outdir: path.join(repoRoot, 'node_modules', '.cache', 'lambda-bundle-check'),
-      logLevel: 'silent',
-      // Code splitting is what makes this affordable. Without it esbuild emits a
-      // standalone bundle per handler and spends ~3 minutes printing 2.5 GB of
-      // duplicated output; with it the same 9,902 modules are resolved and linked
-      // in ~2 seconds. The input graph is identical either way, which is the only
-      // part this guard reads.
-      splitting: true,
-    })
-    .catch(error => error);
-
+  const { errors, modules } = await bundleEntryPoints({
+    root: repoRoot,
+    files: entries.map(e => e.file),
+    external,
+  });
   const elapsed = ((Date.now() - started) / 1000).toFixed(1);
-  const errors = result.errors ?? [];
 
   if (errors.length) {
     const distinct = dedupeMessages(errors);
@@ -223,7 +263,6 @@ async function main() {
     process.exit(1);
   }
 
-  const modules = Object.keys(result.metafile.inputs).length;
   console.log(`\nOK: ${entries.length} handlers bundled, ${modules} modules resolved, ${elapsed}s`);
 }
 
