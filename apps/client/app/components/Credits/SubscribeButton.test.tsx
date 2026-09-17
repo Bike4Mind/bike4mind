@@ -74,9 +74,9 @@ describe('SubscribeButton', () => {
   });
 
   it('offers Subscribe, not Change, when the only plan the user holds is delinquent', () => {
-    // /api/subscriptions/change resolves through the active-only lookup, so Change would
-    // 400 for this user. Subscribe is the truth - and is what they saw before the
-    // delinquent row was included in this list.
+    // The change affordance requires an active plan to change from, so this user gets
+    // Subscribe. Subscribe is the truth - and is what they saw before the delinquent
+    // row was included in this list.
     renderButton([subRow({ status: 'past_due' })], 'price_other');
 
     expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();
@@ -85,9 +85,8 @@ describe('SubscribeButton', () => {
   it.each(['trialing', 'paused'] as const)(
     'offers Subscribe, not Change, when the only plan the user holds is %s',
     status => {
-      // Same trap as the delinquent row: these are cancellable but not active, and
-      // change.ts still resolves through findActiveUserSubscriptions, so Change is a
-      // guaranteed 400 for them.
+      // Same rule as the delinquent row: these are cancellable but not active, and
+      // the button only offers Change against an active plan.
       renderButton([subRow({ status })], 'price_other');
 
       expect(screen.getByRole('button', { name: 'Subscribe' })).toBeEnabled();

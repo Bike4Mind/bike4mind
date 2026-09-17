@@ -5,6 +5,7 @@ import {
   SubscriptionOwnerType,
   SubscriptionSource,
   TERMINAL_SUBSCRIPTION_STATUSES,
+  pickDisplayedSubscription,
   resolveSubscriptionSource,
 } from '@client/lib/subscriptions/types';
 import BaseRepository from '@bike4mind/database';
@@ -358,6 +359,29 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
     const pool = stripeManaged.length ? stripeManaged : candidates;
 
     return pool.find(c => c.status === 'active') ?? pool[0] ?? null;
+  }
+
+  /**
+   * Find the one user subscription a plan change should act on: any non-terminal
+   * row, picked by `pickDisplayedSubscription`'s precedence (Stripe-managed
+   * before admin grant, active before stale, newest first) - so the route mutates
+   * provably the row the UI displays as the user's plan.
+   *
+   * Deliberately not `findActiveUserSubscriptions`: that is `status: 'active'`-only
+   * and hides the trialing/past_due/paused rows Stripe still accepts a price change
+   * on, which answered a legal request with a bare 400.
+   */
+  async findChangeableUserSubscription(userId: string): Promise<(ISubscription & IMongoDocument) | null> {
+    const candidates = await this.model
+      .find({
+        ownerType: SubscriptionOwnerType.User,
+        ownerId: userId,
+        status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] },
+      })
+      .sort({ createdAt: -1 })
+      .lean({ virtuals: true });
+
+    return pickDisplayedSubscription(candidates) ?? null;
   }
 
   /**

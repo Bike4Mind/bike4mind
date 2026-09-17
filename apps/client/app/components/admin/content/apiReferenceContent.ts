@@ -852,7 +852,7 @@ On the two routes above that redeem a share, \`[id]\` is the invite's **share to
 | GET | /api/subscriptions | List subscriptions |
 | GET | /api/subscriptions/own | Get own subscription |
 | POST | /api/subscriptions/subscribe | Subscribe to a plan |
-| POST | /api/subscriptions/change | Change plan |
+| PUT | /api/subscriptions/change | Change plan. Session (JWT) auth only - API keys are rejected, since this mutates a live subscription |
 | POST | /api/subscriptions/cancel | Cancel subscription. Session (JWT) auth only - API keys are rejected, since this can cancel outright and void open invoices |
 | GET | /api/subscriptions/stats | Subscription statistics |
 | GET | /api/subscriptions/[ownerType]/[ownerId] | Get subscription by owner |

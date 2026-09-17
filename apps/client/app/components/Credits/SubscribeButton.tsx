@@ -31,11 +31,10 @@ const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonP
     if (activeSubscription) {
       return 'cancel';
     } else if (cancellableSubscriptions.some(sub => sub.status === 'active')) {
-      // A plan change resolves through the active-only lookup in
-      // /api/subscriptions/change, so it is only on offer when the user actually
-      // holds an active plan to change from - a delinquent, trialing or paused row
-      // would 400 there. Those users fall through to Subscribe, the action they had
-      // before this list was widened to non-terminal rows.
+      // The affordance requires an active plan to change from; a delinquent,
+      // trialing or paused row falls through to Subscribe. The change route itself
+      // no longer requires an active row (it acts on the displayed plan), so this
+      // is the button's own rule rather than a mirror of that lookup.
       return 'change';
     } else {
       return 'subscribe';
