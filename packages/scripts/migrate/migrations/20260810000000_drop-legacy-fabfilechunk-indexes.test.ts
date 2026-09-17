@@ -23,6 +23,9 @@ let server: Awaited<ReturnType<typeof createMongoServer>>;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  // Settle autoIndex before beforeEach's dropDatabase: an unawaited background build can restore
+  // the keyset compound that the "refuses to drop" cases need absent. Same note as above.
+  await FabFileChunk.init();
 });
 
 afterAll(async () => {
