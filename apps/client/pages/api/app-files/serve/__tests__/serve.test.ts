@@ -77,6 +77,9 @@ describe('GET /api/app-files/serve/[...key]', () => {
     const call = s3Mock.commandCalls(GetObjectCommand)[0].args[0].input;
     expect(call.Key).toBe('abc.png'); // 'generated/' stripped
     expect(headers['Content-Type']).toBe('image/png');
+    // Inert-document backstop: kept in sync with the CDN CSP in infra/router.ts.
+    expect(headers['Content-Security-Policy']).toBe("default-src 'none'; sandbox");
+    expect(headers['X-Content-Type-Options']).toBe('nosniff');
     expect(s3Mock.commandCalls(GetObjectCommand).length).toBe(1);
   });
 
