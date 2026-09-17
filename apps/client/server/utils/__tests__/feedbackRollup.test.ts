@@ -57,6 +57,18 @@ describe('buildFeedbackRollupPipeline', () => {
     expect(() => buildFeedbackRollupPipeline({}, FROM, TO)).toThrow();
   });
 
+  it('throws when the only key is undefined - Mongoose would strip it, leaving an unconstrained match', () => {
+    expect(() => buildFeedbackRollupPipeline({ userId: undefined }, FROM, TO)).toThrow();
+  });
+
+  it('throws when every key of a multi-key scope is null or undefined', () => {
+    expect(() => buildFeedbackRollupPipeline({ userId: null, organizationId: undefined }, FROM, TO)).toThrow();
+  });
+
+  it('does not throw for a real falsy constraint like `false`', () => {
+    expect(() => buildFeedbackRollupPipeline({ someFlag: false }, FROM, TO)).not.toThrow();
+  });
+
   it('joins the FeedbackText sibling by _id using the plain localField/foreignField form, with no pipeline key', () => {
     const [, lookup] = stages({ userId: 'a' });
 

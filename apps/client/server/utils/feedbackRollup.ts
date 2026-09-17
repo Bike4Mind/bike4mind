@@ -60,10 +60,10 @@ export function buildFeedbackRollupPipeline(
   from: Date,
   to: Date
 ): FeedbackRollupPipeline {
-  // Fail closed at the seam an organization-wide rollup will reuse: an empty scope here would
-  // aggregate every tenant, and that guarantee must live at the builder, not in one caller's 401.
-  if (Object.keys(scope).length === 0) {
-    throw new Error('buildFeedbackRollupPipeline requires a non-empty scope');
+  // Fail closed at the seam an org-wide rollup will reuse: Mongoose strips null/undefined values,
+  // so a scope with none surviving would match like {} and aggregate every tenant.
+  if (Object.values(scope).every(value => value === null || value === undefined)) {
+    throw new Error('buildFeedbackRollupPipeline requires a scope with at least one non-null constraint');
   }
 
   return {

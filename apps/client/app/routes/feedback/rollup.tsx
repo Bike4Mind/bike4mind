@@ -89,7 +89,7 @@ const DimensionCard: FC<{ dimension: DimensionKey; label: string; data: Feedback
 );
 
 const FeedbackRollupPage: FC = () => {
-  useDocumentTitle('Feedback Rollup');
+  useDocumentTitle('Your feedback');
 
   const { from, to } = feedbackRollupRoute.useSearch();
   const { data, isPending, isError, error } = useFeedbackRollup({ from, to });
