@@ -28,7 +28,9 @@ export const groundedNoInventionEval = (
   systemPrompt: () => groundedSystemPrompt(rule),
   grade: (evalCase, reply) =>
     evalCase.expectation.kind === 'mustNotDenyPremise'
-      ? gradeMustNotDenyPremise(reply, evalCase.message)
+      ? // The message, not just the reply: both closed-world checks license the figures the QUESTION
+        // itself asserts, so a reply repeating one back is not scored as having supplied it.
+        gradeMustNotDenyPremise(reply, evalCase.message)
       : gradeMustAnswer(reply, evalCase.expectation.expected, evalCase.message),
   gradeEmpty: reason => ({ passed: false, reason, claims: [] }),
 });
