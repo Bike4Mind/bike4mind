@@ -915,6 +915,40 @@ describe('fetchAndParseURL page-chrome stripping', () => {
     expect(await fetchText(tablePage)).toContain(expected);
   });
 
+  it('keeps a self-contained callout block that is not nested inside a longer sentence', async () => {
+    // A "Related:"/"See also:" callout sitting in its own <div> is the whole short block, not a
+    // fragment nested inside a longer one - hasAdjacentProseText/hasProseAncestor only look outside
+    // the candidate, so neither one saves it. Only the strip-budget itself being landmark-only
+    // (see LANDMARK_CHROME_SELECTOR) stops "Related: " from clearing isControlStrip.
+    const page =
+      '<html><body><main>' +
+      '<p>The API supports pagination via the cursor parameter, which should be treated as an opaque token by clients.</p>' +
+      '<div>Related: <a href="/pagination">Pagination guide</a> and <a href="/cursors">Cursor tokens</a>.</div>' +
+      '<p>Rate limits are enforced per API key and reset on a rolling one-minute window.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Related: Pagination guide and Cursor tokens.');
+    expect(text).toContain('The API supports pagination via the cursor parameter');
+    expect(text).toContain('Rate limits are enforced per API key');
+  });
+
+  it('still strips a nav bar with a bare wordmark alongside its links (landmark tags keep the budget)', async () => {
+    const page =
+      '<html><body><nav>' +
+      '<a href="/a">Home</a><a href="/b">Docs</a><span>Acme</span>' +
+      '</nav>' +
+      '<p>Real prose paragraph describing the article content in detail.</p></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Home');
+    expect(text).not.toContain('Docs');
+    expect(text).not.toContain('Acme');
+    expect(text).toContain('Real prose paragraph describing the article content in detail.');
+  });
+
   it('does not strip a link pair sitting inside a list item, heading, or blockquote', async () => {
     const page =
       '<html><body><main>' +

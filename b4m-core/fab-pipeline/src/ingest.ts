@@ -288,8 +288,24 @@ const MAX_CONTROL_LABEL_CHARS = 40;
  * Requiring exactly zero (the previous rule) let a single stray word - a wordmark, a version
  * string, a bare "Menu" - defeat the whole strip and leak the nav into stored content. Budgeted
  * small and absolute, at wordmark scale rather than sentence scale.
+ *
+ * Only granted to a candidate matching `LANDMARK_CHROME_SELECTOR` - see there for why a `div`/
+ * `span`/`section` candidate does not get this budget at all.
  */
 const MAX_NON_CONTROL_TEXT_CHARS = 15;
+
+/**
+ * Tags and roles that self-declare as chrome regardless of what they contain - the only
+ * candidates `MAX_NON_CONTROL_TEXT_CHARS`'s wordmark-scale budget applies to. A `div`/`span`/
+ * `section`/`ul`/`ol`/`form` carries no such signal and is exactly where a CMS renders a short,
+ * genuine callout ("Related: <a>X</a> and <a>Y</a>."): granting it the same budget let a
+ * self-contained sentence-plus-links block clear `isControlStrip` on its own short lead-in text
+ * and get deleted whole, with nothing downstream able to tell it happened. Those tags instead
+ * fall back to requiring non-control text be separator punctuation only (see `isControlStrip`),
+ * same as every candidate did before this budget existed.
+ */
+const LANDMARK_CHROME_SELECTOR =
+  'nav, header, footer, aside, [role="navigation"], [role="banner"], [role="contentinfo"], [role="complementary"], [role="search"]';
 
 /**
  * How much of a container's nesting depth (from the document root, so a page with no `<main>`
@@ -404,7 +420,9 @@ function isControlStrip($: CheerioAPI, element: DomNode): boolean {
   }
 
   const outsideControls = $element.clone().find(CONTROL_SELECTOR).remove().end().text();
-  return outsideControls.replace(/[\s|\u00b7\u2022/,:;-]+/g, '').length <= MAX_NON_CONTROL_TEXT_CHARS;
+  const strippedOutsideControls = outsideControls.replace(/[\s|\u00b7\u2022/,:;-]+/g, '');
+  const budget = $element.is(LANDMARK_CHROME_SELECTOR) ? MAX_NON_CONTROL_TEXT_CHARS : 0;
+  return strippedOutsideControls.length <= budget;
 }
 
 /**
