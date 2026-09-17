@@ -66,6 +66,26 @@ export const surfaceBackground = (isDark: boolean, accent: Hue, secondary: Hue) 
     : `radial-gradient(ellipse 80% 45% at 50% -8%, ${alpha(accent.deep, 0.07)}, transparent 65%),
        radial-gradient(ellipse 60% 40% at 88% 108%, ${alpha(secondary.deep, 0.05)}, transparent 60%)`;
 
+/**
+ * Squared-off chip for a value a block states about itself - a count, a size, a
+ * target, the objective it is solving for. One style for all of them: a hairline
+ * and no fill, so a row of them reads as one set of facts rather than as tags
+ * competing for the eye.
+ *
+ * `isDark` is vestigial now that the hairline is a mode-aware token; the signature
+ * stays until the callers still passing it are updated.
+ */
+export const dataChipSx = (isDark: boolean) => ({
+  fontSize: '13px',
+  // Joy sizes a chip through these vars (its root styles read them), so bare
+  // minHeight/padding here would lose to them.
+  '--Chip-minHeight': '24px',
+  '--Chip-paddingInline': '8px',
+  borderRadius: '4px',
+  color: 'text.primary',
+  borderColor: 'divider',
+});
+
 export interface TickerStat {
   label: string;
   value: string;

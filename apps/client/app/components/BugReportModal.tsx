@@ -18,9 +18,26 @@ interface BugReportModalProps {
   className?: string;
   onClose: () => void;
   promptMeta: PromptMeta | null;
+  /** Turn/session pointers, passed explicitly rather than relying solely on the
+   *  promptMeta.questId/session.id fallback (absent for e.g. a user-only turn with no reply yet).
+   *  Untrusted pointers, not authorization keys - the server re-reads and ownership-checks
+   *  whichever is present before either survives onto the saved record (see feedbackContext.ts). */
+  sessionId?: string;
+  questId?: string;
+  /** Called after a successful submit (regardless of delivery outcome) so the caller can
+   *  invalidate its own session-scoped feedback cache and show the "Reported" annotation
+   *  immediately, without this modal knowing anything about react-query. */
+  onSubmitted?: () => void;
 }
 
-const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMeta }) => {
+const BugReportModal: React.FC<BugReportModalProps> = ({
+  open,
+  onClose,
+  promptMeta,
+  sessionId,
+  questId,
+  onSubmitted,
+}) => {
   const [bugReport, setBugReport] = useState('');
   const [feedbackType, setFeedbackType] = useState<FeedbackType>(FeedbackType.BUG);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -74,8 +91,11 @@ const BugReportModal: React.FC<BugReportModalProps> = ({ open, onClose, promptMe
         type: feedbackType,
         content: bugReport || 'No feedback details provided',
         promptMeta: promptMeta ?? {},
+        sessionId,
+        questId,
       });
       onClose();
+      onSubmitted?.();
       // Optional chaining: a rolling deploy can route this request to a server instance
       // still on the pre-delivery-field handler, where the record saved but `delivery` is
       // absent - fall back to the success toast (the pre-fix default) rather than throwing.

@@ -1129,6 +1129,9 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
               >
                 <iframe
                   srcDoc={previewHtml}
+                  // Opaque-origin, no scripts: rendered email HTML must not run with the
+                  // admin's app-origin session.
+                  sandbox=""
                   style={{
                     width: '100%',
                     height: '100%',
@@ -1364,6 +1367,9 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
               {previewHtml && (
                 <iframe
                   srcDoc={previewHtml}
+                  // Opaque-origin, no scripts: rendered email HTML must not run with the
+                  // admin's app-origin session.
+                  sandbox=""
                   style={{
                     width: '100%',
                     height: '100%',

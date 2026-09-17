@@ -205,6 +205,30 @@ describe('GET /api/data-lakes/:id/articles lake scoping', () => {
   });
 });
 
+describe('GET /api/data-lakes/:id/articles membership arm', () => {
+  it('stamps each returned file with which membership arm made it a member', async () => {
+    h.search.mockResolvedValue({
+      data: [
+        { id: 'meta-only', tags: [{ name: LAKE.datalakeTag }] },
+        { id: 'prefix-only', userId: LAKE.createdByUserId, tags: [{ name: 'acme:draft' }] },
+        { id: 'both', userId: LAKE.createdByUserId, tags: [{ name: LAKE.datalakeTag }, { name: 'acme:draft' }] },
+      ],
+      total: 3,
+      hasMore: false,
+    });
+    const { res, json } = makeRes();
+
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(makeReq(), res);
+
+    const payload = json.mock.calls[0][0];
+    expect(payload.data.map((f: { id: string; membershipArm?: string }) => [f.id, f.membershipArm])).toEqual([
+      ['meta-only', 'meta'],
+      ['prefix-only', 'prefix'],
+      ['both', 'both'],
+    ]);
+  });
+});
+
 describe('GET /api/data-lakes/:id/articles access-event audit', () => {
   it('records an event scoped to the resolved lake, with file ids from the result', async () => {
     h.search.mockResolvedValue({ data: [{ id: 'f1' }, { id: 'f2' }], total: 2, hasMore: false });

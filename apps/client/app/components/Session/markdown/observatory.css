@@ -1,0 +1,617 @@
+/* =========================================================================
+   Chat markdown - "Observatory" reading treatment.
+
+   Scope: every rule below is a descendant of `.b4m-md`, the class on the
+   assistant reply body in PromptReplies.tsx. Nothing here is global.
+
+   Light/dark keys off `[data-joy-color-scheme]`, which MUI Joy's
+   InitColorSchemeScript writes on <html> before hydration. Do NOT switch this
+   to `[data-color-mode]` - that is the unrelated attribute the @uiw editor
+   packages use, and it is never set on this app's <html>.
+
+   Every color below resolves from the `reading` palette group
+   (utils/themes/components/reading.ts) through the `--joy-palette-reading-*`
+   variables Joy emits for it. Change a reply color THERE, not here. The literal
+   after each var() is the same value as a fallback, and is what renders where
+   the Joy variables are absent - SSR before hydration, and tests that mount a
+   component without the app theme.
+
+   Non-ASCII is deliberate in this file: .css is outside the repo's ASCII
+   guards (which cover .ts/.tsx/.mts/.cts only), and the typography here wants
+   real characters.
+   ========================================================================= */
+
+/* -- tokens --------------------------------------------------------------
+   The bare `.b4m-md` selector carries the light values so the body still
+   renders if the color-scheme attribute is missing (SSR, tests). Joy's own
+   default light scheme is 'light', so this is the same answer, not a guess. */
+.b4m-md,
+[data-joy-color-scheme='light'] .b4m-md {
+  --b4m-md-surface: var(--joy-palette-reading-surface, #f4f7f9);
+  --b4m-md-surface-2: var(--joy-palette-reading-surface2, #eef3f9);
+  --b4m-md-line: var(--joy-palette-reading-line, rgba(16, 38, 56, 0.11));
+  --b4m-md-line-2: var(--joy-palette-reading-line2, rgba(16, 38, 56, 0.22));
+  --b4m-md-ink: var(--joy-palette-reading-ink, #0a2230);
+  --b4m-md-ink-2: var(--joy-palette-reading-ink2, rgba(10, 34, 48, 0.85));
+  --b4m-md-ink-3: var(--joy-palette-reading-ink3, rgba(10, 34, 48, 0.7));
+  --b4m-md-accent: var(--joy-palette-reading-accent, #0b6bcb);
+  --b4m-md-accent-soft: var(--joy-palette-reading-accentSoft, rgba(11, 107, 203, 0.07));
+  --b4m-md-accent-line: var(--joy-palette-reading-accentLine, rgba(11, 107, 203, 0.32));
+  --b4m-md-warn-soft: var(--joy-palette-reading-warnSoft, rgba(232, 163, 61, 0.14));
+}
+
+[data-joy-color-scheme='dark'] .b4m-md {
+  --b4m-md-surface: var(--joy-palette-reading-surface, #13181c);
+  --b4m-md-surface-2: var(--joy-palette-reading-surface2, #141b23);
+  --b4m-md-line: var(--joy-palette-reading-line, rgba(209, 228, 244, 0.08));
+  --b4m-md-line-2: var(--joy-palette-reading-line2, rgba(209, 228, 244, 0.15));
+  --b4m-md-ink: var(--joy-palette-reading-ink, #d1e4f4);
+  --b4m-md-ink-2: var(--joy-palette-reading-ink2, rgba(209, 228, 244, 0.85));
+  --b4m-md-ink-3: var(--joy-palette-reading-ink3, rgba(209, 228, 244, 0.7));
+  --b4m-md-accent: var(--joy-palette-reading-accent, #5aaaea);
+  --b4m-md-accent-soft: var(--joy-palette-reading-accentSoft, rgba(90, 170, 234, 0.11));
+  --b4m-md-accent-line: var(--joy-palette-reading-accentLine, rgba(90, 170, 234, 0.34));
+  --b4m-md-warn-soft: var(--joy-palette-reading-warnSoft, rgba(232, 163, 61, 0.1));
+}
+
+/* -- shape and fonts ------------------------------------------------------
+   Three faces doing three jobs: a serif to read in, sans for chrome (headings
+   below h2, table heads, labels), mono for data. The serif and mono are
+   self-hosted by next/font in app/layout.tsx and reach this file as CSS
+   variables; the sans is deliberately the app's own UI face, so rendered
+   markdown does not introduce a fourth typeface next to the surrounding chrome.
+
+   `.b4m-md` is a plain <div> that wraps the markdown and nothing else. It
+   deliberately does NOT sit on the reply bubble: the bubble is a Joy
+   <Typography>, whose emitted class would tie this one on specificity and win
+   on injection order, and its children include banners and media grids that
+   must not inherit reading typography.
+   Because of that placement this file needs no specificity bumps and no
+   !important anywhere. */
+.b4m-md {
+  --b4m-md-r: 10px;
+  --b4m-md-r-sm: 6px;
+
+  /* Three faces, three jobs: the app's own sans reads everything, the serif is
+     reserved for the two places a few words carry weight (top headings and a
+     quoted voice), and mono means code and nothing else.
+
+     Must be a real stack, not `inherit`: this element sets font-family from it,
+     so an inheriting value would resolve to itself. */
+  --b4m-md-font-body: var(
+    --joy-fontFamily-body,
+    'Libre Franklin',
+    -apple-system,
+    BlinkMacSystemFont,
+    'Segoe UI',
+    Roboto,
+    Helvetica,
+    Arial,
+    sans-serif
+  );
+
+  /* Self-hosted by next/font in app/layout.tsx. The fallback belongs INSIDE
+     var(): an undefined custom property makes the whole font-family invalid at
+     computed-value time, so a trailing comma-list would never be reached. The
+     variable is set on <html> server-side, but tests and any surface that
+     renders this CSS without the root layout rely on this. */
+  --b4m-md-font-display: var(--font-reading-serif, 'Source Serif 4'), Georgia, 'Iowan Old Style', serif;
+  --b4m-md-font-mono:
+    var(--font-reading-mono, 'JetBrains Mono'), ui-monospace, 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas',
+    'source-code-pro', monospace;
+
+  /* Container plumbing for the later rail work. Nothing reads it today - the
+     measure widening it used to drive is gone (see below) - but the context is
+     kept so a later branch can hang width-responsive treatments off it. */
+  container-type: inline-size;
+  container-name: b4m-md;
+
+  font-family: var(--b4m-md-font-body);
+  line-height: 1.68;
+  color: var(--b4m-md-ink-2);
+  hanging-punctuation: first last;
+  text-wrap: pretty;
+}
+
+.b4m-md > :first-child {
+  margin-top: 0;
+}
+
+.b4m-md > :last-child {
+  margin-bottom: 0;
+}
+
+/* -- prose ---------------------------------------------------------------- */
+.b4m-md p {
+  margin: 0 0 1.05em;
+  text-wrap: pretty;
+}
+
+/* An image-only paragraph, unwrapped to a <div> by markdownComponents.tsx
+   because <div> inside <p> is invalid nesting. It keeps the paragraph rhythm. */
+.b4m-md .b4m-md-figure {
+  margin: 0 0 1.05em;
+}
+
+/* The figure's caption is chrome, not prose. ImageContainer renders it as a Joy
+   <Typography>, which emits a bare <p>, and `.b4m-md p` above outspecifies Joy's
+   own emotion class - so without this the caption would be pulled into the
+   reading serif and given the paragraph's bottom margin. */
+.b4m-md .b4m-md-figure p {
+  margin: 0;
+  font-family: var(--b4m-md-font-body);
+  text-wrap: initial;
+}
+
+.b4m-md strong {
+  color: var(--b4m-md-ink);
+  font-weight: 620;
+}
+
+.b4m-md em {
+  font-style: italic;
+}
+
+.b4m-md a {
+  color: var(--b4m-md-accent);
+  text-decoration: none;
+  border-bottom: 1px solid var(--b4m-md-accent-line);
+}
+
+.b4m-md a:hover {
+  border-bottom-color: var(--b4m-md-accent);
+}
+
+.b4m-md del {
+  color: var(--b4m-md-ink-3);
+  text-decoration: line-through;
+  text-decoration-color: var(--b4m-md-line-2);
+  text-decoration-thickness: 1px;
+}
+
+.b4m-md mark {
+  background: var(--b4m-md-warn-soft);
+  color: inherit;
+  border-radius: var(--b4m-md-r-sm);
+  padding: 0 0.15em;
+}
+
+.b4m-md sup,
+.b4m-md sub {
+  font-size: 0.72em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+  font-family: var(--b4m-md-font-body);
+}
+
+.b4m-md sup {
+  top: -0.5em;
+}
+
+.b4m-md sub {
+  bottom: -0.25em;
+}
+
+.b4m-md hr {
+  border: 0;
+  border-top: 1px solid var(--b4m-md-line);
+  margin: 2em 0;
+}
+
+/* A model that writes `---` before `## Heading` gets two rules: its own, and the
+   one h2 draws above itself. Drop the written one rather than the heading's, so
+   every h2 keeps the same rule and spacing whether or not one was written. Same
+   problem the footnote section solves further down. */
+.b4m-md hr:has(+ h2) {
+  display: none;
+}
+
+/* -- headings -------------------------------------------------------------
+   h1-h3 come straight from the comp. h4-h6 extend the same idea: the scale
+   stops growing and starts receding, so a deep outline reads as structure
+   rather than as ever-smaller shouting. */
+.b4m-md :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--b4m-md-ink);
+  letter-spacing: -0.015em;
+  line-height: 1.22;
+  text-wrap: balance;
+}
+
+/* Optical sizing is left to the browser, which reads the serif's `opsz` axis
+   straight off font-size. Setting it by hand would mean font-variation-settings,
+   which resets every axis it does not name - including `wght`, silently
+   undoing the font-weight below. */
+.b4m-md h1 {
+  font-family: var(--b4m-md-font-display);
+  font-optical-sizing: auto;
+  font-size: 1.42em;
+  font-weight: 600;
+  margin: 2em 0 0.62em;
+}
+
+.b4m-md h2 {
+  font-family: var(--b4m-md-font-display);
+  font-optical-sizing: auto;
+  font-size: 1.2em;
+  font-weight: 600;
+  letter-spacing: -0.018em;
+  margin: 1.85em 0 0.6em;
+  padding-top: 0.72em;
+  border-top: 1px solid var(--b4m-md-line);
+}
+
+/* h3 and h4 are where a chat reply actually starts - a model writes `###` for a section,
+   not `#` - so they carry the structure most of the time. At 0.86em/0.8em they sat BELOW
+   body size, and at 660/640 they were within a hair of bold body text (`strong` is 620),
+   which is exactly what they read as. Now they are at least body size and clearly heavier,
+   and the tracking is the headings' own rather than the positive tracking that made them
+   look like small labels. */
+/* Serif, like h1 and h2: a chat reply starts at `###`, so this is the level that carries
+   structure most of the time, and it is where a change of voice actually earns its keep.
+   1.06em, not 1em: the serif has the smaller x-height of the two faces, so matching the
+   body's nominal size would leave it looking smaller than the text it heads. */
+.b4m-md h3 {
+  font-family: var(--b4m-md-font-display);
+  font-optical-sizing: auto;
+  font-size: 1.06em;
+  font-weight: 600;
+  margin: 1.6em 0 0.5em;
+}
+
+/* Sans, so it reads as subordinate to the serif above it. It cannot step down by size -
+   that would put it under the body text it heads - so the family is what separates them. */
+.b4m-md h4 {
+  font-family: var(--b4m-md-font-body);
+  font-size: 1em;
+  font-weight: 700;
+  margin: 1.4em 0 0.45em;
+}
+
+.b4m-md h5 {
+  font-family: var(--b4m-md-font-body);
+  font-size: 0.72em;
+  font-weight: 640;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--b4m-md-ink-2);
+  margin: 1.25em 0 0.4em;
+}
+
+.b4m-md h6 {
+  font-family: var(--b4m-md-font-body);
+  font-size: 0.68em;
+  font-weight: 600;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--b4m-md-ink-3);
+  margin: 1.2em 0 0.4em;
+}
+
+/* -- lists ----------------------------------------------------------------
+   Unordered markers are a hairline dash, not a bullet: at reading size a dot
+   is a blob and a dash is a rule, which is the language the rest of this
+   treatment speaks. Ordered markers recede to tertiary ink, because the
+   number is an index, not a claim. */
+.b4m-md ul,
+.b4m-md ol {
+  margin: 0 0 1.1em;
+  padding-left: 1.1em;
+}
+
+.b4m-md ul {
+  list-style: none;
+  padding-left: 1.25em;
+}
+
+.b4m-md ul > li {
+  position: relative;
+  margin-bottom: 0.5em;
+  text-wrap: pretty;
+}
+
+.b4m-md ul > li::before {
+  content: '';
+  position: absolute;
+  left: -1.05em;
+  top: 0.66em;
+  width: 5px;
+  height: 1px;
+  background: var(--b4m-md-ink-3);
+}
+
+.b4m-md ol > li {
+  margin-bottom: 0.5em;
+  padding-left: 0.25em;
+  text-wrap: pretty;
+}
+
+.b4m-md ol > li::marker {
+  color: var(--b4m-md-ink-3);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85em;
+}
+
+.b4m-md li > :last-child {
+  margin-bottom: 0;
+}
+
+.b4m-md li > ul,
+.b4m-md li > ol {
+  margin-top: 0.5em;
+}
+
+/* Task lists: GFM renders `- [x] done` as a checkbox inside the <li>. The
+   checkbox replaces the dash, so suppress the marker on exactly those rows. */
+.b4m-md li:has(> input[type='checkbox']) {
+  list-style: none;
+  /* The box is absolutely positioned against this li's padding box, so this
+     indent moves the text without moving the box: it is what sets the gap
+     between them. Raised from 0.1em when the box grew to 14px. */
+  padding-left: 0.3em;
+}
+
+.b4m-md li:has(> input[type='checkbox'])::before {
+  content: none;
+}
+
+.b4m-md li > input[type='checkbox'] {
+  appearance: none;
+  position: absolute;
+  /* Box, tick and both offsets are one proportional set: the left offset keeps
+     a constant gap to the text, and the top offset keeps the box optically
+     centred on the first line. Resizing the box means rescaling all of them. */
+  left: -1.35em;
+  top: 0.45em;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1px solid var(--b4m-md-line-2);
+  border-radius: 4px;
+  background: transparent;
+}
+
+.b4m-md li > input[type='checkbox']:checked {
+  border-color: var(--b4m-md-accent-line);
+  background: var(--b4m-md-accent-soft);
+}
+
+.b4m-md li > input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 0.6px;
+  width: 3.4px;
+  height: 7.8px;
+  border: solid var(--b4m-md-accent);
+  border-width: 0 1.7px 1.7px 0;
+  transform: rotate(42deg);
+}
+
+.b4m-md li:has(> input[type='checkbox']:checked) {
+  color: var(--b4m-md-ink-3);
+}
+
+/* -- blockquote -----------------------------------------------------------
+   A rule and a shift of register, not a tinted box: the quote is a different
+   voice, not a different importance - and here the face says so literally. The
+   serif is reserved for exactly two things: top headings, and a quoted voice. */
+.b4m-md blockquote {
+  /* A heading's bottom margin collapses against this one, so only a value above
+     it has any effect. Prose gets ~5px of free optical relief from its own
+     half-leading; a blockquote draws its rule at the box edge and a table sets
+     its head flush, so both read tighter than a paragraph at the same box gap.
+     1.1em restores parity. */
+  margin: 1.1em 0 1.3em;
+  padding: 0.1em 0 0.1em 1.15em;
+  border-left: 1px solid var(--b4m-md-line-2);
+  color: var(--b4m-md-ink-3);
+  font-family: var(--b4m-md-font-display);
+  font-style: italic;
+}
+
+.b4m-md blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.b4m-md blockquote strong {
+  color: var(--b4m-md-ink-2);
+}
+
+/* -- inline code ---------------------------------------------------------- */
+.b4m-md :not(pre) > code {
+  font-family: var(--b4m-md-font-mono);
+  font-size: 0.83em;
+  color: var(--b4m-md-ink);
+  background: var(--b4m-md-surface-2);
+  border: 1px solid var(--b4m-md-line);
+  padding: 0.08em 0.38em;
+  border-radius: var(--b4m-md-r-sm);
+  font-style: normal;
+}
+
+/* -- tables ---------------------------------------------------------------
+   Ruled above and below, never boxed: verticals fight the eye's left-to-right
+   scan, and a horizontal rule per row is all the separation a reader needs.
+   The per-column classes are set in markdownComponents.tsx, which is where the
+   numeric analysis has to live (CSS cannot look across rows). */
+.b4m-md .b4m-md-table-wrap {
+  /* Same reasoning as the blockquote's top margin, but a step wider: the head
+     row sets its cells flush to the box top (no padding-top), and they are the
+     smallest type in the file, so a table reads tighter than a quote at an
+     identical gap. */
+  margin: 1.6em 0 1.5em;
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+.b4m-md table {
+  width: 100%;
+  border-collapse: collapse;
+  border: 0;
+  font-family: var(--b4m-md-font-body);
+  line-height: 1.45;
+}
+
+/* Cell sizes are set per cell type rather than once on the table, so each one
+   resolves against the block's own text size. Sizing the table and then the
+   head cell made the two em values multiply: 0.68 of 0.84 is 0.57, which put
+   the column labels at about 9px - uppercase, letter-spaced and in the muted
+   tone. Nobody picked 0.57. Keep new cell sizes on this level for the same
+   reason. */
+.b4m-md tbody td,
+.b4m-md tbody th {
+  font-size: 0.84em;
+}
+
+.b4m-md thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.68em;
+  text-transform: uppercase;
+  letter-spacing: 0.11em;
+  color: var(--b4m-md-ink-3);
+  padding: 0 14px 9px;
+  border: 0;
+  border-bottom: 1px solid var(--b4m-md-line-2);
+  white-space: nowrap;
+}
+
+.b4m-md tbody td {
+  padding: 10px 14px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--b4m-md-line);
+  color: var(--b4m-md-ink-2);
+  vertical-align: top;
+}
+
+.b4m-md tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.b4m-md tbody tr:hover td {
+  background: var(--b4m-md-surface-2);
+}
+
+/* A column every body cell of which parses to exactly one number: tabular
+   figures and a magnitude bar under the value.
+
+   Every column reads left-aligned, numeric ones included. Right-alignment is
+   the classier setting for comparing magnitudes down a column, but it puts a
+   ragged left edge between a label and its own numbers, and these tables are
+   read a row at a time far more often than a column at a time.
+
+   analyseTable sets these classes on the head cell as well, so the label sits
+   over its own column. The face, the figures and the ink are how a datum is
+   presented and a head cell holds a word, so those stay scoped to tbody. Left
+   unscoped they also outrank `.b4m-md thead th` on specificity (0,2,0 against
+   0,1,2), which rendered a single head row in two typefaces, two inks and -
+   via numtext's own font-size - two sizes. */
+.b4m-md .b4m-md-num {
+  text-align: left;
+  white-space: nowrap;
+}
+
+.b4m-md tbody td.b4m-md-num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+  color: var(--b4m-md-ink);
+}
+
+.b4m-md tbody td.b4m-md-num {
+  position: relative;
+}
+
+/* The bar grows from the left, under the digit the value starts at, now that
+   the column is left-aligned - anchored right it would have floated away from
+   the number it measures. */
+.b4m-md tbody td.b4m-md-num[style*='--b4m-md-bar']::after {
+  content: '';
+  position: absolute;
+  left: 14px;
+  bottom: 5px;
+  width: calc(var(--b4m-md-bar) * 62px);
+  height: 2px;
+  border-radius: 2px;
+  background: var(--b4m-md-accent);
+  opacity: 0.42;
+}
+
+/* Numeric, but long enough that the >24-character guard classes it as prose.
+   Prose is what it then gets: no nowrap and no bar, so a wrapped cell does not
+   ladder away from its neighbours. The mono face is
+   deliberately not carried over - a sentence set in mono reads worse, and it
+   would put a third typeface in a table that otherwise uses two. Tabular
+   figures are kept, since the cell does still hold exactly one number. */
+.b4m-md .b4m-md-numtext {
+  text-align: left;
+  white-space: normal;
+}
+
+.b4m-md tbody td.b4m-md-numtext {
+  font-variant-numeric: tabular-nums;
+}
+
+/* The total row is ruled, not filled: a fill reads as a highlight, and a total
+   is a boundary. */
+.b4m-md tbody tr[data-b4m-md-total] td {
+  background: transparent;
+  border-top: 1px solid var(--b4m-md-line-2);
+  color: var(--b4m-md-ink);
+}
+
+.b4m-md tbody tr[data-b4m-md-total] strong {
+  color: var(--b4m-md-ink);
+}
+
+.b4m-md tbody tr[data-b4m-md-total] td.b4m-md-num {
+  color: var(--b4m-md-accent);
+}
+
+/* -- footnotes ------------------------------------------------------------
+   remark-gfm emits <section data-footnotes> with an <ol> of definitions and an
+   <hr> just above it. The whole block is apparatus, so it drops a size and a
+   step of ink rather than carrying body weight. */
+.b4m-md section[data-footnotes] {
+  margin-top: 2em;
+  padding-top: 1.1em;
+  border-top: 1px solid var(--b4m-md-line);
+  font-size: 0.86em;
+  color: var(--b4m-md-ink-3);
+}
+
+.b4m-md section[data-footnotes] > h2 {
+  font-family: var(--b4m-md-font-body);
+  font-size: 0.72em;
+  font-weight: 640;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--b4m-md-ink-3);
+  border-top: 0;
+  padding-top: 0;
+  margin: 0 0 0.8em;
+}
+
+.b4m-md section[data-footnotes] ol {
+  padding-left: 1.4em;
+}
+
+.b4m-md section[data-footnotes] li {
+  margin-bottom: 0.35em;
+}
+
+.b4m-md section[data-footnotes] p {
+  margin-bottom: 0.4em;
+}
+
+/* The <hr> remark-gfm inserts immediately before the footnote section would
+   double the section's own top rule. */
+.b4m-md hr + section[data-footnotes] {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.b4m-md .data-footnote-backref {
+  border-bottom: 0;
+}

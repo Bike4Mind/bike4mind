@@ -4,6 +4,7 @@ import type {
   IDataLakeRepository,
   IDataLakeBatchRepository,
   IFabFileRepository,
+  IFabFileChunkRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, type ManageActor } from './manageRule';
@@ -14,7 +15,12 @@ import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLa
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
-import { bestEffortIndexRemove, type RetrievalIndexPort } from './ports';
+import {
+  bestEffortIndexRemove,
+  bestEffortSetDriveConnectionEnabled,
+  type RetrievalIndexPort,
+  type DriveConnectionEnablePort,
+} from './ports';
 
 interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
   // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
@@ -43,8 +49,16 @@ interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
       | 'findIdsByDataLakeTag'
       | 'hasArchivedMemberExclusiveToDataLakeTag'
     >;
+    // REQUIRED, not optional: `retrievalIndex` is itself optional (a host without self-host
+    // OpenSearch wires neither), but a host that DOES wire `retrievalIndex` must wire this half
+    // too, or an archive/unarchive cycle leaves a stale confirm no later step ever clears (see
+    // bestEffortIndexRemove's docblock). Making it optional here let all three doors go unwired
+    // silently and compile clean; this turns a missing door into a compile error instead.
+    fabFileChunks: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>;
   };
   retrievalIndex?: RetrievalIndexPort;
+  /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
+  disableDriveConnection?: DriveConnectionEnablePort;
   logger?: { warn: (msg: string, ...args: unknown[]) => void };
 }
 
@@ -57,7 +71,7 @@ interface ArchiveDataLakeAdapters extends LakeConfigAuditAdapters {
 export const archiveDataLake = async (
   actor: ManageActor,
   dataLakeId: string,
-  { db, retrievalIndex, logger }: ArchiveDataLakeAdapters
+  { db, retrievalIndex, disableDriveConnection, logger }: ArchiveDataLakeAdapters
 ): Promise<IDataLakeDocument> => {
   const existing = await db.dataLakes.findById(dataLakeId);
   if (!existing) {
@@ -205,7 +219,13 @@ export const archiveDataLake = async (
   // Same scope the sweep ran on. findIdsByDataLakeTag is the id source rather than the flip's
   // count because it reports every member whatever its archived/deleted state, so a re-run after
   // a crashed attempt still hands the index the full set.
-  await bestEffortIndexRemove(retrievalIndex, scope, () => db.fabFiles.findIdsByDataLakeTag(scope), logger);
+  await bestEffortIndexRemove(
+    retrievalIndex,
+    scope,
+    () => db.fabFiles.findIdsByDataLakeTag(scope),
+    logger,
+    db.fabFileChunks
+  );
 
   // Step 3: settle to archived and reconcile stats from source (now 0 live files).
   // Stamped on the TERMINAL transition only (not the 'archiving' claim above): one stamp per
@@ -233,6 +253,8 @@ export const archiveDataLake = async (
       `This data lake moved to '${current.status}' while it was being archived; its files were archived but the archive did not complete`
     );
   }
+  // Stops the hourly poll from enqueueing this lake again - best-effort, see ports.ts.
+  await bestEffortSetDriveConnectionEnabled(disableDriveConnection, dataLakeId, logger);
   // Recorded on the terminal transition alongside the stamp, for the same reason and with the same
   // scope: one operator action, one audit row. Placed BEFORE the stats recompute so the archive is
   // attributed even if the recompute throws - the lake is already archived by this point either way.

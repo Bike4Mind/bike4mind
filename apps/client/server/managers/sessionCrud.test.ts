@@ -10,6 +10,11 @@ const {
   UserMock,
   userRepoUpdate,
   sessionRepoFindById,
+  sessionRepoFindByIdAndUserId,
+  accessibleBySpy,
+  favoriteRepoFind,
+  userRepoFindById,
+  defineAbilitiesForSpy,
 } = vi.hoisted(() => {
   const sessionSave = vi.fn().mockResolvedValue(undefined);
   // any: a Mongoose model mock that is both newable (regular function so it works with
@@ -43,6 +48,11 @@ const {
     UserMock,
     userRepoUpdate: vi.fn().mockResolvedValue(undefined),
     sessionRepoFindById: vi.fn(),
+    sessionRepoFindByIdAndUserId: vi.fn(),
+    accessibleBySpy: vi.fn(() => ({ ofType: () => ({}) })),
+    favoriteRepoFind: vi.fn(),
+    userRepoFindById: vi.fn(),
+    defineAbilitiesForSpy: vi.fn(),
   };
 });
 
@@ -59,16 +69,23 @@ vi.mock('@bike4mind/database', () => ({
   User: UserMock,
   mongoose: { Types: { ObjectId: class {} } },
   compareMongoIds: (a: unknown, b: unknown) => String(a) === String(b),
-  favoriteRepository: { find: vi.fn() },
+  favoriteRepository: { find: favoriteRepoFind },
   fabFileRepository: {},
   projectRepository: {},
-  userRepository: { update: userRepoUpdate },
+  agentRepository: {},
+  userRepository: { update: userRepoUpdate, findById: userRepoFindById },
+}));
+
+vi.mock('@server/auth/ability', () => ({
+  default: defineAbilitiesForSpy,
 }));
 
 vi.mock('@bike4mind/database/auth', () => ({
-  Session: { modelName: 'Session' },
+  // find is shared with SessionModelMock so tests can drive both bindings from one mock.
+  Session: { modelName: 'Session', find: SessionModelMock.find },
   sessionRepository: {
     findById: sessionRepoFindById,
+    findByIdAndUserId: sessionRepoFindByIdAndUserId,
     shareable: { findAllShared: vi.fn() },
   },
 }));
@@ -84,10 +101,10 @@ vi.mock('@bike4mind/observability', () => ({
 }));
 
 vi.mock('@casl/mongoose', () => ({
-  accessibleBy: () => ({ ofType: () => ({}) }),
+  accessibleBy: accessibleBySpy,
 }));
 
-import { getOrCreateSession, createSession } from './sessionCrud';
+import { getOrCreateSession, createSession, getFavoriteSessionByUser } from './sessionCrud';
 import {
   notifySessionCreated,
   logSessionCreatedEvent,
@@ -112,21 +129,53 @@ describe('sessionCrud', () => {
   });
 
   describe('getOrCreateSession', () => {
-    it('fetches the existing session and fires no creation side effects', async () => {
-      sessionRepoFindById.mockResolvedValueOnce({ id: 'existing', name: 'Existing' });
+    it('fetches an accessible existing session via an access-scoped lookup (owner/share/org)', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', name: 'Existing' });
 
-      const result = await getOrCreateSession({ sessionId: 'existing', user, logger });
+      const result = await getOrCreateSession({ sessionId: 'existing', user, ability: allowAbility, logger });
 
       expect(result.wasCreated).toBe(false);
       expect(result.sessionId).toBe('existing');
-      expect(sessionRepoFindById).toHaveBeenCalledWith('existing');
+      // access-scoped: filtered by _id AND accessibleBy(), never a bare findById
+      expect(SessionModelMock.findOne).toHaveBeenCalledWith(expect.objectContaining({ _id: 'existing' }));
+      expect(sessionRepoFindById).not.toHaveBeenCalled();
       expect(notifySessionCreated).not.toHaveBeenCalled();
       expect(logSessionCreatedEvent).not.toHaveBeenCalled();
     });
 
-    it('throws NotFoundError when an existing session id resolves to nothing', async () => {
-      sessionRepoFindById.mockResolvedValueOnce(null);
-      await expect(getOrCreateSession({ sessionId: 'missing', user, logger })).rejects.toThrow('Session not found');
+    it('scopes the lookup with the update verb, so a read-only share cannot continue the session', async () => {
+      SessionModelMock.findOne.mockResolvedValueOnce({ id: 'existing', name: 'Existing' });
+
+      await getOrCreateSession({ sessionId: 'existing', user, ability: allowAbility, logger });
+
+      // Quests are appended to this session and the retry path clears an existing quest's reply,
+      // so `read` here would let a read-only share mutate the owner's notebook.
+      expect(accessibleBySpy).toHaveBeenCalledWith(allowAbility, 'update');
+      expect(accessibleBySpy).not.toHaveBeenCalledWith(allowAbility, 'read');
+    });
+
+    it('throws NotFoundError when the caller has no access to the requested session (foreign session)', async () => {
+      // accessibleBy() filters the doc out -> findOne resolves null (same 404 as truly missing,
+      // so a caller cannot distinguish "not yours" from "does not exist")
+      SessionModelMock.findOne.mockResolvedValueOnce(null);
+      await expect(
+        getOrCreateSession({ sessionId: 'someone-elses', user, ability: allowAbility, logger })
+      ).rejects.toThrow('Session not found');
+    });
+
+    it('falls back to an owner-only lookup when no ability is supplied (e.g. the Slack path)', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce({ id: 'owned', name: 'Owned' });
+
+      const result = await getOrCreateSession({ sessionId: 'owned', user, logger });
+
+      expect(result.sessionId).toBe('owned');
+      expect(sessionRepoFindByIdAndUserId).toHaveBeenCalledWith('owned', 'user-1');
+      expect(sessionRepoFindById).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundError when the owner-only fallback finds nothing', async () => {
+      sessionRepoFindByIdAndUserId.mockResolvedValueOnce(null);
+      await expect(getOrCreateSession({ sessionId: 'not-owned', user, logger })).rejects.toThrow('Session not found');
     });
 
     it('creates a session, notifies clients, and defers analytics + last-notebook update', async () => {
@@ -188,6 +237,26 @@ describe('sessionCrud', () => {
     it('sets the user lastNotebookId when setLastNotebook is requested', async () => {
       await createSession('user-1', { name: 'My NB' }, allowAbility, { setLastNotebook: true });
       expect(UserMock.updateOne).toHaveBeenCalledWith({ _id: 'user-1' }, { lastNotebookId: 'new-session-id' });
+    });
+  });
+
+  describe('getFavoriteSessionByUser', () => {
+    beforeEach(() => {
+      favoriteRepoFind.mockResolvedValue([{ documentId: 'fav-session-1' }]);
+      userRepoFindById.mockResolvedValue({ id: 'user-1' });
+      defineAbilitiesForSpy.mockReturnValue(allowAbility);
+      SessionModelMock.find.mockReturnValue({ lean: vi.fn().mockResolvedValue([]) });
+    });
+
+    it('re-checks the callers current access instead of trusting the stored favorite row', async () => {
+      await getFavoriteSessionByUser('user-1');
+
+      expect(userRepoFindById).toHaveBeenCalledWith('user-1');
+      expect(defineAbilitiesForSpy).toHaveBeenCalledWith({ id: 'user-1' });
+      expect(accessibleBySpy).toHaveBeenCalledWith(allowAbility, 'read');
+
+      const query = SessionModelMock.find.mock.calls[0][0];
+      expect(query.$and).toEqual(expect.arrayContaining([{}, { _id: { $in: ['fav-session-1'] } }]));
     });
   });
 });

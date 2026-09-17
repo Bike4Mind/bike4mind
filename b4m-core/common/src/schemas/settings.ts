@@ -18,7 +18,13 @@ import {
   LAKE_CONFIG_AUDIT_RETENTION_FLOOR_DAYS,
   LAKE_CONFIG_AUDIT_RETENTION_MAX_DAYS,
 } from '../constants/lakeConfigAudit';
-import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT } from '../constants/forcedRetrieval';
+import {
+  FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
+  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+  FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+} from '../constants/forcedRetrieval';
+import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
+import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
 import {
   KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
   KB_SEARCH_MIN_RELEVANCE_PCT_DEFAULT,
@@ -36,6 +42,18 @@ import {
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/ScopedSettingTypes';
+
+/**
+ * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
+ * text-embedding-ada-002, 35 for text-embedding-3-small").
+ *
+ * Rendered rather than written out in prose because these numbers are expected to move - 35 is
+ * provisional until it is re-derived against a production lake - and a description that restates
+ * the table is a wrong number shown to operators the moment it drifts, with nothing failing.
+ */
+const forcedRetrievalFloorsBySpaceSummary = Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)
+  .map(([space, pct]) => `${pct} for ${space}`)
+  .join(', ');
 
 /**
  * Default text for the artifact-emission system prompt. Single source of truth used BOTH as the
@@ -144,6 +162,78 @@ export const HELP_CENTER_PROMPT = `HELP CENTER: Bike4Mind has a built-in Help Ce
 export const ABSTENTION_PROMPT = `When a request is underspecified or your sources do not cover it, say so and name what is missing. "I do not have enough to answer that" is a correct, high-value answer. Never invent facts about the user, their business, or their data, and never state a specific customer, competitor, deal, or figure as fact - or cite a source for it - unless your sources support it, even when the question assumes it.`;
 
 /**
+ * Default text for the web-search freshness nudge, and the `WebSearchFreshnessPrompt` admin
+ * setting's default.
+ *
+ * Unlike ABSTENTION_PROMPT / ARTIFACT_EMISSION_PROMPT / HELP_CENTER_PROMPT, this setting
+ * distinguishes an absent row from a cleared one. ChatCompletionProcess reads it 2-arg, so an
+ * absent row still falls back to this constant as the setting's registered default, but a cleared
+ * '' is returned verbatim and drops the section rather than reverting. The siblings are read 3-arg
+ * and collapse both cases to the constant. That divergence is deliberate - this section has no
+ * companion boolean, so clearing the field is the only off switch it has. Keep the setting's
+ * description in sync with that if either changes.
+ *
+ * Names no tool but `web_search`: the section is gated on web_search being offered, and web_fetch
+ * is an independent toggle that may well be off.
+ */
+export const WEB_SEARCH_FRESHNESS_PROMPT = `# WEB SEARCH AND FRESHNESS
+
+Your training data has a cutoff. The current date is supplied to you in this conversation's system context - treat it as authoritative, and assume anything time-sensitive may have changed since your training.
+
+Call \`web_search\` BEFORE answering when the answer depends on a fact that changes over time: current prices or rates, product availability or roadmap status, funding, organizational or personnel changes, published benchmarks or performance figures, competitive positioning, or anything the user frames as "current", "latest", "now", or "as of today". When a stale answer would mislead, search instead of answering from memory. When a search surfaces a specific page that matters, or the user names one, read that page directly rather than answering from the snippet.
+
+You do not need to search for stable knowledge (definitions, mathematics, established theory), or for questions answerable purely from this conversation or from documents already retrieved for you.
+
+When you report a time-sensitive fact, state what it is as of - the date of the source you used - and say plainly when you could not verify something and are answering from training data instead. Never present an unverified recollection as a current fact.`;
+
+/**
+ * Default text for the knowledge-base retrieval nudge, and the `KnowledgeBaseRetrievalPrompt`
+ * admin setting's default.
+ *
+ * The gap this closes: the tool prompt has a when-to-use section for the clock, for web search,
+ * for MCP and for agent delegation, and none for the user's own corpus. The
+ * `search_knowledge_base` description is entirely HOW to search ("Make ONE good search per
+ * distinct topic") and never WHEN, so on the optional path the model decides unaided - and over 30
+ * days of production it reached for the corpus on 20.1% of the turns it was offered on.
+ *
+ * Read 2-arg by ChatCompletionProcess, exactly as WEB_SEARCH_FRESHNESS_PROMPT is and unlike the
+ * 3-arg siblings: an absent row falls back to this constant as the registered default, but a
+ * cleared '' is returned verbatim and drops the section instead of reverting. Deliberate - the
+ * section has no companion boolean, so clearing the field is its only off switch, and that off
+ * switch is what makes it A/B-able without a deploy. Keep the setting's description in sync.
+ *
+ * Names no tool but `search_knowledge_base`, for the same reason the web-search section names no
+ * `web_fetch`: the companion `retrieve_knowledge_content` is paired in at build time but a session
+ * denylist can still strip it (ChatCompletionProcess warns on exactly that case), and instructing
+ * the model to call a tool it was not given makes it emit the call as leaked JSON text.
+ *
+ * The "do not search" paragraph is load-bearing, not padding. A when-to-retrieve nudge without a
+ * don't-retrieve clause buys retrieval on turns that need none - the same failure mode global
+ * forced retrieval already shows on out-of-corpus questions, reached by a different route. Three of
+ * its clauses are load-bearing for a specific co-resident path, not general hedging:
+ * - "from an attached document" - a small attached corpus is INLINED rather than deferred to
+ *   retrieval (`shouldDeferCorpusToRetrieval`), and forced retrieval deliberately steps aside on
+ *   an attached-files turn (`forcedRetrievalAbstention` emits nothing there). Without this clause
+ *   the section tells the model to go searching for content already sitting in its context.
+ * - "already been searched on this turn" - on a forced turn that found nothing,
+ *   `forcedRetrievalNoContextPrompt` instructs the model to say the library does not cover the
+ *   question. A nudge to search then invites a second identical query - a billed query embedding,
+ *   and a chance to talk itself out of a correct abstention.
+ * - the opening scope, "unless its content has been placed in this conversation" - the reason the
+ *   first paragraph does not simply claim the documents are invisible, which is false whenever a
+ *   corpus was inlined.
+ */
+export const KNOWLEDGE_BASE_RETRIEVAL_PROMPT = `# KNOWLEDGE BASE
+
+\`search_knowledge_base\` searches a library of documents the user has made available to you - their own uploads, and any shared or organization library they can reach. You cannot see what a document holds unless its content has been placed in this conversation or you search for it; file names and tags are labels, not content.
+
+Call \`search_knowledge_base\` BEFORE answering when that library would settle the question: anything about their organization, projects, customers, products, processes or people; a term, name, acronym or identifier that is not general public knowledge; a policy, decision, figure or date specific to them; or a question that assumes context this conversation never gave you. If you are about to answer in general terms a question the user means specifically, search first. A general-knowledge answer that sounds right is the failure this library exists to prevent.
+
+Do not search when the answer is already in front of you or out of scope: general knowledge (definitions, mathematics, established theory, public facts); anything answerable from this conversation, from an attached document, or from content already retrieved for you this turn; or a request to transform, summarize or reformat text the user has just supplied. If the library has already been searched on this turn, do not search it again for the same question - a repeat spends a round trip to return the same passages.
+
+When a search does not turn up what was asked for, say so plainly rather than filling the gap from training data, and never imply an answer came from the user's documents when it did not.`;
+
+/**
  * Default text for the formatting system message. Runtime fallback used by
  * `includeHardcodedSystemMessage` (b4m-core/utils/src/llm/utils.ts) when the `FormatPromptTemplate`
  * admin setting is blank; that setting's own default is intentionally '' - keep this the sole home.
@@ -164,6 +254,7 @@ export const SettingKeySchema = z.enum([
   'geminiDemoKey',
   'xaiApiKey',
   'moonshotApiKey',
+  'deepseekApiKey',
   'voyageApiKey',
   'FirecrawlApiKey',
   'FirecrawlApiUrl',
@@ -177,6 +268,8 @@ export const SettingKeySchema = z.enum([
   'ArtifactEmissionPrompt',
   'HelpCenterPrompt',
   'AbstentionPrompt',
+  'WebSearchFreshnessPrompt',
+  'KnowledgeBaseRetrievalPrompt',
   'UseFormatPrompt',
   'EnableQuestMaster',
   'EnableQuestMasterDefault',
@@ -195,11 +288,11 @@ export const SettingKeySchema = z.enum([
   'EnableLattice',
   'EnableLatticeDefault',
   'EnableDataLakes',
-  'EnableDataLakesDefault',
   'EnableDataLakeSlackAdd',
   'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
   'EnableDataLakeVectorSearch',
+  'EnableRetrievalSupersessionCollapse',
   'PauseLakeConvergence',
   'LakeConvergenceBulkChangeSharePct',
   'EnforceLakeReadGrants',
@@ -306,10 +399,14 @@ export const SettingKeySchema = z.enum([
   'defaultEmbeddingModel',
   'dataLakeSearchMaxFiles',
   'dataLakeSearchMaxChunks',
+  'dataLakeSearchMaxChunksPerFile',
   'forcedRetrievalCharBudget',
+  'lakeMemoryRecallK',
   'kbSearchDefaultResults',
   'kbSearchResultTokenBudget',
   'kbSearchMinRelevancePct',
+  'forcedRetrievalRelativeFloorPct',
+  'forcedRetrievalMinSimilarityPct',
 
   // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
   'dataLakeEmbeddingSpendEnabled',
@@ -399,7 +496,6 @@ export const SettingKeySchema = z.enum([
 
   // OPTIHASHI SETTINGS
   'EnableOptiHashi',
-  'EnableOptiHashiDefault',
   'EnableComputeSubmission',
   'EnableFamilyCompute',
   'EnableHybridCompute',
@@ -443,6 +539,7 @@ export const SettingKeySchema = z.enum([
   'modelDiscoveryAllowEgress',
   'modelDiscoveryPriceBandPct',
   'modelDiscoveryAutoRemap',
+  'modelDiscoveryProbeNewModels',
   // PR REPORT GENERATOR
   'prReportRepo',
   'prReportIdentityMap',
@@ -510,10 +607,12 @@ export const OrchestrationDefaultsSchema = z.object({
     'mermaid_chart',
   ]),
   /**
-   * Tool names explicitly forbidden. Enforced as a final subtraction in
-   * `pickEffectiveEnabledTools` - wins even over payload-pinned tools - so this
-   * is the defense-in-depth backstop for the case where an admin broadens
-   * `allowedTools` without realizing a parallel denylist is also needed.
+   * Tool names explicitly forbidden. Enforced in two places: as a final subtraction in
+   * `pickEffectiveEnabledTools` (wins even over payload-pinned tools), and - for the two
+   * delegation tools, which are injected as objects and never registered by name - at the
+   * dependency gate in agentExecutor (`delegationOffer` withholds `agentStore` /
+   * `dagDispatcher`). The name subtraction alone cannot reach those two; see
+   * agentExecutor.sessionToolPolicy.
    *
    * Seeded with every tool that mutates user data (the spec's
    * "anything tagged `mutates_user_data`"): destructive/overwriting filesystem
@@ -712,6 +811,16 @@ interface BaseSetting {
    * available-model list, theme). NEVER tag secrets or operational/internal config.
    */
   publicSafe?: boolean;
+  /**
+   * Opt-in: allow a NON-ADMIN authenticated caller to read this setting through
+   * GET /api/settings/fetch. Fail-closed and independent of `isSensitive`: that flag is
+   * opt-OUT, so an operational setting nobody remembered to tag (sreAgentConfig,
+   * secopsTriageConfig, contextTelemetryAlerts, prReportIdentityMap) was served to every
+   * user. Tag a setting here only when non-admin client code actually reads it.
+   * Experimental-group flags and `publicSafe` keys are readable already -- see
+   * `userReadableSettingKeys()` -- and do not need tagging.
+   */
+  userReadable?: boolean;
   /** Parent setting key - this setting is hidden in admin UI when the parent is off. */
   dependsOn?: SettingKey;
   /**
@@ -760,6 +869,18 @@ export const DATA_LAKE_SEARCH_MAX_FILES_DEFAULT = 5_000;
 export const DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT = 100_000;
 
 /**
+ * Most chunks one SOURCE DOCUMENT may contribute to a search's top-K. Unlike the two scan budgets
+ * above this is a diversity guard, not a cost rail: it bounds who occupies the result slots, not
+ * how far the query scans.
+ *
+ * `0` is a real, silent value meaning "no cap" - byte-identical to behavior before this setting
+ * existed - not "unset, use some other default". It ships disabled deliberately: crowding was
+ * measured absent on a 47-document corpus, so this is a lever for corpora large enough to show
+ * the problem, not a change to how retrieval behaves today.
+ */
+export const DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT = 0;
+
+/**
  * Data-lake embedding SPEND levers: defaults and hard rails, shared by the admin-settings
  * definitions below and resolveSpendLevers in the dataLakeService (imported there so the two
  * cannot drift). Unlike the scan budgets above, these govern money, so their semantics differ
@@ -785,13 +906,25 @@ export const DATA_LAKE_EMBEDDING_MAX_CALLS_PER_MINUTE_MAX = 10_000;
  * 120 calls/min permits ~3.1M tokens/min - several times the smallest paid embeddings tier. The two
  * levers are complementary: calls/min bounds RPM, this bounds TPM, and a call must fit both.
  *
- * Default is 60% of OpenAI's published Tier-1 embeddings quota (1M TPM), which is the floor across
- * the supported cloud providers. The other 40% is deliberate headroom for QUERY-side embedding,
- * which is exempt from this gate (see enforceEmbeddingSpendGate's doc comment): a retrieval query
- * must not queue behind a backfill. Operators on a higher tier raise it to their own dashboard
- * number, minus that same headroom.
+ * The default is deliberately LOW - it has to be safe on the smallest tier any deployment might
+ * be on, including self-hosts nobody here can see. It is not a claim about what any particular
+ * account can do, and reading it as one is the mistake to avoid: a provider tier is a property of
+ * the provider organization, so it cannot be derived from this codebase at all.
+ *
+ * The real number is measurable per deployment: Admin -> Settings -> AI -> Data Lake Cost
+ * Governance reads the configured provider's live ceiling (GET /api/admin/embedding-limits) and
+ * shows it beside this lever, so an operator sets this from their own measured quota rather than
+ * from a guess baked in here. Leave headroom below the measured ceiling for QUERY-side embedding,
+ * which is exempt from this gate (see enforceEmbeddingSpendGate) and shares the same per-model
+ * pool - a retrieval query must not queue behind a backfill.
  */
 export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_DEFAULT = 600_000;
+/**
+ * Share of a MEASURED provider ceiling the admin panel suggests for this lever. The remainder is
+ * the query lane. Lives here, next to the lever it advises on, so the suggestion and the default
+ * cannot drift apart into two different ideas of how much headroom is right.
+ */
+export const EMBEDDING_THROUGHPUT_SUGGESTED_SHARE = 0.6;
 export const DATA_LAKE_EMBEDDING_MAX_TOKENS_PER_MINUTE_MAX = 50_000_000;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_DEFAULT = 50;
 export const DATA_LAKE_VECTORIZE_CHUNK_BATCH_SIZE_MAX = 500;
@@ -815,14 +948,28 @@ export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_INDIVIDUAL_DEFAULT = 1;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_ORGANIZATION_DEFAULT = 5;
 export const DATA_LAKE_EMBEDDING_TIER_MULTIPLIER_MAX = 100;
 
-function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number } & BaseSetting) {
+function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: number; int?: boolean } & BaseSetting) {
   let numberSchema = z.coerce.number();
+  // Opt-in, not the factory default: several settings are genuine fractions (see
+  // ContextVerbatimWindowFraction), so integrality is a property of the setting rather than of
+  // "number setting". Where it IS set, it rejects at the write boundary instead of leaving a
+  // fractional value to be floored later by whichever reader happens to floor it.
+  if (config.int) numberSchema = numberSchema.int();
   if (config.min !== undefined) numberSchema = numberSchema.min(config.min);
   if (config.max !== undefined) numberSchema = numberSchema.max(config.max);
   return {
     ...config,
     type: 'number' as const,
-    schema: numberSchema.prefault(config.defaultValue ?? 0),
+    // A cleared field submits '', which z.coerce.number() reads as a schema-valid 0, silently
+    // defeating the undefined-only prefault; rewriting it (and a raw null) to undefined first
+    // restores the default. Only whitespace/null is rewritten, so a real 0 (AutoNameNotebook's
+    // "0 = disable") still passes through. prefault must stay INSIDE the preprocess: it
+    // substitutes only on the raw value it receives, so chaining it outside would feed the
+    // rewritten undefined into z.coerce.number() and fail with a NaN instead of defaulting.
+    schema: z.preprocess(
+      val => (val === null || (typeof val === 'string' && val.trim() === '') ? undefined : val),
+      numberSchema.prefault(config.defaultValue ?? 0)
+    ),
   };
 }
 
@@ -1414,6 +1561,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'ArtifactEmissionPrompt', order: 9 },
       { key: 'HelpCenterPrompt', order: 10 },
       { key: 'AbstentionPrompt', order: 11 },
+      { key: 'WebSearchFreshnessPrompt', order: 12 },
+      { key: 'KnowledgeBaseRetrievalPrompt', order: 13 },
     ],
   },
   EMBEDDING: {
@@ -1429,6 +1578,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'kbSearchDefaultResults', order: 5 },
       { key: 'kbSearchResultTokenBudget', order: 6 },
       { key: 'kbSearchMinRelevancePct', order: 7 },
+      { key: 'lakeMemoryRecallK', order: 8 },
+      { key: 'forcedRetrievalRelativeFloorPct', order: 9 },
+      { key: 'forcedRetrievalMinSimilarityPct', order: 10 },
+      { key: 'dataLakeSearchMaxChunksPerFile', order: 11 },
     ],
   },
   DATA_LAKE_COST: {
@@ -1480,6 +1633,13 @@ export const API_SERVICE_GROUPS = {
     description: 'Moonshot AI / Kimi API integration settings',
     icon: 'AutoAwesome',
     settings: [{ key: 'moonshotApiKey', order: 1 }],
+  },
+  DEEPSEEK: {
+    id: 'deepseekAPIService',
+    name: 'DeepSeek Service',
+    description: 'DeepSeek API integration settings',
+    icon: 'AutoAwesome',
+    settings: [{ key: 'deepseekApiKey', order: 1 }],
   },
   ANTHROPIC: {
     id: 'anthropicAPIService',
@@ -1621,7 +1781,6 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableOllamaDefault', order: 71 },
       { key: 'ollamaBackend', order: 72 },
       { key: 'EnableOptiHashi', order: 80 },
-      { key: 'EnableOptiHashiDefault', order: 81 },
       { key: 'EnableComputeSubmission', order: 82 },
       { key: 'EnableFamilyCompute', order: 83 },
       { key: 'optiMaxToolCalls', order: 84 },
@@ -1779,6 +1938,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'modelDiscoveryAllowEgress', order: 4 },
       { key: 'modelDiscoveryPriceBandPct', order: 5 },
       { key: 'modelDiscoveryAutoRemap', order: 6 },
+      { key: 'modelDiscoveryProbeNewModels', order: 7 },
     ],
   },
   RATE_LIMITING: {
@@ -1868,6 +2028,16 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.MOONSHOT.id,
     order: 1,
   }),
+  deepseekApiKey: makeStringSetting({
+    key: 'deepseekApiKey',
+    name: 'DeepSeek API Key',
+    defaultValue: '',
+    description: 'The global API Key for DeepSeek.',
+    isSensitive: true,
+    category: 'AI',
+    group: API_SERVICE_GROUPS.DEEPSEEK.id,
+    order: 1,
+  }),
   voyageApiKey: makeStringSetting({
     key: 'voyageApiKey',
     name: 'Voyage API Key',
@@ -1917,16 +2087,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 88,
   }),
-  EnableDataLakesDefault: makeBooleanSetting({
-    key: 'EnableDataLakesDefault',
-    name: 'Data Lakes: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, Data Lakes is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 89,
-    dependsOn: 'EnableDataLakes',
-  }),
   EnableDataLakeSlackAdd: makeBooleanSetting({
     key: 'EnableDataLakeSlackAdd',
     name: 'Data Lakes: Slack "@datalake add" path',
@@ -1954,7 +2114,7 @@ export const settingsMap = {
     name: 'Data Lakes: Lake memory profile (extraction)',
     defaultValue: false,
     description:
-      "Server-side gate for the lake memory producer - LLM extraction of a data lake's documents into a durable memory profile on ingest. Off by default (measurement rollout); the consumer that injects the profile is inert until this is on and a lake has been extracted.",
+      "Master gate for lake memory, on all three sides: LLM extraction of a data lake's documents into a durable memory profile, recall of that profile into chats grounded in the lake, and whether the per-lake opt-in is offered at all. Off by default (measurement rollout). Turning it off stops recall immediately and stops new extractions from being queued or picked up, though a run already in flight finishes its slice (bounded by the handler timeout). It is NOT destructive - each lake keeps its own opt-in and its built profile, so flipping this back on resumes where it left off. Erasing a profile is a separate, explicit per-lake action.",
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 91,
@@ -1969,6 +2129,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 92,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableRetrievalSupersessionCollapse: makeBooleanSetting({
+    key: 'EnableRetrievalSupersessionCollapse',
+    name: 'Data Lakes: Collapse superseded members before ranking',
+    defaultValue: false,
+    description:
+      'When a lake holds two generations of the same document (a re-upload, a Drive sync, a migration), rank only the newest and report the suppression. Off by default: the weakest identity tier is a bare file name, so two genuinely different documents sharing a name in one lake would collapse to one - turn this on only after checking the reported collapse counts on real lakes. Suppression is recoverable either way; a collapsed member is still reachable by id or name through retrieve_knowledge_content.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 97,
     dependsOn: 'EnableDataLakes',
   }),
   PauseLakeConvergence: makeBooleanSetting({
@@ -2013,9 +2184,9 @@ export const settingsMap = {
   EnforceLakeReadGrants: makeBooleanSetting({
     key: 'EnforceLakeReadGrants',
     name: 'Data Lakes: Enforce read-time grant resolution',
-    defaultValue: false,
+    defaultValue: true,
     description:
-      'Read-time grant cutover (#1673). OFF by default = report-only: the read gate resolves a persisted READER/org grant into an ephemeral membership view and logs where it WOULD change access ([lakeReadGrantCutover] lines), but the enforced decision stays the legacy owner/org/tag/entitlement/public rule so no one gains or loses access. NOTE: turning this ON is currently a NO-OP guarded by a source-level interlock (READ_GRANT_ENFORCEMENT_READY) - enforcement will not activate until the follow-up code (member-management write path + retrieval arm) lands and flips it, and a premature toggle just logs a warning and stays report-only. This is deliberate so the setting cannot half-enable a half-wired gate. Platform altitude on purpose: a one-time install-wide migration cutover, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
+      'Read-time grant resolution (#1673). ON is the shipped default: a persisted READER or ORG grant is resolved into the read decision, so a principal a lake was shared with can browse it, open it and ground on it. Resolution is purely ADDITIVE (legacy OR grant), so it takes no access away; this arm contains an ORG grant to the granting org, and expired rows never resolve. This is the standing KILL SWITCH for that arm, not a migration phase: turning it OFF returns to report-only, where the gate still resolves grants and logs where they WOULD change access ([lakeReadGrantCutover] lines) but the enforced decision falls back to the legacy owner/org/tag/entitlement/public rule - so those log lines are the diagnostic for a lake someone can no longer reach while the switch is off. Platform altitude on purpose: install-wide, not a per-lake lever. Tag and entitlement grants always resolve live and are never affected by this flag; only persisted reader/org rows are gated by it.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 94,
@@ -2291,6 +2462,7 @@ export const settingsMap = {
   }),
   DefaultChunkSize: makeNumberSetting({
     key: 'DefaultChunkSize',
+    userReadable: true,
     name: 'Default Chunk Size',
     // Must equal the chunker's own default, or a reprocess driven through the UI (which sends this
     // as an explicit chunkSize override) produces a different granularity than one driven through
@@ -2387,6 +2559,24 @@ export const settingsMap = {
     category: 'AI',
     order: 11,
   }),
+  WebSearchFreshnessPrompt: makeStringSetting({
+    key: 'WebSearchFreshnessPrompt',
+    name: 'Web Search Freshness Prompt',
+    defaultValue: WEB_SEARCH_FRESHNESS_PROMPT,
+    description:
+      'System prompt telling the model when to reach for web_search rather than answer from training data, and to state the as-of date of any time-sensitive fact. Injected only when the web_search tool is offered for the request - a model instructed to search without a search tool tends to claim it searched. Clearing this field turns the section OFF rather than restoring the built-in default, and it is the only off switch this section has; to get the stock wording back, paste it in. A change is not instantaneous: the settings cache is per-instance, so it applies immediately on the instance that served the change and within ~5 min (one cache TTL) everywhere else. After an upgrade, diff a saved copy against the built-in default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
+    category: 'AI',
+    order: 12,
+  }),
+  KnowledgeBaseRetrievalPrompt: makeStringSetting({
+    key: 'KnowledgeBaseRetrievalPrompt',
+    name: 'Knowledge Base Retrieval Prompt',
+    defaultValue: KNOWLEDGE_BASE_RETRIEVAL_PROMPT,
+    description:
+      'System prompt telling the model when to reach for search_knowledge_base rather than answer from training data, and when NOT to. Injected only when the search_knowledge_base tool is offered for the request - a model instructed to search a corpus it has no tool for tends to claim it searched. Clearing this field turns the section OFF rather than restoring the built-in default, and it is the only off switch this section has; to get the stock wording back, paste it in. A change is not instantaneous: the settings cache is per-instance, so it applies immediately on the instance that served the change and within ~5 min (one cache TTL) everywhere else. After an upgrade, diff a saved copy against the built-in default: a saved copy pins the wording from whenever it was saved and will not pick up fixes made since.',
+    category: 'AI',
+    order: 13,
+  }),
   UseFormatPrompt: makeBooleanSetting({
     key: 'UseFormatPrompt',
     name: 'Use Format Prompt',
@@ -2405,6 +2595,7 @@ export const settingsMap = {
   }),
   pricePerCredit: makeNumberSetting({
     key: 'pricePerCredit',
+    userReadable: true,
     name: 'Price Per Credit',
     defaultValue: 50,
     description: 'The price per credit for purchasing credits.',
@@ -2491,6 +2682,9 @@ export const settingsMap = {
     defaultValue: 10000,
     description: 'Credits to give to the referred user.',
     category: 'Referrals',
+    // ReferralModal renders this for every non-admin sender - no secret, just the number
+    // displayed in the "invited person gets N credits" line.
+    userReadable: true,
   }),
   EnableReferralToEmail: makeBooleanSetting({
     key: 'EnableReferralToEmail',
@@ -2682,8 +2876,11 @@ export const settingsMap = {
   }),
   MaxFileSize: makeNumberSetting({
     key: 'MaxFileSize',
+    userReadable: true,
     name: 'Max File Size',
     defaultValue: 30,
+    min: 1, // clearing the field stores '', which z.coerce.number() reads as 0 - without a floor
+    // that 0 passes validation as a real limit and every upload gets refused
     description: 'The maximum file size allowed for uploads in MB.',
     category: 'Knowledge',
     group: API_SERVICE_GROUPS.KNOWLEDGE.id,
@@ -2790,6 +2987,7 @@ export const settingsMap = {
   }),
   enforceCredits: makeBooleanSetting({
     key: 'enforceCredits',
+    userReadable: true,
     name: 'Enforce Credits',
     // Self-host runs on the operator's own LLM keys with no billing stack (Stripe is
     // not part of the open core), so metering defaults OFF there; hosted stays ON.
@@ -2814,6 +3012,7 @@ export const settingsMap = {
   }),
   enableTeamPlan: makeBooleanSetting({
     key: 'enableTeamPlan',
+    userReadable: true,
     name: 'Enable Team Plan',
     defaultValue: false,
     description: 'Whether to enable team plans',
@@ -2923,6 +3122,10 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.OPENAI.id,
     order: 8,
+    // useSystemPromptFiles() reads this by name with no admin guard - it lists file names,
+    // not a secret. The server independently resolves it when composing the prompt, so this
+    // read only affects what the non-admin UI displays.
+    userReadable: true,
   }),
   OpenWeatherKey: makeStringSetting({
     key: 'OpenWeatherKey',
@@ -3083,6 +3286,7 @@ export const settingsMap = {
   }),
   MaxContentLength: makeNumberSetting({
     key: 'MaxContentLength',
+    userReadable: true,
     name: 'Max Content Length',
     defaultValue: 50000,
     description: 'The maximum character length for file content displayed in workbench (truncated if larger).',
@@ -3250,11 +3454,22 @@ export const settingsMap = {
   }),
   defaultEmbeddingModel: makeStringSetting({
     key: 'defaultEmbeddingModel',
+    userReadable: true,
     name: 'Default Embedding Model',
     // Self-host with a local Ollama server and no cloud key defaults to a local embedder so RAG
-    // works keyless out of the box; cloud deployments keep the OpenAI default. See embedding.ts.
+    // works keyless out of the box; every cloud stage keeps the OpenAI default. Deliberately
+    // stage-neutral on cloud: this value is bundled into the browser too, and a keyless stage's
+    // Bedrock fallback is resolved at the embedding seam instead. See embedding.ts.
     defaultValue: defaultEmbeddingModelForEnv(),
-    description: 'The default embedding model to use',
+    description:
+      'The default embedding model to use. Changing it changes the SCALE of every similarity score ' +
+      'in the system, so relevance floors do not carry across: a floor tuned for one model can sit ' +
+      'above the entire range of another and reject everything. The server handles this for you ' +
+      'on the floors it ships, applying the value measured for whichever model your documents are ' +
+      'actually embedded with - but if you have set Forced Retrieval Absolute Floor by hand, ' +
+      're-measure it after changing this. Existing documents keep their old vectors and are only ' +
+      'comparable to a query embedded the same way, so a change here needs a re-embed to take full ' +
+      'effect; until then each set of documents is searched with the model it was indexed under.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     options: [
@@ -3276,8 +3491,13 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 2,
-    // A scan budget an org/owner/lake may tighten below the platform ceiling (#1661 org/lake rungs).
-    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+    // A scan budget an org/owner may tighten below the platform ceiling. No Lake rung (#2624): one
+    // search is not scoped to one lake - resolveRetrievalLakeScope hands the scan EVERY lake the
+    // caller can reach as a single dataLakeTags array and the scan walks that whole set in one pass,
+    // so there is no single lakeId for a narrower rung to key on. The rung was declared here
+    // speculatively and no caller ever resolved it, so a Lake-scoped override was silently inert.
+    // Reinstating it needs per-lake sub-budgets in the scan first, not just this line.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   dataLakeSearchMaxChunks: makeNumberSetting({
     key: 'dataLakeSearchMaxChunks',
@@ -3289,7 +3509,44 @@ export const settingsMap = {
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 3,
-    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+    // Same rungs, and the same reason for no Lake rung, as dataLakeSearchMaxFiles above (#2624).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  dataLakeSearchMaxChunksPerFile: makeNumberSetting({
+    key: 'dataLakeSearchMaxChunksPerFile',
+    name: 'Data Lake Search Max Chunks Per Document',
+    defaultValue: DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
+    min: 0,
+    description:
+      'Most chunks from any ONE source document a data-lake semantic search may return in its ' +
+      'top-K. A diversity guard for CONTESTED slots: where several documents answer the question, ' +
+      'it stops the best-scoring one from taking slots the others could have filled. It is NOT a ' +
+      'fix for severe crowding - the cap redistributes only among the candidates retrieval ' +
+      'already returned, so a document that supplies enough of the top-scoring chunks to fill ' +
+      'that pool on its own is one the cap cannot change at all. On a corpus of book-length ' +
+      'documents, expect enabling this to change little beyond widening the vector-search ' +
+      'request. 0 (default) disables the cap, ' +
+      'byte-identical to behavior before this setting existed. The cap never SHRINKS a result set - ' +
+      'once the spread-out picks are in, any slots still open are backfilled with the highest-' +
+      'scoring chunks the cap held back, so a lake whose only match is one document still returns ' +
+      'a full top-K. A value at or above the result count is also a no-op, since nothing can ever ' +
+      "be held back. Below it, each retrieval stream's candidate pool is widened to a fixed " +
+      'multiple of the result count so the cap has a spread to choose from. The scanned corpus ' +
+      'itself does not grow (that is bounded separately), but the vector-search backends are ' +
+      'asked for that many more matches, and a larger in-memory ranking pool costs some CPU. 2-3 ' +
+      'is the useful range; 1 serves one passage per document, which suits a corpus of many short ' +
+      'documents and starves a question whose answer spans one long one. The chat knowledge-base ' +
+      'path ranks more passages than it serves, so it applies the cap a second time at the count ' +
+      'it actually serves - otherwise the spread-out picks, which are by definition the lowest-' +
+      'scoring ones admitted, would land in the passages that path discards.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 11,
+    // Organization/Owner only, no Lake rung - same reason as dataLakeSearchMaxFiles/MaxChunks
+    // (#2624). The cap is enforced at a merge whose pool spans EVERY lake the caller can reach in
+    // one pass, so there is no single lakeId for a narrower rung to key on and a Lake-scoped
+    // override would be silently inert. Reinstating it needs per-lake sub-budgets in the scan.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   forcedRetrievalCharBudget: makeNumberSetting({
     key: 'forcedRetrievalCharBudget',
@@ -3309,12 +3566,18 @@ export const settingsMap = {
       'saturating on every turn against a 47-document lake, so this is the binding constraint on ' +
       'how much of a corpus reaches the model - not the relevance floor. Raising it admits more ' +
       'passages at the cost of prompt tokens and latency on every Data-Lake turn; it is NOT ' +
-      'automatically better, since more context can dilute ranking. Platform-only for now: this ' +
-      'read does not go through the scoped-settings resolver, so a `settableAt` block here would ' +
-      "be inert metadata at best and could arm the resolver's fail-loud owner check at worst.",
+      'automatically better, since more context can dilute ranking. Overridable per organization ' +
+      'and per owner, the same altitude as the two relevance floors resolved alongside it on the ' +
+      'same turn.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 4,
+    // Same rungs, and the same absent Lake rung, as the two floors below: one turn scans an
+    // uncapped SET of lakes into a single pool, so no single lake can key a narrower rung.
+    // MUST stay in sync with the read path - `settableAt` is metadata only the scoped resolver
+    // honors, so this block is load-bearing only while readForcedRetrievalSettings
+    // (ChatCompletionFeatures.ts) resolves this key through resolveScopedSettingValues (#2572).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   kbSearchDefaultResults: makeNumberSetting({
     key: 'kbSearchDefaultResults',
@@ -3333,14 +3596,17 @@ export const settingsMap = {
       "setting's own value is then unused there, though it still governs the keyword-search " +
       'fallback, and the count served if token pricing itself fails). Does NOT raise the ' +
       "tool's hard ceiling of 10 passages per call - a model that reads max_results up to 10 " +
-      "from its own tool schema won't ask for more than that regardless of this setting.",
+      "from its own tool schema won't ask for more than that regardless of this setting. " +
+      'A change is not instantaneous: the settings cache is per-instance, so it applies immediately ' +
+      'on the instance that served the change and within ~5 min (one cache TTL) everywhere else.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 5,
     // Caller altitude (#1955): a knowledge-base search spans a mixed multi-lake corpus plus the
     // caller's own/shared files (see the "MIXED corpus" comment on trySemanticKbSearch's lakeIds
-    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on -
-    // unlike dataLakeSearchMaxFiles/MaxChunks below, which scan one lake at a time.
+    // in knowledgeBaseSearch/index.ts), so there is no single lake for a Lake rung to key on. The
+    // same turned out to be true of dataLakeSearchMaxFiles/MaxChunks below, which were believed to
+    // scan one lake at a time and do not: they lost their Lake rung in #2624.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   kbSearchResultTokenBudget: makeNumberSetting({
@@ -3364,7 +3630,9 @@ export const settingsMap = {
       'chunked smaller no longer silently returns less material for the same setting. 0 (default) ' +
       'disables it: search_knowledge_base then serves exactly kbSearchDefaultResults passages, ' +
       'unchanged from before this setting existed. The FIRST matching passage is always returned ' +
-      'even if it alone exceeds the budget - a search that found something never returns nothing.',
+      'even if it alone exceeds the budget - a search that found something never returns nothing. ' +
+      'A change is not instantaneous: the settings cache is per-instance, so it applies immediately ' +
+      'on the instance that served the change and within ~5 min (one cache TTL) everywhere else.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 6,
@@ -3384,10 +3652,94 @@ export const settingsMap = {
       'Cosine similarity is not comparable across embedding models: a floor tuned for one model can ' +
       'filter out an entire alternate model, when a lake mixes embedding models, more aggressively ' +
       "than intended. Start low and raise gradually while watching the tool's own retrieval-" +
-      'skipped notices.',
+      'skipped notices. A change is not instantaneous: the settings cache is per-instance, so it ' +
+      'applies immediately on the instance that served the change and within ~5 min (one cache TTL) ' +
+      'everywhere else.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 7,
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  lakeMemoryRecallK: makeNumberSetting({
+    key: 'lakeMemoryRecallK',
+    name: 'Lake Memory Belief Budget',
+    defaultValue: LAKE_RECALL_K_DEFAULT,
+    min: 1,
+    max: LAKE_RECALL_K_MAX,
+    // A belief count, so 1.5 is not a lower setting - it is a typo. Without this the write path
+    // accepts it and `positiveIntOr` floors it silently at read time, which reports as 1.
+    int: true,
+    description:
+      'Most beliefs the lake memory hot-card injects on a Data-Lake-mode turn, shared across every ' +
+      'lake in scope. Recall still applies its cosine floor and the source-reachability gate first, ' +
+      'so raising this does not admit low-quality beliefs - it raises the ceiling on how many ' +
+      'QUALIFYING beliefs can actually be used, which was pinned at 8 (inherited from personal-' +
+      'memento recall) on no evidence beyond that inheritance. The sibling lever on the same turn is ' +
+      'Forced Retrieval Char Budget, which governs raw chunk text rather than extracted beliefs. ' +
+      'Platform-only for now, unlike that sibling: this read goes through plain getSettingsValue, ' +
+      'which ignores settableAt, so a scope block here would be silently inert - every override ' +
+      'written against it would resolve to nothing. Pointing the read at the scoped resolver is ' +
+      'the prerequisite, not extra metadata.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 8,
+  }),
+  forcedRetrievalRelativeFloorPct: makeNumberSetting({
+    key: 'forcedRetrievalRelativeFloorPct',
+    name: 'Forced Retrieval Relative Floor (%)',
+    defaultValue: FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+    min: 0,
+    max: 100,
+    int: true,
+    description:
+      'How close to the best-scoring passage of the SAME turn a chunk must score to be injected on ' +
+      'a Data-Lake-mode turn, as a percent of that top score. This is the floor that ranks; the ' +
+      'absolute floor below only rejects. Unlike an absolute cosine line, it moves with the turn, so ' +
+      'it keeps working when a corpus or an embedding model puts the whole score band somewhere ' +
+      'else. Raising it injects fewer, more sharply-ranked passages and leaves char budget unspent; ' +
+      'lowering it admits more of the tail. 0 disables the relative floor and leaves the absolute ' +
+      'one as the only gate (the pre-#2497 behavior). The default is behavior-preserving rather ' +
+      'than tuned: it admits everything the absolute floor admitted on the measured band, so it ' +
+      'changes nothing until raised. Tune it AFTER an embedding-model change, never before - a ' +
+      'migration shifts the band any value fitted to today would have been chosen against.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 9,
+    // Organization/Owner only, no Lake rung - the altitude every retrieval-budget setting settles
+    // at, kbSearchMinRelevancePct and dataLakeSearchMaxFiles/MaxChunks (#2624) included, and for
+    // the same reason. A forced-retrieval turn scans an uncapped SET of lakes into one pool with
+    // one top score, so there is no single lake for a narrower rung to key on, and the relative
+    // floor is a per-turn quantity by construction. See scopeForCaller's doc comment.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  forcedRetrievalMinSimilarityPct: makeNumberSetting({
+    key: 'forcedRetrievalMinSimilarityPct',
+    name: 'Forced Retrieval Absolute Floor (%)',
+    defaultValue: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+    // min 1, not 0: clearing a number field in the admin UI coerces to 0, so a 0 here is far more
+    // likely to be an emptied field than an intent to disable the gate. 1% still effectively
+    // disables it for anyone who means to, while keeping an accidental clear out of range.
+    min: 1,
+    max: 100,
+    int: true,
+    description:
+      'Absolute minimum cosine similarity, as a percent, a chunk must clear to be injected on a ' +
+      'Data-Lake-mode turn. This is a sanity floor for genuinely unrelated content, NOT the ranking ' +
+      `gate - the relative floor above does the ranking. LEAVE IT AT ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} UNLESS YOU HAVE MEASURED ` +
+      'YOUR OWN CORPUS: a raw cosine means nothing outside the embedding model it was fitted to, so ' +
+      `while this reads ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT} the server ignores it and applies the floor measured for whichever model ` +
+      `your documents are actually embedded with (${forcedRetrievalFloorsBySpaceSummary}, ` +
+      'and no absolute floor at all for a model nobody has measured - the relative floor still ' +
+      'applies). Set any other value and the server uses exactly that, in every space, which is ' +
+      'yours to get right: 75 against text-embedding-3-small sits above that band entirely and ' +
+      'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
+      'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
+      'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
+      'embedding model; the sweep tool is packages/scripts/retrieval/forcedFloorSweep.ts.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 10,
+    // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
   LakeAccessAuditRetentionDays: makeNumberSetting({
@@ -3450,6 +3802,7 @@ export const settingsMap = {
   // a default - on an unparseable stored value. Rails (max) mirror the MAX_* constants.
   dataLakeEmbeddingSpendEnabled: makeBooleanSetting({
     key: 'dataLakeEmbeddingSpendEnabled',
+    userReadable: true,
     name: 'Data Lake Embedding Spend Enabled',
     defaultValue: true,
     description:
@@ -3460,6 +3813,7 @@ export const settingsMap = {
   }),
   dataLakeEmbeddingBudgetPerRunUsd: makeNumberSetting({
     key: 'dataLakeEmbeddingBudgetPerRunUsd',
+    userReadable: true,
     name: 'Embedding Budget Per Run (USD)',
     defaultValue: DATA_LAKE_EMBEDDING_BUDGET_PER_RUN_USD_DEFAULT,
     min: 0,
@@ -3682,6 +4036,7 @@ export const settingsMap = {
   }),
   enableVoiceSession: makeBooleanSetting({
     key: 'enableVoiceSession',
+    userReadable: true,
     name: 'Enable Voice Session',
     defaultValue: false,
     description: 'Whether to enable the voice session.',
@@ -3691,6 +4046,7 @@ export const settingsMap = {
   }),
   voiceV2Enabled: makeBooleanSetting({
     key: 'voiceV2Enabled',
+    userReadable: true,
     name: 'Enable Voice v2 (Model-Agnostic)',
     defaultValue: false,
     description:
@@ -3712,6 +4068,7 @@ export const settingsMap = {
   }),
   voiceSessionAiVoice: makeStringSetting({
     key: 'voiceSessionAiVoice',
+    userReadable: true,
     name: 'Default Assistant Voice',
     defaultValue: 'alloy',
     description: 'The default voice for the assistant in the voice session.',
@@ -4023,16 +4380,6 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 80,
   }),
-  EnableOptiHashiDefault: makeBooleanSetting({
-    key: 'EnableOptiHashiDefault',
-    name: 'OptiHashi: On by default for users',
-    defaultValue: false,
-    description: 'When enabled, OptiHashi is active for users who have never explicitly toggled it.',
-    category: 'Experimental',
-    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
-    order: 81,
-    dependsOn: 'EnableOptiHashi',
-  }),
   // [DELETION-FOOTPRINT] LibreOncology launch gate (removed when the product is
   // extracted). When off, the LibreOncology upgrade page shows "coming soon" and
   // the public subscribe endpoint refuses checkout (via the generic
@@ -4284,6 +4631,7 @@ export const settingsMap = {
   }),
   orchestrationDefaults: makeObjectSetting({
     key: 'orchestrationDefaults',
+    userReadable: true,
     name: 'Agent Orchestration Defaults',
     defaultValue: OrchestrationDefaultsSchema.parse({}),
     description:
@@ -4357,6 +4705,16 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
     order: 6,
   }),
+  modelDiscoveryProbeNewModels: makeBooleanSetting({
+    key: 'modelDiscoveryProbeNewModels',
+    name: 'Probe New Models for Dispatch',
+    defaultValue: true,
+    description:
+      'Lets a write-mode run spend a forced one-tool call on a newly discovered OpenAI model to verify which token parameter and tool transport it takes, and turn its tools on. Off leaves every new OpenAI model with tools withheld until an operator writes the dispatch profile by hand.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.MODEL_DISCOVERY.id,
+    order: 7,
+  }),
   prReportRepo: makeStringSetting({
     key: 'prReportRepo',
     name: 'PR Report Repository',
@@ -4409,6 +4767,63 @@ export const settingsMap = {
 };
 
 export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]['schema']>;
+
+/**
+ * Every setting the data-lake SEARCH budget merge resolves, in one list. The forced-retrieval merge
+ * is a separate read with its own list ({@link FORCED_RETRIEVAL_SETTING_KEYS}), which this does not
+ * cover; the Lake-rung guard loops both.
+ *
+ * `resolveSearchBudgets` (b4m-core/services) reads exactly these on both its scoped and its platform
+ * path, and the guard in settings.test.ts loops this same list to assert none of them declares a
+ * Lake rung: one search is handed every lake the caller can reach as a single tag array (#2624), so
+ * a Lake-scoped override has no lakeId to key on and resolves to nothing an operator can observe.
+ * Shared rather than enumerated twice because that guard is only as good as its key list - against a
+ * hand-written one, #2465 declared a new budget key WITH a Lake rung, merged textually clean, and
+ * was caught in review rather than by CI.
+ *
+ * Declaring a key here is what makes it resolvable: the scoped path's return type is mapped over
+ * this list, so a budget read without being declared here fails to compile.
+ *
+ * `DefaultChunkSize` is not a scan budget and is listed so that ONE derivation serves both paths -
+ * the serve budget is DERIVED from the chunk policy, and omitting it here would make the scoped path
+ * serve a different budget than the platform path for the same lake, which is the disagreement
+ * `resolveSearchBudgets` exists to remove.
+ *
+ * `DefaultChunkSize` is also the one key here a caller rung may only RAISE, never lower (#2803). This
+ * read resolves on the CALLER's scope, but the key's declared subject is the FILE OWNER ("Resolves at
+ * file-OWNER altitude", its own definition above), and a search spans other owners' files - so a
+ * caller-side override that LOWERED the serve budget would truncate in-policy content it does not
+ * own. `resolveServeTarget` (services/dataLakeService/resolveSearchBudgets.ts) floors the resolved
+ * value at the platform one for that reason; it stays listed here because the raise direction is
+ * still wanted, and because dropping it would give the two paths different budgets for the same lake.
+ */
+export const SEARCH_BUDGET_SETTING_KEYS = [
+  'dataLakeSearchMaxFiles',
+  'dataLakeSearchMaxChunks',
+  'DefaultChunkSize',
+  'kbSearchDefaultResults',
+  'kbSearchResultTokenBudget',
+  'kbSearchMinRelevancePct',
+  'dataLakeSearchMaxChunksPerFile',
+] as const satisfies readonly SettingKey[];
+
+/**
+ * Every setting the forced-retrieval merge resolves, in one list - the sibling of
+ * {@link SEARCH_BUDGET_SETTING_KEYS} for the other read that resolves settings for one retrieval
+ * turn. `readForcedRetrievalSettings` (ChatCompletionFeatures.ts, b4m-core/services) resolves these
+ * through `resolveScopedSettingValues`, and the guard in settings.test.ts loops this list to assert
+ * none of them declares a Lake rung: one turn scans an uncapped SET of lakes into a single pool, so
+ * no single lake can key a narrower rung (#2572).
+ *
+ * Lives here rather than beside that read so the guard can reach it - `common` cannot import from
+ * `services`. A test fixture that enumerated these keys itself would keep passing on coded defaults
+ * if a fourth were added, which is the one way those tests could go quiet without failing.
+ */
+export const FORCED_RETRIEVAL_SETTING_KEYS = [
+  'forcedRetrievalCharBudget',
+  'forcedRetrievalRelativeFloorPct',
+  'forcedRetrievalMinSimilarityPct',
+] as const satisfies readonly SettingKey[];
 
 // ============================================================================
 // Public settings projection - the security boundary for the unauthenticated
@@ -4471,7 +4886,9 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
 /**
  * Redact secrets from a single setting before it leaves the server.
  *
- * Two boundaries, both fail-closed against the stored value reaching a client:
+ * Three boundaries, all fail-closed against the stored value reaching a client:
+ *  - a `settingName` with no entry in `settingsMap` (removed/renamed setting, orphaned row)
+ *    is treated as sensitive and masked, rather than falling through unmasked,
  *  - any setting tagged `isSensitive` collapses to a mask (never the real value),
  *  - sreAgentConfig (which is NOT isSensitive) has its per-repo webhookSecret and
  *    callbackToken masked; parsed through the schema first so the v1->v2 migration
@@ -4482,7 +4899,7 @@ export function isMaskedSensitiveSettingValue(value: unknown): boolean {
  */
 export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc {
   const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
-  if (definition?.isSensitive) {
+  if (!definition || definition.isSensitive) {
     return { ...setting, settingValue: maskSensitiveSettingValue(setting.settingValue) };
   }
 
@@ -4514,10 +4931,13 @@ export function redactSettingSecrets(setting: AdminSettingDoc): AdminSettingDoc 
  * admin watching a live cross-admin update mis-verify which credential is loaded. An unset
  * value stays empty. The authoritative mask carrying the real last-4 still comes from
  * /api/settings/fetch. Non-sensitive shapes (sreAgentConfig) fall through to redactSettingSecrets.
+ *
+ * A `settingName` absent from `settingsMap` is treated as sensitive too, matching
+ * redactSettingSecrets - an orphaned row must never broadcast unmasked.
  */
 export function redactSettingSecretsForBroadcast(setting: AdminSettingDoc): AdminSettingDoc {
   const definition = (settingsMap as Record<string, { isSensitive?: boolean } | undefined>)[setting.settingName];
-  if (definition?.isSensitive) {
+  if (!definition || definition.isSensitive) {
     const hasValue = typeof setting.settingValue === 'string' && setting.settingValue.length > 0;
     return { ...setting, settingValue: hasValue ? SENSITIVE_SETTING_MASK : '' };
   }
@@ -4556,6 +4976,34 @@ export const experimentalFeatureSettingKeys: readonly SettingKey[] = (() => {
     .map(s => s.key);
   return Array.from(new Set<SettingKey>([...groupKeys, ...experimentalNonGroupSettingKeys]));
 })();
+
+/**
+ * Setting keys a NON-ADMIN authenticated caller may read via GET /api/settings/fetch.
+ * Opt-in and fail-closed, replacing the opt-OUT `isSensitive` filter that governed this
+ * endpoint. Three sources, unioned:
+ *
+ *  1. The EXPERIMENTAL group (plus `experimentalNonGroupSettingKeys`). `useExperimentalFeatureSettings`
+ *     reads these as a BLOCK by group membership rather than by name, so they are allowed as a
+ *     block too -- omitting one would not crash the client, it would silently fall back to the
+ *     compiled default and drop the admin's configured override.
+ *  2. `publicSafe` keys, which already ship in the unauthenticated CDN artifact.
+ *  3. Anything explicitly tagged `userReadable: true`.
+ *
+ * `isSensitive` then subtracts from the union, so no arm can admit a secret by accident.
+ * Arm 1 is the one that needs it: the EXPERIMENTAL block is allowed wholesale by group, and
+ * `ollamaBackend` sits in that group carrying an internal backend URL. The subtraction is
+ * belt-and-braces next to `redactSettingSecrets` on the response -- that masks the VALUE,
+ * this keeps the key out of a non-admin's payload at all.
+ *
+ * Admins bypass this entirely and read the full catalog.
+ */
+export function userReadableSettingKeys(): string[] {
+  const entries = Object.values(settingsMap) as Array<{ key: string; userReadable?: boolean; isSensitive?: boolean }>;
+  const tagged = entries.filter(s => s.userReadable === true).map(s => s.key);
+  const sensitive = new Set(entries.filter(s => s.isSensitive === true).map(s => s.key));
+  const union = new Set<string>([...experimentalFeatureSettingKeys, ...publicSafeSettingKeys(), ...tagged]);
+  return Array.from(union).filter(k => !sensitive.has(k));
+}
 
 /** A single setting in the public artifact - slimmed to exactly the two fields the client needs. */
 export interface PublicSetting {

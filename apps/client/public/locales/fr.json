@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Veuillez entrer des adresses email valides",
     "send_referral": "Envoyer le parrainage",
     "send_referral_success": "Parrainage envoyé avec succès!",
-    "send_referral_skipped": "{{count}} invitation(s) ignorée(s) — ces adresses e-mail ont déjà un compte.",
     "send_referral_failed": "Impossible d'envoyer {{count}} invitation(s). Veuillez réessayer.",
     "send_referral_error": "Erreur lors de l'envoi du parrainage. Veuillez réessayer.",
     "slack_notification_default": "Parrainage envoyé par l'utilisateur USER_NAME:USER_ID à FRIEND_EMAIL"

@@ -68,7 +68,6 @@
     "no_valid_emails_error": "कृपया मान्य ईमेल पते दर्ज करें",
     "send_referral": "रेफरल भेजें",
     "send_referral_success": "रेफरल सफलतापूर्वक भेजा गया!",
-    "send_referral_skipped": "{{count}} निमंत्रण छोड़ दिया गया — उन ईमेल पतों के पास पहले से ही खाता है।",
     "send_referral_failed": "{{count}} निमंत्रण भेजे नहीं जा सके। कृपया पुनः प्रयास करें।",
     "send_referral_error": "रेफरल भेजने में त्रुटि। कृपया पुनः प्रयास करें।",
     "slack_notification_default": "उपयोगकर्ता USER_NAME:USER_ID द्वारा FRIEND_EMAIL को भेजा गया रेफरल"

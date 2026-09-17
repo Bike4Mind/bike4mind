@@ -20,7 +20,10 @@ Access your profile by clicking your avatar in the sidebar footer.
 View and edit your basic profile:
 - **Avatar** - Upload a profile picture
 - **Name** - Your display name
-- **Email** - Primary email (change with verification)
+- **Email** - Primary email (change with verification). If you signed up through a social provider
+  that did not confirm your email, your account has no email on file and this field reads
+  "No email on file" - use **Add Email** to attach one, then confirm the verification link. Until
+  then you sign in through that provider rather than by one-time code
 - **Phone** - Contact number (optional)
 - **Location** - Your location (optional)
 
@@ -297,7 +300,24 @@ Set limits to control usage:
 
 - **Rotate** - Generate new secret (invalidates old)
 - **Revoke** - Permanently disable key
+- **Delete** - Remove an already-revoked key from your list
 - **View usage** - See last used timestamp
+
+Each row shows a status of **Active**, **Expired**, or **Revoked**.
+
+### Revoked Keys
+
+Revoked keys are hidden from the table by default, so it lists only the keys you can still use. A **Show revoked (N)** checkbox appears beside the refresh button whenever you have at least one revoked key, with N being how many are revoked; tick it to bring those rows back so you can review or delete them.
+
+With the toggle off and every key revoked, the table says so and points you at the checkbox, rather than showing the "no API keys yet" empty state.
+
+:::note Revoke before you delete
+Deleting is list housekeeping, not a security step - revoking is what stops the credential working. Delete therefore accepts only a key that is already revoked: the button stays disabled until then, and the server refuses the request with a 409 Conflict if the two are done out of order. Once it is enabled its tooltip reads **Delete permanently**; what that removes is the row from your list, the credential itself having already been stopped by the revoke.
+
+Expiry is not revocation. **Expired** is worked out from the key's expiry date, while **Revoked** is a separate stored flag - so a key shown as **Expired** has still not been revoked, and has to be revoked before you can delete it.
+:::
+
+Deleting a key keeps the usage it recorded while active, but those rows lose the key's name.
 
 ### API Documentation
 

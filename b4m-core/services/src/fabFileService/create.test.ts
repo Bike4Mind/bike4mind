@@ -1,11 +1,12 @@
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { FabFileSourceType, KnowledgeType } from '@bike4mind/common';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
+import { FabFileSourceType, KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { BadRequestError, invalidateSettingsCache } from '@bike4mind/utils';
 import { createFabFile, type CreateFabFileAdapters } from './create';
 
 // Unsupported file-type gating on ingest. The rejection throws right
 // after the user lookup - before any settings/storage adapter is touched - so
 // these cases only need a user stub. This guards the loophole where a file with
-// an unknown extension (e.g. .exe) was silently coerced to text/plain and
+// an unknown extension (e.g. setup.exe) was silently coerced to text/plain and
 // accepted. (Extension-to-MIME resolution itself is covered by utils/file.test.ts.)
 function adapters(): CreateFabFileAdapters {
   return {
@@ -22,7 +23,7 @@ function adapters(): CreateFabFileAdapters {
 const base = { fileSize: 100, type: KnowledgeType.FILE as const };
 
 describe('createFabFile — unsupported file-type gating', () => {
-  it('rejects a binary with an unknown extension and empty MIME type (the .exe loophole)', async () => {
+  it('rejects a binary with an unknown extension and empty MIME type (the setup.exe loophole)', async () => {
     await expect(createFabFile('u1', { ...base, fileName: 'malware.exe', mimeType: '' }, adapters())).rejects.toThrow(
       /not supported/i
     );
@@ -35,6 +36,104 @@ describe('createFabFile — unsupported file-type gating', () => {
     await expect(
       createFabFile('u1', { ...base, fileName: 'bundle.zip', mimeType: 'application/octet-stream' }, adapters())
     ).rejects.toThrow(/not supported/i);
+  });
+
+  // A supplied claim must disqualify the plain-text fallback even when the name itself
+  // is extension-less - otherwise the fallback becomes a route around the throw above.
+  it('rejects an extension-less name whose claimed MIME type is unsupported', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'payload', mimeType: 'application/octet-stream' }, adapters())
+    ).rejects.toThrow(/not supported/i);
+  });
+
+  it('rejects a digit-tail name whose claimed MIME type is unsupported', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'backup.001', mimeType: 'application/octet-stream' }, adapters())
+    ).rejects.toThrow(/not supported/i);
+  });
+});
+
+describe('createFabFile - extension-first MIME resolution', () => {
+  // Same user/storage stubs as adapters() above, but with fabFiles.create echoing
+  // back the built data (so these cases can assert on the persisted mimeType) and
+  // adminSettings resolving to an empty settings list (so getSettingsMap doesn't
+  // reduce over undefined once execution passes the mime gate).
+  function resolvingAdapters(): CreateFabFileAdapters {
+    const deps = adapters();
+    deps.db.fabFiles.create = vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data }));
+    deps.db.adminSettings = {
+      findAll: vi.fn().mockResolvedValue([]),
+      findBySettingNames: vi.fn().mockResolvedValue([]),
+    };
+    return deps;
+  }
+
+  it('stores a shell script as its extension type even when the client claims text/plain', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'deploy.sh', mimeType: 'text/plain' },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.SH);
+  });
+
+  // Inverted deliberately: a digit tail used to be exempted as a date/version fragment, which
+  // meant renaming any binary to 'payload.1' got it admitted as plain text. Every dot-tail is
+  // an extension now, so it must resolve or the file is refused.
+  it('refuses a date-suffixed name rather than reading it as plain text', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'Meeting notes 2026.09.07', mimeType: '' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  it('still accepts a dotless name with no claim as plain text', async () => {
+    const created = await createFabFile('u1', { ...base, fileName: 'LICENSE', mimeType: '' }, resolvingAdapters());
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.TXT_PLAIN);
+  });
+
+  // Malformed rather than extension-less, so it gets no fallback - matches Slack.
+  it('refuses a trailing-dot name', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'payload.', mimeType: '' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  // What the trailing dot withholds is the FALLBACK, not the claim: with one supplied the name
+  // resolves like any other extension-less one, so these two pin which half is which.
+  it('accepts a trailing-dot name carrying a supported claim, as for any extension-less name', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'payload.', mimeType: SupportedFabFileMimeTypes.TXT_PLAIN },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe(SupportedFabFileMimeTypes.TXT_PLAIN);
+  });
+
+  it('refuses a trailing-dot name carrying an unsupported claim', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'payload.', mimeType: 'application/x-msdownload' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  it('still refuses a digit-led unsupported extension', async () => {
+    await expect(
+      createFabFile('u1', { ...base, fileName: 'archive.7z', mimeType: '' }, resolvingAdapters())
+    ).rejects.toThrow(BadRequestError);
+  });
+
+  // Audio is storable but not ingestable: .mp3 resolves by extension, and the storable
+  // predicate this door passes is what keeps it accepted.
+  it('keeps accepting an audio file', async () => {
+    const created = await createFabFile(
+      'u1',
+      { ...base, fileName: 'speech.mp3', mimeType: 'audio/mpeg' },
+      resolvingAdapters()
+    );
+
+    expect(created.mimeType).toBe('audio/mpeg');
   });
 });
 
@@ -163,6 +262,62 @@ describe('createFabFile (upload moderation gate root cause)', () => {
     expect(persistedData.mimeType).toBe('audio/mpeg');
     // Stored under the generated-audio prefix with an .mp3 extension.
     expect(persistedData.filePath).toMatch(/^generated-audio\/.+\.mp3$/);
+  });
+});
+
+describe('createFabFile MaxFileSize enforcement - cleared setting no longer blocks every upload (#2456)', () => {
+  const mockUserId = 'user-123';
+
+  let mockAdapters: CreateFabFileAdapters;
+  let fabFilesCreate: Mock;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // The admin-settings cache key is process-wide ('all_settings'), not scoped to this test's
+    // db mock - without invalidating it, whichever test in this file populates it first would
+    // leak its findAll() result into every later test in this file.
+    invalidateSettingsCache();
+
+    fabFilesCreate = vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data }));
+    mockAdapters = {
+      db: {
+        fabFiles: { create: fabFilesCreate },
+        adminSettings: {
+          findAll: vi.fn().mockResolvedValue([{ settingName: 'MaxFileSize', settingValue: '' }]),
+          findBySettingNames: vi.fn().mockResolvedValue([]),
+        },
+        users: {
+          findById: vi.fn().mockResolvedValue({ id: mockUserId, storageLimit: 1000, currentStorageSize: 0 }),
+        },
+      },
+      storage: {
+        generateSignedUrl: vi.fn().mockResolvedValue('https://s3.example.com/signed-url'),
+        upload: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as CreateFabFileAdapters;
+  });
+
+  // Not undoing our own beforeEach - guarding the NEXT describe block in this file from it.
+  // The admin-settings cache this block populates (`MaxFileSize: ''`) is process-wide, so
+  // without this it would leak forward and feed every describe block that runs after this
+  // one, not just the tests inside it.
+  afterEach(() => {
+    invalidateSettingsCache();
+  });
+
+  it('accepts a normal-sized upload when MaxFileSize is stored as a cleared empty string', async () => {
+    await expect(
+      createFabFile(
+        mockUserId,
+        {
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          fileSize: 10 * 1024 * 1024, // 10MB - well under the 30MB default, well over a stray 0
+          type: KnowledgeType.FILE,
+        },
+        mockAdapters
+      )
+    ).resolves.toBeDefined();
   });
 });
 
@@ -299,7 +454,7 @@ describe('createFabFile - lake-tag gate at create time', () => {
   // This is exactly the call shape packages/scripts/datalake/ingest-pdf-datalake.ts makes to seed
   // a STATIC REGISTRY lake (datalake:opti-knowledge, no owning DB document) - the only supported
   // way to populate one. Centralizing assertCanWriteDataLakeTags here must not break it.
-  it('allows an admin to create a file tagged into a static-registry lake with no DB lookup', async () => {
+  it('allows an admin to create a file tagged into a static-registry lake, minting no fallback stamp', async () => {
     findByDatalakeTag.mockClear();
     const result = await createFabFile(
       'u1',
@@ -312,7 +467,11 @@ describe('createFabFile - lake-tag gate at create time', () => {
       mockAdaptersFor(true)
     );
     expect(result.id).toBe('fab-1');
-    expect(findByDatalakeTag).not.toHaveBeenCalled();
+    // assertCanWriteDataLakeTags' static-registry arm does no DB lookup (line 231-235 above), but
+    // the fallback tagger (#2397) still resolves the meta-tag - a static-registry lake has no
+    // owning document, so this returns null and mints no stamp, same as a stale/orphaned tag would.
+    expect(findByDatalakeTag).toHaveBeenCalledTimes(1);
+    expect(result.tags).toEqual([{ name: 'datalake:opti-knowledge', strength: 1 }]);
   });
 
   it('refuses a non-admin creating a file tagged into a static-registry lake', async () => {
@@ -328,5 +487,85 @@ describe('createFabFile - lake-tag gate at create time', () => {
         mockAdaptersFor(false)
       )
     ).rejects.toThrow(/only an admin can change this data lake/i);
+  });
+});
+
+// #2397: createFabFile used to persist a lake meta-tag with no content-prefix stamp, unlike
+// updateFabFile (which runs every whole-array tag write through reconcileLakeTags). A file
+// created this way sat in its lake contributing nothing to tag-counts and appearing under no
+// category in the Explorer tree until some later edit happened to trigger the stamp.
+describe('createFabFile - lake fallback-tag stamp at create time (#2397)', () => {
+  const lake = {
+    id: 'lake1',
+    name: 'Project Docs',
+    fileTagPrefix: 'proj:',
+    datalakeTag: 'datalake:project-docs',
+    createdByUserId: 'u1',
+  };
+
+  const mockAdapters = (): CreateFabFileAdapters =>
+    ({
+      db: {
+        fabFiles: { create: vi.fn().mockImplementation(async data => ({ id: 'fab-1', ...data })) },
+        adminSettings: { findAll: vi.fn().mockResolvedValue([]), findBySettingNames: vi.fn().mockResolvedValue([]) },
+        users: { findById: vi.fn().mockResolvedValue({ id: 'u1', isAdmin: false }) },
+        dataLakes: {
+          findByDatalakeTag: vi.fn().mockResolvedValue(lake),
+          // No colliding lakes in scope, so decideStampPrefix's overlap check clears.
+          find: vi.fn().mockResolvedValue([]),
+        },
+      },
+      storage: { generateSignedUrl: vi.fn().mockResolvedValue('url'), upload: vi.fn() },
+    }) as unknown as CreateFabFileAdapters;
+
+  it('stamps <prefix>uncategorized on a file created with only the lake meta-tag', async () => {
+    const result = await createFabFile(
+      'u1',
+      {
+        ...base,
+        fileName: 'notes.txt',
+        mimeType: 'text/plain',
+        tags: [{ name: 'datalake:project-docs', strength: 1 }],
+      },
+      mockAdapters()
+    );
+
+    // Same tag-counts/Explorer-tree signal reconcileLakeTags stamps on the update path - this is
+    // the parity the acceptance criteria ask for.
+    expect(result.tags).toEqual(
+      expect.arrayContaining([
+        { name: 'datalake:project-docs', strength: 1 },
+        { name: 'proj:uncategorized', strength: 1 },
+      ])
+    );
+  });
+
+  it('mints no stamp when the file already carries a tag under the lake prefix', async () => {
+    const result = await createFabFile(
+      'u1',
+      {
+        ...base,
+        fileName: 'notes.txt',
+        mimeType: 'text/plain',
+        tags: [
+          { name: 'datalake:project-docs', strength: 1 },
+          { name: 'proj:onboarding', strength: 1 },
+        ],
+      },
+      mockAdapters()
+    );
+
+    expect(result.tags).toEqual([
+      { name: 'datalake:project-docs', strength: 1 },
+      { name: 'proj:onboarding', strength: 1 },
+    ]);
+  });
+
+  it('leaves a create with no tags at all untouched (no dataLakes round trip)', async () => {
+    const adapters = mockAdapters();
+    const result = await createFabFile('u1', { ...base, fileName: 'notes.txt', mimeType: 'text/plain' }, adapters);
+
+    expect(result.tags).toBeUndefined();
+    expect(adapters.db.dataLakes.findByDatalakeTag).not.toHaveBeenCalled();
   });
 });

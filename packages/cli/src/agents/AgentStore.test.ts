@@ -72,7 +72,8 @@ describe('MODEL_ALIASES', () => {
 
   describe('Other model aliases', () => {
     it('should map DeepSeek aliases', () => {
-      expect(MODEL_ALIASES['deepseek']).toBe('deepseek-r1:latest');
+      // Bare `deepseek` names the hosted model; `deepseek-r1` stays the Ollama tag.
+      expect(MODEL_ALIASES['deepseek']).toBe('deepseek-flash');
       expect(MODEL_ALIASES['deepseek-r1']).toBe('deepseek-r1:latest');
     });
 

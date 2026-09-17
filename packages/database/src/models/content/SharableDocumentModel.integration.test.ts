@@ -40,6 +40,46 @@ const seed = (overrides: Record<string, unknown> = {}) =>
     ...overrides,
   });
 
+// A grant row's provenance tags are what both revoke cascades filter on, and mongoose runs strict:
+// an undeclared subpath is dropped on write with no error, which would turn every scoped revoke
+// into a silent no-op against a direct share. Pinned here rather than trusted, the same way
+// SessionModel.retrievalExclusion and OrganizationModel pin their own subpaths.
+describe('UserShareableSchema provenance tags survive a round trip', () => {
+  it('persists projectId and sessionId, and keeps the two rows distinct', async () => {
+    const doc = await seed({
+      users: [
+        { userId: 'u1', permissions: ['read'] },
+        { userId: 'u1', permissions: ['read'], projectId: 'project-a' },
+        { userId: 'u1', permissions: ['read'], sessionId: 'session-a' },
+      ],
+    });
+
+    const reread = await FabFile.findById(doc.id).lean();
+    const rows = (reread!.users ?? []) as Array<{ projectId?: string; sessionId?: string }>;
+
+    expect(rows).toHaveLength(3);
+    expect(rows.map(r => r.projectId)).toEqual([undefined, 'project-a', undefined]);
+    expect(rows.map(r => r.sessionId)).toEqual([undefined, undefined, 'session-a']);
+  });
+
+  it('keeps a direct share when only the session-tagged row is filtered out', async () => {
+    const doc = await seed({
+      users: [
+        { userId: 'u1', permissions: ['read'] },
+        { userId: 'u1', permissions: ['read'], sessionId: 'session-a' },
+      ],
+    });
+
+    const loaded = await FabFile.findById(doc.id);
+    loaded!.users = loaded!.users.filter(user => user.sessionId !== 'session-a');
+    await loaded!.save();
+
+    const reread = await FabFile.findById(doc.id).lean();
+    expect(reread!.users).toHaveLength(1);
+    expect((reread!.users[0] as { sessionId?: string }).sessionId).toBeUndefined();
+  });
+});
+
 describe('ShareableDocumentRepository.findShareAccessById', () => {
   it('grants the owner', async () => {
     const doc = await seed();
@@ -86,6 +126,32 @@ describe('ShareableDocumentRepository.findUpdateAccessById', () => {
     const doc = await seed({ users: [{ userId: 'sharer-1', permissions: ['share'] }] });
     const got = await fabFileRepository.shareable.findUpdateAccessById({ id: 'sharer-1', groups: [] }, doc.id);
     expect(got).toBeNull();
+  });
+});
+
+describe('ShareableDocumentRepository.findAllUpdateAccessByIds', () => {
+  it('returns the owner document and omits one the caller only holds read on', async () => {
+    const owned = await seed();
+    const readOnly = await seed({ userId: 'owner-2', users: [{ userId: 'owner-1', permissions: ['read'] }] });
+
+    const got = await fabFileRepository.shareable.findAllUpdateAccessByIds({ id: 'owner-1', groups: [] }, [
+      owned.id,
+      readOnly.id,
+    ]);
+
+    expect(got.map(doc => doc.id)).toEqual([owned.id]);
+  });
+
+  it('includes a document whose user grant carries update, and one via a group update grant', async () => {
+    const viaUser = await seed({ userId: 'owner-2', users: [{ userId: 'editor-1', permissions: ['update'] }] });
+    const viaGroup = await seed({ userId: 'owner-2', groups: [{ groupId: 'grp-1', permissions: ['update'] }] });
+
+    const got = await fabFileRepository.shareable.findAllUpdateAccessByIds({ id: 'editor-1', groups: ['grp-1'] }, [
+      viaUser.id,
+      viaGroup.id,
+    ]);
+
+    expect(got.map(doc => doc.id).sort()).toEqual([viaUser.id, viaGroup.id].sort());
   });
 });
 

@@ -1,4 +1,5 @@
 import { FC, useState } from 'react';
+import { getErrorMessage } from '@client/app/utils/error';
 import {
   Alert,
   Box,
@@ -129,8 +130,12 @@ const SkillShareDialog: FC<SkillShareDialogProps> = ({ onClose, skill }) => {
         isGlobalWrite,
       });
       onClose();
-    } catch {
-      setError('Failed to save sharing changes. Try again.');
+    } catch (error) {
+      // isGlobalRead/isGlobalWrite publish a skill to the whole instance, so the server gates them
+      // on the SHARE predicate rather than update. Permissions are independently assignable, so an
+      // update-without-share holder is a real grant and this save can legitimately be refused - a
+      // fixed string gave them no way to tell that apart from a network blip.
+      setError(getErrorMessage(error));
     }
   };
 

@@ -11,10 +11,11 @@ import type { IncomingHttpHeaders } from 'http';
  * the caller's own credential reads a scope the caller was never granted. There
  * is deliberately no shared/service-key path - see resolvePrincipalAuthHeaders.
  *
- * NOTE: /api/files/presigned-url does NOT scope by principal - it signs whatever
- * filePath it is handed. The only thing gating it here is that getArticle's
- * filePath came from the lake-gated articles?id= hop. Do not add a files/*
- * loopback call assuming the forwarded principal scopes it.
+ * NOTE: /api/files/presigned-url now scopes by principal - it signs a key only
+ * when the caller owns/shares the file, reaches it through an accessible lake, or
+ * the key is an allowlisted ownerless-serveable prefix. getArticle's filePath still
+ * comes from the lake-gated articles?id= hop, and the presign route's lake gate
+ * resolves against this same forwarded principal.
  */
 export type PrincipalAuthHeaders = { 'x-api-key'?: string; authorization?: string };
 

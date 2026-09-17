@@ -267,5 +267,82 @@ describe('resolveOutputMaxTokens', () => {
       expect(reasonsWithinOutputBudget(kimiK25)).toBe(true);
       expect(reasonsWithinOutputBudget(legacyModel)).toBe(false);
     });
+
+    // DeepSeek Flash misses every shape check for a different reason than Kimi: the
+    // dispatch profile says `max_tokens` (which is what DeepSeek takes) rather than
+    // `max_completion_tokens`, so the catalog-only clause cannot see it either. Left on
+    // the 4096 fallback it reasons at effort 'high' inside that budget, returns
+    // finish_reason 'length' with no content, and deepseekBackend throws.
+    const deepseekFlash: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.DEEPSEEK_FLASH,
+      name: 'DeepSeek Flash',
+      backend: ModelBackend.DeepSeek,
+      can_think: true,
+      max_tokens: 393_216,
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+    };
+
+    it('reports DeepSeek Flash as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(deepseekFlash)).toBe(true);
+    });
+
+    it('defaults DeepSeek Flash to the reasoning floor, not the 4096 fallback', () => {
+      // Its own cap is far above the floor, so the floor is what applies.
+      expect(resolve(undefined, deepseekFlash)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('still honors an explicit budget on DeepSeek Flash', () => {
+      expect(resolve(8192, deepseekFlash)).toBe(8192);
+    });
+
+    const deepseekV4Pro: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.DEEPSEEK_V4_PRO,
+      name: 'DeepSeek V4 Pro',
+      backend: ModelBackend.DeepSeek,
+      can_think: true,
+      max_tokens: 393_216,
+      dispatchProfile: { maxTokensParam: 'max_tokens', toolTransport: 'chat' },
+    };
+
+    it('reports DeepSeek V4 Pro as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(deepseekV4Pro)).toBe(true);
+    });
+
+    it('defaults DeepSeek V4 Pro to the reasoning floor, not the 4096 fallback', () => {
+      expect(resolve(undefined, deepseekV4Pro)).toBe(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR);
+    });
+
+    it('still honors an explicit budget on DeepSeek V4 Pro', () => {
+      expect(resolve(8192, deepseekV4Pro)).toBe(8192);
+    });
+
+    // Bedrock DeepSeek R1 also inlines its monologue into the output budget
+    // (bedrockBackend/deepseek.ts) and matches no shape check either: no
+    // thinkingStyle, absent from REASONING_SUPPORTED_MODELS, and its profile
+    // declares plain max_tokens. Its cap is 32K, so the floor resolves to that cap -
+    // the value that actually leaves room for an answer after a long trace.
+    const deepseekR1Bedrock: ModelInfo = {
+      ...baseModelInfo,
+      id: ChatModels.DEEPSEEK_R1_BEDROCK,
+      name: 'DeepSeek R1',
+      backend: ModelBackend.Bedrock,
+      max_tokens: 32_768,
+      can_stream: true,
+      supportsVision: false,
+    };
+
+    it('reports Bedrock DeepSeek R1 as reasoning within the output budget', () => {
+      expect(reasonsWithinOutputBudget(deepseekR1Bedrock)).toBe(true);
+    });
+
+    it('defaults Bedrock DeepSeek R1 to its own cap rather than the 4096 fallback', () => {
+      expect(resolve(undefined, deepseekR1Bedrock)).toBe(32_768);
+    });
+
+    it('still honors an explicit budget on Bedrock DeepSeek R1', () => {
+      expect(resolve(8192, deepseekR1Bedrock)).toBe(8192);
+    });
   });
 });

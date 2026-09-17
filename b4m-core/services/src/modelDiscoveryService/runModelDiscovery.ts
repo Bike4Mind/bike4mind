@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ModelBackend,
   isFieldGroup,
   type FieldGroup,
   type ICatalogContributor,
@@ -14,7 +15,7 @@ import {
   type IModelPrice,
   type IModelPriceInput,
 } from '@bike4mind/common';
-import { resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
+import { adapterPriceTiers, resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
 import { applyAbsence, planAbsence, type AbsencePlan } from './absence';
 import { limitConcurrency } from './concurrency';
 import { planCatalogWrites, summarizeDiff, type CatalogWritePlan } from './catalogWrite';
@@ -47,6 +48,7 @@ import type {
   PriceFlag,
   PriceOverride,
   PriceSkip,
+  ProbedDispatchAnswer,
   RunModelDiscoveryOptions,
   SourceResult,
   SourceSkipReason,
@@ -91,6 +93,18 @@ export const RETRY_DEADLINE_MS = 2_000;
 
 /** Two stages on the same 6h boundary otherwise hit every provider simultaneously. */
 export const DEFAULT_MIN_SOURCE_INTERVAL_MS = 60 * 60_000;
+
+/**
+ * Dispatch probes per run. A cap rather than a queue: the models are ordered by
+ * how often they have been asked, so the leftovers lead the next run.
+ */
+export const PROBE_MAX_MODELS_PER_RUN = 8;
+
+/** Lifetime probes per model, after which the id stops taking a budget slot. */
+export const PROBE_MAX_ATTEMPTS = 5;
+
+export const PROBE_BUDGET_MS = 90_000;
+export const PROBE_CALL_TIMEOUT_MS = 15_000;
 
 /** How far back run reports are read for the interval guard and cached validators. */
 const RUN_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
@@ -205,6 +219,7 @@ interface RunContext {
   autoEnable: DiscoveryAutoEnablePolicy;
   autoRemap: DiscoveryAutoRemapPolicy;
   allowEgress: boolean;
+  probeNewModels: boolean;
   bandPct: number;
   startedAt: Date;
   globalDeadlineMs: number;
@@ -235,7 +250,9 @@ async function executeRun(
   } as Omit<IModelDiscoveryRunDocument, 'id' | 'createdAt' | 'updatedAt'>);
   const runId = run.id;
 
-  const credentials = await adapters.resolveCredentials();
+  // A manual run is how an admin checks a key they just saved, so it reads admin
+  // settings fresh; scheduled and startup runs keep the cached map.
+  const credentials = await adapters.resolveCredentials({ skipCache: options.trigger === 'manual' });
   const history = await recentRunHistory(adapters, startedAt);
   const minInterval = options.minSourceIntervalMs ?? DEFAULT_MIN_SOURCE_INTERVAL_MS;
 
@@ -313,6 +330,21 @@ async function executeRun(
     }
     const unauthoritativeSources = new Set(shrunkListings);
 
+    // Before the first pass: planCatalogWrites decides a model's dispatch group
+    // once, and a probe that landed after it would only take effect a run later.
+    // A throw here must not cost the run its writes.
+    const probedProfiles = await runDispatchProbeLeg({
+      adapters,
+      ctx,
+      credentials,
+      succeeded: succeeded(),
+      results,
+      globalSignal: globalDeadline.signal,
+    }).catch(error => {
+      logger.warn(`${LOG_PREFIX} dispatch probe leg failed: ${describe(error)}`);
+      return new Map<string, ProbedDispatchAnswer>();
+    });
+
     // The only sources whose answer this run's own writes can change: an
     // aggregator joins against the catalog. One that was skipped or failed in
     // pass 1 stays out - the convergence loop may not become a way around the
@@ -331,6 +363,7 @@ async function executeRun(
         options,
         runId,
         credentials,
+        probedProfiles,
         succeeded: succeeded(),
         results,
         droppedDocsSources,
@@ -393,7 +426,7 @@ async function executeRun(
         `${merged.pricesAppended}/${merged.plannedPriceRows} price rows landed`
     );
   }
-  const status = runStatus(attempts.length, succeededCount, deadlineHit || writesLost);
+  const status = runStatus(attempts.length, succeededCount, deadlineHit || writesLost, skippedSources);
   const summary = summarizeDiff(merged.diff);
   const added = [...new Set(summary.added)];
   const promoted = [...new Set(summary.promoted)];
@@ -410,6 +443,10 @@ async function executeRun(
     status,
     finishedAt,
     sources: sourceReports,
+    // Uncapped like `sources` it sits beside: at most one entry per configured
+    // source, partitioned disjointly from the attempts, so it is bounded by
+    // construction.
+    skippedSources,
     joinCoverage: merged.joinCoverage,
     unmatchedIds: merged.unmatchedIds,
     changes: {
@@ -431,8 +468,9 @@ async function executeRun(
     },
     passes: passes.length,
     droppedRecords: merged.droppedRecords.slice(0, MAX_PERSISTED_DROPPED_RECORDS),
-    // The detail behind the counts above, every array bounded. Without it the
-    // admin reads a flag count with no way to learn which models or why.
+    // The detail behind the counts above, each array below capped at
+    // MAX_PERSISTED_RUN_DETAIL. Without it the admin reads a flag count with no
+    // way to learn which models or why.
     priceFlags: merged.priceFlags.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceRows: plannedPrices.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceOverrides: merged.priceOverrides.slice(0, MAX_PERSISTED_RUN_DETAIL),
@@ -498,6 +536,141 @@ async function executeRun(
   };
 }
 
+interface ProbeLegInput {
+  adapters: ModelDiscoveryAdapters;
+  ctx: RunContext;
+  credentials: DiscoveryCredentials;
+  succeeded: readonly DiscoverySource[];
+  results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>;
+  /** The run's deadline, which bounds both the queue and each call in flight. */
+  globalSignal: AbortSignal;
+}
+
+/**
+ * Verify the dispatch group of the OpenAI models this run would otherwise leave
+ * for a human. Nothing else can: a wrong toolTransport fails silently, so the
+ * only way to know which of OpenAI's two tool conventions a new id takes is to
+ * make the model answer (see dispatchProbe.ts).
+ *
+ * Write mode only, and only for records still 'discovered' with no profile - the
+ * same set planCatalogWrites is still allowed to decide for.
+ */
+async function runDispatchProbeLeg(input: ProbeLegInput): Promise<ReadonlyMap<string, ProbedDispatchAnswer>> {
+  const { adapters, ctx, credentials } = input;
+  const answers = new Map<string, ProbedDispatchAnswer>();
+  const probe = adapters.probeDispatch;
+  const apiKey = credentials.openai;
+  if (!probe || !apiKey || ctx.mode !== 'write' || !ctx.allowEgress || !ctx.probeNewModels) return answers;
+
+  const sighted = openAiSightings(input.succeeded, input.results);
+  if (sighted.size === 0) return answers;
+
+  const { rows } = await adapters.db.catalog.rowsInForceWithRejects(ctx.startedAt);
+  // An operator row that owns only `presentation` still makes the model theirs:
+  // planCatalogWrites diffs against the non-operator resolution and would hand
+  // it a discovery-authored dispatch row without noticing.
+  const operatorOwned = new Set(rows.filter(row => row.source === 'operator').map(row => row.modelId));
+  const candidates = [...resolveCatalogRecords(rows.filter(row => row.source !== 'operator')).values()]
+    .filter(({ modelId, record }) => sighted.has(modelId) && !operatorOwned.has(modelId) && awaitsDispatch(record))
+    .map(({ modelId }) => modelId);
+  if (candidates.length === 0) return answers;
+
+  const states = new Map(
+    (await adapters.db.discoveryState.findByModelIds(candidates)).map(state => [state.modelId, state] as const)
+  );
+  const attemptsOf = (modelId: string): number => states.get(modelId)?.probeAttempts ?? 0;
+  const queue = candidates
+    .filter(modelId => attemptsOf(modelId) < PROBE_MAX_ATTEMPTS)
+    // Never-attempted first. Without that key one permanently failing id that
+    // sorts early takes a slot every run and new models never reach one.
+    .sort((a, b) => attemptsOf(a) - attemptsOf(b) || a.localeCompare(b))
+    .slice(0, PROBE_MAX_MODELS_PER_RUN);
+
+  // Clamped to the run's deadline, because the budget is checked only BETWEEN
+  // models: the last one could start just inside it and then run three live
+  // calls (chat, the wrong-token-param retry, then responses), so the overshoot
+  // is 3 x PROBE_CALL_TIMEOUT_MS.
+  const until = Math.min(ctx.now().getTime() + PROBE_BUDGET_MS, ctx.startedAt.getTime() + ctx.globalDeadlineMs);
+  for (const [index, modelId] of queue.entries()) {
+    if (ctx.now().getTime() >= until) {
+      ctx.logger.info(`${LOG_PREFIX} dispatch probe budget spent; ${queue.length - index} model(s) wait for next run`);
+      break;
+    }
+
+    // Per model, because the leg's own boundary returns NO answers: one throw
+    // from the probe or from the attempt write would otherwise discard every
+    // model this run already paid live calls for.
+    try {
+      const result = await probe(modelId, {
+        apiKey,
+        fetch: (url, init) => fetch(url, init),
+        timeoutMs: PROBE_CALL_TIMEOUT_MS,
+        signal: input.globalSignal,
+      });
+
+      if (result.retryable) {
+        // The upstream, not the model: probing the rest of the queue against a
+        // rate-limited or unhealthy endpoint buys nothing and costs the budget.
+        // No attempt is charged for it either - PROBE_MAX_ATTEMPTS is a lifetime
+        // budget the state model only ever increments, so a 429 or a truncated
+        // reasoning reply would otherwise exclude the model after five runs.
+        ctx.logger.warn(
+          `${LOG_PREFIX} dispatch probe of ${modelId} hit a retryable upstream; leg stopped for this run`
+        );
+        break;
+      }
+
+      if (result.answer) {
+        answers.set(modelId, result.answer);
+        const profile = result.answer.dispatchProfile;
+        const verified = result.answer.maxTokensParamVerified;
+        ctx.logger.info(
+          `${LOG_PREFIX} probed ${modelId}: ${profile?.toolTransport} tool transport, ${profile?.maxTokensParam}${
+            verified ? '' : ' (unverified, not written)'
+          }`
+        );
+        if (verified) continue;
+      }
+
+      // A verdict about the model, usable or not: no answer at all, or one whose
+      // maxTokensParam no call confirmed. Both leave the model without a profile
+      // and back in next run's queue, so the attempt budget is what bounds it.
+      await adapters.db.discoveryState.recordProbeAttempt(modelId);
+    } catch (error) {
+      ctx.logger.warn(
+        `${LOG_PREFIX} dispatch probe of ${modelId} failed: ${describe(error)}; leg stopped for this run`
+      );
+      break;
+    }
+  }
+
+  return answers;
+}
+
+/** Ids a provider source listed as OpenAI-backed THIS run. */
+function openAiSightings(
+  succeeded: readonly DiscoverySource[],
+  results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>
+): ReadonlySet<string> {
+  const sighted = new Set<string>();
+  for (const source of succeeded) {
+    if (source.kind !== 'provider') continue;
+    const ok = results.get(source.name)?.result as DiscoverySourceOk;
+    for (const record of ok.records ?? []) {
+      if (record.patch?.backend === ModelBackend.OpenAI) sighted.add(record.modelId);
+    }
+  }
+  return sighted;
+}
+
+/** A record the catalog holds but cannot dispatch, and that discovery may still decide. */
+function awaitsDispatch(record: Record<string, unknown>): boolean {
+  if (record.backend !== ModelBackend.OpenAI || record.type !== 'text' || record.dispatchProfile) return false;
+  const lifecycle = record.lifecycle;
+  const status = typeof lifecycle === 'object' && lifecycle !== null ? (lifecycle as { status?: unknown }).status : '';
+  return status === 'discovered';
+}
+
 interface PassInput {
   adapters: ModelDiscoveryAdapters;
   ctx: RunContext;
@@ -507,6 +680,8 @@ interface PassInput {
   /** The sources whose fetch succeeded, in registration order. */
   succeeded: readonly DiscoverySource[];
   results: ReadonlyMap<string, { report: IDiscoverySourceReport; result: SourceResult }>;
+  /** Dispatch groups the probe leg verified this run, keyed by model id. */
+  probedProfiles: ReadonlyMap<string, ProbedDispatchAnswer>;
   /** Sources whose docs-derived signals this run drops, decided from pass 1. */
   droppedDocsSources: ReadonlySet<string>;
   /** Sources whose listing shrank this run; they enrich but claim no backend. */
@@ -600,6 +775,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
   const catalog = planCatalogWrites({
     contributions: signals.contributions,
     resolveDispatch: adapters.resolveDispatch,
+    probedProfiles: input.probedProfiles,
     base,
     coveredBackends,
     priorDiscoveryGroups,
@@ -620,6 +796,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     // The models this run adds are known too: a new model's first price row
     // lands in the same run as the catalog row that makes it a model at all.
     knownModelIds: new Set([...base.keys(), ...operatorOwnedModelIds, ...catalog.rows.map(row => row.modelId)]),
+    adapterTiers: await adapterPriceTiers(),
     bandPct: ctx.bandPct,
     runStartedAt: effectiveAt,
   });
@@ -1113,25 +1290,64 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
  * 'ok' when nothing FAILED: every source attempted came back and the run was not
  * cut short. A skip is not a failure - a self-host install skips bedrock on
  * every run for want of an IAM role, and a source skipped as recently-fetched is
- * fresh data by definition - so skips may not degrade the run. They used to, and
- * the cost was structural: lastSuccessfulRun is findOne({status:'ok'}), so a
- * deployment that always skips something never had one, the startup staleness
- * gate never tripped, and every container boot re-ran a full fan-out. A run with
- * nothing but skips is 'ok' too, with an empty `sources` list and the skip
- * counts in the summary line to tell it apart from a full one.
+ * fresh data by definition - so a skip beside a successful attempt may not
+ * degrade the run. Skips used to degrade it unconditionally, and the cost was
+ * structural: lastSuccessfulRun is findOne({status:'ok'}), so a deployment that
+ * always skips something never had one, the startup staleness gate never
+ * tripped, and every container boot re-ran a full fan-out.
+ *
+ * Attempting nothing is the exception. Nothing failed, but nothing was
+ * refreshed either, so the run may not claim the success that advances
+ * lastSuccessfulRun - a deployment with no source configured would otherwise
+ * report an unbroken string of successes while the catalog never moved. The
+ * exception's own exception is 'recently-fetched', which is derived from a
+ * successful fetch inside the interval: that data IS fresh, and degrading the
+ * run that stood aside for it would degrade every stage sharing a cadence.
+ *
+ * It reports 'partial' and not a fourth status because 'partial' already
+ * carries exactly this contract - commits what it verified, does not advance
+ * lastSuccessfulRun - and every reader already handles it. Not 'failed',
+ * because RunFailures has to keep meaning "the sources are broken" for the
+ * consecutive-failure alarm; RunPartial is the counter that moves, and a
+ * "Last success" that stops advancing on the admin card is the operator-facing
+ * signal. The startup leg (apps/client/server/modelDiscovery/startupLeg.ts)
+ * then re-runs on every boot for a deployment configured with nothing: no
+ * provider egress, but still a lease, a run document and a full read of the
+ * rows and prices in force.
  */
-function runStatus(attempted: number, succeeded: number, deadlineHit: boolean): 'ok' | 'partial' | 'failed' {
+function runStatus(
+  attempted: number,
+  succeeded: number,
+  deadlineHit: boolean,
+  skipped: ReadonlyArray<{ reason: SourceSkipReason }>
+): 'ok' | 'partial' | 'failed' {
   if (attempted > 0 && succeeded === 0) return 'failed';
-  if (succeeded < attempted || deadlineHit) return 'partial';
+  const refreshedNothing = attempted === 0 && !skipped.some(skip => skip.reason === 'recently-fetched');
+  if (refreshedNothing || succeeded < attempted || deadlineHit) return 'partial';
   return 'ok';
 }
 
-/** Skip counts for the summary line: "ok with nothing attempted" has to be readable. */
-function describeSkips(skipped: ReadonlyArray<{ reason: SourceSkipReason }>): string {
+/** Keeps the summary line bounded when a wide source registry skips everything. */
+const MAX_LOGGED_SKIP_NAMES_PER_REASON = 5;
+
+/**
+ * Skips for the summary line: "ok with nothing attempted" has to be readable,
+ * and a bare count leaves the reader unable to say which source went missing.
+ */
+function describeSkips(skipped: ReadonlyArray<{ name: string; reason: SourceSkipReason }>): string {
   if (skipped.length === 0) return '0';
-  const byReason = new Map<SourceSkipReason, number>();
-  for (const { reason } of skipped) byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
-  return `${skipped.length}(${[...byReason].map(([reason, count]) => `${reason}:${count}`).join(',')})`;
+  const byReason = new Map<SourceSkipReason, string[]>();
+  for (const { name, reason } of skipped) {
+    const names = byReason.get(reason);
+    if (names) names.push(name);
+    else byReason.set(reason, [name]);
+  }
+  const groups = [...byReason].map(([reason, names]) => {
+    const shown = names.slice(0, MAX_LOGGED_SKIP_NAMES_PER_REASON).join('+');
+    const overflow = names.length - MAX_LOGGED_SKIP_NAMES_PER_REASON;
+    return `${reason}:${overflow > 0 ? `${shown}+${overflow}more` : shown}`;
+  });
+  return `${skipped.length}(${groups.join(',')})`;
 }
 
 function computeJoinCoverage(
@@ -1164,15 +1380,17 @@ async function readMode(adapters: ModelDiscoveryAdapters): Promise<{
   autoEnable: DiscoveryAutoEnablePolicy;
   autoRemap: DiscoveryAutoRemapPolicy;
   allowEgress: boolean;
+  probeNewModels: boolean;
   bandPct: number;
 }> {
   const settings = adapters.db.adminSettings;
-  const [enabled, mode, autoEnable, autoRemap, allowEgress, bandPct] = await Promise.all([
+  const [enabled, mode, autoEnable, autoRemap, allowEgress, probeNewModels, bandPct] = await Promise.all([
     settings.getSettingsValue('enableModelDiscovery'),
     settings.getSettingsValue('modelDiscoveryMode'),
     settings.getSettingsValue('modelDiscoveryAutoEnable'),
     settings.getSettingsValue('modelDiscoveryAutoRemap'),
     settings.getSettingsValue('modelDiscoveryAllowEgress'),
+    settings.getSettingsValue('modelDiscoveryProbeNewModels'),
     settings.getSettingsValue('modelDiscoveryPriceBandPct'),
   ]);
   return {
@@ -1182,6 +1400,10 @@ async function readMode(adapters: ModelDiscoveryAdapters): Promise<{
     autoEnable: autoEnable === 'manual' || autoEnable === 'all' ? autoEnable : 'priced',
     autoRemap: autoRemap === 'apply' ? 'apply' : 'suggest',
     allowEgress: allowEgress !== false,
+    // On unless an operator turns it off: this replaces a human hand-writing
+    // the profile, so off by default would leave every new OpenAI model
+    // tool-less forever. The setting is the kill switch, not the opt-in.
+    probeNewModels: probeNewModels !== false,
     // A band of 0 is legitimate ("flag every move"), so only an unusable value
     // falls back; NaN or a negative one would let every move through.
     bandPct: typeof bandPct === 'number' && Number.isFinite(bandPct) && bandPct >= 0 ? bandPct : DEFAULT_PRICE_BAND_PCT,

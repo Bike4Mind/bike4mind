@@ -4,10 +4,11 @@ import { Quest } from '@bike4mind/database';
 import { z } from 'zod';
 import { ForbiddenError } from '@server/utils/errors';
 import { TELEMETRY_SAFE_PROJECTION } from '@server/utils/telemetryProjection';
+import { dateParam } from '@server/utils/dateParam';
 
 const querySchema = z.object({
-  startDate: z.string().optional(),
-  endDate: z.string().optional(),
+  startDate: dateParam.optional(),
+  endDate: dateParam.optional(),
   modelId: z.string().optional(),
   provider: z.string().optional(),
   minAnomalyScore: z.string().optional(),

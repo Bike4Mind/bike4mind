@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 import { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
+import { assertParseableDate } from '@server/utils/dateParam';
 
 /**
  * Admin API for querying Slack audit logs
@@ -66,8 +67,11 @@ const handler = baseApi().get(async (req, res) => {
   if (success !== undefined) filters.success = success;
 
   // Query logs using findByDateRange which supports all filters
+  assertParseableDate('startDate', startDate);
+  assertParseableDate('endDate', endDate);
   const start = startDate ? new Date(startDate) : new Date(0);
   const end = endDate ? new Date(endDate) : new Date();
+
   const logs = await slackAuditLogRepository.findByDateRange(start, end, filters, limit);
 
   Logger.info('📋 [Admin] Queried Slack audit logs', {

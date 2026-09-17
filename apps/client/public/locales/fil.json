@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Mangyaring magpasok ng wastong mga email address",
     "send_referral": "Ipadala ang Referral",
     "send_referral_success": "Matagumpay na naipadala ang referral!",
-    "send_referral_skipped": "{{count}} paanyaya ang nilaktawan — ang mga email address na iyon ay may account na.",
     "send_referral_failed": "Hindi maipadala ang {{count}} paanyaya. Pakisubukang muli.",
     "send_referral_error": "Error sa pagpapadala ng referral. Pakisubukang muli.",
     "slack_notification_default": "Referral na ipinadala ng user USER_NAME:USER_ID sa FRIEND_EMAIL"

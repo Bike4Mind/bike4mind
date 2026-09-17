@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
-import { filterOptInTools, selectSubagentTools, filterToolsByPatterns } from './toolFilter';
+import { filterOptInTools, selectSubagentTools, filterToolsByPatterns, matchesToolPattern } from './toolFilter';
 
 /** Minimal tool stub — only `toolSchema.name` is read by the filters. */
 function tool(name: string): ICompletionOptionTools {
@@ -70,5 +70,25 @@ describe('selectSubagentTools', () => {
     const viaSelect = selectSubagentTools(parentTools, [], ['web_search']);
     const viaFilter = filterToolsByPatterns(parentTools, ['web_search']);
     expect(names(viaSelect)).toEqual(names(viaFilter));
+  });
+});
+
+describe('matchesToolPattern', () => {
+  it('treats every character but * as a literal', () => {
+    // A regex-based matcher escapes `.` into `\.` and would answer the first pair the same
+    // way, but `[ab]` into a character class - flipping the second pair in both directions.
+    expect(matchesToolPattern('mcp__github__create_issue', 'mcp__*__create_*')).toBe(true);
+    expect(matchesToolPattern('a.b', 'a.b')).toBe(true);
+    expect(matchesToolPattern('axb', 'a.b')).toBe(false);
+    expect(matchesToolPattern('x[ab]', '*[ab]')).toBe(true);
+    expect(matchesToolPattern('xa', '*[ab]')).toBe(false);
+  });
+
+  it('resolves a chained-* pattern without catastrophic backtracking', () => {
+    // allowedTools/deniedTools reach this unvalidated off req.body, and every subagent
+    // dispatch evaluates each pattern - so a hostile one used to pin the event loop.
+    const start = Date.now();
+    expect(matchesToolPattern('a'.repeat(40), '*a'.repeat(20) + 'Z')).toBe(false);
+    expect(Date.now() - start).toBeLessThan(1000);
   });
 });

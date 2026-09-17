@@ -1,7 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IUserDocument } from '@bike4mind/common';
 
-vi.mock('@bike4mind/database', () => ({
+vi.mock('@bike4mind/database', async () => ({
+  // The shared share arm is the REAL implementation - it takes the resource list as a parameter,
+  // so it registers rules against the stub classes below and CASL still matches them.
+  applySharedShareableRules: (
+    await vi.importActual<typeof import('../../../../../packages/database/src/utils/ability')>(
+      '../../../../../packages/database/src/utils/ability'
+    )
+  ).applySharedShareableRules,
   AdminSettings: class AdminSettings {},
   CounterLog: class CounterLog {},
   Session: class Session {
@@ -31,7 +38,8 @@ vi.mock('@server/models/Subscription', () => ({
 }));
 
 import defineAbilitiesFor from '../ability';
-import { Prompt, FabFile } from '@bike4mind/database';
+import { Prompt, FabFile, FeedbackModel } from '@bike4mind/database';
+import { accessibleBy } from '@casl/mongoose';
 
 const makeUser = (overrides: Partial<IUserDocument> = {}): IUserDocument =>
   ({
@@ -143,6 +151,113 @@ describe('defineAbilitiesFor - group-shared document access', () => {
     const doc = sharedWithGroups([
       { groupId: 'g1', permissions: ['read'] },
       { groupId: 'g2', permissions: ['read', 'update'] },
+    ]);
+    expect(ability.can('update', doc)).toBe(true);
+  });
+});
+
+describe('defineAbilitiesFor - Feedback read/delete scoping', () => {
+  // A reporter owns fb-own; someone else owns fb-other. Instances, not the class: every non-admin
+  // feedback grant carries a { userId } condition, and a by-class check does not evaluate it.
+  const ownReport = Object.assign(new FeedbackModel(), { userId: 'u1' });
+  const othersReport = Object.assign(new FeedbackModel(), { userId: 'someone-else' });
+
+  it('lets a reporter read and retract their OWN report', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', ownReport)).toBe(true);
+    expect(ability.can('delete', ownReport)).toBe(true);
+  });
+
+  it("denies a reporter reading or deleting SOMEONE ELSE'S report", () => {
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', othersReport)).toBe(false);
+    expect(ability.can('delete', othersReport)).toBe(false);
+  });
+
+  it('lets an admin read and delete any report', () => {
+    const ability = defineAbilitiesFor(makeUser({ isAdmin: true }));
+    expect(ability.can('read', othersReport)).toBe(true);
+    expect(ability.can('delete', othersReport)).toBe(true);
+  });
+
+  it('pins the footgun these grants create: the by-class check passes for a non-owner', () => {
+    // This is why every feedback route authorizes against the fetched instance (read/update/
+    // delete) or narrows the query with accessibleBy (list). If a route ever reverts to a
+    // by-class check, it hands every logged-in user the admin view - and this assertion is the
+    // record of why that check is not safe here.
+    const ability = defineAbilitiesFor(makeUser());
+    expect(ability.can('read', FeedbackModel)).toBe(true);
+    expect(ability.can('delete', FeedbackModel)).toBe(true);
+    expect(ability.can('read', othersReport)).toBe(false);
+    expect(ability.can('delete', othersReport)).toBe(false);
+  });
+
+  it('narrows a list query to the caller for a non-admin, and not at all for an admin', () => {
+    // accessibleBy is what pages/api/feedback/index.ts uses to scope the list; these are the two
+    // shapes it must produce.
+    const reporterScope = accessibleBy(defineAbilitiesFor(makeUser()), 'read').ofType(FeedbackModel);
+    expect(JSON.stringify(reporterScope)).toContain('u1');
+
+    const adminScope = accessibleBy(defineAbilitiesFor(makeUser({ isAdmin: true })), 'read').ofType(FeedbackModel);
+    expect(adminScope).toEqual({});
+  });
+
+  it('fails closed for a caller with no read grant at all', () => {
+    // An unsatisfiable filter, never an empty one: an empty filter would match the whole
+    // collection.
+    const scope = accessibleBy(defineAbilitiesFor(undefined), 'read').ofType(FeedbackModel);
+    expect(scope).toEqual({ $expr: { $eq: [0, 1] } });
+    expect(scope).not.toEqual({});
+  });
+});
+
+// The user arm of the same gate as the group block above: `users[]` pairs a userId with
+// the permissions that user is granted, and both must hold on the SAME entry. Must stay
+// in sync with the db-core copy (packages/database/src/utils/ability.test.ts).
+describe('defineAbilitiesFor - user-shared document access', () => {
+  type UserShare = { userId: string; permissions: string[] };
+  const sharedWithUsers = (users: UserShare[]) => Object.assign(new FabFile(), { userId: 'owner', users, groups: [] });
+
+  it('grants read to a user the doc shares read with', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([{ userId: 'u1', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(true);
+  });
+
+  it('denies a user the doc is not shared with', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([{ userId: 'someone-else', permissions: ['read'] }]);
+    expect(ability.can('read', doc)).toBe(false);
+  });
+
+  it('denies when the matched entry lacks the requested permission', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([{ userId: 'u1', permissions: ['share'] }]);
+    expect(ability.can('read', doc)).toBe(false);
+    expect(ability.can('share', doc)).toBe(true);
+  });
+
+  // The over-broad-grant guard, and unlike the group arm this one is live rather than
+  // dormant: there is no empty-collection gate in front of it, so the dotted filter
+  // reached production through accessibleBy. The caller holds only `share` on their own
+  // entry and `read` belongs to a co-collaborator's; dotted satisfied the two halves
+  // across the two entries and leaked read. The `share` assertion is the positive
+  // control that the entry still matches at all.
+  it('does not leak a permission granted to a different user (no cross-element match)', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([
+      { userId: 'u1', permissions: ['share'] },
+      { userId: 'collaborator', permissions: ['read'] },
+    ]);
+    expect(ability.can('read', doc)).toBe(false);
+    expect(ability.can('share', doc)).toBe(true);
+  });
+
+  it('resolves the right entry when a doc is shared with several users', () => {
+    const ability = defineAbilitiesFor(makeUser());
+    const doc = sharedWithUsers([
+      { userId: 'collaborator', permissions: ['read'] },
+      { userId: 'u1', permissions: ['read', 'update'] },
     ]);
     expect(ability.can('update', doc)).toBe(true);
   });

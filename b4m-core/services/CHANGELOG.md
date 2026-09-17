@@ -1,5 +1,582 @@
 # @bike4mind/services
 
+## 10.0.0
+
+### Major Changes
+
+- [#2663](https://github.com/Bike4Mind/bike4mind/pull/2663) [`897db4d`](https://github.com/Bike4Mind/bike4mind/commit/897db4d71005adb476705a5e5bc0f59d4a8ccc39) Thanks [@jasonbdaro](https://github.com/jasonbdaro)! - cascade revocations, cap re-shares, and gate the invite lifecycle
+
+- [#2663](https://github.com/Bike4Mind/bike4mind/pull/2663) [`897db4d`](https://github.com/Bike4Mind/bike4mind/commit/897db4d71005adb476705a5e5bc0f59d4a8ccc39) Thanks [@jasonbdaro](https://github.com/jasonbdaro)! - Second tranche of the sharing authorization cluster. A grant now means only what it says, and an
+  entity that derives grants cleans them up when it goes away.
+
+  Re-sharing is capped and gated at the invite door. An invite can no longer carry a permission its
+  minter does not hold, so a sharee with `share` alone cannot mint `update`/`delete` and redeem the link on their own
+  account; `@bike4mind/common` exports `heldPermissions` and `grantablePermissions` for that check.
+  The cap uses the latter, which treats `share` as conveying `read`: minting an invite already
+  requires share authority, and a collaborator granted share alone still has to be able to pass on
+  the read that share implies. Flipping `isGlobalRead`/
+  `isGlobalWrite` publishes a document to the whole instance, so it moves from the update predicate
+  to the share predicate. Project invite listing moves to the share predicate too, since it exposes
+  link-invite ids and pending invitees' email addresses. Accepting a session invite propagates a
+  grant to an attached file only when the inviter holds share on that file, capped at what they hold;
+  invites gain an optional `inviterId` to make that check possible, and a legacy invite without one
+  falls back to propagating only to the session owner's own files.
+
+  Revocation and deletion now cascade. The project-scoped revoke filter removed every entry carrying
+  the target `projectId` rather than only the target user's, so one member leaving stripped every
+  co-member's access. Deleting a project strips the grants it left on its files and sessions.
+  Revoking a session share also removes the file grants acceptance materialized. Deleting a session
+  hard-deletes only the owner's own files; an attached file owned by someone else loses the derived
+  grant instead of being destroyed.
+
+  A shared entry now records the grant's source, for sessions as well as projects. `pushShareable`
+  keyed `users[]` on `userId` alone,
+  so a file reached through two projects collapsed into one entry tagged with whichever project
+  wrote last, while `revoke` filters on that tag: revoking via the earlier project matched nothing
+  and returned the document as if it had succeeded, leaving access live, and revoking via the later
+  one tore out the other project's grant as well. Entries are keyed on `(userId, projectId, sessionId)`,
+  so each project's grant, each session's, and any direct share are separate rows, and a scoped revoke that matches no row now
+  raises `NotFoundError` instead of reporting a success that removed nothing. No first-party caller passes a
+  `projectId` except `revokeFromProject`'s own cascade, which swallows `NotFoundError` by design, but
+  the `revokeSharing` route accepts one in its body - so a client that supplies a `projectId` matching
+  none of the target's rows now gets a 404 instead of the broad revoke it probably meant. That is the
+  fail-closed direction, and it is the point: the old behaviour reported success and removed nothing.
+  Rows written before
+  this change carry only the last project's tag; a scoped revoke against an earlier project hits the
+  new not-found path, and revoking without a `projectId` still clears every row the user holds. A
+  user may now legitimately hold several rows on one document, so the client-side permission helpers
+  in `apps/client/app/utils/userPermission.ts` union across them instead of reading the first match,
+  matching the `$elemMatch` predicates and `heldPermissions` server-side.
+
+  The db-core CASL ability was missing `Project` from its shared user/group permission arm while the
+  HTTP copy carried it, so a project shared with a user was unreachable through every caller that
+  builds an ability from `@bike4mind/database` rather than `@server/auth/ability` (the quest,
+  slack-quest, image-edit, image-generation and video-generation queue handlers). Both copies now
+  grant the same resource set, and a structural test reads the two files and fails if they drift.
+
+  An invite now records whether it names anybody. Project and Organization invites carry raw user
+  ids (the add-members modals send `recipients: [userId]`), and `findAllByEmailsOrUsernames` queries
+  email and username only, so their `recipients.pending` always persisted as `[]`. Every gate keyed
+  on `pending.length` therefore fell open for exactly those two types: any authenticated caller
+  holding the invite id could read its contents, and could accept it and join the project or
+  organization with grants on every file and session inside. `createInvite` resolves id-shaped
+  recipients through `findByIds` (a new requirement on its `users` adapter, alongside the
+  `findAllByEmailsOrUsernames` and `findById` it already took), refuses to mint an invite whose
+  recipients all fail to resolve, and persists an `isLinkOnly` flag; `canViewInvite` and the accept-time recipient gate key on that flag
+  via `isLinkOnlyInvite` (`@bike4mind/common`) rather than on an empty `pending`. Invites minted
+  before the flag fall back to inferring it, and only for FabFile and Session, whose recipients always
+  did resolve to emails - so a legacy Project or Organization invite fails closed at both gates and
+  has to be re-sent. A side effect worth knowing: organization seat accounting counts pending
+  recipients, so it was undercounting and now holds.
+
+  A session's knowledge propagation now tags the grants it mints, and both cascades key on that tag.
+  `IUserShare` gains an optional `sessionId`, the counterpart to `projectId` for the other entity that
+  derives grants, and `pushShareable` keys on all three. Untagged, a propagated file grant merged into
+  any direct share of the same file to the same user - so unsharing the session deleted the merged row
+  whole and destroyed a grant a third party had made. Reaching that row through the session also
+  skipped the owner-or-self check a direct `revokeSharing` on the file would have applied, since the
+  cascade writes `file.users` itself. Keying on the tag fixes both: a direct share is its own row and
+  is never touched, and a tagged row can only have been written by an accept that already required the
+  inviter to hold share on the file, so the tag _is_ the authorization. That retires the previous
+  gate, which asked whether the SESSION OWNER could still share the file while the mint had asked
+  about the INVITER - not the same principal whenever a sharee minted the invite, which stranded those
+  grants un-revokable through the very path that created them.
+
+  Grants written before the tag existed are untagged and so are not reachable from either cascade.
+  This is under-revocation, and it is the safe direction to fail - the alternative is the third-party
+  destruction above - but it is not costless, and the honest statement of the residue is narrower than
+  "revoke it on the file instead". Where the session owner does not own the file, they have no
+  surface at all: an unscoped revoke on the file is owner-or-self, so only the file's owner or the
+  grant holder can clear it, and neither of them is the person who wanted the access gone. No backfill closes this from
+  code alone: an untagged row is indistinguishable from the direct share this change exists to
+  protect, so tagging it re-creates the bug and adding a second tagged row leaves the untagged one
+  live. Reconstructing provenance from accepted-invite history does not substitute, because a grant
+  outlives the invite that created it and can predate the address it would be keyed on; a gate on the
+  session owner holding `share` authorizes the wrong principal, since the mint reads the inviter. It is
+  not a regression either - before this change neither cascade existed at all, so those rows were
+  already unreachable from this surface. The gap shrinks as legacy grants are revoked on the file. Closing
+  the rest is tracked as its own follow-up, `sharing: owner-facing surface to list and clear untagged
+grant rows`, which is a UI plus a scoped revoke endpoint rather than a backfill that guesses at
+  provenance.
+
+  Deleting a session cascades before it tombstones. The tombstone came first while the per-file grant
+  rewrite came second, and `softDeletePlugin` puts `deletedAt: null` on every `findOne` - so a failure
+  mid-cascade left the session unreachable on a retry with the remaining grants live and nothing left
+  to clear them. The cascade now runs first, and both live entry points - `DELETE /api/sessions/[id]` and the bulk
+  route - wrap each call in a transaction, so a concurrency conflict partway through rolls back rather
+  than leaving some files rewritten and some not; that matches the `revokeSharing` route, which
+  already wrapped the sibling cascade. The bulk route wraps per session rather than around its loop,
+  because it is best-effort: one session failing must not roll back the ones already deleted.
+
+  What that cascade touches, precisely: rows tagged with this session, on the union of files uploaded
+  into it and files named in `knowledgeIds` (neither set contains the other), for every grantee rather
+  than only the deleter, skipping files the deleter owns because those are deleted moments later and a
+  guarded write on them can abort the delete for nothing. That delete is `deleteManyInIds`, the
+  soft-delete plugin's tombstone path rather than a hard delete, so the skipped rows survive on the
+  tombstoned document; no read path reaches them, since every FabFile aggregate filters `deletedAt`
+  and none projects `users`, and the one `includeDeleted` read that returns `users[]` is admin-only. Its reach is bounded by `knowledgeIds` as of the call, which is
+  client-writable, so a sharee holding update on the session can detach a file first and keep the
+  grant; closing that needs a `users.sessionId` sweep across a high-cardinality collection and is not
+  paid here. Both new whole-document grant writes, here and in the session knowledge-file cascade,
+  take `updateGuarded` rather than `update`, joining the optimistic-concurrency convention the revoke
+  path already uses. Mint paths still use a plain `update`; guarding those remains a separate change.
+
+  Deleting a project revokes the owner's own derived grants. `addFiles`/`addSessions` mint the project
+  owner a `projectId`-scoped read+update grant on content a MEMBER contributes, but the owner is never
+  in `project.users`, so the per-member cascade never reached those and they outlived the only surface
+  that could revoke them. Making that pass reachable meant taking a hidden mutation out of
+  `revokeFromProject`: it pruned the caller's live `project.fileIds`/`sessionIds` as it went, so by the
+  time the owner pass ran, the member-owned documents carrying the owner's grants had already been
+  removed from the list it reads. It now returns the pruned ids and leaves the caller's document alone.
+  `leaveProject` and the project arm of `revoke` assign the return; `deleteProject` drops it, so a
+  tombstoned project still records what it held for restore and audit to read.
+
+  The legacy link-only inference reads all three recipient buckets, and is permanent: rows minted
+  before `isLinkOnly` existed never gain the flag, so the fork stays until none are left. Its safety
+  also depends on `remaining`, which is documented at the predicate rather than left implied. Accepting and declining both move
+  an address out of `pending`, so unioning only `pending` and `accepted` made a pre-flag invite whose
+  named recipients had all declined infer as a share link - opening the view gate to any authenticated
+  caller and letting anyone redeem it. `refused` is unioned too.
+
+  An invite of a type that is not shareable by link can no longer be minted with no recipients. Only
+  FabFile and Session are: for Project and Organization an empty list would otherwise persist
+  `isLinkOnly: true` and be redeemable by anyone holding the id, and for Group it persisted
+  `isLinkOnly: false` against an empty `pending`, which both the view gate and the accept gate then
+  refuse - a row that minted successfully and nobody could ever redeem. The refusal is expressed
+  against the same predicate that sets the flag, so the two cannot drift apart. `InviteType.Tool` has
+  no arm in `createInvite`'s switch and still fails earlier, on `Document not found`. A Group invite
+  naming only recipients that fail to resolve is refused too, matching the Project/Organization arm
+  that already did: it persisted a row both gates then refuse, while telling the sharer it worked.
+
+  The CASL share arm is now one exported function, `applySharedShareableRules`, called by both ability
+  builders instead of being hand-copied. Each caller still passes its own resource list, because CASL
+  matches subjects by constructor and a shared list would close over db-core's models; list drift is
+  what the structural test compares, and body drift is no longer possible. `findAllAccessibleByIds`
+  declares the `Pick<IUserDocument, 'id' | 'groups'>` it actually consumes, which removes two casts at
+  the `createProject` call site. Its sibling `findAllUpdateAccessByIds` still takes a full
+  `IUserDocument` and is unchanged here.
+  `GET /api/invites/[id]` screens the id shape before `findById` and answers a malformed id with the
+  same 404 as a missing or unauthorized one, so the status never tells a caller which ids exist.
+  The `backfill-invite-inviter-id` migration backfills `Invite.inviterId` from the username every
+  invite already persists, which is the closing move for the legacy propagation fallback in
+  `accept.ts`. It scans on an `_id` cursor rather than loading the whole matching set at once, since
+  invites are one of the higher-cardinality collections. Because `username` is mutable and the only
+  reader of `inviterId` is an authorization gate, the backfill is narrowed twice: to Session invites,
+  the only type that gate runs for, and to resolutions where the account still OWNS the target
+  session. Not merely holds a grant on it: minting a Session invite is owner-only, so a sharee can
+  never be the inviter, and admitting grant holders would readmit the squatter case the narrowing
+  exists to exclude. A rename-then-reuse resolves to exactly one account, so the
+  ambiguity guard never fires on it; anything uncorroborated stays on the conservative fallback, which
+  is strictly safer than attributing the invite to the wrong person. `SkillShareDialog`, the surface that actually
+  flips `isGlobalRead`/`isGlobalWrite`, reports the server's reason instead of a fixed string, so a
+  holder refused by the predicate this change moves can tell that apart from a network failure.
+
+  Cancelling one named recipient by email clamps `remaining` to the addresses still pending instead of
+  decrementing it. The two gates that let anyone holding an invite id read and redeem it treat an
+  invite naming nobody as a share link, and on a row minted before `isLinkOnly` existed that is
+  inferred from the recipient buckets - so `remaining` reaching zero is what stops a cancelled named
+  invite becoming a live link. A decrement only matched the address count while `remaining` started
+  equal to it, and `available` in the create body is taken at face value, so a row naming one person
+  with five slots kept four of them after that person was cancelled.
+
+  `POST /api/projects` no longer turns a typed service error into a 500. `createProject` raises
+  `BadRequestError` when a supplied file or notebook does not resolve through the caller's access
+  predicate, which the client hits whenever a pick is revoked between select and submit; the route's
+  catch rewrapped every non-duplicate-key error as `InternalServerError`, so that 400 reached the
+  client as a 500. `GET /api/[type]/[id]` now strips co-recipients' addresses from the response, the
+  last invitee-facing route that was returning the whole recipient list to one named recipient.
+
+  Invite redemption enforces `expiresAt` on both accept and refuse. Declining now affects only the
+  decliner's own slot: one recipient declining used to zero the invite for every other recipient, and
+  any holder of a link id could do the same. Whole-invite revocation requires the same authority
+  `cancelInviteById` enforces. `GET /api/invites/[id]` and `GET /api/[type]/[id]` no longer return an
+  invite's contents to any authenticated caller holding the id; a caller who fails the gate gets 404,
+  not 403, so the response does not confirm the id exists.
+
+  Ids supplied by the caller are resolved before they are persisted. Project creation and
+  `addSessions` write only the ids that resolved through the caller's access predicate, so a project
+  can no longer carry a file or notebook the creator cannot reach. The favorites list intersects
+  against currently-held access rather than trusting the stored row, so a notebook stops appearing
+  once its share is revoked.
+
+  Breaking, in `@bike4mind/services`: `createProject` takes the acting user (`Pick<IUserDocument,
+'id' | 'groups'>`) instead of a bare user id, and requires `fabFiles` and `sessions` adapters;
+  `refuseWholeInvite` takes a full `IUserDocument` and the adapters `authorizeByInviteType` needs;
+  `deleteProject` requires `sessions`, `fabFiles` and `users` adapters to run its cascade;
+  `revokeFromProject` returns `{ fileIds, sessionIds }` and no longer writes them back onto the
+  `project` it was handed, so a caller that relied on the mutation must assign the return itself. In
+  `@bike4mind/common`, `IUserShare` gains an optional `sessionId`, and any code that reads `users[]`
+  must treat a row carrying it as distinct from an untagged row for the same user.
+
+### Minor Changes
+
+- [#2853](https://github.com/Bike4Mind/bike4mind/pull/2853) [`7bd1432`](https://github.com/Bike4Mind/bike4mind/commit/7bd143228cbc2b9be3434ad8d795c2ae76623241) Thanks [@onoya](https://github.com/onoya)! - correct and retry
+
+### Patch Changes
+
+- [#2719](https://github.com/Bike4Mind/bike4mind/pull/2719) [`718232a`](https://github.com/Bike4Mind/bike4mind/commit/718232ac8b73f441d39cbf74041f3a06316a7248) Thanks [@vinchi777](https://github.com/vinchi777)! - gate self-host OpenSearch retrieval on confirmed index residency
+
+- [#2788](https://github.com/Bike4Mind/bike4mind/pull/2788) [`c619705`](https://github.com/Bike4Mind/bike4mind/commit/c619705a92c6cbbb614b893caee446ae868beab2) Thanks [@onoya](https://github.com/onoya)! - stop a vectorize resume from splitting a file across two embedding spaces
+
+- [#2862](https://github.com/Bike4Mind/bike4mind/pull/2862) [`b9bc64a`](https://github.com/Bike4Mind/bike4mind/commit/b9bc64a4291420be50017fb34c1dc80f92e64c89) Thanks [@onoya](https://github.com/onoya)! - report a declared scope rung the caller's scope cannot key
+
+- [#2884](https://github.com/Bike4Mind/bike4mind/pull/2884) [`9310a7a`](https://github.com/Bike4Mind/bike4mind/commit/9310a7a4ef4f5348d3ce57495513d6f087d5b4b8) Thanks [@ken-b4m](https://github.com/ken-b4m)! - bind the leave-it-open licence in the grounded-no-invention rule
+
+- [#2887](https://github.com/Bike4Mind/bike4mind/pull/2887) [`b757a71`](https://github.com/Bike4Mind/bike4mind/commit/b757a7120009f60171e04684b4582f13bddf31b0) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - read admin settings fresh on a manual run
+
+- [#2888](https://github.com/Bike4Mind/bike4mind/pull/2888) [`5d79949`](https://github.com/Bike4Mind/bike4mind/commit/5d7994926622a7af9d6aa38d8e547e014d3838ac) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - surface the sources a discovery run skipped
+
+- [#2889](https://github.com/Bike4Mind/bike4mind/pull/2889) [`d6b86bf`](https://github.com/Bike4Mind/bike4mind/commit/d6b86bf0e7c644adb387d17b48e48ee6da58652c) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - forward quality param to OpenAI for GPT-Image models
+
+- Updated dependencies [[`897db4d`](https://github.com/Bike4Mind/bike4mind/commit/897db4d71005adb476705a5e5bc0f59d4a8ccc39), [`718232a`](https://github.com/Bike4Mind/bike4mind/commit/718232ac8b73f441d39cbf74041f3a06316a7248), [`c619705`](https://github.com/Bike4Mind/bike4mind/commit/c619705a92c6cbbb614b893caee446ae868beab2), [`e4263b7`](https://github.com/Bike4Mind/bike4mind/commit/e4263b73e1c24301fe4e9f6414903697bc715bfa), [`7bd1432`](https://github.com/Bike4Mind/bike4mind/commit/7bd143228cbc2b9be3434ad8d795c2ae76623241), [`b9bc64a`](https://github.com/Bike4Mind/bike4mind/commit/b9bc64a4291420be50017fb34c1dc80f92e64c89), [`d6cd7dd`](https://github.com/Bike4Mind/bike4mind/commit/d6cd7dddabe0428fee52db8fc33d045461ae4c79), [`b757a71`](https://github.com/Bike4Mind/bike4mind/commit/b757a7120009f60171e04684b4582f13bddf31b0), [`5d79949`](https://github.com/Bike4Mind/bike4mind/commit/5d7994926622a7af9d6aa38d8e547e014d3838ac), [`d6b86bf`](https://github.com/Bike4Mind/bike4mind/commit/d6b86bf0e7c644adb387d17b48e48ee6da58652c), [`d086ed5`](https://github.com/Bike4Mind/bike4mind/commit/d086ed5f0049fea32dd03034fe8f084c600b5bd7), [`b91b853`](https://github.com/Bike4Mind/bike4mind/commit/b91b853a865f8f1cf5ab417ade6fac88184886c2), [`91a73c9`](https://github.com/Bike4Mind/bike4mind/commit/91a73c9b9494408f126d267e859f9a9629e6e126), [`13e0733`](https://github.com/Bike4Mind/bike4mind/commit/13e0733c9faf196143a79225d4bcd74623f36dee), [`897db4d`](https://github.com/Bike4Mind/bike4mind/commit/897db4d71005adb476705a5e5bc0f59d4a8ccc39)]:
+  - @bike4mind/common@8.0.0
+  - @bike4mind/db-core@0.6.1
+  - @bike4mind/fab-pipeline@1.3.9
+  - @bike4mind/auth@0.8.6
+  - @bike4mind/utils@6.0.2
+  - @bike4mind/agents@1.0.9
+  - @bike4mind/llm-adapters@0.15.3
+  - @bike4mind/mcp@2.0.9
+
+## 9.1.0
+
+### Minor Changes
+
+- [#2720](https://github.com/Bike4Mind/bike4mind/pull/2720) [`40f31bd`](https://github.com/Bike4Mind/bike4mind/commit/40f31bd9c9f63e6a2db9d5569222145c84fa46a0) Thanks [@vinchi777](https://github.com/vinchi777)! - add a /feedback slash command for session-level reports
+
+### Patch Changes
+
+- [#2885](https://github.com/Bike4Mind/bike4mind/pull/2885) [`00fb861`](https://github.com/Bike4Mind/bike4mind/commit/00fb8615644725e4936aec459d5dec0bdbac121d) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - name the field behind a refused catalog record
+
+- Updated dependencies [[`bf76770`](https://github.com/Bike4Mind/bike4mind/commit/bf7677008efbd820c9d235e1cbad8a7797fbd4b4), [`40f31bd`](https://github.com/Bike4Mind/bike4mind/commit/40f31bd9c9f63e6a2db9d5569222145c84fa46a0), [`bf76770`](https://github.com/Bike4Mind/bike4mind/commit/bf7677008efbd820c9d235e1cbad8a7797fbd4b4)]:
+  - @bike4mind/db-core@0.6.0
+  - @bike4mind/common@7.5.0
+  - @bike4mind/fab-pipeline@1.3.8
+  - @bike4mind/agents@1.0.8
+  - @bike4mind/auth@0.8.5
+  - @bike4mind/llm-adapters@0.15.2
+  - @bike4mind/mcp@2.0.8
+  - @bike4mind/utils@6.0.1
+
+## 9.0.0
+
+### Major Changes
+
+- [#2786](https://github.com/Bike4Mind/bike4mind/pull/2786) [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91) Thanks [@jarlacut](https://github.com/jarlacut)! - resolve ingest file type by extension, with per-door precedence
+
+  **Breaking change.** `resolveSupportedMimeType`'s third parameter is now an options object instead of
+  a bare predicate function:
+
+  ```ts
+  resolveSupportedMimeType(fileName, claimedMimeType, {
+    isAcceptable?: (mimeType: string | null | undefined) => boolean; // defaults to isSupportedFabFileMimeType
+    precedence?: 'extension-first' | 'claim-first'; // defaults to 'extension-first'
+    extensionlessFallback?: SupportedFabFileMimeTypes;
+  })
+  ```
+
+  A bare predicate passed as the third argument no longer works - wrap it as
+  `{ isAcceptable: yourPredicate }`. `precedence` controls whether the filename
+  extension or the caller-supplied MIME type is consulted first, and
+  `extensionlessFallback` is the type used for a filename that carries no
+  extension at all (and no claim) - omit it to keep a caller strict.
+
+  **Inputs that were previously accepted and are now refused:**
+
+  - A filename with a dot-tail that does not resolve to a known extension is
+    refused outright - a claimed MIME type no longer rescues it. (`deploy.sh` or
+    `malware.exe` claiming `text/plain` is no longer admitted.)
+  - A dotted date or version filename (`Meeting notes 2026.09.07`, `My Report
+v1.2`) is refused, because its tail is read as an unrecognized extension.
+  - A trailing-dot filename (`payload.`) is treated as malformed rather than
+    extension-less, so it no longer receives a plain-text fallback.
+  - A URL import that yields no extractable text is now refused with an error
+    instead of silently creating an empty file.
+  - The Slack ingest door now applies the same extension rule as the other
+    ingest doors: an attachment whose filename has an unrecognized or
+    date-style tail is refused.
+
+- [#2786](https://github.com/Bike4Mind/bike4mind/pull/2786) [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91) Thanks [@jarlacut](https://github.com/jarlacut)! - resolve ingest file type by extension, with per-door precedence
+
+### Minor Changes
+
+- [#2863](https://github.com/Bike4Mind/bike4mind/pull/2863) [`8cc4c68`](https://github.com/Bike4Mind/bike4mind/commit/8cc4c68855dcb550815abba6ccbc665bb2b251f0) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - add effective-settings admin read endpoint
+
+### Patch Changes
+
+- [#2782](https://github.com/Bike4Mind/bike4mind/pull/2782) [`7a214d5`](https://github.com/Bike4Mind/bike4mind/commit/7a214d5aa0fb5aa65302f887a3fac356ab3dc8ca) Thanks [@onoya](https://github.com/onoya)! - end a departing member's lake access, and pass on lakes they created
+
+- [#2814](https://github.com/Bike4Mind/bike4mind/pull/2814) [`10dd200`](https://github.com/Bike4Mind/bike4mind/commit/10dd2000171021022593d2c20d866f1d38cc30c7) Thanks [@julsanchez](https://github.com/julsanchez)! - route blog tool fetches through the SSRF guard
+
+- [#2841](https://github.com/Bike4Mind/bike4mind/pull/2841) [`2cfe44d`](https://github.com/Bike4Mind/bike4mind/commit/2cfe44d452803f4be8d6689edfb4ad250b0c881c) Thanks [@onoya](https://github.com/onoya)! - schedule the Anthropic concurrency pool fairly and bound its wait line
+
+- [#2842](https://github.com/Bike4Mind/bike4mind/pull/2842) [`068e14f`](https://github.com/Bike4Mind/bike4mind/commit/068e14f2ab9e45cb7e7cecbae8a49fca1ce85dc6) Thanks [@choyno](https://github.com/choyno)! - validate requiredUserTag as a single matchable tag
+
+- [#2844](https://github.com/Bike4Mind/bike4mind/pull/2844) [`fa08028`](https://github.com/Bike4Mind/bike4mind/commit/fa08028c91136b4f051a45bc4976a7714677f845) Thanks [@choyno](https://github.com/choyno)! - surface lake status on computeLakeHealth so a non-active lake cannot read healthy
+
+- [#2860](https://github.com/Bike4Mind/bike4mind/pull/2860) [`6ea0d28`](https://github.com/Bike4Mind/bike4mind/commit/6ea0d28a8a8db0625f81cba61fd7a5f545dc3483) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - scope settings reads to verified org membership
+
+- [#2861](https://github.com/Bike4Mind/bike4mind/pull/2861) [`0a4253e`](https://github.com/Bike4Mind/bike4mind/commit/0a4253e4f31492b6fea19976a469ffd5e79f4af9) Thanks [@vinchi777](https://github.com/vinchi777)! - report lake lifecycle status in lake health
+
+- Updated dependencies [[`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91), [`7a214d5`](https://github.com/Bike4Mind/bike4mind/commit/7a214d5aa0fb5aa65302f887a3fac356ab3dc8ca), [`4f8f445`](https://github.com/Bike4Mind/bike4mind/commit/4f8f445aa1d025a5187158fc0a527f475cefbd91), [`6f662d8`](https://github.com/Bike4Mind/bike4mind/commit/6f662d81308d53bb430665ed048607da97c4e9ef), [`46ea8e1`](https://github.com/Bike4Mind/bike4mind/commit/46ea8e1efc42e992ebc0a19c4542f65d2665832c), [`2cfe44d`](https://github.com/Bike4Mind/bike4mind/commit/2cfe44d452803f4be8d6689edfb4ad250b0c881c), [`068e14f`](https://github.com/Bike4Mind/bike4mind/commit/068e14f2ab9e45cb7e7cecbae8a49fca1ce85dc6), [`fa08028`](https://github.com/Bike4Mind/bike4mind/commit/fa08028c91136b4f051a45bc4976a7714677f845), [`0a4253e`](https://github.com/Bike4Mind/bike4mind/commit/0a4253e4f31492b6fea19976a469ffd5e79f4af9), [`6ce4b99`](https://github.com/Bike4Mind/bike4mind/commit/6ce4b99b9ab5d4fe8142647a9b3dcef6f0c8ebfd)]:
+  - @bike4mind/utils@6.0.0
+  - @bike4mind/common@7.4.0
+  - @bike4mind/fab-pipeline@1.3.7
+  - @bike4mind/llm-adapters@0.15.1
+  - @bike4mind/agents@1.0.7
+  - @bike4mind/auth@0.8.4
+  - @bike4mind/db-core@0.5.7
+  - @bike4mind/mcp@2.0.7
+
+## 8.0.0
+
+### Major Changes
+
+- [#2778](https://github.com/Bike4Mind/bike4mind/pull/2778) [`f3d4563`](https://github.com/Bike4Mind/bike4mind/commit/f3d4563c442e4471fd37d3bf35baac96095f5fc5) Thanks [@onoya](https://github.com/onoya)! - keep the LLM tool closure out of the package barrel
+
+### Minor Changes
+
+- [#2812](https://github.com/Bike4Mind/bike4mind/pull/2812) [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46) Thanks [@maconard](https://github.com/maconard)! - restore DeepSeek V4 Pro
+
+### Patch Changes
+
+- [#2783](https://github.com/Bike4Mind/bike4mind/pull/2783) [`5e1eee0`](https://github.com/Bike4Mind/bike4mind/commit/5e1eee08f765b93a1c30160c03858e7c5e9fd798) Thanks [@onoya](https://github.com/onoya)! - verify membership and roster authority at every use site
+
+- [#2823](https://github.com/Bike4Mind/bike4mind/pull/2823) [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243) Thanks [@onoya](https://github.com/onoya)! - escape dynamic regex inputs and guard dynamic object writes
+
+- [#2826](https://github.com/Bike4Mind/bike4mind/pull/2826) [`d1836db`](https://github.com/Bike4Mind/bike4mind/commit/d1836db1eb4c3d9c738a56b94d01da63f16e325a) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - dedupe sibling private-address guards onto a shared predicate
+
+- [#2828](https://github.com/Bike4Mind/bike4mind/pull/2828) [`2922d00`](https://github.com/Bike4Mind/bike4mind/commit/2922d0061d5ee3673da2a3b9bd88f11b7005e5db) Thanks [@onoya](https://github.com/onoya)! - let a caller rung only raise the search serve budget
+
+- [#2843](https://github.com/Bike4Mind/bike4mind/pull/2843) [`13322f6`](https://github.com/Bike4Mind/bike4mind/commit/13322f6bcc3473bdc243d1d4e397e069204273a6) Thanks [@onoya](https://github.com/onoya)! - harden the shared settings int-coercion helpers
+
+- Updated dependencies [[`5e1eee0`](https://github.com/Bike4Mind/bike4mind/commit/5e1eee08f765b93a1c30160c03858e7c5e9fd798), [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46), [`a4e980d`](https://github.com/Bike4Mind/bike4mind/commit/a4e980d956c721aa734dde981420adcb4bfaa243), [`2922d00`](https://github.com/Bike4Mind/bike4mind/commit/2922d0061d5ee3673da2a3b9bd88f11b7005e5db), [`afba631`](https://github.com/Bike4Mind/bike4mind/commit/afba6315105929e9b39672a2d0d23caad7f8e4aa)]:
+  - @bike4mind/common@7.3.0
+  - @bike4mind/llm-adapters@0.15.0
+  - @bike4mind/utils@5.2.0
+  - @bike4mind/agents@1.0.6
+  - @bike4mind/fab-pipeline@1.3.6
+  - @bike4mind/auth@0.8.3
+  - @bike4mind/db-core@0.5.6
+  - @bike4mind/mcp@2.0.6
+
+## 7.2.2
+
+### Patch Changes
+
+- [#2765](https://github.com/Bike4Mind/bike4mind/pull/2765) [`2298140`](https://github.com/Bike4Mind/bike4mind/commit/229814036a13097cae1cd3ccc19d052d4d6c17f9) Thanks [@onoya](https://github.com/onoya)! - resolve search budgets on the caller scope in the semantic-search route
+
+- Updated dependencies [[`2298140`](https://github.com/Bike4Mind/bike4mind/commit/229814036a13097cae1cd3ccc19d052d4d6c17f9)]:
+  - @bike4mind/common@7.2.2
+  - @bike4mind/agents@1.0.5
+  - @bike4mind/auth@0.8.2
+  - @bike4mind/db-core@0.5.5
+  - @bike4mind/fab-pipeline@1.3.5
+  - @bike4mind/llm-adapters@0.14.2
+  - @bike4mind/mcp@2.0.5
+  - @bike4mind/utils@5.1.2
+
+## 7.2.1
+
+### Patch Changes
+
+- [#2796](https://github.com/Bike4Mind/bike4mind/pull/2796) [`8ef2c17`](https://github.com/Bike4Mind/bike4mind/commit/8ef2c17f7b54b0df8c3809f17a62544784e65029) Thanks [@onoya](https://github.com/onoya)! - derive the scoped-retrieval Lake-rung guard from the reads' own key lists
+
+- Updated dependencies [[`8ef2c17`](https://github.com/Bike4Mind/bike4mind/commit/8ef2c17f7b54b0df8c3809f17a62544784e65029)]:
+  - @bike4mind/common@7.2.1
+  - @bike4mind/agents@1.0.4
+  - @bike4mind/auth@0.8.1
+  - @bike4mind/db-core@0.5.4
+  - @bike4mind/fab-pipeline@1.3.4
+  - @bike4mind/llm-adapters@0.14.1
+  - @bike4mind/mcp@2.0.4
+  - @bike4mind/utils@5.1.1
+
+## 7.2.0
+
+### Minor Changes
+
+- [#2760](https://github.com/Bike4Mind/bike4mind/pull/2760) [`f72cd4b`](https://github.com/Bike4Mind/bike4mind/commit/f72cd4b612275d641680699cfd4f6e91976903f7) Thanks [@onoya](https://github.com/onoya)! - measure and alarm on ANN query duration
+
+- [#2762](https://github.com/Bike4Mind/bike4mind/pull/2762) [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef) Thanks [@maconard](https://github.com/maconard)! - add DeepSeek as a first-party provider and close Moonshot gaps
+
+- [#2773](https://github.com/Bike4Mind/bike4mind/pull/2773) [`b660460`](https://github.com/Bike4Mind/bike4mind/commit/b6604604904ae62ab4c6745ec4e2335e05706e68) Thanks [@vinchi777](https://github.com/vinchi777)! - record which lake prompts the owner/curator grant arm admitted
+
+### Patch Changes
+
+- [#2682](https://github.com/Bike4Mind/bike4mind/pull/2682) [`f6407e2`](https://github.com/Bike4Mind/bike4mind/commit/f6407e27d91175446e28246e1234d4c0a409c694) Thanks [@onoya](https://github.com/onoya)! - fall back to a keyless Bedrock embedder when no provider credential resolves
+
+- [#2758](https://github.com/Bike4Mind/bike4mind/pull/2758) [`0a931d2`](https://github.com/Bike4Mind/bike4mind/commit/0a931d25ddbfc35963f82f1bb6ea26b89a10f39e) Thanks [@onoya](https://github.com/onoya)! - resolve cosine relevance floors per embedding space
+
+- [#2759](https://github.com/Bike4Mind/bike4mind/pull/2759) [`671c753`](https://github.com/Bike4Mind/bike4mind/commit/671c753fc81d65561729f591bc7038e4c605126c) Thanks [@onoya](https://github.com/onoya)! - report unmeasured lake members as unmeasured, and disclose the corpus-scope gap
+
+- [#2770](https://github.com/Bike4Mind/bike4mind/pull/2770) [`e543fe6`](https://github.com/Bike4Mind/bike4mind/commit/e543fe695608f0c4fb9aade7a0be974aa2c44f4e) Thanks [@wescarda](https://github.com/wescarda)! - use isObjectIdShaped instead of lowercase-only hex regex
+
+- [#2775](https://github.com/Bike4Mind/bike4mind/pull/2775) [`36fae3b`](https://github.com/Bike4Mind/bike4mind/commit/36fae3b0e2a448442c65b83735de0406ed233370) Thanks [@vinchi777](https://github.com/vinchi777)! - record the resolved lake scope at the retrieval seed site
+
+- [#2776](https://github.com/Bike4Mind/bike4mind/pull/2776) [`534d9c6`](https://github.com/Bike4Mind/bike4mind/commit/534d9c69e757aa69d4d68ef713199afbb94d53a5) Thanks [@wescarda](https://github.com/wescarda)! - resolve OpenAI bare model aliases (gpt-4.1) in the public completions API
+
+- Updated dependencies [[`b5c25db`](https://github.com/Bike4Mind/bike4mind/commit/b5c25db2ff248dd7491f7c263ae69cd1aaf23eca), [`0abc901`](https://github.com/Bike4Mind/bike4mind/commit/0abc9019ce87dc58c96e63273c32eb1310e121fa), [`aedbc31`](https://github.com/Bike4Mind/bike4mind/commit/aedbc312f5c166b52e166d795c7a2c6917134964), [`f6407e2`](https://github.com/Bike4Mind/bike4mind/commit/f6407e27d91175446e28246e1234d4c0a409c694), [`a756c37`](https://github.com/Bike4Mind/bike4mind/commit/a756c379f89401a9cfefc41735df4610dd5da0ce), [`0a931d2`](https://github.com/Bike4Mind/bike4mind/commit/0a931d25ddbfc35963f82f1bb6ea26b89a10f39e), [`671c753`](https://github.com/Bike4Mind/bike4mind/commit/671c753fc81d65561729f591bc7038e4c605126c), [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef), [`b660460`](https://github.com/Bike4Mind/bike4mind/commit/b6604604904ae62ab4c6745ec4e2335e05706e68), [`36fae3b`](https://github.com/Bike4Mind/bike4mind/commit/36fae3b0e2a448442c65b83735de0406ed233370)]:
+  - @bike4mind/common@7.2.0
+  - @bike4mind/mcp@2.0.3
+  - @bike4mind/llm-adapters@0.14.0
+  - @bike4mind/fab-pipeline@1.3.3
+  - @bike4mind/utils@5.1.0
+  - @bike4mind/auth@0.8.0
+  - @bike4mind/agents@1.0.3
+  - @bike4mind/db-core@0.5.3
+
+## 7.1.1
+
+### Patch Changes
+
+- Updated dependencies [[`7958ee1`](https://github.com/Bike4Mind/bike4mind/commit/7958ee13d277295ed9877a24686aa266265a727f), [`0e11dab`](https://github.com/Bike4Mind/bike4mind/commit/0e11dab88d9141c364c2f9192681fd94023050d3)]:
+  - @bike4mind/common@7.1.1
+  - @bike4mind/llm-adapters@0.13.0
+  - @bike4mind/agents@1.0.2
+  - @bike4mind/auth@0.7.6
+  - @bike4mind/db-core@0.5.2
+  - @bike4mind/fab-pipeline@1.3.2
+  - @bike4mind/mcp@2.0.2
+  - @bike4mind/utils@5.0.2
+
+## 7.1.0
+
+### Minor Changes
+
+- [#2465](https://github.com/Bike4Mind/bike4mind/pull/2465) [`576f59f`](https://github.com/Bike4Mind/bike4mind/commit/576f59f9cb237c473c2793e72cd33e1648f12327) Thanks [@onoya](https://github.com/onoya)! - per-document search cap + rescue sweep metrics ([#1422](https://github.com/Bike4Mind/bike4mind/issues/1422))
+
+### Patch Changes
+
+- Updated dependencies [[`576f59f`](https://github.com/Bike4Mind/bike4mind/commit/576f59f9cb237c473c2793e72cd33e1648f12327)]:
+  - @bike4mind/common@7.1.0
+  - @bike4mind/agents@1.0.1
+  - @bike4mind/auth@0.7.5
+  - @bike4mind/db-core@0.5.1
+  - @bike4mind/fab-pipeline@1.3.1
+  - @bike4mind/llm-adapters@0.12.2
+  - @bike4mind/mcp@2.0.1
+  - @bike4mind/utils@5.0.1
+
+## 7.0.0
+
+### Major Changes
+
+- [#2147](https://github.com/Bike4Mind/bike4mind/pull/2147) [`49f96c3`](https://github.com/Bike4Mind/bike4mind/commit/49f96c3ca5303a29ac6acb318d6178a7ec7efa48) Thanks [@vinchi777](https://github.com/vinchi777)! - Chunk-stall markers move off `FabFile.notes` into their own fields. `findDataLakeHealthMembers` and
+  `findLakeConvergenceMembers` rename a required `notes: string | null` to
+  `chunkStallReason: ChunkStallReason | null`; the deprecated note-string aliases cannot cover that.
+  `IndexStateFile` renames the same field, optional on both sides - a caller still passing the old
+  shape type-checks but reads `undefined` and silently never trips `isChunkStalled`, which is why the
+  services bump is a major too.
+
+- [#2197](https://github.com/Bike4Mind/bike4mind/pull/2197) [`2351bad`](https://github.com/Bike4Mind/bike4mind/commit/2351bad305a9ea7a249669078792d970f40e73a6) Thanks [@onoya](https://github.com/onoya)! - bound embedding throughput by tokens, and by membership not batchId
+
+- [#2216](https://github.com/Bike4Mind/bike4mind/pull/2216) [`354f3c6`](https://github.com/Bike4Mind/bike4mind/commit/354f3c65b4a9e84401801e3e868f217c7454cd3f) Thanks [@onoya](https://github.com/onoya)! - make the membership predicate express registry lakes
+
+  BREAKING CHANGE: `DataLakeMembershipScope` is now a discriminated union and requires a `kind`
+  discriminant (`'owned'` | `'registry'`). Any construction site must say which membership model it
+  means; the compiler flags each one. Previously a creator-less scope silently degraded to
+  meta-tag-only matching, which under-counted registry lakes against their own file list.
+
+- [#2283](https://github.com/Bike4Mind/bike4mind/pull/2283) [`beb8517`](https://github.com/Bike4Mind/bike4mind/commit/beb85175245f55e2aef64469876aa15961df215c) Thanks [@onoya](https://github.com/onoya)! - surface the document date in the retrieval passage headers
+
+- [#2459](https://github.com/Bike4Mind/bike4mind/pull/2459) [`872164a`](https://github.com/Bike4Mind/bike4mind/commit/872164aef40a5fc24673a0c0a6ced35c97be36e2) Thanks [@jasonbdaro](https://github.com/jasonbdaro)! - Content mutations now resolve through the update-level share predicate rather than the read-level
+  one, so a `read` grant on a notebook, file or project authorizes viewing it and nothing more.
+  Affected paths: `updateFabFile` and `toggleTags` (file bytes, metadata and tags),
+  `addSystemPrompts`, `addFiles` and `removeSystemPrompts` (project content), the chat-completion
+  entry point (which appends to the notebook it runs against), and
+  `PUT /api/sessions/[id]/chat/[messageId]`. A sharee who previously edited shared content while
+  holding only `read` now needs `update`; project-derived grants already carry `[read, update]` and
+  are unaffected.
+
+  `IShareableStaticMethods` gains a required `findAllUpdateAccessByIds`, the batch counterpart to
+  `findUpdateAccessById`, implemented by `ShareableDocumentRepository` - an out-of-tree implementer
+  of that interface must add it. `@bike4mind/common` also exports `canUpdateShareable`, an
+  update-level predicate for the call sites that already hold the document and so cannot re-resolve
+  it through the repository.
+
+  `DELETE /api/files` no longer hard-deletes files owned by other users that happen to be shared in
+  with a delete grant: those lose the caller's grant instead, and only the caller's own files (and
+  their stored bytes) are destroyed.
+
+### Minor Changes
+
+- [#1855](https://github.com/Bike4Mind/bike4mind/pull/1855) [`b30f155`](https://github.com/Bike4Mind/bike4mind/commit/b30f155a9b329eeed621c56eff9fad3ea9a6b144) Thanks [@vinchi777](https://github.com/vinchi777)! - gate the artifact-emission prompt on caller intent
+
+- [#1932](https://github.com/Bike4Mind/bike4mind/pull/1932) [`1bdf739`](https://github.com/Bike4Mind/bike4mind/commit/1bdf7391cc8f83d42b2b00ecab7b528e5a3c0d09) Thanks [@vinchi777](https://github.com/vinchi777)! - verifiable permanent deletion for one lake document
+
+- [#2178](https://github.com/Bike4Mind/bike4mind/pull/2178) [`c17fbcc`](https://github.com/Bike4Mind/bike4mind/commit/c17fbccb067921f8ab1b9b352eda91285bbd9720) Thanks [@onoya](https://github.com/onoya)! - give image generation and image edit a local queue consumer
+
+- [#2196](https://github.com/Bike4Mind/bike4mind/pull/2196) [`1d65698`](https://github.com/Bike4Mind/bike4mind/commit/1d656985af6f8c2b3b2a486d932feca5e541a9cd) Thanks [@onoya](https://github.com/onoya)! - show partial knowledge-base coverage on the reply itself
+
+- [#2207](https://github.com/Bike4Mind/bike4mind/pull/2207) [`55fb6c3`](https://github.com/Bike4Mind/bike4mind/commit/55fb6c39ffc7e881293dc715594770f43c865e1a) Thanks [@onoya](https://github.com/onoya)! - instrument forced retrieval's abstain exits
+
+- [#2227](https://github.com/Bike4Mind/bike4mind/pull/2227) [`68cfd6b`](https://github.com/Bike4Mind/bike4mind/commit/68cfd6b0458c9c45a387cd24ab46399ed5afbca9) Thanks [@onoya](https://github.com/onoya)! - separate an unindexed corpus from a genuine failure in the retrieval outcome
+
+- [#2252](https://github.com/Bike4Mind/bike4mind/pull/2252) [`f191816`](https://github.com/Bike4Mind/bike4mind/commit/f19181619bceed9c225ca4586305fb219cdb2589) Thanks [@ken-b4m](https://github.com/ken-b4m)! - make lake-member removal reversible by any lake manager
+
+- [#2262](https://github.com/Bike4Mind/bike4mind/pull/2262) [`f712bb8`](https://github.com/Bike4Mind/bike4mind/commit/f712bb827c37af41c43d26ef9e5b4c607ee7f056) Thanks [@vinchi777](https://github.com/vinchi777)! - ingest a very large Drive folder across several runs
+
+- [#2264](https://github.com/Bike4Mind/bike4mind/pull/2264) [`1cd2b7d`](https://github.com/Bike4Mind/bike4mind/commit/1cd2b7d520bd9150e54c3f8a3df2f1bc2b51afcd) Thanks [@onoya](https://github.com/onoya)! - record whether a turn's retrieval was forced or merely offered
+
+- [#2270](https://github.com/Bike4Mind/bike4mind/pull/2270) [`32f72a1`](https://github.com/Bike4Mind/bike4mind/commit/32f72a160b0bb5827dd9a458ea16a6adb7abae39) Thanks [@choyno](https://github.com/choyno)! - give lake health a membership dimension
+
+- [#2274](https://github.com/Bike4Mind/bike4mind/pull/2274) [`b0b13bf`](https://github.com/Bike4Mind/bike4mind/commit/b0b13bf82601945d456dd0bf59b3aecf19eed137) Thanks [@ken-b4m](https://github.com/ken-b4m)! - add a lake-scoped door to set a file's tags under a lake's prefix
+
+- [#2277](https://github.com/Bike4Mind/bike4mind/pull/2277) [`ea49d82`](https://github.com/Bike4Mind/bike4mind/commit/ea49d82a08e85ff27a43699b7ecdd85a526857c5) Thanks [@juicewaa](https://github.com/juicewaa)! - collapse superseded lake members before ranking, scoped per lake
+
+- [#2282](https://github.com/Bike4Mind/bike4mind/pull/2282) [`8c183d3`](https://github.com/Bike4Mind/bike4mind/commit/8c183d3f6b7ce48eaf1e8bfe61e82e18332cf9b2) Thanks [@vinchi777](https://github.com/vinchi777)! - surface membership arm and allow attaching existing files
+
+- [#2312](https://github.com/Bike4Mind/bike4mind/pull/2312) [`cc0e8e3`](https://github.com/Bike4Mind/bike4mind/commit/cc0e8e3ae147c45f375e8ddecea5503e97fb78e7) Thanks [@juicewaa](https://github.com/juicewaa)! - make the candidate-selection rule visible and lake-attributable
+
+### Patch Changes
+
+- [#1929](https://github.com/Bike4Mind/bike4mind/pull/1929) [`920a061`](https://github.com/Bike4Mind/bike4mind/commit/920a061ec7c079a86b8e4b8a2627b631af8e8fef) Thanks [@vinchi777](https://github.com/vinchi777)! - Price the pre-flight credit hold on a realistic output size instead of the model's
+  full max-output ceiling, so a turn that will not actually use the ceiling no longer
+  gets blocked by a worst-case reservation. Reasoning models that spend reasoning
+  tokens inside their output budget get a larger reservation ceiling than other
+  models. The per-member organization credit cap is unaffected by this change: it is
+  still priced on the unshrunk ceiling at both the chat and CLI completion paths, and
+  on the CLI path that unshrunk figure is now used where an unrelated, smaller default
+  budget was used before - callers without an explicit output budget on an org-billed
+  key may see the per-member cap trigger sooner than before.
+
+- [#1784](https://github.com/Bike4Mind/bike4mind/pull/1784) [`c3f48ef`](https://github.com/Bike4Mind/bike4mind/commit/c3f48efb86869b715a4e3776a652a40128a0f88e) Thanks [@wescarda](https://github.com/wescarda)! - run the audited credit ledger before the admin user-doc write
+
+- [#2064](https://github.com/Bike4Mind/bike4mind/pull/2064) [`787c867`](https://github.com/Bike4Mind/bike4mind/commit/787c867b9445547e05a4ab32c69cd58716aa3c53) Thanks [@vinchi777](https://github.com/vinchi777)! - claim the transitional lifecycle statuses atomically
+
+- [#2100](https://github.com/Bike4Mind/bike4mind/pull/2100) [`f2f9b3d`](https://github.com/Bike4Mind/bike4mind/commit/f2f9b3d6ae4dc69aa763b15bfc5af3f8e7ada12c) Thanks [@jarlacut](https://github.com/jarlacut)! - skip ids that cannot address a row instead of throwing
+
+- [#2126](https://github.com/Bike4Mind/bike4mind/pull/2126) [`1c39465`](https://github.com/Bike4Mind/bike4mind/commit/1c394654b3ace280b8b0941742d09fbb01a236a8) Thanks [@choyno](https://github.com/choyno)! - exclude convergence-paused files from the chunk rescue sweep
+
+- [#2204](https://github.com/Bike4Mind/bike4mind/pull/2204) [`e465103`](https://github.com/Bike4Mind/bike4mind/commit/e465103247d17e39750edc7bc9a7dddee249db7e) Thanks [@vinchi777](https://github.com/vinchi777)! - release the Drive connection when its lake is purged
+
+- [#2217](https://github.com/Bike4Mind/bike4mind/pull/2217) [`9c4cbf8`](https://github.com/Bike4Mind/bike4mind/commit/9c4cbf8bb37d0b67c1dcec3edc51f21995733307) Thanks [@choyno](https://github.com/choyno)! - stop an idempotent taxonomy re-apply reporting every file as freshly tagged
+
+- [#2218](https://github.com/Bike4Mind/bike4mind/pull/2218) [`1c16f7f`](https://github.com/Bike4Mind/bike4mind/commit/1c16f7f410648d5ef15bb883a1a7e14d00fe81b9) Thanks [@choyno](https://github.com/choyno)! - keep a disambiguated slug inside MAX_DATA_LAKE_SLUG_LENGTH
+
+- [#2220](https://github.com/Bike4Mind/bike4mind/pull/2220) [`7703e89`](https://github.com/Bike4Mind/bike4mind/commit/7703e8901332dc54d0533f0784dbfbb21df7772d) Thanks [@onoya](https://github.com/onoya)! - stamp TTFVT on the first visible token, not the first chunk
+
+- [#2234](https://github.com/Bike4Mind/bike4mind/pull/2234) [`3ac67a8`](https://github.com/Bike4Mind/bike4mind/commit/3ac67a8ef1540c89b885458d2dedb4be77a3d752) Thanks [@erikbethke](https://github.com/erikbethke)! - deliver attachment content on the agent path and report every drop
+
+- [#2250](https://github.com/Bike4Mind/bike4mind/pull/2250) [`72430db`](https://github.com/Bike4Mind/bike4mind/commit/72430db9a825facba11528fbd04ad620d91761f7) Thanks [@ken-b4m](https://github.com/ken-b4m)! - make the fileName and fileSize sorts a total order so paging cannot drop members
+
+- [#2254](https://github.com/Bike4Mind/bike4mind/pull/2254) [`8fd5c09`](https://github.com/Bike4Mind/bike4mind/commit/8fd5c09dc29ac2b516552a1d289d5113631520d0) Thanks [@ken-b4m](https://github.com/ken-b4m)! - anchor retrieval's dynamic-lake prefix arm to the lake's creator
+
+- [#2273](https://github.com/Bike4Mind/bike4mind/pull/2273) [`201bf43`](https://github.com/Bike4Mind/bike4mind/commit/201bf436ba987b47c363ebc7a6c7b4ece8801860) Thanks [@ken-b4m](https://github.com/ken-b4m)! - anchor the aggregate browse and forced retrieval to lake membership
+
+- [#2458](https://github.com/Bike4Mind/bike4mind/pull/2458) [`b8c6d29`](https://github.com/Bike4Mind/bike4mind/commit/b8c6d290a814bdf7e9cc04eb2c90c970d53976df) Thanks [@jjmarfa](https://github.com/jjmarfa)! - flag cross-document retrieval conflicts for the model
+
+- Updated dependencies [[`49f96c3`](https://github.com/Bike4Mind/bike4mind/commit/49f96c3ca5303a29ac6acb318d6178a7ec7efa48), [`920a061`](https://github.com/Bike4Mind/bike4mind/commit/920a061ec7c079a86b8e4b8a2627b631af8e8fef), [`51b306b`](https://github.com/Bike4Mind/bike4mind/commit/51b306b8b5c12062e54bd586f51a80c35e581f99), [`1bdf739`](https://github.com/Bike4Mind/bike4mind/commit/1bdf7391cc8f83d42b2b00ecab7b528e5a3c0d09), [`ddd4e75`](https://github.com/Bike4Mind/bike4mind/commit/ddd4e7592d99876c8910f02afdc8d1782878f55f), [`787c867`](https://github.com/Bike4Mind/bike4mind/commit/787c867b9445547e05a4ab32c69cd58716aa3c53), [`116346b`](https://github.com/Bike4Mind/bike4mind/commit/116346b680d797c539e5112086aae7ed91f36273), [`70ec2a6`](https://github.com/Bike4Mind/bike4mind/commit/70ec2a68decf31e67edc8d354115b0ef7299730f), [`214d076`](https://github.com/Bike4Mind/bike4mind/commit/214d076194b7b5792af4011b29a9d071c7b7a35e), [`f2f9b3d`](https://github.com/Bike4Mind/bike4mind/commit/f2f9b3d6ae4dc69aa763b15bfc5af3f8e7ada12c), [`a467b99`](https://github.com/Bike4Mind/bike4mind/commit/a467b99c43e695a3c1657a08ddd874da4e2438ca), [`1c39465`](https://github.com/Bike4Mind/bike4mind/commit/1c394654b3ace280b8b0941742d09fbb01a236a8), [`95d158a`](https://github.com/Bike4Mind/bike4mind/commit/95d158a96782d16dceb7e56e9984ed7ab7bb5cd9), [`b6bcd64`](https://github.com/Bike4Mind/bike4mind/commit/b6bcd64d712d5231937518f329194d6504b4d3df), [`9c5588c`](https://github.com/Bike4Mind/bike4mind/commit/9c5588c25e8025755ebe0eab77c4af208ef27538), [`469c391`](https://github.com/Bike4Mind/bike4mind/commit/469c391f0e9d48ba9285210f00f597bdafb26810), [`545e51b`](https://github.com/Bike4Mind/bike4mind/commit/545e51b5a17c439ba7bd303bd4033fe0b8d4cd37), [`d6cf4b1`](https://github.com/Bike4Mind/bike4mind/commit/d6cf4b1e7a6bb09d05f3cbf041a0b1d158bb3e2b), [`1d65698`](https://github.com/Bike4Mind/bike4mind/commit/1d656985af6f8c2b3b2a486d932feca5e541a9cd), [`2351bad`](https://github.com/Bike4Mind/bike4mind/commit/2351bad305a9ea7a249669078792d970f40e73a6), [`e465103`](https://github.com/Bike4Mind/bike4mind/commit/e465103247d17e39750edc7bc9a7dddee249db7e), [`55fb6c3`](https://github.com/Bike4Mind/bike4mind/commit/55fb6c39ffc7e881293dc715594770f43c865e1a), [`354f3c6`](https://github.com/Bike4Mind/bike4mind/commit/354f3c65b4a9e84401801e3e868f217c7454cd3f), [`ad5801f`](https://github.com/Bike4Mind/bike4mind/commit/ad5801f5d44cfd198e424af10c9780aff3c04643), [`7703e89`](https://github.com/Bike4Mind/bike4mind/commit/7703e8901332dc54d0533f0784dbfbb21df7772d), [`68cfd6b`](https://github.com/Bike4Mind/bike4mind/commit/68cfd6b0458c9c45a387cd24ab46399ed5afbca9), [`c7ac7d2`](https://github.com/Bike4Mind/bike4mind/commit/c7ac7d2d76150ef30c20e692d0445c4518575b1d), [`3ac67a8`](https://github.com/Bike4Mind/bike4mind/commit/3ac67a8ef1540c89b885458d2dedb4be77a3d752), [`4af59ad`](https://github.com/Bike4Mind/bike4mind/commit/4af59adbd76c4de00d78db6c8f3d2ed9eeea7085), [`72430db`](https://github.com/Bike4Mind/bike4mind/commit/72430db9a825facba11528fbd04ad620d91761f7), [`f191816`](https://github.com/Bike4Mind/bike4mind/commit/f19181619bceed9c225ca4586305fb219cdb2589), [`ed62ab7`](https://github.com/Bike4Mind/bike4mind/commit/ed62ab7149c9af24b36e772a5bbf934d512674b7), [`8fd5c09`](https://github.com/Bike4Mind/bike4mind/commit/8fd5c09dc29ac2b516552a1d289d5113631520d0), [`f712bb8`](https://github.com/Bike4Mind/bike4mind/commit/f712bb827c37af41c43d26ef9e5b4c607ee7f056), [`1cd2b7d`](https://github.com/Bike4Mind/bike4mind/commit/1cd2b7d520bd9150e54c3f8a3df2f1bc2b51afcd), [`9b317ab`](https://github.com/Bike4Mind/bike4mind/commit/9b317ab5825776b433e69a1d8f255a12e8be625b), [`fbc0c09`](https://github.com/Bike4Mind/bike4mind/commit/fbc0c0959bf597d4dc253d5ef1bdf1f7f2b2723b), [`32f72a1`](https://github.com/Bike4Mind/bike4mind/commit/32f72a160b0bb5827dd9a458ea16a6adb7abae39), [`201bf43`](https://github.com/Bike4Mind/bike4mind/commit/201bf436ba987b47c363ebc7a6c7b4ece8801860), [`b0b13bf`](https://github.com/Bike4Mind/bike4mind/commit/b0b13bf82601945d456dd0bf59b3aecf19eed137), [`ea49d82`](https://github.com/Bike4Mind/bike4mind/commit/ea49d82a08e85ff27a43699b7ecdd85a526857c5), [`8c183d3`](https://github.com/Bike4Mind/bike4mind/commit/8c183d3f6b7ce48eaf1e8bfe61e82e18332cf9b2), [`cc0e8e3`](https://github.com/Bike4Mind/bike4mind/commit/cc0e8e3ae147c45f375e8ddecea5503e97fb78e7), [`e285e73`](https://github.com/Bike4Mind/bike4mind/commit/e285e738ff13227869492811f1a10865d6d82f03), [`be2fd04`](https://github.com/Bike4Mind/bike4mind/commit/be2fd04c6fd9d591ed48a46e62df95da3d0c1816), [`99ca5cf`](https://github.com/Bike4Mind/bike4mind/commit/99ca5cff668240c067a0ac31ad9caeeb8b45de34), [`3061759`](https://github.com/Bike4Mind/bike4mind/commit/3061759af9f5140a0d3f01667973f8f574f191ff), [`42c04cc`](https://github.com/Bike4Mind/bike4mind/commit/42c04cc38d47b51d9579c3d7dced5df42cd1b7f8), [`b8c6d29`](https://github.com/Bike4Mind/bike4mind/commit/b8c6d290a814bdf7e9cc04eb2c90c970d53976df), [`f4cce81`](https://github.com/Bike4Mind/bike4mind/commit/f4cce81c67e29b74f6ba7f9775438e3799fd92b0), [`cb227a3`](https://github.com/Bike4Mind/bike4mind/commit/cb227a3ad54ecfd5647ff92f4ebf68e3a4651c99), [`e79c63d`](https://github.com/Bike4Mind/bike4mind/commit/e79c63dc24c06e36e690282c2190e944a67b00f1), [`466e5a9`](https://github.com/Bike4Mind/bike4mind/commit/466e5a9b2ed4276f8886faec3aea42ff8484434b), [`872164a`](https://github.com/Bike4Mind/bike4mind/commit/872164aef40a5fc24673a0c0a6ced35c97be36e2), [`466e5a9`](https://github.com/Bike4Mind/bike4mind/commit/466e5a9b2ed4276f8886faec3aea42ff8484434b)]:
+  - @bike4mind/common@7.0.0
+  - @bike4mind/utils@5.0.0
+  - @bike4mind/db-core@0.5.0
+  - @bike4mind/llm-adapters@0.12.1
+  - @bike4mind/fab-pipeline@1.3.0
+  - @bike4mind/agents@1.0.0
+  - @bike4mind/mcp@2.0.0
+  - @bike4mind/auth@0.7.4
+
 ## 6.1.0
 
 ### Minor Changes

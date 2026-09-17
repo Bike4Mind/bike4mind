@@ -1,6 +1,6 @@
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { connectDB } from '../utils/mongo';
-import { createMongoServer } from './createMongoServer';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from './createMongoServer';
 import mongoose from 'mongoose';
 import { beforeAll, afterAll, beforeEach } from 'vitest';
 // Import models to ensure they're registered
@@ -11,6 +11,8 @@ import { FabFile } from '../models/content/FabFileModel';
 import { researchTaskRepository } from '../models/ai/ResearchTaskModel';
 import { taskScheduleRepository } from '../models/infra/ops/TaskScheduleModel';
 import { researchAgentRepository } from '../models/ai/ResearchAgentModel';
+
+export { testFabFileId } from './testFabFileId';
 
 export const connectTestDB = async () => {
   const mongoServer = await createMongoServer();
@@ -31,6 +33,13 @@ export const cleanupTestDB = async () => {
   }
 };
 
+// This hook does strictly more than boot mongod: it also builds four models' index sets on a cold
+// connection, and both costs scale with how contended the runner is. A bare literal here would also
+// override any per-file `vi.setConfig` budget, so it is derived from the shared lever rather than
+// pinned beside it. Doubled because the shared budget covers booting mongod alone; raising the
+// shared constant instead would hand the same slack to every suite that only boots.
+const SETUP_HOOK_TIMEOUT_MS = MONGO_TEST_TIMEOUT_MS * 2;
+
 export async function setupMongoTest() {
   let mongoServer: MongoMemoryServer;
 
@@ -49,16 +58,16 @@ export async function setupMongoTest() {
 
     // Force the models to be registered by accessing them
     await Promise.resolve([researchTaskRepository, taskScheduleRepository, researchAgentRepository]);
-    // 60s (not 30s): under parallel shards a cold mongodb-memory-server start - binary
-    // resolution plus the port-collision retry loop in createMongoServer - can exceed
-    // 30s and time the hook out (a transient red, not a real failure).
-  }, 60000);
+  }, SETUP_HOOK_TIMEOUT_MS);
 
+  // No timeout literal: this hook inherits the package's hookTimeout, which is larger than any
+  // number that would fit here. The literal this replaces HALVED it under a comment claiming the
+  // opposite.
   afterAll(async () => {
     if (mongoServer) {
       await disconnectTestDB(mongoServer);
     }
-  }, 30000); // Increase timeout for cleanup
+  });
 
   beforeEach(async () => {
     await cleanupTestDB();

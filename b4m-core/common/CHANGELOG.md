@@ -1,5 +1,448 @@
 # @bike4mind/common
 
+## 8.0.0
+
+### Major Changes
+
+- [#2663](https://github.com/Bike4Mind/bike4mind/pull/2663) [`897db4d`](https://github.com/Bike4Mind/bike4mind/commit/897db4d71005adb476705a5e5bc0f59d4a8ccc39) Thanks [@jasonbdaro](https://github.com/jasonbdaro)! - cascade revocations, cap re-shares, and gate the invite lifecycle
+
+- [#2663](https://github.com/Bike4Mind/bike4mind/pull/2663) [`897db4d`](https://github.com/Bike4Mind/bike4mind/commit/897db4d71005adb476705a5e5bc0f59d4a8ccc39) Thanks [@jasonbdaro](https://github.com/jasonbdaro)! - Second tranche of the sharing authorization cluster. A grant now means only what it says, and an
+  entity that derives grants cleans them up when it goes away.
+
+  Re-sharing is capped and gated at the invite door. An invite can no longer carry a permission its
+  minter does not hold, so a sharee with `share` alone cannot mint `update`/`delete` and redeem the link on their own
+  account; `@bike4mind/common` exports `heldPermissions` and `grantablePermissions` for that check.
+  The cap uses the latter, which treats `share` as conveying `read`: minting an invite already
+  requires share authority, and a collaborator granted share alone still has to be able to pass on
+  the read that share implies. Flipping `isGlobalRead`/
+  `isGlobalWrite` publishes a document to the whole instance, so it moves from the update predicate
+  to the share predicate. Project invite listing moves to the share predicate too, since it exposes
+  link-invite ids and pending invitees' email addresses. Accepting a session invite propagates a
+  grant to an attached file only when the inviter holds share on that file, capped at what they hold;
+  invites gain an optional `inviterId` to make that check possible, and a legacy invite without one
+  falls back to propagating only to the session owner's own files.
+
+  Revocation and deletion now cascade. The project-scoped revoke filter removed every entry carrying
+  the target `projectId` rather than only the target user's, so one member leaving stripped every
+  co-member's access. Deleting a project strips the grants it left on its files and sessions.
+  Revoking a session share also removes the file grants acceptance materialized. Deleting a session
+  hard-deletes only the owner's own files; an attached file owned by someone else loses the derived
+  grant instead of being destroyed.
+
+  A shared entry now records the grant's source, for sessions as well as projects. `pushShareable`
+  keyed `users[]` on `userId` alone,
+  so a file reached through two projects collapsed into one entry tagged with whichever project
+  wrote last, while `revoke` filters on that tag: revoking via the earlier project matched nothing
+  and returned the document as if it had succeeded, leaving access live, and revoking via the later
+  one tore out the other project's grant as well. Entries are keyed on `(userId, projectId, sessionId)`,
+  so each project's grant, each session's, and any direct share are separate rows, and a scoped revoke that matches no row now
+  raises `NotFoundError` instead of reporting a success that removed nothing. No first-party caller passes a
+  `projectId` except `revokeFromProject`'s own cascade, which swallows `NotFoundError` by design, but
+  the `revokeSharing` route accepts one in its body - so a client that supplies a `projectId` matching
+  none of the target's rows now gets a 404 instead of the broad revoke it probably meant. That is the
+  fail-closed direction, and it is the point: the old behaviour reported success and removed nothing.
+  Rows written before
+  this change carry only the last project's tag; a scoped revoke against an earlier project hits the
+  new not-found path, and revoking without a `projectId` still clears every row the user holds. A
+  user may now legitimately hold several rows on one document, so the client-side permission helpers
+  in `apps/client/app/utils/userPermission.ts` union across them instead of reading the first match,
+  matching the `$elemMatch` predicates and `heldPermissions` server-side.
+
+  The db-core CASL ability was missing `Project` from its shared user/group permission arm while the
+  HTTP copy carried it, so a project shared with a user was unreachable through every caller that
+  builds an ability from `@bike4mind/database` rather than `@server/auth/ability` (the quest,
+  slack-quest, image-edit, image-generation and video-generation queue handlers). Both copies now
+  grant the same resource set, and a structural test reads the two files and fails if they drift.
+
+  An invite now records whether it names anybody. Project and Organization invites carry raw user
+  ids (the add-members modals send `recipients: [userId]`), and `findAllByEmailsOrUsernames` queries
+  email and username only, so their `recipients.pending` always persisted as `[]`. Every gate keyed
+  on `pending.length` therefore fell open for exactly those two types: any authenticated caller
+  holding the invite id could read its contents, and could accept it and join the project or
+  organization with grants on every file and session inside. `createInvite` resolves id-shaped
+  recipients through `findByIds` (a new requirement on its `users` adapter, alongside the
+  `findAllByEmailsOrUsernames` and `findById` it already took), refuses to mint an invite whose
+  recipients all fail to resolve, and persists an `isLinkOnly` flag; `canViewInvite` and the accept-time recipient gate key on that flag
+  via `isLinkOnlyInvite` (`@bike4mind/common`) rather than on an empty `pending`. Invites minted
+  before the flag fall back to inferring it, and only for FabFile and Session, whose recipients always
+  did resolve to emails - so a legacy Project or Organization invite fails closed at both gates and
+  has to be re-sent. A side effect worth knowing: organization seat accounting counts pending
+  recipients, so it was undercounting and now holds.
+
+  A session's knowledge propagation now tags the grants it mints, and both cascades key on that tag.
+  `IUserShare` gains an optional `sessionId`, the counterpart to `projectId` for the other entity that
+  derives grants, and `pushShareable` keys on all three. Untagged, a propagated file grant merged into
+  any direct share of the same file to the same user - so unsharing the session deleted the merged row
+  whole and destroyed a grant a third party had made. Reaching that row through the session also
+  skipped the owner-or-self check a direct `revokeSharing` on the file would have applied, since the
+  cascade writes `file.users` itself. Keying on the tag fixes both: a direct share is its own row and
+  is never touched, and a tagged row can only have been written by an accept that already required the
+  inviter to hold share on the file, so the tag _is_ the authorization. That retires the previous
+  gate, which asked whether the SESSION OWNER could still share the file while the mint had asked
+  about the INVITER - not the same principal whenever a sharee minted the invite, which stranded those
+  grants un-revokable through the very path that created them.
+
+  Grants written before the tag existed are untagged and so are not reachable from either cascade.
+  This is under-revocation, and it is the safe direction to fail - the alternative is the third-party
+  destruction above - but it is not costless, and the honest statement of the residue is narrower than
+  "revoke it on the file instead". Where the session owner does not own the file, they have no
+  surface at all: an unscoped revoke on the file is owner-or-self, so only the file's owner or the
+  grant holder can clear it, and neither of them is the person who wanted the access gone. No backfill closes this from
+  code alone: an untagged row is indistinguishable from the direct share this change exists to
+  protect, so tagging it re-creates the bug and adding a second tagged row leaves the untagged one
+  live. Reconstructing provenance from accepted-invite history does not substitute, because a grant
+  outlives the invite that created it and can predate the address it would be keyed on; a gate on the
+  session owner holding `share` authorizes the wrong principal, since the mint reads the inviter. It is
+  not a regression either - before this change neither cascade existed at all, so those rows were
+  already unreachable from this surface. The gap shrinks as legacy grants are revoked on the file. Closing
+  the rest is tracked as its own follow-up, `sharing: owner-facing surface to list and clear untagged
+grant rows`, which is a UI plus a scoped revoke endpoint rather than a backfill that guesses at
+  provenance.
+
+  Deleting a session cascades before it tombstones. The tombstone came first while the per-file grant
+  rewrite came second, and `softDeletePlugin` puts `deletedAt: null` on every `findOne` - so a failure
+  mid-cascade left the session unreachable on a retry with the remaining grants live and nothing left
+  to clear them. The cascade now runs first, and both live entry points - `DELETE /api/sessions/[id]` and the bulk
+  route - wrap each call in a transaction, so a concurrency conflict partway through rolls back rather
+  than leaving some files rewritten and some not; that matches the `revokeSharing` route, which
+  already wrapped the sibling cascade. The bulk route wraps per session rather than around its loop,
+  because it is best-effort: one session failing must not roll back the ones already deleted.
+
+  What that cascade touches, precisely: rows tagged with this session, on the union of files uploaded
+  into it and files named in `knowledgeIds` (neither set contains the other), for every grantee rather
+  than only the deleter, skipping files the deleter owns because those are deleted moments later and a
+  guarded write on them can abort the delete for nothing. That delete is `deleteManyInIds`, the
+  soft-delete plugin's tombstone path rather than a hard delete, so the skipped rows survive on the
+  tombstoned document; no read path reaches them, since every FabFile aggregate filters `deletedAt`
+  and none projects `users`, and the one `includeDeleted` read that returns `users[]` is admin-only. Its reach is bounded by `knowledgeIds` as of the call, which is
+  client-writable, so a sharee holding update on the session can detach a file first and keep the
+  grant; closing that needs a `users.sessionId` sweep across a high-cardinality collection and is not
+  paid here. Both new whole-document grant writes, here and in the session knowledge-file cascade,
+  take `updateGuarded` rather than `update`, joining the optimistic-concurrency convention the revoke
+  path already uses. Mint paths still use a plain `update`; guarding those remains a separate change.
+
+  Deleting a project revokes the owner's own derived grants. `addFiles`/`addSessions` mint the project
+  owner a `projectId`-scoped read+update grant on content a MEMBER contributes, but the owner is never
+  in `project.users`, so the per-member cascade never reached those and they outlived the only surface
+  that could revoke them. Making that pass reachable meant taking a hidden mutation out of
+  `revokeFromProject`: it pruned the caller's live `project.fileIds`/`sessionIds` as it went, so by the
+  time the owner pass ran, the member-owned documents carrying the owner's grants had already been
+  removed from the list it reads. It now returns the pruned ids and leaves the caller's document alone.
+  `leaveProject` and the project arm of `revoke` assign the return; `deleteProject` drops it, so a
+  tombstoned project still records what it held for restore and audit to read.
+
+  The legacy link-only inference reads all three recipient buckets, and is permanent: rows minted
+  before `isLinkOnly` existed never gain the flag, so the fork stays until none are left. Its safety
+  also depends on `remaining`, which is documented at the predicate rather than left implied. Accepting and declining both move
+  an address out of `pending`, so unioning only `pending` and `accepted` made a pre-flag invite whose
+  named recipients had all declined infer as a share link - opening the view gate to any authenticated
+  caller and letting anyone redeem it. `refused` is unioned too.
+
+  An invite of a type that is not shareable by link can no longer be minted with no recipients. Only
+  FabFile and Session are: for Project and Organization an empty list would otherwise persist
+  `isLinkOnly: true` and be redeemable by anyone holding the id, and for Group it persisted
+  `isLinkOnly: false` against an empty `pending`, which both the view gate and the accept gate then
+  refuse - a row that minted successfully and nobody could ever redeem. The refusal is expressed
+  against the same predicate that sets the flag, so the two cannot drift apart. `InviteType.Tool` has
+  no arm in `createInvite`'s switch and still fails earlier, on `Document not found`. A Group invite
+  naming only recipients that fail to resolve is refused too, matching the Project/Organization arm
+  that already did: it persisted a row both gates then refuse, while telling the sharer it worked.
+
+  The CASL share arm is now one exported function, `applySharedShareableRules`, called by both ability
+  builders instead of being hand-copied. Each caller still passes its own resource list, because CASL
+  matches subjects by constructor and a shared list would close over db-core's models; list drift is
+  what the structural test compares, and body drift is no longer possible. `findAllAccessibleByIds`
+  declares the `Pick<IUserDocument, 'id' | 'groups'>` it actually consumes, which removes two casts at
+  the `createProject` call site. Its sibling `findAllUpdateAccessByIds` still takes a full
+  `IUserDocument` and is unchanged here.
+  `GET /api/invites/[id]` screens the id shape before `findById` and answers a malformed id with the
+  same 404 as a missing or unauthorized one, so the status never tells a caller which ids exist.
+  The `backfill-invite-inviter-id` migration backfills `Invite.inviterId` from the username every
+  invite already persists, which is the closing move for the legacy propagation fallback in
+  `accept.ts`. It scans on an `_id` cursor rather than loading the whole matching set at once, since
+  invites are one of the higher-cardinality collections. Because `username` is mutable and the only
+  reader of `inviterId` is an authorization gate, the backfill is narrowed twice: to Session invites,
+  the only type that gate runs for, and to resolutions where the account still OWNS the target
+  session. Not merely holds a grant on it: minting a Session invite is owner-only, so a sharee can
+  never be the inviter, and admitting grant holders would readmit the squatter case the narrowing
+  exists to exclude. A rename-then-reuse resolves to exactly one account, so the
+  ambiguity guard never fires on it; anything uncorroborated stays on the conservative fallback, which
+  is strictly safer than attributing the invite to the wrong person. `SkillShareDialog`, the surface that actually
+  flips `isGlobalRead`/`isGlobalWrite`, reports the server's reason instead of a fixed string, so a
+  holder refused by the predicate this change moves can tell that apart from a network failure.
+
+  Cancelling one named recipient by email clamps `remaining` to the addresses still pending instead of
+  decrementing it. The two gates that let anyone holding an invite id read and redeem it treat an
+  invite naming nobody as a share link, and on a row minted before `isLinkOnly` existed that is
+  inferred from the recipient buckets - so `remaining` reaching zero is what stops a cancelled named
+  invite becoming a live link. A decrement only matched the address count while `remaining` started
+  equal to it, and `available` in the create body is taken at face value, so a row naming one person
+  with five slots kept four of them after that person was cancelled.
+
+  `POST /api/projects` no longer turns a typed service error into a 500. `createProject` raises
+  `BadRequestError` when a supplied file or notebook does not resolve through the caller's access
+  predicate, which the client hits whenever a pick is revoked between select and submit; the route's
+  catch rewrapped every non-duplicate-key error as `InternalServerError`, so that 400 reached the
+  client as a 500. `GET /api/[type]/[id]` now strips co-recipients' addresses from the response, the
+  last invitee-facing route that was returning the whole recipient list to one named recipient.
+
+  Invite redemption enforces `expiresAt` on both accept and refuse. Declining now affects only the
+  decliner's own slot: one recipient declining used to zero the invite for every other recipient, and
+  any holder of a link id could do the same. Whole-invite revocation requires the same authority
+  `cancelInviteById` enforces. `GET /api/invites/[id]` and `GET /api/[type]/[id]` no longer return an
+  invite's contents to any authenticated caller holding the id; a caller who fails the gate gets 404,
+  not 403, so the response does not confirm the id exists.
+
+  Ids supplied by the caller are resolved before they are persisted. Project creation and
+  `addSessions` write only the ids that resolved through the caller's access predicate, so a project
+  can no longer carry a file or notebook the creator cannot reach. The favorites list intersects
+  against currently-held access rather than trusting the stored row, so a notebook stops appearing
+  once its share is revoked.
+
+  Breaking, in `@bike4mind/services`: `createProject` takes the acting user (`Pick<IUserDocument,
+'id' | 'groups'>`) instead of a bare user id, and requires `fabFiles` and `sessions` adapters;
+  `refuseWholeInvite` takes a full `IUserDocument` and the adapters `authorizeByInviteType` needs;
+  `deleteProject` requires `sessions`, `fabFiles` and `users` adapters to run its cascade;
+  `revokeFromProject` returns `{ fileIds, sessionIds }` and no longer writes them back onto the
+  `project` it was handed, so a caller that relied on the mutation must assign the return itself. In
+  `@bike4mind/common`, `IUserShare` gains an optional `sessionId`, and any code that reads `users[]`
+  must treat a row carrying it as distinct from an untagged row for the same user.
+
+### Minor Changes
+
+- [#2853](https://github.com/Bike4Mind/bike4mind/pull/2853) [`7bd1432`](https://github.com/Bike4Mind/bike4mind/commit/7bd143228cbc2b9be3434ad8d795c2ae76623241) Thanks [@onoya](https://github.com/onoya)! - correct and retry
+
+### Patch Changes
+
+- [#2719](https://github.com/Bike4Mind/bike4mind/pull/2719) [`718232a`](https://github.com/Bike4Mind/bike4mind/commit/718232ac8b73f441d39cbf74041f3a06316a7248) Thanks [@vinchi777](https://github.com/vinchi777)! - gate self-host OpenSearch retrieval on confirmed index residency
+
+- [#2788](https://github.com/Bike4Mind/bike4mind/pull/2788) [`c619705`](https://github.com/Bike4Mind/bike4mind/commit/c619705a92c6cbbb614b893caee446ae868beab2) Thanks [@onoya](https://github.com/onoya)! - stop a vectorize resume from splitting a file across two embedding spaces
+
+- [#2862](https://github.com/Bike4Mind/bike4mind/pull/2862) [`b9bc64a`](https://github.com/Bike4Mind/bike4mind/commit/b9bc64a4291420be50017fb34c1dc80f92e64c89) Thanks [@onoya](https://github.com/onoya)! - report a declared scope rung the caller's scope cannot key
+
+- [#2875](https://github.com/Bike4Mind/bike4mind/pull/2875) [`d6cd7dd`](https://github.com/Bike4Mind/bike4mind/commit/d6cd7dddabe0428fee52db8fc33d045461ae4c79) Thanks [@dea0030](https://github.com/dea0030)! - constrain promptMeta.model.type at the completion write path
+
+- [#2888](https://github.com/Bike4Mind/bike4mind/pull/2888) [`5d79949`](https://github.com/Bike4Mind/bike4mind/commit/5d7994926622a7af9d6aa38d8e547e014d3838ac) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - surface the sources a discovery run skipped
+
+- [#2894](https://github.com/Bike4Mind/bike4mind/pull/2894) [`d086ed5`](https://github.com/Bike4Mind/bike4mind/commit/d086ed5f0049fea32dd03034fe8f084c600b5bd7) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - treat a cleared numeric admin field as unset, not zero
+
+- [#2904](https://github.com/Bike4Mind/bike4mind/pull/2904) [`b91b853`](https://github.com/Bike4Mind/bike4mind/commit/b91b853a865f8f1cf5ab417ade6fac88184886c2) Thanks [@vinchi777](https://github.com/vinchi777)! - stop gating read-only tools in agent mode, and make session approvals stick
+
+- [#2909](https://github.com/Bike4Mind/bike4mind/pull/2909) [`91a73c9`](https://github.com/Bike4Mind/bike4mind/commit/91a73c9b9494408f126d267e859f9a9629e6e126) Thanks [@vinchi777](https://github.com/vinchi777)! - type the completions SSE error classifier and emit it mid-stream
+
+- [#2913](https://github.com/Bike4Mind/bike4mind/pull/2913) [`13e0733`](https://github.com/Bike4Mind/bike4mind/commit/13e0733c9faf196143a79225d4bcd74623f36dee) Thanks [@vinchi777](https://github.com/vinchi777)! - honor the artifact opt-out on the chat persistence path
+
+## 7.5.0
+
+### Minor Changes
+
+- [#2720](https://github.com/Bike4Mind/bike4mind/pull/2720) [`40f31bd`](https://github.com/Bike4Mind/bike4mind/commit/40f31bd9c9f63e6a2db9d5569222145c84fa46a0) Thanks [@vinchi777](https://github.com/vinchi777)! - add a /feedback slash command for session-level reports
+
+### Patch Changes
+
+- [#2797](https://github.com/Bike4Mind/bike4mind/pull/2797) [`bf76770`](https://github.com/Bike4Mind/bike4mind/commit/bf7677008efbd820c9d235e1cbad8a7797fbd4b4) Thanks [@juicewaa](https://github.com/juicewaa)! - let non-admin routes own the 404 for a malformed resource id
+
+## 7.4.0
+
+### Minor Changes
+
+- [#2819](https://github.com/Bike4Mind/bike4mind/pull/2819) [`6f662d8`](https://github.com/Bike4Mind/bike4mind/commit/6f662d81308d53bb430665ed048607da97c4e9ef) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - send a per-visit session id, and count anonymous visits
+
+### Patch Changes
+
+- [#2782](https://github.com/Bike4Mind/bike4mind/pull/2782) [`7a214d5`](https://github.com/Bike4Mind/bike4mind/commit/7a214d5aa0fb5aa65302f887a3fac356ab3dc8ca) Thanks [@onoya](https://github.com/onoya)! - end a departing member's lake access, and pass on lakes they created
+
+- [#2833](https://github.com/Bike4Mind/bike4mind/pull/2833) [`46ea8e1`](https://github.com/Bike4Mind/bike4mind/commit/46ea8e1efc42e992ebc0a19c4542f65d2665832c) Thanks [@onoya](https://github.com/onoya)! - bound oversized structured inputs before allocation and decode
+
+- [#2842](https://github.com/Bike4Mind/bike4mind/pull/2842) [`068e14f`](https://github.com/Bike4Mind/bike4mind/commit/068e14f2ab9e45cb7e7cecbae8a49fca1ce85dc6) Thanks [@choyno](https://github.com/choyno)! - validate requiredUserTag as a single matchable tag
+
+- [#2844](https://github.com/Bike4Mind/bike4mind/pull/2844) [`fa08028`](https://github.com/Bike4Mind/bike4mind/commit/fa08028c91136b4f051a45bc4976a7714677f845) Thanks [@choyno](https://github.com/choyno)! - surface lake status on computeLakeHealth so a non-active lake cannot read healthy
+
+- [#2861](https://github.com/Bike4Mind/bike4mind/pull/2861) [`0a4253e`](https://github.com/Bike4Mind/bike4mind/commit/0a4253e4f31492b6fea19976a469ffd5e79f4af9) Thanks [@vinchi777](https://github.com/vinchi777)! - report lake lifecycle status in lake health
+
+- [#2865](https://github.com/Bike4Mind/bike4mind/pull/2865) [`6ce4b99`](https://github.com/Bike4Mind/bike4mind/commit/6ce4b99b9ab5d4fe8142647a9b3dcef6f0c8ebfd) Thanks [@vinchi777](https://github.com/vinchi777)! - stop a failing cluster starving the rescue sweep
+
+## 7.3.0
+
+### Minor Changes
+
+- [#2812](https://github.com/Bike4Mind/bike4mind/pull/2812) [`fee546f`](https://github.com/Bike4Mind/bike4mind/commit/fee546f162297fbd3cf5acdb41b71906bdabab46) Thanks [@maconard](https://github.com/maconard)! - restore DeepSeek V4 Pro
+
+### Patch Changes
+
+- [#2783](https://github.com/Bike4Mind/bike4mind/pull/2783) [`5e1eee0`](https://github.com/Bike4Mind/bike4mind/commit/5e1eee08f765b93a1c30160c03858e7c5e9fd798) Thanks [@onoya](https://github.com/onoya)! - verify membership and roster authority at every use site
+
+- [#2828](https://github.com/Bike4Mind/bike4mind/pull/2828) [`2922d00`](https://github.com/Bike4Mind/bike4mind/commit/2922d0061d5ee3673da2a3b9bd88f11b7005e5db) Thanks [@onoya](https://github.com/onoya)! - let a caller rung only raise the search serve budget
+
+- [#2832](https://github.com/Bike4Mind/bike4mind/pull/2832) [`afba631`](https://github.com/Bike4Mind/bike4mind/commit/afba6315105929e9b39672a2d0d23caad7f8e4aa) Thanks [@michaeljymsgutierrez](https://github.com/michaeljymsgutierrez)! - merge or drop near-empty chunks from SmartChunker
+
+## 7.2.2
+
+### Patch Changes
+
+- [#2765](https://github.com/Bike4Mind/bike4mind/pull/2765) [`2298140`](https://github.com/Bike4Mind/bike4mind/commit/229814036a13097cae1cd3ccc19d052d4d6c17f9) Thanks [@onoya](https://github.com/onoya)! - resolve search budgets on the caller scope in the semantic-search route
+
+## 7.2.1
+
+### Patch Changes
+
+- [#2796](https://github.com/Bike4Mind/bike4mind/pull/2796) [`8ef2c17`](https://github.com/Bike4Mind/bike4mind/commit/8ef2c17f7b54b0df8c3809f17a62544784e65029) Thanks [@onoya](https://github.com/onoya)! - derive the scoped-retrieval Lake-rung guard from the reads' own key lists
+
+## 7.2.0
+
+### Minor Changes
+
+- [#2738](https://github.com/Bike4Mind/bike4mind/pull/2738) [`a756c37`](https://github.com/Bike4Mind/bike4mind/commit/a756c379f89401a9cfefc41735df4610dd5da0ce) Thanks [@TRAP-RCG](https://github.com/TRAP-RCG)! - add an overwatch:read scope for agent-held credentials
+
+- [#2762](https://github.com/Bike4Mind/bike4mind/pull/2762) [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef) Thanks [@maconard](https://github.com/maconard)! - add DeepSeek as a first-party provider and close Moonshot gaps
+
+- [#2773](https://github.com/Bike4Mind/bike4mind/pull/2773) [`b660460`](https://github.com/Bike4Mind/bike4mind/commit/b6604604904ae62ab4c6745ec4e2335e05706e68) Thanks [@vinchi777](https://github.com/vinchi777)! - record which lake prompts the owner/curator grant arm admitted
+
+### Patch Changes
+
+- [#2513](https://github.com/Bike4Mind/bike4mind/pull/2513) [`b5c25db`](https://github.com/Bike4Mind/bike4mind/commit/b5c25db2ff248dd7491f7c263ae69cd1aaf23eca) Thanks [@julsanchez](https://github.com/julsanchez)! - verify session ownership before acting on session-scoped routes
+
+- [#2682](https://github.com/Bike4Mind/bike4mind/pull/2682) [`f6407e2`](https://github.com/Bike4Mind/bike4mind/commit/f6407e27d91175446e28246e1234d4c0a409c694) Thanks [@onoya](https://github.com/onoya)! - fall back to a keyless Bedrock embedder when no provider credential resolves
+
+- [#2758](https://github.com/Bike4Mind/bike4mind/pull/2758) [`0a931d2`](https://github.com/Bike4Mind/bike4mind/commit/0a931d25ddbfc35963f82f1bb6ea26b89a10f39e) Thanks [@onoya](https://github.com/onoya)! - resolve cosine relevance floors per embedding space
+
+- [#2759](https://github.com/Bike4Mind/bike4mind/pull/2759) [`671c753`](https://github.com/Bike4Mind/bike4mind/commit/671c753fc81d65561729f591bc7038e4c605126c) Thanks [@onoya](https://github.com/onoya)! - report unmeasured lake members as unmeasured, and disclose the corpus-scope gap
+
+- [#2775](https://github.com/Bike4Mind/bike4mind/pull/2775) [`36fae3b`](https://github.com/Bike4Mind/bike4mind/commit/36fae3b0e2a448442c65b83735de0406ed233370) Thanks [@vinchi777](https://github.com/vinchi777)! - record the resolved lake scope at the retrieval seed site
+
+## 7.1.1
+
+### Patch Changes
+
+- [#2723](https://github.com/Bike4Mind/bike4mind/pull/2723) [`7958ee1`](https://github.com/Bike4Mind/bike4mind/commit/7958ee13d277295ed9877a24686aa266265a727f) Thanks [@vinchi777](https://github.com/vinchi777)! - harden the embedding-comparison harness before the credentialed run
+
+## 7.1.0
+
+### Minor Changes
+
+- [#2465](https://github.com/Bike4Mind/bike4mind/pull/2465) [`576f59f`](https://github.com/Bike4Mind/bike4mind/commit/576f59f9cb237c473c2793e72cd33e1648f12327) Thanks [@onoya](https://github.com/onoya)! - per-document search cap + rescue sweep metrics ([#1422](https://github.com/Bike4Mind/bike4mind/issues/1422))
+
+## 7.0.0
+
+### Major Changes
+
+- [#2147](https://github.com/Bike4Mind/bike4mind/pull/2147) [`49f96c3`](https://github.com/Bike4Mind/bike4mind/commit/49f96c3ca5303a29ac6acb318d6178a7ec7efa48) Thanks [@vinchi777](https://github.com/vinchi777)! - Chunk-stall markers move off `FabFile.notes` into their own fields. `findDataLakeHealthMembers` and
+  `findLakeConvergenceMembers` rename a required `notes: string | null` to
+  `chunkStallReason: ChunkStallReason | null`; the deprecated note-string aliases cannot cover that.
+  `IndexStateFile` renames the same field, optional on both sides - a caller still passing the old
+  shape type-checks but reads `undefined` and silently never trips `isChunkStalled`, which is why the
+  services bump is a major too.
+
+- [#2197](https://github.com/Bike4Mind/bike4mind/pull/2197) [`2351bad`](https://github.com/Bike4Mind/bike4mind/commit/2351bad305a9ea7a249669078792d970f40e73a6) Thanks [@onoya](https://github.com/onoya)! - bound embedding throughput by tokens, and by membership not batchId
+
+- [#2216](https://github.com/Bike4Mind/bike4mind/pull/2216) [`354f3c6`](https://github.com/Bike4Mind/bike4mind/commit/354f3c65b4a9e84401801e3e868f217c7454cd3f) Thanks [@onoya](https://github.com/onoya)! - make the membership predicate express registry lakes
+
+  BREAKING CHANGE: `DataLakeMembershipScope` is now a discriminated union and requires a `kind`
+  discriminant (`'owned'` | `'registry'`). Any construction site must say which membership model it
+  means; the compiler flags each one. Previously a creator-less scope silently degraded to
+  meta-tag-only matching, which under-counted registry lakes against their own file list.
+
+- [#2459](https://github.com/Bike4Mind/bike4mind/pull/2459) [`872164a`](https://github.com/Bike4Mind/bike4mind/commit/872164aef40a5fc24673a0c0a6ced35c97be36e2) Thanks [@jasonbdaro](https://github.com/jasonbdaro)! - Content mutations now resolve through the update-level share predicate rather than the read-level
+  one, so a `read` grant on a notebook, file or project authorizes viewing it and nothing more.
+  Affected paths: `updateFabFile` and `toggleTags` (file bytes, metadata and tags),
+  `addSystemPrompts`, `addFiles` and `removeSystemPrompts` (project content), the chat-completion
+  entry point (which appends to the notebook it runs against), and
+  `PUT /api/sessions/[id]/chat/[messageId]`. A sharee who previously edited shared content while
+  holding only `read` now needs `update`; project-derived grants already carry `[read, update]` and
+  are unaffected.
+
+  `IShareableStaticMethods` gains a required `findAllUpdateAccessByIds`, the batch counterpart to
+  `findUpdateAccessById`, implemented by `ShareableDocumentRepository` - an out-of-tree implementer
+  of that interface must add it. `@bike4mind/common` also exports `canUpdateShareable`, an
+  update-level predicate for the call sites that already hold the document and so cannot re-resolve
+  it through the repository.
+
+  `DELETE /api/files` no longer hard-deletes files owned by other users that happen to be shared in
+  with a delete grant: those lose the caller's grant instead, and only the caller's own files (and
+  their stored bytes) are destroyed.
+
+### Minor Changes
+
+- [#1932](https://github.com/Bike4Mind/bike4mind/pull/1932) [`1bdf739`](https://github.com/Bike4Mind/bike4mind/commit/1bdf7391cc8f83d42b2b00ecab7b528e5a3c0d09) Thanks [@vinchi777](https://github.com/vinchi777)! - verifiable permanent deletion for one lake document
+
+- [#2072](https://github.com/Bike4Mind/bike4mind/pull/2072) [`70ec2a6`](https://github.com/Bike4Mind/bike4mind/commit/70ec2a68decf31e67edc8d354115b0ef7299730f) Thanks [@onoya](https://github.com/onoya)! - expose the agent-executor pipeline over REST
+
+- [#2196](https://github.com/Bike4Mind/bike4mind/pull/2196) [`1d65698`](https://github.com/Bike4Mind/bike4mind/commit/1d656985af6f8c2b3b2a486d932feca5e541a9cd) Thanks [@onoya](https://github.com/onoya)! - show partial knowledge-base coverage on the reply itself
+
+- [#2207](https://github.com/Bike4Mind/bike4mind/pull/2207) [`55fb6c3`](https://github.com/Bike4Mind/bike4mind/commit/55fb6c39ffc7e881293dc715594770f43c865e1a) Thanks [@onoya](https://github.com/onoya)! - instrument forced retrieval's abstain exits
+
+- [#2227](https://github.com/Bike4Mind/bike4mind/pull/2227) [`68cfd6b`](https://github.com/Bike4Mind/bike4mind/commit/68cfd6b0458c9c45a387cd24ab46399ed5afbca9) Thanks [@onoya](https://github.com/onoya)! - separate an unindexed corpus from a genuine failure in the retrieval outcome
+
+- [#2252](https://github.com/Bike4Mind/bike4mind/pull/2252) [`f191816`](https://github.com/Bike4Mind/bike4mind/commit/f19181619bceed9c225ca4586305fb219cdb2589) Thanks [@ken-b4m](https://github.com/ken-b4m)! - make lake-member removal reversible by any lake manager
+
+- [#2262](https://github.com/Bike4Mind/bike4mind/pull/2262) [`f712bb8`](https://github.com/Bike4Mind/bike4mind/commit/f712bb827c37af41c43d26ef9e5b4c607ee7f056) Thanks [@vinchi777](https://github.com/vinchi777)! - ingest a very large Drive folder across several runs
+
+- [#2264](https://github.com/Bike4Mind/bike4mind/pull/2264) [`1cd2b7d`](https://github.com/Bike4Mind/bike4mind/commit/1cd2b7d520bd9150e54c3f8a3df2f1bc2b51afcd) Thanks [@onoya](https://github.com/onoya)! - record whether a turn's retrieval was forced or merely offered
+
+- [#2268](https://github.com/Bike4Mind/bike4mind/pull/2268) [`9b317ab`](https://github.com/Bike4Mind/bike4mind/commit/9b317ab5825776b433e69a1d8f255a12e8be625b) Thanks [@onoya](https://github.com/onoya)! - read the embedding provider's real rate limits from the admin panel
+
+- [#2270](https://github.com/Bike4Mind/bike4mind/pull/2270) [`32f72a1`](https://github.com/Bike4Mind/bike4mind/commit/32f72a160b0bb5827dd9a458ea16a6adb7abae39) Thanks [@choyno](https://github.com/choyno)! - give lake health a membership dimension
+
+- [#2274](https://github.com/Bike4Mind/bike4mind/pull/2274) [`b0b13bf`](https://github.com/Bike4Mind/bike4mind/commit/b0b13bf82601945d456dd0bf59b3aecf19eed137) Thanks [@ken-b4m](https://github.com/ken-b4m)! - add a lake-scoped door to set a file's tags under a lake's prefix
+
+- [#2277](https://github.com/Bike4Mind/bike4mind/pull/2277) [`ea49d82`](https://github.com/Bike4Mind/bike4mind/commit/ea49d82a08e85ff27a43699b7ecdd85a526857c5) Thanks [@juicewaa](https://github.com/juicewaa)! - collapse superseded lake members before ranking, scoped per lake
+
+- [#2282](https://github.com/Bike4Mind/bike4mind/pull/2282) [`8c183d3`](https://github.com/Bike4Mind/bike4mind/commit/8c183d3f6b7ce48eaf1e8bfe61e82e18332cf9b2) Thanks [@vinchi777](https://github.com/vinchi777)! - surface membership arm and allow attaching existing files
+
+- [#2312](https://github.com/Bike4Mind/bike4mind/pull/2312) [`cc0e8e3`](https://github.com/Bike4Mind/bike4mind/commit/cc0e8e3ae147c45f375e8ddecea5503e97fb78e7) Thanks [@juicewaa](https://github.com/juicewaa)! - make the candidate-selection rule visible and lake-attributable
+
+- [#2656](https://github.com/Bike4Mind/bike4mind/pull/2656) [`466e5a9`](https://github.com/Bike4Mind/bike4mind/commit/466e5a9b2ed4276f8886faec3aea42ff8484434b) Thanks [@julsanchez](https://github.com/julsanchez)! - expose ConcurrencyConflictError, isConcurrencyConflictError, and the opt-in IBaseRepository.updateGuarded from @bike4mind/common
+
+### Patch Changes
+
+- [#1929](https://github.com/Bike4Mind/bike4mind/pull/1929) [`920a061`](https://github.com/Bike4Mind/bike4mind/commit/920a061ec7c079a86b8e4b8a2627b631af8e8fef) Thanks [@vinchi777](https://github.com/vinchi777)! - Price the pre-flight credit hold on a realistic output size instead of the model's
+  full max-output ceiling, so a turn that will not actually use the ceiling no longer
+  gets blocked by a worst-case reservation. Reasoning models that spend reasoning
+  tokens inside their output budget get a larger reservation ceiling than other
+  models. The per-member organization credit cap is unaffected by this change: it is
+  still priced on the unshrunk ceiling at both the chat and CLI completion paths, and
+  on the CLI path that unshrunk figure is now used where an unrelated, smaller default
+  budget was used before - callers without an explicit output budget on an org-billed
+  key may see the per-member cap trigger sooner than before.
+
+- [#1930](https://github.com/Bike4Mind/bike4mind/pull/1930) [`51b306b`](https://github.com/Bike4Mind/bike4mind/commit/51b306b8b5c12062e54bd586f51a80c35e581f99) Thanks [@vinchi777](https://github.com/vinchi777)! - make Discover show gated public lakes to gate holders
+
+- [#2064](https://github.com/Bike4Mind/bike4mind/pull/2064) [`787c867`](https://github.com/Bike4Mind/bike4mind/commit/787c867b9445547e05a4ab32c69cd58716aa3c53) Thanks [@vinchi777](https://github.com/vinchi777)! - claim the transitional lifecycle statuses atomically
+
+- [#2066](https://github.com/Bike4Mind/bike4mind/pull/2066) [`116346b`](https://github.com/Bike4Mind/bike4mind/commit/116346b680d797c539e5112086aae7ed91f36273) Thanks [@jarlacut](https://github.com/jarlacut)! - stop one unusable id from failing a whole notebook export
+
+- [#2081](https://github.com/Bike4Mind/bike4mind/pull/2081) [`214d076`](https://github.com/Bike4Mind/bike4mind/commit/214d076194b7b5792af4011b29a9d071c7b7a35e) Thanks [@biletskiy6](https://github.com/biletskiy6)! - make delegation denials durable across continuations and dispatched children
+
+- [#2100](https://github.com/Bike4Mind/bike4mind/pull/2100) [`f2f9b3d`](https://github.com/Bike4Mind/bike4mind/commit/f2f9b3d6ae4dc69aa763b15bfc5af3f8e7ada12c) Thanks [@jarlacut](https://github.com/jarlacut)! - skip ids that cannot address a row instead of throwing
+
+- [#2103](https://github.com/Bike4Mind/bike4mind/pull/2103) [`a467b99`](https://github.com/Bike4Mind/bike4mind/commit/a467b99c43e695a3c1657a08ddd874da4e2438ca) Thanks [@choyno](https://github.com/choyno)! - validate and bound failedFileIds on upload-complete
+
+- [#2126](https://github.com/Bike4Mind/bike4mind/pull/2126) [`1c39465`](https://github.com/Bike4Mind/bike4mind/commit/1c394654b3ace280b8b0941742d09fbb01a236a8) Thanks [@choyno](https://github.com/choyno)! - exclude convergence-paused files from the chunk rescue sweep
+
+- [#2131](https://github.com/Bike4Mind/bike4mind/pull/2131) [`95d158a`](https://github.com/Bike4Mind/bike4mind/commit/95d158a96782d16dceb7e56e9984ed7ab7bb5cd9) Thanks [@vinchi777](https://github.com/vinchi777)! - guard the partial vectorize rollup against a stale write
+
+- [#2143](https://github.com/Bike4Mind/bike4mind/pull/2143) [`469c391`](https://github.com/Bike4Mind/bike4mind/commit/469c391f0e9d48ba9285210f00f597bdafb26810) Thanks [@vinchi777](https://github.com/vinchi777)! - make a failed vectorize enqueue recoverable
+
+- [#2159](https://github.com/Bike4Mind/bike4mind/pull/2159) [`545e51b`](https://github.com/Bike4Mind/bike4mind/commit/545e51b5a17c439ba7bd303bd4033fe0b8d4cd37) Thanks [@choyno](https://github.com/choyno)! - treat a zero or elapsed Retry-After as no hint, not as zero backoff
+
+- [#2204](https://github.com/Bike4Mind/bike4mind/pull/2204) [`e465103`](https://github.com/Bike4Mind/bike4mind/commit/e465103247d17e39750edc7bc9a7dddee249db7e) Thanks [@vinchi777](https://github.com/vinchi777)! - release the Drive connection when its lake is purged
+
+- [#2219](https://github.com/Bike4Mind/bike4mind/pull/2219) [`ad5801f`](https://github.com/Bike4Mind/bike4mind/commit/ad5801f5d44cfd198e424af10c9780aff3c04643) Thanks [@choyno](https://github.com/choyno)! - honour a Retry-After only when it asks the caller to wait
+
+- [#2220](https://github.com/Bike4Mind/bike4mind/pull/2220) [`7703e89`](https://github.com/Bike4Mind/bike4mind/commit/7703e8901332dc54d0533f0784dbfbb21df7772d) Thanks [@onoya](https://github.com/onoya)! - stamp TTFVT on the first visible token, not the first chunk
+
+- [#2234](https://github.com/Bike4Mind/bike4mind/pull/2234) [`3ac67a8`](https://github.com/Bike4Mind/bike4mind/commit/3ac67a8ef1540c89b885458d2dedb4be77a3d752) Thanks [@erikbethke](https://github.com/erikbethke)! - deliver attachment content on the agent path and report every drop
+
+- [#2249](https://github.com/Bike4Mind/bike4mind/pull/2249) [`4af59ad`](https://github.com/Bike4Mind/bike4mind/commit/4af59adbd76c4de00d78db6c8f3d2ed9eeea7085) Thanks [@erikbethke](https://github.com/erikbethke)! - stop agent mode auto-engaging on ordinary prompts and dropping Smart Tools
+
+- [#2250](https://github.com/Bike4Mind/bike4mind/pull/2250) [`72430db`](https://github.com/Bike4Mind/bike4mind/commit/72430db9a825facba11528fbd04ad620d91761f7) Thanks [@ken-b4m](https://github.com/ken-b4m)! - make the fileName and fileSize sorts a total order so paging cannot drop members
+
+- [#2254](https://github.com/Bike4Mind/bike4mind/pull/2254) [`8fd5c09`](https://github.com/Bike4Mind/bike4mind/commit/8fd5c09dc29ac2b516552a1d289d5113631520d0) Thanks [@ken-b4m](https://github.com/ken-b4m)! - anchor retrieval's dynamic-lake prefix arm to the lake's creator
+
+- [#2273](https://github.com/Bike4Mind/bike4mind/pull/2273) [`201bf43`](https://github.com/Bike4Mind/bike4mind/commit/201bf436ba987b47c363ebc7a6c7b4ece8801860) Thanks [@ken-b4m](https://github.com/ken-b4m)! - anchor the aggregate browse and forced retrieval to lake membership
+
+- [#2458](https://github.com/Bike4Mind/bike4mind/pull/2458) [`b8c6d29`](https://github.com/Bike4Mind/bike4mind/commit/b8c6d290a814bdf7e9cc04eb2c90c970d53976df) Thanks [@jjmarfa](https://github.com/jjmarfa)! - flag cross-document retrieval conflicts for the model
+
 ## 6.0.0
 
 ### Major Changes

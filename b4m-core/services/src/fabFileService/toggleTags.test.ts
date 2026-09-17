@@ -15,18 +15,36 @@ const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     ...overrides,
   }) as IDataLakeDocument;
 
-const file = (id: string, tags: { name: string; strength: number }[] = []) => ({ id, userId: 'owner', tags });
+// `toJSON` is non-enumerable, matching a real Mongoose document: it must not show up in a
+// structural `toEqual` diff, and the production code's `Object.assign`-onto-a-live-document bug
+// (an own-property assignment invisible to `toJSON`, dropped by `res.json`) can only be caught by
+// a mock document that actually behaves like one - a bare plain object masks it. See
+// SharableDocumentModel.findAccessibleById for the real repository's own `.toJSON()` call.
+const file = (id: string, tags: { name: string; strength: number }[] = []) => {
+  const doc = { id, userId: 'owner', tags };
+  Object.defineProperty(doc, 'toJSON', { value: () => ({ ...doc }), enumerable: false });
+  return doc;
+};
+
+/** Attaches the same non-enumerable `toJSON` to a raw file literal that doesn't already have one. */
+const withToJSON = <T extends { id: string }>(f: T): T => {
+  if (typeof (f as unknown as { toJSON?: unknown }).toJSON === 'function') return f;
+  const copy = { ...f };
+  Object.defineProperty(copy, 'toJSON', { value: () => ({ ...copy }), enumerable: false });
+  return copy;
+};
 
 const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocument | null = lake()) => {
+  const filesWithToJSON = files.map(withToJSON);
   // A mutable store so pushTagsByFabFileId/pullTagsByFabFileId mutate what findById returns next,
   // exactly as the real atomic repository methods would - the backfill step re-reads after the
   // per-tag loop, so its correctness depends on that read seeing the loop's own writes.
-  const store = new Map(files.map(f => [f.id, { ...f, tags: [...f.tags] }]));
+  const store = new Map(filesWithToJSON.map(f => [f.id, { ...f, tags: [...f.tags] }]));
 
   return {
     db: {
       fabFiles: {
-        shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue(files) },
+        shareable: { findAllUpdateAccessByIds: vi.fn().mockResolvedValue(filesWithToJSON) },
         findById: vi.fn(async (id: string) => store.get(id) ?? null),
         pullTagsByFabFileId: vi.fn(async (id: string, names: string[]) => {
           const doc = store.get(id);
@@ -53,14 +71,17 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
         find: vi.fn().mockResolvedValue([]),
       },
       users: { findById: vi.fn().mockResolvedValue({ id: 'owner', isAdmin: false }) },
+      // Wired unconditionally so a test can assert on it without rebuilding the fixture; degrades
+      // to "no event recorded" the same way an absent repo would if a caller genuinely omitted it.
+      lakeConfigChangeEvents: { record: vi.fn().mockResolvedValue({}) },
     },
     store,
   };
 };
 
 // real repositories; the mocks implement only the methods under test.
-const run = (adapters: ReturnType<typeof makeAdapters>, params: unknown) =>
-  toggleTags('owner', params, adapters as any);
+const run = (adapters: ReturnType<typeof makeAdapters>, params: unknown, extra?: Record<string, unknown>) =>
+  toggleTags('owner', params, { ...adapters, ...extra } as any);
 
 describe('toggleTags - ordinary tags', () => {
   it('adds an absent tag with the caller casing intact and counts it', async () => {
@@ -114,14 +135,14 @@ describe('toggleTags - ordinary tags', () => {
   it('returns freshly re-read documents rather than the pre-write snapshot', async () => {
     const adapters = makeAdapters([file('f1')]);
     const afterWrite = [file('f1', [{ name: 'new-tag', strength: 0 }])];
-    adapters.db.fabFiles.shareable.findAllAccessibleByIds
+    adapters.db.fabFiles.shareable.findAllUpdateAccessByIds
       .mockResolvedValueOnce([file('f1')])
       .mockResolvedValueOnce(afterWrite);
 
     const result = await run(adapters, { ids: ['f1'], tags: ['new-tag'] });
 
     expect(result).toEqual(afterWrite);
-    expect(adapters.db.fabFiles.shareable.findAllAccessibleByIds).toHaveBeenCalledTimes(2);
+    expect(adapters.db.fabFiles.shareable.findAllUpdateAccessByIds).toHaveBeenCalledTimes(2);
   });
 
   it('acts once on a tag repeated in the same request', async () => {
@@ -194,6 +215,46 @@ describe('toggleTags - data lake meta-tags', () => {
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
     expect(adapters.db.dataLakes.activateIfDraft).toHaveBeenCalledWith('lake1');
+  });
+
+  // #1964: the one remaining door that could emit an `auto-activate` config-change row without
+  // ever attaching an `auditPrincipal` - the four config-write routes (#1917) and the other
+  // recompute callers (#2124) already do. Mutation-verified: deleting the `auditPrincipal` line
+  // from the actor at toggleTags.ts's actor construction turns the first case red (the fallback
+  // derives `principalKind: 'user'` from `actor.userId` instead).
+  describe('auto-activate audit principal (#1964)', () => {
+    it('names the API key, not the human, when a key-driven toggle activates a draft lake', async () => {
+      const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
+      adapters.db.dataLakes.activateIfDraft = vi.fn().mockResolvedValue(true);
+
+      await run(
+        adapters,
+        { ids: ['f1'], tags: ['datalake:lake'] },
+        { auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'owner' } }
+      );
+
+      expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'auto-activate',
+          principalKind: 'apiKey',
+          principalId: 'key-abc',
+          onBehalfOfUserId: 'owner',
+        })
+      );
+    });
+
+    it('still names the session user with no onBehalfOfUserId when no key is involved', async () => {
+      const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
+      adapters.db.dataLakes.activateIfDraft = vi.fn().mockResolvedValue(true);
+
+      await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
+
+      expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: 'owner' })
+      );
+      const [event] = adapters.db.lakeConfigChangeEvents.record.mock.calls[0];
+      expect('onBehalfOfUserId' in event).toBe(false);
+    });
   });
 
   it('recomputes a lake once for the whole batch, not once per file', async () => {
@@ -313,6 +374,48 @@ describe('toggleTags - data lake meta-tags', () => {
     await expect(run(adapters, { ids: ['f1', 'f2'], tags: ['datalake:lake'] })).rejects.toThrow(/write failed/);
     // f1's removal committed, so the lake's counts must reflect it rather than stay stale.
     expect(adapters.db.dataLakes.setStats).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Membership IS read access - the meta-tag arm of buildDataLakeMembershipFilter carries no
+// ownership conjunct - so stamping the tag on a file the actor does not own publishes that owner's
+// private, merely read-shared file to every reader of the lake. Every other meta-tag test in this
+// file builds files with `userId: 'owner'` and calls as 'owner', so `file.userId === actor.userId`
+// is true throughout and the rest of the check is dead under test: delete it and they all still
+// pass. These three are the cases that fail when it is deleted.
+describe('toggleTags - meta-tag join file-ownership conjunct', () => {
+  const runAs = (userId: string, adapters: ReturnType<typeof makeAdapters>, params: unknown) =>
+    toggleTags(userId, params, adapters as any);
+  const refusal = 'You do not have permission to add files to this data lake';
+
+  it('refuses a lake manager joining a file it does not own', async () => {
+    // 'owner' created lake1, so canManageLake passes and this conjunct is the only thing between a
+    // legitimate manager and a third party's file.
+    const adapters = makeAdapters([{ id: 'f1', userId: 'someone-else', tags: [] }]);
+
+    await expect(run(adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(refusal);
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  it('lets a platform admin join a file the lake effective owner owns', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'admin', isAdmin: true });
+
+    await runAs('admin', adapters, { ids: ['f1'], tags: ['datalake:lake'] });
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+  });
+
+  it('refuses a platform admin joining an unrelated third party file', async () => {
+    // isAdmin only satisfies the FIRST half of the second disjunct; the file's owner must still be
+    // an effective owner of the lake. Admin is not a licence to publish anyone's file anywhere.
+    const adapters = makeAdapters([{ id: 'f1', userId: 'third-party', tags: [] }]);
+    adapters.db.users.findById = vi.fn().mockResolvedValue({ id: 'admin', isAdmin: true });
+
+    await expect(runAs('admin', adapters, { ids: ['f1'], tags: ['datalake:lake'] })).rejects.toThrow(refusal);
+
+    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
 });
 
@@ -457,6 +560,21 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
     expect(adapters.store.get('f1')?.tags.map(t => t.name)).toEqual(['lk:b']);
   });
 
+  it('surfaces the prefix-arm join count on the returned file, and it survives a JSON round-trip', async () => {
+    // Regression test for a real bug: the count used to be assigned onto the live Mongoose
+    // document via Object.assign, which `res.json` (via the schema's toJSON) silently dropped -
+    // the caller-facing trap-defusal toast could never fire. `file()`'s mock toJSON mirrors that
+    // real serialization boundary, so this fails the same way the production code did before the
+    // fix if the count is attached the wrong way.
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake()]);
+
+    const result = await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] });
+
+    const serialized = JSON.parse(JSON.stringify(result));
+    expect(serialized[0].prefixArmJoinedLakeCount).toBe(1);
+  });
+
   it('toggling a prefix tag ON is never a leave, and recomputes when the actor manages the lake', async () => {
     const adapters = makeAdapters([file('f1')]);
     adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake()]);
@@ -469,6 +587,36 @@ describe('toggleTags - prefix-arm-only membership (no meta-tag on the file)', ()
       totalSizeBytes: 99,
       totalChunkedChars: 0,
     });
+  });
+
+  // Pins the API-key scope gate itself, not just the manage-rights gate above: the route's own
+  // scope check never sees this tag (it carries no `datalake:` prefix), so `assertWriteScope` is
+  // the ONLY thing standing between a caller with no data-lake scope and joining a lake this way.
+  it('calls assertWriteScope on a prefix-arm join, and propagates its refusal', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([lake()]);
+    const assertWriteScope = vi.fn();
+
+    await run(adapters, { ids: ['f1'], tags: ['lk:invoices'] }, { assertWriteScope });
+    expect(assertWriteScope).toHaveBeenCalledTimes(1);
+
+    assertWriteScope.mockClear();
+    assertWriteScope.mockImplementation(() => {
+      throw new Error('missing scope');
+    });
+    await expect(run(adapters, { ids: ['f1'], tags: ['lk:invoices'] }, { assertWriteScope })).rejects.toThrow(
+      'missing scope'
+    );
+  });
+
+  it('does not call assertWriteScope when a colon-bearing tag resolves to no prefix-arm lake', async () => {
+    const adapters = makeAdapters([file('f1')]);
+    adapters.db.dataLakes.find = vi.fn().mockResolvedValue([]); // no candidate lakes to match
+    const assertWriteScope = vi.fn();
+
+    await run(adapters, { ids: ['f1'], tags: ['other:tag'] }, { assertWriteScope });
+
+    expect(assertWriteScope).not.toHaveBeenCalled();
   });
 
   // MEMBERSHIP needs no gate (the read-side predicate grants it purely on the tag), but the

@@ -1,4 +1,5 @@
 import { IChatHistoryItemDocument, IQuestMasterPlanDocument, SubQuestStatus } from '@bike4mind/common';
+import type { ContextBreakdown } from '@bike4mind/services';
 import { api } from '@client/app/contexts/ApiContext';
 import { updateAllQueryData } from '@client/app/utils/react-query';
 import { deleteChatMessage, getChatMessage, updateChatMessage } from '@client/app/utils/sessionsAPICalls';
@@ -59,6 +60,22 @@ export const useGetQuest = (sessionId: string, questId: string, enabled = true) 
     staleTime: 0,
     gcTime: 30000, // Keep cache for 30s to allow late-binding queries to find streaming updates
     refetchOnWindowFocus: false, // Don't interfere with manual polling
+  });
+};
+
+/**
+ * The signed-in user's own /context breakdown for one of their quests. Owner-only server-side, and
+ * lazy: nothing is requested until the reader opens the panel.
+ */
+export const useQuestContextBreakdown = (questId: string | undefined, enabled: boolean) => {
+  return useQuery<ContextBreakdown>({
+    queryKey: ['quests', 'context', questId],
+    queryFn: async () => {
+      const { data } = await api.get<ContextBreakdown>(`/api/quests/${questId}/context`);
+      return data;
+    },
+    enabled: enabled && !!questId,
+    refetchOnWindowFocus: false,
   });
 };
 

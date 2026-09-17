@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
+import { ImageModels, type GenerateImageToolCall } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 
 // The agent-tool edit_image path must run the SAME moderation gate the
@@ -21,8 +22,25 @@ vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
   };
 });
 
-// Imported after the mock so `processAndStoreImage` picks up the mocked service.
-const { processAndStoreImage, getImageFromFileId } = await import('./index');
+// Mocks for the edit_image toolFn's OpenAI branch - see the 'imageEditTool - OpenAI branch'
+// describe below. Same constructor-function pattern as RekognitionImageModerationService above.
+const mockEditSpy = vi.fn();
+vi.mock('@bike4mind/utils', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/utils')>();
+  return {
+    ...actual,
+    OpenAIImageService: vi.fn().mockImplementation(function () {
+      return { edit: mockEditSpy };
+    }),
+  };
+});
+
+vi.mock('../../../../apiKeyService', () => ({
+  getEffectiveApiKey: vi.fn().mockResolvedValue('fake-openai-key'),
+}));
+
+// Imported after the mocks so `processAndStoreImage` and `imageEditTool` pick up the mocked services.
+const { processAndStoreImage, getImageFromFileId, imageEditTool } = await import('./index');
 
 // 1x1 transparent PNG - downloadImage() short-circuits data: URLs with no network call.
 const PNG_DATA_URL =
@@ -57,12 +75,13 @@ function createFakeContext(): ToolContext {
   };
 }
 
-// Builds a context whose `db.fabfiles.findById` resolves to the given fabFile stub, and
-// whose `storage.getSignedUrl` is mockable - everything `getImageFromFileId` touches.
+// Builds a context whose `db.fabfiles.findAccessibleInIds` resolves to the given fabFile stub
+// (null -> [], the shape the repo returns when the caller cannot access the id), and whose
+// `storage.getSignedUrl` is mockable - everything `getImageFromFileId` touches.
 function createFakeContextWithFabFile(fabFile: Record<string, unknown> | null): ToolContext {
   const context = createFakeContext();
-  (context.db as unknown as { fabfiles: { findById: ReturnType<typeof vi.fn> } }).fabfiles = {
-    findById: vi.fn().mockResolvedValue(fabFile),
+  (context.db as unknown as { fabfiles: { findAccessibleInIds: ReturnType<typeof vi.fn> } }).fabfiles = {
+    findAccessibleInIds: vi.fn().mockResolvedValue(fabFile ? [fabFile] : []),
   };
   context.storage = {
     upload: vi.fn(),
@@ -96,6 +115,26 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
 
     await expect(getImageFromFileId(VALID_FILE_ID, context)).rejects.toThrow('This image is not available.');
     expect(context.storage.getSignedUrl).not.toHaveBeenCalled();
+  });
+
+  it('denies a file the caller cannot access - NotFoundError, no signed URL minted', async () => {
+    // Repo returns [] when the id is not owned by / shared with the caller (the IDOR fix): the
+    // tool must not distinguish "not found" from "not yours", and must never sign the file.
+    const context = createFakeContextWithFabFile(null);
+
+    await expect(getImageFromFileId(VALID_FILE_ID, context)).rejects.toThrow(`File with ID ${VALID_FILE_ID} not found`);
+    expect(context.storage.getSignedUrl).not.toHaveBeenCalled();
+    // Pin the principal that reaches the repo: the lookup runs as the caller (context.userId),
+    // never a widened one, and carries a lakeAccess arm so the denial cannot be an artifact of an
+    // over-narrow query. (lakeAccess resolves to {} here - the fake context wires no lake repos.)
+    const findAccessibleInIds = (
+      context.db as unknown as { fabfiles: { findAccessibleInIds: ReturnType<typeof vi.fn> } }
+    ).fabfiles.findAccessibleInIds;
+    expect(findAccessibleInIds).toHaveBeenCalledWith(
+      [VALID_FILE_ID],
+      { userId: context.userId, userGroups: undefined },
+      expect.anything()
+    );
   });
 
   it('resolves a signed URL for a clean image', async () => {
@@ -139,5 +178,32 @@ describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate
     expect(mockCheckImage).toHaveBeenCalledTimes(1);
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
     expect(result).toBe('generated/stored-key.png');
+  });
+});
+
+describe('imageEditTool - OpenAI branch', () => {
+  beforeEach(() => {
+    mockEditSpy.mockReset();
+    // Stop right after dispatch: the assertion is about what reached the provider,
+    // not about the post-edit moderation/storage pipeline.
+    mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+  });
+
+  it('forwards the requested quality to the OpenAI edit service', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_1_5,
+      quality: 'high',
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it blue' });
+
+    expect(mockEditSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ quality: 'high' })
+    );
   });
 });

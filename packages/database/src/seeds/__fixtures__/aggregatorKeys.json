@@ -1,9 +1,10 @@
 {
-  "notice": "Aggregator key universes captured 2026-07-26 from models.dev/api.json (ETag 97c7bbb38bbf69bf51d022718f331faf) and github.com/BerriAI/litellm@v1.93.0/model_prices_and_context_window.json. Keys only, no values: this fixture exists so the join-coverage guard and the dead-alias check run without egress. modelsDev holds only the providers MODELS_DEV_PROVIDER_BY_BACKEND maps a backend to; litellm holds only first-party keys, because a key whose gateway prefix survives normalization can never match one of our ids and must never be aliased to. The moonshotai provider keys and the first-party moonshot/* litellm keys were added 2026-07-28 when the Kimi backend landed; the litellm side is still read at v1.93.0, the models.dev side from a later fetch than the ETag above.",
+  "notice": "Aggregator key universes captured 2026-07-26 from models.dev/api.json (ETag 97c7bbb38bbf69bf51d022718f331faf) and github.com/BerriAI/litellm@v1.93.0/model_prices_and_context_window.json. Keys only, no values: this fixture exists so the join-coverage guard and the dead-alias check run without egress. modelsDev holds only the providers MODELS_DEV_PROVIDER_BY_BACKEND maps a backend to; litellm holds only first-party keys, because a key whose gateway prefix survives normalization can never match one of our ids and must never be aliased to. The moonshotai provider keys and the first-party moonshot/* litellm keys were added 2026-07-28 when the Kimi backend landed; the litellm side is still read at v1.93.0, the models.dev side from a later fetch than the ETag above. The deepseek provider was added 2026-09-13 when the DeepSeek backend landed: models.dev already lists both deepseek-flash and deepseek-v4-pro under it, while litellm's bare deepseek-v4-pro predates that capture and its deepseek-flash entry has not appeared yet (it still only carries the vendor's legacy deepseek-v4-flash alias name). Both sides carry keys for DeepSeek ids this build does not ship, the same as every other provider here - the capture is the provider's whole key space, not our catalog.",
   "capturedAt": "2026-07-26",
   "modelsDevProviders": [
     "amazon-bedrock",
     "anthropic",
+    "deepseek",
     "google",
     "moonshotai",
     "openai",
@@ -51,6 +52,8 @@
     "claude-sonnet-5",
     "deep-research-max-preview-04-2026",
     "deep-research-preview-04-2026",
+    "deepseek-flash",
+    "deepseek-v4-pro",
     "deepseek.r1-v1:0",
     "deepseek.v3-v1:0",
     "deepseek.v3.2",

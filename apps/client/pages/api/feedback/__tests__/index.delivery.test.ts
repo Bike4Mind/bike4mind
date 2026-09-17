@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { FEEDBACK_CONTENT_MAX_CHARS } from '@bike4mind/common';
 
@@ -52,6 +52,15 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
+
+// The real resolver reads the session collection to prove ownership; the deep-link tests below
+// only care that whatever it resolved reaches both channels, so it is stubbed to a fixed answer.
+const mockFeedbackContext = vi.hoisted(() => ({
+  value: { organizationId: null, subject: 'product' } as Record<string, unknown>,
+}));
+vi.mock('@server/utils/feedbackContext', () => ({
+  resolveFeedbackContext: vi.fn(async () => mockFeedbackContext.value),
+}));
 
 const mockPostFeedbackToSlack = vi.fn();
 vi.mock('@server/integrations/slack/slack', () => ({
@@ -128,6 +137,7 @@ describe('POST /api/feedback - delivery outcome', () => {
     mockConfig.STAGE = 'production';
     mockPostFeedbackToSlack.mockResolvedValue({ outcome: 'delivered' });
     mockEmailPublish.mockResolvedValue(undefined);
+    mockFeedbackContext.value = { organizationId: null, subject: 'product' };
   });
 
   it('does not call postFeedbackToSlack when EnableFeedBackToSlack is off, and reports it skipped', async () => {
@@ -181,7 +191,7 @@ describe('POST /api/feedback - delivery outcome', () => {
     (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => false;
     await mockRefs.postHandler!(req, res);
 
-    const slackContentArg = mockPostFeedbackToSlack.mock.calls[0][5];
+    const slackContentArg = mockPostFeedbackToSlack.mock.calls[0][0].content;
     expect(slackContentArg).toHaveLength(FEEDBACK_CONTENT_MAX_CHARS);
     expect(slackContentArg).not.toContain('x'.repeat(FEEDBACK_CONTENT_MAX_CHARS + 1));
 
@@ -404,5 +414,80 @@ describe('POST /api/feedback - delivery outcome', () => {
     expect(body.delivery.channels.email).toEqual({ outcome: 'skipped', reason: 'nonprod_unconfigured' });
     expect(Logger.warn).toHaveBeenCalled();
     expect(Logger.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/feedback - deep links in the delivery payload', () => {
+  const originalAppUrl = process.env.APP_URL;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSettings.EnableFeedBackToSlack = true;
+    mockSettings.EnableFeedBackToEmail = true;
+    mockSettings.FeedbackReceiveEmail = 'team@example.com';
+    mockSettings.FeedbackReceiveEmailNonProd = '';
+    mockConfig.STAGE = 'production';
+    mockPostFeedbackToSlack.mockResolvedValue({ outcome: 'delivered' });
+    mockEmailPublish.mockResolvedValue(undefined);
+    mockFeedbackContext.value = {
+      organizationId: null,
+      subject: 'turn',
+      sessionId: 'sess-1',
+      questId: 'quest-1',
+    };
+    process.env.APP_URL = 'https://app.example.com';
+  });
+
+  afterEach(() => {
+    if (originalAppUrl === undefined) delete process.env.APP_URL;
+    else process.env.APP_URL = originalAppUrl;
+  });
+
+  it('hands Slack and the email the same record and turn links', async () => {
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    const { links } = mockPostFeedbackToSlack.mock.calls[0][0];
+    expect(links).toEqual({
+      record: 'https://app.example.com/admin?tab=feedback&feedbackId=fb1',
+      conversation: 'https://app.example.com/notebooks/sess-1?questId=quest-1',
+      conversationIsTurn: true,
+    });
+
+    // Both channels have to carry them - the email half is the one #1863 was written before.
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).toContain('href="https://app.example.com/admin?tab=feedback&amp;feedbackId=fb1"');
+    expect(emailBody).toContain('href="https://app.example.com/notebooks/sess-1?questId=quest-1"');
+    expect(emailBody).toContain('>Conversation turn</a>');
+  });
+
+  it('links only the record for a product-level report', async () => {
+    mockFeedbackContext.value = { organizationId: null, subject: 'product' };
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockPostFeedbackToSlack.mock.calls[0][0].links).toEqual({
+      record: 'https://app.example.com/admin?tab=feedback&feedbackId=fb1',
+      conversation: null,
+      conversationIsTurn: false,
+    });
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).toContain('>Admin record</a>');
+    expect(emailBody).not.toContain('/notebooks/');
+  });
+
+  it('still delivers on a stage with no APP_URL, with no link row and a warning', async () => {
+    delete process.env.APP_URL;
+    const { req, res } = run();
+    await mockRefs.postHandler!(req, res);
+
+    expect(mockPostFeedbackToSlack.mock.calls[0][0].links).toBeNull();
+    const emailBody = mockEmailPublish.mock.calls[0][0].body as string;
+    expect(emailBody).not.toContain('<strong>Links:</strong>');
+    expect(Logger.warn).toHaveBeenCalledWith(
+      '[feedback] APP_URL is unset - delivering the notification without deep links',
+      { feedbackId: 'fb1' }
+    );
+    expect(res._getJSONData().delivery.delivered).toBe(true);
   });
 });

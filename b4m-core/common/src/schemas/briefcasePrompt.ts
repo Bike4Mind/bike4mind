@@ -41,7 +41,10 @@ export const BriefcaseRequiredToolsSchema = z
 /** A 24-char hex Mongo ObjectId string (for by-id refetch and personal CRUD). */
 export const BriefcasePromptIdSchema = z.string().regex(/^[a-f0-9]{24}$/i, 'Invalid prompt id');
 
-const PROMPT_TEXT_MAX = 16_000;
+/** Shared cap for every free-text prompt body a caller can supply. Exported so the
+ * caller-prompt caps on the chat request, the invoke params and the CLI tool import it
+ * rather than each restating the literal. */
+export const PROMPT_TEXT_MAX = 16_000;
 const TAGS_MAX = 20;
 const VISIBILITY_SCOPES_MAX = 20;
 

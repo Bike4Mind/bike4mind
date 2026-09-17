@@ -12,9 +12,10 @@ import {
   ModalModel,
   Organization,
   FabFile,
-  Memento,
   Project,
+  Memento,
   QuestMasterPlan,
+  applySharedShareableRules,
 } from '@bike4mind/database';
 import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
 import { SecretRotation } from '@bike4mind/database/infra';
@@ -78,38 +79,7 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
       allow('delete', AdminSettings);
     }
 
-    // Common patterns applied to each resource below: own documents, documents
-    // shared with the user's ID, and documents shared with any of the user's groups.
-    [Session, FabFile, Organization, Project].forEach(resource => {
-      allow(Permission.create, resource);
-
-      // Global read/write flags apply to all resource types:
-      allow(Permission.read, resource, { isGlobalRead: true });
-      allow(Permission.update, resource, { isGlobalWrite: true });
-
-      [Permission.read, Permission.update, Permission.delete, Permission.share].forEach(permission => {
-        allow(permission, resource, ownDocumentPermission);
-
-        const userWithPermissions: MongoQuery = {
-          'users.userId': user.id,
-          'users.permissions': permission,
-        };
-        // $elemMatch so groupId and permission must hold on the SAME group entry.
-        // A dotted `{ 'groups.groupId': ..., 'groups.permissions': ... }` lets the two
-        // conditions be satisfied by different array elements - a doc shared with
-        // group A (some other permission) and group B (this permission) would grant
-        // access to an A-member, a cross-group over-grant. Mirrors the $elemMatch the
-        // fabFile search query already uses (packages/database fabFileSearchQuery.ts).
-        const groupWithPermissions: MongoQuery = {
-          groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: permission } },
-        };
-        allow(permission, resource, userWithPermissions);
-
-        if (user.groups?.length) {
-          allow(permission, resource, groupWithPermissions);
-        }
-      });
-    });
+    applySharedShareableRules(allow, user, [Session, FabFile, Organization, Project]);
 
     // Team Manager permissions for Organizations
     // Managers can read and update organizations they manage (but not billing-related fields)
@@ -147,6 +117,20 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
     allow(Permission.create, FeedbackModel);
 
     allow(Permission.update, FeedbackModel, {
+      userId: user.id,
+    });
+
+    // A reporter can read back and retract their own reports. Every condition below is INVISIBLE
+    // to a by-class `can(action, FeedbackModel)` check, which reports true as soon as any rule for
+    // the action exists - so a feedback route must authorize against the fetched document instance
+    // (see feedback/[id]/read.ts, update.ts, delete.ts) or narrow the query with accessibleBy()
+    // (see feedback/index.ts). A by-class check here would grant every non-admin the admin view.
+    // MUST STAY IN SYNC with the feedback rules in packages/database/src/utils/ability.ts.
+    allow(Permission.read, FeedbackModel, {
+      userId: user.id,
+    });
+
+    allow(Permission.delete, FeedbackModel, {
       userId: user.id,
     });
 

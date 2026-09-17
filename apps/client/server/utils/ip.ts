@@ -1,34 +1,13 @@
+import { isPrivateIP } from '@bike4mind/fab-pipeline';
 import type { Request } from 'express';
 
 // Extracts the most accurate client IP behind proxies/CDNs.
 // Priority: Cloudflare, Akamai/proxies, X-Forwarded-For (first), Fly, then socket addresses.
-// Filters out private/reserved ranges and strips ports.
-
-const PRIVATE_IPV4_RANGES: RegExp[] = [/^10\./, /^127\./, /^169\.254\./, /^172\.(1[6-9]|2\d|3[0-1])\./, /^192\.168\./];
-
-// Loopback (::1 and its fully-expanded 0:0:0:0:0:0:0:1 form), unspecified (::),
-// link-local (fe80::/10 -> fe80..febf), and unique-local (fc00::/7 -> fc00..fdff).
-// Matched case-insensitively on the leading hextets.
-const PRIVATE_IPV6_RANGES: RegExp[] = [
-  /^::1$/i,
-  /^(?:0{1,4}:){7}0{0,3}1$/i,
-  /^::$/,
-  /^fe[89ab][0-9a-f]:/i,
-  /^f[cd][0-9a-f]{2}:/i,
-];
-
-// Matches the ::ffff:<IPv4> mapped prefix so we can re-check the embedded dotted
-// IPv4 against the private ranges. The exotic hex-encoded mapped form
-// (::ffff:0a00:0001) is intentionally not normalized - see follow-up.
-const IPV4_MAPPED_PREFIX = /^::ffff:/i;
-
-function isPrivateIp(ip: string): boolean {
-  if (PRIVATE_IPV4_RANGES.some(r => r.test(ip))) return true;
-  if (PRIVATE_IPV6_RANGES.some(r => r.test(ip))) return true;
-  // IPv4-mapped IPv6 (e.g. ::ffff:10.0.0.1): strip the prefix and re-test as IPv4.
-  const mapped = ip.replace(IPV4_MAPPED_PREFIX, '');
-  return mapped !== ip && PRIVATE_IPV4_RANGES.some(r => r.test(mapped));
-}
+// Filters out private/reserved ranges and strips ports. The filter is `isPrivateIP` from
+// `@bike4mind/fab-pipeline` (so this file doesn't carry its own IPv6 prefix list to drift out of
+// sync with it - see #1969) - it is an SSRF-destination guard, so it is also wider than routability
+// alone (e.g. CGNAT, 6to4/Teredo, documentation ranges): a header value in one of those ranges is
+// treated as untrustworthy here too and the resolver falls through to the next signal.
 
 function cleanIp(raw: string | undefined | null): string | null {
   if (!raw) return null;
@@ -70,7 +49,7 @@ export function getClientIp(req: Request): string {
     // Callers may pass a NextApiRequest-like object whose `headers` is absent
     // (e.g. some handler/test contexts); without this guard the loop throws.
     const ip = cleanIp(req.headers?.[header] as string | undefined);
-    if (ip && !isPrivateIp(ip)) return ip;
+    if (ip && !isPrivateIP(ip)) return ip;
   }
 
   const socketIp = cleanIp((req.socket as any)?.remoteAddress || (req.connection as any)?.remoteAddress);

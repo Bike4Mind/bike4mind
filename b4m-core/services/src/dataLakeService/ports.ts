@@ -1,4 +1,4 @@
-import type { DataLakeMembershipScope } from '@bike4mind/common';
+import type { DataLakeMembershipScope, IFabFileChunkRepository } from '@bike4mind/common';
 
 /**
  * What a lifecycle sweep hands the index: the lake it ran on, and the member ids it resolved.
@@ -46,18 +46,50 @@ export interface RetrievalIndexPort {
  * Archive and phase-1 delete: a failure is logged, not fatal. Both are reversible, so a stale
  * entry is tolerated rather than blocking the transition.
  *
- * Ids resolve lazily and inside the try, so a door with no index wired pays no query, and a
- * lookup failure cannot abort an op that is contractually best-effort.
+ * Ids resolve lazily and inside a try, so a door with no index wired pays no query, and a lookup
+ * failure cannot abort an op that is contractually best-effort.
+ *
+ * Clears `retrievalIndexConfirmedModel` for every resolved file (via `fabFileChunks`, when wired)
+ * BEFORE attempting the removal, not after - the reverse order left a gap where the OpenSearch
+ * delete succeeds but the clear then fails (DocumentDB failover, timeout on a large `$in`): the
+ * confirm would never be retried (unarchive has no re-index path) and the file would end up
+ * permanently stamped-ready, confirmed, and absent from the index - exactly what this port exists
+ * to prevent. If the clear itself fails, the removal is SKIPPED, not run anyway - running it would
+ * over-claim (index doc gone, confirm still set), the one outcome `annResidentFabFileIds`'s safe
+ * bias must never see; skipping instead leaves the index document and the confirm both untouched,
+ * which is exactly the state the file was already in - no worse than not having attempted the
+ * removal at all, and nothing is silently promised to self-heal on its own. Each step gets its own
+ * try/catch and log line so a clear failure is never misreported as an index-removal failure (or
+ * vice versa) to whoever is on call.
+ * Kept here rather than at each call site so a door wiring `retrievalIndex` cannot forget to wire
+ * this half too.
  */
 export async function bestEffortIndexRemove(
   retrievalIndex: RetrievalIndexPort | undefined,
   scope: DataLakeMembershipScope,
   resolveFabFileIds: () => Promise<string[]>,
-  logger?: { warn: (msg: string, ...args: unknown[]) => void }
+  logger?: { warn: (msg: string, ...args: unknown[]) => void },
+  fabFileChunks?: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>
 ): Promise<void> {
   if (!retrievalIndex) return;
+  let fabFileIds: string[];
   try {
-    await retrievalIndex.removeForDataLake({ scope, fabFileIds: await resolveFabFileIds() });
+    fabFileIds = await resolveFabFileIds();
+  } catch (error) {
+    logger?.warn(`Best-effort index removal failed for ${scope.datalakeTag}:`, error);
+    return;
+  }
+  try {
+    await fabFileChunks?.clearRetrievalIndexConfirmedByFabFileIds(fabFileIds);
+  } catch (error) {
+    logger?.warn(
+      `Failed to clear the retrieval-index confirm before best-effort removal for ${scope.datalakeTag}:`,
+      error
+    );
+    return;
+  }
+  try {
+    await retrievalIndex.removeForDataLake({ scope, fabFileIds });
   } catch (error) {
     logger?.warn(`Best-effort index removal failed for ${scope.datalakeTag}:`, error);
   }
@@ -77,11 +109,75 @@ export async function bestEffortIndexRemove(
  * the sweep (`api/admin/dlq/replay.ts`), which finishes the purge rather than reversing it.
  *
  * This is the canonical description of both postures. Call sites point here rather than restating.
+ *
+ * Also clears `retrievalIndexConfirmedModel` for `input.fabFileIds` (via `fabFileChunks`, when
+ * wired), BEFORE the removal itself - the same crash-window reasoning as `bestEffortIndexRemove`
+ * above for WHY clear-before-remove. The failure posture differs, though: a clear failure here is
+ * logged AND rethrown, never swallowed. The clear runs before anything destructive, so a throw
+ * here is genuinely zero progress, matching this function's own "zero progress on a throw"
+ * contract above. Swallowing it and running the removal anyway would over-claim (index doc gone,
+ * confirm still set) with no retry path to fix it - unarchive/re-vectorize is the only way a
+ * confirm gets set again, and this file is not going through either - which is the exact
+ * stranding this port exists to prevent, so `bestEffortIndexRemove`'s "skip on clear failure" and
+ * this function's "rethrow on clear failure" are the same over-claim-avoidance choice expressed in
+ * each posture's own vocabulary (skip vs. abort).
  */
 export async function strictIndexRemove(
   retrievalIndex: RetrievalIndexPort | undefined,
-  input: RetrievalIndexRemoval
+  input: RetrievalIndexRemoval,
+  fabFileChunks?: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>,
+  logger?: { warn: (msg: string, ...args: unknown[]) => void }
 ): Promise<void> {
   if (!retrievalIndex) return;
+  try {
+    await fabFileChunks?.clearRetrievalIndexConfirmedByFabFileIds(input.fabFileIds);
+  } catch (error) {
+    logger?.warn(
+      `Failed to clear the retrieval-index confirm before strict removal for ${input.scope.datalakeTag}:`,
+      error
+    );
+    throw error;
+  }
   await retrievalIndex.removeForDataLake(input);
+}
+
+/**
+ * Optional port: flip `enabled` on whatever Drive connection feeds a lake - disable on
+ * archive/delete, re-enable on unarchive/restore. Injected because the connection lookup + write
+ * lives in the app layer (see disableDriveConnectionForLake/enableDriveConnectionForLake), same
+ * reason `releaseDriveConnection` is injected into cleanupDeletedDataLake. Absent -> a host
+ * without the Drive integration is unaffected.
+ */
+export type DriveConnectionEnablePort = (args: { dataLakeId: string }) => Promise<void>;
+
+/**
+ * Archive/delete/unarchive/restore: a failure here is logged, not fatal - failing a whole lifecycle
+ * transition over a Drive hiccup would be a worse outcome than a connection briefly out of sync with
+ * its lake. The two directions are swallowed for DIFFERENT reasons, and neither is "the ingest guard
+ * covers it":
+ *
+ * - A lost DISABLE is genuinely backstopped: the ingest-level status guard (driveLakeIngest.ts)
+ *   refuses to sync a lake that is not draft/active, so the poll keeps enqueueing work that is always
+ *   dropped. Wasteful, never incorrect.
+ * - A lost ENABLE has no backstop - `findDueForPoll` is the only reader that ACTS on the flag (the
+ *   enabled-only finders and the per-lake GET read it too, but none of them resumes a poll) - so it
+ *   is swallowed only because it is REPAIRABLE: the reconnect door re-stamps `enabled: true`
+ *   (OrgGoogleDriveConnection.updateCredential), which is where a user goes when sync looks broken.
+ *   The GET does report `enabled` truthfully, but no UI reads it - the connection chip renders from
+ *   `status` alone - so this state is inspectable over the API, not in the product. Do not remove
+ *   that re-stamp without making this direction fatal instead.
+ */
+export async function bestEffortSetDriveConnectionEnabled(
+  port: DriveConnectionEnablePort | undefined,
+  dataLakeId: string,
+  // Optional `warn` (not the required shape bestEffortIndexRemove takes): unarchive/restore only
+  // inherit LakeConfigAuditAdapters's LakeConfigAuditLogger, which declares it optional.
+  logger?: { warn?: (msg: string, ...args: unknown[]) => void }
+): Promise<void> {
+  if (!port) return;
+  try {
+    await port({ dataLakeId });
+  } catch (error) {
+    logger?.warn?.(`Failed to update Drive connection enabled state for lake ${dataLakeId}:`, error);
+  }
 }

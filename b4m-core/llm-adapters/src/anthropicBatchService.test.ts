@@ -144,6 +144,124 @@ describe('AnthropicBatchService', () => {
       expect(byRef['article-B']).toMatchObject({ clientRef: 'article-B', status: 'failed', error: 'bad' });
     });
 
+    it('carries the cache counters through, since input_tokens excludes them', async () => {
+      // A consumer that prices the request from input_tokens alone would read
+      // a cached batch as nearly free. The multipliers differ per field (a
+      // read bills 0.1x, a write 1.25x), so all three have to come back.
+      const retrieve = vi.fn().mockResolvedValue({
+        processing_status: 'ended',
+        request_counts: { processing: 0, succeeded: 1, errored: 0, canceled: 0, expired: 0 },
+      });
+      const results = vi.fn().mockResolvedValue(
+        asyncIterableOf([
+          {
+            custom_id: 'req_0',
+            result: {
+              type: 'succeeded',
+              message: {
+                content: [{ type: 'text', text: 'ok' }],
+                usage: {
+                  input_tokens: 6882,
+                  output_tokens: 3290,
+                  cache_read_input_tokens: 11367,
+                  cache_creation_input_tokens: 0,
+                },
+              },
+            },
+          },
+        ])
+      );
+      const svc = new AnthropicBatchService(fakeAnthropic({ retrieve, results }));
+
+      const out = await svc.getBatchResults('msgbatch_xyz', customIdMap);
+
+      expect(out.results?.[0].tokenUsage).toEqual({
+        inputTokens: 6882,
+        outputTokens: 3290,
+        cacheReadInputTokens: 11367,
+        cacheCreationInputTokens: 0,
+      });
+    });
+
+    it('reports zero, not absence, on a request that read nothing', async () => {
+      // Shape copied from a live batch response: the counters are always
+      // present on a request that carried a breakpoint, and an uncached one
+      // reports 0. `cache_creation` splits the write by TTL because the two
+      // bill differently (5m at 1.25x base input, 1h at 2x).
+      const retrieve = vi.fn().mockResolvedValue({
+        processing_status: 'ended',
+        request_counts: { processing: 0, succeeded: 1, errored: 0, canceled: 0, expired: 0 },
+      });
+      const results = vi.fn().mockResolvedValue(
+        asyncIterableOf([
+          {
+            custom_id: 'req_0',
+            result: {
+              type: 'succeeded',
+              message: {
+                content: [{ type: 'text', text: 'ok' }],
+                usage: {
+                  input_tokens: 5327,
+                  cache_creation_input_tokens: 11394,
+                  cache_read_input_tokens: 0,
+                  cache_creation: { ephemeral_5m_input_tokens: 11394, ephemeral_1h_input_tokens: 0 },
+                  output_tokens: 2818,
+                },
+              },
+            },
+          },
+        ])
+      );
+      const svc = new AnthropicBatchService(fakeAnthropic({ retrieve, results }));
+
+      const out = await svc.getBatchResults('msgbatch_xyz', customIdMap);
+
+      expect(out.results?.[0].tokenUsage).toEqual({
+        inputTokens: 5327,
+        outputTokens: 2818,
+        cacheReadInputTokens: 0,
+        cacheCreationInputTokens: 11394,
+        cacheWrite5mInputTokens: 11394,
+        cacheWrite1hInputTokens: 0,
+      });
+    });
+
+    it('splits a 1h write out of the flat total, which is their sum', async () => {
+      // Priced at the 5m multiplier a 1h write reports 62.5% of what it cost,
+      // and the flat field cannot tell the caller which it was.
+      const retrieve = vi.fn().mockResolvedValue({
+        processing_status: 'ended',
+        request_counts: { processing: 0, succeeded: 1, errored: 0, canceled: 0, expired: 0 },
+      });
+      const results = vi.fn().mockResolvedValue(
+        asyncIterableOf([
+          {
+            custom_id: 'req_0',
+            result: {
+              type: 'succeeded',
+              message: {
+                content: [{ type: 'text', text: 'ok' }],
+                usage: {
+                  input_tokens: 8,
+                  cache_creation_input_tokens: 14394,
+                  cache_read_input_tokens: 0,
+                  cache_creation: { ephemeral_5m_input_tokens: 3000, ephemeral_1h_input_tokens: 11394 },
+                  output_tokens: 1,
+                },
+              },
+            },
+          },
+        ])
+      );
+      const svc = new AnthropicBatchService(fakeAnthropic({ retrieve, results }));
+
+      const u = (await svc.getBatchResults('msgbatch_xyz', customIdMap)).results?.[0].tokenUsage;
+
+      expect(u?.cacheWrite1hInputTokens).toBe(11394);
+      expect(u?.cacheWrite5mInputTokens).toBe(3000);
+      expect((u?.cacheWrite5mInputTokens ?? 0) + (u?.cacheWrite1hInputTokens ?? 0)).toBe(u?.cacheCreationInputTokens);
+    });
+
     it('marks canceled / expired items as failed with a reason', async () => {
       const retrieve = vi.fn().mockResolvedValue({
         processing_status: 'ended',

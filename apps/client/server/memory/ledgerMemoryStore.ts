@@ -72,7 +72,13 @@ const MAX_APPEND_ATTEMPTS = 6;
  * event onto it (content hash + prev-hash) via the memory core, and inserts it at the next seq. If a
  * concurrent append took that seq (the repository signals it with a null), re-read the head and
  * retry - this is what keeps the chain linear instead of forking under races. Returns the sealed
- * event.
+ * event, or NULL when the write was refused because the principal's key was destroyed after
+ * `options.startedAt`.
+ *
+ * That null is a REFUSAL, not a failure, and callers must treat the two differently. It means the
+ * user erased this principal's memory while this work was already running, so declining to write is
+ * the correct outcome - not something to retry, surface as an error, or DLQ. Throwing here would make
+ * correct behaviour look like an outage on any path that treats a write failure as fatal.
  */
 export async function appendMemoryEvent(
   repo: LedgerRepo,
@@ -90,13 +96,22 @@ export async function appendMemoryEvent(
      * a key that matches nothing and silently minting a duplicate belief instead of coalescing.
      */
     subjectIsHashed?: boolean;
-  } = {}
-): Promise<MemoryEvent> {
+    /**
+     * When the caller's unit of work began - a run's lease claim, a request's arrival. Required, with
+     * no default: defaulting it to `now` would silently disable the shred fence for every caller that
+     * forgot it, which is the failure mode this whole guard exists to remove.
+     */
+    startedAt: Date;
+  }
+): Promise<MemoryEvent | null> {
   // Fetch the key once (outside the retry loop) and use it to encrypt the fact AND to HMAC the
   // subject. Neither the fact nor the subject is ever persisted in plaintext, so destroying the key
   // later renders both - and any backup of them - unreadable. The HMAC is deterministic, so
   // re-mentions of the same fact still coalesce.
-  const dek = await keys.getOrCreateDek(input.principal, ownerUserId);
+  const dek = await keys.getOrCreateDek(input.principal, ownerUserId, options.startedAt);
+  // Refused: the key was shredded after this work began. Fail CLOSED - writing under a re-minted key
+  // is what let erased facts come back readable.
+  if (!dek) return null;
   const sealedFact: SealedFact | undefined = input.fact !== undefined ? encryptFact(dek, input.fact) : undefined;
   // The embedding is encrypted under the SAME key as the fact: it is a semantic image of that fact,
   // so it must die with it when the key is destroyed (see encryptVector).

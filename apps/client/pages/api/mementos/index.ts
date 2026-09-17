@@ -1,6 +1,7 @@
 import { Request, Response } from 'express';
 import { Memento } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
 
 /**
@@ -42,7 +43,9 @@ const handler = baseApi().get(async (req: Request, res: Response) => {
   // Always scoped to the caller: a user may only read their own mementos.
   const filter = {
     userId: req.user.id,
-    ...(ids && ids.length > 0 ? { _id: { $in: ids } } : {}),
+    // One uncastable id rejects the whole $in, taking the valid rows with it. Such an id
+    // could never have matched, so drop it rather than fail the request.
+    ...(ids && ids.length > 0 ? { _id: { $in: ids.filter(isValidObjectId) } } : {}),
   };
 
   const query = Memento.find(filter).sort({ lastAccessedAt: -1 });

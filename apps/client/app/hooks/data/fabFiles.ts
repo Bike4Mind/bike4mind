@@ -690,7 +690,9 @@ export function useCloneFabFile(callback?: { onSuccess?: () => void }) {
 export function useGetPresignedUrl() {
   return useMutation({
     mutationFn: async ({ filePaths, expiresIn }: { filePaths: string[]; expiresIn?: number }) => {
-      const response = await api.get<{ urls: string[] }>('/api/files/presigned-url', {
+      // Positional, and each entry is null where the route withheld a URL (held/blocked by
+      // moderation, or not the caller's to read). Consumers must handle a null at any index.
+      const response = await api.get<{ urls: (string | null)[] }>('/api/files/presigned-url', {
         params: {
           filePaths,
           expiresIn,
@@ -718,10 +720,10 @@ export function useGetFabFileContent(fabFile: IFabFileDocument | null | undefine
       let fileUrl = fabFile.fileUrl;
       if (!fileUrl && fabFile.filePath) {
         try {
-          const response = await api.get<{ urls: string[] }>('/api/files/presigned-url', {
+          const response = await api.get<{ urls: (string | null)[] }>('/api/files/presigned-url', {
             params: { 'filePaths[]': fabFile.filePath },
           });
-          fileUrl = response.data.urls?.[0];
+          fileUrl = response.data.urls?.[0] ?? undefined;
         } catch (err) {
           console.error('Failed to fetch signed URL for fab file content', err);
         }

@@ -68,7 +68,6 @@
     "no_valid_emails_error": "Proszę wprowadzić prawidłowe adresy email",
     "send_referral": "Wyślij polecanie",
     "send_referral_success": "Polecenie wysłane pomyślnie!",
-    "send_referral_skipped": "{{count}} zaproszenie(-ń) pominięto — te adresy e-mail mają już konto.",
     "send_referral_failed": "{{count}} zaproszenie(-ń) nie mogło zostać wysłane. Proszę spróbuj ponownie.",
     "send_referral_error": "Błąd wysyłania polecenia. Proszę spróbować ponownie.",
     "slack_notification_default": "Polecenie wysłane przez użytkownika USER_NAME:USER_ID do FRIEND_EMAIL"

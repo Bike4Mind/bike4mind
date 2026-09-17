@@ -42,6 +42,7 @@ import GavelIcon from '@mui/icons-material/GavelOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import RefreshIcon from '@mui/icons-material/RefreshOutlined';
@@ -261,10 +262,6 @@ const ProfileMenu = () => {
   const planLabel =
     selectedAccount && !selectedAccount.personal ? t('account.team', 'Team') : t('account.personal', 'Personal');
 
-  // menuSurfaceSx is shared with the Data Lake row menu. 12px is the flyout's radius; the
-  // main panel below tightens it to 8px.
-  const panelSx = (t2: typeof theme) => ({ ...menuSurfaceSx(t2), borderRadius: '12px' });
-
   return (
     <Box ref={rootRef} sx={{ position: 'relative' }}>
       {open && (
@@ -272,8 +269,7 @@ const ProfileMenu = () => {
           data-testid="profile-menu-panel"
           role="menu"
           sx={theme2 => ({
-            ...panelSx(theme2),
-            borderRadius: '8px',
+            ...menuSurfaceSx(theme2),
             position: 'absolute',
             bottom: 'calc(100% + 8px)',
             left: 0,
@@ -487,7 +483,9 @@ const ProfileMenu = () => {
                 data-testid="profile-menu-more-flyout"
                 role="menu"
                 sx={theme2 => ({
-                  ...panelSx(theme2),
+                  // 12px, one step softer than the main panel's 8px: the flyout floats clear of
+                  // the panel rather than reading as part of it.
+                  ...menuSurfaceSx(theme2, '12px'),
                   position: 'absolute',
                   left: 'calc(100% + 16px)',
                   bottom: 0,
@@ -517,6 +515,19 @@ const ProfileMenu = () => {
                     closeAll();
                   }}
                 />
+                {/* Admin-only while the page is placeholder copy. Drop the gate - and move
+                    this row to the sidenav rail - once it replaces the first-run slider. */}
+                {isAdmin && (
+                  <MenuRow
+                    testId="profile-more-tutorials"
+                    icon={<MenuBookOutlinedIcon sx={{ fontSize: '18px' }} />}
+                    label={t('tutorials.title', 'Tutorials')}
+                    onClick={() => {
+                      navigate({ to: '/tutorials/explore' });
+                      closeNavigation();
+                    }}
+                  />
+                )}
                 <MenuRow
                   testId="profile-more-about"
                   icon={<InfoOutlinedIcon sx={{ fontSize: '18px' }} />}
