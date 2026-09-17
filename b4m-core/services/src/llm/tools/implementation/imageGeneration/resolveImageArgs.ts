@@ -21,7 +21,9 @@ export interface ResolvedImageArgs {
  * `imageConfig` is the client's Smart Tools panel selection and is a DEFAULT, not a pin:
  * an arg the model supplied in the tool call wins (`??`), and an omitted one falls back to
  * the client value. `model` is the exception - the tool schema exposes no model parameter,
- * so the panel's selection stays authoritative there.
+ * so the panel's selection stays authoritative here (the caller may still step the
+ * resolved model down afterward, e.g. gpt-image-2 -> gpt-image-1.5 when the request
+ * asks for a transparent background, which gpt-image-2 rejects outright).
  *
  * Both the credit reservation (`ToolBuilder.reserveImageCredits` reads the `onStart`
  * payload) and the provider dispatch must read this output, so the ledger can never

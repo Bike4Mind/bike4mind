@@ -32,6 +32,7 @@ const PromptMetaModelParametersSchema = z.object({
   prompt_upsampling: z.boolean().optional(), // BFL prompt upsampling
   seed: z.number().optional(),
   output_format: z.string().optional(), // Output format (jpeg/png)
+  background: z.string().optional(), // Background handling (transparent/opaque/auto), gpt-image only
   response_format: z.string().optional(), // Response format (url/b64_json)
 
   // Video generation parameters (Sora)
