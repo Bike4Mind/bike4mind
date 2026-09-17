@@ -24,10 +24,13 @@ interface ContextBreakdownModalProps {
 
 const format = (value: number | null | undefined) => (value == null ? '-' : value.toLocaleString());
 
+// The assembler's own system-prompt total, not the itemized sum: this is what the input was
+// actually billed as, and the layer rows (categories.systemPrompt) do not always add up to it.
+const billedSystemPrompt = (categories: ContextBreakdown['categories']): number =>
+  categories.systemPromptResidual || categories.systemPrompt;
+
 const toDistribution = (categories: ContextBreakdown['categories']): TokenDistribution => ({
-  // The assembler's own system-prompt total, not the itemized sum: the buckets beside it are what
-  // the input was actually billed as, and the layer rows do not always add up to it.
-  systemPrompts: categories.systemPromptResidual || categories.systemPrompt,
+  systemPrompts: billedSystemPrompt(categories),
   conversationHistory: categories.conversationHistory,
   mementos: categories.memory,
   fabFiles: categories.attachedFiles,
@@ -39,7 +42,7 @@ const toDistribution = (categories: ContextBreakdown['categories']): TokenDistri
 const CategoryTable: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => {
   const { categories, window: contextWindow } = breakdown;
   const rows: Array<[string, number | null]> = [
-    ['System prompts', categories.systemPromptResidual || categories.systemPrompt],
+    ['System prompts', billedSystemPrompt(categories)],
     ['Tool definitions', categories.toolDefinitions],
     ['Attached files', categories.attachedFiles],
     ['Conversation history', categories.conversationHistory],
@@ -161,6 +164,12 @@ const Breakdown: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => (
       <Typography level="body-sm" fontWeight="md" sx={{ mb: 1 }}>
         System prompt layers, in delivery order
       </Typography>
+      {billedSystemPrompt(breakdown.categories) !== breakdown.categories.systemPrompt && (
+        <Typography level="body-xs" sx={{ mb: 1 }} data-testid="context-breakdown-system-prompt-reconciliation">
+          Layers below sum to {format(breakdown.categories.systemPrompt)}; the model was billed for{' '}
+          {format(billedSystemPrompt(breakdown.categories))} system-prompt tokens.
+        </Typography>
+      )}
       {breakdown.layers.length > 0 ? (
         <LayerTable layers={breakdown.layers} />
       ) : (

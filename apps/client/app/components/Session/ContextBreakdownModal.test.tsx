@@ -92,4 +92,26 @@ describe('ContextBreakdownModal', () => {
     expect(screen.getByText('No tools were offered on this turn.')).toBeTruthy();
     expect(screen.getByText('No retrieval was recorded for this turn.')).toBeTruthy();
   });
+
+  it('reconciles the billed system-prompt total against the layer sum when they differ', () => {
+    renderModal();
+
+    const reconciliation = screen.getByTestId('context-breakdown-system-prompt-reconciliation');
+    expect(reconciliation.textContent).toContain('2,882');
+    expect(reconciliation.textContent).toContain('4,000');
+  });
+
+  it('omits the reconciliation line when the billed total matches the layer sum', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: {
+        ...breakdown,
+        categories: { ...breakdown.categories, systemPromptResidual: breakdown.categories.systemPrompt },
+      },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.queryByTestId('context-breakdown-system-prompt-reconciliation')).toBeNull();
+  });
 });
