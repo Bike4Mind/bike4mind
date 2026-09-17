@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { IMongoDocument } from '.';
 import { PromptMeta } from './PromptMetaTypes';
 import { IOrganizationDocument } from './OrganizationTypes';
@@ -117,3 +118,93 @@ export type CreateFeedbackResponse = IFeedbackDocument & {
   delivery?: FeedbackDeliveryResult;
   contentTruncated?: boolean;
 };
+
+/**
+ * Feedback rollup: counts only, never content and never a username. The window is capped in DAYS
+ * because the aggregate materializes every arm into a single $facet document (Mongo's 16MB
+ * document limit), and the day cap is what bounds the rows that document is built from.
+ */
+export const FEEDBACK_ROLLUP_MAX_WINDOW_DAYS = 366;
+
+/**
+ * Keys kept per rollup dimension. The day cap bounds rows scanned, not DISTINCT keys, so an
+ * unbounded dimension (sessionId, questId, tags) needs its own ceiling. Shared so a client caption naming the
+ * ceiling reads the same number the server applied.
+ */
+export const FEEDBACK_ROLLUP_TOP_N = 25;
+
+const ROLLUP_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Reads a rollup bound as a UTC instant. The schema below accepts an offset-less value (what a
+ * date picker emits), and a bare `new Date` would read that in the host's local zone - so the
+ * same query would cover a different window depending on where it ran.
+ */
+export function parseFeedbackRollupBound(value: string): Date {
+  return new Date(/([Zz]|[+-]\d{2}:?\d{2})$/.test(value) ? value : `${value}Z`);
+}
+
+/**
+ * GET /api/feedback/rollup query contract. There is deliberately no `userId` key: the server
+ * derives the principal from the session, so `?userId=<someone-else>` is stripped here rather
+ * than trusted. The window is half-open in UTC (`$gte from`, `$lt to`); buildFeedbackRollupPipeline
+ * in apps/client/server/utils/feedbackRollup.ts must keep that convention, or an organization
+ * rollup and the personal rollups under it disagree on the documents sitting exactly on a bound.
+ */
+export const FeedbackRollupQuerySchema = z
+  .object({
+    from: z.iso.datetime({ offset: true, local: true }),
+    to: z.iso.datetime({ offset: true, local: true }),
+  })
+  .refine(query => parseFeedbackRollupBound(query.from) < parseFeedbackRollupBound(query.to), {
+    message: 'from must be strictly before to',
+    path: ['from'],
+  })
+  .refine(
+    query =>
+      parseFeedbackRollupBound(query.to).getTime() - parseFeedbackRollupBound(query.from).getTime() <=
+      FEEDBACK_ROLLUP_MAX_WINDOW_DAYS * ROLLUP_DAY_MS,
+    {
+      message: `window must not exceed ${FEEDBACK_ROLLUP_MAX_WINDOW_DAYS} days`,
+      path: ['to'],
+    }
+  );
+
+export type FeedbackRollupQuery = z.infer<typeof FeedbackRollupQuerySchema>;
+
+export interface FeedbackRollupBucket {
+  key: string;
+  count: number;
+}
+
+/** One rollup dimension: its top keys by count, and whether keys were dropped to get there. */
+export interface FeedbackRollupDimension {
+  buckets: FeedbackRollupBucket[];
+  truncated: boolean;
+}
+
+/**
+ * GET /api/feedback/rollup response. Every bucket value is a count over the matched set; nothing
+ * here carries report text, an email, or a display name.
+ */
+export interface FeedbackRollupResponse {
+  /** Echoed back as the normalized UTC bounds actually queried, not the raw query strings. */
+  from: string;
+  to: string;
+  total: number;
+  topN: number;
+  textRetentionDays: number;
+  /**
+   * Whether the matched reports still have their free text, derived per document from
+   * `contentStored` and the retention cutoff. A report that never stored text is in neither arm,
+   * since "never had text" and "text expired" are different facts (see IFeedback.contentStored).
+   */
+  textAvailability: { stored: number; expired: number };
+  buckets: {
+    sessionId: FeedbackRollupDimension;
+    questId: FeedbackRollupDimension;
+    subject: FeedbackRollupDimension;
+    status: FeedbackRollupDimension;
+    tags: FeedbackRollupDimension;
+  };
+}
