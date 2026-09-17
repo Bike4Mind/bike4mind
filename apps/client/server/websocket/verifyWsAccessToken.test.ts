@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockFindByKeyName = vi.fn();
 vi.mock('@bike4mind/database/infra', () => ({
-  secretRotationRepository: { findByKeyName: (...args: unknown[]) => mockFindByKeyName(...args) },
+  secretRotationRepository: { findByKeyNameWithSecret: (...args: unknown[]) => mockFindByKeyName(...args) },
 }));
 
 const mockIsWithinGraceWindow = vi.fn();
@@ -26,6 +26,7 @@ vi.mock('@server/utils/errors', () => ({
 }));
 
 import { verifyWsAccessToken } from './verifyWsAccessToken';
+import { configureSecretsAtRest, encryptAtRest, generateEncryptionKey } from '@bike4mind/utils/security';
 
 describe('verifyWsAccessToken', () => {
   beforeEach(() => {
@@ -80,5 +81,26 @@ describe('verifyWsAccessToken', () => {
     await verifyWsAccessToken('token-123');
 
     expect(mockVerifyToken).toHaveBeenCalledWith('token-123', 'prev-secret');
+  });
+
+  // Regression guard: previousKey is stored encrypted at rest, so a reader that skips
+  // decryptAtRest verifies grace-window tokens against ciphertext and every real rotated
+  // token fails. The plaintext fixture above cannot catch that (decrypt passes plaintext
+  // through unchanged); this one holds real ciphertext and fails if the decrypt is dropped.
+  it('decrypts an encrypted rotated previousKey before verifying', async () => {
+    const PREV_SECRET = 'the-outgoing-signing-secret';
+    configureSecretsAtRest(generateEncryptionKey());
+    try {
+      const ciphertext = encryptAtRest(PREV_SECRET);
+      expect(ciphertext).not.toBe(PREV_SECRET); // guard the fixture itself is encrypted
+      mockFindByKeyName.mockResolvedValue({ rotatedAt: new Date(), previousKey: ciphertext });
+      mockIsWithinGraceWindow.mockReturnValue(true);
+
+      await verifyWsAccessToken('token-123');
+
+      expect(mockVerifyToken).toHaveBeenCalledWith('token-123', PREV_SECRET);
+    } finally {
+      configureSecretsAtRest(undefined);
+    }
   });
 });

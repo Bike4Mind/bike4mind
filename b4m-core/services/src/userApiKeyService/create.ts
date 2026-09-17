@@ -2,10 +2,13 @@ import {
   ApiKeyBillingOwnerType,
   ApiKeyScope,
   ApiKeyStatus,
+  CONFINED_API_KEY_SCOPES,
   CreditHolderType,
   EmbedBrandingSchema,
   EmbedOriginsSchema,
+  IAgentRepository,
   IEmbedBranding,
+  isAgentOwnedByEmbedKey,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
@@ -70,6 +73,14 @@ export type CreateUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
 interface CreateUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
+    /**
+     * Needed so an `embed:chat` mint can verify the agent it binds. REQUIRED: an embed key
+     * ships in public HTML, so the ownership check must never be skippable. Typing it
+     * optional-but-throwing let an out-of-repo @bike4mind/services consumer compile clean and
+     * break at runtime, so the requirement is enforced at compile time. The runtime guard
+     * below stays as defense in depth against a caller that bypasses the type.
+     */
+    agents: Pick<IAgentRepository, 'findById'>;
   };
   systemUserId?: string;
 }
@@ -130,6 +141,18 @@ export const createUserApiKey = async (
     throw new BadRequestError('productId is required for overwatch-ingest:write scope');
   }
 
+  // A confined scope authorizes exactly one dedicated flow (embed widget, Overwatch
+  // ingest, bridge pairing), so a key carrying one must carry nothing else: the runtime
+  // gate (decideScopeGate) confines such a key anyway, so any extra scope buys nothing
+  // but risk. Checked before the embed-specific rules below so a mixed request like
+  // ['embed:chat','notebooks:read'] reports this real reason, not a downstream missing
+  // agentId. Same constant the runtime gate reads, so mint and runtime state one rule.
+  if (params.scopes.length > 1 && params.scopes.some(scope => CONFINED_API_KEY_SCOPES.includes(scope))) {
+    throw new BadRequestError(
+      'A confined scope (embed:chat, overwatch-ingest:write, cc-bridge:connect) must be the only scope on a key'
+    );
+  }
+
   // Embed key invariants: an embed:chat key is always bound to one agent, and the
   // embed-only fields are meaningless without the scope (mirrors the OVERWATCH check).
   const isEmbedKey = params.scopes.includes(ApiKeyScope.EMBED_CHAT);
@@ -145,6 +168,23 @@ export const createUserApiKey = async (
       'embed:chat scope requires organization billing (billingOwnerType Organization with an organizationId)'
     );
   }
+  // Bind-time ownership: the agent must belong to the org this key bills or to the
+  // minter. Previously deferred to the runtime consumer, which left a key bindable
+  // to another tenant's agent and that agent's name readable through embed/serve.
+  // Enforced here so an incoherent key is never persisted; the runtime checks stay,
+  // since a bound agent can change hands after the mint.
+  if (isEmbedKey && params.agentId) {
+    // Fail closed: the type requires `agents`, so this only fires for a caller that bypassed
+    // the type. The ownership check must never be skipped on the one key class shipped in public HTML.
+    if (!db.agents) {
+      throw new BadRequestError('agents adapter is required to mint an embed:chat key');
+    }
+    const agent = await db.agents.findById(params.agentId);
+    if (!agent || !isAgentOwnedByEmbedKey(agent, { organizationId: params.organizationId, userId })) {
+      throw new BadRequestError('agentId must reference an agent owned by the billing organization or the minter');
+    }
+  }
+
   if (
     !isEmbedKey &&
     (params.agentId !== undefined ||

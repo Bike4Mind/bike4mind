@@ -1,6 +1,7 @@
 import { emailJobRepository, emailTemplateRepository, userRepository, subscriberRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { ApiKeyScope } from '@bike4mind/common';
 
 /**
  * GET /api/admin/email/jobs/:id/preview-for-user?userId=xxx&type=user|subscriber
@@ -8,7 +9,7 @@ import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/er
  * Renders the email as it would appear for a specific user/subscriber.
  * Used for preview dropdown in campaign editor.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }

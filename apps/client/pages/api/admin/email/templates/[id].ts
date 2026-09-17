@@ -1,5 +1,5 @@
 import { emailTemplateRepository } from '@bike4mind/database';
-import { EmailCategory } from '@bike4mind/common';
+import { ApiKeyScope, EmailCategory } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
@@ -28,7 +28,7 @@ const updateBodySchema = z.object({
   isActive: z.boolean().optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

@@ -8,8 +8,9 @@ import { resolveStage } from '@server/security/resolveStage';
 import { computeCategoryScoreAndCounts, computeDeterministicStatus } from '@server/security/securityDashboardScoring';
 
 import type { Request, Response } from 'express';
+import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi<Request, Response>()
+const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Admin access required');

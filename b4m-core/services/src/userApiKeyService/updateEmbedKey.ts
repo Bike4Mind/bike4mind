@@ -2,7 +2,9 @@ import {
   ApiKeyScope,
   EmbedBrandingSchema,
   EmbedOriginsSchema,
+  IAgentRepository,
   IOrganizationRepository,
+  isAgentOwnedByEmbedKey,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
@@ -26,6 +28,13 @@ interface UpdateEmbedKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
+    /**
+     * Needed to verify the agent when a rebind is requested (`agentId` provided). REQUIRED so
+     * the ownership check can never be skipped: an optional-but-throwing type let an out-of-repo
+     * @bike4mind/services consumer compile clean and break at runtime. The runtime guard below
+     * stays as defense in depth against a caller that bypasses the type. See createUserApiKey.
+     */
+    agents: Pick<IAgentRepository, 'findById'>;
   };
 }
 
@@ -71,12 +80,22 @@ export const updateEmbedKey = async (
     throw new BadRequestError('Only embed:chat keys can be configured with embed settings');
   }
 
-  // Agent-ownership/access enforcement (does the caller own/can reach this
-  // agentId?) is deferred to the Phase C runtime endpoint (#571), where the
-  // binding is first consumed - it is enforced there, not at bind time. The
-  // admin UI only offers owned agents; the create path applies the same
-  // deferral. Do not treat this rebind as an access boundary.
-  if (params.agentId !== undefined) apiKey.agentId = params.agentId;
+  // Agent-ownership IS enforced at bind time: the agent must belong to the org the
+  // key bills or to its owner. This used to be deferred to the runtime consumer,
+  // which left a key rebindable to another tenant's agent. The runtime checks stay
+  // (a bound agent can change hands afterwards) but this is now an access boundary.
+  if (params.agentId !== undefined) {
+    // Fail closed: the type requires `agents`, so this only fires for a caller that bypassed the
+    // type. The ownership check must never be skipped on a rebind.
+    if (!db.agents) {
+      throw new BadRequestError('agents adapter is required to configure an embed:chat key');
+    }
+    const agent = await db.agents.findById(params.agentId);
+    if (!agent || !isAgentOwnedByEmbedKey(agent, apiKey)) {
+      throw new BadRequestError('agentId must reference an agent owned by the billing organization or the key owner');
+    }
+    apiKey.agentId = params.agentId;
+  }
   if (params.allowedOrigins !== undefined) apiKey.allowedOrigins = params.allowedOrigins;
   if (params.branding !== undefined) apiKey.branding = params.branding;
 

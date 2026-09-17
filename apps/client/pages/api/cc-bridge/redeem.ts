@@ -1,4 +1,9 @@
-import { CcBridgeDevice, ccBridgeDeviceRepository, ccBridgePairingTokenRepository } from '@bike4mind/database';
+import {
+  CcBridgeDevice,
+  agentRepository,
+  ccBridgeDeviceRepository,
+  ccBridgePairingTokenRepository,
+} from '@bike4mind/database';
 import { UserApiKey, userApiKeyRepository } from '@bike4mind/database/auth';
 import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
 import { userApiKeyService } from '@bike4mind/services';
@@ -103,7 +108,7 @@ const handler = baseApi({ auth: false })
             createdFrom: 'bridge' as const,
           },
         },
-        { db: { userApiKeys: userApiKeyRepository } }
+        { db: { userApiKeys: userApiKeyRepository, agents: agentRepository } }
       );
 
       const device = await ccBridgeDeviceRepository.create({

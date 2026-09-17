@@ -1,5 +1,5 @@
 import { emailJobRepository } from '@bike4mind/database';
-import { EmailJobOverallStatus } from '@bike4mind/common';
+import { ApiKeyScope, EmailJobOverallStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { z } from 'zod';
@@ -29,7 +29,7 @@ const updateBodySchema = z.object({
   testEmailAddresses: z.array(z.string()).optional(),
 });
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');

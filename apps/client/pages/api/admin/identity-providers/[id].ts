@@ -3,8 +3,9 @@ import { Logger } from '@bike4mind/observability';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
 import { clearConfigurationCache } from '@server/auth/oktaOidcClient';
+import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi()
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req, res) => {
     try {
       if (!req.user?.isAdmin) {

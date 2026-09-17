@@ -22,6 +22,12 @@ const handler = baseApi().post(
           userApiKeys: userApiKeyRepository,
           organizations: organizationRepository,
         },
+        // Undefined for a browser/JWT caller (unrestricted: they hold the whole
+        // account); the actual held scopes when an API key is rotating, which is when
+        // the no-escalation rule applies. `?? []` on purpose: an api key whose scopes
+        // are absent holds NO scope and must deny, never fall through to the
+        // browser-caller (undefined) branch. See rotateUserApiKey's escalation guard.
+        callerScopes: req.apiKeyInfo ? (req.apiKeyInfo.scopes ?? []) : undefined,
       }
     );
 
@@ -32,6 +38,9 @@ const handler = baseApi().post(
         metadata: {
           keyId,
           name: rotatedKey.name,
+          // Present only when an org admin rotated someone else's key: the rotation
+          // re-owned it, so this is the audit trail for the change of hands.
+          ...(rotatedKey.previousOwnerUserId ? { previousOwnerUserId: rotatedKey.previousOwnerUserId } : {}),
         },
       },
       { ability: req.ability },

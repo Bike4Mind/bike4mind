@@ -25,7 +25,7 @@ import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import { useState } from 'react';
-import { ISecretRotationDocument } from '@bike4mind/common';
+import { SafeSecretRotation } from '@client/lib/secretRotation/utils';
 
 dayjs.extend(relativeTime);
 
@@ -33,14 +33,13 @@ export default function SecretsRotationTab() {
   const queryClient = useQueryClient();
   const [openRenewModal, setOpenRenewModal] = useState(false);
   const [openEditModal, setOpenEditModal] = useState(false);
-  const [currentSecret, setCurrentSecret] = useState<ISecretRotationDocument | null>(null);
+  const [currentSecret, setCurrentSecret] = useState<SafeSecretRotation | null>(null);
   const [editFormData, setEditFormData] = useState({
-    previousKey: '',
     rotationIntervalDays: 30,
     description: '',
   });
 
-  const { data, isLoading, error, refetch } = useQuery<ISecretRotationDocument[]>({
+  const { data, isLoading, error, refetch } = useQuery<SafeSecretRotation[]>({
     queryKey: ['secrets-rotation'],
     queryFn: async () => {
       const response = await api.get('/api/secret-rotations');
@@ -50,7 +49,7 @@ export default function SecretsRotationTab() {
   });
 
   const editMutation = useMutation({
-    mutationFn: (data: { id: string; previousKey?: string; rotationIntervalDays?: number; description?: string }) =>
+    mutationFn: (data: { id: string; rotationIntervalDays?: number; description?: string }) =>
       api.put(`/api/secret-rotations/${data.id}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['secrets-rotation'] });
@@ -66,7 +65,7 @@ export default function SecretsRotationTab() {
     },
   });
 
-  const handleRenew = (secret: ISecretRotationDocument) => {
+  const handleRenew = (secret: SafeSecretRotation) => {
     setCurrentSecret(secret);
     setOpenRenewModal(true);
   };
@@ -130,14 +129,6 @@ export default function SecretsRotationTab() {
                 name="description"
                 value={editFormData.description}
                 onChange={e => setEditFormData({ ...editFormData, description: e.target.value })}
-              />
-            </FormControl>
-            <FormControl>
-              <FormLabel>Previous Key</FormLabel>
-              <Input
-                name="previousKey"
-                value={editFormData.previousKey}
-                onChange={e => setEditFormData({ ...editFormData, previousKey: e.target.value })}
               />
             </FormControl>
             <FormControl>
@@ -261,7 +252,6 @@ export default function SecretsRotationTab() {
                       onClick={() => {
                         setCurrentSecret(secret);
                         setEditFormData({
-                          previousKey: secret.previousKey || '',
                           rotationIntervalDays: secret.rotationIntervalDays,
                           description: secret.description || '',
                         });

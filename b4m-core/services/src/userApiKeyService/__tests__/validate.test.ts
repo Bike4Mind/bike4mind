@@ -47,8 +47,13 @@ const mintParams = {
  */
 async function mintLegacyKey() {
   const { repo, getStored } = makeSyncedRepo();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const adapters = { db: { userApiKeys: repo as any } };
+
+  const adapters = {
+    db: {
+      userApiKeys: repo as any,
+      agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+    },
+  };
 
   const { key } = await createUserApiKey('sys-1', mintParams, {
     ...adapters,
@@ -114,8 +119,13 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
 
   it('does not touch the stored prefix for current-format keys', async () => {
     const { repo, getStored } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     const { key } = await createUserApiKey('sys-1', mintParams, {
       ...adapters,
@@ -133,8 +143,13 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
 describe('validateUserApiKey - embed context fields', () => {
   it('flows agentId and allowedOrigins through for an embed:chat key', async () => {
     const { repo } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     const { key } = await createUserApiKey(
       'sys-1',
@@ -181,8 +196,13 @@ describe('validateUserApiKey - embed context fields', () => {
 
   it('leaves embed fields undefined for a non-embed key', async () => {
     const { repo } = makeSyncedRepo();
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     const { key } = await createUserApiKey('sys-1', mintParams, {
       ...adapters,
@@ -219,8 +239,16 @@ describe('validateUserApiKeyById + shared finalize gates', () => {
       findById: vi.fn().mockResolvedValue(doc),
       updateLastUsed: vi.fn().mockResolvedValue(undefined),
     };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return { repo, adapters: { db: { userApiKeys: repo as any } } };
+
+    return {
+      repo,
+      adapters: {
+        db: {
+          userApiKeys: repo as any,
+          agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+        },
+      },
+    };
   }
 
   it('validates an active key located by id and bumps last-used', async () => {

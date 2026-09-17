@@ -5,8 +5,9 @@ import { securityDashboardSnapshotRepository } from '@bike4mind/database';
 import { getCooldownStatus } from '@server/security/cooldown';
 import { resolveStage } from '@server/security/resolveStage';
 import { handler as runWafScan } from '@server/security/wafScan';
+import { ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi<Request, Response>()
+const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Admin access required');

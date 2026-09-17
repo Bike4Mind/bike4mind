@@ -56,6 +56,8 @@ const mockUserFind = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'target-us
 const mockLakeFind = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFind(...a) },
+  // Required adapter on createUserApiKey (embed binds are validated there).
+  agentRepository: { findById: vi.fn().mockResolvedValue(null) },
   dataLakeRepository: { findById: (...a: unknown[]) => mockLakeFind(...a) },
   dataLakeAccessGrantRepository: { listActiveByLakes: vi.fn().mockResolvedValue([]) },
   organizationRepository: { findIdsWithAdminRights: vi.fn().mockResolvedValue([]) },
@@ -151,6 +153,27 @@ describe('POST /api/admin/users/:userId/generate-api-key - scope allowlist guard
     await mockRefs.postHandler!(req, res);
     expect(res._getStatusCode()).toBe(201);
     expect(mockCreateKey).toHaveBeenCalled();
+  });
+
+  it('records the acting admin, so the key is not readable as a self-service mint', async () => {
+    const { req, res } = post({ name: 'plain', scopes: ['notebooks:read'] });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    // The key belongs to the target user, so `userId` is theirs - the acting admin
+    // is only recoverable from metadata.
+    expect(mockCreateKey).toHaveBeenCalledWith(
+      'target-user',
+      expect.objectContaining({ metadata: expect.objectContaining({ createdByUserId: 'caller' }) }),
+      expect.anything()
+    );
+    expect(mockLogEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: 'target-user',
+        metadata: expect.objectContaining({ createdByUserId: 'caller', createdByUsername: 'admin-user' }),
+      }),
+      expect.anything()
+    );
   });
 
   it('rejects with BadRequestError when the target user does not exist', async () => {

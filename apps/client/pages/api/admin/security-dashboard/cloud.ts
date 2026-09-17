@@ -8,11 +8,12 @@ import { handler as runCloudScan } from '@server/security/cloudScan';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { Logger } from '@bike4mind/observability';
+import { ApiKeyScope } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { service: 'cloud-scan-api' } });
 const sqsClient = new SQSClient({});
 
-const handler = baseApi<Request, Response>()
+const handler = baseApi<Request, Response>({ requiredScopes: [ApiKeyScope.ADMIN] })
   .get(async (req: Request, res: Response) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Admin access required');

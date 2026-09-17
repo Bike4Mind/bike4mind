@@ -47,7 +47,7 @@ vi.mock('@bike4mind/database/infra', async orig => {
     ...actual,
     secretRotationRepository: {
       ...(actual.secretRotationRepository as object),
-      findByKeyName: (...a: unknown[]) => mockFindRotation(...a),
+      findByKeyNameWithSecret: (...a: unknown[]) => mockFindRotation(...a),
     },
   };
 });

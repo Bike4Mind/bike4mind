@@ -29,7 +29,12 @@ describe('revokeUserApiKey', () => {
   it('disables an embed:chat key while leaving its embed fields intact', async () => {
     const { repo, getStored } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     await createUserApiKey(
       'user1',
@@ -54,7 +59,12 @@ describe('revokeUserApiKey', () => {
   it('records the revocation audit trail and returns the key name', async () => {
     const { repo, getStored } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     await createUserApiKey(
       'user1',
@@ -74,7 +84,12 @@ describe('revokeUserApiKey', () => {
   it('leaves revokedReason unset when no reason is supplied', async () => {
     const { repo, getStored } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     await createUserApiKey(
       'user1',
@@ -91,7 +106,12 @@ describe('revokeUserApiKey', () => {
   it('keeps the first revocation when an already-revoked key is revoked again', async () => {
     const { repo, getStored } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const adapters = { db: { userApiKeys: repo as any } };
+    const adapters = {
+      db: {
+        userApiKeys: repo as any,
+        agents: { findById: vi.fn().mockResolvedValue({ organizationId: 'org-1', userId: 'user1' }) } as any,
+      },
+    };
 
     await createUserApiKey(
       'user1',

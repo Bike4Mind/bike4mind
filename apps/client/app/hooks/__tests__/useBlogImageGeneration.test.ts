@@ -16,7 +16,9 @@ vi.mock('sonner', () => ({
   },
 }));
 
-vi.mock('@client/app/utils/blogImageUpload', () => ({
+vi.mock('@client/app/utils/blogImageUpload', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/utils/blogImageUpload')>()),
+  // Keep the real getBlogUploadErrorMessage; only stub the network/util calls.
   uploadBlogImage: vi.fn(),
   generatePostIdFromTitle: vi.fn((title: string) => title.toLowerCase().replace(/\s+/g, '-')),
 }));
@@ -33,7 +35,6 @@ describe('useBlogImageGeneration', () => {
   const mockContent = 'This is a blog post about React hooks and testing.';
   const mockTitle = 'React Hooks Guide';
   const mockSummary = 'A comprehensive guide to React hooks';
-  const mockBlogApiKey = 'test-api-key';
   const mockOnImageGenerated = vi.fn();
 
   // Sample base64 PNG (1x1 transparent pixel)
@@ -51,7 +52,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -68,7 +68,6 @@ describe('useBlogImageGeneration', () => {
           content: '',
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -87,7 +86,6 @@ describe('useBlogImageGeneration', () => {
           content: '   ',
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -118,7 +116,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -153,7 +150,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -190,7 +186,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -199,44 +194,9 @@ describe('useBlogImageGeneration', () => {
         await result.current.generateFeaturedImage();
       });
 
-      expect(uploadBlogImage).toHaveBeenCalledWith(expect.any(File), mockBlogApiKey, 'react-hooks-guide', undefined);
+      expect(uploadBlogImage).toHaveBeenCalledWith(expect.any(File), 'react-hooks-guide');
       expect(mockOnImageGenerated).toHaveBeenCalledWith(uploadedUrl, generatedPrompt);
       expect(toast.success).toHaveBeenCalled();
-    });
-
-    it('forwards the configured blogBaseUrl to uploadBlogImage', async () => {
-      const generatedPrompt = 'A stunning React hooks visualization';
-      const uploadedUrl = 'https://blog.example.com/images/react-hooks-guide.png';
-      vi.mocked(api.post)
-        .mockResolvedValueOnce({ data: { success: true, prompt: generatedPrompt } })
-        .mockResolvedValueOnce({ data: { success: true, imageUrl: sampleBase64 } });
-
-      vi.mocked(uploadBlogImage).mockResolvedValue({
-        url: uploadedUrl,
-        key: 'images/react-hooks-guide.png',
-      });
-
-      const { result } = renderHook(() =>
-        useBlogImageGeneration({
-          content: mockContent,
-          title: mockTitle,
-          summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
-          blogBaseUrl: 'https://blog.example.com',
-          onImageGenerated: mockOnImageGenerated,
-        })
-      );
-
-      await act(async () => {
-        await result.current.generateFeaturedImage();
-      });
-
-      expect(uploadBlogImage).toHaveBeenCalledWith(
-        expect.any(File),
-        mockBlogApiKey,
-        'react-hooks-guide',
-        'https://blog.example.com'
-      );
     });
 
     it('shows error when prompt generation fails', async () => {
@@ -249,7 +209,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -280,7 +239,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -305,7 +263,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -343,7 +300,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -378,7 +334,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: '', // Empty title
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );
@@ -387,7 +342,7 @@ describe('useBlogImageGeneration', () => {
         await result.current.generateFeaturedImage();
       });
 
-      expect(uploadBlogImage).toHaveBeenCalledWith(expect.any(File), mockBlogApiKey, 'featured', undefined);
+      expect(uploadBlogImage).toHaveBeenCalledWith(expect.any(File), 'featured');
     });
   });
 
@@ -406,7 +361,6 @@ describe('useBlogImageGeneration', () => {
           content: mockContent,
           title: mockTitle,
           summary: mockSummary,
-          blogApiKey: mockBlogApiKey,
           onImageGenerated: mockOnImageGenerated,
         })
       );

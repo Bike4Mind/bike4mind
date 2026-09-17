@@ -1,9 +1,10 @@
 import { HeadObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { isExecutableUploadMimeType } from '@bike4mind/common';
-import { createS3Client, isPrivateIP } from '@bike4mind/fab-pipeline';
+import { createS3Client } from '@bike4mind/fab-pipeline';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { z } from 'zod';
@@ -29,52 +30,6 @@ const ExternalImageQuery = z.object({
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB
 const FETCH_TIMEOUT_MS = 10_000;
-
-/**
- * SSRF guard. Returns null if the URL is safe to fetch, otherwise a reason.
- *
- * Note: this is a hostname-string check, not a DNS-resolved IP check, so it
- * does not defend against DNS rebinding. The admin-only gate is the primary
- * control; this is defence in depth.
- */
-export function rejectIfUnsafe(url: URL): string | null {
-  if (url.protocol !== 'https:') {
-    return 'only https URLs are allowed';
-  }
-
-  // Normalize: strip square brackets from IPv6 notation so the same checks
-  // work for both `::1` and `[::1]` forms returned by URL.hostname.
-  const raw = url.hostname.toLowerCase();
-  const host = raw.startsWith('[') && raw.endsWith(']') ? raw.slice(1, -1) : raw;
-
-  // Reject literal loopback / unspecified
-  if (host === 'localhost' || host === '0.0.0.0' || host === '::' || host === '::1') {
-    return 'loopback hosts are not allowed';
-  }
-
-  // Reject IPv4-mapped IPv6 addresses (::ffff:a.b.c.d / ::ffff:hex:hex).
-  // Node normalises these to ::ffff:XXYY:ZZWW which bypasses the IPv4 regex but
-  // fetch() still dials the underlying IPv4 address. Anchored to the actual prefix (not a bare
-  // substring match) so an ordinary public host with an unrelated `ffff` hextet isn't over-blocked.
-  if (host.startsWith('::ffff:')) {
-    return 'IPv4-mapped IPv6 addresses are not allowed';
-  }
-
-  // Reject IPv4 in private / loopback / link-local ranges, via `isPrivateIP` from
-  // `@bike4mind/fab-pipeline` rather than a local prefix list (#1969).
-  if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(host) && isPrivateIP(host)) {
-    return 'private/reserved IPv4 addresses are not allowed';
-  }
-
-  // Reject IPv6 private/reserved ranges (unique-local, link-local, site-local, etc.).
-  // Also delegated to `isPrivateIP` - this file used to reimplement the same per-hextet
-  // prefix list and drifted out of sync with it, leaving fe00::/9 and fec0::/10 open (#1969).
-  if (host.includes(':') && isPrivateIP(host)) {
-    return 'private/reserved IPv6 addresses are not allowed';
-  }
-
-  return null;
-}
 
 function generateCacheKey(rawUrl: string, parsed: URL): string {
   const hash = crypto.createHash('sha256').update(rawUrl).digest('hex');
@@ -128,10 +83,14 @@ const handler = baseApi().get(
       throw new BadRequestError('url must be a valid URL');
     }
 
-    const reject = rejectIfUnsafe(parsed);
-    if (reject) {
-      req.logger.warn('Blocked SSRF attempt on /api/external-image', { url: rawUrl, reason: reject });
-      throw new BadRequestError(reject);
+    try {
+      await assertUrlAllowed(parsed.toString());
+    } catch (e) {
+      if (e instanceof SsrfError) {
+        req.logger.warn('Blocked SSRF attempt on /api/external-image', { url: rawUrl, reason: e.message });
+        throw new BadRequestError(e.message);
+      }
+      throw e;
     }
 
     const bucketName = Resource.appFilesBucket.name;
@@ -155,47 +114,22 @@ const handler = baseApi().get(
 
     let response: Response;
     try {
-      // Use redirect: 'manual' instead of redirect: 'error' so we
-      // can follow legitimate CDN redirects (Gravatar, GitHub avatars, Cloudinary)
-      // after re-checking the Location header through the SSRF guard. This closes
-      // the redirect-to-private-host bypass without breaking real image hosts.
-      response = await fetch(parsed.toString(), {
+      // safeFetch re-checks the initial host and follows at most one redirect after
+      // re-validating its Location through the SSRF guard, so legitimate CDN redirects
+      // (Gravatar, GitHub avatars, Cloudinary) still work while a redirect to a private
+      // host is blocked.
+      response = await safeFetch(parsed.toString(), {
         headers: {
           'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
           Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         },
         signal: controller.signal,
-        redirect: 'manual',
       });
-
-      // Follow at most one redirect, re-checking the target through the SSRF guard
-      if (response.status >= 300 && response.status < 400) {
-        const location = response.headers.get('location');
-        if (!location) {
-          throw new BadRequestError('Redirect without Location header');
-        }
-        const redirectUrl = new URL(location, parsed);
-        const redirectReject = rejectIfUnsafe(redirectUrl);
-        if (redirectReject) {
-          req.logger.warn('Blocked SSRF via redirect', {
-            from: rawUrl,
-            to: redirectUrl.toString(),
-            reason: redirectReject,
-          });
-          throw new BadRequestError(`Blocked redirect: ${redirectReject}`);
-        }
-        // Second fetch with redirect: 'error' to prevent further hops
-        response = await fetch(redirectUrl.toString(), {
-          headers: {
-            'User-Agent': `Lumina5-ImageProxy/1.0${brand ? ` (${brand})` : ''}`,
-            Accept: 'image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-          },
-          signal: controller.signal,
-          redirect: 'error',
-        });
-      }
     } catch (fetchError) {
-      if (fetchError instanceof BadRequestError) throw fetchError;
+      if (fetchError instanceof SsrfError) {
+        req.logger.warn('Blocked SSRF on external image fetch', { url: rawUrl, reason: fetchError.message });
+        throw new BadRequestError(fetchError.message);
+      }
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
         throw new BadRequestError('Image fetch timed out');
       }
