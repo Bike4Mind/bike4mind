@@ -109,7 +109,8 @@ beforeEach(async () => {
 });
 
 const runRollup = async (scope: Record<string, unknown>) => {
-  const [facet] = await FeedbackModel.aggregate<FeedbackRollupFacet>(buildFeedbackRollupPipeline(scope, FROM, TO));
+  const { pipeline, facetStages } = buildFeedbackRollupPipeline(scope, FROM, TO);
+  const [facet] = await FeedbackModel.aggregate<FeedbackRollupFacet>([...pipeline, { $facet: facetStages }]);
   return toFeedbackRollupResponse(facet, FROM, TO);
 };
 
@@ -158,9 +159,11 @@ describe('feedback rollup against a real collection', () => {
     // The half-open bound moves that report into the adjoining window instead of dropping it,
     // which is what keeps consecutive windows summing to the same total as one wide one.
     const nextTo = new Date('2026-03-01T00:00:00.000Z');
-    const [adjoining] = await FeedbackModel.aggregate<FeedbackRollupFacet>(
-      buildFeedbackRollupPipeline({ userId: USER_A }, TO, nextTo)
-    );
+    const adjoiningPipeline = buildFeedbackRollupPipeline({ userId: USER_A }, TO, nextTo);
+    const [adjoining] = await FeedbackModel.aggregate<FeedbackRollupFacet>([
+      ...adjoiningPipeline.pipeline,
+      { $facet: adjoiningPipeline.facetStages },
+    ]);
     expect(toFeedbackRollupResponse(adjoining, TO, nextTo).total).toBe(1);
   });
 
@@ -181,7 +184,8 @@ describe('feedback rollup against a real collection', () => {
   });
 
   it('walks the userId/createdAt index rather than scanning the collection', async () => {
-    const plan = await FeedbackModel.aggregate(buildFeedbackRollupPipeline({ userId: USER_A }, FROM, TO)).explain();
+    const { pipeline, facetStages } = buildFeedbackRollupPipeline({ userId: USER_A }, FROM, TO);
+    const plan = await FeedbackModel.aggregate([...pipeline, { $facet: facetStages }]).explain();
 
     expect(JSON.stringify(plan)).toContain('feedback_userId_createdAt');
   });

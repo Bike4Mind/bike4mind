@@ -1,4 +1,4 @@
-import { FeedbackModel } from '@bike4mind/database';
+import { FeedbackModel, convertPipelineForDocumentDB, executeFacetCompatible } from '@bike4mind/database';
 import { FeedbackRollupQuerySchema, parseFeedbackRollupBound } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -44,10 +44,10 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
   const from = parseFeedbackRollupBound(query.from);
   const to = parseFeedbackRollupBound(query.to);
 
-  const [facet] = await FeedbackModel.aggregate<FeedbackRollupFacet>(
-    buildFeedbackRollupPipeline({ userId }, from, to),
-    { maxTimeMS: FEEDBACK_ROLLUP_MAX_TIME_MS }
-  );
+  const { pipeline, facetStages } = buildFeedbackRollupPipeline({ userId }, from, to);
+  const [facet] = (await executeFacetCompatible(FeedbackModel, convertPipelineForDocumentDB(pipeline), facetStages, {
+    maxTimeMS: FEEDBACK_ROLLUP_MAX_TIME_MS,
+  })) as FeedbackRollupFacet[];
 
   // A per-principal aggregate: never a shared cache entry, and never stored by an intermediary.
   res.setHeader('Cache-Control', 'private, no-store');

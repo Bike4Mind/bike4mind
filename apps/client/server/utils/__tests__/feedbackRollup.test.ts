@@ -7,7 +7,9 @@ const FROM = new Date('2026-01-01T00:00:00.000Z');
 const TO = new Date('2026-02-01T00:00:00.000Z');
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-const stages = (scope: Record<string, unknown>) => buildFeedbackRollupPipeline(scope, FROM, TO) as any[];
+const stages = (scope: Record<string, unknown>) => buildFeedbackRollupPipeline(scope, FROM, TO).pipeline as any[];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const facetOf = (scope: Record<string, unknown>) => buildFeedbackRollupPipeline(scope, FROM, TO).facetStages as any;
 
 describe('buildFeedbackRollupPipeline', () => {
   it('composes the caller scope with $and so a scope carrying its own $or survives', () => {
@@ -27,26 +29,26 @@ describe('buildFeedbackRollupPipeline', () => {
   });
 
   it('excludes a missing or null sessionId and questId from their own dimensions only', () => {
-    const [, , facet] = stages({ userId: 'a' });
+    const facet = facetOf({ userId: 'a' });
 
-    expect(facet.$facet.sessionId[0]).toEqual({ $match: { sessionId: { $ne: null } } });
-    expect(facet.$facet.questId[0]).toEqual({ $match: { questId: { $ne: null } } });
-    expect(facet.$facet.total).toEqual([{ $count: 'count' }]);
+    expect(facet.sessionId[0]).toEqual({ $match: { sessionId: { $ne: null } } });
+    expect(facet.questId[0]).toEqual({ $match: { questId: { $ne: null } } });
+    expect(facet.total).toEqual([{ $count: 'count' }]);
   });
 
   it('dedupes tags before unwinding them', () => {
-    const [, , facet] = stages({ userId: 'a' });
+    const facet = facetOf({ userId: 'a' });
 
-    expect(facet.$facet.tags[0]).toEqual({
+    expect(facet.tags[0]).toEqual({
       $addFields: { tags: { $setUnion: [{ $cond: [{ $isArray: '$tags' }, '$tags', []] }, []] } },
     });
-    expect(facet.$facet.tags[1].$unwind.path).toBe('$tags');
-    expect(facet.$facet.tags[1].$unwind.preserveNullAndEmptyArrays).toBe(false);
+    expect(facet.tags[1].$unwind.path).toBe('$tags');
+    expect(facet.tags[1].$unwind.preserveNullAndEmptyArrays).toBe(false);
   });
 
   it('coerces a non-array tags field to an empty array instead of hard-erroring $setUnion', () => {
-    const [, , facet] = stages({ userId: 'a' });
-    const cond = facet.$facet.tags[0].$addFields.tags.$setUnion[0].$cond;
+    const facet = facetOf({ userId: 'a' });
+    const cond = facet.tags[0].$addFields.tags.$setUnion[0].$cond;
 
     expect(cond).toEqual([{ $isArray: '$tags' }, '$tags', []]);
   });
@@ -55,39 +57,48 @@ describe('buildFeedbackRollupPipeline', () => {
     expect(() => buildFeedbackRollupPipeline({}, FROM, TO)).toThrow();
   });
 
-  it('joins the FeedbackText sibling by _id before the $facet stage, projecting only _id', () => {
+  it('joins the FeedbackText sibling by _id using the plain localField/foreignField form, with no pipeline key', () => {
     const [, lookup] = stages({ userId: 'a' });
 
+    // Regression pin: a $lookup with both localField/foreignField AND a pipeline is passed
+    // through untouched by convertLookupForDocumentDB, which only certifies the plain form.
+    expect(lookup.$lookup).not.toHaveProperty('pipeline');
     expect(lookup.$lookup).toEqual({
       from: FeedbackTextModel.collection.name,
       localField: '_id',
       foreignField: '_id',
-      pipeline: [{ $project: { _id: 1 } }],
       as: 'textSibling',
     });
   });
 
+  it('reduces the joined sibling to a boolean and drops it before the facet stage', () => {
+    const [, , addFields, project] = stages({ userId: 'a' });
+
+    expect(addFields).toEqual({ $addFields: { hasText: { $gt: [{ $size: '$textSibling' }, 0] } } });
+    expect(project).toEqual({ $project: { textSibling: 0 } });
+  });
+
   it('caps every dimension one key past the ceiling so truncation can be detected', () => {
-    const [, , facet] = stages({ userId: 'a' });
+    const facet = facetOf({ userId: 'a' });
 
     for (const arm of ['sessionId', 'questId', 'subject', 'status', 'tags']) {
-      const limit = facet.$facet[arm].at(-1);
+      const limit = facet[arm].at(-1);
       expect(limit).toEqual({ $limit: FEEDBACK_ROLLUP_TOP_N + 1 });
     }
   });
 
-  it('derives text availability from the joined sibling and $content type, never a createdAt cutoff', () => {
-    const [, , facet] = stages({ userId: 'a' });
+  it('derives text availability from the joined-sibling boolean and $content type, never a createdAt cutoff', () => {
+    const facet = facetOf({ userId: 'a' });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const group = (facet.$facet.textAvailability[0] as any).$group;
+    const group = (facet.textAvailability[0] as any).$group;
 
     expect(group.stored.$sum.$cond[0].$and).toEqual([
       { $eq: ['$contentStored', true] },
-      { $or: [{ $gt: [{ $size: '$textSibling' }, 0] }, { $ne: [{ $type: '$content' }, 'missing'] }] },
+      { $or: ['$hasText', { $ne: [{ $type: '$content' }, 'missing'] }] },
     ]);
     expect(group.expired.$sum.$cond[0].$and).toEqual([
       { $eq: ['$contentStored', true] },
-      { $eq: [{ $size: '$textSibling' }, 0] },
+      { $eq: ['$hasText', false] },
       { $eq: [{ $type: '$content' }, 'missing'] },
     ]);
   });

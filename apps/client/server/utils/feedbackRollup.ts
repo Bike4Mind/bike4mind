@@ -38,6 +38,13 @@ function countArm(field: string, prelude: PipelineStage.FacetPipelineStage[] = [
   ];
 }
 
+/** The prefix pipeline (match + lookup) and the per-dimension facet stages, kept separate so the
+ * caller can run them through `executeFacetCompatible` rather than a raw `$facet` stage. */
+export interface FeedbackRollupPipeline {
+  pipeline: PipelineStage[];
+  facetStages: Record<string, PipelineStage.FacetPipelineStage[]>;
+}
+
 /**
  * Counts-only rollup over the feedback collection.
  *
@@ -52,91 +59,91 @@ export function buildFeedbackRollupPipeline(
   scope: FilterQuery<IFeedbackDocument>,
   from: Date,
   to: Date
-): PipelineStage[] {
+): FeedbackRollupPipeline {
   // Fail closed at the seam an organization-wide rollup will reuse: an empty scope here would
   // aggregate every tenant, and that guarantee must live at the builder, not in one caller's 401.
   if (Object.keys(scope).length === 0) {
     throw new Error('buildFeedbackRollupPipeline requires a non-empty scope');
   }
 
-  return [
-    {
-      // $and rather than a merged object literal: a scope can carry its own $and/$or arm and a
-      // spread would silently drop one side of it (same reason as the feedback list route).
-      $match: { $and: [scope, { createdAt: { $gte: from, $lt: to } }] },
-    },
-    {
-      // Runs once here, before $facet, rather than per-arm. Existence only, never content -
-      // $project: { _id: 1 } is load-bearing for this route's counts-only promise.
-      $lookup: {
-        from: FeedbackTextModel.collection.name,
-        localField: '_id',
-        foreignField: '_id',
-        pipeline: [{ $project: { _id: 1 } }],
-        as: 'textSibling',
+  return {
+    pipeline: [
+      {
+        // $and rather than a merged object literal: a scope can carry its own $and/$or arm and a
+        // spread would silently drop one side of it (same reason as the feedback list route).
+        $match: { $and: [scope, { createdAt: { $gte: from, $lt: to } }] },
       },
-    },
-    {
-      $facet: {
-        total: [{ $count: 'count' }],
-        textAvailability: [
-          {
-            $group: {
-              _id: null,
-              // Mirrors hydrateFeedbackText's `sibling?.content ?? item.content`: a live sibling
-              // row or a non-missing inline `content` (an explicit null counts as present - only
-              // an absent field is "expired") both mean the text is readable.
-              stored: {
-                $sum: {
-                  $cond: [
-                    {
-                      $and: [
-                        { $eq: ['$contentStored', true] },
-                        {
-                          $or: [{ $gt: [{ $size: '$textSibling' }, 0] }, { $ne: [{ $type: '$content' }, 'missing'] }],
-                        },
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
+      {
+        // Plain localField/foreignField form (no `pipeline`) - the only $lookup shape DocumentDB
+        // supports. Reduced to a boolean and dropped before $facet so no joined text ever reaches
+        // an arm or the response.
+        $lookup: {
+          from: FeedbackTextModel.collection.name,
+          localField: '_id',
+          foreignField: '_id',
+          as: 'textSibling',
+        },
+      },
+      { $addFields: { hasText: { $gt: [{ $size: '$textSibling' }, 0] } } },
+      { $project: { textSibling: 0 } },
+    ],
+    facetStages: {
+      total: [{ $count: 'count' }],
+      textAvailability: [
+        {
+          $group: {
+            _id: null,
+            // Mirrors hydrateFeedbackText's `sibling?.content ?? item.content`: a live sibling
+            // row or a non-missing inline `content` (an explicit null counts as present - only
+            // an absent field is "expired") both mean the text is readable.
+            stored: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ['$contentStored', true] },
+                      { $or: ['$hasText', { $ne: [{ $type: '$content' }, 'missing'] }] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
               },
-              expired: {
-                $sum: {
-                  $cond: [
-                    {
-                      $and: [
-                        { $eq: ['$contentStored', true] },
-                        { $eq: [{ $size: '$textSibling' }, 0] },
-                        { $eq: [{ $type: '$content' }, 'missing'] },
-                      ],
-                    },
-                    1,
-                    0,
-                  ],
-                },
+            },
+            expired: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $eq: ['$contentStored', true] },
+                      { $eq: ['$hasText', false] },
+                      { $eq: [{ $type: '$content' }, 'missing'] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
               },
             },
           },
-        ],
-        // Both keys are optional on the model, and `$ne: null` drops a missing field as well as
-        // an explicitly null one - that only excludes the report from its OWN dimension, it still
-        // counts in `total`, `subject`, and `status`.
-        sessionId: countArm('sessionId', [{ $match: { sessionId: { $ne: null } } }]),
-        questId: countArm('questId', [{ $match: { questId: { $ne: null } } }]),
-        subject: countArm('subject'),
-        status: countArm('status'),
-        // $setUnion before $unwind: the create contract does not dedupe tags, so a report tagged
-        // the same thing twice would otherwise count twice against that tag. A non-array `tags`
-        // would otherwise hard-error $setUnion and 500 every arm in this $facet, not just this one.
-        tags: countArm('tags', [
-          { $addFields: { tags: { $setUnion: [{ $cond: [{ $isArray: '$tags' }, '$tags', []] }, []] } } },
-          { $unwind: { path: '$tags', preserveNullAndEmptyArrays: false } },
-        ]),
-      },
+        },
+      ],
+      // Both keys are optional on the model, and `$ne: null` drops a missing field as well as
+      // an explicitly null one - that only excludes the report from its OWN dimension, it still
+      // counts in `total`, `subject`, and `status`.
+      sessionId: countArm('sessionId', [{ $match: { sessionId: { $ne: null } } }]),
+      questId: countArm('questId', [{ $match: { questId: { $ne: null } } }]),
+      subject: countArm('subject'),
+      status: countArm('status'),
+      // $setUnion before $unwind: the create contract does not dedupe tags, so a report tagged
+      // the same thing twice would otherwise count twice against that tag. A non-array `tags`
+      // would otherwise hard-error $setUnion and 500 every arm in this $facet, not just this one.
+      tags: countArm('tags', [
+        { $addFields: { tags: { $setUnion: [{ $cond: [{ $isArray: '$tags' }, '$tags', []] }, []] } } },
+        { $unwind: { path: '$tags', preserveNullAndEmptyArrays: false } },
+      ]),
     },
-  ];
+  };
 }
 
 function toDimension(raw: RawBucket[] | undefined): FeedbackRollupDimension {

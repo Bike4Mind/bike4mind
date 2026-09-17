@@ -33,10 +33,19 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const mockAggregate = vi.fn<(pipeline: unknown, options?: unknown) => Promise<unknown[]>>(() => Promise.resolve([]));
 
-vi.mock('@bike4mind/database', () => ({
-  FeedbackModel: { aggregate: (pipeline: unknown, options: unknown) => mockAggregate(pipeline, options) },
-  FeedbackTextModel: { collection: { name: 'feedbacktexts' } },
-}));
+// executeFacetCompatible and convertPipelineForDocumentDB are the real db-core implementations:
+// with USE_DOCUMENTDB_COMPATIBILITY unset, executeFacetCompatible reduces to
+// model.aggregate([...pipeline, { $facet: facetStages }]), so the mocked FeedbackModel below
+// still sees a single aggregate() call with the same stage shape it did before this route was
+// routed through the compat helper.
+vi.mock('@bike4mind/database', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/database')>('@bike4mind/database');
+  return {
+    ...actual,
+    FeedbackModel: { aggregate: (pipeline: unknown, options: unknown) => mockAggregate(pipeline, options) },
+    FeedbackTextModel: { collection: { name: 'feedbacktexts' } },
+  };
+});
 
 import '@pages/api/feedback/rollup';
 
