@@ -343,6 +343,7 @@ export const buildAccessibleQuery = (
     includePublic?: boolean;
     grantedLakeIds?: string[];
     orgGrantedLakes?: Record<string, string[]>;
+    supersededOwnLakeIds?: string[];
   }
 ): { filter: Record<string, unknown>; arms: FindAccessibleArm[] } => {
   const statuses = opts?.statuses ?? (['draft', 'active'] as DataLakeStatus[]);
@@ -428,10 +429,28 @@ export const buildAccessibleQuery = (
     for (const arm of orgGrantArms(opts?.orgGrantedLakes)) nonOwnerArms.push(['orgGrant', arm]);
   }
 
-  const labelled: [FindAccessibleArm, Record<string, unknown>][] = [
-    ['owner', { createdByUserId: ctx.userId }],
-    ...nonOwnerArms,
-  ];
+  // Owner arm: creator provenance MINUS the lakes whose ownership has since moved off the creator.
+  // `createdByUserId` is immutable and is deliberately NOT the ownership answer - `resolveEffectiveOwnerIds`
+  // (b4m-core/services manageRule.ts) is, and a transfer or a departure hand-off supersedes the creator by
+  // minting an owner grant without ever touching the field. The superseding ids are pre-resolved app-side
+  // (`supersededOwnLakeIdsFor`), the same seam the grant arms use, because the answer lives in a second
+  // collection this query cannot join.
+  //
+  // Excluding a lake here does not hide it from anyone who still holds a claim on it: the arms are $or
+  // siblings, so an owner demoted to curator by `transferLakeOwnership` keeps it via the grant arm and a
+  // still-member of its org keeps it via the org arm. What it removes is the bare provenance bypass, which
+  // is the only arm that survived losing every one of those claims.
+  //
+  // NOTE the asymmetry with the `$in` arms: an unusable id dropped here fails OPEN (the lake stays listed)
+  // rather than closed. Tolerated because these ids are read off `_id` of persisted lakes and so are always
+  // castable - the filter is a belt against a malformed caller, not a load-bearing path.
+  const supersededOwnLakeIds = usableObjectIds(opts?.supersededOwnLakeIds, 'DataLakeModel.buildAccessibleQuery');
+  const ownerArm =
+    supersededOwnLakeIds.length > 0
+      ? { createdByUserId: ctx.userId, _id: { $nin: supersededOwnLakeIds } }
+      : { createdByUserId: ctx.userId };
+
+  const labelled: [FindAccessibleArm, Record<string, unknown>][] = [['owner', ownerArm], ...nonOwnerArms];
 
   return {
     filter: { status: { $in: statuses }, $or: labelled.map(([, arm]) => arm) },
@@ -618,6 +637,24 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
+  /**
+   * Ids of every lake this user CREATED, in any status - the candidate set for resolving which of
+   * them their ownership has since moved off (see `supersededOwnLakeIdsFor`). Creator provenance is
+   * immutable, so this is a stable, cheap anchor; it deliberately answers nothing about ownership by
+   * itself, which is why it returns ids rather than lakes.
+   *
+   * Ids only, via an explicit projection: the caller joins them against the grant collection and
+   * never reads a field off them, and the inherited `find` override would otherwise hand back whole
+   * documents on a query that runs on every lake list. Served by the { createdByUserId: 1 } index.
+   */
+  async findIdsCreatedBy(userId: string): Promise<string[]> {
+    // A blank id is not a caller, and `{ createdByUserId: '' }` is a real query that would return
+    // every lake stored with a blank creator - none of which belong to whoever asked.
+    if (!userId) return [];
+    const docs = await this.dataLakeModel.find({ createdByUserId: userId }).select('_id');
+    return docs.map(d => String(d._id));
+  }
+
   async findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]> {
     const results = await this.dataLakeModel.find({ organizationId: orgId }).select(LIST_PROJECTION);
     return results.map(r => r.toJSON() as IDataLakeDocument);
@@ -635,13 +672,20 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * a lake only when it grants them something: their org (org-scoped lake) or a gate they
    * hold. This is the Private-by-default rule; the owner still matches via the separate arm.
    *
-   * The unconstrained arms (owner, org-admin, grant) are unconstrained because the gate this
+   * The unconstrained arms (org-admin, grant) are unconstrained because the gate this
    * mirrors resolves MANAGE first (`classifyLakeAccess` -> `canManageLake`, before its own
    * org prerequisite) and manage grants read - so ANDing the org/requirement constraints onto
    * them would hide a lake the gate then opens. Keeping the mirror faithful is the whole
    * contract of this method, and the failure is quiet when it breaks: a lake missing here is
    * still reachable by direct id, so the caller keeps every right they had and simply loses
    * the only surface that would have told them the lake exists (#2005).
+   *
+   * The OWNER arm is the one exception to that list, and it fails the other way. It is creator
+   * provenance, which the gate does NOT treat as ownership - `resolveEffectiveOwnerIds` does, and a
+   * transfer or a departure hand-off supersedes the creator without mutating `createdByUserId`. Left
+   * bare it over-matched, keeping a lake in its creator's list after the gate had stopped opening it
+   * by id: the rights were gone and only the surface that names the lake remained. `opts.supersededOwnLakeIds`
+   * (resolved by `supersededOwnLakeIdsFor`) is what brings the arm back in line with the gate.
    */
   async findAccessible(
     ctx: AccessContext,
@@ -650,6 +694,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       includePublic?: boolean;
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
+      supersededOwnLakeIds?: string[];
     }
   ): Promise<IDataLakeDocument[]> {
     const { filter } = buildAccessibleQuery(ctx, opts);

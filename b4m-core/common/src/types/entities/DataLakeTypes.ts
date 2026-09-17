@@ -596,8 +596,23 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       includePublic?: boolean;
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the OWNER arm: ones the caller created but no longer effectively owns
+       * (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via `supersededOwnLakeIdsFor`, the
+       * same seam `grantedLakeIds` uses, because the answer lives in the grant collection. Absent
+       * leaves the arm at bare creator provenance, which over-matches once ownership has moved -
+       * every list caller should pass it.
+       */
+      supersededOwnLakeIds?: string[];
     }
   ): Promise<IDataLakeDocument[]>;
+
+  /**
+   * Ids of every lake the given user CREATED, in any status. The candidate set `supersededOwnLakeIdsFor`
+   * joins against the grant collection to decide which of them ownership has moved off; creator
+   * provenance alone answers nothing about ownership, which is why this returns bare ids.
+   */
+  findIdsCreatedBy(userId: string): Promise<string[]>;
   /**
    * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
    * Deliberately PER-CALLER, not one catalog for everyone: it applies the same gate as

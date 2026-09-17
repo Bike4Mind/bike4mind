@@ -3,9 +3,10 @@ import type {
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
   IDataLakeDocument,
+  IDataLakeRepository,
 } from '@bike4mind/common';
 import { classifyLakeAccess, type LakeAccessArm } from './classifyLakeAccess';
-import type { LakeGrant } from './manageRule';
+import { resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
 import { createScopedAsyncMemo } from './scopedAsyncMemo';
 
 /** The platform kill switch governing whether read-grant resolution is enforced or report-only. */
@@ -362,4 +363,63 @@ export const manageGrantedLakeIdsFor = async (userId: string, grants?: Principal
   const rows = await grants.listByPrincipal('user', userId, { activeAsOf: new Date() });
   const manageable = rows.filter(row => row.role === 'owner' || row.role === 'curator');
   return Array.from(new Set(manageable.map(row => row.dataLakeId)));
+};
+
+/** The lakes-repo slice `supersededOwnLakeIdsFor` needs: creator provenance, ids only. */
+type CreatedLakeLookup = Pick<IDataLakeRepository, 'findIdsCreatedBy'>;
+
+/** The grants-repo slice it needs: every principal's grants on a known set of lakes. */
+type LakeGrantLookup = Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
+
+/**
+ * Lakes the caller CREATED but no longer effectively OWNS - the exclusion set for `findAccessible`'s
+ * owner arm, which is otherwise bare creator provenance (see `buildAccessibleQuery`).
+ *
+ * `createdByUserId` is immutable by design: ownership moves by minting an `owner`-role grant that
+ * supersedes it (`transferLakeOwnership`, and `lapseDepartedMemberLakeAccess` phase 2 handing a
+ * departed member's lakes to the org's billing owner), never by rewriting the field. So a creator
+ * who has been transferred off or removed from the org still matches the raw provenance arm long
+ * after the single gate has stopped opening the lake for them by id - the listing was the one
+ * surface still naming it.
+ *
+ * Resolved app-side rather than in the query because the answer lives in a second collection Mongo
+ * cannot join to. Two indexed reads, both scoped to lakes this caller created: usually a handful,
+ * and zero round trips for a caller who has created none.
+ *
+ * The verdict itself is delegated to `resolveEffectiveOwnerIds` rather than re-derived, so "who owns
+ * this lake" keeps exactly one definition. Passing `{ createdByUserId: userId }` is exact, not a
+ * stand-in: every id here came from `findIdsCreatedBy(userId)`, so that IS each lake's creator field.
+ *
+ * DEGRADES OPEN, deliberately and in step with its neighbours: with no grant repo wired there are no
+ * grants to supersede anyone with, so the caller ALSO loses the grant arm and every `canManage`/`isOwn`
+ * label falls back to creator provenance (see `grantsByLakeIdFor`). That host is coherently running
+ * the pre-grant model rather than half of the post-grant one. Every route that serves a lake list
+ * wires the repo.
+ *
+ * Takes the ACTOR rather than a bare userId, unlike its neighbours above: they resolve reach that an
+ * admin has too, while this one narrows a single arm that an admin context does not even emit
+ * (`buildAccessibleQuery` replaces the whole `$or`). Keeping the skip here rather than at each of the
+ * four list paths is what stops the fifth from silently paying two queries for an ignored answer.
+ */
+export const supersededOwnLakeIdsFor = async (
+  actor: Pick<AccessContext, 'userId' | 'isAdmin'>,
+  dataLakes: CreatedLakeLookup,
+  grants?: LakeGrantLookup
+): Promise<string[]> => {
+  const { userId, isAdmin } = actor;
+  if (isAdmin || !userId || !grants) return [];
+  const createdLakeIds = await dataLakes.findIdsCreatedBy(userId);
+  if (createdLakeIds.length === 0) return [];
+
+  const rows = await grants.listActiveByLakes(createdLakeIds, { activeAsOf: new Date() });
+  const grantsByLakeId = new Map<string, LakeGrant[]>();
+  for (const row of rows) {
+    const list = grantsByLakeId.get(row.dataLakeId) ?? [];
+    list.push({ principalType: row.principalType, principalId: row.principalId, role: row.role });
+    grantsByLakeId.set(row.dataLakeId, list);
+  }
+
+  return createdLakeIds.filter(
+    lakeId => !resolveEffectiveOwnerIds({ createdByUserId: userId }, grantsByLakeId.get(lakeId) ?? []).includes(userId)
+  );
 };
