@@ -60,7 +60,12 @@ const handler = baseApi({ auth: false })
         // valid UserAuthAuditEvent names by construction. The promise is RETURNED rather than
         // dropped so the service can await the write on the paths that throw immediately after
         // emitting; logAuthAudit swallows its own failures, so it can never reject or fail auth.
-        audit: event => logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { sid: event.sid } }),
+        audit: event =>
+          logAuthAudit(req, {
+            userId: event.userId,
+            event: event.type,
+            metadata: { ...event.metadata, sid: event.sid },
+          }),
         logger: req.logger,
       });
       requireNonSystemUser(rotated.user);

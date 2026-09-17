@@ -13,6 +13,7 @@ import {
   readRefreshCookie,
   setRefreshCookie,
 } from '@server/auth/refreshCookie';
+import { logAuthAudit } from '@server/utils/authAudit';
 
 /**
  * End an impersonation and restore the admin's own session ("Return to safety").
@@ -42,6 +43,8 @@ const handler = baseApi({ auth: false })
     const restored = await authSessionService.rotateSession(adminRefreshToken, {
       db: { authSessions: authSessionRepository, users: userRepository },
       signAccessToken: (id, tokenVersion, extra) => authTokenGenerator.signAccessToken(id, tokenVersion, extra),
+      audit: event =>
+        logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { ...event.metadata, sid: event.sid } }),
       logger: req.logger,
     });
     requireNonSystemUser(restored.user);

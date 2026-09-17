@@ -16,6 +16,7 @@ import {
   Permission,
   ShareableAccessShape,
   grantablePermissions,
+  generateInviteToken,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -238,6 +239,11 @@ export const createInvite = async (
     },
     accepted: 0,
     isLinkOnly: namesNobody,
+    // The bearer secret the share link carries. Minted for EVERY invite, not just link-only ones:
+    // an email invite's id is just as guessable, and issuing one uniformly is what lets
+    // resolveRedeemableInvite treat "has a token" as "minted after the cutover" and refuse the
+    // legacy id door for it.
+    token: generateInviteToken(),
     name,
     // username of the user who is sharing instead of owner of the file
     username: user.username,

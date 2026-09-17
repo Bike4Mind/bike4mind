@@ -412,8 +412,36 @@ describe('rotateSession', () => {
       );
       // Revoking here would kill a healthy session AND stamp the theft event on a benign stall.
       expect(authSessions.revokeBySid).not.toHaveBeenCalled();
-      expect(audit).toHaveBeenCalledWith({ type: 'refresh_recovery_capped', sid: SID, userId: 'user-1' });
+      expect(audit).toHaveBeenCalledWith({
+        type: 'refresh_recovery_capped',
+        sid: SID,
+        userId: 'user-1',
+        metadata: { terminal: true },
+      });
       expect(audit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'session_reuse_revoked' }));
+    });
+
+    it('records terminal: false when recoveries are below the cap (stall disjunct, unreachable on current runtime)', async () => {
+      // Unreachable while Lambda timeout (60 s) < REFRESH_REPLAY_WINDOW_MS (120 s).
+      // Pinned here to guard behavior if that invariant ever breaks.
+      const { authSessions, db, signAccessToken } = setup();
+      const audit = vi.fn();
+      const held = generateRefreshSecret();
+      const heldHash = hashRefreshSecret(held);
+      // Re-read shows recoveries below the cap: simulates a call that stalled past the window.
+      authSessions.findBySid.mockResolvedValue(orphaned(heldHash, { recoveries: 0 }));
+      authSessions.recoverRotateHash.mockResolvedValue(null);
+
+      await expect(rotateSession(buildRefreshToken(SID, held), { db, signAccessToken, audit })).rejects.toThrow(
+        TooManyRequestsError
+      );
+      expect(authSessions.revokeBySid).not.toHaveBeenCalled();
+      expect(audit).toHaveBeenCalledWith({
+        type: 'refresh_recovery_capped',
+        sid: SID,
+        userId: 'user-1',
+        metadata: { terminal: false },
+      });
     });
 
     it('still revokes when the previous hash has genuinely moved on', async () => {

@@ -218,6 +218,25 @@ describe('ImageEditService.process model dispatch', () => {
     expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.GPT_IMAGE_1_5, quality: 'high' });
   });
 
+  it('forwards background and output_format to the OpenAI edit service', async () => {
+    await run(ImageModels.GPT_IMAGE_1_5, { background: 'transparent', output_format: 'png' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({
+      model: ImageModels.GPT_IMAGE_1_5,
+      background: 'transparent',
+      output_format: 'png',
+    });
+  });
+
+  it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
+    await run(ImageModels.GPT_IMAGE_2, { background: 'transparent', output_format: 'png' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({
+      model: ImageModels.GPT_IMAGE_1_5,
+      background: 'transparent',
+    });
+  });
+
   it('rejects a model that cannot edit instead of silently substituting one', async () => {
     const quest = await run(ImageModels.FLUX_KONTEXT_PRO);
 

@@ -2,10 +2,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 
-const { mockUserFind, mockIncidents, mockAuth } = vi.hoisted(() => ({
+const { mockUserFind, mockIncidents, mockAuth, mockAuthByEvent } = vi.hoisted(() => ({
   mockUserFind: vi.fn(),
   mockIncidents: vi.fn(),
   mockAuth: vi.fn(),
+  mockAuthByEvent: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -37,13 +38,35 @@ vi.mock('@bike4mind/utils', () => ({
 vi.mock('@bike4mind/database', () => ({
   userRepository: { findById: (...a: unknown[]) => mockUserFind(...a) },
   imageModerationIncidentRepository: { find: (...a: unknown[]) => mockIncidents(...a) },
-  userAuthAuditLogRepository: { findByUser: (...a: unknown[]) => mockAuth(...a) },
+  userAuthAuditLogRepository: {
+    findByUser: (...a: unknown[]) => mockAuth(...a),
+    findByUserAndEvent: (...a: unknown[]) => mockAuthByEvent(...a),
+  },
+  USER_AUTH_AUDIT_EVENTS: [
+    'login_success',
+    'logout',
+    'password_reset',
+    'mfa_enrolled',
+    'mfa_disabled',
+    'oauth_link',
+    'oauth_unlink',
+    'session_revoked',
+    'session_reuse_revoked',
+    'session_recovered',
+    'refresh_replay_capped',
+    'refresh_recovery_capped',
+    'trusted_device_granted',
+    'trusted_device_used',
+    'trusted_device_revoked',
+  ],
 }));
 
 import handler from '../compliance';
 
-const run = ({ user, userId = 'u1' }: { user?: unknown; userId?: string } = {}) => {
-  const { req, res } = createMocks({ method: 'GET', query: { userId } });
+const run = ({ user, userId = 'u1', event }: { user?: unknown; userId?: string; event?: string } = {}) => {
+  const query: Record<string, string> = { userId };
+  if (event !== undefined) query.event = event;
+  const { req, res } = createMocks({ method: 'GET', query });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
@@ -62,6 +85,7 @@ beforeEach(() => {
   });
   mockIncidents.mockReset().mockResolvedValue([]);
   mockAuth.mockReset().mockResolvedValue([]);
+  mockAuthByEvent.mockReset().mockResolvedValue([]);
 });
 
 describe('GET /api/admin/users/:userId/compliance', () => {
@@ -135,5 +159,38 @@ describe('GET /api/admin/users/:userId/compliance', () => {
     await expect(promise).rejects.toThrow();
     expect(mockIncidents).not.toHaveBeenCalled();
     expect(mockAuth).not.toHaveBeenCalled();
+  });
+
+  it('routes to findByUserAndEvent when ?event= is a valid audit event type', async () => {
+    mockAuthByEvent.mockResolvedValue([
+      {
+        event: 'session_reuse_revoked',
+        actorIp: '1.2.3.4',
+        userAgent: 'ua',
+        actorUserId: undefined,
+        createdAt: new Date('2026-09-01'),
+      },
+    ]);
+    const { res, promise } = run({ user: ADMIN, event: 'session_reuse_revoked' });
+    await promise;
+    expect(mockAuthByEvent).toHaveBeenCalledWith('u1', 'session_reuse_revoked', 50);
+    expect(mockAuth).not.toHaveBeenCalled();
+    const body = res._getJSONData();
+    expect(body.recentAuthEvents).toHaveLength(1);
+    expect(body.recentAuthEvents[0].event).toBe('session_reuse_revoked');
+  });
+
+  it('falls back to findByUser when no ?event= param is provided', async () => {
+    const { promise } = run({ user: ADMIN });
+    await promise;
+    expect(mockAuth).toHaveBeenCalledWith('u1', 50);
+    expect(mockAuthByEvent).not.toHaveBeenCalled();
+  });
+
+  it('rejects with an error when ?event= is not a valid audit event type', async () => {
+    const { promise } = run({ user: ADMIN, event: 'not_a_real_event' });
+    await expect(promise).rejects.toThrow();
+    expect(mockAuth).not.toHaveBeenCalled();
+    expect(mockAuthByEvent).not.toHaveBeenCalled();
   });
 });

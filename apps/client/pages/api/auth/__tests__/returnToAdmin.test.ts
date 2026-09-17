@@ -21,6 +21,7 @@ vi.mock('@server/auth/tokenGenerator', () => ({
   authTokenGenerator: { signAccessToken: vi.fn() },
 }));
 vi.mock('@bike4mind/common', () => ({ redactUserSecretsForSelf: (user: unknown) => user }));
+vi.mock('@server/utils/authAudit', () => ({ logAuthAudit: vi.fn() }));
 
 const mockRotateSession = vi.fn();
 vi.mock('@bike4mind/services', () => ({

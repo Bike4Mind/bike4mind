@@ -6,6 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { HTTPError, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
+import { logAuthAudit } from '@server/utils/authAudit';
 
 const RefreshRequestSchema = z.object({
   grant_type: z.literal('refresh_token'),
@@ -32,6 +33,12 @@ const handler = baseApi({ auth: false })
         const rotated = await authSessionService.rotateSession(refresh_token, {
           db: { authSessions: authSessionRepository, users: userRepository },
           signAccessToken,
+          audit: event =>
+            logAuthAudit(req, {
+              userId: event.userId,
+              event: event.type,
+              metadata: { ...event.metadata, sid: event.sid },
+            }),
           logger: req.logger,
         });
         return res.json({
