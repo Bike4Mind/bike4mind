@@ -96,7 +96,8 @@ function bucketFor(fileTags: string[], scopes: LakeOrderScope[]): string {
   const metaTags = new Set(datalakeTagsFrom(fileTags));
   for (const scope of scopes) {
     if (scope.datalakeTag && metaTags.has(scope.datalakeTag)) return scope.key;
-    if (scope.fileTagPrefix && fileTags.some(tag => tag.startsWith(scope.fileTagPrefix!))) return scope.key;
+    if (scope.fileTagPrefix && fileTags.some(tag => typeof tag === 'string' && tag.startsWith(scope.fileTagPrefix!)))
+      return scope.key;
   }
   return UNATTRIBUTED_LAKE_KEY;
 }
