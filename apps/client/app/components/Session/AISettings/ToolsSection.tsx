@@ -1414,7 +1414,7 @@ const ToolsSection = ({
                 />
                 <ToolLabel
                   name="Only tools I pick"
-                  description="Stops the assistant adding tools on its own - file search, app navigation, blog drafting. Saves up to ~1,900 tokens on the turns it applies to."
+                  description="Stops the assistant adding tools on its own - file search, app navigation, blog drafting. Saves ~800-1,950 tokens on the turns it applies to."
                 />
               </Box>
               <SquareSlideToggle

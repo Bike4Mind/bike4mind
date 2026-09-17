@@ -35,7 +35,9 @@ like it needs it - searching your files, navigating the app, or drafting a blog 
 unaffected, and so is knowledge retrieval: a notebook set up to search your documents still does.
 
 It is off by default. Turning it on also trims the tool instructions sent with each message, saving
-up to roughly 1,900 tokens on the turns where those extra tools would have been offered.
+roughly 800 to 1,950 tokens on the turns where those extra tools would have been offered - about 800
+when only the file-search offer was in play, and the full amount when the navigation and blog tools
+would have come too.
 
 ---
 
