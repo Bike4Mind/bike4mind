@@ -2128,6 +2128,64 @@ describe('updateDataLake - widening the gate is owner-only', () => {
       updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: 'OPTI' }, { db })
     ).resolves.toMatchObject({ requiredUserTag: 'OPTI' });
   });
+
+  // The two fields are arms of one any-of, not independent switches. On a doubly gated lake either
+  // arm alone already admits its holders, so dropping one strictly removes readers - on an org lake
+  // too, where clearing the LAST arm opens the lake to the whole org and is refused just below.
+  describe('the gate is graded as a set, because lakeMatchesAccess is an any-of', () => {
+    const bothGates = { requiredUserTag: 'Opti', requiredEntitlement: 'product:pro' };
+
+    it('lets a curator drop one of two arms on a private lake', async () => {
+      const { db } = makeDb(lake({ createdByUserId: 'owner', ...bothGates }), curator);
+
+      await expect(
+        updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db })
+      ).resolves.toMatchObject({ requiredUserTag: '', requiredEntitlement: 'product:pro' });
+    });
+
+    it('lets a curator drop one of two arms on an ORG lake, where clearing the last one is refused', async () => {
+      const partial = makeDb(lake({ createdByUserId: 'owner', organizationId: 'org1', ...bothGates }), curator);
+      await expect(
+        updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredEntitlement: '' }, { db: partial.db })
+      ).resolves.toMatchObject({ requiredUserTag: 'Opti', requiredEntitlement: '' });
+
+      const total = makeDb(lake({ createdByUserId: 'owner', organizationId: 'org1', ...bothGates }), curator);
+      await expect(
+        updateDataLake(
+          { userId: 'curator', isAdmin: false },
+          'lake1',
+          { requiredUserTag: '', requiredEntitlement: '' },
+          { db: total.db }
+        )
+      ).rejects.toThrow(/only the owner/i);
+      expect(total.update).not.toHaveBeenCalled();
+    });
+
+    // Each arm is tagged with the field it came from, so a tag and an entitlement that happen to
+    // share a spelling are two different populations and moving between them is a widening.
+    it('refuses a curator moving a gate value from the tag arm to the entitlement arm', async () => {
+      const { db, update } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'product:pro' }), curator);
+
+      await expect(
+        updateDataLake(
+          { userId: 'curator', isAdmin: false },
+          'lake1',
+          { requiredUserTag: '', requiredEntitlement: 'product:pro' },
+          { db }
+        )
+      ).rejects.toThrow(/only the owner/i);
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('refuses a curator ADDING a second arm to a private lake', async () => {
+      const { db, update } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' }), curator);
+
+      await expect(
+        updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredEntitlement: 'product:pro' }, { db })
+      ).rejects.toThrow(/only the owner/i);
+      expect(update).not.toHaveBeenCalled();
+    });
+  });
 });
 
 describe('updateDataLake - lake memory platform kill-switch is retain-but-inert', () => {
@@ -4588,6 +4646,42 @@ describe('setLakeVisibility - personal ↔ org promotion', () => {
       db,
     } as any);
     expect(db.dataLakes.update.mock.calls[0][0].organizationId).toBeNull();
+  });
+
+  // Demotion is the cheap half of the manage gate because it only ever removes exposure - except on
+  // a gated lake, where dropping the org takes the org prerequisite away and leaves the requirement
+  // any-of standing on its own: every holder of the tag reads the lake, app-wide and across orgs.
+  // Same exposure updateDataLake's widening gate refuses, reached by moving the scope instead.
+  it('blocks a non-owner admin from demoting a TAG-GATED org lake to private', async () => {
+    const db = makeDb({ organizationId: 'orgA', requiredUserTag: 'Opti' });
+    await expect(
+      setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'private', { db } as any)
+    ).rejects.toThrow(/carries a gate/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-owner admin from demoting an ENTITLEMENT-GATED org lake to private', async () => {
+    const db = makeDb({ organizationId: 'orgA', requiredEntitlement: 'product:pro' });
+    await expect(
+      setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'private', { db } as any)
+    ).rejects.toThrow(/carries a gate/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('lets the OWNER demote a gated org lake to private - it is their lake to open', async () => {
+    const db = makeDb({ organizationId: 'orgA', requiredUserTag: 'Opti' });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'private', {
+      db,
+    } as any);
+    expect(db.dataLakes.update.mock.calls[0][0].organizationId).toBeNull();
+  });
+
+  // The gate is about the ORG PREREQUISITE going away, not about demotion in general: an org-less
+  // gated lake is already on the requirement arm, so un-publishing it moves nobody.
+  it('lets a non-owner admin un-publish a gated org-LESS lake, which changes no readership', async () => {
+    const db = makeDb({ isPublic: true, requiredUserTag: 'Opti' });
+    await setLakeVisibility({ userId: 'admin', isAdmin: true }, 'lake1', 'private', { db } as any);
+    expect(db.dataLakes.update.mock.calls[0][0].isPublic).toBe(false);
   });
 
   it('maps a TOCTOU duplicate-key (E11000) on write to the friendly collision error', async () => {

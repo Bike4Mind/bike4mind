@@ -68,7 +68,9 @@ describe('sharingService - refuseWholeInvite', () => {
     });
     db.fabFiles.shareable.findShareAccessById.mockResolvedValue(null);
 
-    await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(UnauthorizedError);
+    await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(
+      UnauthorizedError
+    );
     expect(db.invites.update).not.toHaveBeenCalled();
   });
 
@@ -104,11 +106,53 @@ describe('sharingService - refuseWholeInvite', () => {
     });
     db.fabFiles.shareable.findShareAccessById.mockResolvedValue(null);
 
-    await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(UnauthorizedError);
+    await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(
+      UnauthorizedError
+    );
     expect(db.invites.update).not.toHaveBeenCalled();
   });
 
-  it('lets a share-authorized caller revoke a link invite (no pending list)', async () => {
+  // The tokenized shape, revoked by `_id`: this is how the document's invite list addresses it, and
+  // the redeemable door would 404 it. Refuse is authorized by share authority here, never by holding
+  // the key, so the id is an address and the sharer revoking their own link must still work.
+  it('lets a share-authorized caller revoke a TOKENIZED link invite by its _id', async () => {
+    const invite = {
+      id: '65a1f77bcf86cd7994390001',
+      token: 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw',
+      type: InviteType.FabFile,
+      documentId: 'doc-1',
+      isLinkOnly: true,
+      remaining: 1,
+      recipients: { pending: [], accepted: [], refused: [] },
+    };
+    db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
+    db.fabFiles.shareable.findShareAccessById.mockResolvedValue({ id: 'doc-1' });
+
+    await refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any);
+
+    expect(db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ remaining: 0 }));
+  });
+
+  // The other half of the same pair: the id opening this door grants nothing on its own.
+  it('still denies a keyholder without share authority on that same tokenized link invite', async () => {
+    db.invites.findById.mockResolvedValue({
+      id: '65a1f77bcf86cd7994390001',
+      token: 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw',
+      type: InviteType.FabFile,
+      documentId: 'doc-1',
+      isLinkOnly: true,
+      remaining: 1,
+      recipients: { pending: [], accepted: [], refused: [] },
+    });
+    db.fabFiles.shareable.findShareAccessById.mockResolvedValue(null);
+
+    await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(
+      UnauthorizedError
+    );
+    expect(db.invites.update).not.toHaveBeenCalled();
+  });
+
+  it('lets a share-authorized caller revoke a legacy tokenless link invite (no pending list)', async () => {
     const invite = {
       id: '65a1f77bcf86cd7994390001',
       type: InviteType.FabFile,
@@ -139,7 +183,9 @@ describe('sharingService - refuseWholeInvite', () => {
       recipients: { pending: ['me@example.com'], accepted: [], refused: [] },
     });
 
-    await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(UnprocessableEntityError);
+    await expect(refuseWholeInvite(user, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(
+      UnprocessableEntityError
+    );
     expect(db.invites.update).not.toHaveBeenCalled();
   });
 
@@ -171,7 +217,10 @@ describe('sharingService - refuseWholeInvite', () => {
       await refuseWholeInvite(user, { id: TOKEN }, { db } as any);
 
       expect(db.invites.update).toHaveBeenCalledWith(
-        expect.objectContaining({ remaining: 1, recipients: expect.objectContaining({ pending: ['other@example.com'] }) })
+        expect.objectContaining({
+          remaining: 1,
+          recipients: expect.objectContaining({ pending: ['other@example.com'] }),
+        })
       );
     });
 
@@ -184,7 +233,10 @@ describe('sharingService - refuseWholeInvite', () => {
       await refuseWholeInvite(user, { id: ID }, { db } as any);
 
       expect(db.invites.update).toHaveBeenCalledWith(
-        expect.objectContaining({ remaining: 1, recipients: expect.objectContaining({ pending: ['other@example.com'] }) })
+        expect.objectContaining({
+          remaining: 1,
+          recipients: expect.objectContaining({ pending: ['other@example.com'] }),
+        })
       );
     });
   });

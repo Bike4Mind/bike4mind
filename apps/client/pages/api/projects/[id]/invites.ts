@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { inviteRepository, projectRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
+import { omitInviteToken } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sharingService } from '@bike4mind/services';
 import { InviteEvents, InviteType, ProjectEvents, Permission } from '@bike4mind/common';
@@ -42,7 +43,9 @@ const handler = baseApi()
       ability: req.ability,
     });
 
-    return res.json(result);
+    // Same reason as the sibling document list: the token is a redeemable secret with no consumer
+    // on this surface.
+    return res.json({ ...result, data: result.data.map(omitInviteToken) });
   })
   .post(
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
@@ -109,7 +112,7 @@ const handler = baseApi()
         return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
       };
 
-      return res.json({ ...created, link: generateInviteLink(created) });
+      return res.json({ ...omitInviteToken(created), link: generateInviteLink(created) });
     })
   );
 

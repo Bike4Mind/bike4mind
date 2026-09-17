@@ -14,16 +14,23 @@ export type GateWrites = Partial<Pick<IDataLakeDocument, 'requiredUserTag' | 're
 const GATE_FIELDS = ['requiredUserTag', 'requiredEntitlement'] as const;
 
 /**
- * Compares two gate values the way the READ path does, so an edit that cannot move a single reader
+ * Normalizes a gate value the way the READ path does, so an edit that cannot move a single reader
  * is not mistaken for one that can: `lakeMatchesAccess` lowercases `requiredUserTag` and runs
  * `requiredEntitlement` through `normalizeEntitlementKey`, and both spellings of unset ('' and
  * absent) admit the same population.
  */
-const sameGate = (field: (typeof GATE_FIELDS)[number], a: string | undefined, b: string | undefined): boolean => {
-  const norm = (v: string | undefined) =>
-    !v ? '' : field === 'requiredEntitlement' ? normalizeEntitlementKey(v) : v.toLowerCase();
-  return norm(a) === norm(b);
-};
+const normalizeGate = (field: (typeof GATE_FIELDS)[number], value: string | undefined): string =>
+  !value ? '' : field === 'requiredEntitlement' ? normalizeEntitlementKey(value) : value.toLowerCase();
+
+/**
+ * The lake's gate as the set of arms `lakeMatchesAccess` would OR together, each tagged with the
+ * field it came from so a tag and an entitlement that happen to share a spelling stay distinct.
+ * Empty means ungated.
+ */
+const gateSet = (lake: Pick<GatedLake, 'requiredUserTag' | 'requiredEntitlement'>): string[] =>
+  GATE_FIELDS.map(field => ({ field, value: normalizeGate(field, lake[field]) }))
+    .filter(arm => arm.value !== '')
+    .map(arm => `${arm.field}:${arm.value}`);
 
 /**
  * Does this gate write admit a reader the lake's current configuration excludes?
@@ -50,13 +57,25 @@ export function gateWriteWidensReadership(existing: GatedLake, writes: GateWrite
   // An ungated lake that falls back to owner-only is the one shape where a gate ADDS readers.
   const ungatedIsOwnerOnly = !normalizeId(existing.organizationId) && !existing.isPublic;
 
-  return GATE_FIELDS.some(field => {
-    const next = writes[field];
-    if (next === undefined) return false;
-    const current = existing[field];
-    if (sameGate(field, current, next)) return false;
-    if (!next) return !ungatedIsOwnerOnly;
-    if (!current) return ungatedIsOwnerOnly;
-    return true;
+  // Graded on the resulting gate SET, not field by field. `lakeMatchesAccess` is an any-of, so the
+  // two fields are arms of one predicate rather than independent switches: on a lake gated by both
+  // a tag and an entitlement, clearing either one removes an arm and strictly narrows readership,
+  // which a per-field view reads as "a gate was cleared" and refuses.
+  const before = gateSet(existing);
+  const after = gateSet({
+    requiredUserTag: writes.requiredUserTag === undefined ? existing.requiredUserTag : writes.requiredUserTag,
+    requiredEntitlement:
+      writes.requiredEntitlement === undefined ? existing.requiredEntitlement : writes.requiredEntitlement,
   });
+
+  // Losing the last arm: the lake falls back to its visibility. Owner-only for a private, org-less
+  // lake (narrower), the whole org or the whole app otherwise (wider).
+  if (after.length === 0) return before.length > 0 && !ungatedIsOwnerOnly;
+
+  // Gaining the first arm: the mirror case. Only a private, org-less lake moves OFF owner-only.
+  if (before.length === 0) return ungatedIsOwnerOnly;
+
+  // Arm set changed while still gated. An arm nobody had before admits a population that could not
+  // read the lake, whatever the visibility; dropping arms only ever removes readers.
+  return after.some(arm => !before.includes(arm));
 }

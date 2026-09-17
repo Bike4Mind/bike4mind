@@ -799,11 +799,11 @@ Structured multi-step plans created by the QuestMaster agent.
 | GET | /api/invites | List all invites |
 | GET | /api/invites/[id] | Get invite details (\`[id]\` is the invite's share token) |
 | POST | /api/invites/[id]/accept | Accept invite (\`[id]\` is the invite's share token) |
-| POST | /api/invites/[id]/refuse | Refuse invite |
+| POST | /api/invites/[id]/refuse | Refuse or revoke invite (\`[id]\` is either key) |
 
 On the two routes above that redeem a share, \`[id]\` is the invite's **share token** - the opaque value carried by the link returned as \`link\` when the invite is created - and not the invite's database id. An invite's database id is not a credential and will not resolve on those routes. Invites created before share tokens existed still resolve by their database id until they expire.
 
-\`DELETE /api/invites/[id]\` is the exception and still takes the database id: cancelling is authorized by your share permission on the underlying document, not by holding the link.
+\`DELETE /api/invites/[id]\` and \`POST /api/invites/[id]/refuse\` are the exceptions and take either key: declining is authorized by your own address being on the invite, and cancelling or revoking by your share permission on the underlying document - never by holding the link. The document invite list does not return the token; the \`link\` in the create response is the only place it is handed out.
 
 ---
 

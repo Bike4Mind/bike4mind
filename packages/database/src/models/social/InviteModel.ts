@@ -95,14 +95,12 @@ export const InviteSchema = new Schema<IInviteDocument>(
       type: Boolean,
       required: false,
     },
-    // The share link's bearer secret (see IBaseInvite.token). `unique` is the data constraint that
-    // makes it safe to resolve an invite by this field alone; `sparse` so the legacy tokenless rows
-    // do not all collide on null.
+    // The share link's bearer secret (see IBaseInvite.token). Uniqueness is the data constraint that
+    // makes it safe to resolve an invite by this field alone, but it is declared at the bottom of the
+    // schema rather than here - see the index for why a plain `sparse` one would not do.
     token: {
       type: String,
       required: false,
-      unique: true,
-      sparse: true,
     },
     accepted: {
       type: Number,
@@ -133,6 +131,15 @@ export const InviteSchema = new Schema<IInviteDocument>(
       virtuals: true,
     },
   }
+);
+
+// PARTIAL rather than sparse: DocumentDB honours `unique` on a sparse index but not the sparseness,
+// so every legacy tokenless invite collides on the missing value and the second one fails to save.
+// `$type: 'string'` (not `$exists`) also keeps an explicit null out of the constraint. Built by an
+// `ensure-invite-token-index` migration, because autoIndex is off in the deployed environments.
+InviteSchema.index(
+  { token: 1 },
+  { unique: true, partialFilterExpression: { token: { $type: 'string' } }, name: 'invite_token_unique' }
 );
 
 export const Invite =

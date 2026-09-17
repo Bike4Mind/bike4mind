@@ -1,4 +1,5 @@
 import { InviteEvents, InviteType, Permission } from '@bike4mind/common';
+import { omitInviteToken } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -107,7 +108,10 @@ const handler = baseApi()
           },
         }
       );
-      return res.json(shares);
+      // Sharer-facing, and the bearer token has no consumer here: the create response is what hands
+      // back a link. Leaving it in would put a redeemable secret in a list any share-authorized
+      // caller can re-read at will.
+      return res.json(shares.map(omitInviteToken));
     })
   )
   /**
@@ -221,7 +225,7 @@ const handler = baseApi()
         });
       }
 
-      return res.json({ ...created, link: generateInviteLink(created) });
+      return res.json({ ...omitInviteToken(created), link: generateInviteLink(created) });
     })
   )
   /**

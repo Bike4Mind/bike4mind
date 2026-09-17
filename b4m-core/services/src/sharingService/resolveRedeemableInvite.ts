@@ -39,6 +39,30 @@ export interface RedeemableInviteAdapters {
  */
 export const resolveRedeemableInvite = async (
   key: string,
+  adapters: RedeemableInviteAdapters
+): Promise<IInviteDocument | null> => {
+  const invite = await resolveAddressedInvite(key, adapters);
+  if (!invite) return null;
+
+  // The whole point, scoped to where the key is the only thing standing between a caller and the
+  // grant: a tokenized LINK invite reached by anything other than its own token. `isLinkOnlyInvite`
+  // carries the legacy inference for rows minted before the flag existed.
+  return invite.token && invite.token !== key && isLinkOnlyInvite(invite) ? null : invite;
+};
+
+/**
+ * The same lookup with NO bearer semantics: the token and the `_id` both resolve, for every kind of
+ * invite. For the paths that authorize the caller independently of the key, where the key is only an
+ * address - `refuseWholeInvite`, whose decline arm demands the caller's own email in
+ * `recipients.pending` and whose revoke arm demands share authority on the underlying document
+ * (`cancelInviteById` resolves the same way, by plain `findById`).
+ *
+ * Do not reach for this on a redemption path. The narrowing in `resolveRedeemableInvite` is the
+ * finding, not an incidental strictness, and a caller that grants on the strength of the key alone
+ * must go through that door instead.
+ */
+export const resolveAddressedInvite = async (
+  key: string,
   { db }: RedeemableInviteAdapters
 ): Promise<IInviteDocument | null> => {
   if (!key) return null;
@@ -49,10 +73,5 @@ export const resolveRedeemableInvite = async (
   // Guarded: findById CASTS, so a token-shaped key reaching it throws instead of missing.
   if (!isObjectIdShaped(key)) return null;
 
-  const byId = await db.invites.findById(key);
-  if (!byId) return null;
-
-  // The whole point, scoped to where the key is the only thing standing between a caller and the
-  // grant. `isLinkOnlyInvite` carries the legacy inference for rows minted before the flag existed.
-  return byId.token && isLinkOnlyInvite(byId) ? null : byId;
+  return db.invites.findById(key);
 };

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { IInviteDocument } from '@bike4mind/common';
-import { resolveRedeemableInvite } from './resolveRedeemableInvite';
+import { resolveAddressedInvite, resolveRedeemableInvite } from './resolveRedeemableInvite';
 
 const LEGACY_ID = '65a1f77bcf86cd7994390001';
 const TOKENIZED_ID = '65a1f77bcf86cd7994390002';
@@ -141,5 +141,36 @@ describe('resolveRedeemableInvite - the share link bearer secret', () => {
     rows[0].token = TOKEN;
     await expect(resolveRedeemableInvite(LEGACY_ID, { db })).resolves.toBeNull();
     await expect(resolveRedeemableInvite(TOKEN, { db })).resolves.toMatchObject({ id: LEGACY_ID });
+  });
+});
+
+describe('resolveAddressedInvite - the same lookup without the bearer semantics', () => {
+  // refuseWholeInvite's door. Both arms behind it re-derive authority from the caller, so the key is
+  // an address and the sharer revoking their own link invite from the document's invite list - which
+  // knows only the _id - must not be turned away.
+  it('resolves a tokenized LINK invite by its _id, which the redeemable door refuses', async () => {
+    const row = invite({ id: TOKENIZED_ID, token: TOKEN });
+    const { db } = dbOf([row]);
+
+    await expect(resolveAddressedInvite(TOKENIZED_ID, { db })).resolves.toMatchObject({ id: TOKENIZED_ID });
+    await expect(resolveRedeemableInvite(TOKENIZED_ID, { db })).resolves.toBeNull();
+  });
+
+  it('still prefers the token, and still shape-guards the id door', async () => {
+    const { db, findById } = dbOf([invite({ id: TOKENIZED_ID, token: TOKEN })]);
+
+    await expect(resolveAddressedInvite(TOKEN, { db })).resolves.toMatchObject({ id: TOKENIZED_ID });
+    expect(findById).not.toHaveBeenCalled();
+
+    await expect(resolveAddressedInvite('not-a-real-token-value-here-0000000000000', { db })).resolves.toBeNull();
+    expect(findById).not.toHaveBeenCalled();
+  });
+
+  it('resolves nothing for an empty key or an unknown id', async () => {
+    const { db, findByToken } = dbOf([invite({ id: LEGACY_ID })]);
+
+    await expect(resolveAddressedInvite('', { db })).resolves.toBeNull();
+    expect(findByToken).not.toHaveBeenCalled();
+    await expect(resolveAddressedInvite('65a1f77bcf86cd7994390999', { db })).resolves.toBeNull();
   });
 });
