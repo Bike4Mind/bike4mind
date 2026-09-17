@@ -61,6 +61,16 @@ Yes. The AI retrieval tools automatically search across all Data Lakes you have 
 **How are files added to a Data Lake?**
 Files are tagged with the lake's file tag prefix when uploaded. The lake tracks file count and total size automatically.
 
+**Can an API key ground a session on a lake its owner is not a member of?**
+Only if the key was *bound* to that lake when it was minted. Creating a session can name
+`preauthorizedLakeIds` to admit a lake the creator manages but is not a member of; for an API-key
+caller that admission additionally requires the key itself to carry the lake in its binding list.
+Bindings are set at mint time by an administrator (Admin -> Users -> Generate API Key), can only
+name lakes the key's owner already manages, and cannot be added to an existing key -- which is what
+stops a leaked key from reaching every lake its owner manages. A caller whose key lacks the binding
+gets `403 This API key is not bound to data lake <id>`; the fix is a newly minted key, not a
+permission change.
+
 **Why does a reply say "Only part of your library was searched"?**
 Grounded answers scan the library under per-turn bounds -- a candidate-document cap and a chunk
 budget -- and they skip documents whose embeddings came from a different model than the one running
