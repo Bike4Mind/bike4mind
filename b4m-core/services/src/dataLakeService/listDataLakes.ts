@@ -24,6 +24,7 @@ import { canManageLake, canShredLakeMemory, isEffectiveOwner, type LakeGrant } f
 import { redactLakesForActor, type ReaderDataLake } from './redactLakeForActor';
 import {
   grantedLakeReachFor,
+  supersededOwnLakeIdsFor,
   manageGrantedLakeIdsFor,
   resolveEnforceReadGrants,
   type LakeAccessLogger,
@@ -98,7 +99,7 @@ type OwnerLookup = { id: string; name?: string; username?: string }[];
 
 interface ListDataLakesAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findAccessible' | 'find'>;
+    dataLakes: Pick<IDataLakeRepository, 'findAccessible' | 'find' | 'findIdsCreatedBy'>;
     /**
      * Optional org-admin lookup, needed only to resolve the org-admin rung of `canPreauthorize`
      * for an ADMIN caller (see preauthorizeOrgIdsFor). Unwired callers lose that one rung.
@@ -400,13 +401,24 @@ const toFallbackConfig = (
  * Lists data lakes accessible to the user (org-aware datastore filter + hardcoded
  * fallbacks). Uses the same owner/org/(tag-or-entitlement) rule as the single access
  * gate, so a non-owner never receives lakes outside their org or whose required tag AND
- * required entitlement they both lack. Each result carries `canManage` (admin or creator)
- * so the UI can gate management affordances - the list surfaces other users' public lakes,
- * which are read-only. Fallback (built-in) lakes are read-only for everyone.
+ * required entitlement they both lack. Each result carries `canManage` - true outright for a
+ * platform admin, and otherwise `canManageLake`, which resolves EFFECTIVE ownership plus the
+ * curator/org rungs rather than bare creator provenance - so the UI can gate management
+ * affordances. The list surfaces other users' public lakes, which are read-only, and fallback
+ * (built-in) lakes are read-only for everyone.
  *
- * Each result also carries `isOwn` (did the caller create it) and, when a `users` lookup is
- * supplied (the manager route), `ownerDisplayName` for lakes the caller does NOT own - so the
- * UI can flag someone else's lake and not let it be managed by mistake.
+ * Each result also carries `isOwn`, resolved through `isEffectiveOwner` (so a creator whose
+ * ownership has since moved off gets `false`, and the grant holder it moved to gets `true`) and,
+ * when a `users` lookup is supplied (the manager route), `ownerDisplayName` for lakes the caller
+ * does NOT own - so the UI can flag someone else's lake and not let it be managed by mistake.
+ *
+ * Wider blast radius than its name suggests: `resolveAccessibleLakes`
+ * (`apps/client/server/dataLakes/index.ts`) builds the content-scope lake set from this same
+ * function, and that set is the lake arm of the single-file read gate behind `/api/files/[id]`,
+ * `/api/files/byIds` and `/api/files/presigned-url`, plus the scope for `/api/data-lakes/articles`,
+ * `/api/data-lakes/tag-counts` and the `rlm-answer` has-any-lake precondition. A row this function
+ * stops returning is a lake that stops granting file reads too - intended, and the reason the
+ * narrowing below has to be ownership and not a display filter.
  */
 export const listDataLakes = async (
   ctx: AccessContext,
@@ -432,10 +444,20 @@ export const listDataLakes = async (
     : await grantedLakeReachFor(ctx.userId, ctx.organizationIds ?? [], db.dataLakeAccessGrants, includeReaders);
   let dynamicLakes: IDataLakeDocument[] = [];
   try {
+    // Withheld from the owner arm: lakes this caller created but has since been transferred or
+    // departed off. NOT skipped under `precomputedGrantedLakeIds` - that option only says the caller
+    // already ran the identical GRANT-REACH query, and this is a different one.
+    //
+    // Inside the try with the read it narrows, on purpose. It reads the same collections, so a
+    // deployment without them fails here first, and outside the try that would turn a fresh install's
+    // silent fall-through to the static registry into a 500. It also fails in the right direction: a
+    // failed narrowing costs the caller their dynamic lakes rather than handing them back unnarrowed.
+    const supersededOwnLakeIds = await supersededOwnLakeIdsFor(ctx, db.dataLakes, db.dataLakeAccessGrants);
     dynamicLakes = await db.dataLakes.findAccessible(ctx, {
       statuses: ['draft', 'active'],
       grantedLakeIds,
       orgGrantedLakes,
+      supersededOwnLakeIds,
     });
   } catch {
     // DB may not have the collection yet - fall through to hardcoded
@@ -574,11 +596,15 @@ export const listArchivedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const grantedLakeIds = await manageGrantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  const [grantedLakeIds, supersededOwnLakeIds] = await Promise.all([
+    manageGrantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants),
+    supersededOwnLakeIdsFor(ctx, db.dataLakes, db.dataLakeAccessGrants),
+  ]);
   const lakes = await db.dataLakes.findAccessible(ctx, {
     statuses: ['archived'],
     includePublic: false,
     grantedLakeIds,
+    supersededOwnLakeIds,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
@@ -594,8 +620,16 @@ export const listDeletedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<(IDataLakeDocument | ReaderDataLake)[]> => {
-  const grantedLakeIds = await manageGrantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
-  const lakes = await db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false, grantedLakeIds });
+  const [grantedLakeIds, supersededOwnLakeIds] = await Promise.all([
+    manageGrantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants),
+    supersededOwnLakeIdsFor(ctx, db.dataLakes, db.dataLakeAccessGrants),
+  ]);
+  const lakes = await db.dataLakes.findAccessible(ctx, {
+    statuses: ['deleted'],
+    includePublic: false,
+    grantedLakeIds,
+    supersededOwnLakeIds,
+  });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   return redactLakesForActor(lakes, ctx, grantsByLake);
 };
@@ -622,11 +656,19 @@ export const listTransitionalDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<TransitionalDataLakeSummary[]> => {
-  const grantedLakeIds = await manageGrantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants);
+  // `supersededOwnLakeIds` changes no row HERE - the `canManageLake` post-filter below already drops
+  // a superseded creator, since it resolves ownership through `isEffectiveOwner`. Passed anyway so
+  // the four list paths ask the repo one question, and so this view does not quietly become the one
+  // that relies on its post-filter for a security property the other three get from the query.
+  const [grantedLakeIds, supersededOwnLakeIds] = await Promise.all([
+    manageGrantedLakeIdsFor(ctx.userId, db.dataLakeAccessGrants),
+    supersededOwnLakeIdsFor(ctx, db.dataLakes, db.dataLakeAccessGrants),
+  ]);
   const lakes = await db.dataLakes.findAccessible(ctx, {
     statuses: [...DATA_LAKE_TRANSITIONAL_STATUSES],
     includePublic: false,
     grantedLakeIds,
+    supersededOwnLakeIds,
   });
   const grantsByLake = await grantsByLakeIdFor(lakes, db.dataLakeAccessGrants);
   const now = Date.now();
