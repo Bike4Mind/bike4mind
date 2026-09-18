@@ -523,6 +523,12 @@ describe('apiKeyRateLimitCheck', () => {
       await expect(resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true })).rejects.toThrow(failure);
 
       expect(cacheRepository.deleteByKey).toHaveBeenCalledTimes(4);
+      const request = buildRateLimitKeys(mockKeyId);
+      const management = buildRateLimitKeys(mockKeyId, 'management');
+      expect(cacheRepository.deleteByKey).toHaveBeenNthCalledWith(1, request.minuteKey);
+      expect(cacheRepository.deleteByKey).toHaveBeenNthCalledWith(2, request.dayKey);
+      expect(cacheRepository.deleteByKey).toHaveBeenNthCalledWith(3, management.minuteKey);
+      expect(cacheRepository.deleteByKey).toHaveBeenNthCalledWith(4, management.dayKey);
     });
   });
 
