@@ -128,6 +128,25 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       .lean({ virtuals: true });
   }
 
+  /**
+   * Same read as findActiveSubscriptionsByOwner minus the active-only predicate: a
+   * deny-list on the terminal states, so a `past_due` owner still sees the subscription
+   * that Stripe is dunning (and can act on it). Unordered on purpose - callers pick the
+   * displayed row with `pickDisplayedSubscription`.
+   */
+  findNonTerminalSubscriptionsByOwner(
+    ownerType: SubscriptionOwnerType,
+    ownerId: string
+  ): Promise<(ISubscription & IMongoDocument)[]> {
+    return this.model
+      .find({
+        ownerType,
+        ownerId,
+        status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] },
+      })
+      .lean({ virtuals: true });
+  }
+
   findByPriceIdAndOwner(
     priceId: string,
     ownerType: SubscriptionOwnerType,

@@ -10,7 +10,12 @@ import {
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
 } from '@client/lib/subscriptions/constants';
-import { SubscriptionOwnerType, ISubscription } from '@client/lib/subscriptions/types';
+import {
+  SubscriptionOwnerType,
+  ISubscription,
+  isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
+} from '@client/lib/subscriptions/types';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 import GroupIcon from '@mui/icons-material/Group';
@@ -18,6 +23,7 @@ import PaymentIcon from '@mui/icons-material/Payment';
 import EventIcon from '@mui/icons-material/Event';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
+import WarningAmberIcon from '@mui/icons-material/WarningAmber';
 import {
   Box,
   Button,
@@ -306,7 +312,10 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
   const subscriptions = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
   const stripePortal = useStripePortal();
   const subscribeTeamPlan = useSubscribeTeamPlan();
-  const subscription = subscriptions.data?.[0];
+  const subscription = pickDisplayedSubscription(subscriptions.data ?? []);
+  // A delinquent plan is still a plan: the row exists so the Billing Portal stays reachable,
+  // but it must not read as healthy - Stripe is dunning it and entitlements deny access.
+  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
   const plans = useGetSubscriptionPlans();
 
   // Get the price per seat from Stripe
@@ -420,23 +429,39 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
                   <Box sx={{ textAlign: 'right' }} className="organization-billing-plan-status">
                     <Typography
                       level="body-md"
-                      startDecorator={subscription.canceledAt ? <CancelIcon /> : <CheckCircleIcon />}
-                      color={subscription.canceledAt ? 'warning' : 'success'}
+                      startDecorator={
+                        paymentIssue ? (
+                          <WarningAmberIcon />
+                        ) : subscription.canceledAt ? (
+                          <CancelIcon />
+                        ) : (
+                          <CheckCircleIcon />
+                        )
+                      }
+                      color={paymentIssue ? 'danger' : subscription.canceledAt ? 'warning' : 'success'}
                       sx={{ mb: 1 }}
                       className="organization-billing-plan-state"
                     >
-                      {subscription.canceledAt ? 'Canceled' : 'Active'}
+                      {paymentIssue ? 'Payment issue' : subscription.canceledAt ? 'Canceled' : 'Active'}
                     </Typography>
-                    <Typography
-                      level="body-sm"
-                      color="neutral"
-                      startDecorator={<EventIcon sx={{ fontSize: '1rem' }} />}
-                      className="organization-billing-plan-renewal"
-                    >
-                      {subscription.canceledAt
-                        ? `Ends on ${dayjs(subscription.periodEndsAt).format('MMMM D, YYYY')}`
-                        : `Renews on ${dayjs(subscription.periodEndsAt).format('MMMM D, YYYY')}`}
-                    </Typography>
+                    {paymentIssue ? (
+                      // A delinquent plan still carries a period end, so a renewal date would read
+                      // as healthy. Send them to the portal - the only place the card is fixed.
+                      <Typography level="body-sm" color="danger" className="organization-billing-plan-payment-issue">
+                        Update your payment method in the Billing Portal to keep this plan
+                      </Typography>
+                    ) : (
+                      <Typography
+                        level="body-sm"
+                        color="neutral"
+                        startDecorator={<EventIcon sx={{ fontSize: '1rem' }} />}
+                        className="organization-billing-plan-renewal"
+                      >
+                        {subscription.canceledAt
+                          ? `Ends on ${dayjs(subscription.periodEndsAt).format('MMMM D, YYYY')}`
+                          : `Renews on ${dayjs(subscription.periodEndsAt).format('MMMM D, YYYY')}`}
+                      </Typography>
+                    )}
                   </Box>
                 ) : (
                   <Button
@@ -486,16 +511,20 @@ const OrganizationBillingSection = ({ organization }: OrganizationBillingSection
                       <Typography level="body-sm" color="neutral" className="organization-billing-usage-available">
                         {totalSeats - usedSeats} seats available
                       </Typography>
-                      <Button
-                        size="sm"
-                        variant="outlined"
-                        color="neutral"
-                        onClick={handleOpenSubscriptionModal}
-                        startDecorator={<AddIcon />}
-                        className="organization-billing-manage-button"
-                      >
-                        Manage Seats
-                      </Button>
+                      {/* Seat changes go through a route that lists only Stripe `active` rows, so the
+                          button would 400 on a dunning subscription. Hidden until payment is fixed. */}
+                      {!paymentIssue && (
+                        <Button
+                          size="sm"
+                          variant="outlined"
+                          color="neutral"
+                          onClick={handleOpenSubscriptionModal}
+                          startDecorator={<AddIcon />}
+                          className="organization-billing-manage-button"
+                        >
+                          Manage Seats
+                        </Button>
+                      )}
                     </Box>
                   </Box>
                 </>

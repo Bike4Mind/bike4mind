@@ -6,7 +6,7 @@ import {
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
 } from '@client/lib/subscriptions/constants';
 import { OrgSubscriptionSubscribeSchema, StripeSubscriptionMetadataSchema } from '@client/lib/subscriptions/schema';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import { SubscriptionOwnerType, isDelinquentSubscriptionStatus } from '@client/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
@@ -39,16 +39,26 @@ const handler = baseApi()
       throw new BadRequestError('callbackUrl must point to the deployed application origin');
     }
 
-    // Check for existing active subscription
+    // Refuse a second live subscription for the org. This read used to be active-only, so an org
+    // whose subscription was past_due - invisible to the guard - could start a second checkout
+    // while the first kept retrying the card and emailing. Non-terminal rows block; a terminal
+    // row (canceled, incomplete_expired) does not, so a lapsed org can still subscribe again.
     if (organizationId) {
-      const existingSubscription = await subscriptionRepository.findByPriceIdAndOwner(
-        priceId,
+      const liveSubscriptions = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
         SubscriptionOwnerType.Organization,
         organizationId
       );
 
-      if (existingSubscription) {
-        throw new BadRequestError('An active subscription already exists for this organization');
+      // The price is pinned to ORGANIZATION_SUBSCRIPTION_PRICE_ID above, so for an org this is
+      // "any non-terminal subscription"; keep the match so the guard reads the same for any price.
+      const blockingSubscription = liveSubscriptions.find(subscription => subscription.priceId === priceId);
+
+      if (blockingSubscription) {
+        throw new BadRequestError(
+          isDelinquentSubscriptionStatus(blockingSubscription.status)
+            ? 'This organization has a subscription with a payment problem. Fix or cancel it in the Billing Portal before subscribing again.'
+            : 'An active subscription already exists for this organization'
+        );
       }
     }
 

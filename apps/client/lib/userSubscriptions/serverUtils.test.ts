@@ -12,7 +12,13 @@ import type { Logger } from '@bike4mind/observability';
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
     findByStripeSubscriptionId: vi.fn(),
-    findActiveSubscriptionsByOwner: vi.fn(),
+    // The org duplicate guard must not read active-only, or a past_due row is invisible to it
+    // and a second live Stripe subscription gets created. Present but throwing: a revert fails
+    // loudly here rather than silently returning [].
+    findActiveSubscriptionsByOwner: vi.fn(() => {
+      throw new Error('the org duplicate guard must read non-terminal rows; active-only hides past_due');
+    }),
+    findNonTerminalSubscriptionsByOwner: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
     flipAdminGrantToStripe: vi.fn(),
@@ -103,7 +109,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
       name: 'Acme',
       users: [],
     });
-    (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+    (subscriptionRepository.findNonTerminalSubscriptionsByOwner as any).mockResolvedValue([
       {
         id: 'subDoc_admin_grant',
         source: SubscriptionSource.AdminGrant,
@@ -149,7 +155,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
     // second sees null (filter no longer matches) and must NOT grant credits
     // again or create a duplicate row.
     (organizationRepository.findById as any).mockResolvedValue({ id: 'org_race', name: 'R', users: [] });
-    (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+    (subscriptionRepository.findNonTerminalSubscriptionsByOwner as any).mockResolvedValue([
       {
         id: 'doc_race',
         source: SubscriptionSource.AdminGrant,
@@ -176,7 +182,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
       name: 'Beta',
       users: [],
     });
-    (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([]);
+    (subscriptionRepository.findNonTerminalSubscriptionsByOwner as any).mockResolvedValue([]);
 
     await handleOrganizationSubscriptionInvoice(
       buildInvoice(),
@@ -212,7 +218,7 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
       name: 'Gamma',
       users: [],
     });
-    (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+    (subscriptionRepository.findNonTerminalSubscriptionsByOwner as any).mockResolvedValue([
       {
         id: 'subDoc_existing_stripe',
         source: SubscriptionSource.Stripe,
@@ -236,7 +242,43 @@ describe('handleOrganizationSubscriptionInvoice — conversion flip', () => {
 
     expect(subscriptionRepository.create).not.toHaveBeenCalled();
     expect(subscriptionRepository.flipAdminGrantToStripe).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('already has an active Stripe subscription'));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('already has a live (non-terminal) Stripe subscription')
+    );
+  });
+
+  it('refuses to create a duplicate row beside a past_due Stripe subscription', async () => {
+    // The row the guard used to miss: an active-only read returns [] for this org, so the
+    // webhook recorded a second Subscription while Stripe kept dunning the first.
+    (organizationRepository.findById as any).mockResolvedValue({ id: 'org_dunning', name: 'Delta', users: [] });
+    (subscriptionRepository.findNonTerminalSubscriptionsByOwner as any).mockResolvedValue([
+      {
+        id: 'subDoc_dunning',
+        source: SubscriptionSource.Stripe,
+        subscriptionId: 'sub_stripe_dunned',
+        status: 'past_due',
+        ownerType: SubscriptionOwnerType.Organization,
+        ownerId: 'org_dunning',
+      },
+    ]);
+
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: SubscriptionOwnerType.Organization,
+        organizationId: 'org_dunning',
+      } as any,
+      logger
+    );
+
+    expect(subscriptionRepository.create).not.toHaveBeenCalled();
+    expect(subscriptionRepository.flipAdminGrantToStripe).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('already has a live (non-terminal) Stripe subscription')
+    );
   });
 });
 
@@ -244,7 +286,7 @@ describe('handleOrganizationSubscriptionInvoice - seat sync on initial purchase'
   beforeEach(() => {
     vi.clearAllMocks();
     (subscriptionRepository.findByStripeSubscriptionId as any).mockResolvedValue(null);
-    (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([]);
+    (subscriptionRepository.findNonTerminalSubscriptionsByOwner as any).mockResolvedValue([]);
   });
 
   it('writes organization.seats to the purchased quantity for an existing org (regression: seats stuck at default)', async () => {
@@ -292,7 +334,7 @@ describe('handleOrganizationSubscriptionInvoice - seat sync on initial purchase'
     // handler refuses to create the duplicate, so it must NOT adopt the refused sub's
     // quantity into organization.seats.
     (organizationRepository.findById as any).mockResolvedValue({ id: 'org_dup', name: 'Acme', users: [], seats: 12 });
-    (subscriptionRepository.findActiveSubscriptionsByOwner as any).mockResolvedValue([
+    (subscriptionRepository.findNonTerminalSubscriptionsByOwner as any).mockResolvedValue([
       { id: 's_first', source: SubscriptionSource.Stripe, subscriptionId: 'sub_first', quantity: 12 },
     ]);
 
@@ -310,7 +352,48 @@ describe('handleOrganizationSubscriptionInvoice - seat sync on initial purchase'
 
     expect(organizationRepository.update).not.toHaveBeenCalled();
     expect(subscriptionRepository.create).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('already has an active Stripe subscription'));
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('already has a live (non-terminal) Stripe subscription')
+    );
+  });
+
+  it('does not rewrite seats when a different delinquent Stripe subscription exists (refused duplicate)', async () => {
+    // The paired skip: widening the duplicate guard without widening this would adopt the
+    // refused past_due sub's quantity into organization.seats, desyncing seats from what
+    // Stripe is actually billing.
+    (organizationRepository.findById as any).mockResolvedValue({
+      id: 'org_dun_seats',
+      name: 'Acme',
+      users: [],
+      seats: 12,
+    });
+    (subscriptionRepository.findNonTerminalSubscriptionsByOwner as any).mockResolvedValue([
+      {
+        id: 's_dunned',
+        source: SubscriptionSource.Stripe,
+        subscriptionId: 'sub_dunned',
+        status: 'past_due',
+        quantity: 12,
+      },
+    ]);
+
+    await handleOrganizationSubscriptionInvoice(
+      buildInvoice(),
+      buildSubscription(),
+      {
+        userId: 'u1',
+        stage: 'test',
+        ownerType: SubscriptionOwnerType.Organization,
+        organizationId: 'org_dun_seats',
+      } as any,
+      logger
+    );
+
+    expect(organizationRepository.update).not.toHaveBeenCalled();
+    expect(subscriptionRepository.create).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('already has a live (non-terminal) Stripe subscription')
+    );
   });
 });
 

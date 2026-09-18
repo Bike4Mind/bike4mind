@@ -18,7 +18,10 @@ const handler = baseApi().get(async (req, res) => {
       // NotFoundError identically for a missing org and one the caller does not belong to.
       const organization = await verifyOrgMembership(req.user, ownerId as string);
 
-      subscriptions = await subscriptionRepository.findActiveSubscriptionsByOwner(
+      // Non-terminal, not active-only: an org whose subscription is past_due must still
+      // see it here, or the billing screen loses the Stripe portal - the only route to
+      // fix the card or cancel. Entitlement checks read the active-only lookup instead.
+      subscriptions = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
         SubscriptionOwnerType.Organization,
         organization.id
       );
