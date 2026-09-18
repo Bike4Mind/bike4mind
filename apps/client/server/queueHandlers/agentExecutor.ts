@@ -2055,6 +2055,7 @@ async function processExecution(
         totalOutputTokens: number;
         totalCacheReadTokens: number;
         totalCacheWriteTokens: number;
+        finishReason?: string;
       },
       counters: BillingCounters
     ) => {
