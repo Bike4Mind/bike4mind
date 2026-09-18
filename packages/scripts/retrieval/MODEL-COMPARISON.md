@@ -384,6 +384,28 @@ pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
   --floors 85:75,0:30,0:35,85:35
 ```
 
+#### Screening what a floor actually served
+
+A sweep row says a negative question was served six chunks. Whether that is a false positive depends
+on whether those six answer it - and a question the corpus genuinely answers is not a negative at
+all, so counting it as one inflates the very rate the floor is being graded on. The fixture carries
+no chunk text and, for a production lake, no file names either, so this cannot be settled offline:
+
+```bash
+# Phase B, with the served ids kept
+pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
+  --fixture out/text-embedding-3-small.<lake>.fixture.ndjson \
+  --floors 85:49 --emit-served out/served.json
+
+# Phase C: one read, keyed on chunk id, for exactly those chunks
+npx sst shell --stage <stage> -- tsx packages/scripts/retrieval/fetch-served-text.ts \
+  --served out/served.json --questions <question file> --out out/screen.md
+```
+
+`out/screen.md` pairs each question with the text of what it was served. **Judge it from the
+passages.** Screening by file name has been tried and reversed the answer on a sixth of the cases it
+was used on - a plausible-looking name is not evidence about the chunk that was actually scored.
+
 **These two runs are what produced the MEASURED table below, and neither is reproducible from a
 clean clone.** `packages/scripts/out/` is gitignored, so the captures are not committed - 452 chunks
 of vectors per arm is not something to put in git. Re-making them means a staged capture against a

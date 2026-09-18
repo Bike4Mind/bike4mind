@@ -5,7 +5,9 @@ import {
   buildFloorSweepRow,
   formatFloorConfig,
   formatFloorSweepTable,
+  gateQueries,
   parseFloorConfigs,
+  rowFromOutcomes,
   SHIPPED_CONFIG,
   ZERO_FLOOR_CONFIG,
   type FloorScorableChunk,
@@ -220,6 +222,40 @@ describe('applyFloors', () => {
     expect(outcome.charsAdmitted).toBe(10);
   });
 
+  it('names the served chunks as the budget-walk prefix, counting the one that overran', () => {
+    // Same shape as the budgetStopRank case above, and deliberately so: the two have to agree, or
+    // `served/q` in the table would count a chunk the emitted id list omits.
+    const outcome = applyFloors(
+      QUERY,
+      [chunkAt(0.9, 'a', 'a', 60), chunkAt(0.85, 'b', 'b', 60), chunkAt(0.8, 'c', 'c', 60)],
+      ZERO_FLOOR_CONFIG,
+      100
+    );
+    expect(outcome.servedChunkIds).toEqual(['a', 'b']);
+    expect(outcome.servedChunkIds).toHaveLength(outcome.budgetStopRank ?? outcome.accepted);
+  });
+
+  it('serves every accepted chunk, in rank order, when the budget does not bind', () => {
+    const outcome = applyFloors(
+      QUERY,
+      [chunkAt(0.7, 'c1', 'docA'), chunkAt(0.9, 'c2', 'docB'), chunkAt(0.8, 'c3', 'docA')],
+      ZERO_FLOOR_CONFIG,
+      10_000
+    );
+    // Rank order, NOT the deduped-by-document order `acceptedDocIds` carries - a document serves
+    // more than one chunk and the screen needs each of them.
+    expect(outcome.servedChunkIds).toEqual(['c2', 'c3', 'c1']);
+  });
+
+  it('serves nothing when the floors empty the turn', () => {
+    const outcome = applyFloors(QUERY, [chunkAt(0.6, 'a'), chunkAt(0.5, 'b')], {
+      relativeFloorPct: 0,
+      minSimilarityPct: 75,
+    });
+    expect(outcome.accepted).toBe(0);
+    expect(outcome.servedChunkIds).toEqual([]);
+  });
+
   it('cuts on the spread floor where the relative floor is inert, which is the point of the gate', () => {
     // The measured ada-002 shape, and the reason no background mass appears here: on that corpus
     // the whole band sat at 0.8025-0.9140, so there IS no low tail for a median to fall into. Every
@@ -311,6 +347,29 @@ describe('applyFloors', () => {
 
   it('reports no background when nothing scored', () => {
     expect(applyFloors(QUERY, [], SHIPPED_CONFIG).backgroundScore).toBeUndefined();
+  });
+});
+
+describe('gateQueries / rowFromOutcomes', () => {
+  const chunks = [chunkAt(0.9, 'a', 'docA'), chunkAt(0.76, 'b', 'docB'), chunkAt(0.6, 'c', 'docC')];
+  const queries = [
+    { id: 'q01', vector: [1, 0], supporting: ['docA'] },
+    { id: 'q02', vector: [1, 0], supporting: [] },
+  ];
+
+  it('builds the same row as the one-shot helper, from outcomes scored once', () => {
+    const outcomes = gateQueries({ config: SHIPPED_CONFIG, chunks, queries });
+    expect(outcomes.map(o => o.queryId)).toEqual(['q01', 'q02']);
+    expect(rowFromOutcomes({ config: SHIPPED_CONFIG, outcomes, queries })).toEqual(
+      buildFloorSweepRow({ config: SHIPPED_CONFIG, chunks, queries })
+    );
+  });
+
+  it('refuses a ground-truth set that does not line up with the outcomes', () => {
+    // The two are joined POSITIONALLY, so a mismatch would score each question against another
+    // one's supporting set and report it as a floor result.
+    const outcomes = gateQueries({ config: SHIPPED_CONFIG, chunks, queries });
+    expect(() => rowFromOutcomes({ config: SHIPPED_CONFIG, outcomes, queries: [queries[0]] })).toThrow(/mismatch/i);
   });
 });
 

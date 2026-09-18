@@ -53,17 +53,22 @@
  * it runs over is the instrument's own.
  */
 
+import { mkdirSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT, FORCED_RETRIEVAL_MAX_SCORED_CHUNKS } from '@bike4mind/common';
 import { readEmbeddingFixtureFile } from './embeddingFixture';
 import { resolveQueries } from './modelComparison';
 import {
-  buildFloorSweepRow,
+  formatFloorConfig,
   formatFloorSweepTable,
+  gateQueries,
   parseFloorConfigs,
+  rowFromOutcomes,
   type FloorScorableChunk,
 } from './forcedFloorSweep';
+import type { ServedEmission } from './servedTextScreen';
 
 const argv = await yargs(hideBin(process.argv))
   .option('fixture', {
@@ -83,6 +88,13 @@ const argv = await yargs(hideBin(process.argv))
     type: 'number',
     default: FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
     describe: 'forcedRetrievalCharBudget to measure the floors against',
+  })
+  .option('emit-served', {
+    type: 'string',
+    describe:
+      'Write the served chunk ids per query, per floor point, to this JSON path. The table says ' +
+      'HOW MUCH each floor serves a negative question; this says WHICH chunks, so the text can be ' +
+      'read back out of the corpus and the served answer judged relevant or not',
   })
   .strict()
   .parse();
@@ -114,9 +126,13 @@ const chunks: FloorScorableChunk[] = fixture.chunks.map(c => ({
   charLength: c.charLength,
 }));
 
-const rows = parseFloorConfigs(argv.floors).map(config =>
-  buildFloorSweepRow({ config, chunks, queries, charBudget: argv['char-budget'] })
-);
+// Kept as outcomes rather than straight to rows because `--emit-served` reads the per-query detail
+// the row aggregates away, and re-scoring for it would double the run's cost on a production corpus.
+const swept = parseFloorConfigs(argv.floors).map(config => {
+  const outcomes = gateQueries({ config, chunks, queries, charBudget: argv['char-budget'] });
+  return { config, outcomes, row: rowFromOutcomes({ config, outcomes, queries }) };
+});
+const rows = swept.map(s => s.row);
 
 console.log(
   `${fixture.model}@${fixture.dims} on ${fixture.corpus}: ` +
@@ -134,4 +150,34 @@ NOTE: the ${FORCED_RETRIEVAL_MAX_SCORED_CHUNKS}-chunk pool cap truncated the can
       `${Math.max(...capped.map(r => r.cappedQueries))} of ${queries.length} queries. ` +
       'Every "cut @" rank below is a rank within that truncated pool.'
   );
+}
+
+if (argv['emit-served'] !== undefined) {
+  // Typed against the screen's own schema rather than inferred, so the writer and the reader cannot
+  // drift apart silently - a renamed field here fails to compile instead of failing to parse later.
+  const emitted: ServedEmission = {
+    model: fixture.model,
+    dims: fixture.dims,
+    corpus: fixture.corpus,
+    charBudget: argv['char-budget'],
+    floors: swept.map(({ config, outcomes }) => ({
+      floor: formatFloorConfig(config),
+      // Deduped across queries, because the point of this file is one targeted read for the text and
+      // the same chunk is routinely served to several questions.
+      distinctServedChunkIds: [...new Set(outcomes.flatMap(o => o.servedChunkIds))],
+      queries: outcomes.map((o, i) => ({
+        id: o.queryId,
+        // 0 marks a deliberate NEGATIVE - the question the corpus should not answer. Carried so the
+        // screen does not need the questions file open beside this one.
+        supportingCount: queries[i].supporting.length,
+        accepted: o.accepted,
+        topScore: o.topScore,
+        servedChunkIds: o.servedChunkIds,
+      })),
+    })),
+  };
+  mkdirSync(path.dirname(path.resolve(argv['emit-served'])), { recursive: true });
+  writeFileSync(argv['emit-served'], JSON.stringify(emitted, null, 2));
+  const totals = emitted.floors.map(f => `${f.floor} -> ${f.distinctServedChunkIds.length}`).join(', ');
+  console.log(`\nWrote served chunk ids to ${argv['emit-served']} (distinct chunks per floor: ${totals})`);
 }

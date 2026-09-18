@@ -205,6 +205,13 @@ export type FloorOutcome = {
   /** Distinct parent documents of the accepted set, best-first - what `metrics.ts` scores. */
   acceptedDocIds: string[];
   /**
+   * Chunk ids the budget walk injects, in rank order: the prefix of the accepted set that `served/q`
+   * counts and the only part of it a turn ever sees. Carried as ids because a capture fixture holds
+   * no chunk TEXT, and deciding whether a served chunk was actually relevant to a question can only
+   * be done by reading it - so these are the join key back to the corpus for that screen.
+   */
+  servedChunkIds: string[];
+  /**
    * 1-based rank at which the relative floor starts cutting, or null when it cuts nothing. THE
    * number this sweep exists for: a floor whose cut rank sits past where the char budget already
    * stopped is dormant, however strict it looks.
@@ -293,8 +300,13 @@ export function applyFloors(
   // count, and its rank is the honest answer to "where did the budget bind".
   let charsAdmitted = 0;
   let budgetStopRank: number | null = null;
+  const servedChunkIds: string[] = [];
   for (const [index, candidate] of accepted.entries()) {
     const remaining = charBudget - charsAdmitted;
+    // Before the break, not after it: the candidate that fills or overruns the budget IS injected,
+    // truncated to what remains. Pushing after would drop the last served chunk and disagree with
+    // `budgetStopRank`, which counts it.
+    servedChunkIds.push(candidate.chunk.chunkId);
     if (candidate.chunk.charLength >= remaining) {
       budgetStopRank = index + 1;
       charsAdmitted += remaining;
@@ -321,6 +333,7 @@ export function applyFloors(
     aboveRelative: aboveRelative.length,
     accepted: accepted.length,
     acceptedDocIds,
+    servedChunkIds,
     cutRank,
     spreadCutRank,
     charsAdmitted,
@@ -432,7 +445,40 @@ export function buildFloorSweepRow(args: {
   queries: readonly { id: string; vector: number[]; supporting: readonly string[] }[];
   charBudget?: number;
 }): FloorSweepRow {
-  const outcomes = args.queries.map(q => applyFloors(q, args.chunks, args.config, args.charBudget));
+  return rowFromOutcomes({ config: args.config, outcomes: gateQueries(args), queries: args.queries });
+}
+
+/**
+ * Gate every query at one floor pair, keeping the per-query outcomes.
+ *
+ * Split out from `buildFloorSweepRow` because the scoring is the expensive half - a production
+ * corpus is tens of millions of dot products per floor point - and a caller that wants the table
+ * AND the per-query served sets must not pay for it twice.
+ */
+export function gateQueries(args: {
+  config: FloorConfig;
+  chunks: readonly FloorScorableChunk[];
+  queries: readonly { id: string; vector: number[] }[];
+  charBudget?: number;
+}): FloorOutcome[] {
+  return args.queries.map(q => applyFloors(q, args.chunks, args.config, args.charBudget));
+}
+
+/**
+ * Roll per-query outcomes up into one row. `queries` is positional against `outcomes` - it supplies
+ * only the ground truth, which `applyFloors` has no use for and so does not carry forward.
+ */
+export function rowFromOutcomes(args: {
+  config: FloorConfig;
+  outcomes: readonly FloorOutcome[];
+  queries: readonly { supporting: readonly string[] }[];
+}): FloorSweepRow {
+  const { outcomes } = args;
+  // A length mismatch would silently score each outcome against another question's ground truth,
+  // which reads as a floor result rather than as the join error it is.
+  if (outcomes.length !== args.queries.length) {
+    throw new Error(`Outcome/query count mismatch: ${outcomes.length} outcomes for ${args.queries.length} queries`);
+  }
   const cutRanks = outcomes.map(o => o.cutRank).filter((r): r is number => r !== null);
   const spreadCutRanks = outcomes.map(o => o.spreadCutRank).filter((r): r is number => r !== null);
   const acceptedCounts = outcomes.map(o => o.accepted);

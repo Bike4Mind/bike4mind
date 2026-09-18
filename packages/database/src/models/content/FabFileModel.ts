@@ -376,6 +376,29 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   }
 
   /**
+   * Chunk text for a SET OF CHUNK IDS - `findTextsByFabFileId`'s counterpart for a caller that
+   * holds ids rather than a file.
+   *
+   * Keyed on `_id`, so the read is exactly the chunks asked for and never a whole file around them.
+   * That precision is the point: an offline retrieval instrument captures chunk ids and vectors but
+   * no text, and reading back only what a question was actually served is both the narrowest query
+   * and the least corpus text to handle.
+   *
+   * A requested id that no longer exists is simply absent from the result. Chunks are replaced by
+   * re-vectorization, so an id captured earlier can legitimately be gone by the read, and that is a
+   * fact for the caller to report rather than an error here.
+   */
+  async findTextsByChunkIds(chunkIds: string[]): Promise<{ id: string; fabFileId: string; text: string }[]> {
+    if (chunkIds.length === 0) return [];
+    const docs = await this.fabFileChunkModel
+      .find({ _id: { $in: chunkIds } })
+      .select({ _id: 1, fabFileId: 1, text: 1 })
+      .sort({ _id: 1 })
+      .lean();
+    return docs.map(d => ({ id: String(d._id), fabFileId: String(d.fabFileId ?? ''), text: d.text ?? '' }));
+  }
+
+  /**
    * Every chunk of a file, vectorless ones included. Callers that page a bounded window
    * need this to tell "you are holding the whole file" from "you are holding a slice" -
    * counting only what a projected reader returned cannot make that distinction.
