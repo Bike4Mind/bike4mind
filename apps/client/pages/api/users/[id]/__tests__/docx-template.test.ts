@@ -46,9 +46,14 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 let mongoServer: MongoMemoryServer;
 
+// init() settles each model's background autoIndex build before afterEach can drop the database
+// out from under it - both models are written to here, so both have to settle (see
+// createMongoServer).
 beforeAll(async () => {
   mongoServer = await createMongoServer();
   await mongoose.connect(mongoServer.getUri());
+  await User.init();
+  await AppFile.init();
 });
 
 afterAll(async () => {
