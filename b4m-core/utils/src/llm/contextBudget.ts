@@ -69,14 +69,23 @@ export function effectiveContextWindow(modelInfo: Pick<ModelInfo, 'contextWindow
  * same number is the drift that made it a shared export in the first place.
  */
 export function safeInputWindow(
-  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens' | 'type'>,
+  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens' | 'type' | 'maxOutputTokensDerived'>,
   requestedMaxTokens: number,
   safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS
 ): number {
   const returnsMedia = isMediaModelType(modelInfo.type);
   const contextLimit = effectiveContextWindow(modelInfo);
   const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-  const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);
+  // The reserve has to match what the request will actually send, and resolveOutputMaxTokens
+  // declines to clamp a reasons-within-the-budget model to a DERIVED cap. Clamping here anyway
+  // would reserve 4096 against a 64000-token request and let assembly fill the difference, so
+  // prompt + max_tokens overruns the window and the provider rejects the turn.
+  const capClamps = modelInfo.maxOutputTokensDerived !== true;
+  const reservedOutput = returnsMedia
+    ? 0
+    : capClamps
+      ? Math.min(requestedMaxTokens, modelMaxOutput)
+      : requestedMaxTokens;
   return contextLimit - reservedOutput - safetyBuffer;
 }
 

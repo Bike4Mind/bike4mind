@@ -70,6 +70,19 @@ describe('safeInputWindow', () => {
     expect(safeInputWindow(LLAMA_8K, 999_999)).toBe(8000 - 2048 - 1000);
   });
 
+  // A derived cap is not what the model can emit, and resolveOutputMaxTokens declines to clamp a
+  // reasoning model to it - so reserving it here would under-reserve against the request actually
+  // sent and let assembly overrun the window.
+  it('reserves the whole request when the cap was only derived', () => {
+    const derivedCap = {
+      contextWindow: 200_000,
+      max_tokens: 4096,
+      maxOutputTokensDerived: true,
+      type: 'text' as const,
+    };
+    expect(safeInputWindow(derivedCap, 64_000)).toBe(200_000 - 64_000 - 1000);
+  });
+
   // The caller's empty-prompt guard reads a non-positive budget as a misconfigured model, so clamping
   // here would turn a loud failure into a silently empty prompt.
   it('goes negative rather than clamping on a model that reserves its whole window', () => {
