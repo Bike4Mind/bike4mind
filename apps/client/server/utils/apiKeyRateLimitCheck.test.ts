@@ -505,6 +505,25 @@ describe('apiKeyRateLimitCheck', () => {
       expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(management.minuteKey);
       expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(management.dayKey);
     });
+
+    it('rejects but still fires every delete when one deleteByKey call fails', async () => {
+      // Each deleteByKey call fires synchronously while the `deletes` array is
+      // built, before Promise.all is ever awaited - so a later key still gets
+      // cleared even when an earlier one rejects. The caller only learns
+      // "something failed" and must retry the whole reset; that's safe because
+      // deleteByKey is an idempotent exact-match delete (see resetApiKeyRateLimit
+      // doc comment), so a retry re-clears already-cleared keys as a no-op.
+      const failure = new Error('cache unavailable');
+      vi.mocked(cacheRepository.deleteByKey)
+        .mockRejectedValueOnce(failure) // request minute
+        .mockResolvedValueOnce(undefined) // request day
+        .mockResolvedValueOnce(undefined) // management minute
+        .mockResolvedValueOnce(undefined); // management day
+
+      await expect(resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true })).rejects.toThrow(failure);
+
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledTimes(4);
+    });
   });
 
   describe('getApiKeyRateLimitUsage', () => {
