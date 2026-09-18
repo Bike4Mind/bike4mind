@@ -5,8 +5,6 @@ import {
   Alert,
   CircularProgress,
   Tabs,
-  TabList,
-  Tab,
   TabPanel,
   Stack,
   Button,
@@ -17,6 +15,7 @@ import {
   useTheme,
 } from '@mui/joy';
 import { type ReactArtifact } from '@bike4mind/common';
+import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { validateArtifactContent } from '@client/app/utils/artifactParser';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -27,8 +26,6 @@ import 'prismjs/components/prism-jsx';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-tsx';
 import {
-  PlayArrow as PreviewIcon,
-  Code as CodeIcon,
   Save as SaveIcon,
   Undo as UndoIcon,
   Lock as LockIcon,
@@ -505,32 +502,13 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
               flexShrink: 0,
             }}
           >
-            <TabList className="react-artifact-viewer-tab-list" sx={{ minHeight: 'auto' }}>
-              <Tab
-                className="react-artifact-viewer-tab-preview"
-                value={tabPanelValues.preview}
-                sx={{ py: 0.5, minHeight: 'auto' }}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  <PreviewIcon sx={{ fontSize: 18 }} />
-                  <Typography className="react-artifact-viewer-tab-label" level="body-sm">
-                    Preview
-                  </Typography>
-                </Stack>
-              </Tab>
-              <Tab
-                className="react-artifact-viewer-tab-code"
-                value={tabPanelValues.code}
-                sx={{ py: 0.5, minHeight: 'auto' }}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  <CodeIcon sx={{ fontSize: 18 }} />
-                  <Typography className="react-artifact-viewer-tab-label" level="body-sm">
-                    Code
-                  </Typography>
-                </Stack>
-              </Tab>
-            </TabList>
+            <ArtifactModeTabs
+              className="react-artifact-viewer-tab-list"
+              previewValue={tabPanelValues.preview}
+              codeValue={tabPanelValues.code}
+              previewTestId="react-artifact-preview-tab"
+              codeTestId="react-artifact-code-tab"
+            />
 
             <Stack className="react-artifact-viewer-toolbar" direction="row" spacing={1} alignItems="center">
               {onSave && !isEditMode && (

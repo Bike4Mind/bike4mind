@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
-import { Box, IconButton, Stack, Tab, TabList, TabPanel, Tabs, Typography, useTheme, Textarea } from '@mui/joy';
+import { Box, IconButton, Stack, TabPanel, Tabs, Typography, useTheme, Textarea } from '@mui/joy';
+import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { Code, Download, ContentCopy } from '@mui/icons-material';
 import ErrorIcon from '@mui/icons-material/Error';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
@@ -221,14 +222,12 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
         sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
-          <TabList>
-            <Tab value="chart" data-testid="mermaid-chart-tab">
-              Chart
-            </Tab>
-            <Tab value="source" data-testid="mermaid-source-tab">
-              Source
-            </Tab>
-          </TabList>
+          <ArtifactModeTabs
+            previewValue="chart"
+            codeValue="source"
+            previewTestId="mermaid-chart-tab"
+            codeTestId="mermaid-source-tab"
+          />
 
           {/* Actions */}
           <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
