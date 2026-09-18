@@ -78,9 +78,24 @@ export const ImageSizeSchema = z.union([
 export type OpenAIImageSize = z.infer<typeof OpenAIImageSizeSchema> | string;
 export type ImageSizeFromSchema = z.infer<typeof ImageSizeSchema>;
 
+// 'auto' is accepted but priced at the GPT-Image CEILING tier (the same as an explicit 'high'),
+// because OpenAI chooses the render effort per request and image credits are held once, before
+// the call, with no reconciliation afterwards. On gpt-image-2 @1024x1024 that is $0.211 rather
+// than the $0.053 a mid-tier request costs. Pass an explicit tier to pay for that tier.
 export const OPENAI_IMAGE_QUALITIES = ['standard', 'hd', 'low', 'medium', 'high', 'auto'] as const;
 export const OpenAIImageQualitySchema = z.enum(OPENAI_IMAGE_QUALITIES);
 export type OpenAIImageQuality = z.infer<typeof OpenAIImageQualitySchema>;
+
+/**
+ * The tiers offered to the LLM in the image_generation tool schema: every accepted quality
+ * except 'auto', whose price the model cannot reason about (see the note above). Omitting the
+ * field is how a tool call defers to the user's saved preference, at that preference's price.
+ *
+ * Deliberately narrower than OPENAI_IMAGE_QUALITIES, which stays the API contract - an existing
+ * caller sending 'auto' keeps working, it is simply priced honestly.
+ */
+export const TOOL_SELECTABLE_IMAGE_QUALITIES: readonly Exclude<OpenAIImageQuality, 'auto'>[] =
+  OPENAI_IMAGE_QUALITIES.filter((quality): quality is Exclude<OpenAIImageQuality, 'auto'> => quality !== 'auto');
 
 export const OPENAI_IMAGE_STYLES = ['vivid', 'natural'] as const;
 export const OpenAIImageStyleSchema = z.enum(OPENAI_IMAGE_STYLES);
@@ -140,6 +155,7 @@ export const OpenAIImageGenerationInput = z.object({
     z.union([z.enum(ALL_IMAGE_MODELS), z.string().regex(/^local-image\/(?=.*\S)[\w.:/ -]+$/)])
   ),
   n: z.number().min(1).max(10).optional(),
+  // 'auto' is valid here and bills at the ceiling tier - see OPENAI_IMAGE_QUALITIES.
   quality: OpenAIImageQualitySchema.optional(),
   response_format: z.enum(['b64_json', 'url']).optional(),
   size: ImageSizeSchema.nullable().optional(),

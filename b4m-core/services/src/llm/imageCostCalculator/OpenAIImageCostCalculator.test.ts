@@ -152,7 +152,6 @@ describe('OpenAIImageCostCalculator', () => {
       describe(model, () => {
         it('prices "auto" at the high tier, not the medium default', () => {
           expect(calculator.getCost({ model, quality: 'auto', size: '1024x1024' })).toBe(high1024);
-          expect(calculator.getCost({ model, quality: 'auto', size: '1024x1024' })).not.toBe(medium1024);
         });
 
         it('prices "auto" at the high tier for every known size', () => {
@@ -162,6 +161,7 @@ describe('OpenAIImageCostCalculator', () => {
 
         it('prices "auto" at the high tier when the size falls back to 1024x1024', () => {
           expect(calculator.getCost({ model, quality: 'auto', size: undefined })).toBe(high1024);
+          expect(calculator.getCost({ model, quality: 'auto', size: null })).toBe(high1024);
           expect(calculator.getCost({ model, quality: 'auto', size: '1440x810' })).toBe(high1024);
         });
 

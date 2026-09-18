@@ -25,7 +25,8 @@ type PriceKey = `${Tier}_${KnownSize}`;
 
 const DEFAULT_TIER: Tier = 'medium';
 // OpenAI picks the render effort for `quality: 'auto'` per request and never tells us which
-// tier it used, so we bill the ceiling it could have rendered. Under-billing is unrecoverable
+// tier it used, so we bill the ceiling it could have rendered. The prose counterpart of this
+// constant lives in OpenAIImageService.toGptImageQuality (utils), which cannot import it. Under-billing is unrecoverable
 // (the credit hold is set once, before the call, and never reconciled); over-billing an
 // 'auto' request the user opted into is the survivable side of that trade.
 const AUTO_TIER: Tier = 'high';

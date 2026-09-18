@@ -47,8 +47,10 @@ function isGptImageQuality(value: unknown): value is GptImageQuality {
  * diverge, the user is charged one tier and rendered another.
  *
  * 'auto' is the one value deliberately forwarded unresolved: OpenAI picks the effort per
- * request, so the calculator prices it at its AUTO_TIER ceiling rather than pretending to
- * know the tier. Do not "fix" that by pinning 'auto' here without repricing it there.
+ * request, so the services-side calculator prices it at the highest tier it could render
+ * rather than pretending to know the tier. Do not "fix" that by pinning 'auto' here without
+ * repricing it there. (Named symbols are left out on purpose - services depends on utils, not
+ * the reverse, so nothing in this package can import or rename-track them.)
  */
 export function toGptImageQuality(quality?: string | null): GptImageQuality | undefined {
   const mapped = quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;

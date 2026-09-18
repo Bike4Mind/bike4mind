@@ -183,19 +183,17 @@ describe('image_generation effective-arg precedence (tool call vs client imageCo
 
   // #2889 taught the OpenAI layer to map standard/hd, but the schema still advertised only
   // those two, so "generate it at low quality" could not be expressed at all.
-  it('exposes the real GPT-image quality tiers in the tool schema', () => {
+  //
+  // #2899 then removed 'auto': it bills at the ceiling tier because OpenAI picks the effort per
+  // request, so the model must not be able to reach for it - omitting the field is the way to
+  // defer to the user's saved preference, and that costs whatever that preference costs.
+  //
+  // Pinned exactly rather than with arrayContaining/not.toContain: a future value added to
+  // OPENAI_IMAGE_QUALITIES would reach the model unreviewed under a looser assertion.
+  it('exposes exactly the model-selectable GPT-image quality tiers in the tool schema', () => {
     const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
     const quality = toolSchema.parameters.properties.quality;
-    expect(quality.enum).toEqual(expect.arrayContaining(['low', 'medium', 'high']));
-  });
-
-  // #2899: 'auto' bills at the ceiling tier because OpenAI picks the effort per request, so the
-  // model must not be able to reach for it - omitting the field is the way to defer to the
-  // user's saved preference, and that costs whatever that preference costs.
-  it('does not offer "auto" quality in the tool schema', () => {
-    const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
-    const quality = toolSchema.parameters.properties.quality;
-    expect(quality.enum).not.toContain('auto');
+    expect(quality.enum).toEqual(['standard', 'hd', 'low', 'medium', 'high']);
   });
 });
 
