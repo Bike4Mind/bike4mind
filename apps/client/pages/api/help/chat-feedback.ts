@@ -2,12 +2,14 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { HelpEventModel } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
+import { HELP_FEEDBACK_RATINGS } from '@bike4mind/common';
+import { routeHelpCommentToFeedback, syncRoutedVerdict } from '@server/utils/helpFeedbackRouting';
 import { z } from 'zod';
 
 const ChatFeedbackSchema = z.object({
   chatQuestion: z.string().min(1).max(2000),
   chatAnswer: z.string().min(1).max(10000),
-  rating: z.enum(['helpful', 'not_helpful']),
+  rating: z.enum(HELP_FEEDBACK_RATINGS),
   comment: z.string().max(1000).optional(),
 });
 
@@ -30,15 +32,19 @@ const handler = baseApi()
     }
 
     const { chatQuestion, chatAnswer, rating, comment } = parsed.data;
+    // Trimmed for the same reason as the article route: a whitespace-only note would otherwise
+    // take the comment branch, be dropped by the router, and skip the verdict sync below.
+    const writtenComment = comment?.trim();
 
+    // The behavior half (the question/answer pair and the thumbs) stays here; the comment is
+    // human-written and routes to Feedback below. Both stores carry the same 90-day TTL.
+    //
     // Always try to dedup: update a recent chat feedback entry from the same
     // user+question+answer within the last 10 minutes. Rating is NOT in the match
     // filter so users can change their rating without creating duplicates.
     const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
-    const updateFields: Partial<Pick<typeof parsed.data, 'rating' | 'comment'>> = { rating };
-    if (comment) updateFields.comment = comment;
 
-    const updated = await HelpEventModel.findOneAndUpdate(
+    const revised = await HelpEventModel.findOneAndUpdate(
       {
         type: 'chat_feedback',
         userId,
@@ -46,24 +52,38 @@ const handler = baseApi()
         chatAnswer,
         createdAt: { $gte: tenMinutesAgo },
       },
-      { $set: updateFields },
+      { $set: { rating } },
       { sort: { createdAt: -1 }, new: true }
     );
-    if (updated) {
-      return res.status(200).json({ success: true });
+
+    const event =
+      revised ??
+      (await HelpEventModel.create({
+        type: 'chat_feedback',
+        userId,
+        chatQuestion,
+        chatAnswer,
+        rating,
+      }));
+
+    if (writtenComment) {
+      // No slug: help chat has no article. The question and answer are free text and stay on the
+      // TTL'd event that `eventId` points at rather than being copied onto the permanent report.
+      await routeHelpCommentToFeedback({
+        submitter: { id: userId, username: req.user?.username, email: req.user?.email },
+        comment: writtenComment,
+        // No verdict, for the same reason as the article route: the router reads it off the event
+        // at write time rather than taking this request's older read.
+        helpContext: { eventId: event.id, surface: 'chat' },
+        logger: req.logger,
+      });
+    } else if (rating) {
+      // Same two-site verdict as the article route - see syncRoutedVerdict. No reportType: help
+      // chat has no article to flag as outdated.
+      await syncRoutedVerdict({ eventId: event.id, userId });
     }
 
-    // No recent entry to update; create a new event
-    await HelpEventModel.create({
-      type: 'chat_feedback',
-      userId,
-      chatQuestion,
-      chatAnswer,
-      rating,
-      comment,
-    });
-
-    res.status(201).json({ success: true });
+    res.status(revised ? 200 : 201).json({ success: true });
   });
 
 export default handler;

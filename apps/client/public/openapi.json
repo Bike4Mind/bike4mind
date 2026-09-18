@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Bike4Mind API",
-    "version": "8.0.0",
-    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n- `hearth:read`\n- `hearth:write`\n- `optihashi:read`\n- `optihashi:compute`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
+    "version": "10.0.0",
+    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n- `hearth:read`\n- `hearth:write`\n- `optihashi:read`\n- `optihashi:compute`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
     "contact": {
       "name": "Bike4Mind",
       "url": "https://your-deployment.example.com"
@@ -70,6 +70,62 @@
         "example": {
           "error": "Missing or invalid toolName",
           "request_id": "abc-123"
+        }
+      },
+      "sendChatMessage200PollResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "stopped",
+              "running",
+              "done"
+            ]
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "message",
+              "oob",
+              "error",
+              "system",
+              "voice_transcript"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "spend_cap_exceeded"
+            ]
+          },
+          "reply": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "replies": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "description": "Outcome fields of the quest polled at `GET /api/quests/{id}` after this ACK. A finished turn that failed is `status: \"done\"` with `type: \"error\"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: \"error\"`, present only for a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. `QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but that rejection is caught before a quest exists and surfaces as a synchronous 422 on `/api/embed/chat` instead - it can never appear here. Most `type: \"error\"` turns - an abort, a provider timeout or overload, a recovered stuck quest - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. `type`/`errorCode` separate a recovered from a timeout with partial content keeps `type: \"message\"` even though it did not finish. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.",
+        "example": {
+          "id": "664f1c2b9a1e4d0012ab34cd",
+          "status": "done",
+          "type": "error",
+          "errorCode": "insufficient_credits",
+          "reply": "You're out of credits. This request needs about 12 credits, but only 3 are available."
         }
       },
       "sendChatMessageResponse200": {
@@ -1630,7 +1686,7 @@
       "post": {
         "operationId": "sendChatMessage",
         "summary": "Send a chat message",
-        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: \"error\"`, since the ACK was already sent. A terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: \"error\"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for every classified failure class (an abort, a provider timeout, a recovered stuck quest, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` reaches this poll path - a spend-cap-exceeded rejection is checked before a quest exists and surfaces as a synchronous 422 on `/api/embed/chat` instead. A caller must treat `type: \"error\"` OR a terminal `status: \"stopped\"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "AI"
         ],
@@ -1654,7 +1710,7 @@
         },
         "responses": {
           "200": {
-            "description": "Message accepted. The default (async) path returns this queued ACK. With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.",
+            "description": "Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/quests/{id}` (see the `sendChatMessage200PollResult` schema), which reports a failed turn as `type: \"error\"` plus an `errorCode` classifier. With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1704,6 +1760,11 @@
                 "schema": {
                   "type": "integer"
                 }
+              }
+            },
+            "x-poll-result": {
+              "schema": {
+                "$ref": "#/components/schemas/sendChatMessage200PollResult"
               }
             }
           },
@@ -3167,7 +3228,7 @@
       "post": {
         "operationId": "createCompletion",
         "summary": "Create a chat completion",
-        "description": "OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). Authenticate with an API key (`b4m_live_`) or a JWT.\n\nBILLING FAILURES. Headers are flushed before authentication or pricing, so unlike the JSON surfaces this endpoint has no pre-stream `422` + `errorCode: \"insufficient_credits\"` to pair with: credit exhaustion ALWAYS arrives as the in-band `error` event, whether it is caught by the reservation before the first token or by settlement mid-generation. Branch on that event's `code` (`insufficient_credits` - buy credits; `spend_cap_exceeded` - the owner is solvent but this key hit its admin-set ceiling, so raise the cap), never on `message`, which is prose and may change. `code` is absent on unclassified failures.",
+        "description": "OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. The terminal event carries `stopReason`; treat `max_tokens` as a TRUNCATED reply rather than a complete one, and note that omitting `max_tokens` on the request lets the server size the output ceiling for the model (recommended for reasoning models, which spend thinking tokens inside that ceiling). A message `content` may be a string or an array of parts; image parts are accepted in OpenAI Chat (`image_url`), OpenAI Responses (`input_image`) or Anthropic (`image` with a `source`) form and are translated to whatever the target model speaks. Authenticate with an API key (`b4m_live_`) or a JWT.\n\nBILLING FAILURES. Headers are flushed before authentication or pricing, so unlike the JSON surfaces this endpoint has no pre-stream `422` + `errorCode: \"insufficient_credits\"` to pair with: credit exhaustion ALWAYS arrives as the in-band `error` event, whether it is caught by the reservation before the first token or by settlement mid-generation. Branch on that event's `code` (`insufficient_credits` - buy credits; `spend_cap_exceeded` - the owner is solvent but this key hit its admin-set ceiling, so raise the cap), never on `message`, which is prose and may change. `code` is absent on unclassified failures.",
         "tags": [
           "AI"
         ],

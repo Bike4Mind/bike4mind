@@ -51,13 +51,16 @@ import {
   lakeMemoryFacts,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MAX_SCORED_CHUNKS,
+  FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_SETTING_KEYS,
+  backgroundScoreOf,
   compareForcedRetrievalRank,
   cosineFloorPctForSpace,
   forcedRetrievalRelativeCutoff,
+  forcedRetrievalSpreadCutoff,
   LAKE_RECALL_K_DEFAULT,
   DATALAKE_TAG_PREFIX,
   materializePromptMetaSession,
@@ -222,7 +225,15 @@ interface DatabaseAdapters {
   // for its fallback tagger's prefix-overlap check.
   dataLakes?: Pick<
     IDataLakeRepository,
-    'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById' | 'find'
+    | 'findActiveByUserTags'
+    | 'findActiveByUserTagsAndEntitlements'
+    | 'findByDatalakeTag'
+    | 'findById'
+    | 'find'
+    // Required, not optional, and that is the point: it is the anchor for the ownership-supersession
+    // read that narrows the retrieval creator arm, so every host that can retrieve has to wire it
+    // rather than silently degrade to bare creator provenance.
+    | 'findIdsCreatedBy'
   >;
   /**
    * Access-grant lookup shared by two independent optional features:
@@ -597,20 +608,21 @@ export class MementoFeature implements ChatCompletionFeature {
     this.logger.log('📚 Retrieving relevant mementos using vector similarity');
 
     // Neither `minSimilarity` nor `embeddingModel`: BOTH are properties of the embedding space, and
-    // `getRelevantMementos` is the single place that resolves it (from the `defaultEmbeddingModel`
-    // setting). The 0.75 that used to sit here was fitted to ada-002 and would have rejected every
-    // memento in existence the moment that setting moved.
+    // `getRelevantMementos` is the single place that resolves it - now a compile-time pin
+    // (`MEMENTO_EMBEDDING_ID`), not the `defaultEmbeddingModel` admin setting. The 0.75 that used to
+    // sit here was fitted to ada-002 and would have rejected every memento in existence the moment
+    // that setting moved.
     //
     // MUST STAY IN SYNC with `getFirstIterationMementosPreamble.ts` (agent mode), which also passes
-    // neither. Passing `embeddingFactory.getDefaultEmbeddingModel()` here is what made the two modes
-    // disagree: the factory resolves by CREDENTIAL PRIORITY (an OpenAI key alone returns ada-002) and
-    // never reads the setting - see `resolveEmbeddingModelFallback` below, which says the same thing
-    // about naming a space. That argument does not merely pick a floor, it picks the space the QUERY
-    // is embedded in, so with the setting on 3-small and an OpenAI key present this embedded the
-    // query in ada-002, scored it against 3-small memento vectors, and then gated the resulting
-    // cross-space noise on ada-002's 75. Memory went dark on the exact path this table exists to keep
-    // lit. Resolving in one place makes the comparison in-space and the two modes agree by
-    // construction.
+    // neither. Passing `embeddingFactory.getDefaultEmbeddingModel()` here used to be what made the
+    // two modes disagree: the factory resolved by CREDENTIAL PRIORITY (an OpenAI key alone returns
+    // ada-002) and never read the setting - see `resolveEmbeddingModelFallback` below, which says the
+    // same thing about naming a space. That argument did not merely pick a floor, it picked the space
+    // the QUERY was embedded in, so with the setting on 3-small and an OpenAI key present this
+    // embedded the query in ada-002, scored it against 3-small memento vectors, and then gated the
+    // resulting cross-space noise on ada-002's 75. Memory went dark on the exact path this table
+    // exists to keep lit. Resolving in one pinned place makes the comparison in-space and the two
+    // modes agree by construction, independent of whatever the admin setting says.
     const relevantMementos = await getRelevantMementos(
       this.user.id,
       message,
@@ -1782,10 +1794,11 @@ function resolveForcedRetrievalAbsoluteFloor(configuredPct: number, space: strin
 }
 
 /**
- * The two relevance floors a forced-retrieval turn grades candidates against, as raw cosine
+ * The three relevance floors a forced-retrieval turn grades candidates against, as raw cosine
  * fractions (the settings store whole-number percents; the conversion happens once, in the
- * resolver). Resolved together because they are read in one query and are only meaningful as a
- * pair: the relative one ranks, the absolute one rejects.
+ * resolver). Resolved together because they are read in one query and are only meaningful as a set:
+ * the absolute one rejects, the relative one ranks against the turn's top score, and the spread one
+ * ranks against the turn's own top-to-median span.
  */
 interface ForcedRetrievalFloors {
   /**
@@ -1798,6 +1811,12 @@ interface ForcedRetrievalFloors {
    * disables it, which is what an embedding space with no measured floor resolves to.
    */
   minSimilarity: number;
+  /**
+   * Fraction of the turn's top-to-background span a candidate may fall below the top score and
+   * still be kept. `0` disables it, which is the shipped default - see
+   * `FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT` for why the mechanism ships inert.
+   */
+  spreadFloor: number;
 }
 
 /**
@@ -1809,6 +1828,8 @@ interface ForcedRetrievalConfig {
   charBudget: number;
   relativeFloor: number;
   configuredAbsolutePct: number;
+  /** Ready to use for the same reason the relative floor is: a fraction of the turn's own span. */
+  spreadFloor: number;
 }
 
 /** An above-floor candidate. The vector is dropped so each batch can be freed after scoring. */
@@ -2266,7 +2287,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    */
   private async resolveForcedRetrievalConfig(): Promise<ForcedRetrievalConfig> {
     try {
-      const { charBudget, relative, absolute } = await this.readForcedRetrievalSettings();
+      const { charBudget, relative, absolute, spread } = await this.readForcedRetrievalSettings();
       return {
         charBudget: positiveIntOr(
           charBudget as string | number | null | undefined,
@@ -2278,6 +2299,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           relative,
           FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
           'forcedRetrievalRelativeFloorPct',
+          this.logger
+        ),
+        // A fraction of the turn's own span, so like the relative floor it is space-independent and
+        // resolves here rather than waiting on the embedding-model vote.
+        spreadFloor: forcedRetrievalFloorFraction(
+          spread,
+          FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT,
+          'forcedRetrievalSpreadFloorPct',
           this.logger
         ),
         // Stays a PERCENT here, unresolved: turning it into a cosine needs the embedding space,
@@ -2295,9 +2324,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // reading this line needs to know which levers stopped being honored.
       this.logger.warn(
         `\u{1F512} Forced retrieval: failed to read forcedRetrievalCharBudget / ` +
-          `forcedRetrievalRelativeFloorPct / forcedRetrievalMinSimilarityPct; falling back to ` +
+          `forcedRetrievalRelativeFloorPct / forcedRetrievalMinSimilarityPct / ` +
+          `forcedRetrievalSpreadFloorPct; falling back to ` +
           `${FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT} chars, ` +
-          `${FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT}% relative / ${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% absolute`,
+          `${FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT}% relative / ` +
+          `${FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT}% absolute / ` +
+          `${FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT}% spread`,
         err
       );
       return {
@@ -2306,6 +2338,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // The coded default, which then resolves per embedding space like any unchosen value - so a
         // settings outage cannot reintroduce the ada-002 floor in a space it does not belong to.
         configuredAbsolutePct: FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
+        spreadFloor: FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT / 100,
       };
     }
   }
@@ -2348,6 +2381,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     charBudget: unknown;
     relative: unknown;
     absolute: unknown;
+    spread: unknown;
   }> {
     const { db, user } = this.chatCompletion;
     if (db.scopedSettings) {
@@ -2367,6 +2401,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           charBudget: values.forcedRetrievalCharBudget,
           relative: values.forcedRetrievalRelativeFloorPct,
           absolute: values.forcedRetrievalMinSimilarityPct,
+          spread: values.forcedRetrievalSpreadFloorPct,
         };
       } catch (err) {
         // Fall THROUGH rather than rethrow: the outer catch lands on coded defaults, which would
@@ -2378,12 +2413,13 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         );
       }
     }
-    const [charBudget, relative, absolute] = await Promise.all([
+    const [charBudget, relative, absolute, spread] = await Promise.all([
       db.adminSettings.getSettingsValue('forcedRetrievalCharBudget'),
       db.adminSettings.getSettingsValue('forcedRetrievalRelativeFloorPct'),
       db.adminSettings.getSettingsValue('forcedRetrievalMinSimilarityPct'),
+      db.adminSettings.getSettingsValue('forcedRetrievalSpreadFloorPct'),
     ]);
-    return { charBudget, relative, absolute };
+    return { charBudget, relative, absolute, spread };
   }
 
   private noContextMessages(finding: ForcedRetrievalNoContextFinding): IMessage[] {
@@ -2539,6 +2575,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         charBudget: forcedRetrievalCharBudget,
         relativeFloor,
         configuredAbsolutePct,
+        spreadFloor,
       } = await this.resolveForcedRetrievalConfig();
 
       // Only a non-lake tag survives: a `datalake:` entry (the shape a lake-created session sets
@@ -2639,6 +2676,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const floors: ForcedRetrievalFloors = {
         relativeFloor,
         minSimilarity: resolveForcedRetrievalAbsoluteFloor(configuredAbsolutePct, embeddingModel, this.logger),
+        spreadFloor,
       };
 
       // Withhold foreign-model files before any chunk is loaded, mirroring the shared ranking
@@ -2703,6 +2741,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const mismatchedFileIds = new Set<string>();
       let topScore = -1;
       let scoredCount = 0;
+      // Every finite score compared this turn, for the spread floor's background statistic. Bounded
+      // by FORCED_RETRIEVAL_MAX_SCANNED_CHUNKS, so this is a few tens of KB at worst. Collected even
+      // while the floor is off: `backgroundScore` is recorded on promptMeta either way, and the
+      // production distribution it exposes is what a value for the floor has to be chosen from.
+      const scannedScores: number[] = [];
 
       batches: for (let i = 0; i < scanCandidates.length; i += FORCED_RETRIEVAL_FILE_BATCH_SIZE) {
         const batchIds = scanCandidates.slice(i, i + FORCED_RETRIEVAL_FILE_BATCH_SIZE).map(f => f.id);
@@ -2755,6 +2798,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             // it would slip past the floor and sort ahead of real hits.
             if (!Number.isFinite(score)) continue;
             scoredCount++;
+            scannedScores.push(score);
             if (score > topScore) topScore = score;
             if (score < floors.minSimilarity) continue;
             pool.push({ id: row.id, fabFileId: row.fabFileId, text: row.text, score });
@@ -2810,6 +2854,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           chars: 0,
           preRelativeFloorCandidates: pool.length,
           postRelativeFloorCandidates: pool.length,
+          // Same reasoning as the pair above, extended: no score was ever computed, so there is no
+          // background to report either - omitted rather than zeroed, like `topScore`.
+          postSpreadFloorCandidates: pool.length,
         });
         return this.noContextMessages('unavailable');
       }
@@ -2833,11 +2880,36 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // absolute floor if anything does, and the in-scan trim retains the highest scores - so the
       // best candidate always survives its own cutoff. No new empty-handed exit is introduced.
       const relativeCutoff = forcedRetrievalRelativeCutoff(topScore, floors.relativeFloor);
-      const scored = relativeCutoff > 0 ? ranked.filter(c => c.score >= relativeCutoff) : ranked;
-      if (scored.length < ranked.length) {
+      const afterRelative = relativeCutoff > 0 ? ranked.filter(c => c.score >= relativeCutoff) : ranked;
+      if (afterRelative.length < ranked.length) {
         this.logger.log(
-          `\u{1F512} Forced retrieval: relative floor kept ${scored.length}/${ranked.length} candidates ` +
+          `\u{1F512} Forced retrieval: relative floor kept ${afterRelative.length}/${ranked.length} candidates ` +
             `(cutoff ${relativeCutoff.toFixed(3)} = ${(floors.relativeFloor * 100).toFixed(0)}% of ${topScore.toFixed(3)})`
+        );
+      }
+
+      // The spread floor, last of the three and the only one whose cut is a property of the
+      // QUESTION rather than of where the band sits: it measures down from this turn's top score in
+      // units of that turn's own top-to-median span, so a sharply-answered question admits few
+      // candidates and a diffusely-answered one admits many. See
+      // FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT for why that is the gate the other two cannot be.
+      //
+      // Its background is the median of EVERY score compared, not of `ranked` - `ranked` has already
+      // been gated by the absolute floor and truncated by the pool cap, and a background read off it
+      // would move with the very floor this one exists to be independent of.
+      //
+      // Runs after the relative floor purely so the two `pre`/`post` counts on promptMeta stay a
+      // chain; the two cuts are independent, and applying both is an AND either way. Cannot empty
+      // the turn at any setting: the cutoff never exceeds `topScore`, which the head of `ranked`
+      // meets, and `ranked` is non-empty here.
+      const backgroundScore = backgroundScoreOf(scannedScores);
+      const spreadCutoff = forcedRetrievalSpreadCutoff(topScore, backgroundScore, floors.spreadFloor);
+      const scored = spreadCutoff > 0 ? afterRelative.filter(c => c.score >= spreadCutoff) : afterRelative;
+      if (scored.length < afterRelative.length) {
+        this.logger.log(
+          `\u{1F512} Forced retrieval: spread floor kept ${scored.length}/${afterRelative.length} candidates ` +
+            `(cutoff ${spreadCutoff.toFixed(3)} = ${(floors.spreadFloor * 100).toFixed(0)}% of the way from ` +
+            `top ${topScore.toFixed(3)} down to background ${(backgroundScore ?? 0).toFixed(3)})`
         );
       }
 
@@ -2918,12 +2990,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           // pair exists to expose. The exit is reached only when `sections` came out empty. The
           // walk above skips a candidate only via its budget `break`, and `used` starts at 0
           // against a budget positiveIntOr floors at 1, so the FIRST candidate is always pushed:
-          // an empty `sections` means an empty `scored`. And the top candidate always survives its
-          // own relative cutoff (`>=` against `topScore * fraction`, fraction <= 1), so an empty
-          // `scored` means an empty `ranked`. Nothing cleared the ABSOLUTE floor, which is exactly
-          // what the `chunks: 0` beside it says. If that budget ever admits 0, this breaks.
+          // an empty `sections` means an empty `scored`. And the top candidate always survives
+          // BOTH per-turn cutoffs - the relative one is `topScore * fraction` with fraction <= 1,
+          // the spread one interpolates between the top and the background and so never exceeds the
+          // top - meaning an empty `scored` means an empty `ranked`. Nothing cleared the ABSOLUTE
+          // floor, which is exactly what the `chunks: 0` beside it says. If that budget ever admits
+          // 0, this breaks.
           preRelativeFloorCandidates: ranked.length,
-          postRelativeFloorCandidates: scored.length,
+          postRelativeFloorCandidates: afterRelative.length,
+          postSpreadFloorCandidates: scored.length,
+          ...(backgroundScore !== undefined ? { backgroundScore } : {}),
         });
         // Names the floor and the space, not just the top score. An off-topic question and a floor
         // sitting above the corpus's entire band produce the identical outcome here - every score
@@ -3001,11 +3077,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         chunks: sections.length,
         chars: used,
         ...(scoredCount > 0 ? { topScore } : {}),
-        // `pre - post` is the relative floor's own effect and nothing else. Do NOT read
-        // `pre - chunks` as the floor: the char budget trims the same walk, so that gap is the two
-        // trimmers summed - and `chunks` sums across surfaces while this pair is forced-only.
+        // `pre - post` is the relative floor's own effect and `post - postSpread` the spread
+        // floor's, each and nothing else. Do NOT read `pre - chunks` as a floor: the char budget
+        // trims the same walk, so that gap is all three trimmers summed - and `chunks` sums across
+        // surfaces while these counts are forced-only.
         preRelativeFloorCandidates: ranked.length,
-        postRelativeFloorCandidates: scored.length,
+        postRelativeFloorCandidates: afterRelative.length,
+        postSpreadFloorCandidates: scored.length,
+        ...(backgroundScore !== undefined ? { backgroundScore } : {}),
       });
 
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".

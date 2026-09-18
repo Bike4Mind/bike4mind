@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/db-core",
-  "version": "0.6.1",
+  "version": "0.6.3",
   "publishConfig": {
     "access": "restricted"
   },

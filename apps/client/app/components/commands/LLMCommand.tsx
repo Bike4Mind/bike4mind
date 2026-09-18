@@ -45,6 +45,8 @@ export type LLMCommandArgs = {
   organizationId?: string | null;
   questMaster?: LLMApiRequestBody['questMaster'];
   researchMode?: LLMApiRequestBody['researchMode'];
+  /** Suppresses the server's own tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
+  skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
   imageConfig?: GenerateImageToolCall;
   audioConfig?: AudioGenerationToolCall;
   deepResearchConfig?: {
@@ -120,6 +122,7 @@ export async function handleLLMCommand(
       enableAgents,
       questMaster,
       researchMode,
+      skipAutoOffers,
       imageConfig,
       audioConfig,
       deepResearchConfig,
@@ -169,6 +172,7 @@ export async function handleLLMCommand(
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
+      skipAutoOffers: _omitSkipAutoOffers,
       imageConfig: _omitImageConfig,
       audioConfig: _omitAudioConfig,
       agentMode: _omitAgentMode,
@@ -239,6 +243,7 @@ export async function handleLLMCommand(
         organizationId,
         ...(questMaster ? { questMaster } : {}),
         ...(researchMode ? { researchMode } : {}),
+        ...(skipAutoOffers ? { skipAutoOffers: true } : {}),
         // Include mcpServers if it's an array (even empty - means user disabled all)
         ...(Array.isArray(mcpServers) ? { mcpServers } : {}),
         ...(deepResearchConfig ? { deepResearchConfig } : {}),

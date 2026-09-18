@@ -60,6 +60,25 @@ describe('FocusedFeedbackCard', () => {
   });
 
   /**
+   * The chip has its own unit cover; what this pins is that a consuming surface actually mounts it
+   * off a real record's `helpContext`. Dropping the render site is otherwise invisible - a help
+   * report keeps rendering, just with no sign of which article it came from.
+   */
+  it('renders the help context chip for a routed help report', async () => {
+    mocks.getFeedbackByIdFromServer.mockResolvedValue(
+      record({
+        subject: 'help',
+        helpContext: { eventId: 'evt-1', surface: 'article', slug: 'features/export', reportType: 'outdated' },
+      })
+    );
+
+    renderCard();
+
+    expect(await screen.findByTestId('feedback-help-context-chip')).toHaveTextContent('features/export');
+    expect(screen.getByTestId('feedback-help-outdated-chip')).toBeInTheDocument();
+  });
+
+  /**
    * The read route answers the same NotFoundError for a deleted record and for one belonging to
    * someone else, so the card must not render either as an empty success. Both a null body and a
    * rejected request have to land on the same visible notice.

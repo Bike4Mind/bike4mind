@@ -19,6 +19,8 @@ import {
   buildFeedbackDeliverySkippedMetrics,
   recordChunkRescueSweep,
   recordWebhookDeliveryFailure,
+  recordSessionReuseRevoked,
+  recordSessionRecovered,
 } from './cloudwatch';
 
 // A metric identified by a subset of dimensions is a DISTINCT CloudWatch stream from the
@@ -278,5 +280,33 @@ describe('recordChunkRescueSweep', () => {
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0].input.MetricData).toHaveLength(6);
+  });
+});
+
+// infra/alarms.ts reads these metric names as hardcoded strings across a package boundary; a rename
+// here would silently strand the alarms on a stream that never receives data and so looks healthy.
+describe('Lumina5/AuthSecurity helpers', () => {
+  beforeEach(() => {
+    send.mockReset().mockResolvedValue(undefined);
+  });
+
+  it('recordSessionReuseRevoked emits SessionReuseRevoked to Lumina5/AuthSecurity', async () => {
+    await recordSessionReuseRevoked();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const { Namespace, MetricData } = send.mock.calls[0][0].input;
+    expect(Namespace).toBe('Lumina5/AuthSecurity');
+    expect(MetricData).toHaveLength(1);
+    expect(MetricData[0]).toMatchObject({ MetricName: 'SessionReuseRevoked', Value: 1, Unit: StandardUnit.Count });
+  });
+
+  it('recordSessionRecovered emits SessionRecovered to Lumina5/AuthSecurity', async () => {
+    await recordSessionRecovered();
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const { Namespace, MetricData } = send.mock.calls[0][0].input;
+    expect(Namespace).toBe('Lumina5/AuthSecurity');
+    expect(MetricData).toHaveLength(1);
+    expect(MetricData[0]).toMatchObject({ MetricName: 'SessionRecovered', Value: 1, Unit: StandardUnit.Count });
   });
 });
