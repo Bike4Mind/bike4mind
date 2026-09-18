@@ -61,6 +61,18 @@ describe('OrganizationAnalysisSection', () => {
     useOrgFeedbackReport.mockReturnValue(state({ data: REPORT }));
   });
 
+  it('defaults the draft window to exactly 30 calendar days, inclusive of both ends', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-18T15:00:00.000Z'));
+
+    renderSection();
+
+    expect(screen.getByTestId('org-analysis-date-from')).toHaveValue('2026-08-20');
+    expect(screen.getByTestId('org-analysis-date-to')).toHaveValue('2026-09-18');
+
+    vi.useRealTimers();
+  });
+
   it('asks before it aggregates - nothing is fetched until the report is run', () => {
     renderSection();
 
@@ -101,7 +113,7 @@ describe('OrganizationAnalysisSection', () => {
     renderSection();
     run();
 
-    expect(screen.getByTestId('org-analysis-total')).toHaveTextContent('3 reports from 2 members');
+    expect(screen.getByTestId('org-analysis-total')).toHaveTextContent('3 reports from 1 contributors');
     expect(screen.getByTestId('org-analysis-by-member')).toHaveTextContent('Alice');
     expect(screen.getByTestId('org-analysis-acl-only')).toHaveTextContent('Bob');
     expect(screen.queryByTestId('org-analysis-stamp-only')).not.toBeInTheDocument();

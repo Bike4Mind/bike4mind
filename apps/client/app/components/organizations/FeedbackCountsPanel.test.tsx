@@ -62,6 +62,12 @@ describe('FeedbackCountsPanel drill-down', () => {
     useOrgFeedbackItem.mockReturnValue({ ...idle, data: ITEM });
   });
 
+  it('counts the headline by contributors, not the full reconciled membership', () => {
+    renderPanel();
+
+    expect(screen.getByTestId('org-analysis-total').textContent).toBe('3 reports from 1 contributors');
+  });
+
   it('does not fetch any rows until a count is opened', () => {
     renderPanel();
 

@@ -91,7 +91,7 @@ const FeedbackCountsPanel: FC<{ organizationId: string; range: OrgFeedbackRange 
   return (
     <Stack spacing={2} data-testid="org-analysis-counts">
       <Typography level="h3" data-testid="org-analysis-total">
-        {report.totals.count} reports from {membership.memberCount} members
+        {report.totals.count} reports from {report.byMember.length} contributors
       </Typography>
 
       <Stack direction="row" spacing={2} flexWrap="wrap" useFlexGap>
