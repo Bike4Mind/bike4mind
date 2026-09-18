@@ -33,7 +33,7 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
         mimeType: 'text/html',
         successMessage: 'Saved HTML as file',
       })}
-      actions={{ copy: true, save: true, codeToggle: true }}
+      actions={{ copy: true, save: true }}
       // Users asking for an "article" should see the article, not a wall of HTML.
       defaultRenderedView
       stats={

@@ -41,7 +41,7 @@ const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
           mimeType: 'text/plain',
           successMessage: 'Saved diagram as file',
         })}
-        actions={{ copy: true, save: true, codeToggle: true }}
+        actions={{ copy: true, save: true }}
         defaultRenderedView
         stats={
           <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>

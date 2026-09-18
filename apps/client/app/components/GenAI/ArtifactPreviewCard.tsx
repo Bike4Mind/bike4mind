@@ -5,10 +5,8 @@ import {
   OpenInFullOutlined as ExpandIcon,
   ContentCopyOutlined as CopyIcon,
   SaveOutlined as SaveIcon,
-  PlayArrowOutlined as PreviewIcon,
   ExpandMoreOutlined as ExpandMoreIcon,
   ExpandLessOutlined as ExpandLessIcon,
-  CodeOutlined as CodeViewIcon,
 } from '@mui/icons-material';
 import useSessionLayout, {
   setSessionLayout,
@@ -22,7 +20,6 @@ import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { brand } from '@client/app/utils/themes/colors';
-import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
 import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
@@ -87,7 +84,7 @@ export interface ArtifactPreviewCardProps {
   renderPreview?: () => ReactNode;
   /** Overrides the default monospace source box (e.g. to syntax-highlight). */
   renderSource?: () => ReactNode;
-  actions?: { copy?: boolean; save?: boolean; codeToggle?: boolean };
+  actions?: { copy?: boolean; save?: boolean };
   /** Expand straight into the live render (HTML) rather than the source (React). */
   defaultRenderedView?: boolean;
   /**
@@ -140,22 +137,22 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
 
   const hasPreview = !!renderPreview;
   const hasSource = !!source || !!renderSource;
-  // A code toggle only means something when there are two views to flip between.
-  const showCodeToggle = !!actions.codeToggle && hasPreview && hasSource;
 
   // Cards mount expanded: the body is the thing the reader asked for. This used to seed from
   // the `enableArtifacts` flag, which gates artifact GENERATION and has never gated their
   // display -- so it only ever hid the artifact behind a click for the users who had the
   // feature switched on, which is the admin default.
   const [expandedState, setIsExpanded] = useState(true);
-  const [showRenderedPreview, setShowRenderedPreview] = useState(defaultRenderedView);
 
   const isExpanded = collapsible ? expandedState : true;
 
   const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
 
+  // Which body the card shows is fixed per type now: switching between the render and the
+  // source is the viewer's job, where there is room to read either (ArtifactModeTabs). In a
+  // transcript the card shows the type's own default and nothing else.
   // With no source to fall back to, the live render is the only body there is.
-  const renderedView = hasPreview && (hasSource ? showRenderedPreview : true);
+  const renderedView = hasPreview && (hasSource ? defaultRenderedView : true);
 
   // A card that expands into a live render shows no body at all once collapsed. Its source
   // teaser is the first three lines of the file, which for HTML is DOCTYPE boilerplate that
@@ -332,30 +329,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           </Stack>
 
           <Box sx={{ flex: 1 }} />
-
-          {/* The toggle leads the action group so it grows leftward: copy/save/viewer keep
-              the same right-anchored positions whether or not a type has a toggle. */}
-          {showCodeToggle && (
-            // The card's own onClick collapses it, so swallow clicks meant for the toggle.
-            <Box
-              onClick={e => e.stopPropagation()}
-              data-testid={`${testIdPrefix}-artifact-preview-btn`}
-              sx={{ display: 'flex', flexShrink: 0 }}
-            >
-              <SwitchSelector
-                options={[
-                  { value: 'preview', icon: PreviewIcon, tooltip: 'Show preview' },
-                  { value: 'code', icon: CodeViewIcon, tooltip: 'Show code' },
-                ]}
-                value={showRenderedPreview ? 'preview' : 'code'}
-                onChange={next => {
-                  setIsExpanded(true);
-                  setShowRenderedPreview(next === 'preview');
-                }}
-                size="sm"
-              />
-            </Box>
-          )}
 
           {/* One block so the plain icons space and shrink together. Matches
               CodeArtifactPreviewCard - keep the two in sync. */}

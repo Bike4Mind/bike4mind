@@ -32,7 +32,7 @@ const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ art
         mimeType: 'text/typescript',
         successMessage: 'Saved React component as TypeScript file',
       })}
-      actions={{ copy: true, save: true, codeToggle: true }}
+      actions={{ copy: true, save: true }}
       defaultRenderedView={false}
       stats={
         <>
