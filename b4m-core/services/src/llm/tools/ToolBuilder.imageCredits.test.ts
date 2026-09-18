@@ -72,11 +72,15 @@ describe('ToolBuilder.reserveImageCredits - edit_image billing targets', () => {
     expect(record.mock.calls[0][0]).toMatchObject({ model: ImageModels.FLUX_PRO_FILL });
   });
 
-  it('scales the reservation by n', async () => {
+  // Named image_generation deliberately: this estimator is shared, and n only means something
+  // on the generation side. The edit_image tool now reserves IMAGES_PER_EDIT_REQUEST whatever
+  // was asked for (see its own tests), because edit() returns a single image - so clamping n
+  // HERE would silently stop generation billing for images it really does render.
+  it('scales the reservation by n, which only generation can honor', async () => {
     const { builder, toolCreditsMap } = makeBuilder();
 
     await builder.reserveImageCredits(
-      'edit_image',
+      'image_generation',
       { model: ImageModels.FLUX_PRO_FILL, n: 3 },
       true,
       null,
@@ -88,7 +92,7 @@ describe('ToolBuilder.reserveImageCredits - edit_image billing targets', () => {
     // Mirrors the production order of operations (per-image USD scaled by n, THEN
     // converted): 0.05 * 3 is not exactly 0.15 in binary float, and usdToCredits rounds
     // up, so usdToCredits(0.05 * 3) is one credit above usdToCredits(0.15).
-    expect(toolCreditsMap.get('edit_image')).toEqual([usdToCredits(0.05 * 3)]);
+    expect(toolCreditsMap.get('image_generation')).toEqual([usdToCredits(0.05 * 3)]);
   });
 
   it('prices the OpenAI edit fallback too, so neither fallback branch can throw', async () => {

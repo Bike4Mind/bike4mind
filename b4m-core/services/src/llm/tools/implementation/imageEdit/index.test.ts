@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
-import { ImageModels, type GenerateImageToolCall } from '@bike4mind/common';
+import { ImageModels, IMAGES_PER_EDIT_REQUEST, type GenerateImageToolCall } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
 
 // The agent-tool edit_image path must run the SAME moderation gate the
@@ -309,5 +309,65 @@ describe('imageEditTool - credit reservation names the rendered model', () => {
       'edit_image',
       expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_MINI })
     );
+  });
+});
+
+describe('imageEditTool - credit reservation counts the image that renders', () => {
+  beforeEach(() => {
+    mockEditSpy.mockReset();
+    // Same stop-after-dispatch trick as the block above: onStart fires before the provider call.
+    mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+  });
+
+  // onStart is the single payload both credit rails bill from - ToolBuilder.reserveImageCredits
+  // for classic chat and estimateGeneratedMediaUsd for agent mode - so an n above 1 reaching it
+  // overcharged on both, for images edit() has never been able to return.
+  it('reserves one image however many the model asks for', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_1_5,
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it warmer', n: 5 });
+
+    expect(context.onStart).toHaveBeenCalledWith('edit_image', expect.objectContaining({ n: IMAGES_PER_EDIT_REQUEST }));
+  });
+
+  it('reserves one image however many the image settings ask for', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_1_5,
+      n: 5,
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it warmer' });
+
+    expect(context.onStart).toHaveBeenCalledWith('edit_image', expect.objectContaining({ n: IMAGES_PER_EDIT_REQUEST }));
+  });
+
+  it('does not offer the provider an image count it would render and we would discard', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_1_5,
+    } as GenerateImageToolCall);
+
+    await toolFn({ image: PNG_DATA_URL, prompt: 'make it warmer', n: 5 });
+
+    expect(mockEditSpy.mock.calls[0][2]).not.toHaveProperty('n');
+  });
+
+  it('stops advertising an image count the edit path cannot honor', () => {
+    const { toolSchema } = imageEditTool.implementation(createFakeContext(), {
+      model: ImageModels.GPT_IMAGE_1_5,
+    } as GenerateImageToolCall);
+    const { properties } = toolSchema.parameters as { properties: Record<string, unknown> };
+
+    expect(properties).not.toHaveProperty('n');
   });
 });
