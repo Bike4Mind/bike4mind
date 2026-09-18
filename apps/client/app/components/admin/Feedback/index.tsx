@@ -263,7 +263,10 @@ const FeedbackTab: React.FC = () => {
                         // status checkboxes rather than under a heading like the org dropdown), and
                         // Joy drops a top-level aria-label - only the button slot reaches the DOM.
                         slotProps={{
-                          button: { 'aria-label': 'Filter by subject', 'data-testid': 'feedback-subject-filter-btn' },
+                          button: {
+                            'aria-label': 'Filter by subject',
+                            'data-testid': 'feedback-subject-filter-select',
+                          },
                         }}
                       >
                         <Option value={FEEDBACK_SUBJECT_ANY}>All Subjects</Option>
