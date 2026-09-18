@@ -90,6 +90,7 @@ export async function recordToolOperationalUsage(
         costUsd,
         latencyMs: Date.now() - startTime,
         source: 'system',
+        finishReason: completionInfo?.stopReason,
       },
       { db: { usageEvents: context.db.usageEvents, adminSettings: context.db.adminSettings }, logger: context.logger }
     );

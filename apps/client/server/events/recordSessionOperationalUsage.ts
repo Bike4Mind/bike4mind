@@ -78,6 +78,7 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
         costUsd,
         latencyMs: Date.now() - args.startTime,
         source: 'system',
+        finishReason: completionInfo?.stopReason,
       },
       {
         db: {

@@ -17,6 +17,7 @@
 import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import type { IIterationBilling } from '@bike4mind/database';
 import type { UsageEventStatus } from '@bike4mind/common';
+import { buildEarlyStopStamp } from '@bike4mind/services/llm';
 
 /** Last-billed cumulative totals; mutated in place as iterations settle. */
 export type BillingCounters = {
@@ -33,6 +34,8 @@ export type BillingCheckpoint = {
   totalOutputTokens: number;
   totalCacheReadTokens: number;
   totalCacheWriteTokens: number;
+  /** Provider stop reason for this iteration's completion, e.g. from `AgentCheckpoint.finishReason`. */
+  finishReason?: string;
 };
 
 /** Per-iteration token deltas (this iteration's contribution). */
@@ -322,6 +325,9 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
   }
   // Dual-write usage event: analytics only, never billing. One per billed iteration.
   // Tokens + cost include the tool spend so margin reporting sees true COGS.
+  // Same refund key the chat/CLI completion paths record: an iteration that ended
+  // truncated or degenerate still bills normally (the provider tokens were spent) but
+  // must not read as a clean, fully-valued success. See buildEarlyStopStamp.
   effects.recordUsageEvent({
     inputTokens: chargedInputTokens,
     outputTokens: chargedOutputTokens,
@@ -329,7 +335,7 @@ export async function billIteration(params: BillIterationParams): Promise<void> 
     cacheWriteTokens: chargedCacheWriteTokens,
     costUsd: costDelta,
     creditsCharged: credits,
-    status: 'ok',
+    status: buildEarlyStopStamp(checkpoint.finishReason)?.usageEventStatus ?? 'ok',
     latencyMs: effects.now() - startTime,
   });
   // Persist AGENT-ONLY token deltas: these are summed on resume to rebuild cumulative

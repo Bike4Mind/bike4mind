@@ -54,6 +54,8 @@ export interface SubagentUsageMeta {
   outputTokens: number;
   cacheReadTokens: number;
   cacheWriteTokens: number;
+  /** Provider stop reason of the subagent's last completion; see `AgentResult.completionInfo.finishReason`. */
+  finishReason?: string;
 }
 
 /**
@@ -373,6 +375,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
                   outputTokens,
                   cacheReadTokens,
                   cacheWriteTokens,
+                  finishReason: result.completionInfo.finishReason,
                 }
               : undefined
           );

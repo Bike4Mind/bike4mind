@@ -330,6 +330,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
         errors: countFor('error'),
         timeouts: countFor('timeout'),
         refusals: countFor('refusal'),
+        degenerates: countFor('degenerate'),
       },
       byModel: result?.byModel ?? [],
       byAccount: result?.byAccount ?? [],

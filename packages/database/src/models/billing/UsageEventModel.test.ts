@@ -752,7 +752,7 @@ describe('UsageEventRepository', () => {
       expect(summary.byAccount[0]).toMatchObject({ ownerId: 'org-embed', cogsUsd: 50, creditsCharged: 0 });
     });
 
-    it('computes p50/p95 latency and error/timeout/refusal counts', async () => {
+    it('computes p50/p95 latency and error/timeout/refusal/degenerate counts', async () => {
       // Latencies 100..500; p50 ~= 300, p95 ~= 500 under approximate percentile.
       for (const latencyMs of [100, 200, 300, 400, 500]) {
         await record({ latencyMs, status: 'ok' });
@@ -760,10 +760,13 @@ describe('UsageEventRepository', () => {
       await record({ status: 'error', latencyMs: 600 });
       await record({ status: 'timeout', latencyMs: 700 });
       await record({ status: 'refusal', latencyMs: 800 });
+      // A stream aborted as degenerate: billed like any other call, counted on its own so
+      // the dashboard cannot read a repetition loop as a healthy success.
+      await record({ status: 'degenerate', latencyMs: 900 });
 
       const summary = await usageEventRepository.spendSummary();
 
-      expect(summary.status).toEqual({ total: 8, errors: 1, timeouts: 1, refusals: 1 });
+      expect(summary.status).toEqual({ total: 9, errors: 1, timeouts: 1, refusals: 1, degenerates: 1 });
       expect(summary.latency.p50).toBeGreaterThanOrEqual(200);
       expect(summary.latency.p50).toBeLessThanOrEqual(500);
       expect(summary.latency.p95).toBeGreaterThanOrEqual(summary.latency.p50);
@@ -814,7 +817,7 @@ describe('UsageEventRepository', () => {
       expect(summary.totals).toEqual({ requests: 0, cogsUsd: 0, creditsCharged: 0 });
       expect(summary.activeAccounts).toBe(0);
       expect(summary.latency).toEqual({ p50: 0, p95: 0 });
-      expect(summary.status).toEqual({ total: 0, errors: 0, timeouts: 0, refusals: 0 });
+      expect(summary.status).toEqual({ total: 0, errors: 0, timeouts: 0, refusals: 0, degenerates: 0 });
       expect(summary.byModel).toEqual([]);
       expect(summary.byAccount).toEqual([]);
       expect(summary.dailyCost).toEqual([]);

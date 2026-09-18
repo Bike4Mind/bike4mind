@@ -15,6 +15,7 @@ import {
 import type { Logger } from '@bike4mind/observability';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { isOperationalBillingEnabled } from './isOperationalBillingEnabled';
+import { buildEarlyStopStamp } from '../llm/earlyStopStamp';
 
 /** The non-chat AI spend this helper records: operational-model calls and query embeddings. */
 export type OperationalUsageFeature = Extract<UsageEventFeature, 'operations' | 'embedding'>;
@@ -42,6 +43,8 @@ export interface RecordOperationalUsageParams {
   costUsd: number;
   latencyMs?: number;
   source?: CompletionSource;
+  /** Provider stop reason of the underlying completion, e.g. `CompletionInfo.stopReason`. */
+  finishReason?: string;
   /**
    * Skip the credit-deduction path entirely, regardless of the billOperationalUsage/
    * enforceCredits admin settings. For spend already governed by its own dedicated
@@ -164,7 +167,8 @@ export async function recordOperationalUsage(
     settledBasis: 'local',
     costUsd: params.costUsd,
     creditsCharged,
-    status: 'ok',
+    // Same refund key the chat/CLI completion paths record: see buildEarlyStopStamp.
+    status: buildEarlyStopStamp(params.finishReason)?.usageEventStatus ?? 'ok',
     latencyMs: params.latencyMs,
     // Same origin as this call's ledger write above (params.source ?? 'system').
     source: params.source ?? 'system',

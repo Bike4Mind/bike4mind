@@ -19,7 +19,9 @@ import crypto from 'crypto';
  */
 const PAYLOAD_VERSIONS = {
   modelMetrics: 1,
-  spend: 1,
+  // Bumped for the degenerateRate KPI: a stale v1 payload would hide the new field for
+  // up to the cache's 12h TTL after deploy.
+  spend: 2,
   eventMetrics: 1,
   modelStats: 1,
 } as const;

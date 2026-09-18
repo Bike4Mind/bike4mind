@@ -40,6 +40,7 @@ import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
 import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
+import { buildEarlyStopStamp } from './llm/earlyStopStamp';
 
 export interface CompletionParams {
   userId: string;
@@ -587,7 +588,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         cacheWriteTokens: finalCacheCreationTokens,
         costUsd: finalUsdCost,
         creditsCharged,
-        status: 'ok',
+        // Same refund key the web chat path records: a stream aborted as degenerate is
+        // priced normally (the provider tokens were spent) but must not read as a clean,
+        // fully-valued success. See buildEarlyStopStamp.
+        status: buildEarlyStopStamp(finalStopReason)?.usageEventStatus ?? 'ok',
         latencyMs: Date.now() - completionStartTime,
       })
       .catch(err => logger?.warn?.('Failed to record usage event', err));
