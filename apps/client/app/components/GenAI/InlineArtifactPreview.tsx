@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Box, CircularProgress, Typography } from '@mui/joy';
-import { ExpandMoreOutlined as ExpandMoreIcon, ExpandLessOutlined as ExpandLessIcon } from '@mui/icons-material';
 import { type ReactArtifact, type HtmlArtifact, type SvgArtifact } from '@bike4mind/common';
 import DOMPurify from 'dompurify';
+import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
 import { sanitizeHtmlForIframe, absolutizeBlessedScripts } from '@client/app/utils/htmlSanitizer';
 import { useReactArtifactSandbox } from '@client/app/hooks/useReactArtifactSandbox';
 
@@ -360,38 +360,11 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
         sets `pointer-events: none` over the render so a click opens the viewer, so this
         opts back in - and stops the click there rather than opening the viewer under it. */}
       {htmlOverflows && (
-        <Typography
-          component="button"
-          type="button"
-          level="body-sm"
-          data-testid="inline-artifact-show-more-btn"
-          endDecorator={
-            htmlExpanded ? <ExpandLessIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />
-          }
-          onClick={e => {
-            e.stopPropagation();
-            setHtmlExpanded(v => !v);
-          }}
-          sx={{
-            mt: '16px',
-            p: 0,
-            border: 'none',
-            background: 'none',
-            cursor: 'pointer',
-            // Centred under the body it reveals, like the reply-level Show More.
-            display: 'flex',
-            alignItems: 'center',
-            mx: 'auto',
-            color: 'text.primary',
-            fontWeight: 500,
-            gap: '2px',
-            // Joy icons read --Icon-color, so the chevron does not follow `color` on its
-            // own - it has to be named here or it stays the default grey.
-            '&:hover': { textDecoration: 'underline', '--Icon-color': 'var(--joy-palette-text-primary)' },
-          }}
-        >
-          {htmlExpanded ? 'Show less' : 'Show more'}
-        </Typography>
+        <ShowMoreButton
+          expanded={htmlExpanded}
+          onToggle={() => setHtmlExpanded(v => !v)}
+          testId="inline-artifact-show-more-btn"
+        />
       )}
     </>
   );

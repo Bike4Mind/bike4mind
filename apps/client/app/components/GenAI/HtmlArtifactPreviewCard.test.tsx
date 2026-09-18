@@ -39,6 +39,10 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 vi.mock('@client/app/utils/filesAPICalls', () => ({ createFabFileOnServerWithUpload: vi.fn() }));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  // The card reads maxVisibleLines/autoCollapseContent to bound a long source body.
+  useUserSettings: () => ({ settings: { autoCollapseContent: true, maxVisibleLines: 25 } }),
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import HtmlArtifactPreviewCard from './HtmlArtifactPreviewCard';

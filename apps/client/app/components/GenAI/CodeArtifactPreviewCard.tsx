@@ -2,14 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
   OpenInFullOutlined as ExpandIcon,
-  ExpandMoreOutlined as ExpandMoreIcon,
-  ExpandLessOutlined as ExpandLessIcon,
   ContentCopyOutlined as CopyIcon,
   SaveOutlined as SaveIcon,
 } from '@mui/icons-material';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
-import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
@@ -17,6 +15,7 @@ import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { toast } from 'sonner';
 import { brand } from '@client/app/utils/themes/colors';
+import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
 import { actionButtonSx } from './ArtifactPreviewCard';
 
 interface CodeArtifactData {
@@ -34,7 +33,6 @@ interface CodeArtifactPreviewCardProps {
 }
 
 const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data, artifactId, onExpand }) => {
-  const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
   const { currentSession, setCurrentSession, currentSessionId } = useSessions();
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { setWorkBenchFiles } = useWorkBenchActions();
@@ -154,7 +152,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
         position: 'relative',
         overflow: 'visible',
         borderWidth: 1,
-        borderColor: isSelected ? 'primary.500' : theme.palette.reading.cardLine,
+        borderColor: theme.palette.reading.cardLine,
         transition: 'all 0.2s ease-in-out',
         '&:hover': {
           transform: 'translateY(-2px)',
@@ -309,38 +307,12 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             </Box>
 
             {needsTruncation && (
-              <Typography
-                component="button"
-                type="button"
-                level="body-sm"
-                data-testid="code-artifact-show-more-btn"
-                endDecorator={
-                  showFullBody ? <ExpandLessIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />
-                }
-                onClick={e => {
-                  e.stopPropagation();
-                  setShowFullBody(v => !v);
-                }}
-                sx={{
-                  mt: '16px',
-                  p: 0,
-                  border: 'none',
-                  background: 'none',
-                  cursor: 'pointer',
-                  // Centred under the body it reveals, like the reply-level Show More.
-                  display: 'flex',
-                  alignItems: 'center',
-                  mx: 'auto',
-                  color: 'text.primary',
-                  fontWeight: 500,
-                  gap: '2px',
-                  // Joy icons read --Icon-color, so the chevron does not follow `color` on
-                  // its own - it has to be named here or it stays the default grey.
-                  '&:hover': { textDecoration: 'underline', '--Icon-color': 'var(--joy-palette-text-primary)' },
-                }}
-              >
-                {showFullBody ? 'Show less' : `Show ${codeLines.length - settings.maxVisibleLines} more lines`}
-              </Typography>
+              <ShowMoreButton
+                expanded={showFullBody}
+                onToggle={() => setShowFullBody(v => !v)}
+                collapsedLabel={`Show ${codeLines.length - settings.maxVisibleLines} more lines`}
+                testId="code-artifact-show-more-btn"
+              />
             )}
           </>
         )}

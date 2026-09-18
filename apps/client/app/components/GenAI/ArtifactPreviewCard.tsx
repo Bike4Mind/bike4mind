@@ -1,16 +1,14 @@
-import React, { type ReactNode } from 'react';
+import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Box, Button, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import type { Theme } from '@mui/joy';
+import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
+import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import {
   OpenInFullOutlined as ExpandIcon,
   ContentCopyOutlined as CopyIcon,
   SaveOutlined as SaveIcon,
 } from '@mui/icons-material';
-import useSessionLayout, {
-  setSessionLayout,
-  setSelectedArtifactVersion,
-  type ArtifactData,
-} from '@client/app/hooks/useSessionLayout';
+import { setSessionLayout, setSelectedArtifactVersion, type ArtifactData } from '@client/app/hooks/useSessionLayout';
 import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { KnowledgeType } from '@bike4mind/common';
@@ -27,6 +25,9 @@ import type { ArtifactType } from '@bike4mind/common';
 // Shared by copy / save / open-in-viewer: 18px glyphs dimmed to 70%, brightening to full
 // on hover, over the same hover fill the sidebar items use (notebooklist.hoverBg) rather
 // than Joy's default plain-variant hover. Joy icons take their color from --Icon-color.
+/** How much of a non-rendering artifact's source a card shows before offering the rest. */
+const SOURCE_COLLAPSED_MAX_HEIGHT = 360;
+
 export const actionButtonSx = (theme: Theme) => ({
   // Joy sizes an IconButton from --IconButton-size; `width`/`height` alone lose to its
   // own minWidth/minHeight, so all three are needed to get off the 32px `sm` default.
@@ -86,6 +87,12 @@ export interface ArtifactPreviewCardProps {
   /** Expand straight into the live render (HTML) rather than the source (React). */
   defaultRenderedView?: boolean;
   /**
+   * Whether the card prints its source when it has no render to show. Off for a type whose
+   * source is not for reading - a lattice model is machine-serialised JSON, and the card's
+   * stats line says far more about it than its first 360px of text.
+   */
+  inlineSource?: boolean;
+  /**
    * Types whose body IS the artifact (SVG) set this false: the graphic is always shown,
    * the chevron is dropped, and clicking the card does not collapse it.
    */
@@ -118,6 +125,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   renderSource,
   actions = {},
   defaultRenderedView = true,
+  inlineSource = true,
   onExpand,
 }) => {
   const { currentSession, setCurrentSession, currentSessionId } = useSessions();
@@ -139,8 +147,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   // display -- so it only ever hid the artifact behind a click for the users who had the
   // feature switched on, which is the admin default.
 
-  const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
-
   // Which body the card shows is fixed per type now: switching between the render and the
   // source is the viewer's job, where there is room to read either (ArtifactModeTabs). In a
   // transcript the card shows the type's own default and nothing else.
@@ -150,7 +156,25 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   // A card that expands into a live render shows no body at all once collapsed. Its source
   // teaser is the first three lines of the file, which for HTML is DOCTYPE boilerplate that
   // reads identically on every artifact; source-primary types (React, code, Python) keep it.
-  const showSourceBody = hasSource && !renderedView;
+  const showSourceBody = hasSource && !renderedView && inlineSource;
+
+  // The source body is bounded by measured height, not by line count. A lattice model is
+  // serialised without indentation, so it is ONE line that wraps into hundreds of pixels -
+  // counting lines sees nothing to truncate. Measuring catches both that and an ordinary
+  // long script. Honours the reader's auto-collapse switch, like the code card.
+  const { settings } = useUserSettings();
+  const [showFullSource, setShowFullSource] = useState(false);
+  const [sourceOverflows, setSourceOverflows] = useState(false);
+  const sourceRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = sourceRef.current;
+    if (!el || !settings.autoCollapseContent) {
+      setSourceOverflows(false);
+      return;
+    }
+    setSourceOverflows(el.scrollHeight > SOURCE_COLLAPSED_MAX_HEIGHT + 4);
+  }, [source, settings.autoCollapseContent]);
+  const sourceIsBounded = sourceOverflows && !showFullSource;
 
   const handleOpenInViewer = (e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -248,7 +272,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         position: 'relative',
         overflow: 'visible',
         borderWidth: 1,
-        borderColor: isSelected ? 'primary.500' : theme.palette.reading.cardLine,
+        borderColor: theme.palette.reading.cardLine,
         transition: 'all 0.2s ease-in-out',
         cursor: 'pointer',
         '&:hover': {
@@ -414,8 +438,10 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                 fontSize: '11px',
                 lineHeight: 1.4,
                 color: 'text.secondary',
-                overflow: 'auto',
+                overflow: 'hidden',
+                maxHeight: sourceIsBounded ? `${SOURCE_COLLAPSED_MAX_HEIGHT}px` : undefined,
               }}
+              ref={sourceRef}
               data-testid={`${testIdPrefix}-artifact-source`}
             >
               <Typography level="body-xs" sx={{ fontFamily: 'inherit', whiteSpace: 'pre-wrap' }}>
@@ -424,6 +450,14 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             </Box>
           )
         ) : null}
+
+        {showSourceBody && !renderSource && sourceOverflows && (
+          <ShowMoreButton
+            expanded={showFullSource}
+            onToggle={() => setShowFullSource(v => !v)}
+            testId={`${testIdPrefix}-artifact-show-more-btn`}
+          />
+        )}
 
         {/* Stop propagation so clicks inside the modal don't reach the Card's onClick and
             open the viewer behind the open dialog. */}
