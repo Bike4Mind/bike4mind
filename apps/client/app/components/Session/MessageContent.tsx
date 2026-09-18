@@ -47,6 +47,7 @@ import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLak
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { usePromptMetaInspector } from '@client/app/components/Session/PromptMetaInspector';
+import { AnswerFeedbackPrompt } from '@client/app/components/Session/AnswerFeedbackPrompt';
 import HiveIcon from '@mui/icons-material/Hive';
 import ContextBreakdownModal from '@client/app/components/Session/ContextBreakdownModal';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
@@ -186,7 +187,7 @@ const MessageContent: React.FC<ContentProps> = memo(
     // Backs the persistent Report button's "already reported" state and the in-thread
     // "Reported" annotation - see hooks/data/feedback.ts for why this is safe to call once per
     // rendered message.
-    const { data: sessionFeedback = [] } = useGetFeedbackBySessionId(sessionId);
+    const { data: sessionFeedback = [], isLoading: isFeedbackLoading } = useGetFeedbackBySessionId(sessionId);
     const isReported = useMemo(
       () => isPersistedMessage && sessionFeedback.some(item => item.questId === messageData.id),
       [isPersistedMessage, sessionFeedback, messageData.id]
@@ -909,6 +910,27 @@ const MessageContent: React.FC<ContentProps> = memo(
               </Box>
             );
           })()}
+        {/* Proactive feedback ask, gated on the turn's own diagnosis (#1873). Restricted to one
+            turn: that is the frequency cap that matters, since a notebook whose retrieval is broken
+            produces a whole column of failing turns. Note `isLastMessage` is last of the RENDERED
+            list, which buildChatHistory has already filtered by search text and the pinned-only
+            toggle - so under an active filter this can be an older turn rather than the newest one.
+            Still exactly one banner either way, and still a genuinely failing turn, so the cap
+            holds; it is only the "the turn you are still thinking about" part that weakens.
+            Rendered here rather than inside either action row so the desktop/mobile branches below
+            cannot drift into showing it twice or not at all. */}
+        {!isProcessingPrompt && isLastMessage && (
+          <AnswerFeedbackPrompt
+            promptMeta={messageData.promptMeta}
+            questId={isPersistedMessage ? messageData.id : undefined}
+            // Fail-closed while the feedback read is still in flight: an already-reported turn
+            // must never flash this banner on a fresh page load just because `isReported`
+            // resolved from "unknown" to "false" before the real read landed.
+            isReported={isReported || isFeedbackLoading}
+            onReport={handleOpenBugReportModal}
+          />
+        )}
+
         <Box
           className="message-footer"
           sx={{
