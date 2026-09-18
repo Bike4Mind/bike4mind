@@ -22,7 +22,11 @@ import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { useGetSubscriptionPlans, useStripePortal } from '@client/app/hooks/data/stripe';
 import dayjs from 'dayjs';
 import { useTheme } from '@mui/joy';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import {
+  isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
+  SubscriptionOwnerType,
+} from '@client/lib/subscriptions/types';
 import { useToggleShowCreditsUsed } from '@client/app/hooks/data/user';
 
 function centsToDollars(cents: number | undefined) {
@@ -178,8 +182,13 @@ const SubscriptionCard = () => {
   const stripePortal = useStripePortal();
   const { currentUser } = useUser();
   const subscriptions = useGetSubscriptions({ enabled: true });
-  const subscription = (subscriptions.data || []).find(sub => sub.status === 'active');
+  // Non-terminal, not just active: a past_due user still holds this plan, and this
+  // is the gate that decides whether the corner button opens Stripe's portal (where
+  // they fix the card or cancel) or the upgrade modal.
+  const userSubscriptions = subscriptions.data || [];
+  const subscription = pickDisplayedSubscription(userSubscriptions);
   const subscriptionPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === subscription?.priceId);
+  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
   const plans = useGetSubscriptionPlans();
   const priceMap = useMemo(() => {
     return plans.data?.reduce(
@@ -248,13 +257,17 @@ const SubscriptionCard = () => {
                 sx={{
                   fontSize: '14px',
                   lineHeight: '14px',
-                  color: subscription.canceledAt ? 'warning.400' : 'neutral.500',
+                  color: paymentIssue ? 'danger.500' : subscription.canceledAt ? 'warning.400' : 'neutral.500',
                 }}
               >
-                {t(subscription.canceledAt ? 'subscriptions.expires_on' : 'subscriptions.renews_on', {
-                  // TODO: Pass locale to dayjs, as well as dynamically import dayjs/locales for the user's locale from useLanguage
-                  date: dayjs(subscription?.periodEndsAt).format('MMMM DD, YYYY'),
-                })}
+                {/* A delinquent plan still has a period end, so "renews on" would read
+                    as healthy - say what is actually wrong instead. */}
+                {paymentIssue
+                  ? t('subscriptions.payment_issue')
+                  : t(subscription.canceledAt ? 'subscriptions.expires_on' : 'subscriptions.renews_on', {
+                      // TODO: Pass locale to dayjs, as well as dynamically import dayjs/locales for the user's locale from useLanguage
+                      date: dayjs(subscription?.periodEndsAt).format('MMMM DD, YYYY'),
+                    })}
               </Box>
             )}
           </Box>

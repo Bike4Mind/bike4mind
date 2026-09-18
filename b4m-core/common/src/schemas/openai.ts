@@ -87,6 +87,26 @@ export const OpenAIImageStyleSchema = z.enum(OPENAI_IMAGE_STYLES);
 export type OpenAIImageStyle = z.infer<typeof OpenAIImageStyleSchema>;
 
 /**
+ * Alpha handling for gpt-image renders. `transparent` only yields real alpha when the
+ * output format also carries an alpha channel (png or webp) - OpenAI rejects it alongside
+ * jpeg. Ignored by every other provider (see OpenAIImageService.generate).
+ */
+export const OpenAIImageBackgroundSchema = z.enum(['transparent', 'opaque', 'auto']);
+export type OpenAIImageBackground = z.infer<typeof OpenAIImageBackgroundSchema>;
+
+/** Container for a generated image. `webp` is gpt-image only; BFL and Gemini take png/jpeg. */
+export const ImageOutputFormatSchema = z.enum(['png', 'jpeg', 'webp']);
+export type ImageOutputFormat = z.infer<typeof ImageOutputFormatSchema>;
+
+/**
+ * Degrade a shared output-format setting to what BFL and Gemini accept, so selecting
+ * webp for gpt-image cannot fail an unrelated render after a model switch.
+ */
+export function toNonWebpOutputFormat(format?: ImageOutputFormat | null): 'png' | 'jpeg' | null | undefined {
+  return format === 'webp' ? 'png' : format;
+}
+
+/**
  * Maps legacy/removed image model IDs to their current replacements.
  * Prevents Zod validation failures when clients send stale persisted model names.
  *
@@ -144,6 +164,7 @@ export const OpenAIImageGenerationInput = z.object({
   response_format: z.enum(['b64_json', 'url']).optional(),
   size: ImageSizeSchema.nullable().optional(),
   style: OpenAIImageStyleSchema.optional(),
+  background: OpenAIImageBackgroundSchema.nullable().optional(),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),

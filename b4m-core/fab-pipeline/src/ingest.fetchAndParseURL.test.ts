@@ -414,9 +414,11 @@ describe('fetchAndParseURL whole-body text extraction', () => {
       '<html><body>' +
       '<details><summary>History</summary><p>Changed in v2</p></details>' +
       '<nav>Home</nav><nav>About</nav>' +
-      '<button>Submit</button><button>Cancel</button>' +
+      // Deliberately NOT <button>/<select>, which are the obvious members of this tag family:
+      // those are stripped as page chrome now, so they cannot double as separator fixtures here.
+      '<hgroup>Submit</hgroup><hgroup>Cancel</hgroup>' +
       '<aside>Sidebar</aside><address>Contact us</address>' +
-      '<select><option>Alpha</option><option>Beta</option></select>' +
+      '<fieldset>Alpha</fieldset><output>Beta</output>' +
       '</body></html>';
     axiosGet.mockResolvedValueOnce(html(page));
 
@@ -485,5 +487,565 @@ describe('fetchAndParseURL whole-body text extraction', () => {
     // it reads identically to a normal fetch that parsed into real content.
     const logged = (logger.log as unknown as ReturnType<typeof vi.fn>).mock.calls.flat().join(' ');
     expect(logged).toContain('no extractable text was found');
+  });
+});
+
+describe('fetchAndParseURL page-chrome stripping', () => {
+  const html = (body: string) => ({ status: 200, data: body, headers: { 'content-type': 'text/html' } });
+  const fetchText = async (page: string) => {
+    axiosGet.mockResolvedValueOnce(html(page));
+    const result = await fetchAndParseURL('http://93.184.216.34/docs', { logger });
+    return String(result.textContent);
+  };
+
+  // Each of the four below is modeled on the markup one of the pages that motivated this actually
+  // ships, because the tell differs per site and no single rule covers them: GitHub's docs chrome is
+  // aria-hidden tooltip spans and a survey outside <main>, Tailwind's top nav is unmarked <div>s of
+  // links with no landmark anywhere, and react.dev's sandbox toolbar mixes <button>s with an <a>.
+
+  it('drops aria-hidden tooltip labels rendered beside icon buttons', async () => {
+    const page =
+      '<html><body><main>' +
+      '<div><span aria-hidden="true">Collapse sidebar</span><span aria-hidden="true">Expand sidebar</span></div>' +
+      '<p>Real prose about workflows.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Collapse sidebar');
+    expect(text).not.toContain('Expand sidebar');
+    expect(text).toContain('Real prose about workflows.');
+  });
+
+  it('extracts from <main> and leaves site header and footer chrome outside it alone', async () => {
+    const page =
+      '<html><body>' +
+      '<header role="banner"><span aria-hidden="true">Search or ask Copilot</span></header>' +
+      '<main><p>Quickstart for GitHub Actions.</p></main>' +
+      '<footer><h3>Help us make these docs great!</h3>' +
+      '<form><div role="radiogroup"><label>Yes</label><label>No</label></div></form>' +
+      '<a href="/privacy">Privacy policy</a></footer>' +
+      '</body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Quickstart for GitHub Actions.');
+    expect(text).not.toContain('Search or ask Copilot');
+    expect(text).not.toContain('Help us make these docs great');
+    expect(text).not.toContain('Privacy policy');
+    expect(text).not.toMatch(/\bYes\b/);
+    expect(text).not.toMatch(/\bNo\b/);
+  });
+
+  it('drops an unmarked nav bar of links on a page with no landmark at all', async () => {
+    const page =
+      '<html><body><div><div>' +
+      '<div><a href="/docs">Docs</a><a href="/blog">Blog</a><a href="/showcase">Showcase</a></div>' +
+      '<div><button>Search</button><kbd>Ctrl K</kbd></div>' +
+      '</div>' +
+      '<h1>Installing Tailwind CSS as a Vite plugin</h1>' +
+      '<p>It is fast, flexible, and reliable.</p>' +
+      '</body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Installing Tailwind CSS as a Vite plugin');
+    expect(text).toContain('It is fast, flexible, and reliable.');
+    expect(text).not.toContain('Docs');
+    expect(text).not.toContain('Showcase');
+    expect(text).not.toContain('Search');
+  });
+
+  it('drops a link sharing a toolbar with buttons, which a tag-based rule cannot see', async () => {
+    // The `Fork` link is chrome only because of the company it keeps: on its own an <a> is content.
+    const page =
+      '<html><body><main><article>' +
+      '<div><button>Reload</button><button>Clear</button><a href="https://codesandbox.io/x">Fork</a></div>' +
+      '<p>useState is a React Hook that lets you add a state variable.</p>' +
+      '</article></main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('useState is a React Hook that lets you add a state variable.');
+    expect(text).not.toContain('Reload');
+    expect(text).not.toContain('Clear');
+    expect(text).not.toContain('Fork');
+  });
+
+  it('KEEPS real content in <aside> and <footer>, the failure mode the naive fix causes', async () => {
+    // Dropping these tags outright is the obvious way to strip chrome and it is wrong: a pull quote
+    // in an <aside> and an author note in a <footer> are the article. Nothing here declares a
+    // <main>, so the whole document is the scope and both have to survive on their own merits.
+    const page =
+      '<html><body>' +
+      '<article><p>The main argument of the piece.</p>' +
+      '<aside><h2>Background</h2><p>A pull quote with real substance that belongs in the index.</p></aside>' +
+      '<footer><p>Written by a staff reporter covering monetary policy since 2011.</p></footer>' +
+      '</article></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('The main argument of the piece.');
+    expect(text).toContain('Background');
+    expect(text).toContain('A pull quote with real substance that belongs in the index.');
+    expect(text).toContain('Written by a staff reporter covering monetary policy since 2011.');
+  });
+
+  it('KEEPS an <aside> and <footer> that live INSIDE the declared <main>', async () => {
+    const page =
+      '<html><body>' +
+      '<header role="banner"><a href="/">Home</a><a href="/about">About</a></header>' +
+      '<main><p>The body of the article.</p>' +
+      '<aside><p>A sidebar note that expands on the argument.</p></aside>' +
+      '<footer><p>Corrections: an earlier version misstated the date.</p></footer>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('The body of the article.');
+    expect(text).toContain('A sidebar note that expands on the argument.');
+    expect(text).toContain('Corrections: an earlier version misstated the date.');
+  });
+
+  it('keeps a single short link, so an ordinary content list is not mistaken for a nav', async () => {
+    // Two controls is the threshold; one is how a real list item or a linked card reads. The <ul>
+    // holding both WOULD qualify, which is the rule doing its job on a nav - what saves this page
+    // is the rollback below, since pruning it leaves nothing at all.
+    const page =
+      '<html><body><ul>' +
+      '<li><a href="/a">Understanding GitHub Actions</a></li>' +
+      '<li><a href="/b">Using workflow templates</a></li>' +
+      '</ul></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Understanding GitHub Actions');
+    expect(text).toContain('Using workflow templates');
+  });
+
+  it('keeps a link list whose entries are prose rather than labels', async () => {
+    const page =
+      '<html><body><div>' +
+      '<a href="/a">Committing the workflow file to a branch triggers the push event and runs it.</a>' +
+      '<a href="/b">If you chose to start a pull request, you can continue and create it.</a>' +
+      '</div></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('triggers the push event');
+    expect(text).toContain('you can continue and create it');
+  });
+
+  it('rolls the pruning back rather than storing nothing for a page that IS a list of links', async () => {
+    const entries = Array.from({ length: 40 }, (_unused, index) => `<a href="/p${index}">Chapter ${index}</a>`).join(
+      ''
+    );
+    const page = `<html><body><div>${entries}</div></body></html>`;
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Chapter 0');
+    expect(text).toContain('Chapter 39');
+  });
+
+  it('prunes a nav on a page that has prose, and does NOT roll back because prose survives', async () => {
+    // The other side of the rollback: identical nav markup to the case above, one paragraph added.
+    const entries = Array.from({ length: 40 }, (_unused, index) => `<a href="/p${index}">Chapter ${index}</a>`).join(
+      ''
+    );
+    const page = `<html><body><div>${entries}</div><p>The chapter itself, in prose.</p></body></html>`;
+
+    const text = await fetchText(page);
+
+    expect(text).toBe('The chapter itself, in prose.');
+  });
+
+  it('ignores an empty <main> shell instead of extracting nothing from it', async () => {
+    // A client-rendered app can ship <main></main> with the real content elsewhere in the document.
+    const page =
+      '<html><body><main></main><div><p>Server-rendered prose that is the whole page.</p></div></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Server-rendered prose that is the whole page.');
+  });
+
+  it('does not let an aria-hidden wrapper take a whole real article down with it', async () => {
+    // The strip rule and the non-content removal used to be gated by one rollback each - here the
+    // article's ONLY container is a non-content wrapper, so nothing was left to trigger a rollback
+    // and the page extracted to "".
+    const page =
+      '<html><body><div aria-hidden="true"><article><h1>Title</h1>' +
+      '<p>The entire article body.</p></article></div></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('The entire article body.');
+  });
+
+  it('does not let a <dialog> wrapper take a whole real article down with it', async () => {
+    const page = '<html><body><dialog open><p>The whole article lives in a dialog.</p></dialog></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('The whole article lives in a dialog.');
+  });
+
+  it('rolls back both the strip AND the non-content removal together when together they empty the page', async () => {
+    // The label is what keeps the page non-empty right up until NON_CONTENT_SELECTOR removes it -
+    // after the strip is pruned first, this is a page whose only remaining text lives in a <label>.
+    const entries = Array.from({ length: 40 }, (_unused, index) => `<a href="/p${index}">Chapter ${index}</a>`).join(
+      ''
+    );
+    const page = `<html><body><div>${entries}</div><form><label>Sign in to continue reading.</label></form></body></html>`;
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Chapter 0');
+    expect(text).toContain('Sign in to continue reading.');
+  });
+
+  it('rolls back a link directory even though its footer copyright line survives on its own', async () => {
+    // A bare rollback gate ("is ANY text left") is defeated by this - the copyright line alone is
+    // enough to look like the pruning "worked", even though the page is still overwhelmingly links.
+    const entries = Array.from({ length: 40 }, (_unused, index) => `<a href="/p${index}">Chapter ${index}</a>`).join(
+      ''
+    );
+    const page = `<html><body><div>${entries}</div><footer>(c) 2024 Acme Inc</footer></body></html>`;
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Chapter 0');
+    expect(text).toContain('Chapter 39');
+  });
+
+  it('rolls back a linked list even though a short "Further reading" label survives on its own', async () => {
+    const page =
+      '<html><body><p>Further reading.</p><ul>' +
+      '<li><a href="/a">Article A</a></li><li><a href="/b">Article B</a></li>' +
+      '</ul></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Article A');
+    expect(text).toContain('Article B');
+  });
+
+  it('does not lose real content outside <main> when <main> is truthy only because of a loading placeholder', async () => {
+    const page =
+      '<html><body><main>Loading...</main>' +
+      '<article><p>The server-rendered article prose that matters.</p></article></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('The server-rendered article prose that matters.');
+  });
+
+  it('falls back to the whole document when <main> holds nothing but a nav bar', async () => {
+    const page =
+      '<html><body><main><nav><a href="/">Home</a><a href="/blog">Blog</a></nav></main>' +
+      '<div><p>Real article body that must not be lost.</p></div></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Real article body that must not be lost.');
+    expect(text).not.toContain('Home');
+    expect(text).not.toContain('Blog');
+  });
+
+  it('keeps a reference table of linked cells, which a table row can never be a nav bar for', async () => {
+    const page =
+      '<html><body><p>API reference.</p><table>' +
+      '<tr><td><a href="/useState">useState</a></td><td><a href="/hook">Hook</a></td></tr>' +
+      '<tr><td><a href="/useEffect">useEffect</a></td><td><a href="/hook2">Hook</a></td></tr>' +
+      '</table></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('API reference.');
+    expect(text).toContain('useState');
+    expect(text).toContain('useEffect');
+  });
+
+  it('drops a nav bar carrying one extra bare word alongside its links', async () => {
+    // A wordmark or a lone "Menu" span used to be enough non-control text to defeat the whole strip.
+    const page =
+      '<html><body><nav><a href="/">Home</a><a href="/docs">Docs</a><span>Menu</span></nav>' +
+      '<p>Real prose paragraph describing the article content in detail.</p></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Home');
+    expect(text).not.toContain('Docs');
+    expect(text).not.toContain('Menu');
+    expect(text).toContain('Real prose paragraph describing the article content in detail.');
+  });
+
+  it('treats a 40-character control label as still strippable, and a 41-character one as not', async () => {
+    const label40 = 'A'.repeat(40);
+    const label41 = 'A'.repeat(41);
+    const pageWith = (label: string) =>
+      `<html><body><nav><a href="/a">${label}</a><a href="/b">${label}</a></nav>` +
+      '<p>Real distinguishing prose that must survive regardless.</p></body></html>';
+
+    const textAt40 = await fetchText(pageWith(label40));
+    expect(textAt40).not.toContain(label40);
+    expect(textAt40).toContain('Real distinguishing prose that must survive regardless.');
+
+    const textAt41 = await fetchText(pageWith(label41));
+    expect(textAt41).toContain(label41);
+    expect(textAt41).toContain('Real distinguishing prose that must survive regardless.');
+  });
+
+  it('keeps a short link list whose labels are sentences rather than nav-style words', async () => {
+    // Both labels are well under the 40-character length cap, so only the sentence-punctuation
+    // clause is what disqualifies this as a strip.
+    const page =
+      '<html><body><nav><a href="/a">Yes. Go.</a><a href="/b">No. Stop.</a></nav>' +
+      '<p>Real prose that also must survive.</p></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Yes. Go.');
+    expect(text).toContain('No. Stop.');
+    expect(text).toContain('Real prose that also must survive.');
+  });
+
+  it('treats 15 characters of non-control text in a strip as still strippable, and 16 as not', async () => {
+    const pageWith = (extra: string) =>
+      `<html><body><nav><a href="/a">Home</a><a href="/b">Docs</a><span>${extra}</span></nav>` +
+      '<p>Real prose paragraph describing the article content in enough detail.</p></body></html>';
+
+    const nonControlText15 = 'A'.repeat(15);
+    const textAt15 = await fetchText(pageWith(nonControlText15));
+    expect(textAt15).not.toContain('Home');
+    expect(textAt15).not.toContain(nonControlText15);
+    expect(textAt15).toContain('Real prose paragraph describing the article content in enough detail.');
+
+    const nonControlText16 = 'A'.repeat(16);
+    const textAt16 = await fetchText(pageWith(nonControlText16));
+    expect(textAt16).toContain(nonControlText16);
+    expect(textAt16).toContain('Real prose paragraph describing the article content in enough detail.');
+  });
+
+  it('treats a control strip within the depth cap as still strippable, and one past it as not', async () => {
+    // MAX_STRIP_CONTAINER_DEPTH is 32, measured from the document root: a <nav> wrapped in N
+    // levels sits at depth N + 2 (html -> body -> N wrappers -> nav), so 30 wrappers land the nav
+    // exactly at the cap and 31 land it one past it. Wrapped in <article>, not <div> - a <div>
+    // wrapper with no text of its own and the nav's two links as its only descendants would
+    // itself qualify as a (shallow, well-within-cap) control strip and get removed as a whole,
+    // never exercising the nav's own depth at all. <article> is not a STRIP_CONTAINER_SELECTOR
+    // tag, so it only adds depth without being a candidate itself.
+    const wrap = (depth: number, inner: string) => '<article>'.repeat(depth) + inner + '</article>'.repeat(depth);
+    const nav = '<nav><a href="/a">Home</a><a href="/b">Docs</a></nav>';
+    const prose = '<p>Real prose paragraph describing the article content in detail.</p>';
+
+    const atCap = `<html><body>${wrap(30, nav)}${prose}</body></html>`;
+    const textAtCap = await fetchText(atCap);
+    expect(textAtCap).not.toContain('Home');
+    expect(textAtCap).not.toContain('Docs');
+    expect(textAtCap).toContain('Real prose paragraph describing the article content in detail.');
+
+    // Deliberate, documented gap (see MAX_STRIP_CONTAINER_DEPTH): a genuine nav bar nested past the
+    // cap is never evaluated as a strip candidate at all, so it survives untouched.
+    const pastCap = `<html><body>${wrap(31, nav)}${prose}</body></html>`;
+    const textPastCap = await fetchText(pastCap);
+    expect(textPastCap).toContain('Home');
+    expect(textPastCap).toContain('Docs');
+    expect(textPastCap).toContain('Real prose paragraph describing the article content in detail.');
+  });
+
+  it('extracts a deeply nested document without throwing or hanging', async () => {
+    // Regression guard only: pins that a 500-level document still completes within a generous
+    // budget, so a future change that reintroduces unbounded recursion or a pathological loop
+    // fails loudly. It is NOT a measurement of the depth cap's benefit - the bound is loose enough
+    // that the uncapped implementation also clears it; `MAX_STRIP_CONTAINER_DEPTH`'s own cost
+    // tradeoff is pinned by the depth-cap boundary test above instead.
+    const depth = 500;
+    const page =
+      '<html><body>' +
+      '<div>'.repeat(depth) +
+      '<p>Deeply nested real content.</p>' +
+      '</div>'.repeat(depth) +
+      '</body></html>';
+
+    const start = Date.now();
+    const text = await fetchText(page);
+    const elapsed = Date.now() - start;
+
+    expect(text).toContain('Deeply nested real content.');
+    expect(elapsed).toBeLessThan(3000);
+  });
+
+  it('does not drop inline links, and the words between them, out of a sentence', async () => {
+    // A <span> wrapping two short links in the middle of a paragraph is structurally identical to a
+    // toolbar (two controls, little non-control text) - only its prose ancestry tells them apart.
+    const page =
+      '<html><body><main><p>This behaviour is specified in ' +
+      '<span><a href="/rfc">RFC 9110</a> and <a href="/errata">its errata</a></span>' +
+      ', which every conforming client must implement.</p></main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toBe(
+      'This behaviour is specified in RFC 9110 and its errata, which every conforming client must implement.'
+    );
+  });
+
+  it('does not drop inline links out of a sentence wrapped in a non-prose tag', async () => {
+    // Same shape as the <p>-wrapped case above, but the sentence's own container is a <div>,
+    // <section> or <td> - none of which is in PROSE_ANCESTOR_SELECTOR. Only the tag-agnostic
+    // adjacent-text-node check (hasAdjacentProseText) protects these; the ancestor-tag check alone
+    // does not see them.
+    const sentence = (open: string, close: string) =>
+      `${open}This behaviour is specified in ` +
+      '<span><a href="/rfc">RFC 9110</a> and <a href="/errata">its errata</a></span>' +
+      `, which every conforming client must implement.${close}`;
+    const expected =
+      'This behaviour is specified in RFC 9110 and its errata, which every conforming client must implement.';
+
+    const divPage = `<html><body><main>${sentence('<div>', '</div>')}</main></body></html>`;
+    expect(await fetchText(divPage)).toBe(expected);
+
+    const sectionPage = `<html><body><main>${sentence('<section>', '</section>')}</main></body></html>`;
+    expect(await fetchText(sectionPage)).toBe(expected);
+
+    const tablePage =
+      '<html><body><main><table><tr><td>' + sentence('', '') + '</td></tr></table></main></body></html>';
+    expect(await fetchText(tablePage)).toContain(expected);
+  });
+
+  it('keeps a self-contained callout block that is not nested inside a longer sentence', async () => {
+    // A "Related:"/"See also:" callout sitting in its own <div> is the whole short block, not a
+    // fragment nested inside a longer one - hasAdjacentProseText/hasProseAncestor only look outside
+    // the candidate, so neither one saves it. Only the strip-budget itself being landmark-only
+    // (see LANDMARK_CHROME_SELECTOR) stops "Related: " from clearing isControlStrip.
+    const page =
+      '<html><body><main>' +
+      '<p>The API supports pagination via the cursor parameter, which should be treated as an opaque token by clients.</p>' +
+      '<div>Related: <a href="/pagination">Pagination guide</a> and <a href="/cursors">Cursor tokens</a>.</div>' +
+      '<p>Rate limits are enforced per API key and reset on a rolling one-minute window.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Related: Pagination guide and Cursor tokens.');
+    expect(text).toContain('The API supports pagination via the cursor parameter');
+    expect(text).toContain('Rate limits are enforced per API key');
+  });
+
+  it('still strips a nav bar with a bare wordmark alongside its links (landmark tags keep the budget)', async () => {
+    const page =
+      '<html><body><nav>' +
+      '<a href="/a">Home</a><a href="/b">Docs</a><span>Acme</span>' +
+      '</nav>' +
+      '<p>Real prose paragraph describing the article content in detail.</p></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Home');
+    expect(text).not.toContain('Docs');
+    expect(text).not.toContain('Acme');
+    expect(text).toContain('Real prose paragraph describing the article content in detail.');
+  });
+
+  it('does not strip a link pair sitting inside a list item, heading, or blockquote', async () => {
+    const page =
+      '<html><body><main>' +
+      '<h2>See also <a href="/a">Alpha</a> and <a href="/b">Beta</a></h2>' +
+      '<li><span><a href="/c">Gamma</a> or <a href="/d">Delta</a></span></li>' +
+      '<blockquote><span><a href="/e">Epsilon</a>, <a href="/f">Zeta</a></span> said so.</blockquote>' +
+      '<p>Enough surrounding prose to keep this page well past the survival floor regardless.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Alpha');
+    expect(text).toContain('Beta');
+    expect(text).toContain('Gamma');
+    expect(text).toContain('Delta');
+    expect(text).toContain('Epsilon');
+    expect(text).toContain('Zeta');
+  });
+
+  it('still strips a toolbar even though it sits next to a <p> rather than inside one', async () => {
+    // The prose-ancestor exclusion only declines a candidate NESTED inside prose - a sibling
+    // toolbar block must still be caught, or the exclusion would swallow genuine chrome too.
+    const page =
+      '<html><body><main>' +
+      '<div><a href="/reload">Reload</a><a href="/clear">Clear</a><a href="/fork">Fork</a></div>' +
+      '<p>Real article prose that has nothing to do with the sandbox toolbar above it.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Reload');
+    expect(text).not.toContain('Clear');
+    expect(text).not.toContain('Fork');
+    expect(text).toContain('Real article prose that has nothing to do with the sandbox toolbar above it.');
+  });
+
+  it('keeps a two-item content list of links when real prose survives elsewhere on the page', async () => {
+    // Same shape as the earlier "keeps a single short link" rollback case, but with enough OTHER
+    // prose on the page that the rollback never fires - so this is the one place the <ul>/<ol>
+    // control threshold, not the rollback, has to be what protects the list.
+    const page =
+      '<html><body><main>' +
+      '<p>Long enough paragraph of real prose to clear the survival floor easily on its own.</p>' +
+      '<ul><li><a href="/a">Alpha</a></li><li><a href="/b">Beta</a></li></ul>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).toContain('Alpha');
+    expect(text).toContain('Beta');
+    expect(text).toContain('Long enough paragraph of real prose to clear the survival floor easily on its own.');
+  });
+
+  it('still strips a three-item nav list even with prose surviving elsewhere', async () => {
+    const page =
+      '<html><body><main>' +
+      '<ul><li><a href="/a">Home</a></li><li><a href="/b">Docs</a></li><li><a href="/c">Blog</a></li></ul>' +
+      '<p>Real article prose that must survive the nav-list strip above it.</p>' +
+      '</main></body></html>';
+
+    const text = await fetchText(page);
+
+    expect(text).not.toContain('Home');
+    expect(text).not.toContain('Docs');
+    expect(text).not.toContain('Blog');
+    expect(text).toContain('Real article prose that must survive the nav-list strip above it.');
+  });
+
+  it('treats one control as too few to strip a div, and two as enough', async () => {
+    const pageWith = (links: string) =>
+      `<html><body><main><div>${links}</div>` +
+      '<p>Real prose paragraph describing the article content in detail.</p></main></body></html>';
+
+    const oneLink = await fetchText(pageWith('<a href="/a">Home</a>'));
+    expect(oneLink).toContain('Home');
+    expect(oneLink).toContain('Real prose paragraph describing the article content in detail.');
+
+    const twoLinks = await fetchText(pageWith('<a href="/a">Home</a><a href="/b">Docs</a>'));
+    expect(twoLinks).not.toContain('Home');
+    expect(twoLinks).not.toContain('Docs');
+    expect(twoLinks).toContain('Real prose paragraph describing the article content in detail.');
+  });
+
+  it('treats 20 surviving characters as enough to trust a prune, and 19 as not', async () => {
+    const pageWith = (remnant: string) =>
+      `<html><body><nav><a href="/a">Home</a><a href="/b">Docs</a></nav><p>${remnant}</p></body></html>`;
+
+    const remnant19 = 'A'.repeat(19);
+    const textAt19 = await fetchText(pageWith(remnant19));
+    expect(textAt19).toContain('Home');
+    expect(textAt19).toContain('Docs');
+    expect(textAt19).toContain(remnant19);
+
+    const remnant20 = 'A'.repeat(20);
+    const textAt20 = await fetchText(pageWith(remnant20));
+    expect(textAt20).not.toContain('Home');
+    expect(textAt20).not.toContain('Docs');
+    expect(textAt20).toContain(remnant20);
   });
 });

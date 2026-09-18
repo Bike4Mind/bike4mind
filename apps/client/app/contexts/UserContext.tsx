@@ -379,11 +379,20 @@ export function resolveIdentifyEffect(params: {
 export const shouldAdoptIdentifyToken = (heldToken: string | null | undefined): boolean => !heldToken;
 
 /**
- * Merge a `users` WebSocket push onto the existing store user. The push carries the full user
- * document minus the server's security exclusions (password, stripeCustomerId, resetPasswordToken -
- * see resolveFieldLimits), so replacing would wipe those excluded fields from the store; merging
- * applies the pushed fields and preserves the excluded ones. `existing` may be null (no user yet),
- * in which case the pushed document is adopted as-is. Exported for unit testing.
+ * Merge a `users` WebSocket push onto the existing store user.
+ *
+ * A push is a projection of the stored document, so a field never written to that document is
+ * absent from the push rather than null, and a replace would drop every such field from the
+ * store. Merge so the store never loses a field the push simply did not carry: pushed fields win,
+ * everything else survives. A schema `default` is written at save time, so defaulted fields
+ * normally arrive; one with no default, like `platformEmailAddress`, does not.
+ *
+ * The server additionally strips stripeCustomerId and resetPasswordToken from `users` pushes (see
+ * resolveFieldLimits), which merging preserves as well. `password` is deliberately not in that
+ * list: it is `select: false` in UserModel, so it never reaches the store in the first place.
+ *
+ * `existing` may be null (no user yet), in which case the pushed document is adopted as-is.
+ * Exported for unit testing.
  */
 export const applyUserPush = (existing: IUserDocument | null, pushed: IUserDocument): IUserDocument =>
   ({ ...(existing ?? {}), ...pushed }) as IUserDocument;
@@ -407,11 +416,9 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
       (_type: string, data: IUserDocument) => {
         if (data && data.id === userId) {
           try {
-            // The 'users' push carries the full user document minus the server's security
-            // exclusions (password, stripeCustomerId, resetPasswordToken), so replacing the store
-            // user would wipe those excluded fields. Merge onto the existing user so a push applies
-            // its fields and leaves the excluded ones intact. Tradeoff: a field cleared server-side
-            // but absent from the push keeps its stale value until the next refreshUser()/identify.
+            // Merge, never replace: see applyUserPush for why a push can omit fields the store
+            // already has. Tradeoff: a field cleared server-side but absent from the push keeps
+            // its stale value until the next refreshUser()/identify.
             setCurrentUser(applyUserPush(useUser.getState().currentUser, data));
             // Real-time kill switch: if the user's tokenVersion has advanced
             // past the version embedded in this tab's access token, the session

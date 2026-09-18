@@ -53,7 +53,14 @@ async function createMementoEmbeddingService(userId: string) {
 export async function reembedMementosForUser(
   userId: string,
   opts: { dryRun?: boolean } = {}
-): Promise<{ total: number; alreadyCurrent: number; reembedded: number; failed: number; skippedEmpty: number }> {
+): Promise<{
+  total: number;
+  alreadyCurrent: number;
+  reembedded: number;
+  failed: number;
+  skippedEmpty: number;
+  errors: string[];
+}> {
   const mementos = await Memento.find({ userId }).select('summary embedding embeddingModel');
 
   const stale = mementos.filter(m => !mementoEmbeddingIsCurrent(m));
@@ -63,6 +70,7 @@ export async function reembedMementosForUser(
     reembedded: 0,
     failed: 0,
     skippedEmpty: 0,
+    errors: [] as string[],
   };
 
   if (stale.length === 0 || opts.dryRun) return stats;
@@ -87,13 +95,13 @@ export async function reembedMementosForUser(
       stats.reembedded += 1;
     } catch (err) {
       // Leave it stale rather than half-written: it stays excluded from vector search, which is the
-      // safe state, and the next run retries it.
+      // safe state, and the next run retries it. Recorded in errors (mirroring
+      // migrateLedgerVectorsForUser's own errors: string[]) so the caller can surface WHICH memento
+      // needs attention instead of only a count.
       stats.failed += 1;
-      console.error(
-        `[reembedMementos] user ${userId} memento ${String(memento._id)} failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
+      const message = `memento ${String(memento._id)}: ${err instanceof Error ? err.message : String(err)}`;
+      stats.errors.push(message);
+      console.error(`[reembedMementos] user ${userId} ${message}`);
     }
   }
 
