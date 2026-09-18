@@ -10,6 +10,7 @@ import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import ArticleIcon from '@mui/icons-material/Article';
 import ThumbUpOutlinedIcon from '@mui/icons-material/ThumbUpOutlined';
 import ThumbDownOutlinedIcon from '@mui/icons-material/ThumbDownOutlined';
+import type { HelpFeedbackRating } from '@bike4mind/common';
 import ThumbUpIcon from '@mui/icons-material/ThumbUp';
 import ThumbDownIcon from '@mui/icons-material/ThumbDown';
 import { useHelpChat, HelpChatMessage } from '@client/app/hooks/useHelpChat';
@@ -36,7 +37,7 @@ const ChatMessageFeedback: React.FC<{ message: HelpChatMessage; previousUserMess
 }) => {
   const { submitChatFeedback } = useHelpFeedback();
   const { data: recentFeedback } = useMyRecentFeedback();
-  const [rating, setRating] = useState<'helpful' | 'not_helpful' | null>(null);
+  const [rating, setRating] = useState<HelpFeedbackRating | null>(null);
   const [comment, setComment] = useState('');
   const [commentSent, setCommentSent] = useState(false);
   const populatedRef = useRef(false);
@@ -57,7 +58,7 @@ const ChatMessageFeedback: React.FC<{ message: HelpChatMessage; previousUserMess
     }
   }, [recentFeedback, previousUserMessage, message.content]);
 
-  const handleRating = (value: 'helpful' | 'not_helpful') => {
+  const handleRating = (value: HelpFeedbackRating) => {
     if (value === rating) return; // Same thumb is a no-op
     setRating(value);
     submitChatFeedback.mutate({

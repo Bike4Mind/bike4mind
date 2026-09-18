@@ -19,6 +19,7 @@
  */
 import type { ArtifactType } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 // Deliberately the CLIENT parser, not `@bike4mind/utils` (which the other server
 // callers use). Only this one exports `generateCompleteArtifactId`, and its exact
 // `artifact_{type}_{identifier}_{timestamp}_{index}` shape is what
@@ -191,28 +192,6 @@ function defaultDeps(): PersistAgentArtifactsDeps {
       await ArtifactContent.deleteMany({ artifactId });
     },
   };
-}
-
-/**
- * E11000 off the `{ artifactId, version }` unique index on artifact_contents.
- *
- * This is NOT on its own a success signal. `artifactService.create` writes
- * artifact_contents -> artifact_versions -> artifacts with no transaction, so a
- * duplicate content row means either "already fully written" or "a previous
- * attempt died partway". Only the artifacts row distinguishes them - see the
- * caller. Both error shapes are checked because a wrapped or serialized error
- * may carry only the message.
- */
-function isDuplicateKeyError(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null) return false;
-  if ((err as { code?: unknown }).code === 11000) return true;
-  // Read `message` off any object, not just an Error instance. A driver error
-  // that crossed a serialization boundary arrives as a plain object carrying
-  // only the text, and an `instanceof Error` check would miss it - which would
-  // send a genuine duplicate down the generic failure path and leave an orphan
-  // unrepaired, the exact outcome this module exists to prevent.
-  const message = (err as { message?: unknown }).message;
-  return typeof message === 'string' && message.includes('E11000');
 }
 
 /**

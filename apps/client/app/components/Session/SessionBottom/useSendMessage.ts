@@ -211,6 +211,7 @@ export function useSendMessage({
     seed,
     output_format,
     researchMode,
+    skipAutoOffers,
     thinking,
     enabledMcpServers,
     deepResearchConfig,
@@ -237,6 +238,7 @@ export function useSendMessage({
       s.seed,
       s.output_format,
       s.researchMode,
+      s.skipAutoOffers,
       s.thinking,
       s.enabledMcpServers,
       s.deepResearchConfig,
@@ -680,6 +682,7 @@ export function useSendMessage({
       prompt,
       supportsTools: !!currentModelInfo?.supportsTools,
       toolsOverride: options?.toolsOverride,
+      skipAutoOffers,
     });
     if (refused) {
       setSubmitting(false);
@@ -753,6 +756,7 @@ export function useSendMessage({
           projectId,
           organizationId,
           researchMode,
+          skipAutoOffers,
           deepResearchConfig,
           imageConfig: imageSettings,
           audioConfig: audioSettings,
@@ -796,6 +800,7 @@ export function useSendMessage({
           projectId,
           organizationId,
           researchMode,
+          skipAutoOffers,
           deepResearchConfig,
           imageConfig: imageSettings,
           audioConfig: audioSettings,

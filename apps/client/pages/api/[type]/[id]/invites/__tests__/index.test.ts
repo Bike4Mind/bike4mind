@@ -7,6 +7,8 @@ import { createMocks } from 'node-mocks-http';
  * the raw-array response, and the type/id guards.
  */
 
+const TOKEN = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
+
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   postHandler: null as null | ((req: any, res: any) => unknown),
@@ -106,6 +108,24 @@ describe('GET /api/[type]/[id]/invites', () => {
       expect.anything()
     );
   });
+
+  // The list is share-authorized, so this is not an authorization hole - it is a redeemable secret
+  // with no consumer on this surface, re-readable from any cache of the response.
+  it('strips every bearer token from the listed invites', async () => {
+    listInvitesForDocument.mockResolvedValue([
+      { id: 'i1', type: 'FabFile', token: TOKEN },
+      { id: 'i2', type: 'FabFile' },
+    ]);
+    const { req, res } = createMocks({ method: 'GET', query: { type: 'files', id: '507f1f77bcf86cd799439011' } });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(JSON.stringify(res._getJSONData())).not.toContain(TOKEN);
+    expect(res._getJSONData()).toEqual([
+      { id: 'i1', type: 'FabFile' },
+      { id: 'i2', type: 'FabFile' },
+    ]);
+  });
 });
 
 /**
@@ -116,6 +136,24 @@ describe('POST /api/[type]/[id]/invites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     createInvite.mockResolvedValue({ id: 'i1', recipients: { pending: [] } });
+  });
+
+  // The `link` is the one place the token belongs, and it is what the client reads. Echoing the bare
+  // field alongside it puts the same secret in a second, unadvertised place in the body.
+  it('returns the token inside the share link and nowhere else', async () => {
+    createInvite.mockResolvedValue({ id: 'i1', token: TOKEN, recipients: { pending: [] } });
+    const { req, res } = createMocks({
+      method: 'POST',
+      query: { type: 'files', id: '507f1f77bcf86cd799439011' },
+      body: { permissions: ['read'] },
+    });
+    (req as any).user = { id: 'u1' };
+
+    await mockRefs.postHandler!(req, res);
+
+    const body = res._getJSONData();
+    expect(body.link).toContain(TOKEN);
+    expect('token' in body).toBe(false);
   });
 
   it.each([

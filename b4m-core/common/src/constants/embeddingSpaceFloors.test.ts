@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE,
-  MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE,
-  cosineFloorPctForSpace,
-} from './embeddingSpaceFloors';
+import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, cosineFloorPctForSpace } from './embeddingSpaceFloors';
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT } from './forcedRetrieval';
 import { OpenAIEmbeddingModel, OllamaEmbeddingModel, VoyageAIEmbeddingModel } from '../schemas/embedding';
 
@@ -33,7 +29,7 @@ describe('cosineFloorPctForSpace', () => {
     ).toBe(75);
     expect(
       cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL)
-    ).toBe(35);
+    ).toBe(49);
   });
 
   // The whole contract. `noUncheckedIndexedAccess` is off in this repo, so a bare `TABLE[space]`
@@ -57,16 +53,10 @@ describe('cosineFloorPctForSpace', () => {
     }
   });
 
-  it('reports absence rather than borrowing a neighbouring table entry', () => {
-    // 3-small has a forced-retrieval floor and no V1 memento floor. The tables must not be
-    // interchangeable: a memento is one sentence and a chunk is a passage, so their score
-    // distributions differ even inside one vector space.
+  it('reports absence for a space with no recorded floor rather than a default of 0', () => {
     expect(
-      cosineFloorPctForSpace(MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL)
+      cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE)
     ).toBeUndefined();
-    expect(
-      cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL)
-    ).toBe(35);
   });
 });
 
@@ -98,13 +88,5 @@ describe('behavior preservation on the model in production today', () => {
     expect(
       cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)
     ).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT);
-  });
-
-  // Both V1 memento call sites hardcoded 0.75 before this. Neither passes a floor now, so this
-  // entry is the only thing keeping ada-002 recall identical to what it was.
-  it('resolves the ada-002 V1 memento floor to the literal both call sites used to hardcode', () => {
-    expect(
-      cosineFloorPctForSpace(MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)
-    ).toBe(75);
   });
 });

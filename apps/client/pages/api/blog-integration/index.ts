@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import { z } from 'zod';
 import { encryptToken, decryptToken } from '@server/security/tokenEncryption';
+import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 
 /**
  * Blog Integration Settings API
@@ -62,6 +63,25 @@ const handler = baseApi()
 
       const { apiKey, baseUrl, defaultAuthor, defaultTags } = validation.data;
 
+      // Fail closed against SSRF: baseUrl is user-supplied and fetched server-side with the
+      // user's key (here, and by blog/publish + blog/presign-image-upload). Reject an
+      // internal/loopback/non-https host - DNS-resolving, so a public name that resolves to a
+      // private IP is caught at validation time too - before we test or store it. This does not
+      // close DNS rebinding (validation and the later connect resolve separately; see the TOCTOU
+      // note in ssrfProtection.ts); the outbound calls use safeFetch, which bounds what an upstream
+      // response can return. Shared guard in server/utils/ssrfProtection.ts.
+      try {
+        await assertUrlAllowed(baseUrl);
+      } catch (e) {
+        if (e instanceof SsrfError) {
+          return res.status(400).json({
+            error: 'Invalid blog settings',
+            message: `Base URL is not allowed: ${e.message}`,
+          });
+        }
+        throw e;
+      }
+
       // Test the API key by making a test request (optional but recommended)
       try {
         const controller = new AbortController();
@@ -69,7 +89,7 @@ const handler = baseApi()
 
         let testResponse: Response | undefined;
         try {
-          testResponse = await fetch(`${baseUrl}/api/posts`, {
+          testResponse = await safeFetch(`${baseUrl}/api/posts`, {
             method: 'GET',
             headers: {
               'X-API-Key': apiKey,
@@ -79,6 +99,13 @@ const handler = baseApi()
           clearTimeout(timeoutId);
         } catch (fetchError) {
           clearTimeout(timeoutId);
+          // A redirect to an internal host during the test must reject, not silently save.
+          if (fetchError instanceof SsrfError) {
+            return res.status(400).json({
+              error: 'Invalid blog settings',
+              message: `Base URL is not allowed: ${fetchError.message}`,
+            });
+          }
           if (fetchError instanceof Error && fetchError.name === 'AbortError') {
             console.warn('[Blog Integration POST] API test timed out after 5s');
             // Continue anyway - timeout shouldn't block setup

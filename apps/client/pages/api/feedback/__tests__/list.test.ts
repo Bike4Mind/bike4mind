@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { AbilityBuilder, createMongoAbility } from '@casl/ability';
 import { accessibleBy } from '@casl/mongoose';
@@ -282,6 +282,19 @@ describe('GET /api/feedback', () => {
     // it an admin opening a shared session sees someone else's report as "You reported this".
     const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
     expect(JSON.stringify(findFilter.$and)).not.toContain('userId');
+  });
+
+  // Drives the real errorHandler: an untyped throw here would be a 500 logged at `error`.
+  it('reports a missing ability as a typed 404 logged at warn, not an untyped 500', async () => {
+    const { req, res } = buildRequest({}, undefined);
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getJSONData().error).toBe('Ability not found');
+
+    const { logger } = req as unknown as { logger: Record<string, Mock> };
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('404'));
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
   it('resolves free-text search through the FeedbackText sibling and filters by matching ids', async () => {
