@@ -6,6 +6,7 @@ import {
   isSvgGraphicallyEmpty,
   shouldWarnElidedArtifact,
   elidedReplyWarning,
+  validateArtifactContent,
 } from './artifactParser';
 
 describe('extractReactDependencies', () => {
@@ -478,5 +479,26 @@ describe('elidedReplyWarning', () => {
     // this surface scans raw markdown with no artifact type to gate on.
     const prose = 'The changelog below is abbreviated for brevity; the rest of the entries are omitted.';
     expect(elidedReplyWarning({}, prose)).toBe(false);
+  });
+});
+
+describe('validateArtifactContent - HTML structure', () => {
+  // The check used to be exact-case on '<!DOCTYPE', so a lowercase doctype - valid HTML, and
+  // what several models emit - was reported as malformed and the viewer showed a warning
+  // over a page that rendered perfectly well.
+  it.each([
+    '<!DOCTYPE html><html><body>hi</body></html>',
+    '<!doctype html><body>hi</body>',
+    '<HTML><body>hi</body></HTML>',
+  ])('accepts %s', content => {
+    expect(validateArtifactContent('html', content).errors).not.toContain(
+      'HTML artifacts should include proper HTML structure'
+    );
+  });
+
+  it('still flags content with no HTML structure at all', () => {
+    expect(validateArtifactContent('html', 'just some text').errors).toContain(
+      'HTML artifacts should include proper HTML structure'
+    );
   });
 });

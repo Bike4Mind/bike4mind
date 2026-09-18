@@ -429,11 +429,15 @@ export function validateArtifactContent(
         errors.push('React components must have a default export');
       }
       break;
-    case 'html':
-      if (!content.includes('<html') && !content.includes('<!DOCTYPE')) {
+    case 'html': {
+      // Case-insensitive: `<!doctype html>` is valid HTML and is what several models emit,
+      // but the old exact-case check rejected it as malformed.
+      const lowered = content.toLowerCase();
+      if (!lowered.includes('<html') && !lowered.includes('<!doctype')) {
         errors.push('HTML artifacts should include proper HTML structure');
       }
       break;
+    }
     case 'svg':
       if (!content.includes('<svg')) {
         errors.push('SVG artifacts must contain SVG elements');
