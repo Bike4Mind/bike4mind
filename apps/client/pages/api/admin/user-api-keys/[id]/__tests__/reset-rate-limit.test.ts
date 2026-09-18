@@ -50,9 +50,13 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', async importOriginal => {
   return { ...actual, resetApiKeyRateLimit };
 });
 
-vi.mock('@bike4mind/services', () => ({
-  userApiKeyService: { API_KEY_RATE_LIMIT_DEFAULTS: { requestsPerMinute: 60, requestsPerDay: 1000 } },
-}));
+// Sources the real default from the actual package rather than a hardcoded literal, so a change
+// to API_KEY_RATE_LIMIT_DEFAULTS shows up here instead of this fallback test silently staying
+// green against a stale value.
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return { userApiKeyService: { API_KEY_RATE_LIMIT_DEFAULTS: actual.userApiKeyService.API_KEY_RATE_LIMIT_DEFAULTS } };
+});
 
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
@@ -132,7 +136,12 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
     // The stored doc id (what the enforcer keys on), not the raw param. Admin
     // resets also clear the management counter - it's the only override for
     // a client that has locked itself out of the self-service PATCH (#2883).
-    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id, { alsoResetManagement: true });
+    // The route's own logger is threaded through so a clear failure logs with
+    // request correlation instead of landing in bare console.warn.
+    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id, {
+      alsoResetManagement: true,
+      logger: (req as any).logger,
+    });
     expect(logEvent).toHaveBeenCalledWith(
       {
         userId: 'owner-1',
@@ -204,8 +213,24 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
     await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id, { alsoResetManagement: true });
+    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id, {
+      alsoResetManagement: true,
+      logger: (req as any).logger,
+    });
     expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('key-1'));
+  });
+
+  it('surfaces a total reset failure to asyncHandler instead of answering a hollow 200 success', async () => {
+    // resetApiKeyRateLimit itself now rejects when every counter fails to clear (see
+    // apiKeyRateLimitCheck.test.ts). This handler runs with asyncHandler mocked to identity (see
+    // the top-of-file mock), so the real 500-mapping isn't under test here - what matters is that
+    // this route lets the rejection propagate instead of catching it and answering
+    // { success: true } anyway.
+    resetApiKeyRateLimit.mockRejectedValueOnce(new Error('Failed to clear any rate-limit counters'));
+    const { req, res } = post({ id: 'key-1' }, admin);
+
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/failed to clear any rate-limit counters/i);
+    expect(logEvent).not.toHaveBeenCalled();
   });
 
   it('registers POST only, so next-connect 405s every other verb', () => {
