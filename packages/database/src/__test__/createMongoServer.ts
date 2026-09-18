@@ -77,6 +77,23 @@ const withPortRetry = async <T>(start: () => Promise<T>): Promise<T> => {
  */
 export const MONGO_TEST_TIMEOUT_MS = 60_000;
 
+/**
+ * Standalone mongod behind the port-collision retry above. The default choice; reach for
+ * `createMongoReplSet` only when transactionality is the thing under test.
+ *
+ * A suite that asserts on, drops, or recreates indexes MUST settle the model's autoIndex build
+ * first, right after connecting:
+ *
+ *   await mongoose.connect(server.getUri());
+ *   await MyModel.init();
+ *
+ * autoIndex cannot be turned off here (index-dependent suites need it), and Mongoose builds the
+ * schema's declared indexes in the BACKGROUND on connect, resolving whenever the runner gets to
+ * it. Without that `init()` await the build can land AFTER a hook has dropped an index or the
+ * whole database, restoring exactly what the test needs absent. It surfaces as an assertion on an
+ * index that should not exist yet, only under contention, and goes green on a re-run of the same
+ * commit - see the two fabfilechunk index migration suites in packages/scripts for the pattern.
+ */
 export const createMongoServer = async (): Promise<MongoMemoryServer> =>
   withPortRetry(() => MongoMemoryServer.create());
 

@@ -29,6 +29,8 @@ let server: Awaited<ReturnType<typeof createMongoServer>>;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  // Settle autoIndex before the hooks below drop indexes - see createMongoServer's autoIndex note.
+  await Promise.all([LakeAccessEventModel, LakeConfigChangeEventModel].map(model => model.init()));
 });
 
 afterAll(async () => {
