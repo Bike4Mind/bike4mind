@@ -7,6 +7,7 @@ import {
   extractApiKeyFromHeaders,
   getApiKeyRateLimitUsage,
   resetApiKeyRateLimit,
+  resolveCounterLimit,
 } from './apiKeyRateLimitCheck';
 import { cacheRepository } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -17,6 +18,7 @@ vi.mock('@bike4mind/database', () => ({
     tryIncrementWithinLimitFixedWindow: vi.fn(),
     decrementCounter: vi.fn(),
     deleteByKey: vi.fn(),
+    deleteByKeyAndReturn: vi.fn(),
     findByKey: vi.fn(),
   },
 }));
@@ -457,13 +459,13 @@ describe('apiKeyRateLimitCheck', () => {
 
   describe('resetApiKeyRateLimit', () => {
     it('deletes exactly the minute and day counter keys', async () => {
-      vi.mocked(cacheRepository.deleteByKey).mockResolvedValue(undefined);
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockResolvedValue(null);
 
       await resetApiKeyRateLimit(mockKeyId);
 
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledTimes(2);
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(`api-key-rate-limit:${mockKeyId}:minute`);
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(`api-key-rate-limit:${mockKeyId}:day`);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledTimes(2);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(`api-key-rate-limit:${mockKeyId}:minute`);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(`api-key-rate-limit:${mockKeyId}:day`);
     });
 
     it('uses the same keys the enforcer passes to the fixed-window increment', async () => {
@@ -483,53 +485,101 @@ describe('apiKeyRateLimitCheck', () => {
     });
 
     it('leaves the management counter untouched by default', async () => {
-      vi.mocked(cacheRepository.deleteByKey).mockResolvedValue(undefined);
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockResolvedValue(null);
 
-      await resetApiKeyRateLimit(mockKeyId);
+      const result = await resetApiKeyRateLimit(mockKeyId);
 
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledTimes(2);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledTimes(2);
       const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId, 'management');
-      expect(cacheRepository.deleteByKey).not.toHaveBeenCalledWith(minuteKey);
-      expect(cacheRepository.deleteByKey).not.toHaveBeenCalledWith(dayKey);
+      expect(cacheRepository.deleteByKeyAndReturn).not.toHaveBeenCalledWith(minuteKey);
+      expect(cacheRepository.deleteByKeyAndReturn).not.toHaveBeenCalledWith(dayKey);
+      expect(result.management).toBeUndefined();
     });
 
     it('also clears the management counter when alsoResetManagement is set', async () => {
-      vi.mocked(cacheRepository.deleteByKey).mockResolvedValue(undefined);
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockResolvedValue(null);
 
       await resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true });
 
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledTimes(4);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledTimes(4);
       const request = buildRateLimitKeys(mockKeyId);
       const management = buildRateLimitKeys(mockKeyId, 'management');
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(request.minuteKey);
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(request.dayKey);
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(management.minuteKey);
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(management.dayKey);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(request.minuteKey);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(request.dayKey);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.minuteKey);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.dayKey);
     });
 
-    it('rejects but still fires every delete when one deleteByKey call fails', async () => {
-      // Each deleteByKey call fires synchronously while the `deletes` array is
-      // built, before Promise.all is ever awaited - so a later key still gets
-      // cleared even when an earlier one rejects. The caller only learns
-      // "something failed" and must retry the whole reset; that's safe because
-      // deleteByKey is an idempotent exact-match delete (see resetApiKeyRateLimit
-      // doc comment), so a retry re-clears already-cleared keys as a no-op.
-      const failure = new Error('cache unavailable');
-      vi.mocked(cacheRepository.deleteByKey)
-        .mockRejectedValueOnce(failure) // request minute
-        .mockResolvedValueOnce(undefined) // request day
-        .mockResolvedValueOnce(undefined) // management minute
-        .mockResolvedValueOnce(undefined); // management day
+    it('derives usage from the document it actually deleted, never a separate read', async () => {
+      // Closes the race a concurrent increment could otherwise exploit: if
+      // this derived a value from a prior `findByKey` and the counter was
+      // bumped between that read and the delete, the reported usage would be
+      // stale. Asserting `findByKey` is never called proves there is no such
+      // separate read to race against - the deleted document IS the report.
+      vi.mocked(cacheRepository.deleteByKeyAndReturn)
+        .mockResolvedValueOnce({ result: { count: 60 }, expiresAt: future(MINUTE_MS) } as never) // request minute, at ceiling
+        .mockResolvedValueOnce({ result: { count: 200 }, expiresAt: future(DAY_MS) } as never); // request day
 
-      await expect(resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true })).rejects.toThrow(failure);
+      const result = await resetApiKeyRateLimit(mockKeyId);
 
-      expect(cacheRepository.deleteByKey).toHaveBeenCalledTimes(4);
+      expect(result.request).toEqual({
+        minute: 60,
+        day: 200,
+        minuteResetAt: Math.floor(future(MINUTE_MS).getTime() / 1000),
+        dayResetAt: Math.floor(future(DAY_MS).getTime() / 1000),
+      });
+      expect(cacheRepository.findByKey).not.toHaveBeenCalled();
+    });
+
+    it('reports a missing counter document as usage 0', async () => {
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockResolvedValue(null);
+
+      const result = await resetApiKeyRateLimit(mockKeyId);
+
+      expect(result.request).toEqual({ minute: 0, day: 0 });
+    });
+
+    it('still clears and reports the request counter when clearing management fails, and logs the failure', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const request = buildRateLimitKeys(mockKeyId);
       const management = buildRateLimitKeys(mockKeyId, 'management');
-      expect(cacheRepository.deleteByKey).toHaveBeenNthCalledWith(1, request.minuteKey);
-      expect(cacheRepository.deleteByKey).toHaveBeenNthCalledWith(2, request.dayKey);
-      expect(cacheRepository.deleteByKey).toHaveBeenNthCalledWith(3, management.minuteKey);
-      expect(cacheRepository.deleteByKey).toHaveBeenNthCalledWith(4, management.dayKey);
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockImplementation(async key => {
+        if (key === management.minuteKey || key === management.dayKey) {
+          throw new Error('cache unavailable');
+        }
+        return null;
+      });
+
+      const result = await resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true });
+
+      expect(result.request).toEqual({ minute: 0, day: 0 });
+      expect(result.management).toBeUndefined();
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(request.minuteKey);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(request.dayKey);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(mockKeyId));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('management'));
+      warnSpy.mockRestore();
+    });
+
+    it('still clears and reports the management counter when clearing the request counter fails', async () => {
+      // The mirror of the case above - this is the exact scenario the admin
+      // reset endpoint exists for: an operator must still be able to recover
+      // the management counter even if the request counter's clear hiccups.
+      const request = buildRateLimitKeys(mockKeyId);
+      const management = buildRateLimitKeys(mockKeyId, 'management');
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockImplementation(async key => {
+        if (key === request.minuteKey || key === request.dayKey) {
+          throw new Error('cache unavailable');
+        }
+        return null;
+      });
+
+      const result = await resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true });
+
+      expect(result.request).toBeUndefined();
+      expect(result.management).toEqual({ minute: 0, day: 0 });
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.minuteKey);
+      expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.dayKey);
     });
   });
 
@@ -627,6 +677,16 @@ describe('apiKeyRateLimitCheck', () => {
         minuteAtLimit: true,
         dayAtLimit: true,
       });
+    });
+  });
+
+  describe('resolveCounterLimit', () => {
+    it("returns the key's own configured limit for 'request'", () => {
+      expect(resolveCounterLimit('request', mockRateLimit)).toBe(mockRateLimit);
+    });
+
+    it("returns the fixed MANAGEMENT_RATE_LIMIT for 'management', ignoring the key's own limit", () => {
+      expect(resolveCounterLimit('management', mockRateLimit)).toBe(MANAGEMENT_RATE_LIMIT);
     });
   });
 
