@@ -47,6 +47,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
 import SendIcon from '@mui/icons-material/Send';
 import { ExpandMore, ExtensionOff, Splitscreen, FormatListNumbered } from '@mui/icons-material';
+import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { create } from 'zustand';
 import { setSessionLayout, clearRecentArtifacts } from '@client/app/hooks/useSessionLayout';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
@@ -302,6 +303,31 @@ export const shouldSyncArtifactFromDb = (params: {
   return (params.latestVersion ?? 0) > (params.baselineVersion ?? 0);
 };
 
+/**
+ * Decides whether an empty KnowledgeViewer may push the layout to `hide`.
+ *
+ * An empty pane is only collapse-worthy once it has actually SHOWN items in the current
+ * session - that is the "files were deleted / artifacts cleared" case `autoHideOnEmpty` was
+ * written for. A pane that has been empty since it mounted must stay open: that is an explicit
+ * "Open Knowledge Base" click on an empty session, and it is also every reload or session
+ * switch, where the sources are still loading asynchronously.
+ *
+ * We deliberately do NOT key this on whether a session id is present: `currentSessionId` comes
+ * from SessionsContext and starts null on a cold load, only settling after `changeSession`
+ * resolves, so a hydrating session is indistinguishable from a genuinely session-less page.
+ * Collapsing on a null id re-creates the very reload bug this guards against. Hosts that must
+ * never auto-collapse pass `autoHideOnEmpty={false}` (DataLakeRailViewer, AdminPage).
+ *
+ * Extracted as a pure predicate so the decision is unit-testable without mounting the viewer,
+ * which drags in the websocket/session/artifact chain (the seam established by
+ * shouldSyncArtifactFromDb above).
+ */
+export const shouldAutoHideKnowledgePane = (params: {
+  isEmpty: boolean;
+  hasShownItems: boolean;
+  autoHideOnEmpty: boolean;
+}): boolean => params.autoHideOnEmpty && params.isEmpty && params.hasShownItems;
+
 const isMarkdownFile = (item: KnowledgeItem | undefined) => {
   if (!item || item.type !== 'file') return false;
   const mime = item.content.mimeType;
@@ -402,6 +428,11 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
 
   // Track previous session ID to detect actual session changes
   const prevSessionIdRef = useRef(currentSessionId);
+
+  // Auto-hide bookkeeping: whether the pane has shown items since the last session change, and
+  // the session that latch belongs to. See shouldAutoHideKnowledgePane.
+  const hasShownItemsRef = useRef(false);
+  const autoHideSessionRef = useRef(currentSessionId);
 
   // Fetch latest artifact data if it's a Quest 4 artifact
   const isQuest4Artifact = artifactData?.id && artifactData.id.startsWith('artifact_');
@@ -754,9 +785,24 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
 
   // Effect: Reset view when no selection
   useEffect(() => {
+    // On a session change, drop the "has shown items" latch so the previous session's items -
+    // which can still be in hand for one commit - cannot mark the new session as having shown
+    // items (and therefore as safe to auto-hide when empty).
+    const sessionChanged = autoHideSessionRef.current !== currentSessionId;
+    if (sessionChanged) {
+      autoHideSessionRef.current = currentSessionId;
+      hasShownItemsRef.current = false;
+    }
+
     // Also check recentArtifacts: knowledgeItems is briefly empty during the
     // re-render after clicking a code block, which would otherwise race.
     const hasSelected = knowledgeItems.length > 0 || recentArtifacts.length > 0;
+
+    // Latch only for the session we are already tracking, so a stale pre-switch list cannot
+    // arm the latch for the new session.
+    if (hasSelected && !sessionChanged) {
+      hasShownItemsRef.current = true;
+    }
 
     if (!hasSelected) {
       // Functional update, applied only when the value actually changes.
@@ -767,16 +813,22 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         return state;
       });
 
-      // Only auto-hide if enabled (default). Pages like /opti disable this
-      // to keep their floatingChat layout stable.
-      if (autoHideOnEmpty) {
+      // Only auto-hide if enabled (default) AND the pane was emptied after showing items.
+      // Pages like /opti disable this to keep their floatingChat layout stable.
+      if (
+        shouldAutoHideKnowledgePane({
+          isEmpty: !hasSelected,
+          hasShownItems: hasShownItemsRef.current,
+          autoHideOnEmpty,
+        })
+      ) {
         const currentLayout = useSessionLayout.getState().layout;
         if (currentLayout !== 'hide') {
           setSessionLayout({ layout: 'hide' });
         }
       }
     }
-  }, [knowledgeItems.length, recentArtifacts.length, autoHideOnEmpty]); // Also watch recentArtifacts to prevent hiding during state updates
+  }, [knowledgeItems.length, recentArtifacts.length, autoHideOnEmpty, currentSessionId]); // Also watch recentArtifacts to prevent hiding during state updates
 
   // Effect: Auto-switch tab when selectedArtifactId changes.
   useEffect(() => {
@@ -1293,7 +1345,73 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     }
   };
 
-  if (knowledgeItems.length === 0) return null;
+  // An open-but-empty pane is still a pane: render it framed with copy and a Close affordance
+  // rather than a blank rectangle. The file Select is intentionally omitted - with no options
+  // and value={selectedTabIndex} it would misbehave.
+  if (knowledgeItems.length === 0) {
+    return (
+      <Stack
+        className="knowledge-viewer-container"
+        data-testid="knowledge-viewer-empty-state"
+        sx={(theme: Theme) => ({
+          height: '100%',
+          border: '1px solid',
+          borderColor: theme.palette.divider,
+          borderRadius: '8px',
+          background: theme.palette.background.body,
+          position: 'relative',
+          overflow: 'hidden', // clips the header and content to the frame's 8px radius
+        })}
+      >
+        <Box
+          className="knowledge-viewer-header"
+          sx={(theme: Theme) => ({
+            borderBottom: '1px solid',
+            borderColor: theme.palette.divider,
+            p: '10px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'flex-end',
+            // Same 56px app-chrome band as the populated header beside the chat.
+            minHeight: '56px',
+            boxSizing: 'border-box',
+            flexShrink: 0,
+            backgroundColor: theme.palette.background.level1,
+          })}
+        >
+          <Tooltip title="Close Knowledge Preview" disableInteractive>
+            <IconButton
+              size="sm"
+              variant="soft"
+              onClick={() => setSessionLayout({ layout: 'hide' })}
+              data-testid="knowledge-viewer-empty-close"
+            >
+              <CloseIcon sx={{ fontSize: 16 }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
+
+        <Box
+          sx={{
+            flexGrow: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '8px',
+            p: 4,
+            textAlign: 'center',
+          }}
+        >
+          <MenuBookIcon sx={{ fontSize: 40, opacity: 0.4 }} />
+          <Typography level="title-md">No files or artifacts yet</Typography>
+          <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: '36ch' }}>
+            Attach a file or generate an artifact and it will appear here.
+          </Typography>
+        </Box>
+      </Stack>
+    );
+  }
 
   return (
     <Stack
