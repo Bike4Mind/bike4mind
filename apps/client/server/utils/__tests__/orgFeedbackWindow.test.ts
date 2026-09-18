@@ -25,7 +25,7 @@ describe('resolveReportWindow', () => {
     const { from, to } = resolveReportWindow({});
 
     expect(to.toISOString()).toBe('2026-09-18T23:59:59.999Z');
-    expect(from.toISOString()).toBe('2026-08-19T00:00:00.000Z');
+    expect(from.toISOString()).toBe('2026-08-20T00:00:00.000Z');
   });
 
   it('rejects an inverted range', () => {

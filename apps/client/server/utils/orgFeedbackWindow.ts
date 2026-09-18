@@ -50,7 +50,11 @@ export function resolveReportWindow(query: { from?: string; to?: string }): { fr
     'from',
     from !== undefined && from !== ''
       ? dayjs.utc(from).startOf('day').toDate()
-      : dayjs.utc(toDate).subtract(DEFAULT_WINDOW_DAYS, 'days').startOf('day').toDate()
+      : dayjs
+          .utc(toDate)
+          .subtract(DEFAULT_WINDOW_DAYS - 1, 'days')
+          .startOf('day')
+          .toDate()
   );
   assertWindowBounds(fromDate, toDate);
 

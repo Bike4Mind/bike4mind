@@ -11,7 +11,8 @@ const isoDay = (date: Date) => date.toISOString().slice(0, 10);
 
 const defaultRange = (): OrgFeedbackRange => {
   const to = new Date();
-  const from = new Date(to.getTime() - DEFAULT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  // Inclusive of both endpoints, so DEFAULT_WINDOW_DAYS calendar days means subtracting one fewer.
+  const from = new Date(to.getTime() - (DEFAULT_WINDOW_DAYS - 1) * 24 * 60 * 60 * 1000);
   return { from: isoDay(from), to: isoDay(to) };
 };
 
