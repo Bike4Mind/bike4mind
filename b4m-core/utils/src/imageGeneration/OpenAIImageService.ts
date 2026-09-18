@@ -459,13 +459,13 @@ export class OpenAIImageService extends AIImageService {
         Logger.globalInstance.debug(`[DEBUG] ⚠️ ${editModel} parameter adjustments:`, editWarnings);
       }
 
-      // GPT-Image models (1, 1.5, 1-mini, 2) also accept `size` and `mask`, but only a size
-      // their own tier supports - a dall-e-2 size (e.g. 256x256/512x512) or an out-of-range
-      // resolution is a 400 from OpenAI. gpt-image-2 also takes any custom WIDTHxHEIGHT
+      // Gates `size` on the GPT-Image arm of the request below, and only there: the dall-e-2
+      // arm still passes `size` straight through under a cast. A GPT-Image tier accepts only
+      // its own sizes - a dall-e-2 size (e.g. 256x256/512x512) or an out-of-range resolution
+      // is a 400 from OpenAI - while gpt-image-2 additionally takes any custom WIDTHxHEIGHT
       // meeting its constraints, so this must not be a flat preset check. An unsupported or
       // absent size is omitted so OpenAI's own default sizing applies, as it did before.
       // The background/output_format alpha controls are resolved above via gptImageOutputOptions.
-      // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
       const forwardSize = isSupportedImageSize(editModel, size);
       // Callers bill against the requested tier before getting here, so it has to reach
       // OpenAI; an unmappable value is dropped rather than 400-ing the whole request.
@@ -493,7 +493,8 @@ export class OpenAIImageService extends AIImageService {
               ...(editQuality ? { quality: editQuality } : {}),
               ...gptImageOutputOptions,
             }
-          : {
+          : // dall-e-2 supports: model, image (single), prompt, mask, n, size, response_format, user
+            {
               model: editModel as 'dall-e-2',
               image: imageFile,
               prompt,
