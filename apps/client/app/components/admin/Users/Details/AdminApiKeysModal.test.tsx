@@ -92,14 +92,55 @@ describe('AdminApiKeysModal', () => {
     expect(h.resetMutate.mock.calls[0][0]).toBe('k1');
   });
 
-  it('shows a success toast when the reset lands', () => {
+  it('shows a bare success toast when neither counter was at its ceiling', () => {
     h.keys = [KEY];
-    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({ success: true, id: 'k1', lockout: {} })
+    );
     renderModal();
 
     fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
 
-    expect(vi.mocked(toast.success)).toHaveBeenCalled();
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Rate limit reset for "pipeline key"');
+  });
+
+  it('names the counter that caused the lockout in the success toast (#2974)', () => {
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: { request: { minuteAtLimit: true, dayAtLimit: false }, management: undefined },
+      })
+    );
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      'Rate limit reset for "pipeline key" - request counter was at its ceiling'
+    );
+  });
+
+  it('names both counters when both were at their ceiling', () => {
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: {
+          request: { minuteAtLimit: false, dayAtLimit: true },
+          management: { minuteAtLimit: true, dayAtLimit: false },
+        },
+      })
+    );
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      'Rate limit reset for "pipeline key" - request and management counters were at their ceilings'
+    );
   });
 
   it('does not reset when the confirmation is dismissed', () => {
