@@ -229,8 +229,15 @@ ${codeContent.trim()}
 </artifact>`;
   });
 
-  // Detect Mermaid code blocks and mixed content
-  const mermaidCodeBlockRegex = /```mermaid\s*((?:.*\n)*?)```/gi;
+  // Detect Mermaid code blocks and mixed content. The body used to be a repeated
+  // (?:.*\n)*? group that the greedy \s* could backtrack into, so an unclosed fence
+  // after a long whitespace run cost time quadratic in the run. One lazy group with
+  // an explicit non-whitespace first character leaves \s* nothing to give back. The
+  // match set is unchanged: (?:.|\n) spans exactly the characters the old body could
+  // cross, the body still starts at the first non-whitespace character and still has to
+  // end on a newline, and the group is lazily optional so a closer sitting right after
+  // the whitespace run still wins over a later one.
+  const mermaidCodeBlockRegex = /```mermaid\s*((?:\S(?:.|\n)*?\n)??)```/gi;
 
   content = content.replace(mermaidCodeBlockRegex, (fullMatch, codeContent) => {
     // Clean and validate the Mermaid syntax

@@ -363,7 +363,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   it('leaves a fence followed by a long whitespace run untouched, in bounded time', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
-    for (const label of ['html', 'svg', 'tsx', 'json']) {
+    for (const label of ['html', 'svg', 'tsx', 'json', 'mermaid']) {
       const input = '```' + label + '\n' + '\n'.repeat(200000) + 'x';
       const startedAt = Date.now();
       expect(convertCodeBlocksToArtifacts(input)).toBe(input);
@@ -458,6 +458,44 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
       expect(Date.now() - startedAt).toBeLessThan(2000);
       expect(out).toBe(input);
     }
+  });
+
+  // The mermaid fence body is the one that cannot simply drop its leading \s*: the old
+  // body matched whole newline-terminated lines only, so the run of whitespace ahead of
+  // it was load-bearing. These pin the match set the rewritten body has to keep.
+  describe('mermaid fence body', () => {
+    const LINE_SEPARATOR = String.fromCharCode(0x2028);
+
+    it('promotes a body of newline-terminated lines', () => {
+      const out = convertCodeBlocksToArtifacts('```mermaid\ngraph TD\n  A-->B\n```');
+      expect(wrappers(out)).toBe(1);
+      expect(out).toContain('type="application/vnd.ant.mermaid"');
+    });
+
+    it('promotes a fence opened with a CRLF break', () => {
+      const out = convertCodeBlocksToArtifacts('```mermaid\r\ngraph TD\n  A-->B\n```');
+      expect(wrappers(out)).toBe(1);
+    });
+
+    it('promotes a fence opened with a run of spaces before the break', () => {
+      const out = convertCodeBlocksToArtifacts('```mermaid   \ngraph TD\n  A-->B\n```');
+      expect(wrappers(out)).toBe(1);
+    });
+
+    it('leaves a body that does not end on a newline as a code block', () => {
+      const input = '```mermaid\ngraph TD\n  A-->B```';
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    });
+
+    it('leaves a body with CR line endings as a code block', () => {
+      const input = '```mermaid\r\ngraph TD\r\n  A-->B\r\n```';
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    });
+
+    it('leaves a body carrying a Unicode line separator as a code block', () => {
+      const input = '```mermaid\ngraph TD' + LINE_SEPARATOR + '  A-->B\n```';
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+    });
   });
 });
 
