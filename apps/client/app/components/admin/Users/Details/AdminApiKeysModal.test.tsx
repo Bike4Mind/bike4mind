@@ -104,7 +104,7 @@ describe('AdminApiKeysModal', () => {
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Rate limit reset for "pipeline key"');
   });
 
-  it('names the counter that caused the lockout in the success toast (#2974)', () => {
+  it('names the counter that caused the lockout in the success toast', () => {
     h.keys = [KEY];
     h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
       opts?.onSuccess?.({
@@ -119,6 +119,24 @@ describe('AdminApiKeysModal', () => {
 
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
       'Rate limit reset for "pipeline key" - request counter was at its ceiling'
+    );
+  });
+
+  it('names the management counter alone when only it was at its ceiling', () => {
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: { request: undefined, management: { minuteAtLimit: false, dayAtLimit: true } },
+      })
+    );
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      'Rate limit reset for "pipeline key" - management counter was at its ceiling'
     );
   });
 
