@@ -71,6 +71,8 @@ import { CognitoIdTokenError } from '@server/auth/verifyCognitoIdToken';
 
 const FEDERATED_CLIENT = {
   name: 'VibesWire',
+  // relying-party: the grant gate (step 5.5) only fires for these; a first-party client is exempt.
+  clientType: 'relying-party',
   federatedIdp: {
     issuer: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool',
     audience: 'app-client-id',
@@ -138,6 +140,32 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
     expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
+  });
+
+  it('grant gate (enforce): a first-party client with no grant still mints - the gate never runs for it', async () => {
+    // Regression: enforcing a grant on first-party/pre-existing federated clients (which never go
+    // through code.ts consent and so have no grant row) would 403 every such integration the moment
+    // the lever flips. They must be exempt - findGrant is not even consulted.
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, clientType: 'first-party' });
+    mockFindGrant.mockResolvedValue(null);
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+    expect(mockFindGrant).not.toHaveBeenCalled();
+  });
+
+  it('grant gate (enforce): a transient grant-lookup error degrades to grace (mints, no 500) instead of blocking', async () => {
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    mockFindGrant.mockRejectedValue(new Error('mongo unavailable'));
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('grant lookup failed'));
   });
 
   it('AC1/AC9: mints a scoped, short-lived key and returns it once', async () => {
