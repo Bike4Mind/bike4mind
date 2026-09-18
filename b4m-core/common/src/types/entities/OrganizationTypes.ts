@@ -64,6 +64,28 @@ export interface IOrganization extends ICreditHolder, IModelConfig {
 }
 export interface IOrganizationDocument extends IOrganization, IShareableDocument {}
 
+/**
+ * Who counts as a member for org-scoped reporting over user-authored content, and where the two
+ * populations that answer that question disagree.
+ *
+ * The org ACL - billing owner plus `users[]` rows granting read/write, the predicate behind
+ * `findMembershipOrgIds` - is who the ORG says its members are. The stamp population is who
+ * org-stamped content actually names: `Feedback.organizationId` is copied from the author's own
+ * `User.organizationId` pointer at write time, never from `users[]`. A manager listed only in
+ * `managerId`, an appointed org admin, or a seat whose ACL row lags therefore authors org-stamped
+ * rows while matching no ACL row, and an ACL-derived `$in` drops those rows with nothing to show
+ * for it. Callers scope on the union and surface the two one-sided lists rather than quietly
+ * picking a population.
+ */
+export interface OrgMemberPopulation {
+  /** Both populations unioned and deduplicated. Suitable for an `$in` filter. */
+  userIds: string[];
+  /** In the org's ACL, but with no `User.organizationId` pointing at this org. */
+  aclOnly: string[];
+  /** Pointed at this org by `User.organizationId`, but absent from the org's ACL. */
+  stampOnly: string[];
+}
+
 export interface IOrganizationRepository extends IBaseRepository<IOrganizationDocument>, ICreditHolderMethods {
   shareable: IShareableStaticMethods<IOrganizationDocument>;
 
@@ -137,6 +159,12 @@ export interface IOrganizationRepository extends IBaseRepository<IOrganizationDo
    * `user.organizationId`, which is a display preference.
    */
   findMembershipOrgIds(userId: string): Promise<string[]>;
+
+  /**
+   * Every user id whose org-stamped content belongs in this org's reports, plus the disagreement
+   * between the two populations that define "belongs". See `OrgMemberPopulation`.
+   */
+  findMemberUserIds(organizationId: string): Promise<OrgMemberPopulation>;
 
   /**
    * IDs of every organization where the user holds admin RIGHTS: billing owner (`userId`), team

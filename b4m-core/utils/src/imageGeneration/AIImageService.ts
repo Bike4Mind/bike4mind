@@ -41,6 +41,11 @@ export interface AIImageGenerationOptions {
  * Generation options plus an optional inpainting mask; each call site passes a
  * subset. `size` is widened to OpenAIImageSize (`string`) so callers can forward
  * provider-specific sizes; only OpenAIImageService.edit reads it.
+ *
+ * `n` rides along from AIImageGenerationOptions and is ignored: an ImageEditResponse carries one
+ * dataUrl, so no implementation of edit() renders or returns more than one image. Start honoring
+ * it only once this response type can carry several, or callers get billed for images they never
+ * receive.
  */
 export type ImageEditOptions = Omit<AIImageGenerationOptions, 'size'> & {
   mask?: string | null;

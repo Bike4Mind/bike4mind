@@ -31,6 +31,7 @@ describe('FeedbackModel indexes', () => {
 
   const EXPECTED_INDEX_NAMES = [
     'feedback_helpContext_eventId',
+    'feedback_org_createdAt',
     'feedback_org_subject_createdAt',
     'feedback_questId_createdAt',
     'feedback_sessionId_createdAt',

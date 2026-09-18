@@ -12,7 +12,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import migration from './20260918000000_backfill-oauthclient-token-endpoint-auth-method';
+import migration from './20260918020000_backfill-oauthclient-token-endpoint-auth-method';
 
 const CONFIRM_ENV = 'OAUTH_BACKFILL_CONFIRMED';
 let logged: string[] = [];

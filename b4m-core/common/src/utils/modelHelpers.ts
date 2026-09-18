@@ -161,3 +161,16 @@ export function supportsImageEdit(model?: string | null): boolean {
   if (!model) return false;
   return (EDIT_SUPPORTED_IMAGE_MODELS as readonly string[]).includes(model);
 }
+
+/**
+ * Images an edit request renders, whatever `n` it asks for. Every provider's `edit()`
+ * resolves to a single-image ImageEditResponse, so on the edit path `n` is not a billable
+ * multiplier the way it is for generation.
+ *
+ * Both edit dispatchers bill through this so the charge equals what is delivered: the
+ * image-edit queue handler (services/llm/ImageEdit.ts) and the chat edit_image tool, whose
+ * onToolStart payload feeds both the classic (ToolBuilder.reserveImageCredits) and agent-mode
+ * (estimateGeneratedMediaUsd) credit rails. Raise it only together with ImageEditResponse itself -
+ * billing more than one image before the response can carry more re-opens the overcharge.
+ */
+export const IMAGES_PER_EDIT_REQUEST = 1;
