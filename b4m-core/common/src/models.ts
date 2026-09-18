@@ -110,8 +110,9 @@ export const IMAGE_SIZE_CONSTRAINTS = {
   },
   /**
    * dall-e-3 is no longer in ImageModels, but the generate path still accepts its sizes
-   * for callers holding a persisted one. Kept separate from DALL_E_2 because the two
-   * tiers accept different lists and only dall-e-2 supports edit/variation.
+   * for callers holding a persisted one. Listed separately to record what each tier really
+   * accepts; isSupportedImageSize currently measures both against the union of the two
+   * (OPENAI_LEGACY_IMAGE_SIZES), so the split is documentation rather than enforcement.
    */
   DALL_E_3: {
     sizes: ['1024x1024', '1792x1024', '1024x1792'] as const,
