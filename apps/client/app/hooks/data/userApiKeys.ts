@@ -210,10 +210,30 @@ export function useAdminGetUserApiKeys(userId: string | undefined) {
   });
 }
 
+/** Whether a counter's minute and/or day window was at its ceiling just
+ * before a reset - mirrors the server's CounterLockoutState
+ * (server/utils/apiKeyRateLimitCheck.ts). */
+export interface RateLimitCounterLockoutState {
+  minuteAtLimit: boolean;
+  dayAtLimit: boolean;
+}
+
+/** Response of POST /api/admin/user-api-keys/[id]/reset-rate-limit. A
+ * `lockout` entry is undefined when that counter's usage read failed - a
+ * best-effort diagnostic; the reset itself always still ran regardless. */
+export interface ApiKeyRateLimitResetResponse {
+  success: boolean;
+  id: string;
+  lockout: {
+    request?: RateLimitCounterLockoutState;
+    management?: RateLimitCounterLockoutState;
+  };
+}
+
 export function useAdminResetApiKeyRateLimit({ onSuccess }: { onSuccess?: () => void } = {}) {
   const queryClient = useQueryClient();
 
-  return useMutation<{ success: boolean; id: string }, Error, string>({
+  return useMutation<ApiKeyRateLimitResetResponse, Error, string>({
     mutationFn: async keyId => {
       const response = await api.post(`/api/admin/user-api-keys/${keyId}/reset-rate-limit`);
       return response.data;
