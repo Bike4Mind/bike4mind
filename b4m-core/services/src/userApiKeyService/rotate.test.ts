@@ -77,6 +77,16 @@ describe('rotateUserApiKey - no escalation by rotation', () => {
 
     await expect(rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never)).rejects.toThrow(/scopes/i);
   });
+
+  it('refuses an admin:*-scoped API-key caller rotating a key holding a scope it does not literally list', async () => {
+    // admin:* is deliberately not treated as a superset for rotation - containment is literal.
+    const adapters = makeAdapters(key({ scopes: [ApiKeyScope.READ_NOTEBOOKS] }), [ApiKeyScope.ADMIN]);
+
+    await expect(rotateUserApiKey('owner-1', { keyId: 'k1' }, adapters as never)).rejects.toThrow(
+      /scopes the calling key does not have/i
+    );
+    expect(adapters.db.userApiKeys.update).not.toHaveBeenCalled();
+  });
 });
 
 /**
