@@ -280,10 +280,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // `number`, but that is only a claim about catalog data, and a row that omits it
         // reaches here for real (the embed route's own integration fixture did). No `??`
         // here on purpose - resolveOutputMaxTokens absorbs an absent cap itself, so the
-        // two call sites cannot drift on what an unknown cap means. The remaining hole is
-        // upstream: toModelInfo substitutes a *derived* 4096 that then clamps an adaptive
-        // model as though the row had declared it, which has to be closed there where
-        // declared and derived are still tellable apart.
+        // two call sites cannot drift on what an unknown cap means. A cap toModelInfo
+        // merely derived is absorbed there too, via modelInfo.maxOutputTokensDerived.
         modelMaxOutputTokens: modelInfo.max_tokens,
       })
     : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);

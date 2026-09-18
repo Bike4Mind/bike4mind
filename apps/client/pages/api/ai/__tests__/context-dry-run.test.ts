@@ -101,6 +101,32 @@ describe('POST /api/ai/context-dry-run', () => {
     expect(mockListFabFiles).not.toHaveBeenCalled();
   });
 
+  // A derived cap states nothing about the model (see safeInputWindow in @bike4mind/utils), so
+  // clamping the reserve to it would report a much smaller extraction budget than the real turn
+  // reserves for a reasoning model that resolves a far larger requestedMaxTokens.
+  it('reserves the full requested output rather than clamping to a derived cap', async () => {
+    mockListFabFiles.mockResolvedValue([file({ extractedCharCount: 40_000, fileSize: 40_000 })]);
+
+    const derived = await run({
+      contextWindow: 200_000,
+      maxOutputTokens: 4096,
+      maxOutputTokensDerived: true,
+      requestedMaxTokens: 32_000,
+      modelType: 'text',
+      fileIds: ['f1'],
+    });
+    const declared = await run({
+      contextWindow: 200_000,
+      maxOutputTokens: 4096,
+      requestedMaxTokens: 32_000,
+      modelType: 'text',
+      fileIds: ['f1'],
+    });
+
+    expect(derived.body.maxSafeInputTokens).toBe(200_000 - 32_000 - 1000);
+    expect(derived.body.maxSafeInputTokens).toBeLessThan(declared.body.maxSafeInputTokens);
+  });
+
   it('reports a 4,000-character file as fully delivered on an 8k model', async () => {
     mockListFabFiles.mockResolvedValue([file({ extractedCharCount: 4000 })]);
 

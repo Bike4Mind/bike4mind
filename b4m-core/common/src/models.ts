@@ -550,6 +550,15 @@ export type ModelInfo = {
    * generated response.
    */
   max_tokens: number;
+  /**
+   * True when `max_tokens` above was DERIVED (toModelInfo's default for a record that
+   * declares no cap), not stated by the source. Absent means declared, so every ModelInfo
+   * built outside toModelInfo - the adapter tables, which hardcode a real cap - is correct
+   * by omission. Sizing rules must not treat a derived cap as the model's real ceiling:
+   * see resolveOutputMaxTokens, where clamping an adaptive model to the derived 4096
+   * starves its visible answer.
+   */
+  maxOutputTokensDerived?: boolean;
   can_stream?: boolean;
   /**
    * Whether the model supports the thinking feature.

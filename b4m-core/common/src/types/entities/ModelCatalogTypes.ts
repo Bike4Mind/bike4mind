@@ -326,6 +326,9 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
 
   contextWindow: 'limits',
   max_tokens: 'limits',
+  // Rides with the cap it describes: a row owning {limits} must replace both, or an
+  // overlay would leave the previous source's derived/declared verdict on a new cap.
+  maxOutputTokensDerived: 'limits',
 
   can_think: 'reasoning',
   thinkingStyle: 'reasoning',

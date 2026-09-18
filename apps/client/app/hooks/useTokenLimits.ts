@@ -7,6 +7,7 @@ interface ModelInfoEntry {
   type?: ModelInfo['type'];
   contextWindow?: number;
   max_tokens?: number;
+  maxOutputTokensDerived?: boolean;
 }
 
 interface UseTokenLimitsParams {
@@ -34,12 +35,18 @@ export function useTokenLimits({ model, modelInfo, max_tokens, chatInputLength }
   const contextWindowLimit =
     returnsMedia && !rawContextWindow ? DEFAULT_UNKNOWN_CONTEXT_WINDOW : (rawContextWindow ?? 0);
   const modelCatalogMaxOutput = activeModelEntry?.max_tokens ?? 0;
+  const isDerivedMaxOutput = activeModelEntry?.maxOutputTokensDerived === true;
 
   // Must agree with the store's default (computeDefaultMaxTokens) - this only stands in for the
   // window between mount and the model-change effect writing a real max_tokens.
   const getDefaultMaxOutputTokens = useMemo(
-    () => computeDefaultMaxTokens({ contextWindow: contextWindowLimit, max_tokens: modelCatalogMaxOutput }),
-    [contextWindowLimit, modelCatalogMaxOutput]
+    () =>
+      computeDefaultMaxTokens({
+        contextWindow: contextWindowLimit,
+        max_tokens: modelCatalogMaxOutput,
+        maxOutputTokensDerived: isDerivedMaxOutput,
+      }),
+    [contextWindowLimit, modelCatalogMaxOutput, isDerivedMaxOutput]
   );
 
   const effectiveMaxOutputTokens = useMemo(() => {
@@ -47,7 +54,10 @@ export function useTokenLimits({ model, modelInfo, max_tokens, chatInputLength }
     // Defensive cap against stale max_tokens persisted from a previously-selected model:
     // (1) cannot exceed this model's catalog max_tokens, (2) cannot consume the full
     // context window (which would leave 0 budget for input and trip the over-limit state).
-    const cappedByModel = modelCatalogMaxOutput > 0 ? Math.min(requested, modelCatalogMaxOutput) : requested;
+    // A derived cap states nothing about the model (see computeDefaultMaxTokens), so it must
+    // not clamp the window-based target back down to it.
+    const cappedByModel =
+      modelCatalogMaxOutput > 0 && !isDerivedMaxOutput ? Math.min(requested, modelCatalogMaxOutput) : requested;
     if (contextWindowLimit > 0 && cappedByModel >= contextWindowLimit) {
       // For ctx < 2 * INPUT_HEADROOM_TOKENS, the absolute reserve would zero output -
       // fall back to halving the context so both sides stay positive.
@@ -56,7 +66,7 @@ export function useTokenLimits({ model, modelInfo, max_tokens, chatInputLength }
       return Math.max(1, contextWindowLimit - reserve);
     }
     return cappedByModel;
-  }, [max_tokens, getDefaultMaxOutputTokens, modelCatalogMaxOutput, contextWindowLimit]);
+  }, [max_tokens, getDefaultMaxOutputTokens, modelCatalogMaxOutput, isDerivedMaxOutput, contextWindowLimit]);
 
   const maxInputTokens = useMemo(() => {
     return Math.max(0, contextWindowLimit - effectiveMaxOutputTokens);

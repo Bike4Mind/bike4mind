@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { api } from '@client/app/contexts/ApiContext';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
+import { computeDefaultMaxTokens } from '@client/app/utils/aiSettingsUtils';
 import type { AttachmentFitWarning } from '@client/app/components/Session/ContextUsageWarning';
 
 /**
@@ -89,9 +90,16 @@ export function useAttachmentFitWarning(
       // The shared authed client, NOT bare axios: this route requires a bearer token, and an
       // unauthenticated call 401s, which with retry:false leaves data undefined and the banner silent -
       // indistinguishable from "the file fits".
+      // For a derived cap, model.max_tokens is only toModelInfo's substitute default (see
+      // modelCatalog.ts), not what a real turn reserves - computeDefaultMaxTokens is the same
+      // window-share default the composer applies, so the dry run reserves against it instead
+      // of understating the real turn's output budget.
+      const requestedMaxTokens = model ? computeDefaultMaxTokens(model) : undefined;
       const res = await api.post<{ files: DryRunFile[]; textFileCount: number }>('/api/ai/context-dry-run', {
         contextWindow: model?.contextWindow,
         maxOutputTokens: model?.max_tokens,
+        maxOutputTokensDerived: model?.maxOutputTokensDerived,
+        requestedMaxTokens,
         modelType: model?.type,
         fileIds,
       });

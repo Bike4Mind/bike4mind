@@ -125,6 +125,11 @@ export function toModelInfo(record: RenderableModelRecord): ModelInfo {
     backend: record.backend,
     contextWindow: record.contextWindow,
     max_tokens: record.maxOutputTokens ?? Math.min(record.contextWindow, DEFAULT_MAX_OUTPUT_TOKENS),
+    // Stamped only on the substituted cap, so an absent flag keeps meaning "declared" for
+    // every ModelInfo built outside this adapter. Downstream sizing needs the two apart:
+    // a derived cap is a placeholder, and clamping to it re-pins a model that reasons
+    // inside its output budget at the value that truncates the answer.
+    ...(record.maxOutputTokens === undefined ? { maxOutputTokensDerived: true } : {}),
     pricing: {},
     can_stream: record.canStream,
     can_think: record.reasoning?.supported ?? false,
@@ -256,7 +261,9 @@ export function toModelRecord(info: ModelInfo): RenderableModelRecord {
     type: info.type,
     name: info.name,
     contextWindow: info.contextWindow,
-    maxOutputTokens: info.max_tokens,
+    // A derived cap is not the model's belief about itself, so it must not be written back
+    // as though the row declared it - that would launder the default into catalog data.
+    maxOutputTokens: info.maxOutputTokensDerived === true ? undefined : info.max_tokens,
     canStream: info.can_stream,
     // Omitted when the source said nothing about thinking: asserting
     // `supported: false` would claim the reasoning group and turn every silent

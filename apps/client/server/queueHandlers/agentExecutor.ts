@@ -53,12 +53,19 @@ import {
   processFabFilesServer,
   attachedContentExtractionBudget,
   safeInputWindow,
+  DEFAULT_OUTPUT_MAX_TOKENS,
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
 import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
-import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  getAvailableModels,
+  resolveDeprecatedModelId,
+  resolveOutputMaxTokens,
+  type ApiKeyTable,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
@@ -692,7 +699,13 @@ const AGENT_SYSTEM_PROMPT_RESERVE = 4000;
  * leave the run behaving exactly as it did before, not kill the turn.
  */
 async function materializeAttachmentsForRun(args: {
-  execution: { userId: string; query: string; messageFileIds?: string[]; sessionFabFileIds?: string[] };
+  execution: {
+    userId: string;
+    query: string;
+    messageFileIds?: string[];
+    sessionFabFileIds?: string[];
+    maxTokens?: number;
+  };
   sessionKnowledgeIds: string[];
   scope: Record<string, unknown>;
   lakeAccess: AttachmentLakeAccess;
@@ -760,8 +773,19 @@ async function materializeAttachmentsForRun(args: {
     }
     const embeddingFactory = new EmbeddingFactory(embeddingConfig);
 
+    // Reserve against the budget the turn will actually send, not the model's raw cap - a
+    // derived cap on a reasoning model resolves to a much larger value (see
+    // resolveOutputMaxTokens), and reserving the smaller raw cap here while the turn sends the
+    // resolved one understates the output reserve and overstates how much attachment content the
+    // input window can actually hold.
+    const resolvedMaxTokens = resolveOutputMaxTokens({
+      requested: execution.maxTokens,
+      fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+    });
     const budget = attachedContentExtractionBudget(
-      safeInputWindow(modelInfo, modelInfo.max_tokens),
+      safeInputWindow(modelInfo, resolvedMaxTokens),
       AGENT_SYSTEM_PROMPT_RESERVE
     );
 

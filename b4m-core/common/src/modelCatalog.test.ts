@@ -31,6 +31,7 @@ describe('toModelInfo', () => {
       backend: ModelBackend.OpenAI,
       contextWindow: 128_000,
       max_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      maxOutputTokensDerived: true,
       pricing: {},
       can_stream: undefined,
       can_think: false,
@@ -56,6 +57,11 @@ describe('toModelInfo', () => {
   it('never caps max_tokens above the context window', () => {
     expect(toModelInfo({ ...minimal, contextWindow: 2048 }).max_tokens).toBe(2048);
     expect(toModelInfo({ ...minimal, maxOutputTokens: 64_000 }).max_tokens).toBe(64_000);
+  });
+
+  it('marks a substituted cap derived and leaves a declared one unmarked', () => {
+    expect(toModelInfo(minimal).maxOutputTokensDerived).toBe(true);
+    expect(toModelInfo({ ...minimal, maxOutputTokens: 64_000 }).maxOutputTokensDerived).toBeUndefined();
   });
 
   it('derives can_think and thinkingStyle from the unified reasoning field', () => {
@@ -124,6 +130,16 @@ describe('toModelRecord', () => {
   it('round-trips back to the same ModelInfo, pricing excepted', () => {
     // Pricing has no catalog home: applyModelPriceCatalog is its only writer.
     expect(toModelInfo(toModelRecord(info))).toEqual({ ...info, pricing: {}, private: false, disabled: false });
+  });
+
+  it('does not write a derived cap back as a declared one', () => {
+    const derived: ModelInfo = { ...info, max_tokens: DEFAULT_MAX_OUTPUT_TOKENS, maxOutputTokensDerived: true };
+    expect(toModelRecord(derived).maxOutputTokens).toBeUndefined();
+    // And the round trip re-derives the same value rather than losing the model's shape.
+    expect(toModelInfo(toModelRecord(derived))).toMatchObject({
+      max_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
+      maxOutputTokensDerived: true,
+    });
   });
 
   it('never guesses dispatch data, which no ModelInfo field can supply', () => {
