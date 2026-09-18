@@ -56,7 +56,12 @@ describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
       expect(blocked.allowed).toBe(false);
       expect(blocked.limitType).toBe('minute');
 
-      await resetApiKeyRateLimit(keyId);
+      // Against a real cache repo (not mocked), the usage this reports is
+      // read from the exact document the atomic findOneAndDelete removed -
+      // proves the reported count matches what was actually cleared, not a
+      // stale pre-read.
+      const result = await resetApiKeyRateLimit(keyId);
+      expect(result.request).toMatchObject({ minute: 2, day: 2 });
 
       // Fresh window: allowed again, counter restarted at 1.
       const afterReset = await checkApiKeyRateLimit(keyId, rateLimit);
@@ -89,10 +94,12 @@ describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
   });
 
   it('is idempotent: resetting a never-used or already-reset key is a no-op', async () => {
-    await expect(resetApiKeyRateLimit('never-used-key')).resolves.toBeUndefined();
+    await expect(resetApiKeyRateLimit('never-used-key')).resolves.toMatchObject({
+      request: { minute: 0, day: 0 },
+    });
     await checkApiKeyRateLimit(keyId, rateLimit);
     await resetApiKeyRateLimit(keyId);
-    await expect(resetApiKeyRateLimit(keyId)).resolves.toBeUndefined();
+    await expect(resetApiKeyRateLimit(keyId)).resolves.toMatchObject({ request: { minute: 0, day: 0 } });
   });
 
   it('alsoResetManagement additionally clears the management counter (#2883)', async () => {
@@ -104,9 +111,12 @@ describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
     expect(await cacheRepository.findByKey(management.minuteKey)).toBeTruthy();
     expect(await cacheRepository.findByKey(management.dayKey)).toBeTruthy();
 
-    await resetApiKeyRateLimit(keyId, { alsoResetManagement: true });
+    const result = await resetApiKeyRateLimit(keyId, { alsoResetManagement: true });
 
     expect(await cacheRepository.findByKey(management.minuteKey)).toBeFalsy();
     expect(await cacheRepository.findByKey(management.dayKey)).toBeFalsy();
+    // The management usage reported back reflects what was actually cleared -
+    // one call was made above, so the minute counter was at 1 when deleted.
+    expect(result.management).toMatchObject({ minute: 1, day: 1 });
   });
 });
