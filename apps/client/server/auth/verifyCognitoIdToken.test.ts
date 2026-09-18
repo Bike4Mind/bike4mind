@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Stub aws-jwt-verify: JwtVerifier.create returns a verifier whose verify() we drive per-test.
 const mockVerify = vi.fn();
@@ -171,5 +171,48 @@ describe('verifyCognitoIdToken - B4M-issued ID token (subjectSource: sub)', () =
     mockVerify.mockResolvedValue({ token_use: 'id', identities: [{ userId: 'u', providerName: 'B4M' }] });
     const { providerName: _omitted, ...withoutProvider } = IDP;
     await expect(verifyCognitoIdToken('tok', withoutProvider)).rejects.toBeInstanceOf(CognitoIdTokenError);
+  });
+});
+
+describe('verifyCognitoIdToken - staged subjectSource=sub requirement (OAUTH_AI_TOKEN_REQUIRE_SUB)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockCreate.mockImplementation(() => ({ verify: mockVerify }));
+    __clearVerifierCache();
+    delete process.env.OAUTH_AI_TOKEN_REQUIRE_SUB;
+  });
+  afterEach(() => {
+    delete process.env.OAUTH_AI_TOKEN_REQUIRE_SUB;
+  });
+
+  it('enforce mode rejects an identities-source client', async () => {
+    process.env.OAUTH_AI_TOKEN_REQUIRE_SUB = 'true';
+    mockVerify.mockResolvedValue({
+      token_use: 'id',
+      identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
+    });
+    await expect(verifyCognitoIdToken('tok', IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+  });
+
+  it('grace mode (flag unset) still resolves an identities-source client but logs a would-reject', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockVerify.mockResolvedValue({
+      token_use: 'id',
+      identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
+    });
+
+    const result = await verifyCognitoIdToken('tok', IDP);
+
+    expect(result.b4mUserId).toBe('b4m-user-123');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
+    warn.mockRestore();
+  });
+
+  it('enforce mode does not affect a subjectSource=sub client', async () => {
+    process.env.OAUTH_AI_TOKEN_REQUIRE_SUB = 'true';
+    mockVerify.mockResolvedValue({ sub: 'b4m-user-777' });
+
+    const result = await verifyCognitoIdToken('tok', B4M_IDP);
+    expect(result.b4mUserId).toBe('b4m-user-777');
   });
 });
