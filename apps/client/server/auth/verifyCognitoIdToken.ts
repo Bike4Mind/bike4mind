@@ -138,6 +138,23 @@ export async function verifyCognitoIdToken(
     return { b4mUserId: extractSubUserId(claims), claims };
   }
 
+  // Staged deprecation of the self-asserted `identities` path (subjectSource !== 'sub'): a
+  // federated client should present a B4M-issued ID token whose `sub` B4M signed, not a userId
+  // its own Cognito pool asserts in `identities[]` (a compromised or misconfigured pool could
+  // name any B4M user there). Grace by default so an un-migrated client keeps working while
+  // operators watch this log; set OAUTH_AI_TOKEN_REQUIRE_SUB=true per stage to enforce once
+  // every live client is on `sub`. Retire this whole branch (and extractB4mUserId) once
+  // enforcement is on everywhere.
+  if (process.env.OAUTH_AI_TOKEN_REQUIRE_SUB === 'true') {
+    throw new CognitoIdTokenError(
+      "Federated client must present a B4M-issued ID token (subjectSource='sub'); the self-asserted identities path is no longer accepted"
+    );
+  }
+  console.warn(
+    `[OAUTH_AI_TOKEN] would-reject: federated client (issuer ${idp.issuer}) uses the self-asserted ` +
+      "'identities' subject source; set OAUTH_AI_TOKEN_REQUIRE_SUB=true to enforce subjectSource='sub'"
+  );
+
   if (claims.token_use !== 'id') {
     throw new CognitoIdTokenError(`Expected an ID token (token_use='id'), got token_use='${String(claims.token_use)}'`);
   }
