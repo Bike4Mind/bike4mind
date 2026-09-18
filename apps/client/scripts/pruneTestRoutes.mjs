@@ -10,16 +10,44 @@
 // silently breaking every S3/MinIO operation in the self-host image. Pruning
 // the compiled entries keeps test code out of the shipped server entirely.
 //
-// Usage: node pruneTestRoutes.mjs <path-to-.next-dir>
+// The hosted build cares for a second reason: OpenNext's copyTracedFiles reads
+// the standalone tree's traces, so a test route's .nft.json pulls its whole
+// dependency graph into the Lambda bundle even though the route is dead weight.
+//
+// Usage: node pruneTestRoutes.mjs [--if-standalone] <path-to-.next-dir>
 
 import fs from 'node:fs';
 import path from 'node:path';
 
-const nextDir = process.argv[2];
-if (!nextDir || !fs.existsSync(path.join(nextDir, 'server', 'pages-manifest.json'))) {
-  console.error('usage: pruneTestRoutes.mjs <.next dir containing server/pages-manifest.json>');
+const args = process.argv.slice(2);
+const ifStandalone = args.includes('--if-standalone');
+const nextDir = args.find((arg) => !arg.startsWith('--'));
+
+const usage = () => {
+  console.error('usage: pruneTestRoutes.mjs [--if-standalone] <.next dir containing server/pages-manifest.json>');
   process.exit(1);
+};
+
+if (!nextDir) usage();
+
+// `next build` only writes .next/standalone when standalone output is on, which the postbuild
+// hook cannot know in advance. --if-standalone makes a missing standalone ROOT a no-op while
+// leaving every wrong path below it fatal, so a typo in the app segment still fails the build.
+if (ifStandalone) {
+  const segments = path.resolve(nextDir).split(path.sep);
+  const standaloneIndex = segments.lastIndexOf('standalone');
+  if (standaloneIndex === -1) {
+    console.error('pruneTestRoutes: --if-standalone needs a path under .next/standalone');
+    process.exit(1);
+  }
+  const standaloneRoot = segments.slice(0, standaloneIndex + 1).join(path.sep);
+  if (!fs.existsSync(standaloneRoot)) {
+    console.log(`pruneTestRoutes: no standalone output at ${standaloneRoot}, nothing to prune`);
+    process.exit(0);
+  }
 }
+
+if (!fs.existsSync(path.join(nextDir, 'server', 'pages-manifest.json'))) usage();
 
 const isTestEntry = (p) => p.includes('/__tests__/') || /\.test\.js$/.test(p);
 

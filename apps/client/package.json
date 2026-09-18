@@ -17,6 +17,7 @@
     "local": "concurrently npm:local:*",
     "sst": "sst",
     "build": "NODE_OPTIONS='--max-old-space-size=12288' next build",
+    "postbuild": "node scripts/pruneTestRoutes.mjs --if-standalone .next/standalone/apps/client/.next",
     "clean": "rm -rf node_modules/ .next/ .sst/ public/pdfjs public/pdf.worker.min.mjs public/highs.wasm",
     "start": "next start",
     "lint": "eslint .",
