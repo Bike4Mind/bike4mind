@@ -1,27 +1,33 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { NOT_CONFIGURED_PLACEHOLDER, SST_PLACEHOLDER_VALUE } from '@bike4mind/common';
+import {
+  SST_PLACEHOLDER_VALUE as INFRA_SST_PLACEHOLDER_VALUE,
+  NOT_CONFIGURED_PLACEHOLDER as INFRA_NOT_CONFIGURED_PLACEHOLDER,
+} from '@bike4mind/infra';
 import {
   validateEncryptionKey,
   validateMongoUri,
   validateSessionSecret,
   validateJwtSecret,
+  validateSharedSecret,
   JWT_SECRET_MIN_LENGTH,
   JWT_SECRET_WARN_LENGTH,
   SESSION_SECRET_MIN_LENGTH,
+  SHARED_SECRET_MIN_LENGTH,
 } from './tier1SecretValidators';
-
-// Mock SST_PLACEHOLDER_VALUE from @bike4mind/common
-vi.mock('@bike4mind/common', () => ({
-  SST_PLACEHOLDER_VALUE: 'my-secret-placeholder-value',
-}));
-
-// Mock isValidEncryptionKey from secretEncryption
-vi.mock('./secretEncryption', () => ({
-  isValidEncryptionKey: vi.fn((key: string) => key.length === 64 && /^[a-f0-9]+$/i.test(key)),
-}));
 
 describe('tier1SecretValidators', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  // @bike4mind/infra declares its own copies because infra/*.ts cannot resolve
+  // @bike4mind/common from the sst config bundle. Nothing else keeps them equal.
+  describe('placeholder literals', () => {
+    it('match the @bike4mind/common declarations', () => {
+      expect(INFRA_SST_PLACEHOLDER_VALUE).toBe(SST_PLACEHOLDER_VALUE);
+      expect(INFRA_NOT_CONFIGURED_PLACEHOLDER).toBe(NOT_CONFIGURED_PLACEHOLDER);
+    });
   });
 
   describe('validateJwtSecret', () => {
@@ -215,11 +221,8 @@ describe('tier1SecretValidators', () => {
       expect(result.status).toBe('invalid');
     });
 
-    it('returns invalid for low-entropy key', async () => {
-      // Mock isValidEncryptionKey to return true for this test
-      const { isValidEncryptionKey } = await import('./secretEncryption');
-      vi.mocked(isValidEncryptionKey).mockReturnValueOnce(true);
-
+    it('returns invalid for low-entropy key', () => {
+      // 64 chars and all valid hex, so it clears the format check and is caught by entropy.
       const lowEntropyKey = 'a'.repeat(64);
       const result = validateEncryptionKey(lowEntropyKey);
       expect(result.status).toBe('invalid');
@@ -291,9 +294,57 @@ describe('tier1SecretValidators', () => {
     });
   });
 
+  describe('validateSharedSecret', () => {
+    it('returns missing for undefined', () => {
+      const result = validateSharedSecret(undefined);
+      expect(result.status).toBe('missing');
+      expect(result.isValid).toBe(false);
+    });
+
+    it('returns placeholder for the SST placeholder value', () => {
+      const result = validateSharedSecret(SST_PLACEHOLDER_VALUE);
+      expect(result.status).toBe('placeholder');
+      expect(result.isValid).toBe(false);
+    });
+
+    it('returns placeholder for the not-configured literal', () => {
+      const result = validateSharedSecret(NOT_CONFIGURED_PLACEHOLDER);
+      expect(result.status).toBe('placeholder');
+      expect(result.isValid).toBe(false);
+    });
+
+    it('returns placeholder regardless of case or surrounding whitespace', () => {
+      const result = validateSharedSecret(`  ${NOT_CONFIGURED_PLACEHOLDER.toUpperCase()}  `);
+      expect(result.status).toBe('placeholder');
+      expect(result.isValid).toBe(false);
+    });
+
+    it('returns insecure below the minimum length', () => {
+      const result = validateSharedSecret('a1b2c3d4e5');
+      expect(result.status).toBe('insecure');
+      expect(result.isValid).toBe(false);
+    });
+
+    it('returns invalid for a repeated-character token', () => {
+      const result = validateSharedSecret('a'.repeat(64));
+      expect(result.status).toBe('invalid');
+      expect(result.isValid).toBe(false);
+    });
+
+    it('returns configured for a 64-char random token', () => {
+      const result = validateSharedSecret('4f'.repeat(32));
+      expect(result.status).toBe('configured');
+      expect(result.isValid).toBe(true);
+    });
+  });
+
   describe('exported constants', () => {
     it('has correct JWT_SECRET_MIN_LENGTH', () => {
       expect(JWT_SECRET_MIN_LENGTH).toBe(64);
+    });
+
+    it('has correct SHARED_SECRET_MIN_LENGTH', () => {
+      expect(SHARED_SECRET_MIN_LENGTH).toBe(32);
     });
 
     it('has correct JWT_SECRET_WARN_LENGTH', () => {
