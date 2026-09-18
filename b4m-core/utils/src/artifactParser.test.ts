@@ -2,6 +2,45 @@ import { describe, it, expect } from 'vitest';
 import { convertCodeBlocksToArtifacts } from './artifactParser';
 import { parseArtifacts, isSvgGraphicallyEmpty } from './artifactParser';
 
+// A run under this is noise-dominated: flooring it before dividing keeps timer jitter
+// on a fast, near-instant call from inflating the growth ratio. Set well above the
+// ~2ms these cases actually take, so a shared CI runner under load cannot trip the
+// ratio on scheduling noise alone; a real regression is caught by the ceiling below.
+const MIN_BASELINE_MS = 25;
+// Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and
+// cubic (~8x), so the ratio check has margin on both sides.
+const GROWTH_RATIO_CEILING = 3;
+// Generous on purpose: this only exists to catch a genuine wedge, not to pin steady-state timing.
+const SMALL_INPUT_MS_CEILING = 500;
+
+/**
+ * Asserts near-linear scaling from `small` to `small * 2` input size, in place of a
+ * fixed time budget: a budget only fails once the synchronous scan already returned,
+ * so a real quadratic regression hangs the test runner instead of failing it. Both
+ * sizes stay small enough to run fast even on a quadratic (or worse) implementation.
+ */
+function assertLinearGrowth(
+  build: (n: number) => string,
+  small: number,
+  checkOutput: (out: string, input: string) => void = (out, input) => expect(out).toBe(input)
+) {
+  const measure = (n: number) => {
+    const input = build(n);
+    const startedAt = performance.now();
+    const out = convertCodeBlocksToArtifacts(input);
+    const elapsedMs = performance.now() - startedAt;
+    checkOutput(out, input);
+    return elapsedMs;
+  };
+
+  const baselineMs = measure(small);
+  expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+
+  const doubledMs = measure(small * 2);
+  const ratio = doubledMs / Math.max(baselineMs, MIN_BASELINE_MS);
+  expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+}
+
 /**
  * Regression coverage for the artifact parser hardening (gaps B & C):
  * bare <!DOCTYPE>/<html> documents and ```html fragments must be promoted to
@@ -360,20 +399,31 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(out).toContain('```svg');
   });
 
-  it('leaves a fence followed by a long whitespace run untouched, in bounded time', () => {
+  it('leaves a fence followed by a long whitespace run untouched, scaling linearly', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
     for (const label of ['html', 'svg', 'tsx', 'json', 'mermaid']) {
-      const input = '```' + label + '\n' + '\n'.repeat(200000) + 'x';
-      const startedAt = Date.now();
-      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
-      expect(Date.now() - startedAt).toBeLessThan(1000);
+      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 50000);
     }
   });
 
   it('does not promote an svg fence whose closer precedes its opening tag', () => {
     const input = '```svg\n</svg>\n<svg viewBox="0 0 2 2">\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  // Mirrors MAX_FENCE_SCAN_CHARS in the source file (not exported). A promotion
+  // predicate only reads the first 256000 chars of a fence body, so an anchor
+  // sitting past that window must leave the fence as a plain code block rather
+  // than being promoted - the deliberate DoS ceiling, not a correctness bug.
+  const MAX_FENCE_SCAN_CHARS = 256000;
+
+  it('leaves a fence whose promotion anchor sits past the scan window as a plain code block', () => {
+    const body = 'x'.repeat(MAX_FENCE_SCAN_CHARS + 50000) + '<svg></svg>';
+    const input = '```svg\n' + body + '\n```';
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(out).toBe(input);
+    expect(out).not.toContain('<artifact');
   });
 
   it('falls a non-document html fence through to the fragment handler', () => {
@@ -407,14 +457,10 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(ls).toContain('HTML Page');
   });
 
-  it('leaves an unterminated react fence untouched, in bounded time', () => {
+  it('leaves an unterminated react fence untouched, scaling linearly', () => {
     // Same pathological shape as the html case: component markers present on many
     // lines, no closing fence. The old anchored pattern was quadratic in body size.
-    const input = '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(8000);
-    const startedAt = Date.now();
-    const out = convertCodeBlocksToArtifacts(input);
-    expect(Date.now() - startedAt).toBeLessThan(2000);
-    expect(out).toBe(input);
+    assertLinearGrowth(n => '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(n), 1000);
   });
 
   it('drops a double quote from a promoted document title', () => {
@@ -426,38 +472,22 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     }
   });
 
-  it('leaves an svg fence with no closing tag untouched, in bounded time', () => {
+  it('leaves an svg fence with no closing tag untouched, scaling linearly', () => {
     // Openings with no closer: the shape that made a single <svg...</svg> predicate
     // re-scan the body from each one.
-    const input = '```svg\n' + '<svg '.repeat(51200) + '\n```';
-    const startedAt = Date.now();
-    const out = convertCodeBlocksToArtifacts(input);
-    expect(Date.now() - startedAt).toBeLessThan(1000);
-    expect(out).toBe(input);
+    assertLinearGrowth(n => '```svg\n' + '<svg '.repeat(n) + '\n```', 10000);
   });
 
-  it('leaves a single-line react fence untouched, in bounded time', () => {
+  it('leaves a single-line react fence untouched, scaling linearly', () => {
     // One line, no newlines to bound a per-keyword rescan, no component marker.
-    const input = '```tsx\n' + 'const '.repeat(43000) + '\n```';
-    const startedAt = Date.now();
-    const out = convertCodeBlocksToArtifacts(input);
-    expect(Date.now() - startedAt).toBeLessThan(1000);
-    expect(out).toBe(input);
+    assertLinearGrowth(n => '```tsx\n' + 'const '.repeat(n) + '\n```', 8000);
   });
 
-  it('leaves unterminated html fences untouched, in bounded time', () => {
+  it('leaves unterminated html fences untouched, scaling linearly', () => {
     // First body is the pathological shape for the old anchored pattern: both anchors
     // present, many candidate splits for its two lazy groups, no closing fence.
-    const bodies = [
-      '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(16000),
-      '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(20000),
-    ];
-    for (const input of bodies) {
-      const startedAt = Date.now();
-      const out = convertCodeBlocksToArtifacts(input);
-      expect(Date.now() - startedAt).toBeLessThan(2000);
-      expect(out).toBe(input);
-    }
+    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500);
+    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(n), 3800);
   });
 
   // The mermaid fence body is the one that cannot simply drop its leading \s*: the old
@@ -496,6 +526,33 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
       const input = '```mermaid\ngraph TD' + LINE_SEPARATOR + '  A-->B\n```';
       expect(convertCodeBlocksToArtifacts(input)).toBe(input);
     });
+  });
+});
+
+/**
+ * hasComponentDeclarationLine requires the declaration keyword (function/const/class)
+ * and the component marker (Component/App/export default) to sit on the SAME line -
+ * that is the constraint the per-line scan exists to preserve (see its doc comment).
+ */
+describe('convertCodeBlocksToArtifacts - component declaration line gate', () => {
+  it('promotes a closed tsx fence whose declaration keyword and marker share a line', () => {
+    const codeContent = 'export default function App() { const [x, setX] = useState(0); return null; }';
+    const out = convertCodeBlocksToArtifacts('```tsx\n' + codeContent + '\n```');
+    const { artifacts } = parseArtifacts(out);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('react');
+  });
+
+  it('does not promote a tsx fence whose declaration keyword and marker are on different lines', () => {
+    const codeContent = [
+      'function helper() {',
+      '  return doSomething();',
+      '}',
+      '// App component below',
+      'export default helper;',
+    ].join('\n');
+    const input = '```tsx\n' + codeContent + '\n```';
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 });
 
@@ -539,20 +596,15 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     expect(wrappers(convertCodeBlocksToArtifacts(wrapped))).toBe(2);
   });
 
-  it('stays bounded on many html openings, with and without closers', () => {
-    // Each body is a shape that used to make this pass quadratic in message length:
-    // many complete documents (guard re-read the whole prefix per match), openings that
-    // never close (pattern re-scanned to end of input from each one), and the same
-    // inside an unterminated fence.
-    const bodies = [
-      '<html></html>\n'.repeat(60000),
-      '<html>\n'.repeat(60000),
-      '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(60000),
-    ];
-    for (const input of bodies) {
-      const startedAt = Date.now();
-      convertCodeBlocksToArtifacts(input);
-      expect(Date.now() - startedAt).toBeLessThan(1500);
-    }
+  it('stays bounded on many html openings, with and without closers, scaling linearly', () => {
+    // Each shape used to make this pass quadratic in message length: many complete
+    // documents (guard re-read the whole prefix per match), openings that never close
+    // (pattern re-scanned to end of input from each one), and the same inside an
+    // unterminated fence. This test only cares about growth, not the output shape
+    // (these bodies do get promoted), so it skips the output equality check.
+    const noOutputCheck = () => {};
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 3500, noOutputCheck);
+    assertLinearGrowth(n => '<html>\n'.repeat(n), 7000, noOutputCheck);
+    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500, noOutputCheck);
   });
 });

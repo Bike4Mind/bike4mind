@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
+  convertCodeBlocksToArtifacts as coreConvertCodeBlocksToArtifacts,
+  parseArtifacts as coreParseArtifacts,
+} from '@bike4mind/utils/artifactParser';
+import {
   convertCodeBlocksToArtifacts,
   extractReactDependencies,
   hasCompleteOpeningTag,
@@ -8,6 +12,45 @@ import {
   shouldWarnElidedArtifact,
   elidedReplyWarning,
 } from './artifactParser';
+
+// A run under this is noise-dominated: flooring it before dividing keeps timer jitter
+// on a fast, near-instant call from inflating the growth ratio. Set well above the
+// ~2ms these cases actually take, so a shared CI runner under load cannot trip the
+// ratio on scheduling noise alone; a real regression is caught by the ceiling below.
+const MIN_BASELINE_MS = 25;
+// Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and
+// cubic (~8x), so the ratio check has margin on both sides.
+const GROWTH_RATIO_CEILING = 3;
+// Generous on purpose: this only exists to catch a genuine wedge, not to pin steady-state timing.
+const SMALL_INPUT_MS_CEILING = 500;
+
+/**
+ * Asserts near-linear scaling from `small` to `small * 2` input size, in place of a
+ * fixed time budget: a budget only fails once the synchronous scan already returned,
+ * so a real quadratic regression hangs the test runner instead of failing it. Both
+ * sizes stay small enough to run fast even on a quadratic (or worse) implementation.
+ */
+function assertLinearGrowth(
+  build: (n: number) => string,
+  small: number,
+  checkOutput: (out: string, input: string) => void = (out, input) => expect(out).toBe(input)
+) {
+  const measure = (n: number) => {
+    const input = build(n);
+    const startedAt = performance.now();
+    const out = convertCodeBlocksToArtifacts(input);
+    const elapsedMs = performance.now() - startedAt;
+    checkOutput(out, input);
+    return elapsedMs;
+  };
+
+  const baselineMs = measure(small);
+  expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+
+  const doubledMs = measure(small * 2);
+  const ratio = doubledMs / Math.max(baselineMs, MIN_BASELINE_MS);
+  expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+}
 
 describe('extractReactDependencies', () => {
   it('detects packages imported via multi-line named imports', () => {
@@ -513,20 +556,31 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(out).toContain('```svg');
   });
 
-  it('leaves a fence followed by a long whitespace run untouched, in bounded time', () => {
+  it('leaves a fence followed by a long whitespace run untouched, scaling linearly', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
     for (const label of ['html', 'svg', 'tsx', 'python', 'json']) {
-      const input = '```' + label + '\n' + '\n'.repeat(200000) + 'x';
-      const startedAt = Date.now();
-      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
-      expect(Date.now() - startedAt).toBeLessThan(1000);
+      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 50000);
     }
   });
 
   it('does not promote an svg fence whose closer precedes its opening tag', () => {
     const input = '```svg\n</svg>\n<svg viewBox="0 0 2 2">\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  // Mirrors MAX_FENCE_SCAN_CHARS in the source file (not exported). A promotion
+  // predicate only reads the first 256000 chars of a fence body, so an anchor
+  // sitting past that window must leave the fence as a plain code block rather
+  // than being promoted - the deliberate DoS ceiling, not a correctness bug.
+  const MAX_FENCE_SCAN_CHARS = 256000;
+
+  it('leaves a fence whose promotion anchor sits past the scan window as a plain code block', () => {
+    const body = 'x'.repeat(MAX_FENCE_SCAN_CHARS + 50000) + '<svg></svg>';
+    const input = '```svg\n' + body + '\n```';
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(out).toBe(input);
+    expect(out).not.toContain('<artifact');
   });
 
   it('falls a non-document html fence through to the fragment handler', () => {
@@ -560,14 +614,10 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(ls).toContain('HTML Page');
   });
 
-  it('leaves an unterminated react fence untouched, in bounded time', () => {
+  it('leaves an unterminated react fence untouched, scaling linearly', () => {
     // Same pathological shape as the html case: component markers present on many
     // lines, no closing fence. The old anchored pattern was quadratic in body size.
-    const input = '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(8000);
-    const startedAt = Date.now();
-    const out = convertCodeBlocksToArtifacts(input);
-    expect(Date.now() - startedAt).toBeLessThan(2000);
-    expect(out).toBe(input);
+    assertLinearGrowth(n => '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(n), 1000);
   });
 
   it('drops a double quote from a promoted document title', () => {
@@ -589,29 +639,26 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(out).toMatch(/title="a type=text\/plain"/);
   });
 
-  it('leaves an svg fence with no closing tag untouched, in bounded time', () => {
-    // Openings with no closer: the shape that made a single <svg...</svg> predicate
-    // re-scan the body from each one.
-    const input = '```svg\n' + '<svg '.repeat(51200) + '\n```';
-    const startedAt = Date.now();
-    const out = convertCodeBlocksToArtifacts(input);
-    expect(Date.now() - startedAt).toBeLessThan(1000);
-    expect(out).toBe(input);
+  it('drops a double quote from a tool-output mermaid title', () => {
+    // Same shape as the recharts case above (a Unicode escape survives the deep-unescape
+    // loop, reaching metadata.title intact), pinning the mermaid stripTitleQuotes call site.
+    const payload = '{"type":"mermaid","metadata":{"title":"a\\u0022 title"},"content":"graph TD"}';
+    const out = convertCodeBlocksToArtifacts('{"result": "' + payload + '"}');
+    expect(out).toContain('type="application/vnd.ant.mermaid"');
+    expect(out).toMatch(/title="a title"/);
   });
 
-  it('leaves unterminated html fences untouched, in bounded time', () => {
+  it('leaves an svg fence with no closing tag untouched, scaling linearly', () => {
+    // Openings with no closer: the shape that made a single <svg...</svg> predicate
+    // re-scan the body from each one.
+    assertLinearGrowth(n => '```svg\n' + '<svg '.repeat(n) + '\n```', 10000);
+  });
+
+  it('leaves unterminated html fences untouched, scaling linearly', () => {
     // First body is the pathological shape for the old anchored pattern: both anchors
     // present, many candidate splits for its two lazy groups, no closing fence.
-    const bodies = [
-      '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(16000),
-      '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(20000),
-    ];
-    for (const input of bodies) {
-      const startedAt = Date.now();
-      const out = convertCodeBlocksToArtifacts(input);
-      expect(Date.now() - startedAt).toBeLessThan(2000);
-      expect(out).toBe(input);
-    }
+    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500);
+    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(n), 3800);
   });
 });
 
@@ -655,20 +702,83 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     expect(wrappers(convertCodeBlocksToArtifacts(wrapped))).toBe(2);
   });
 
-  it('stays bounded on many html openings, with and without closers', () => {
-    // Each body is a shape that used to make this pass quadratic in message length:
-    // many complete documents (guard re-read the whole prefix per match), openings that
-    // never close (pattern re-scanned to end of input from each one), and the same
-    // inside an unterminated fence.
-    const bodies = [
-      '<html></html>\n'.repeat(60000),
-      '<html>\n'.repeat(60000),
-      '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(60000),
-    ];
-    for (const input of bodies) {
-      const startedAt = Date.now();
-      convertCodeBlocksToArtifacts(input);
-      expect(Date.now() - startedAt).toBeLessThan(1500);
+  it('stays bounded on many html openings, with and without closers, scaling linearly', () => {
+    // Each shape used to make this pass quadratic in message length: many complete
+    // documents (guard re-read the whole prefix per match), openings that never close
+    // (pattern re-scanned to end of input from each one), and the same inside an
+    // unterminated fence. This test only cares about growth, not the output shape
+    // (these bodies do get promoted), so it skips the output equality check.
+    const noOutputCheck = () => {};
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 3500, noOutputCheck);
+    assertLinearGrowth(n => '<html>\n'.repeat(n), 7000, noOutputCheck);
+    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500, noOutputCheck);
+  });
+});
+
+/**
+ * apps/client depends on @bike4mind/utils, so this is the one suite that can reach
+ * both parser copies and catch silent drift between the two MUST-STAY-IN-SYNC files.
+ * Only behaviors both parsers genuinely implement are covered here: core has no
+ * python-artifact promotion at all (that predicate is a client-only surface, unlike
+ * the react fences, which are also excluded - the per-language react predicates
+ * differ from core's hasComponentDeclarationLine by design), so the python case below
+ * only pins the one shape both agree on (a small fence neither promotes).
+ */
+describe('parity with the core parser', () => {
+  const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
+  const buildHtmlCall = (html: string) => JSON.stringify({ name: 'build_html', arguments: { html } });
+
+  const cases: Array<{ name: string; input: string; promoted: boolean; type?: string }> = [
+    {
+      name: 'a full html document fenced as ```html',
+      input: '```html\n' + DOC + '\n```',
+      promoted: true,
+      type: 'html',
+    },
+    {
+      name: 'an svg fence with matching open/close tags',
+      input: '```svg\n<svg viewBox="0 0 2 2"><rect width="1" height="1"/></svg>\n```',
+      promoted: true,
+      type: 'svg',
+    },
+    {
+      name: 'a bare html document sitting in prose (no fence)',
+      input: 'Here you go:\n\n' + DOC + '\n\nEnjoy.',
+      promoted: true,
+      type: 'html',
+    },
+    {
+      name: 'an html fragment fence with no full document',
+      input: '```html\n<div class="card"><p>hello</p></div>\n```',
+      promoted: true,
+      type: 'html',
+    },
+    {
+      name: 'a build_html tool-call JSON fence',
+      input: '```json\n' + buildHtmlCall('<html><body><p>hi</p></body></html>') + '\n```',
+      promoted: true,
+      type: 'html',
+    },
+    // Only shape where core and client agree on python: core never promotes any
+    // python fence, so this pins the negative case rather than the (client-only) positive one.
+    { name: 'a trivial python fence', input: '```python\nprint("hi")\n```', promoted: false },
+    {
+      name: 'an html document sitting inside a generic (unlabeled) code fence',
+      input: '```\n' + DOC + '\n```',
+      promoted: false,
+    },
+  ];
+
+  it.each(cases)('agrees with the core parser on $name', ({ input, promoted, type }) => {
+    const clientResult = parseArtifactsWithFallback(input);
+    const coreConverted = coreConvertCodeBlocksToArtifacts(input);
+    const coreResult = coreParseArtifacts(coreConverted);
+
+    expect(clientResult.artifacts.length > 0).toBe(promoted);
+    expect(coreResult.artifacts.length > 0).toBe(promoted);
+    if (promoted && type) {
+      expect(clientResult.artifacts[0].type).toBe(type);
+      expect(coreResult.artifacts[0].type).toBe(type);
     }
   });
 });
