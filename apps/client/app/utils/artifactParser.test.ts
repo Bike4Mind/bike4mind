@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
+  convertCodeBlocksToArtifacts as coreConvertCodeBlocksToArtifacts,
+  parseArtifacts as coreParseArtifacts,
+} from '@bike4mind/utils/artifactParser';
+import {
+  convertCodeBlocksToArtifacts,
   extractReactDependencies,
   hasCompleteOpeningTag,
   parseArtifactsWithFallback,
@@ -7,6 +12,45 @@ import {
   shouldWarnElidedArtifact,
   elidedReplyWarning,
 } from './artifactParser';
+
+// A run under this is noise-dominated: flooring it before dividing keeps timer jitter
+// on a fast, near-instant call from inflating the growth ratio. Set well above the
+// ~2ms these cases actually take, so a shared CI runner under load cannot trip the
+// ratio on scheduling noise alone; a real regression is caught by the ceiling below.
+const MIN_BASELINE_MS = 25;
+// Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and
+// cubic (~8x), so the ratio check has margin on both sides.
+const GROWTH_RATIO_CEILING = 3;
+// Generous on purpose: this only exists to catch a genuine wedge, not to pin steady-state timing.
+const SMALL_INPUT_MS_CEILING = 500;
+
+/**
+ * Asserts near-linear scaling from `small` to `small * 2` input size, in place of a
+ * fixed time budget: a budget only fails once the synchronous scan already returned,
+ * so a real quadratic regression hangs the test runner instead of failing it. Both
+ * sizes stay small enough to run fast even on a quadratic (or worse) implementation.
+ */
+function assertLinearGrowth(
+  build: (n: number) => string,
+  small: number,
+  checkOutput: (out: string, input: string) => void = (out, input) => expect(out).toBe(input)
+) {
+  const measure = (n: number) => {
+    const input = build(n);
+    const startedAt = performance.now();
+    const out = convertCodeBlocksToArtifacts(input);
+    const elapsedMs = performance.now() - startedAt;
+    checkOutput(out, input);
+    return elapsedMs;
+  };
+
+  const baselineMs = measure(small);
+  expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+
+  const doubledMs = measure(small * 2);
+  const ratio = doubledMs / Math.max(baselineMs, MIN_BASELINE_MS);
+  expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+}
 
 describe('extractReactDependencies', () => {
   it('detects packages imported via multi-line named imports', () => {
@@ -478,5 +522,263 @@ describe('elidedReplyWarning', () => {
     // this surface scans raw markdown with no artifact type to gate on.
     const prose = 'The changelog below is abbreviated for brevity; the rest of the entries are omitted.';
     expect(elidedReplyWarning({}, prose)).toBe(false);
+  });
+});
+
+/**
+ * The fenced detectors match a fence on its own and check the promotion anchors in the
+ * callback, so these cases pin the promotion decisions and the behaviour that changed
+ * when the anchors moved out of the patterns. Mirrors the twin suite in b4m-core/utils/src/artifactParser.test.ts,
+ * except for the react-fence cases: that detector's promotion rules are not shared
+ * between the two copies.
+ */
+describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
+  const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
+  const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
+
+  it('promotes two adjacent html document fences as two artifacts', () => {
+    const out = convertCodeBlocksToArtifacts('```html\n' + DOC + '\n```\n\n```html\n' + DOC + '\n```');
+    expect(wrappers(out)).toBe(2);
+    expect(out).not.toContain('```html');
+  });
+
+  it('promotes two adjacent svg fences as two artifacts', () => {
+    const svg = '<svg viewBox="0 0 2 2"><rect width="1" height="1" /></svg>';
+    const out = convertCodeBlocksToArtifacts('```svg\n' + svg + '\n```\n\n```svg\n' + svg + '\n```');
+    expect(wrappers(out)).toBe(2);
+    expect(out.match(/image\/svg\+xml/g)).toHaveLength(2);
+  });
+
+  it('leaves a ```svg fence with no closing </svg> as a code block', () => {
+    const input = '```svg\n<svg viewBox="0 0 2 2"><rect width="1" height="1" />\n```';
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(wrappers(out)).toBe(0);
+    expect(out).toContain('```svg');
+  });
+
+  it('leaves a fence followed by a long whitespace run untouched, scaling linearly', () => {
+    // Greedy whitespace ahead of the lazy body group backtracks one character at a time
+    // when the fence never closes, which is quadratic in the length of the run.
+    for (const label of ['html', 'svg', 'tsx', 'python', 'json']) {
+      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 50000);
+    }
+  });
+
+  it('does not promote an svg fence whose closer precedes its opening tag', () => {
+    const input = '```svg\n</svg>\n<svg viewBox="0 0 2 2">\n```';
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
+  // Mirrors MAX_FENCE_SCAN_CHARS in the source file (not exported). A promotion
+  // predicate only reads the first 256000 chars of a fence body, so an anchor
+  // sitting past that window must leave the fence as a plain code block rather
+  // than being promoted - the deliberate DoS ceiling, not a correctness bug.
+  const MAX_FENCE_SCAN_CHARS = 256000;
+
+  it('leaves a fence whose promotion anchor sits past the scan window as a plain code block', () => {
+    const body = 'x'.repeat(MAX_FENCE_SCAN_CHARS + 50000) + '<svg></svg>';
+    const input = '```svg\n' + body + '\n```';
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(out).toBe(input);
+    expect(out).not.toContain('<artifact');
+  });
+
+  it('falls a non-document html fence through to the fragment handler', () => {
+    const out = convertCodeBlocksToArtifacts('```html\n<div class="card">hi</div>\n```');
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('HTML Snippet');
+  });
+
+  it('does not promote an html fence whose closer precedes its doctype', () => {
+    const out = convertCodeBlocksToArtifacts('```html\n</html>\n<!DOCTYPE html>\n<div>x</div>\n```');
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('HTML Snippet');
+    expect(out).not.toContain('HTML Page');
+  });
+
+  it('does not let a later fence promote an earlier one', () => {
+    const out = convertCodeBlocksToArtifacts('```html\nnot markup at all\n```\n\n```html\n' + DOC + '\n```');
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('```html\nnot markup at all\n```');
+  });
+
+  it('promotes a document whose lines are separated by \\r or U+2028', () => {
+    // No <title>, so the document pass ('HTML Page') stays distinguishable from the
+    // fragment fallback ('HTML Snippet'), which takes any ```html fence with an opening tag.
+    const untitled = '<!DOCTYPE html>\n<html><body><h1>Hi</h1></body></html>';
+    const cr = convertCodeBlocksToArtifacts('```html\r' + untitled.replace('\n', '\r') + '\r```');
+    expect(wrappers(cr)).toBe(1);
+    expect(cr).toContain('HTML Page');
+    const ls = convertCodeBlocksToArtifacts('```html\n' + untitled.replace('\n', '\u2028') + '\n```');
+    expect(wrappers(ls)).toBe(1);
+    expect(ls).toContain('HTML Page');
+  });
+
+  it('leaves an unterminated react fence untouched, scaling linearly', () => {
+    // Same pathological shape as the html case: component markers present on many
+    // lines, no closing fence. The old anchored pattern was quadratic in body size.
+    assertLinearGrowth(n => '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(n), 1000);
+  });
+
+  it('drops a double quote from a promoted document title', () => {
+    const doc = '<!DOCTYPE html>\n<html><head><title>a" type="text/plain</title></head><body>x</body></html>';
+    for (const input of [doc, '```html\n' + doc + '\n```']) {
+      const out = convertCodeBlocksToArtifacts(input);
+      expect(out).toContain('type="text/html"');
+      expect(out).toMatch(/title="a type=text\/plain"/);
+    }
+  });
+
+  it('drops a double quote from a tool-output chart title', () => {
+    // \u0022 survives the deep-unescape loop, so a quote reaches metadata.title intact.
+    const payload =
+      '{"type":"recharts","metadata":{"title":"a\\u0022 type=\\u0022text/plain"},' +
+      '"content":{"chartType":"bar","data":[{"x":1}]}}';
+    const out = convertCodeBlocksToArtifacts('{"result": "' + payload + '"}');
+    expect(out).toContain('type="application/vnd.ant.recharts"');
+    expect(out).toMatch(/title="a type=text\/plain"/);
+  });
+
+  it('drops a double quote from a tool-output mermaid title', () => {
+    // Same shape as the recharts case above (a Unicode escape survives the deep-unescape
+    // loop, reaching metadata.title intact), pinning the mermaid stripTitleQuotes call site.
+    const payload = '{"type":"mermaid","metadata":{"title":"a\\u0022 title"},"content":"graph TD"}';
+    const out = convertCodeBlocksToArtifacts('{"result": "' + payload + '"}');
+    expect(out).toContain('type="application/vnd.ant.mermaid"');
+    expect(out).toMatch(/title="a title"/);
+  });
+
+  it('leaves an svg fence with no closing tag untouched, scaling linearly', () => {
+    // Openings with no closer: the shape that made a single <svg...</svg> predicate
+    // re-scan the body from each one.
+    assertLinearGrowth(n => '```svg\n' + '<svg '.repeat(n) + '\n```', 10000);
+  });
+
+  it('leaves unterminated html fences untouched, scaling linearly', () => {
+    // First body is the pathological shape for the old anchored pattern: both anchors
+    // present, many candidate splits for its two lazy groups, no closing fence.
+    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500);
+    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(n), 3800);
+  });
+});
+
+/**
+ * promoteBareHtmlDocument is module-private and runs last inside
+ * convertCodeBlocksToArtifacts, so these cases drive it through the public entry point.
+ * MUST STAY IN SYNC with the twin suite in b4m-core/utils/src/artifactParser.test.ts.
+ */
+describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
+  const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
+  const BARE = '<!DOCTYPE html>\n<html><head><title>Bare</title></head><body>hi</body></html>';
+
+  it('promotes a bare document sitting in prose', () => {
+    const out = convertCodeBlocksToArtifacts('Here you go:\n\n' + BARE + '\n\nEnjoy.');
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('title="Bare"');
+    expect(out).toContain('Here you go:');
+    expect(out).toContain('Enjoy.');
+  });
+
+  it('promotes two bare documents in one message', () => {
+    expect(wrappers(convertCodeBlocksToArtifacts(BARE + '\n---\n' + BARE))).toBe(2);
+  });
+
+  it('skips a document inside an open code fence or an open artifact tag', () => {
+    expect(wrappers(convertCodeBlocksToArtifacts('```\n' + BARE))).toBe(0);
+    const wrapped = '<artifact identifier="x" type="text/html" title="X">\n' + BARE + '\n</artifact>';
+    expect(wrappers(convertCodeBlocksToArtifacts(wrapped))).toBe(1);
+  });
+
+  it('clears the fence guard for the document after the fence closes', () => {
+    // The guards accumulate across matches instead of re-reading the whole prefix, so
+    // the second document is what pins the carry from the first.
+    const out = convertCodeBlocksToArtifacts('```\n' + BARE + '\n```\n\n' + BARE);
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('```\n' + BARE + '\n```');
+  });
+
+  it('clears the artifact guard for the document after the wrapper closes', () => {
+    const wrapped = '<artifact identifier="x" type="text/html" title="X">\n' + BARE + '\n</artifact>\n\n' + BARE;
+    expect(wrappers(convertCodeBlocksToArtifacts(wrapped))).toBe(2);
+  });
+
+  it('stays bounded on many html openings, with and without closers, scaling linearly', () => {
+    // Each shape used to make this pass quadratic in message length: many complete
+    // documents (guard re-read the whole prefix per match), openings that never close
+    // (pattern re-scanned to end of input from each one), and the same inside an
+    // unterminated fence. This test only cares about growth, not the output shape
+    // (these bodies do get promoted), so it skips the output equality check.
+    const noOutputCheck = () => {};
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 3500, noOutputCheck);
+    assertLinearGrowth(n => '<html>\n'.repeat(n), 7000, noOutputCheck);
+    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500, noOutputCheck);
+  });
+});
+
+/**
+ * apps/client depends on @bike4mind/utils, so this is the one suite that can reach
+ * both parser copies and catch silent drift between the two MUST-STAY-IN-SYNC files.
+ * Only behaviors both parsers genuinely implement are covered here: core has no
+ * python-artifact promotion at all (that predicate is a client-only surface, unlike
+ * the react fences, which are also excluded - the per-language react predicates
+ * differ from core's hasComponentDeclarationLine by design), so the python case below
+ * only pins the one shape both agree on (a small fence neither promotes).
+ */
+describe('parity with the core parser', () => {
+  const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
+  const buildHtmlCall = (html: string) => JSON.stringify({ name: 'build_html', arguments: { html } });
+
+  const cases: Array<{ name: string; input: string; promoted: boolean; type?: string }> = [
+    {
+      name: 'a full html document fenced as ```html',
+      input: '```html\n' + DOC + '\n```',
+      promoted: true,
+      type: 'html',
+    },
+    {
+      name: 'an svg fence with matching open/close tags',
+      input: '```svg\n<svg viewBox="0 0 2 2"><rect width="1" height="1"/></svg>\n```',
+      promoted: true,
+      type: 'svg',
+    },
+    {
+      name: 'a bare html document sitting in prose (no fence)',
+      input: 'Here you go:\n\n' + DOC + '\n\nEnjoy.',
+      promoted: true,
+      type: 'html',
+    },
+    {
+      name: 'an html fragment fence with no full document',
+      input: '```html\n<div class="card"><p>hello</p></div>\n```',
+      promoted: true,
+      type: 'html',
+    },
+    {
+      name: 'a build_html tool-call JSON fence',
+      input: '```json\n' + buildHtmlCall('<html><body><p>hi</p></body></html>') + '\n```',
+      promoted: true,
+      type: 'html',
+    },
+    // Only shape where core and client agree on python: core never promotes any
+    // python fence, so this pins the negative case rather than the (client-only) positive one.
+    { name: 'a trivial python fence', input: '```python\nprint("hi")\n```', promoted: false },
+    {
+      name: 'an html document sitting inside a generic (unlabeled) code fence',
+      input: '```\n' + DOC + '\n```',
+      promoted: false,
+    },
+  ];
+
+  it.each(cases)('agrees with the core parser on $name', ({ input, promoted, type }) => {
+    const clientResult = parseArtifactsWithFallback(input);
+    const coreConverted = coreConvertCodeBlocksToArtifacts(input);
+    const coreResult = coreParseArtifacts(coreConverted);
+
+    expect(clientResult.artifacts.length > 0).toBe(promoted);
+    expect(coreResult.artifacts.length > 0).toBe(promoted);
+    if (promoted && type) {
+      expect(clientResult.artifacts[0].type).toBe(type);
+      expect(coreResult.artifacts[0].type).toBe(type);
+    }
   });
 });
