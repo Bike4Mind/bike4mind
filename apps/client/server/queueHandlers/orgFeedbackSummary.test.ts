@@ -123,6 +123,20 @@ describe('runOrgFeedbackSummary', () => {
     expect(frames().map(f => f.status)).toEqual(['processing', 'processing', 'completed']);
   });
 
+  it('resolves and keeps the completed status when only the completion frame rejects', async () => {
+    h.sendToClient.mockImplementation(async (_userId: unknown, _endpoint: unknown, payload: { status: string }) => {
+      if (payload.status === 'completed') throw new Error('websocket gone');
+    });
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(h.updateOne).toHaveBeenLastCalledWith(
+      { summaryJobId: SUMMARY_JOB_ID },
+      { status: 'completed', s3Key: summaryS3Key(ORG_ID, SUMMARY_JOB_ID), activeKey: SUMMARY_JOB_ID }
+    );
+    expect(h.updateOne.mock.calls.some(call => (call[1] as { status?: string })?.status === 'failed')).toBe(false);
+  });
+
   it('reports the failure to the client before rethrowing to SQS', async () => {
     h.complete.mockRejectedValue(new Error('bedrock unavailable'));
 

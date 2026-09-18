@@ -227,7 +227,6 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
       { summaryJobId },
       { status: 'completed', s3Key: key, activeKey: summaryJobId }
     );
-    await sendProgress(userId, summaryJobId, organizationId, 'completed', 100);
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     logger.error(`Org feedback summary ${summaryJobId} failed: ${errorMessage}`);
@@ -254,5 +253,13 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
     }
 
     throw error;
+  }
+
+  // Outside the failure boundary: the job is durably completed by this point, so a disconnected
+  // socket here must not rewrite it as failed or trigger an SQS retry of already-completed work.
+  try {
+    await sendProgress(userId, summaryJobId, organizationId, 'completed', 100);
+  } catch (progressError) {
+    logger.error(`Failed to send completion progress for summary job ${summaryJobId}: ${String(progressError)}`);
   }
 }
