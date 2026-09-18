@@ -1,4 +1,9 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { promises as fs } from 'fs';
+import { existsSync } from 'fs';
+import os from 'os';
+import path from 'path';
+import type { AgentDefinition, AgentHooks } from './types.js';
 import type { ICompletionBackend, CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters';
 import type { IMessage } from '@bike4mind/common';
 import { SubagentOrchestrator, type OrchestratorDependencies, type SpawnAgentOptions } from './SubagentOrchestrator.js';
@@ -223,6 +228,73 @@ describe('SubagentOrchestrator run lifecycle callbacks', () => {
     expect(beforeRun).toHaveBeenCalledTimes(1);
     expect(afterRun).toHaveBeenCalledTimes(1);
     expect(afterRun).toHaveBeenCalledWith(beforeRun.mock.calls[0][0], 'tester');
+  });
+});
+
+// An agent lifecycle hook shells out with no permission gate, so it runs only for
+// a source the user controls (builtin/global). A project or dynamic (runtime-generated,
+// so model-influenced) agent's hooks must never execute. See hookTrust.ts.
+describe('SubagentOrchestrator hook trust gate', () => {
+  let canary: string;
+
+  afterEach(async () => {
+    if (canary && existsSync(canary)) await fs.rm(canary, { force: true });
+  });
+
+  function stopHook(canaryPath: string): AgentHooks {
+    return { Stop: [{ hooks: [{ type: 'command', command: `touch "${canaryPath}"` }] }] };
+  }
+
+  function orchestratorWithStoredAgent(def: AgentDefinition, llm: ICompletionBackend): SubagentOrchestrator {
+    const deps = {
+      userId: 'test-user',
+      llm,
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      permissionManager: {},
+      showPermissionPrompt: vi.fn(),
+      configStore: { get: async () => ({}) },
+      apiClient: {},
+      agentStore: {
+        getAgent: (name: string) => (name === def.name ? def : undefined),
+        getAgentNames: () => [def.name],
+      },
+      historyStore: new AgentHistoryStore(),
+    } as unknown as OrchestratorDependencies;
+    return new SubagentOrchestrator(deps);
+  }
+
+  it('does not run a dynamic (inline) agent Stop hook', async () => {
+    canary = path.join(os.tmpdir(), `agent-hook-canary-dynamic-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const orchestrator = createRunnableOrchestrator(new AgentHistoryStore(), createOneShotLlm('done'));
+
+    await orchestrator.delegateToAgent({
+      task: 'do the thing',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: { ...inlineAgent(), hooks: stopHook(canary) } as SpawnAgentOptions['agentDefinition'],
+    });
+
+    expect(existsSync(canary)).toBe(false);
+  });
+
+  it('still runs a global (user-trusted) agent Stop hook', async () => {
+    canary = path.join(os.tmpdir(), `agent-hook-canary-global-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const storedDef = {
+      ...inlineAgent(),
+      name: 'trusted',
+      source: 'global',
+      filePath: '/home/user/.bike4mind/agents/trusted.md',
+      hooks: stopHook(canary),
+    } as unknown as AgentDefinition;
+    const orchestrator = orchestratorWithStoredAgent(storedDef, createOneShotLlm('done'));
+
+    await orchestrator.delegateToAgent({
+      task: 'do the thing',
+      agentName: 'trusted',
+      parentSessionId: 'session-1',
+    });
+
+    expect(existsSync(canary)).toBe(true);
   });
 });
 

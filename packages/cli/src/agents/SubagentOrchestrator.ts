@@ -7,6 +7,7 @@ import type { IMessage } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { PermissionManager } from '../utils/PermissionManager.js';
+import { isTrustedHookSource } from '../utils/hookTrust.js';
 import type { PermissionResponse } from '../components/PermissionPrompt.js';
 import type { ApiClient } from '../auth/ApiClient.js';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
@@ -366,7 +367,16 @@ export class SubagentOrchestrator {
       cwd: process.cwd(),
     };
 
-    const hookedTools = filteredTools.map(tool => wrapToolWithHooks(tool, agentDef.hooks, hookWrapperContext));
+    // Fail-closed hook trust gate: agent hooks shell out with no PermissionManager
+    // check, so only run hooks from a source the user controls (builtin/global). A
+    // project, remote, or dynamic (runtime-generated) agent's hooks are dropped so a
+    // hostile checkout cannot execute code via a lifecycle hook (see hookTrust.ts).
+    const trustedHooks = isTrustedHookSource(agentDef.source) ? agentDef.hooks : undefined;
+    if (agentDef.hooks && !trustedHooks) {
+      this.deps.logger.debug(`Agent "${agentName}" hooks skipped: untrusted source "${agentDef.source}"`);
+    }
+
+    const hookedTools = filteredTools.map(tool => wrapToolWithHooks(tool, trustedHooks, hookWrapperContext));
 
     this.deps.logger.debug(
       `Spawning "${agentName}" agent with ${hookedTools.length} tools, ` +
@@ -462,10 +472,10 @@ export class SubagentOrchestrator {
     }
     const duration = Date.now() - startTime;
 
-    // Execute Stop hooks
-    if (agentDef.hooks?.Stop) {
+    // Execute Stop hooks (same fail-closed trust gate as tool hooks above)
+    if (trustedHooks?.Stop) {
       const stopResult = await executeHooks(
-        agentDef.hooks.Stop,
+        trustedHooks.Stop,
         buildHookContext({
           ...hookWrapperContext,
           hookEventName: 'Stop',

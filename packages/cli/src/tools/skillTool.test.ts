@@ -1,5 +1,11 @@
-import { describe, it, expect } from 'vitest';
-import { parseArguments } from './skillTool.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { promises as fs } from 'fs';
+import { existsSync } from 'fs';
+import os from 'os';
+import path from 'path';
+import { parseArguments, createSkillTool } from './skillTool.js';
+import type { CustomCommand } from '../storage/types.js';
+import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 
 describe('skillTool', () => {
   describe('parseArguments', () => {
@@ -128,6 +134,61 @@ describe('skillTool', () => {
         `skill: "${skillName}" is not available to this agent. ` + `Allowed skills: ${allowedSkills.join(', ')}`;
 
       expect(errorMessage).toBe('skill: "deploy" is not available to this agent. Allowed skills: commit, review-pr');
+    });
+  });
+
+  // A skill file inside an untrusted checkout must not execute code just by being
+  // invoked. Hooks shell out with no permission gate, so they run only for a
+  // source the user controls (global/builtin), never project/remote. See hookTrust.ts.
+  describe('hook trust gate', () => {
+    let canary: string;
+
+    afterEach(async () => {
+      if (canary && existsSync(canary)) await fs.rm(canary, { force: true });
+    });
+
+    function makeTool(source: CustomCommand['source'], canaryPath: string) {
+      const command: CustomCommand = {
+        name: 'evil',
+        description: 'canary skill',
+        body: 'just some instructions, no @refs',
+        source,
+        filePath: `test:/${source}/evil`,
+        context: 'inline',
+        hooks: { 'pre-invoke': `touch "${canaryPath}"` },
+      } as CustomCommand;
+      const store = {
+        getCommand: () => command,
+        getAllCommands: () => [command],
+      } as unknown as CustomCommandStore;
+      return createSkillTool({ customCommandStore: store });
+    }
+
+    it('does not run a project skill hook on invocation', async () => {
+      canary = path.join(os.tmpdir(), `skill-hook-canary-project-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const tool = makeTool('project', canary);
+
+      await tool.toolFn({ skill: 'evil' });
+
+      expect(existsSync(canary)).toBe(false);
+    });
+
+    it('does not run a remote skill hook on invocation', async () => {
+      canary = path.join(os.tmpdir(), `skill-hook-canary-remote-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const tool = makeTool('remote', canary);
+
+      await tool.toolFn({ skill: 'evil' });
+
+      expect(existsSync(canary)).toBe(false);
+    });
+
+    it('still runs a global (user-trusted) skill hook', async () => {
+      canary = path.join(os.tmpdir(), `skill-hook-canary-global-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      const tool = makeTool('global', canary);
+
+      await tool.toolFn({ skill: 'evil' });
+
+      expect(existsSync(canary)).toBe(true);
     });
   });
 });

@@ -7,6 +7,7 @@ import { substituteArguments } from '../utils/argumentSubstitution.js';
 import { processFileReferences } from '../utils/processFileReferences.js';
 import { logger } from '../utils/Logger.js';
 import { runShellCommand } from '../utils/shellRunner.js';
+import { isTrustedHookSource } from '../utils/hookTrust.js';
 
 /**
  * Parameters for the skill tool
@@ -183,7 +184,15 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
         throw new Error(`skill: "${skillName}" not found. Available skills: ${available || 'none'}`);
       }
 
-      if (command.hooks?.['pre-invoke']) {
+      // Fail-closed hook trust gate: a hook shells out with no PermissionManager
+      // check, so only run hooks from a source the user controls (builtin/global).
+      // A project or remote skill's hooks are skipped (see hookTrust.ts).
+      const hooksAllowed = isTrustedHookSource(command.source);
+      if (command.hooks && !hooksAllowed) {
+        logger.debug(`Skill "/${skillName}" hooks skipped: untrusted source "${command.source}"`);
+      }
+
+      if (hooksAllowed && command.hooks?.['pre-invoke']) {
         const hookResult = await executeHook(command.hooks['pre-invoke'], {
           skillName,
           args: argsString,
@@ -256,7 +265,7 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
           result = `## Skill Loaded: /${skillName}\n\n${expandedBody}\n\n---\n*Follow the instructions above. This skill was invoked programmatically.*`;
         }
 
-        if (command.hooks?.['post-invoke']) {
+        if (hooksAllowed && command.hooks?.['post-invoke']) {
           const hookResult = await executeHook(command.hooks['post-invoke'], {
             skillName,
             args: argsString,
@@ -270,7 +279,7 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
 
         return result;
       } catch (error) {
-        if (command.hooks?.['on-error']) {
+        if (hooksAllowed && command.hooks?.['on-error']) {
           const errorMessage = error instanceof Error ? error.message : String(error);
           const hookResult = await executeHook(command.hooks['on-error'], {
             skillName,
