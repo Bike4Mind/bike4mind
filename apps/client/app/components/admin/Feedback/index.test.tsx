@@ -184,7 +184,7 @@ describe('FeedbackTab', () => {
     it('offers every subject the server accepts, plus a way back to all of them', async () => {
       renderFeedbackTab();
 
-      await userEvent.click(screen.getByTestId('feedback-subject-filter-btn'));
+      await userEvent.click(screen.getByTestId('feedback-subject-filter-select'));
 
       const options = screen.getAllByRole('option').map(option => option.textContent);
       expect(options).toEqual(['All Subjects', 'Conversation turn', 'Conversation', 'Product', 'Help']);
@@ -193,7 +193,7 @@ describe('FeedbackTab', () => {
     it('sends the picked subject to the filter hook', async () => {
       renderFeedbackTab();
 
-      await userEvent.click(screen.getByTestId('feedback-subject-filter-btn'));
+      await userEvent.click(screen.getByTestId('feedback-subject-filter-select'));
       await userEvent.click(screen.getByRole('option', { name: 'Help' }));
 
       expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith('help');
@@ -207,7 +207,7 @@ describe('FeedbackTab', () => {
 
       renderFeedbackTab();
 
-      await userEvent.click(screen.getByTestId('feedback-subject-filter-btn'));
+      await userEvent.click(screen.getByTestId('feedback-subject-filter-select'));
       await userEvent.click(screen.getByRole('option', { name: 'All Subjects' }));
 
       expect(defaultFiltersReturn.setSubject).toHaveBeenCalledWith(undefined);
