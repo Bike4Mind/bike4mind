@@ -45,6 +45,8 @@ export type CommandArgExtra = {
   projectId?: string;
   organizationId?: string | null;
   researchMode?: LLMApiRequestBody['researchMode'];
+  /** Suppresses the server-side tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
+  skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
   deepResearchConfig?: {
     maxDepth?: number;
     duration?: number;

@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
     model: 'gpt-4o',
     thinking: { enabled: false, budget_tokens: 16000 },
     disableAutoRouteForThisSession: false,
+    skipAutoOffers: false,
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double for the Zustand hook (selector + setState)
   const useLLM: any = (selector: (s: Record<string, unknown>) => unknown) => selector(state);
@@ -130,6 +131,7 @@ beforeEach(() => {
   mocks.state.toolMode = 'smart';
   mocks.state.agentMode = { enabled: true, source: 'toggle' };
   mocks.state.disableAutoRouteForThisSession = false;
+  mocks.state.skipAutoOffers = false;
   mocks.state.model = 'gpt-4o';
   mocks.experimentalAgentMode.value = true;
   mocks.agentModeFeatureFlag.value = false;

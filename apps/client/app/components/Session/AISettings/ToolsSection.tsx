@@ -30,6 +30,7 @@ import {
   TableChart as ExcelIcon,
   ShowChart as FinanceIcon,
   Close as CloseIcon,
+  PlaylistAddCheck as OnlyPickedToolsIcon,
 } from '@mui/icons-material';
 import { Box, Grid, Input, Tooltip, Typography, IconButton } from '@mui/joy';
 import type { BoxProps } from '@mui/joy';
@@ -279,6 +280,7 @@ const ToolsSection = ({
   const isAgentsEnabled = useLLM(state => state.isAgentsEnabled);
   const isLatticeEnabled = useLLM(state => state.isLatticeEnabled);
   const researchMode = useLLM(state => state.researchMode);
+  const skipAutoOffers = useLLM(state => state.skipAutoOffers);
   const enabledMcpServers = useLLM(state => state.enabledMcpServers);
   const { setState: setLLM } = useLLM;
   const { settings: userSettings, updatePreferences } = useUserSettings();
@@ -1396,6 +1398,29 @@ const ToolsSection = ({
                   checked={displayTools.includes('recharts')}
                 />
               </Box>
+            </ToolContainer>
+          </Grid>
+          {/* Suppresses auto-added tools (server offers + the Smart-mode recommender) - not a
+              tool itself, so no toolId: there is nothing here to pin or gate. */}
+          <Grid xs={12} className="tool-item tool-item-skip-auto-offers">
+            <ToolContainer sx={toolContainerSx}>
+              <Box
+                className="tool-content"
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
+              >
+                <OnlyPickedToolsIcon
+                  sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                />
+                <ToolLabel
+                  name="Only tools I pick"
+                  description="Stops the assistant adding tools on its own - file search, app navigation, blog drafting. Saves ~800-1,950 tokens on the turns it applies to."
+                />
+              </Box>
+              <SquareSlideToggle
+                data-testid="tools-skip-auto-offers-toggle"
+                onChange={e => setLLM({ skipAutoOffers: e.target.checked })}
+                checked={skipAutoOffers}
+              />
             </ToolContainer>
           </Grid>
         </Box>

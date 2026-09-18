@@ -21,6 +21,14 @@ export interface ResolveToolsParams {
   supportsTools: boolean;
   /** Per-message briefcase tools override (one-click prompts). */
   toolsOverride?: B4MLLMTools[];
+  /**
+   * "Only tools I pick" - when true, skip the Smart-mode recommender so the send
+   * carries only the user's own `tools` selection, never an auto-added one (e.g.
+   * `search_knowledge_base` for "check my documents" phrasing). Without this the
+   * toggle only withheld the SERVER's own auto-offers, while the client kept
+   * silently adding its own.
+   */
+  skipAutoOffers?: boolean;
 }
 
 export interface ResolveToolsResult {
@@ -69,7 +77,7 @@ export function useLLMSettingsAssembly(): {
   );
 
   const resolveTools = useCallback(
-    ({ prompt, supportsTools, toolsOverride }: ResolveToolsParams): ResolveToolsResult => {
+    ({ prompt, supportsTools, toolsOverride, skipAutoOffers }: ResolveToolsParams): ResolveToolsResult => {
       // Briefcase per-message tools override: a one-click prompt declares exactly
       // the tools its send must run with, for THIS message only - without mutating
       // the user's sticky tool selection. It short-circuits the Smart/Fast ladder
@@ -100,6 +108,11 @@ export function useLLMSettingsAssembly(): {
         return { effectiveTools: [], refused: false };
       }
       if (toolMode === 'smart') {
+        // "Only tools I pick" means only: skip the recommender entirely rather than
+        // merge and toast for a tool the user asked not to have auto-added.
+        if (skipAutoOffers) {
+          return { effectiveTools: tools, refused: false };
+        }
         const recommendations = recommendTools(prompt);
         const autoSelected = recommendations.filter(r => !tools.includes(r.tool));
         if (autoSelected.length > 0) {
