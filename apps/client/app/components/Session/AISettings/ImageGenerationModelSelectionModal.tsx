@@ -66,6 +66,25 @@ const getDefaultEditModel = (generationModel: string): ModelName => {
   return ImageModels.GPT_IMAGE_2;
 };
 
+// The two quality vocabularies: GPT-Image models bill by low/medium/high tier, DALL-E by
+// standard/hd. Single source for both the Quality select's options and the validity check
+// that coerces a value carried over from the other vocabulary - they must not drift, or a
+// value the select can display would get reset (or vice versa).
+const getQualityOptions = (modelId: string): { value: OpenAIImageQuality; label: string }[] =>
+  isGPTImageModel(modelId)
+    ? [
+        { value: 'low', label: 'Low' },
+        { value: 'medium', label: 'Medium' },
+        { value: 'high', label: 'High' },
+      ]
+    : [
+        { value: 'standard', label: 'Standard' },
+        { value: 'hd', label: 'HD' },
+      ];
+
+// Mirrors AdvancedAISettings' reset defaults.
+const getDefaultQuality = (modelId: string): OpenAIImageQuality => (isGPTImageModel(modelId) ? 'low' : 'standard');
+
 const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelectionModalProps> = ({ open, onClose }) => {
   const {
     model: contextModel,
@@ -253,21 +272,20 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
   };
 
-  // Default quality logic (mirrors AdvancedAISettings)
-  const getDefaultQuality = (modelId: string): OpenAIImageQuality => {
-    if (isGPTImageModel(modelId)) {
-      return 'low';
-    }
-    return 'standard';
-  };
-
-  // Ensure quality defaults appropriately when image model context changes
+  // Coerce quality only when the selected model cannot express the current value - i.e. it
+  // came from the other vocabulary (or is unset/'auto', which the select cannot display).
+  // Anything broader reverts the user's own pick: this effect re-runs on every quality
+  // change, so comparing against the default instead made the select inert and billed every
+  // GPT-Image generation at the cheapest tier. Gated on `open` because ToolsSection mounts
+  // this dialog unconditionally - ungated it would also clobber AdvancedAIModal's Quality
+  // select and overwrite the persisted value on load.
   useEffect(() => {
-    const defaultQuality = getDefaultQuality(contextImageModel);
-    if (_quality !== defaultQuality) {
-      setLLM({ quality: defaultQuality });
+    if (!open) return;
+    const validQualities = getQualityOptions(contextImageModel).map(option => option.value);
+    if (!validQualities.includes(_quality as OpenAIImageQuality)) {
+      setLLM({ quality: getDefaultQuality(contextImageModel) });
     }
-  }, [contextImageModel, _quality, setLLM]);
+  }, [open, contextImageModel, _quality, setLLM]);
 
   const imageSettings = [
     // Temperature (generic input like AdvancedAIModal renders via imageSettings mapping here)
@@ -302,16 +320,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       type: 'select' as const,
       value: _quality,
       onChange: (value: OpenAIImageQuality | null) => value && setLLM({ quality: value }),
-      options: isGPTImageModel(contextImageModel)
-        ? [
-            { value: 'low', label: 'Low' },
-            { value: 'medium', label: 'Medium' },
-            { value: 'high', label: 'High' },
-          ]
-        : [
-            { value: 'standard', label: 'Standard' },
-            { value: 'hd', label: 'HD' },
-          ],
+      options: getQualityOptions(contextImageModel),
       testId: 'image-setting-quality-select',
     },
     // Style (not for GPT-Image or BFL models)
