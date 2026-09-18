@@ -269,7 +269,7 @@ describe('LakeInfoPanel - erase memory (purge)', () => {
   /**
    * The erase door is narrower than the panel that hosts it. `canManage` admits a curator and an
    * org-admin who can edit the lake's settings; a crypto-shred is irreversible and destroys facts
-   * derived from other people's documents, so the API restricts it to the lake's creator (or a
+   * derived from other people's documents, so the API restricts it to the effective owner (or a
    * superuser). Rendering the button off `canManage` offered it to callers the API answers 403 to.
    */
   it('is absent for a manager who may configure the lake but not shred its memory', () => {
