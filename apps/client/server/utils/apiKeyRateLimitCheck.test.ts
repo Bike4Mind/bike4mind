@@ -3,6 +3,7 @@ import {
   MANAGEMENT_RATE_LIMIT,
   buildRateLimitKeys,
   checkApiKeyRateLimit,
+  evaluateCounterLockout,
   extractApiKeyFromHeaders,
   getApiKeyRateLimitUsage,
   resetApiKeyRateLimit,
@@ -576,6 +577,56 @@ describe('apiKeyRateLimitCheck', () => {
         .mockResolvedValueOnce({ expiresAt: future(DAY_MS) });
 
       expect(await getApiKeyRateLimitUsage(mockKeyId)).toEqual({ minute: 0, day: 0 });
+    });
+
+    it('reads the management counter by its namespaced keys when asked', async () => {
+      const minuteDoc = { result: { count: 2 }, expiresAt: future(MINUTE_MS) };
+      const dayDoc = { result: { count: 10 }, expiresAt: future(DAY_MS) };
+      vi.mocked(cacheRepository.findByKey).mockResolvedValueOnce(minuteDoc).mockResolvedValueOnce(dayDoc);
+
+      const usage = await getApiKeyRateLimitUsage(mockKeyId, 'management');
+
+      expect(usage).toEqual({
+        minute: 2,
+        day: 10,
+        minuteResetAt: Math.floor(minuteDoc.expiresAt.getTime() / 1000),
+        dayResetAt: Math.floor(dayDoc.expiresAt.getTime() / 1000),
+      });
+      const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId, 'management');
+      const queried = vi.mocked(cacheRepository.findByKey).mock.calls.map(call => call[0]);
+      expect(new Set(queried)).toEqual(new Set([minuteKey, dayKey]));
+    });
+  });
+
+  describe('evaluateCounterLockout', () => {
+    const limit = { requestsPerMinute: 5, requestsPerDay: 50 };
+
+    it('reports neither window at limit when usage is under both ceilings', () => {
+      expect(evaluateCounterLockout({ minute: 2, day: 30 }, limit)).toEqual({
+        minuteAtLimit: false,
+        dayAtLimit: false,
+      });
+    });
+
+    it('reports the minute window at limit when usage meets or exceeds it', () => {
+      expect(evaluateCounterLockout({ minute: 5, day: 30 }, limit)).toEqual({
+        minuteAtLimit: true,
+        dayAtLimit: false,
+      });
+    });
+
+    it('reports the day window at limit when usage meets or exceeds it', () => {
+      expect(evaluateCounterLockout({ minute: 2, day: 50 }, limit)).toEqual({
+        minuteAtLimit: false,
+        dayAtLimit: true,
+      });
+    });
+
+    it('reports both windows at limit when usage exceeds both ceilings', () => {
+      expect(evaluateCounterLockout({ minute: 9, day: 99 }, limit)).toEqual({
+        minuteAtLimit: true,
+        dayAtLimit: true,
+      });
     });
   });
 
