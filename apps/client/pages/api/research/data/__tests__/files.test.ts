@@ -14,6 +14,8 @@ const mockRefs = vi.hoisted(() => ({
   researchDataFilter: undefined as any,
   fabFileFilter: undefined as any,
   researchDataRows: [] as any[],
+  fabFileRows: [] as any[],
+  loggerWarn: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -37,7 +39,7 @@ vi.mock('@bike4mind/database', () => ({
   FabFile: {
     find: (filter: any) => {
       mockRefs.fabFileFilter = filter;
-      return Promise.resolve([]);
+      return Promise.resolve(mockRefs.fabFileRows);
     },
   },
 }));
@@ -47,6 +49,7 @@ import '@pages/api/research/data/files';
 function mocks(userId: string) {
   const { req, res } = createMocks({ method: 'GET' });
   (req as any).user = { id: userId };
+  (req as any).logger = { warn: mockRefs.loggerWarn };
   return { req, res };
 }
 
@@ -55,6 +58,8 @@ describe('GET /api/research/data/files - caller scoping', () => {
     mockRefs.researchDataFilter = undefined;
     mockRefs.fabFileFilter = undefined;
     mockRefs.researchDataRows = [{ fabFileId: 'f1' }, { fabFileId: 'f2' }];
+    mockRefs.fabFileRows = [];
+    mockRefs.loggerWarn.mockReset();
   });
 
   it('scopes the ResearchData query to the caller', async () => {
@@ -77,5 +82,31 @@ describe('GET /api/research/data/files - caller scoping', () => {
     await mockRefs.getHandler!(req, res);
     expect(mockRefs.fabFileFilter).toBeUndefined();
     expect(res._getJSONData()).toEqual([]);
+    expect(mockRefs.loggerWarn).not.toHaveBeenCalled();
+  });
+
+  it('does not warn when every referenced file is accessible', async () => {
+    mockRefs.fabFileRows = [{ id: 'f1' }, { id: 'f2' }];
+    const { req, res } = mocks('user-1');
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getJSONData()).toEqual(mockRefs.fabFileRows);
+    expect(mockRefs.loggerWarn).not.toHaveBeenCalled();
+  });
+
+  it('warns with the count of unique referenced files omitted by owner scoping', async () => {
+    mockRefs.researchDataRows = [{ fabFileId: 'f1' }, { fabFileId: 'f2' }, { fabFileId: 'f2' }];
+    mockRefs.fabFileRows = [{ id: 'f1' }];
+    const { req, res } = mocks('user-1');
+
+    await mockRefs.getHandler!(req, res);
+
+    expect(mockRefs.fabFileFilter).toEqual({ _id: { $in: ['f1', 'f2'] }, userId: 'user-1' });
+    expect(res._getJSONData()).toEqual(mockRefs.fabFileRows);
+    expect(mockRefs.loggerWarn).toHaveBeenCalledWith('[research-files] Owner-scoped listing omitted referenced files', {
+      droppedFileCount: 1,
+      referencedFileCount: 2,
+    });
   });
 });
