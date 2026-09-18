@@ -78,6 +78,12 @@ export const useWebsocket = () => {
   );
 };
 
+/** How often the self-armed retry below checks whether a dead socket should be handed a fresh
+ *  reconnect budget. Any value comfortably under the access-token TTL (30 minutes) closes the
+ *  gap; it does not translate into reconnect rate, because a single pulse grants a whole new
+ *  20-attempt budget (~6 minutes) that has to be spent before the retry can fire again. */
+const EXHAUSTED_RETRY_INTERVAL_MS = 30_000;
+
 interface Props {
   children: React.ReactNode;
   url?: string;
@@ -92,8 +98,9 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // Mirrors the same flag in the CLI's WebSocketConnectionManager.
   const openedThisAttemptRef = useRef(false);
   // True once `onReconnectStop` has fired (the reconnect budget below is exhausted, no pending
-  // backoff timer left); reset on the next successful open. Gates the refocus pulse so it only
-  // fires once there is genuinely nothing left running - see the pulse effect below for why.
+  // backoff timer left); reset on the next successful open. Gates every reconnect pulse below
+  // so one only fires once there is genuinely nothing left running - see the pulse effect
+  // below for why, and its three triggers for what can wake a sleeping socket.
   const reconnectExhaustedRef = useRef(false);
 
   // Map the action being listened for to the callbacks that want to hear about it
@@ -260,8 +267,12 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // that on every trigger would defeat it - plus the library never clears its own pending
   // reconnect timer on a url change, so a mid-backoff pulse leaves a second, stale reconnect
   // attempt to fire later. Once genuinely exhausted there is no such timer left, so this has
-  // neither problem. Shared by both triggers below (refocus, and a post-exhaustion token
-  // refresh) - see each effect's own comment for why a single trigger isn't enough.
+  // neither problem. Shared by all three triggers below (refocus, a post-exhaustion token
+  // refresh, and the self-armed retry) - see each effect's own comment for why one trigger
+  // isn't enough. The exhausted flag alone is the gate: onReconnectStop is the only thing that
+  // sets it and it fires with the socket already closed, while onOpen is the only thing that
+  // clears it - so it cannot be true behind a live connection, and no separate readyState
+  // check (which would read a render-stale value) can add anything.
   const pulseReconnect = useCallback(() => {
     if (!reconnectExhaustedRef.current) return;
     // Clear it now, not on the next onOpen: the fresh budget this pulse grants means the
@@ -300,6 +311,25 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     if (!changed) return;
     pulseReconnect();
   }, [accessToken, pulseReconnect]);
+
+  // Third trigger, and the only self-armed one. Both triggers above are external events, and a
+  // tab that stays focused while its access token is still valid produces neither: no
+  // focus/visibilitychange ever fires, and the exhausting attempt's own /api/identify probe
+  // returns the SAME token, which changes nothing for the effect above. Such a tab's socket
+  // stayed dead until its token happened to rotate - up to 30 minutes of failed pushes after a
+  // ~6-minute budget ran out. This tick closes that gap by re-running the same pulse on a
+  // timer, inheriting both of its safety properties: the flag is only set once nothing is
+  // pending (so a healthy jittered backoff is never cancelled) and is cleared as the pulse
+  // fires (so one exhaustion yields one pulse, never a herd). Hidden tabs are skipped because
+  // a return to visible already pulses - no reason to spend the one pulse per budget on a tab
+  // nobody is looking at.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      pulseReconnect();
+    }, EXHAUSTED_RETRY_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [pulseReconnect]);
 
   // The other half of the pulse: flip back on the next commit so shouldConnect's dip to
   // false was only momentary - enough for react-use-websocket to see url turn null (see

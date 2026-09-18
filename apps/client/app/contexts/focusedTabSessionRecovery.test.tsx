@@ -326,6 +326,40 @@ describe('focused-tab session recovery (#1691)', () => {
     expect(focusProbe).not.toHaveBeenCalled();
   });
 
+  // The complementary half of the outage case above: that one recovers only because
+  // scheduleSessionRevalidation eventually rotates the token. A tab whose API stayed healthy
+  // the whole time rotates nothing - every failed attempt's own probe gets 200 back with the
+  // SAME token - and nothing focus-shaped ever happens, so both pre-existing triggers stay
+  // silent. This is the reported "stuck until a full reload" tab.
+  it('a focused tab whose API stayed healthy recovers with no token rotation and no focus events', async () => {
+    disposeRevalidation = mount(queryClient);
+    await act(async () => {
+      h.lastOptions?.onOpen?.({});
+    });
+
+    await act(async () => {
+      closeAndScheduleReconnect();
+      // 359s: the 20-attempt budget (125 x sum(1..20)^2, jitter pinned to 0) is spent at
+      // 358.75s, and the self-armed retry's first post-exhaustion tick has not landed yet.
+      await vi.advanceTimersByTimeAsync(359_000);
+    });
+
+    expect(h.reconnectStopCalls).toBe(1);
+    expect(refreshCalls).toBe(0); // nothing ever 401'd - the API was healthy throughout
+    expect(useAccessToken.getState().accessToken).toBe('tok-1');
+    expect(h.urls).not.toContain(null); // no trigger has fired, and none is coming from outside
+
+    // Nothing else can bring the socket back - the retry interval's next tick does.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(h.urls).toContain(null);
+    expect(typeof h.urls[h.urls.length - 1]).toBe('function');
+    expect(refreshCalls).toBe(0);
+    expect(focusProbe).not.toHaveBeenCalled();
+  });
+
   it('onReconnectStop is invoked with the real limit, not undefined', async () => {
     disposeRevalidation = mount(queryClient);
     await act(async () => {
