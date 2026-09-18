@@ -192,7 +192,9 @@ const SMALL_CONTEXT_WINDOW = 32768;
 // input - but as a *share* of the window, not a flat number. A flat 16384 cap meant a 1M-token
 // model with a 128000-token ceiling could only emit 12.8% of what it advertises, which is what
 // truncated large artifacts. Small windows halve; large ones take a quarter of the window
-// (never below LARGE_CONTEXT_FLOOR), always bounded by the model's own advertised ceiling.
+// (never below LARGE_CONTEXT_FLOOR), bounded by the model's own advertised ceiling - unless
+// that ceiling was only derived (see maxOutputTokensDerived), in which case the window share
+// stands on its own.
 export const computeDefaultMaxTokens = (
   modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens' | 'maxOutputTokensDerived'>
 ): number => {

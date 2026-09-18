@@ -104,7 +104,8 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
  * be consumed entirely by reasoning, leaving an empty visible reply. "Their own cap"
  * means a DECLARED one - a cap toModelInfo derived is only a default, and clamping
  * such a model to it reproduces that same starvation, so derivedOutputCeiling stands
- * in for it. Every path still ends in a clamp: nothing here returns an unbounded budget.
+ * in for it. Every path that has a usable cap ends in a clamp against it; a model with
+ * no usable cap at all (line 138) is a different, deliberate exception - see its comment.
  */
 export function resolveOutputMaxTokens({
   requested,
@@ -169,7 +170,7 @@ function derivedOutputCeiling(modelInfo: ModelInfo, derivedCap: number): number 
  * only trustworthy when finite and positive - a zero or negative cap would clamp the budget
  * to an unsendable value just as surely as NaN poisons it.
  */
-function usableTokenCount(value: number | undefined): number | undefined {
+export function usableTokenCount(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 

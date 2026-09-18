@@ -24,7 +24,7 @@ import {
   isMediaModelType,
   type ModelInfo,
 } from '@bike4mind/common';
-import { resolveOutputMaxTokens } from '@bike4mind/llm-adapters';
+import { resolveOutputMaxTokens, usableTokenCount } from '@bike4mind/llm-adapters';
 
 /**
  * The context window a caller should reason against: the catalog's own figure, except for a media
@@ -75,7 +75,10 @@ export function safeInputWindow(
 ): number {
   const returnsMedia = isMediaModelType(modelInfo.type);
   const contextLimit = effectiveContextWindow(modelInfo);
-  const modelMaxOutput = modelInfo.max_tokens;
+  // ModelInfo.max_tokens is typed `number`, but that is a claim toModelInfo makes about catalog
+  // data, not a guarantee about every caller - context-dry-run.ts builds a synthetic ModelInfo
+  // with max_tokens deliberately absent, so this has to tolerate that rather than propagate NaN.
+  const cap = usableTokenCount(modelInfo.max_tokens);
   // The reserve has to match what the request will actually send, and resolveOutputMaxTokens
   // declines to clamp a reasons-within-the-budget model to a DERIVED cap. Clamping here anyway
   // would reserve 4096 against a 64000-token request and let assembly fill the difference, so
@@ -83,8 +86,8 @@ export function safeInputWindow(
   const capClamps = modelInfo.maxOutputTokensDerived !== true;
   const reservedOutput = returnsMedia
     ? 0
-    : capClamps
-      ? Math.min(requestedMaxTokens, modelMaxOutput)
+    : capClamps && cap !== undefined
+      ? Math.min(requestedMaxTokens, cap)
       : requestedMaxTokens;
   return contextLimit - reservedOutput - safetyBuffer;
 }
