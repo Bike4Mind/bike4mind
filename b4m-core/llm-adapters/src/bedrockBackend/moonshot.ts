@@ -8,7 +8,12 @@ import {
   IChoiceEndToolUse,
 } from '../backend';
 import { BaseBedrockBackend } from './base';
-import { hasNativeToolMarker, parseNativeToolSection, KimiNativeToolStream } from './kimiNativeTools';
+import {
+  hasNativeToolMarker,
+  nativeToolCallsBegin,
+  parseNativeToolSection,
+  KimiNativeToolStream,
+} from './kimiNativeTools';
 import { normalizeOpenAIFinishReason } from '../stopReason';
 
 /** The assistant payload Moonshot returns, on `message` or streamed as `delta`. */
@@ -379,9 +384,15 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       // present; otherwise convert the inline <reasoning> envelope to <think>.
       if (hasNativeToolMarker(content)) {
         const inner = content.replace(/<\/?reasoning>/g, '');
-        const begin = inner.indexOf('<|tool_calls_section_begin|>');
+        // Slice to the calls before parsing: parseNativeToolSection caps its input, and
+        // `inner` is the whole message - on a thinking model the monologue precedes the
+        // calls, so an uncapped `inner` can push them past the cap and silently drop every
+        // call (or execute a subset of a parallel call set). Scoping on the section
+        // wrapper alone was not enough: the wrapper is optional, and a bare call fell
+        // straight back to the whole message.
+        const begin = nativeToolCallsBegin(inner);
         const before = (begin >= 0 ? inner.slice(0, begin) : inner).trim();
-        const nativeCalls = parseNativeToolSection(inner);
+        const nativeCalls = begin >= 0 ? parseNativeToolSection(inner.slice(begin)) : [];
         const think = [reasoning, before].filter(Boolean).join(' ').trim();
         let usageAttached = false;
         if (think) {

@@ -200,25 +200,73 @@ export async function parallelLimit<T, R>(items: T[], limit: number, asyncFn: (i
   return results;
 }
 
-export const extractSnippetMeta = (content: string): { sections: SnippetSection[] } => {
-  const snippetRegex = /<!--snippet-meta\s*(\{[\s\S]*?\})\s*-->[\n\s]*([\s\S]*?)(?=<!--snippet-meta|$)/g;
-  const sections: SnippetSection[] = [];
-  let lastIndex = 0;
-  let match;
+const SNIPPET_META_OPEN = '<!--snippet-meta';
+const SNIPPET_META_CLOSE = '-->';
 
-  // Find all snippets
-  while ((match = snippetRegex.exec(content)) !== null) {
-    // Add text before snippet if any
-    if (match.index > lastIndex) {
-      const textBefore = content.slice(lastIndex, match.index).trim();
-      if (textBefore) {
-        sections.push({ type: 'text', content: textBefore });
-      }
+/** Index of the first non-whitespace character at or after `from`. */
+const skipSpaceForward = (text: string, from: number): number => {
+  let i = from;
+  while (i < text.length && /\s/.test(text[i])) i++;
+  return i;
+};
+
+/** Index just past the last non-whitespace character before `before`. */
+const skipSpaceBackward = (text: string, before: number): number => {
+  let i = before;
+  while (i > 0 && /\s/.test(text[i - 1])) i--;
+  return i;
+};
+
+/**
+ * Split a prompt into its `<!--snippet-meta {...}-->` sections and the text around them.
+ *
+ * Scanned with indexOf rather than a regex. The regex this replaces backtracked
+ * super-linearly on a marker whose JSON never closed, which invited a parse cap - but a
+ * cap could not be applied safely here: the section pattern was terminated by
+ * `(?=<!--snippet-meta|$)`, so capping moved `$` and changed section SHAPE, not just
+ * length. Past the cap a snippet re-emitted as a `text` section, and callers that skip
+ * snippets when collecting URLs to fetch (utils/src/llm/utils.ts) would start fetching
+ * them. A linear scan needs no cap, so the shape is the same at every input length.
+ */
+export const extractSnippetMeta = (content: string): { sections: SnippetSection[] } => {
+  const sections: SnippetSection[] = [];
+  // Start of the text run not yet emitted, and where to resume looking for a marker.
+  let cursor = 0;
+  let search = 0;
+
+  while (search < content.length) {
+    const open = content.indexOf(SNIPPET_META_OPEN, search);
+    if (open === -1) break;
+
+    const metaStart = skipSpaceForward(content, open + SNIPPET_META_OPEN.length);
+    if (content[metaStart] !== '{') {
+      search = open + SNIPPET_META_OPEN.length;
+      continue;
+    }
+
+    // Take the first `-->` that leaves a brace-delimited body behind it, so a `-->`
+    // inside a JSON string value does not end the marker early. The boundary test is
+    // O(1) per candidate and the indexOf scans never overlap, so this stays linear.
+    let close = content.indexOf(SNIPPET_META_CLOSE, metaStart);
+    while (close !== -1) {
+      const metaEnd = skipSpaceBackward(content, close);
+      if (metaEnd > metaStart && content[metaEnd - 1] === '}') break;
+      close = content.indexOf(SNIPPET_META_CLOSE, close + SNIPPET_META_CLOSE.length);
+    }
+    if (close === -1) break;
+
+    const bodyStart = close + SNIPPET_META_CLOSE.length;
+    const nextMarker = content.indexOf(SNIPPET_META_OPEN, bodyStart);
+    const bodyEnd = nextMarker === -1 ? content.length : nextMarker;
+
+    const textBefore = content.slice(cursor, open).trim();
+    if (textBefore) {
+      sections.push({ type: 'text', content: textBefore });
     }
 
     try {
-      const meta = JSON.parse(match[1]) as SnippetMeta;
-      const snippetContent = match[2].trim();
+      const meta = JSON.parse(content.slice(metaStart, skipSpaceBackward(content, close))) as SnippetMeta;
+      const snippetContent = content.slice(bodyStart, bodyEnd).trim();
       if (meta && snippetContent) {
         sections.push({ type: 'snippet', meta, content: snippetContent });
       }
@@ -226,15 +274,13 @@ export const extractSnippetMeta = (content: string): { sections: SnippetSection[
       console.error('Error parsing snippet meta:', e);
     }
 
-    lastIndex = match.index + match[0].length;
+    cursor = bodyEnd;
+    search = bodyEnd;
   }
 
-  // Add remaining text if any
-  if (lastIndex < content.length) {
-    const remainingText = content.slice(lastIndex).trim();
-    if (remainingText) {
-      sections.push({ type: 'text', content: remainingText });
-    }
+  const remainingText = content.slice(cursor).trim();
+  if (remainingText) {
+    sections.push({ type: 'text', content: remainingText });
   }
 
   return { sections };
