@@ -513,10 +513,22 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(out).toContain('```svg');
   });
 
+  it('does not promote an svg fence whose closer precedes its opening tag', () => {
+    const input = '```svg\n</svg>\n<svg viewBox="0 0 2 2">\n```';
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+  });
+
   it('falls a non-document html fence through to the fragment handler', () => {
     const out = convertCodeBlocksToArtifacts('```html\n<div class="card">hi</div>\n```');
     expect(wrappers(out)).toBe(1);
     expect(out).toContain('HTML Snippet');
+  });
+
+  it('does not promote an html fence whose closer precedes its doctype', () => {
+    const out = convertCodeBlocksToArtifacts('```html\n</html>\n<!DOCTYPE html>\n<div>x</div>\n```');
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('HTML Snippet');
+    expect(out).not.toContain('HTML Page');
   });
 
   it('does not let a later fence promote an earlier one', () => {
@@ -526,10 +538,15 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   });
 
   it('promotes a document whose lines are separated by \\r or U+2028', () => {
-    const cr = convertCodeBlocksToArtifacts('```html\r' + DOC.replace('\n', '\r') + '\r```');
+    // No <title>, so the document pass ('HTML Page') stays distinguishable from the
+    // fragment fallback ('HTML Snippet'), which takes any ```html fence with an opening tag.
+    const untitled = '<!DOCTYPE html>\n<html><body><h1>Hi</h1></body></html>';
+    const cr = convertCodeBlocksToArtifacts('```html\r' + untitled.replace('\n', '\r') + '\r```');
     expect(wrappers(cr)).toBe(1);
-    const ls = convertCodeBlocksToArtifacts('```html\n' + DOC.replace('\n', '\u2028') + '\n```');
+    expect(cr).toContain('HTML Page');
+    const ls = convertCodeBlocksToArtifacts('```html\n' + untitled.replace('\n', '\u2028') + '\n```');
     expect(wrappers(ls)).toBe(1);
+    expect(ls).toContain('HTML Page');
   });
 
   it('leaves an unterminated react fence untouched, in bounded time', () => {
@@ -602,6 +619,19 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     expect(wrappers(convertCodeBlocksToArtifacts('```\n' + BARE))).toBe(0);
     const wrapped = '<artifact identifier="x" type="text/html" title="X">\n' + BARE + '\n</artifact>';
     expect(wrappers(convertCodeBlocksToArtifacts(wrapped))).toBe(1);
+  });
+
+  it('clears the fence guard for the document after the fence closes', () => {
+    // The guards accumulate across matches instead of re-reading the whole prefix, so
+    // the second document is what pins the carry from the first.
+    const out = convertCodeBlocksToArtifacts('```\n' + BARE + '\n```\n\n' + BARE);
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('```\n' + BARE + '\n```');
+  });
+
+  it('clears the artifact guard for the document after the wrapper closes', () => {
+    const wrapped = '<artifact identifier="x" type="text/html" title="X">\n' + BARE + '\n</artifact>\n\n' + BARE;
+    expect(wrappers(convertCodeBlocksToArtifacts(wrapped))).toBe(2);
   });
 
   it('stays bounded on many html openings, with and without closers', () => {

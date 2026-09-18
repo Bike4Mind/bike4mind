@@ -179,8 +179,11 @@ ${codeContent.trim()}
   const htmlCodeBlockRegex = /```html\s*\n?([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
+    // The closer must follow the declaration, as the anchored pattern required. The
+    // first declaration is the only one worth testing: closers only move forward.
     const head = codeContent.slice(0, MAX_FENCE_SCAN_CHARS);
-    if (!/<!DOCTYPE/i.test(head) || !/<\/html\s*>/i.test(head)) return match;
+    const docAt = head.search(/<!DOCTYPE/i);
+    if (docAt < 0 || !/<\/html\s*>/i.test(head.slice(docAt))) return match;
     const title = extractHTMLTitle(codeContent) || 'HTML Page';
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
