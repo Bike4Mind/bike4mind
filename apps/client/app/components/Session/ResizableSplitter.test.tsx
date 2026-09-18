@@ -35,7 +35,7 @@ describe('ResizableSplitter', () => {
     expect(splitter).toHaveAttribute('aria-valuenow', '50');
     expect(splitter).toHaveAttribute('aria-valuemin', '20');
     expect(splitter).toHaveAttribute('aria-valuemax', '80');
-    expect(splitter).toHaveAttribute('aria-valuetext', 'Knowledge pane 50%');
+    expect(splitter).toHaveAttribute('aria-valuetext', 'Chat pane 50%');
     expect(splitter).toHaveAttribute('tabindex', '0');
   });
 
@@ -46,20 +46,29 @@ describe('ResizableSplitter', () => {
 
     fireEvent.keyDown(handle(), { key: 'ArrowRight' });
     expect(width()).toBe(48);
+    // The announced value names the chat pane, so it has to RISE as the separator moves right
+    // -- tracking the viewer instead made ArrowRight report a smaller number.
+    expect(handle()).toHaveAttribute('aria-valuenow', '52');
 
     fireEvent.keyDown(handle(), { key: 'ArrowLeft' });
     fireEvent.keyDown(handle(), { key: 'ArrowLeft' });
     expect(width()).toBe(52);
+    expect(handle()).toHaveAttribute('aria-valuenow', '48');
   });
 
+  // Home and End are named for the value this widget announces (the chat pane), so they land
+  // on aria-valuemin and aria-valuemax -- which also drives the separator hard left and hard
+  // right, the same direction the arrows travel.
   it('jumps to the clamps on Home and End', () => {
     renderSplitter();
 
     fireEvent.keyDown(handle(), { key: 'Home' });
-    expect(width()).toBe(20);
+    expect(width()).toBe(80);
+    expect(handle()).toHaveAttribute('aria-valuenow', '20');
 
     fireEvent.keyDown(handle(), { key: 'End' });
-    expect(width()).toBe(80);
+    expect(width()).toBe(20);
+    expect(handle()).toHaveAttribute('aria-valuenow', '80');
   });
 
   it('holds the arrow steps inside the same clamps the drag uses', () => {
@@ -79,10 +88,15 @@ describe('ResizableSplitter', () => {
     setSessionLayout({ knowledgeViewerWidth: 47.382 });
     renderSplitter();
 
+    // Asserted BEFORE the keypress, while the store still holds the fraction: afterwards it
+    // holds the integer 45 and a valuenow built from the raw width is indistinguishable from
+    // one built from the rounded width, so the assertion could not fail.
+    expect(handle()).toHaveAttribute('aria-valuenow', '53');
+
     fireEvent.keyDown(handle(), { key: 'ArrowRight' });
 
     expect(width()).toBe(45);
-    expect(handle()).toHaveAttribute('aria-valuenow', '45');
+    expect(handle()).toHaveAttribute('aria-valuenow', '55');
   });
 
   it('reports keyboard resizes through onWidthChange, like a drag', () => {
@@ -91,7 +105,7 @@ describe('ResizableSplitter', () => {
 
     fireEvent.keyDown(handle(), { key: 'End' });
 
-    expect(onWidthChange).toHaveBeenCalledWith(80);
+    expect(onWidthChange).toHaveBeenCalledWith(20);
   });
 
   it('swallows the keys it handles and leaves the rest alone', () => {

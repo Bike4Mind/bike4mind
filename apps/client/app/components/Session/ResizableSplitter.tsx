@@ -34,6 +34,11 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
   // A drag commits a fractional width, so round before announcing it or stepping off it:
   // otherwise aria-valuenow and the stored width drift apart for the rest of the session.
   const roundedWidth = Math.round(knowledgeViewerWidth);
+  // The announced value tracks the CHAT pane even though the stored width is the knowledge
+  // pane's, so the number rises as the separator moves right the way a slider's does. Derived
+  // by subtracting the ROUNDED width rather than rounding 100 - width, so the two panes always
+  // sum to exactly 100. The 20-80 clamp is symmetric, so valuemin/valuemax hold either way.
+  const chatPaneWidth = 100 - roundedWidth;
 
   const commitWidth = useCallback(
     (newWidth: number) => {
@@ -119,9 +124,11 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
     [commitWidth, knowledgeViewerWidth, startTransition]
   );
 
-  // Arrow keys step the separator, Home/End jump to the clamps. Left/Right are named for
-  // where the separator MOVES, so they carry the same sign flip as the drag: the viewer is
-  // the right-hand pane, so moving the separator right shrinks it.
+  // Arrow keys step the separator, Home/End jump to the clamps. All four are named for where
+  // the separator MOVES, so they carry the same sign flip as the drag: the viewer is the
+  // right-hand pane, so moving the separator right shrinks it. Home is therefore the viewer's
+  // MAX (separator hard left) and End its MIN, which is also what puts Home on aria-valuemin
+  // and End on aria-valuemax, since the announced value is the chat pane's.
   const handleKeyResize = useCallback(
     (e: React.KeyboardEvent) => {
       let newWidth: number;
@@ -134,10 +141,10 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
           newWidth = clampWidth(roundedWidth - KEY_STEP_PERCENT);
           break;
         case 'Home':
-          newWidth = MIN_WIDTH_PERCENT;
+          newWidth = MAX_WIDTH_PERCENT;
           break;
         case 'End':
-          newWidth = MAX_WIDTH_PERCENT;
+          newWidth = MIN_WIDTH_PERCENT;
           break;
         default:
           return;
@@ -209,12 +216,12 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize the chat and knowledge panes"
-      aria-valuenow={roundedWidth}
+      aria-valuenow={chatPaneWidth}
       aria-valuemin={MIN_WIDTH_PERCENT}
       aria-valuemax={MAX_WIDTH_PERCENT}
       // Without this a screen reader reads the value as its position in the 20-80 range
       // (a 32% split announced as "20%"), which is worse than saying nothing.
-      aria-valuetext={`Knowledge pane ${roundedWidth}%`}
+      aria-valuetext={`Chat pane ${chatPaneWidth}%`}
       tabIndex={0}
     />
   );
