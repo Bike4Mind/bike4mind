@@ -253,6 +253,13 @@ export interface CliConfig {
     config: Record<string, any>;
   };
   trustedTools?: string[]; // Tools that don't need permission (user has permanently allowed)
+  /**
+   * Project roots the user has explicitly trusted (realpath'd absolute paths).
+   * Global-only: repo config layers can never write this. Until a discovered
+   * project root is in this set, its repo-committed config/agents/skills/MCP
+   * are inert (not merged, not loaded, not spawned). See ConfigStore trust gate.
+   */
+  trustedProjects?: string[];
   // Sandbox configuration for OS-level filesystem isolation
   sandbox?: SandboxConfig;
   // Subagent configurations
