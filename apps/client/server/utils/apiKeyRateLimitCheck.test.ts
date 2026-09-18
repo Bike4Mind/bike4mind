@@ -539,6 +539,20 @@ describe('apiKeyRateLimitCheck', () => {
       expect(result.request).toEqual({ minute: 0, day: 0 });
     });
 
+    it('reports an expired-but-uncleaned counter document as usage 0', async () => {
+      // deleteByKeyAndReturn has no expiresAt predicate (unlike findByKey), so it can return a
+      // doc Mongo's TTL sweeper hasn't gotten to yet. readCounter's expiry check must still treat
+      // that as an already-closed window, not report its stale count.
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockResolvedValue({
+        result: { count: 60 },
+        expiresAt: new Date(Date.now() - 1000),
+      } as never);
+
+      const result = await resetApiKeyRateLimit(mockKeyId);
+
+      expect(result.request).toEqual({ minute: 0, day: 0 });
+    });
+
     it('still clears and reports the request counter when clearing management fails, and logs the failure', async () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       const request = buildRateLimitKeys(mockKeyId);
@@ -580,6 +594,42 @@ describe('apiKeyRateLimitCheck', () => {
       expect(result.management).toEqual({ minute: 0, day: 0 });
       expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.minuteKey);
       expect(cacheRepository.deleteByKeyAndReturn).toHaveBeenCalledWith(management.dayKey);
+    });
+
+    it('rejects when every attempted counter fails to clear anything, instead of reporting success', async () => {
+      // A reset that clears nothing must not look like a reset that succeeded - the caller
+      // (the admin route) needs this to surface as a failure, not a 200 with a hollow lockout.
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockRejectedValue(new Error('cache unavailable'));
+
+      await expect(resetApiKeyRateLimit(mockKeyId, { alsoResetManagement: true })).rejects.toThrow(
+        /failed to clear any rate-limit counters/i
+      );
+    });
+
+    it('rejects when the only attempted group (no alsoResetManagement) fails to clear anything', async () => {
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockRejectedValue(new Error('cache unavailable'));
+
+      await expect(resetApiKeyRateLimit(mockKeyId)).rejects.toThrow(/failed to clear any rate-limit counters/i);
+    });
+
+    it('does not discard a sibling counter that cleared when the other counter in its own group fails', async () => {
+      // Before this fixed, a fail-fast Promise.all inside deleteCounterGroup meant the day
+      // delete rejecting threw away the minute delete's already-succeeded usage too - a counter
+      // that WAS cleared got reported as if clearing it had failed entirely.
+      const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId);
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockImplementation(async key => {
+        if (key === minuteKey) return { result: { count: 4 }, expiresAt: future(MINUTE_MS) } as never;
+        if (key === dayKey) throw new Error('cache unavailable');
+        return null;
+      });
+
+      const result = await resetApiKeyRateLimit(mockKeyId);
+
+      expect(result.request).toEqual({
+        minute: 4,
+        day: 0,
+        minuteResetAt: Math.floor(future(MINUTE_MS).getTime() / 1000),
+      });
     });
   });
 
@@ -629,12 +679,16 @@ describe('apiKeyRateLimitCheck', () => {
       expect(await getApiKeyRateLimitUsage(mockKeyId)).toEqual({ minute: 0, day: 0 });
     });
 
-    it('reads the management counter by its namespaced keys when asked', async () => {
+    it('always reads the request counter - no callers need a management-scoped read', async () => {
+      // Both production callers (api-usage.ts, admin user-api-keys.ts) only ever read the
+      // request counter; the admin reset's management diagnostic comes from
+      // resetApiKeyRateLimit's own atomic delete instead. Pinning the request-only keys here
+      // guards against that param quietly coming back as unused, untested surface.
       const minuteDoc = { result: { count: 2 }, expiresAt: future(MINUTE_MS) };
       const dayDoc = { result: { count: 10 }, expiresAt: future(DAY_MS) };
       vi.mocked(cacheRepository.findByKey).mockResolvedValueOnce(minuteDoc).mockResolvedValueOnce(dayDoc);
 
-      const usage = await getApiKeyRateLimitUsage(mockKeyId, 'management');
+      const usage = await getApiKeyRateLimitUsage(mockKeyId);
 
       expect(usage).toEqual({
         minute: 2,
@@ -642,7 +696,7 @@ describe('apiKeyRateLimitCheck', () => {
         minuteResetAt: Math.floor(minuteDoc.expiresAt.getTime() / 1000),
         dayResetAt: Math.floor(dayDoc.expiresAt.getTime() / 1000),
       });
-      const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId, 'management');
+      const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId);
       const queried = vi.mocked(cacheRepository.findByKey).mock.calls.map(call => call[0]);
       expect(new Set(queried)).toEqual(new Set([minuteKey, dayKey]));
     });
@@ -687,6 +741,13 @@ describe('apiKeyRateLimitCheck', () => {
 
     it("returns the fixed MANAGEMENT_RATE_LIMIT for 'management', ignoring the key's own limit", () => {
       expect(resolveCounterLimit('management', mockRateLimit)).toBe(MANAGEMENT_RATE_LIMIT);
+    });
+
+    it('MANAGEMENT_RATE_LIMIT is 5/min, 50/day', () => {
+      // The identity check above only pins that resolveCounterLimit returns this exact object -
+      // it says nothing about what the policy value actually is, so a change to the constant
+      // itself has no regression guard without asserting the literal.
+      expect(MANAGEMENT_RATE_LIMIT).toEqual({ requestsPerMinute: 5, requestsPerDay: 50 });
     });
   });
 
