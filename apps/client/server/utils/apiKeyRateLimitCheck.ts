@@ -128,14 +128,18 @@ export interface RateLimitUsage {
 }
 
 /**
- * Read a key's current minute and day counter values without touching them.
- * A missing doc, or one whose fixed window already ended (expiresAt in the
- * past, awaiting TTL cleanup), reads as 0 - the same view the enforcer takes
- * on the next request. The DB usage.* fields on the key doc are not
- * maintained; these cache counters are the live source of truth.
+ * Read a key's current minute and day counter values for the given counter
+ * (defaults to 'request') without touching them. A missing doc, or one whose
+ * fixed window already ended (expiresAt in the past, awaiting TTL cleanup),
+ * reads as 0 - the same view the enforcer takes on the next request. The DB
+ * usage.* fields on the key doc are not maintained; these cache counters are
+ * the live source of truth.
  */
-export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitUsage> {
-  const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
+export async function getApiKeyRateLimitUsage(
+  keyId: string,
+  counter: RateLimitCounter = 'request'
+): Promise<RateLimitUsage> {
+  const { minuteKey, dayKey } = buildRateLimitKeys(keyId, counter);
   const [minuteDoc, dayDoc] = await Promise.all([
     cacheRepository.findByKey(minuteKey),
     cacheRepository.findByKey(dayKey),
@@ -147,6 +151,28 @@ export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitU
     day: day.count,
     minuteResetAt: minute.resetAt,
     dayResetAt: day.resetAt,
+  };
+}
+
+export interface CounterLockoutState {
+  minuteAtLimit: boolean;
+  dayAtLimit: boolean;
+}
+
+/**
+ * Whether a counter's live usage is at or over its ceiling - i.e. would
+ * currently cause a 429. Read-only, does not touch the counters. Exists so an
+ * admin resetting a key can be told which counter(s) actually caused the
+ * lockout, since resetApiKeyRateLimit clears that state and it can't be
+ * recovered afterward.
+ */
+export function evaluateCounterLockout(
+  usage: RateLimitUsage,
+  limit: { requestsPerMinute: number; requestsPerDay: number }
+): CounterLockoutState {
+  return {
+    minuteAtLimit: usage.minute >= limit.requestsPerMinute,
+    dayAtLimit: usage.day >= limit.requestsPerDay,
   };
 }
 
