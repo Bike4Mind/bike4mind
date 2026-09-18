@@ -53,6 +53,10 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
       e.preventDefault();
 
       const container = e.currentTarget as HTMLElement;
+      // The preventDefault above also suppresses the mousedown that would have focused the
+      // handle, which would leave the arrow keys dead after a drag until the user tabbed back.
+      // This does not light the ring: the indicator is :focus-visible, which a pointer misses.
+      container.focus();
       const parent = container.parentElement;
       if (!parent) return;
 

@@ -108,6 +108,19 @@ describe('ResizableSplitter', () => {
     expect(onWidthChange).toHaveBeenCalledWith(20);
   });
 
+  // pointerdown is preventDefault'd to stop text selection, which also suppresses the focus
+  // the mousedown would have given the handle -- leaving the arrow keys dead after a drag
+  // until the user tabbed back. Fine-tuning a drag by 2% is the obvious next reach.
+  it('focuses the handle on pointer down so the arrows work straight after a drag', () => {
+    renderSplitter();
+    // jsdom does not implement pointer capture, which the drag path calls unconditionally.
+    handle().setPointerCapture = vi.fn();
+
+    fireEvent.pointerDown(handle(), { pointerId: 1, clientX: 0 });
+
+    expect(handle()).toHaveFocus();
+  });
+
   it('swallows the keys it handles and leaves the rest alone', () => {
     renderSplitter();
 
