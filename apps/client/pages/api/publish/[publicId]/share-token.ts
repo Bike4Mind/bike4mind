@@ -13,7 +13,7 @@ const shareTokenBodySchema = z.object({
  * capability behind `/a/<shareToken>`).
  *
  *   GET    - report whether a link is live, WITHOUT minting one, so the owner-facing
- *          surface can offer Revoke on a cold page load (#278). Returns the token
+ *          surface can offer Revoke on a cold page load. Returns the token
  *          itself: the caller is the owner, who may already hold it.
  *   POST   { regenerate?: boolean } - mint the token if absent (idempotent);
  *          `regenerate: true` rotates it, which instantly revokes every
@@ -55,6 +55,11 @@ async function loadOwnedArtifact(req: Request, res: Response): Promise<ShareToke
 
 const handler = baseApi()
   .get(async (req: Request, res: Response) => {
+    // The body carries the capability token itself, so it must never sit in a shared
+    // cache. Set before the gate so the 400/401/403/404 bodies are covered too (same
+    // placement and reason as annotations/[publicId]/can-comment.ts).
+    res.setHeader('Cache-Control', 'private, no-store');
+
     const artifact = await loadOwnedArtifact(req, res);
     if (!artifact) return;
 

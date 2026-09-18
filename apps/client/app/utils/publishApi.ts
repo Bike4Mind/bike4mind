@@ -736,7 +736,7 @@ export interface ShareTokenState {
 /**
  * Read whether a no-sign-in share link is live, WITHOUT minting one (owner/admin).
  * Use this - not `createOrGetShareToken` - to decide which controls to render, so
- * that merely opening a surface never creates a link (#278).
+ * that merely opening a surface never creates a link.
  */
 export async function getShareTokenState(publicId: string): Promise<ShareTokenState> {
   const { data } = await api.get<ShareTokenState>(`/api/publish/${publicId}/share-token`);

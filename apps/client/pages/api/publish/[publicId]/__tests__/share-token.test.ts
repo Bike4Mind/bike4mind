@@ -168,11 +168,14 @@ describe('GET /api/publish/[publicId]/share-token', () => {
     const { res, promise } = run({ method: 'GET' });
     await promise;
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({
+    expect(res._getJSONData()).toEqual({
       hasShareToken: true,
       shareToken: 'EXISTING',
       shareUrl: '/a/EXISTING',
+      shareTokenUpdatedAt: '2026-09-14T00:00:00.000Z',
     });
+    // Soft-deleted artifacts must stay invisible to the read, same as POST/DELETE.
+    expect(mockLoad.mock.calls[0][0]).toEqual({ publicId: 'pub1', deletedAt: null });
     // The whole point of the route: looking must never create a link.
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
     expect(mockUpdateOne).not.toHaveBeenCalled();
@@ -211,5 +214,25 @@ describe('GET /api/publish/[publicId]/share-token', () => {
     const { res, promise } = run({ method: 'GET' });
     await promise;
     expect(res._getStatusCode()).toBe(404);
+  });
+
+  it('400s a missing publicId without touching the database', async () => {
+    const { res, promise } = run({ method: 'GET', publicId: '' });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockLoad).not.toHaveBeenCalled();
+  });
+
+  // The body carries the capability token, so a shared cache must never hold it. The
+  // header is set before the gate, so it covers the error bodies too.
+  it.each([
+    ['a live link', { publicId: 'pub1', ownerId: 'owner1', shareToken: 'EXISTING' }, { id: 'owner1' }, 200],
+    ['a 403', { publicId: 'pub1', ownerId: 'owner1' }, { id: 'intruder' }, 403],
+  ])('sends private, no-store on %s', async (_label, artifact, user, status) => {
+    mockLoad.mockResolvedValue(artifact);
+    const { res, promise } = run({ method: 'GET', user });
+    await promise;
+    expect(res._getStatusCode()).toBe(status);
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store');
   });
 });
