@@ -16,7 +16,8 @@ import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { filterReadableQuests } from '@server/utils/sessionAccess';
 import { apiKeyService } from '@bike4mind/services';
-import { ChatModels, isImageServeable } from '@bike4mind/common';
+import { ChatModels, isImageServeable, ORG_FEEDBACK_SUMMARY_JOB_TYPE } from '@bike4mind/common';
+import { OrgFeedbackSummaryPayload, runOrgFeedbackSummary } from '@server/queueHandlers/orgFeedbackSummary';
 import { getSubQuestStatusIcon } from '@client/app/utils/subQuestStatusPresentation';
 import { z } from 'zod';
 import { Resource } from 'sst';
@@ -28,6 +29,19 @@ const QuestExportPayload = z.object({
   planId: z.string(),
   userId: z.string(),
 });
+
+/**
+ * This queue carries two job types. See `orgFeedbackSummary.ts` for why the summary rides here
+ * instead of getting a queue of its own, and for what it inherits by doing so.
+ *
+ * A plain union rather than `z.discriminatedUnion`, because messages already in flight when this
+ * ships carry no `jobType` at all and must still parse as an export - a discriminated union needs
+ * the key present on every arm.
+ */
+const QueuePayload = z.union([
+  OrgFeedbackSummaryPayload,
+  QuestExportPayload.extend({ jobType: z.literal('questExport').optional() }),
+]);
 
 type ExportStatus = 'assembling' | 'downloading_images' | 'summarizing' | 'zipping' | 'completed' | 'failed';
 
@@ -255,7 +269,16 @@ ${content}`;
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   const body = event.Records[0].body;
-  const { exportJobId, planId, userId } = secureParameters(JSON.parse(body), QuestExportPayload);
+  // secureParameters stays on the front of this, rather than a raw parse per arm: it is what turns
+  // a malformed message into a 422 the wrapper swallows instead of a retry loop into the DLQ.
+  const message = secureParameters(JSON.parse(body), QueuePayload);
+
+  if (message.jobType === ORG_FEEDBACK_SUMMARY_JOB_TYPE) {
+    await runOrgFeedbackSummary(message, logger);
+    return;
+  }
+
+  const { exportJobId, planId, userId } = message;
 
   logger.updateMetadata({ exportJobId, planId, userId });
 

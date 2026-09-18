@@ -90,6 +90,13 @@ feedbackSchema.index(
   }
 );
 
+// Org rollup: every report stamped to an org, newest-first over a date range. The compound above
+// cannot serve it - `createdAt` sits behind `subject` there and DocumentDB has no skip-scan, so a
+// query that does not pin a subject gets no range bound on the date. Not sparse: `organizationId`
+// defaults to null, so the key is present on unstamped rows too, and a compound sparse index skips
+// a document only when every one of its keys is absent.
+feedbackSchema.index({ organizationId: 1, createdAt: -1 }, { name: 'feedback_org_createdAt' });
+
 export const FeedbackModel: Model<IFeedbackDocument> =
   mongoose.models.Feedback ?? model<IFeedbackDocument>('Feedback', feedbackSchema);
 

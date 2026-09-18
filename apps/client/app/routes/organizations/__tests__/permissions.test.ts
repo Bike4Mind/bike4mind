@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Permission } from '@bike4mind/common';
+import { canViewOrgUsage, OrganizationTabs, resolveAccessibleTab } from '../orgTabAccess';
 
 /**
  * Tests the organization permission logic from /routes/organizations/$id.tsx.
@@ -126,20 +127,11 @@ describe('Organization Permissions', () => {
     });
   });
 
-  describe('canViewUsage Helper', () => {
-    // Mirrors the canViewUsage memo in $id.tsx, which intentionally does NOT use
-    // the permission set: it must match the server gate (verifyOrgAccess) exactly
-    // - admin, org owner, or team manager - so the Usage tab never shows to
-    // someone the API would 404. Kept in sync with orgAccess.ts::verifyOrgAccess.
-    const canViewUsage = (
-      currentUser: { id: string; isAdmin?: boolean } | null,
-      organization: { userId: string; managerId?: string | null } | null
-    ): boolean => {
-      if (!currentUser || !organization) return false;
-      if (currentUser.isAdmin) return true;
-      if (currentUser.id === organization.userId) return true;
-      return organization.managerId === currentUser.id;
-    };
+  describe('canViewOrgUsage', () => {
+    // The predicate $id.tsx runs, imported rather than re-declared: a copy here would pass whether
+    // or not the page still agreed with it. Gates the Usage and Analysis tabs, and must match the
+    // server gate (orgAccess.ts, verifyOrgAccess) - admin, org owner, or team manager.
+    const canViewUsage = canViewOrgUsage;
 
     const org = { userId: 'owner123', managerId: 'manager456' };
 
@@ -267,5 +259,49 @@ describe('Organization Permissions', () => {
     it('denies a stranger', () => {
       expect(canSetAdmins({ id: 'stranger999' }, org)).toBe(false);
     });
+  });
+});
+
+describe('resolveAccessibleTab', () => {
+  // The redirect the org page runs on every render. A ?tab= deep link is the only path that can
+  // select a tab the TabList never rendered, so these cases are the gate, not a formality.
+  const all = { canManageOrg: true, canViewUsage: true, canManageGroups: true };
+
+  it('leaves a tab the caller may see alone', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.Analysis, all)).toBe(OrganizationTabs.Analysis);
+    expect(resolveAccessibleTab(OrganizationTabs.Usage, all)).toBe(OrganizationTabs.Usage);
+  });
+
+  it('bounces a deep link to Analysis for someone who may not view usage', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.Analysis, { ...all, canViewUsage: false })).toBe(
+      OrganizationTabs.Overview
+    );
+  });
+
+  it('bounces Usage on the same gate', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.Usage, { ...all, canViewUsage: false })).toBe(
+      OrganizationTabs.Overview
+    );
+  });
+
+  it('keeps Analysis reachable for someone who may view usage but not manage the org', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.Analysis, { ...all, canManageOrg: false })).toBe(
+      OrganizationTabs.Analysis
+    );
+  });
+
+  it('still bounces the manage-pinned tabs and Groups', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.Settings, { ...all, canManageOrg: false })).toBe(
+      OrganizationTabs.Overview
+    );
+    expect(resolveAccessibleTab(OrganizationTabs.Groups, { ...all, canManageGroups: false })).toBe(
+      OrganizationTabs.Overview
+    );
+  });
+
+  it('never bounces the tabs every member may see', () => {
+    const none = { canManageOrg: false, canViewUsage: false, canManageGroups: false };
+    expect(resolveAccessibleTab(OrganizationTabs.Overview, none)).toBe(OrganizationTabs.Overview);
+    expect(resolveAccessibleTab(OrganizationTabs.Members, none)).toBe(OrganizationTabs.Members);
   });
 });
