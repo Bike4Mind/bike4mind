@@ -18,6 +18,7 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 const mockSetLLM = vi.fn();
 let mockSize: string = '1024x1024';
 let mockImageModel: string = ImageModels.FLUX_PRO_1_1;
+let mockQuality: string = 'standard';
 
 vi.mock('@client/app/contexts/LLMContext', () => ({
   useLLM: () => ({
@@ -26,7 +27,7 @@ vi.mock('@client/app/contexts/LLMContext', () => ({
     imageEditModel: ImageModels.GPT_IMAGE_1_5,
     setLLM: mockSetLLM,
     size: mockSize,
-    quality: 'standard',
+    quality: mockQuality,
     style: 'vivid',
     seed: null,
     output_format: 'png',
@@ -206,5 +207,67 @@ describe('ImageGenerationModelSelectionModal - settings the selected model ignor
     );
 
     expect(getByTestId('image-setting-seed-input').querySelector('input')).not.toBeDisabled();
+  });
+});
+
+describe('ImageGenerationModelSelectionModal - Quality select', () => {
+  beforeEach(() => {
+    mockSetLLM.mockClear();
+  });
+
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+    mockQuality = 'standard';
+  });
+
+  const qualityWrites = () =>
+    mockSetLLM.mock.calls.filter(([update]) => update && Object.prototype.hasOwnProperty.call(update, 'quality'));
+
+  it('leaves a GPT-Image quality the user picked alone', async () => {
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+    mockQuality = 'high';
+
+    const { getByTestId } = render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {});
+
+    expect(qualityWrites()).toEqual([]);
+    expect(getByTestId('image-setting-quality-select').textContent).toBe('High');
+  });
+
+  it('coerces a quality from the other vocabulary to the model default', async () => {
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+    mockQuality = 'hd'; // DALL-E vocabulary, not offered for GPT-Image
+
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {});
+
+    expect(mockSetLLM).toHaveBeenCalledWith({ quality: 'low' });
+  });
+
+  it('does not touch quality while the dialog is closed', async () => {
+    // ToolsSection mounts this component unconditionally, so a closed dialog must not
+    // write to the shared LLM store - AdvancedAIModal edits the same field.
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+    mockQuality = 'hd';
+
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={false} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {});
+
+    expect(qualityWrites()).toEqual([]);
   });
 });
