@@ -2372,7 +2372,7 @@ export class ChatCompletionProcess {
       // buildAndSortMessages return nothing and the empty-prompt guard fire on a misconfigured
       // model (a context window smaller than its own reserved output). Clamping there would
       // silently restore the empty payload that guard exists to catch.
-      const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+      const modelMaxOutput = modelInfo.max_tokens;
       // Resolved here, above its first use, because BOTH safeInputWindow callers have to
       // reserve the same output or the window drifts - which is exactly what the note
       // above promises cannot happen. Falling back to the model's full output cap was

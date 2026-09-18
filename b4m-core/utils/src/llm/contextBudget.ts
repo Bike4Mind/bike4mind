@@ -75,7 +75,7 @@ export function safeInputWindow(
 ): number {
   const returnsMedia = isMediaModelType(modelInfo.type);
   const contextLimit = effectiveContextWindow(modelInfo);
-  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+  const modelMaxOutput = modelInfo.max_tokens;
   // The reserve has to match what the request will actually send, and resolveOutputMaxTokens
   // declines to clamp a reasons-within-the-budget model to a DERIVED cap. Clamping here anyway
   // would reserve 4096 against a 64000-token request and let assembly fill the difference, so
@@ -202,7 +202,7 @@ export function computeVerbatimTokenBudget(
   requestedMaxTokens: number | undefined,
   opts: { verbatimWindowFraction: number; nonHistoryOverheadTokens: number }
 ): number {
-  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+  const modelMaxOutput = modelInfo.max_tokens;
   const safeMaxTokens = resolveOutputMaxTokens({
     requested: requestedMaxTokens,
     fallback: DEFAULT_OUTPUT_MAX_TOKENS,

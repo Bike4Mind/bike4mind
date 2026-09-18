@@ -193,12 +193,19 @@ const SMALL_CONTEXT_WINDOW = 32768;
 // model with a 128000-token ceiling could only emit 12.8% of what it advertises, which is what
 // truncated large artifacts. Small windows halve; large ones take a quarter of the window
 // (never below LARGE_CONTEXT_FLOOR), always bounded by the model's own advertised ceiling.
-export const computeDefaultMaxTokens = (modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens'>): number => {
+export const computeDefaultMaxTokens = (
+  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens' | 'maxOutputTokensDerived'>
+): number => {
   const contextWindow = modelInfo.contextWindow ?? 0;
   const modelMaxTokens = modelInfo.max_tokens ?? 0;
   if (contextWindow <= 0 || modelMaxTokens <= 0) return Math.floor(modelMaxTokens);
-  if (contextWindow <= SMALL_CONTEXT_WINDOW) return Math.floor(Math.min(modelMaxTokens, contextWindow / 2));
-  return Math.floor(Math.min(modelMaxTokens, Math.max(LARGE_CONTEXT_FLOOR, contextWindow / 4)));
+  const windowShare =
+    contextWindow <= SMALL_CONTEXT_WINDOW ? contextWindow / 2 : Math.max(LARGE_CONTEXT_FLOOR, contextWindow / 4);
+  // A derived max_tokens is toModelInfo's stand-in for a row that declares none (see models.ts),
+  // so it must not clamp this window-based target back down to it - that would re-pin the same
+  // default the derivation exists to be distinguished from.
+  if (modelInfo.maxOutputTokensDerived === true) return Math.floor(windowShare);
+  return Math.floor(Math.min(modelMaxTokens, windowShare));
 };
 
 // Re-fit a persisted max_tokens onto a model. An unset value, or one carried over from a bigger
@@ -213,13 +220,16 @@ export const computeDefaultMaxTokens = (modelInfo: Pick<ModelInfo, 'contextWindo
 // Keep in sync with the model-change effect in contexts/LLMContext.tsx.
 export const refitMaxTokensForModel = (
   currentMaxTokens: number,
-  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens'>,
+  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens' | 'maxOutputTokensDerived'>,
   { allowRaise = true }: { allowRaise?: boolean } = {}
 ): number => {
+  const isDerived = modelInfo.maxOutputTokensDerived === true;
   const ceiling = modelInfo.max_tokens ?? 0;
-  if (ceiling <= 0) return currentMaxTokens;
+  if (!isDerived && ceiling <= 0) return currentMaxTokens;
   const target = computeDefaultMaxTokens(modelInfo);
-  if (currentMaxTokens <= 0 || currentMaxTokens > ceiling) return target;
+  // A derived ceiling states nothing about the model (see computeDefaultMaxTokens), so it must
+  // not be treated as a real cap that resets a value already set above it.
+  if (currentMaxTokens <= 0 || (!isDerived && currentMaxTokens > ceiling)) return target;
   if (allowRaise && currentMaxTokens < target) return target;
   return currentMaxTokens;
 };
