@@ -82,7 +82,10 @@ const getQualityOptions = (modelId: string): { value: OpenAIImageQuality; label:
         { value: 'hd', label: 'HD' },
       ];
 
-// Mirrors AdvancedAISettings' reset defaults.
+// Close to AdvancedAIModal's reset defaults, but not identical: its handleReset still keys the
+// 'low' default off `model === GPT_IMAGE_1` alone, so it hands gpt-image-1.5/mini/2 'standard'.
+// Pre-existing divergence, and a benign one - OpenAIImageService and OpenAIImageCostCalculator
+// both map 'standard' -> 'medium' for GPT-Image - so it mis-defaults rather than breaks.
 const getDefaultQuality = (modelId: string): OpenAIImageQuality => (isGPTImageModel(modelId) ? 'low' : 'standard');
 
 const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelectionModalProps> = ({ open, onClose }) => {
@@ -282,7 +285,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
   useEffect(() => {
     if (!open) return;
     const validQualities = getQualityOptions(contextImageModel).map(option => option.value);
-    if (!validQualities.includes(_quality as OpenAIImageQuality)) {
+    if (!validQualities.includes(_quality)) {
       setLLM({ quality: getDefaultQuality(contextImageModel) });
     }
   }, [open, contextImageModel, _quality, setLLM]);
