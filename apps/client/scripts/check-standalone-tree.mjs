@@ -52,7 +52,18 @@ if (!fs.existsSync(appDir)) {
 const entries = fs.readdirSync(appDir).sort();
 const entrySet = new Set(entries);
 const offenders = entries.filter((entry) => !ALLOWED.has(entry));
-const missing = [...ALLOWED].filter((entry) => !entrySet.has(entry)).sort();
+const missing = [...ALLOWED].filter((entry) => !entrySet.has(entry));
+
+// `app/generated` is allowlisted as a DIRECTORY, so every check here passes on an empty one -
+// which is what a build whose prebuild did not run leaves behind. Neither artifact is committed
+// any more, so nothing upstream of the build guarantees they exist. help-index.json is produced
+// by prebuild on every build and cannot false-positive. help-embeddings.json is deliberately NOT
+// required: it needs an embedding credential, and degrading to keyword search without one is the
+// documented self-host default rather than a broken build.
+for (const relative of ['app/generated/help-index.json']) {
+  if (!fs.existsSync(path.join(appDir, relative))) missing.push(relative);
+}
+missing.sort();
 
 // Reported with the parent's prefix so the message names a path the reader can go and look at.
 for (const [parent, allowed] of [

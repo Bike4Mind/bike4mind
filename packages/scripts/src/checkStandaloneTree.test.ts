@@ -133,6 +133,29 @@ describe('check-standalone-tree', () => {
     expect(output).toContain('missing public');
   });
 
+  it('fails when app/generated is present but the help index inside it is not', () => {
+    // app/generated is allowlisted as a DIRECTORY, so the entry checks above report clean on an
+    // empty one - which is exactly what a build whose prebuild did not run leaves behind now that
+    // the index is generated rather than committed. This is the only container-build guard on it.
+    makeHealthyTree();
+    fs.rmSync(path.join(appDir, 'app', 'generated', 'help-index.json'));
+
+    const { status, output } = runGuard(appDir);
+    expect(status).toBe(1);
+    expect(output).toContain('missing app/generated/help-index.json');
+  });
+
+  it('does not require the help embeddings, which are keyless-optional by design', () => {
+    // Deliberate asymmetry with the test above: vectors need an embedding credential, and
+    // degrading to keyword search without one is the documented self-host default, not a
+    // broken build. Pinned so a later tightening of the guard is a decision, not a drive-by.
+    makeHealthyTree();
+    expect(fs.existsSync(path.join(appDir, 'app', 'generated', 'help-embeddings.json'))).toBe(false);
+
+    const { status, output } = runGuard(appDir);
+    expect(status, output).toBe(0);
+  });
+
   it('is an allowlist, so it rejects an entry nobody thought to name', () => {
     makeHealthyTree();
     fs.mkdirSync(path.join(appDir, 'some-future-directory'));

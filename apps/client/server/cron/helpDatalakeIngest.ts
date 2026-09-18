@@ -2,11 +2,12 @@
  * Scheduled re-sync of the `system-help` data lake against the help corpus.
  *
  * The lake is the corpus behind in-chat `search_knowledge_base`; the Help panel reads the
- * committed `help-embeddings.json` instead, and that side is already held in step at section
- * granularity by help-id-resolution.test.ts. Nothing held THIS side in step with anything, so the
- * lake was whatever the last hand-run of `help:ingest-datalake` left behind - it drifted for two
- * months in both directions at once, missing newly published articles while still serving eleven
- * that had been deleted from the corpus.
+ * generated `help-embeddings.json` instead, which is rebuilt from docs-site at deploy time and so
+ * cannot go stale the way a committed copy did - as long as the deploy's vectorize step runs;
+ * under HELP_EMBEDDINGS_REQUIRED=false it leaves whatever is already there. Nothing held THIS side in step with anything, so the lake was whatever the
+ * last hand-run of `help:ingest-datalake` left behind - it drifted for two months in both
+ * directions at once, missing newly published articles while still serving eleven that had been
+ * deleted from the corpus.
  *
  * All the mirroring logic is shared with that script (@bike4mind/scripts/help/ingestHelpDatalake),
  * so the scheduled path and the manual path cannot diverge. The shared mirror is differential -
@@ -20,8 +21,8 @@
  * account.
  *
  * The corpus arrives in the Lambda bundle via copyFiles (see infra/cron.ts) and is read from
- * `docs-site/docs` + the generated `help-index.json` - both committed, so the bundle carries them
- * whether or not `help:bundle-content` ran during the build.
+ * `docs-site/docs` + the generated `help-index.json`. infra/cron.ts regenerates that index as it
+ * bundles, so the corpus is self-contained and does not depend on the web build having run.
  */
 
 import {

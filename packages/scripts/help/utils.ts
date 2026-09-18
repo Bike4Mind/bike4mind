@@ -228,11 +228,12 @@ export interface MarkdownSection {
  *   the only OTHER producer that writes to `fabfilechunks`, with its own,
  *   deliberately more conservative default (100 chars vs. that chunker's
  *   `MIN_CHUNK_CHARS_FLOOR` of 50) tuned for RAG passage quality, not just a
- *   near-empty floor - do not casually lower it to match, since
- *   `help-embeddings.json` is a committed snapshot keyed on the exact section
- *   boundaries this produces (see help-id-resolution.test.ts) and changing
- *   the default re-derives that snapshot and needs a real
- *   `help:regenerate` pass to reconcile.
+ *   near-empty floor - do not casually lower it to match. The two callers
+ *   below MUST agree on these defaults: vectorize writes embeddings keyed on
+ *   the (slug, sectionPath) boundaries this produces, and runtime content
+ *   resolution re-derives those same keys to look the chunk back up. Changing
+ *   a default silently invalidates every already-generated vector until a
+ *   `help:regenerate` pass re-derives them.
  *
  * Used at build time (vectorize script) and at runtime (content resolution
  * for vector search results).

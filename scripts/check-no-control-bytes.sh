@@ -46,7 +46,7 @@ staged=
 # --diff-filter must include R (and C): git detects renames by default and emits a
 # rename-plus-edit as ONE R<score> record, which a bare ACM filter drops -- so `git mv a.ts
 # b.ts` plus a control-byte edit used to commit clean. C covers the same shape when copy
-# detection is enabled. Same filter set as .husky/check-help-content.sh.
+# detection is enabled.
 # Note --name-only emits only the NEW path for R/C records, so no stale old path is handed to
 # `git show` in staged mode.
 case "${1:-}" in
