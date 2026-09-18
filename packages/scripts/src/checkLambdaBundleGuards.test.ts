@@ -72,6 +72,29 @@ describe('the container build asserts its output after pruning it', () => {
 });
 
 /**
+ * The Dockerfile pin above covers the container path only. The hosted path has no Dockerfile step
+ * at all - OpenNext invokes the package's own `build` script, so `postbuild` is the only hook that
+ * fires on both paths without OpenNext config of its own. Pinned here because nothing else would
+ * fail if this line were dropped: the hosted build would still succeed, just ship the compiled
+ * test routes this issue is about (bike4mind#2577).
+ */
+describe('the hosted build prunes test routes via postbuild', () => {
+  it('declares a postbuild script that runs the pruner against the standalone output', () => {
+    const pkg = JSON.parse(read('apps/client/package.json')) as { scripts: Record<string, string> };
+    expect(pkg.scripts.postbuild, 'apps/client must declare a postbuild script').toBeDefined();
+    expect(pkg.scripts.postbuild).toContain('pruneTestRoutes.mjs');
+    expect(pkg.scripts.postbuild, 'a plain next build writes no .next/standalone; postbuild must no-op then').toContain(
+      '--if-standalone'
+    );
+  });
+
+  it('enables pre/post lifecycle scripts, or postbuild above never fires', () => {
+    const npmrc = read('.npmrc');
+    expect(npmrc).toMatch(/^enable-pre-post-scripts=true$/m);
+  });
+});
+
+/**
  * The excludes themselves are dormant - Next applies them in collect-build-traces, which it
  * skips under Turbopack - so what is worth pinning is the carve-out, not the effect. Someone
  * trimming the bundle later will reach for public/** first, and it is the one directory here
