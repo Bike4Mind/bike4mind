@@ -287,4 +287,18 @@ describe('POST /api/oauth/token relying-party issuance', () => {
     expect(h.signAccessToken).not.toHaveBeenCalled();
     expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
+
+  it('refuses to issue when a grant exists but does not cover the requested scopes (400 access_denied)', async () => {
+    // Exercises the grantCovers(...) === false branch: without this case grantCovers is mocked true
+    // everywhere, so deleting the coverage re-check would not fail CI.
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid'] });
+    (h.grantCovers as Mock).mockReturnValue(false);
+
+    const res = await relyingPartyExchange();
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('access_denied');
+    expect(h.signAccessToken).not.toHaveBeenCalled();
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+  });
 });
