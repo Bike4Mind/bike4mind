@@ -349,4 +349,67 @@ describe('CheckpointStore repo-trust hardening', () => {
       await cleanup(proj);
     }
   });
+
+  it('refuses to write through a symlink committed inside shadow-repo/', async () => {
+    const proj = await createTestProject();
+    const outside = await makeBareDir();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      // Attacker committed .b4m/shadow-repo/payload.ts as a symlink to a victim file.
+      const victim = path.join(outside, 'victim.txt');
+      await fs.writeFile(victim, 'victim-original', 'utf-8');
+      await fs.symlink(victim, path.join(proj, '.b4m', 'shadow-repo', 'payload.ts'));
+
+      await fs.writeFile(path.join(proj, 'payload.ts'), 'ATTACKER-CONTROLLED', 'utf-8');
+      const cp = await store.createCheckpoint('edit_local_file', ['payload.ts']);
+
+      // The write is refused; nothing outside the shadow repo is touched.
+      expect(cp).toBeNull();
+      expect(await fs.readFile(victim, 'utf-8')).toBe('victim-original');
+    } finally {
+      await cleanup(proj);
+      await cleanup(outside);
+    }
+  });
+
+  it('refuses a gitlink (file/symlink `.git`) planted at shadow-repo', async () => {
+    const proj = await makeBareDir();
+    try {
+      await fs.mkdir(path.join(proj, '.b4m', 'shadow-repo'), { recursive: true });
+      // A gitlink is a `.git` FILE, not a directory; it survives clone and would
+      // point git at an attacker-controlled gitdir.
+      await fs.writeFile(path.join(proj, '.b4m', 'shadow-repo', '.git'), 'gitdir: /tmp/evil\n', 'utf-8');
+
+      const store = new CheckpointStore(proj);
+      await expect(store.init('sess')).rejects.toThrow(/not a real git directory/i);
+    } finally {
+      await cleanup(proj);
+    }
+  });
+
+  it('ignores a hostile GIT_DIR in the ambient env when checkpointing', async () => {
+    const proj = await createTestProject();
+    const bogus = await makeBareDir(); // empty dir - not a git repo
+    const saved = process.env.GIT_DIR;
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      // If GIT_DIR leaked into the shadow git calls, `git add`/`commit` would run
+      // against this empty non-repo and fail (checkpoint would be null).
+      process.env.GIT_DIR = bogus;
+      await fs.writeFile(path.join(proj, 'f.ts'), 'hello', 'utf-8');
+      const cp = await store.createCheckpoint('create_file', ['f.ts']);
+
+      expect(cp).not.toBeNull();
+      expect(existsSync(path.join(bogus, 'HEAD'))).toBe(false);
+    } finally {
+      if (saved === undefined) delete process.env.GIT_DIR;
+      else process.env.GIT_DIR = saved;
+      await cleanup(proj);
+      await cleanup(bogus);
+    }
+  });
 });

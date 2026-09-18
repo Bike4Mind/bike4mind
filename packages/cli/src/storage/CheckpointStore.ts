@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs';
-import { existsSync, readFileSync, writeFileSync, unlinkSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, type Stats } from 'fs';
 import { execFileSync } from 'child_process';
 import path from 'path';
 
@@ -70,8 +70,20 @@ export class CheckpointStore {
     // Create .b4m directory
     await fs.mkdir(path.join(this.projectDir, '.b4m'), { recursive: true });
 
-    // Initialize shadow git repo if it doesn't exist
-    if (!existsSync(path.join(this.shadowRepoDir, '.git'))) {
+    // Initialize shadow git repo if it doesn't exist. A planted `.git` that is a
+    // file (gitlink) or symlink survives `git clone --recurse-submodules` and would
+    // point git at an attacker-controlled gitdir, so require a real directory.
+    const gitDir = path.join(this.shadowRepoDir, '.git');
+    let gitStat: Stats | null = null;
+    try {
+      gitStat = await fs.lstat(gitDir);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    if (gitStat && !gitStat.isDirectory()) {
+      throw new Error(`Refusing checkpoint: ${gitDir} is not a real git directory`);
+    }
+    if (!gitStat) {
       await fs.mkdir(this.shadowRepoDir, { recursive: true });
       this.git('init');
       // Configure the shadow repo to avoid user identity warnings
@@ -126,6 +138,11 @@ export class CheckpointStore {
         const absentMarkerPath = path.join(shadowDir, `${path.basename(filePath)}${ABSENT_MARKER}`);
 
         await fs.mkdir(shadowDir, { recursive: true });
+        // A committed symlink under shadow-repo/ (or a symlinked dir component)
+        // would make copyFile/writeFile below write THROUGH the link, outside the
+        // sandbox. Refuse any destination that is a symlink or escapes the shadow root.
+        await this.assertShadowDestSafe(shadowPath);
+        await this.assertShadowDestSafe(absentMarkerPath);
 
         if (existsSync(absolutePath)) {
           // Use lstat to detect symlinks (don't follow them)
@@ -435,11 +452,35 @@ export class CheckpointStore {
   }
 
   /**
+   * Refuse a per-file shadow write that would escape the sandbox: a symlinked
+   * destination (copyFile/writeFile follow it) or a parent dir whose realpath
+   * lands outside the shadow repo. Complements assertCheckpointPathsSafe, which
+   * only covers the three fixed top-level paths, not files written inside shadow-repo/.
+   */
+  private async assertShadowDestSafe(destPath: string): Promise<void> {
+    const realRoot = await fs.realpath(this.shadowRepoDir);
+    const realDir = await fs.realpath(path.dirname(destPath));
+    if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) {
+      throw new Error(`Refusing shadow write outside sandbox: ${destPath}`);
+    }
+    try {
+      if ((await fs.lstat(destPath)).isSymbolicLink()) {
+        throw new Error(`Refusing symlinked shadow path: ${destPath}`);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+  }
+
+  /**
    * Execute a git command in the shadow repo.
    *
    * Neutralize ambient/planted git config so an attacker `.gitconfig` or hook in
    * the clone cannot execute: /dev/null for global+system config, and
-   * `core.hooksPath=/dev/null` so no hook runs on commit.
+   * `core.hooksPath=/dev/null` so no hook runs on commit. Inherited env can also
+   * inject config or redirect the repo, so unset the config/dir override vars
+   * (GIT_CONFIG_COUNT + numbered keys, GIT_CONFIG_PARAMETERS, GIT_DIR,
+   * GIT_WORK_TREE) - undefined values are dropped from the child env by Node.
    */
   private git(...args: string[]): string {
     return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], {
@@ -447,7 +488,15 @@ export class CheckpointStore {
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 10000,
-      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
+      env: {
+        ...process.env,
+        GIT_CONFIG_GLOBAL: '/dev/null',
+        GIT_CONFIG_SYSTEM: '/dev/null',
+        GIT_CONFIG_COUNT: undefined,
+        GIT_CONFIG_PARAMETERS: undefined,
+        GIT_DIR: undefined,
+        GIT_WORK_TREE: undefined,
+      },
     });
   }
 
