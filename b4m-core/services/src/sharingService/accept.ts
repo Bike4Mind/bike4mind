@@ -22,6 +22,7 @@ import {
   UnprocessableEntityError,
 } from '@bike4mind/utils';
 import { z } from 'zod';
+import { resolveRedeemableInvite } from './resolveRedeemableInvite';
 
 const acceptInviteSchema = z.object({
   id: z.string(),
@@ -66,7 +67,10 @@ export const acceptInvite = async (userId: string, params: AcceptInviteParameter
   if (!user) throw new NotFoundError('User not found');
   if (!user.email) throw new UnprocessableEntityError('User has no email');
 
-  const invite = await db.invites.findById(id);
+  // Holding the key IS the authorization on a link invite, so it resolves through the redemption
+  // door rather than findById: a tokenized invite is addressable only by its token, and a legacy
+  // tokenless one still answers to its id until it expires.
+  const invite = await resolveRedeemableInvite(id, { db });
   if (!invite) throw new NotFoundError('Invite not found');
 
   // createInvite defaults expiresAt 100 years out, so this only bites a real expiration.

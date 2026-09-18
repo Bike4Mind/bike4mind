@@ -13,6 +13,9 @@ import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
 
+/** Staging is irrelevant to a route that declares no gate; reuse one empty set. */
+const NO_STAGED_SCOPES: ReadonlySet<string> = new Set<string>();
+
 /**
  * Hashes an API key for safe logging (avoids exposing partial credentials)
  */
@@ -77,35 +80,39 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
       // (cli/auth.ts DEFAULT_COMPLETION_SCOPES) so a generate-or-chat key isn't
       // split across endpoints. A scope named in API_KEY_SCOPE_STAGING is still
       // rolling out, so its gate reports instead of rejecting - see apiKeyScopeGate.ts.
-      // Most routes declare no scopes, so nothing here runs for them at all.
+      // Runs even on a route that declares no scopes: a key confined to one
+      // dedicated flow must not ride the scope-less default. Staging only bears on
+      // gates a route actually declared, so it is parsed only when there is one.
+      let staged = NO_STAGED_SCOPES;
       if (requiredScopes) {
-        const { staged, rejected } = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
-        if (rejected.length > 0) {
+        const parsed = parseStagedScopes(process.env[SCOPE_STAGING_ENV_VAR]);
+        staged = parsed.staged;
+        if (parsed.rejected.length > 0) {
           req.logger?.warn('Ignoring unstageable or unknown API key scopes in staging list', {
             envVar: SCOPE_STAGING_ENV_VAR,
-            rejected,
+            rejected: parsed.rejected,
           });
         }
-        const gate = decideScopeGate(requiredScopes, validation.scopes, staged);
-        if (gate.outcome !== 'allow') {
-          // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
-          // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
-          // The staged line is also the re-mint backlog: every hit is a production key
-          // that will start failing the day its scope leaves API_KEY_SCOPE_STAGING.
-          const context = {
-            keyHash: hashApiKeyForLogging(apiKey),
-            keyId: validation.keyId,
-            userId: validation.userId,
-            heldScopes: validation.scopes,
-            requiredScopes,
-            endpoint: req.originalUrl,
-          };
-          if (gate.outcome === 'stagedAllow') {
-            req.logger?.warn('API key scope check missed but staged - allowing', context);
-          } else {
-            req.logger?.warn('API key scope check failed', context);
-            throw new ForbiddenError('Insufficient API key permissions');
-          }
+      }
+      const gate = decideScopeGate(requiredScopes, validation.scopes, staged);
+      if (gate.outcome !== 'allow') {
+        // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
+        // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
+        // The staged line is also the re-mint backlog: every hit is a production key
+        // that will start failing the day its scope leaves API_KEY_SCOPE_STAGING.
+        const context = {
+          keyHash: hashApiKeyForLogging(apiKey),
+          keyId: validation.keyId,
+          userId: validation.userId,
+          heldScopes: validation.scopes,
+          requiredScopes,
+          endpoint: req.originalUrl,
+        };
+        if (gate.outcome === 'stagedAllow') {
+          req.logger?.warn('API key scope check missed but staged - allowing', context);
+        } else {
+          req.logger?.warn('API key scope check failed', context);
+          throw new ForbiddenError('Insufficient API key permissions');
         }
       }
 

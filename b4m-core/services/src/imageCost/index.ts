@@ -52,6 +52,7 @@ export function computeImageUsdCostPerImage(modelId: string, input: CostInput): 
     modelId === ImageModels.FLUX_PRO_ULTRA ||
     modelId === ImageModels.FLUX_PRO_1_1 ||
     modelId === ImageModels.FLUX_PRO ||
+    modelId === ImageModels.FLUX_PRO_FILL ||
     modelId === ImageModels.FLUX_KONTEXT_PRO ||
     modelId === ImageModels.FLUX_KONTEXT_MAX
   ) {

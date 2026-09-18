@@ -9,6 +9,7 @@ import {
 import { CreateMementoSchema } from '@server/validators/mementoValidators';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import { generateMementoSummaryEmbedding } from '@server/utils/mementoEmbedding';
 
 const handler = baseApi().post(async (req: Request, res: Response) => {
@@ -93,7 +94,6 @@ const handler = baseApi().post(async (req: Request, res: Response) => {
       { logger: req.logger }
     );
     const embedding = await generateMementoSummaryEmbedding(summary.trim(), {
-      adminSettings: adminSettingsRepository,
       apiKeyTable,
       logger: req.logger,
     });
@@ -111,7 +111,7 @@ const handler = baseApi().post(async (req: Request, res: Response) => {
       questId,
       lastAccessedAt: lastAccessedAt ?? new Date(),
       isArchived: isArchived ?? false,
-      ...(embedding ? { embedding } : {}),
+      ...(embedding ? { embedding, embeddingModel: MEMENTO_EMBEDDING_ID } : {}),
     });
 
     const finalMementos = await Memento.findByUserId(req.user.id);

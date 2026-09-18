@@ -342,6 +342,28 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('seed');
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('output_format');
   });
+
+  it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const { service, create } = makeInvokeService(startImageGenerationProcess);
+
+    await service.invoke({
+      body: {
+        sessionId: 'session1',
+        prompt: 'a cutout icon',
+        model: ImageModels.GPT_IMAGE_2,
+        fabFileIds: [],
+        background: 'transparent',
+      } as any,
+      userId: 'user1',
+    });
+
+    expect(startImageGenerationProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+    const questInput = create.mock.calls[0][0];
+    expect(questInput.promptMeta.model.name).toBe(ImageModels.GPT_IMAGE_1_5);
+  });
 });
 
 describe('ImageGenerationService.process (Gemini provider-dispatch parameter passthrough)', () => {

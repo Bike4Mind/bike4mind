@@ -4,6 +4,9 @@ import {
   ISubscriptionRepository,
   SubscriptionOwnerType,
   SubscriptionSource,
+  TERMINAL_SUBSCRIPTION_STATUSES,
+  pickDisplayedSubscription,
+  resolveSubscriptionSource,
 } from '@client/lib/subscriptions/types';
 import BaseRepository from '@bike4mind/database';
 import { IMongoDocument } from '@bike4mind/common';
@@ -312,6 +315,73 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
   // Convenience methods for user subscriptions
   findActiveUserSubscriptions(userId: string): Promise<(ISubscription & IMongoDocument)[]> {
     return this.findActiveSubscriptionsByOwner(SubscriptionOwnerType.User, userId);
+  }
+
+  /**
+   * Find the user subscription to cancel for `priceId` - anything except the two
+   * terminal states. Deliberately a deny-list: `findActiveUserSubscriptions` only
+   * returns `status: 'active'`, which hides the past_due subscription of the very
+   * user trying to stop dunning. A status Stripe adds later should reach the
+   * cancel attempt (Stripe rejects it, the user gets a real error) rather than
+   * silently 400 the user who wants out.
+   *
+   * Precedence, highest first:
+   *   1. a Stripe-managed row at this price;
+   *   2. an active row over a stale delinquent one - a re-subscribe after a failed
+   *      renewal leaves the old row behind (nothing blocks the second checkout),
+   *      and cancelling that one would leave the live subscription billing;
+   *   3. newest first - `findOne` returns whatever the query plan picked, and that
+   *      is not an ordering anything can rely on.
+   *
+   * The admin grant is only returned when nothing Stripe-managed matches, so the
+   * route can still reject it with a truthful 400.
+   */
+  async findCancelableUserSubscriptionByPriceId(
+    priceId: string,
+    userId: string
+  ): Promise<(ISubscription & IMongoDocument) | null> {
+    const candidates = await this.model
+      .find({
+        ownerType: SubscriptionOwnerType.User,
+        ownerId: userId,
+        priceId,
+        status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] },
+      })
+      .sort({ createdAt: -1 })
+      .lean({ virtuals: true });
+
+    // A Stripe-managed row wins over an admin grant: the grant is not the thing
+    // Stripe is dunning, and grant-subscription only refuses a comp when an
+    // *active* row exists - so a support agent comping a delinquent user leaves
+    // an active grant beside the real past_due row at the same price. Returning
+    // the grant would 400 the user while their card kept getting charged.
+    const stripeManaged = candidates.filter(c => resolveSubscriptionSource(c) === SubscriptionSource.Stripe);
+    const pool = stripeManaged.length ? stripeManaged : candidates;
+
+    return pool.find(c => c.status === 'active') ?? pool[0] ?? null;
+  }
+
+  /**
+   * Find the one user subscription a plan change should act on: any non-terminal
+   * row, picked by `pickDisplayedSubscription`'s precedence (Stripe-managed
+   * before admin grant, active before stale, newest first) - so the route mutates
+   * provably the row the UI displays as the user's plan.
+   *
+   * Deliberately not `findActiveUserSubscriptions`: that is `status: 'active'`-only
+   * and hides the trialing/past_due/paused rows Stripe still accepts a price change
+   * on, which answered a legal request with a bare 400.
+   */
+  async findChangeableUserSubscription(userId: string): Promise<(ISubscription & IMongoDocument) | null> {
+    const candidates = await this.model
+      .find({
+        ownerType: SubscriptionOwnerType.User,
+        ownerId: userId,
+        status: { $nin: [...TERMINAL_SUBSCRIPTION_STATUSES] },
+      })
+      .sort({ createdAt: -1 })
+      .lean({ virtuals: true });
+
+    return pickDisplayedSubscription(candidates) ?? null;
   }
 
   /**

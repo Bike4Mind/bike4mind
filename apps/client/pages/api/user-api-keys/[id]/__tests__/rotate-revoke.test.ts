@@ -66,7 +66,9 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
     expect(rotateUserApiKey).toHaveBeenCalledWith(
       'admin-user',
       { keyId: 'key-1' },
-      expect.objectContaining({ db: expect.objectContaining({ organizations: organizationRepository }) })
+      expect.objectContaining({
+        db: expect.objectContaining({ organizations: organizationRepository }),
+      })
     );
   });
 
@@ -74,6 +76,40 @@ describe('POST /api/user-api-keys/[id]/rotate', () => {
     rotateUserApiKey.mockRejectedValueOnce(new NotFoundError('API key not found'));
     const { req, res } = post('key-1');
     await expect(mockRefs.rotateHandler!(req, res)).rejects.toThrow(/not found/i);
+  });
+
+  it('passes undefined callerScopes for a browser/JWT caller (no apiKeyInfo)', async () => {
+    const { req, res } = post('key-1');
+    await mockRefs.rotateHandler!(req, res);
+    expect(rotateUserApiKey).toHaveBeenCalledWith(
+      'admin-user',
+      { keyId: 'key-1' },
+      expect.objectContaining({ callerScopes: undefined })
+    );
+  });
+
+  it('threads an API keys held scopes through as callerScopes', async () => {
+    const { req, res } = post('key-1');
+    (req as any).apiKeyInfo = { scopes: ['notebooks:read'] };
+    await mockRefs.rotateHandler!(req, res);
+    expect(rotateUserApiKey).toHaveBeenCalledWith(
+      'admin-user',
+      { keyId: 'key-1' },
+      expect.objectContaining({ callerScopes: ['notebooks:read'] })
+    );
+  });
+
+  it('maps an API key with absent scopes to [] (denies), not undefined (skip)', async () => {
+    // Fail-open fix: apiKeyInfo present but scopes absent must not read as a browser
+    // caller. [] means "holds no scope", so the service denies the escalation.
+    const { req, res } = post('key-1');
+    (req as any).apiKeyInfo = {}; // scopes undefined
+    await mockRefs.rotateHandler!(req, res);
+    expect(rotateUserApiKey).toHaveBeenCalledWith(
+      'admin-user',
+      { keyId: 'key-1' },
+      expect.objectContaining({ callerScopes: [] })
+    );
   });
 });
 
