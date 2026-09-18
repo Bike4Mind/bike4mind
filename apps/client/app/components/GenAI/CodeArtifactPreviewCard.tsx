@@ -200,19 +200,17 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       {/* Main Content */}
       {/* No padding here: the Card already provides it. */}
       <Box className="code-artifact-content">
-        {/* Title leads the row so the stats line below aligns flush with it; every control
-            sits at the trailing edge, with the fold chevron last behind a rule - it acts on
-            the whole card, the others act on its content. Matches ArtifactPreviewCard -
-            keep the two in sync. */}
+        {/* Title and line count are one block, so the trailing controls centre against the
+            pair rather than against the title alone. Every control sits at that trailing
+            edge, with the fold chevron last behind a rule - it acts on the whole card, the
+            others act on its content. Matches ArtifactPreviewCard - keep the two in sync. */}
         <Stack className="code-artifact-header" direction="row" spacing={1} alignItems="center">
-          <Stack direction="row" alignItems="center" sx={{ minWidth: 0, gap: '4px' }}>
+          <Stack sx={{ minWidth: 0 }}>
             <Typography
               className="code-artifact-title"
               level="title-sm"
               sx={{
                 color: 'text.primary',
-                // Shrink (and ellipsize) but never grow, so the chevron stays next to the text.
-                flex: '0 1 auto',
                 minWidth: 0,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -221,62 +219,68 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             >
               {data.title}
             </Typography>
+            {/* Stays outside the fold: with no body showing, the line count is part of what
+                identifies a collapsed card. */}
+            <Typography className="code-artifact-stats" level="body-xs" sx={{ color: 'text.tertiary' }}>
+              {data.lineCount} lines of code
+            </Typography>
           </Stack>
 
           <Box sx={{ flex: 1 }} />
 
-          <Tooltip title="Copy code to clipboard" placement="top">
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
-              onClick={handleCopy}
-            >
-              <CopyIcon />
-            </IconButton>
-          </Tooltip>
+          {/* One block so the controls space and shrink together. Matches
+              ArtifactPreviewCard - keep the two in sync. */}
+          <Box
+            className="code-artifact-actions"
+            sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}
+          >
+            <Tooltip title="Copy code to clipboard" placement="top">
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
+                onClick={handleCopy}
+              >
+                <CopyIcon />
+              </IconButton>
+            </Tooltip>
 
-          <Tooltip title="Save as file to workbench" placement="top">
-            <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleSaveAsFile}>
-              <SaveIcon />
-            </IconButton>
-          </Tooltip>
+            <Tooltip title="Save as file to workbench" placement="top">
+              <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleSaveAsFile}>
+                <SaveIcon />
+              </IconButton>
+            </Tooltip>
 
-          <Tooltip title="Open in full viewer" placement="top">
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              sx={actionButtonSx}
-              onClick={handleOpenInViewer}
-              data-testid="code-artifact-expand-btn"
-            >
-              <ExpandIcon />
-            </IconButton>
-          </Tooltip>
+            <Tooltip title="Open in full viewer" placement="top">
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                sx={actionButtonSx}
+                onClick={handleOpenInViewer}
+                data-testid="code-artifact-expand-btn"
+              >
+                <ExpandIcon />
+              </IconButton>
+            </Tooltip>
 
-          <Divider orientation="vertical" sx={{ height: '16px', alignSelf: 'center', mx: '2px' }} />
+            <Divider orientation="vertical" sx={{ height: '16px', alignSelf: 'center' }} />
 
-          <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              sx={actionButtonSx}
-              onClick={handleToggleExpand}
-              data-testid="code-artifact-toggle-btn"
-            >
-              {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-            </IconButton>
-          </Tooltip>
+            <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                sx={actionButtonSx}
+                onClick={handleToggleExpand}
+                data-testid="code-artifact-toggle-btn"
+              >
+                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+              </IconButton>
+            </Tooltip>
+          </Box>
         </Stack>
-
-        {/* Stays outside the fold: with no body showing, the line count is part of what
-            identifies a collapsed card. */}
-        <Typography className="code-artifact-stats" level="body-xs" sx={{ color: 'text.tertiary' }}>
-          {data.lineCount} lines of code
-        </Typography>
 
         {/* The chevron folds everything below the header away - a collapsed card is its
             header alone (type pill, title, line count), which identifies the artifact

@@ -307,16 +307,15 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
 
       {/* No padding here: the Card already provides it. */}
       <Box>
-        {/* Title leads the row so the stats line below aligns flush with it. Title and
-            chevron are their own 4px group; the outer 8px spacing stays for the actions. */}
+        {/* Title and stats are one block, so the trailing controls centre against the pair
+            rather than against the title alone. Matches CodeArtifactPreviewCard - keep the
+            two in sync. */}
         <Stack direction="row" spacing={1} alignItems="center">
-          <Stack direction="row" alignItems="center" sx={{ minWidth: 0, gap: '4px' }}>
+          <Stack sx={{ minWidth: 0 }}>
             <Typography
               level="title-sm"
               sx={{
                 color: 'text.primary',
-                // Shrink (and ellipsize) but never grow, so the chevron stays next to the text.
-                flex: '0 1 auto',
                 minWidth: 0,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -325,6 +324,11 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             >
               {title}
             </Typography>
+            {stats && (
+              <Stack direction="row" spacing={2}>
+                {stats}
+              </Stack>
+            )}
           </Stack>
 
           <Box sx={{ flex: 1 }} />
@@ -353,106 +357,104 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             </Box>
           )}
 
-          {actions.copy && source && (
-            <Tooltip title={copyTooltip} placement="top">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
-                onClick={handleCopy}
-                data-testid={`${testIdPrefix}-artifact-copy-btn`}
-              >
-                <CopyIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-
-          {actions.save && source && saveFile && (
-            <Tooltip title={saveTooltip} placement="top">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                sx={actionButtonSx}
-                onClick={handleSaveAsFile}
-                data-testid={`${testIdPrefix}-artifact-save-btn`}
-              >
-                <SaveIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-
-          <Tooltip title="Open in full viewer" placement="top">
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              sx={actionButtonSx}
-              onClick={handleOpenInViewer}
-              data-testid={`${testIdPrefix}-artifact-expand-btn`}
-            >
-              <ExpandIcon />
-            </IconButton>
-          </Tooltip>
-
-          {source && (
-            // The card's own onClick collapses it, so swallow clicks meant for the button.
-            <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexShrink: 0 }}>
-              <Button
-                size="sm"
-                variant="solid"
-                onClick={handleShare}
-                data-testid={`${testIdPrefix}-artifact-share-btn`}
-                sx={{
-                  backgroundColor: brand[800],
-                  color: '#fff',
-                  fontWeight: 600,
-                  // Pin to the same rendered height as the sm IconButtons beside it.
-                  '--Button-minHeight': '2rem',
-                  '--Button-paddingBlock': '0.25rem',
-                  '--Button-paddingInline': '12px',
-                  lineHeight: 1,
-                  // Colour alone on hover. It sits in a row of still, quiet icons, where a
-                  // button that grows and glows is the only thing moving on the card.
-                  transition: 'background-color 0.15s ease',
-                  '&:hover': {
-                    backgroundColor: brand[900],
-                  },
-                }}
-              >
-                Share
-              </Button>
-            </Box>
-          )}
-
-          {/* The fold chevron sits last, behind a rule: it acts on the whole card, while
-              everything to its left acts on the card's content. Matches
+          {/* One block so the plain icons space and shrink together. Matches
               CodeArtifactPreviewCard - keep the two in sync. */}
-          {collapsible && (
-            <>
-              <Divider orientation="vertical" sx={{ height: '16px', alignSelf: 'center', mx: '2px' }} />
-              <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+            {actions.copy && source && (
+              <Tooltip title={copyTooltip} placement="top">
+                <IconButton
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
+                  onClick={handleCopy}
+                  data-testid={`${testIdPrefix}-artifact-copy-btn`}
+                >
+                  <CopyIcon />
+                </IconButton>
+              </Tooltip>
+            )}
+
+            {actions.save && source && saveFile && (
+              <Tooltip title={saveTooltip} placement="top">
                 <IconButton
                   size="sm"
                   variant="plain"
                   color="neutral"
                   sx={actionButtonSx}
-                  onClick={handleToggleExpand}
-                  data-testid={`${testIdPrefix}-artifact-toggle-btn`}
+                  onClick={handleSaveAsFile}
+                  data-testid={`${testIdPrefix}-artifact-save-btn`}
                 >
-                  {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                  <SaveIcon />
                 </IconButton>
               </Tooltip>
-            </>
-          )}
-        </Stack>
+            )}
 
-        {stats && (
-          <Stack direction="row" spacing={2} sx={{ mb: 1 }}>
-            {stats}
-          </Stack>
-        )}
+            <Tooltip title="Open in full viewer" placement="top">
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                sx={actionButtonSx}
+                onClick={handleOpenInViewer}
+                data-testid={`${testIdPrefix}-artifact-expand-btn`}
+              >
+                <ExpandIcon />
+              </IconButton>
+            </Tooltip>
+
+            {source && (
+              // The card's own onClick collapses it, so swallow clicks meant for the button.
+              <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexShrink: 0 }}>
+                <Button
+                  size="sm"
+                  variant="solid"
+                  onClick={handleShare}
+                  data-testid={`${testIdPrefix}-artifact-share-btn`}
+                  sx={{
+                    backgroundColor: brand[800],
+                    color: '#fff',
+                    fontWeight: 600,
+                    // Pin to the same rendered height as the IconButtons beside it (24px).
+                    '--Button-minHeight': '24px',
+                    '--Button-paddingBlock': '0.25rem',
+                    '--Button-paddingInline': '12px',
+                    lineHeight: 1,
+                    // Colour alone on hover. It sits in a row of still, quiet icons, where a
+                    // button that grows and glows is the only thing moving on the card.
+                    transition: 'background-color 0.15s ease',
+                    '&:hover': {
+                      backgroundColor: brand[900],
+                    },
+                  }}
+                >
+                  Share
+                </Button>
+              </Box>
+            )}
+
+            {/* The fold chevron sits last, behind a rule: it acts on the whole card, while
+                everything to its left acts on the card's content. Matches
+                CodeArtifactPreviewCard - keep the two in sync. */}
+            {collapsible && (
+              <>
+                <Divider orientation="vertical" sx={{ height: '16px', alignSelf: 'center' }} />
+                <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+                  <IconButton
+                    size="sm"
+                    variant="plain"
+                    color="neutral"
+                    sx={actionButtonSx}
+                    onClick={handleToggleExpand}
+                    data-testid={`${testIdPrefix}-artifact-toggle-btn`}
+                  >
+                    {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                  </IconButton>
+                </Tooltip>
+              </>
+            )}
+          </Box>
+        </Stack>
 
         {extra}
 
