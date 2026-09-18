@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
   validateClientSecret: vi.fn(),
   verifyPkce: vi.fn(),
   generateIdToken: vi.fn(() => 'id.jwt'),
+  findValidCode: vi.fn(),
   consumeValidCode: vi.fn(),
   findById: vi.fn(),
   issueSessionForRequest: vi.fn(async () => ({ accessToken: 'a.jwt', refreshToken: 'r.jwt' })),
@@ -42,7 +43,7 @@ vi.mock('@server/auth/oauthServer', () => ({
   generateIdToken: h.generateIdToken,
 }));
 vi.mock('@bike4mind/database', () => ({
-  oauthAuthorizationCodeRepository: { consumeValidCode: h.consumeValidCode },
+  oauthAuthorizationCodeRepository: { findValidCode: h.findValidCode, consumeValidCode: h.consumeValidCode },
   userRepository: { findById: h.findById },
   oauthGrantRepository: { findGrant: h.findGrant },
 }));
@@ -97,6 +98,13 @@ const authCode = (codeChallenge: string) => ({
   userId: 'u1',
 });
 
+// The handler now reads the code (findValidCode) to validate it, then atomically consumes it
+// (consumeValidCode) only once validation passes. A happy path needs both to resolve the code.
+const seedValidCode = (ac: ReturnType<typeof authCode>) => {
+  (h.findValidCode as Mock).mockResolvedValue(ac);
+  (h.consumeValidCode as Mock).mockResolvedValue(ac);
+};
+
 describe('POST /api/oauth/token authorization_code hardening', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -128,7 +136,7 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
   it('lets a confidential client with a valid secret exchange a PKCE-less code', async () => {
     (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
     (h.validateClientSecret as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
-    (h.consumeValidCode as Mock).mockResolvedValue(authCode(''));
+    seedValidCode(authCode(''));
 
     const res = await call({ ...baseBody, client_secret: 'right' });
 
@@ -142,43 +150,47 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
     // clients only would let this exchange through; it must not.
     (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
     (h.validateClientSecret as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'client_secret_post' });
-    (h.consumeValidCode as Mock).mockResolvedValue(authCode('challenge'));
+    (h.findValidCode as Mock).mockResolvedValue(authCode('challenge'));
 
     const res = await call({ ...baseBody, client_secret: 'right' });
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_grant');
     expect(h.verifyPkce).not.toHaveBeenCalled();
+    // The code is NOT burned: validation failed before the atomic consume.
+    expect(h.consumeValidCode).not.toHaveBeenCalled();
     expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 
   it('rejects a public client redeeming a challenge-less code (downgrade -> 400 invalid_grant)', async () => {
     (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
-    (h.consumeValidCode as Mock).mockResolvedValue(authCode(''));
+    (h.findValidCode as Mock).mockResolvedValue(authCode(''));
 
     const res = await call({ ...baseBody });
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_grant');
     expect(res.body?.error_description).toMatch(/pkce required/i);
+    expect(h.consumeValidCode).not.toHaveBeenCalled();
     expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 
   it('rejects a public client whose verifier does not match the challenge (400 invalid_grant)', async () => {
     (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
-    (h.consumeValidCode as Mock).mockResolvedValue(authCode('challenge'));
+    (h.findValidCode as Mock).mockResolvedValue(authCode('challenge'));
     (h.verifyPkce as Mock).mockReturnValue(false);
 
     const res = await call({ ...baseBody, code_verifier: 'nope' });
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_grant');
+    expect(h.consumeValidCode).not.toHaveBeenCalled();
     expect(h.issueSessionForRequest).not.toHaveBeenCalled();
   });
 
   it('lets a public client with a matching verifier complete PKCE', async () => {
     (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
-    (h.consumeValidCode as Mock).mockResolvedValue(authCode('challenge'));
+    seedValidCode(authCode('challenge'));
     (h.verifyPkce as Mock).mockReturnValue(true);
 
     const res = await call({ ...baseBody, code_verifier: 'good' });
@@ -187,9 +199,39 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
     expect(h.issueSessionForRequest).toHaveBeenCalledOnce();
   });
 
+  it('does NOT burn the code on a client_id/redirect_uri mismatch (consume deferred until validation passes)', async () => {
+    // The mismatched redemption is rejected, but the code is only READ, never consumed, so the
+    // legitimate client can still redeem it. (Reverses the earlier burn-on-mismatch behavior per the
+    // review on token.ts:64.)
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
+    (h.findValidCode as Mock).mockResolvedValue(authCode('challenge'));
+
+    const res = await call({ ...baseBody, client_id: 'client-2' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_grant');
+    expect(res.body?.error_description).toMatch(/mismatch/i);
+    expect(h.consumeValidCode).not.toHaveBeenCalled();
+  });
+
+  it('rejects a lost consume race even after validation passes (single-use preserved)', async () => {
+    // Validation passes but consumeValidCode returns null - a concurrent request already claimed the
+    // code between the read and the atomic consume. Must reject rather than issue a second token.
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
+    (h.findValidCode as Mock).mockResolvedValue(authCode('challenge'));
+    (h.consumeValidCode as Mock).mockResolvedValue(null);
+    (h.verifyPkce as Mock).mockReturnValue(true);
+
+    const res = await call({ ...baseBody, code_verifier: 'good' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_grant');
+    expect(h.issueSessionForRequest).not.toHaveBeenCalled();
+  });
+
   it('mints a first-party id_token as NOT scope-limited (full claims even for scope=openid)', async () => {
     (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
-    (h.consumeValidCode as Mock).mockResolvedValue(authCode('challenge'));
+    seedValidCode(authCode('challenge'));
     (h.verifyPkce as Mock).mockReturnValue(true);
 
     await call({ ...baseBody, code_verifier: 'good' });
@@ -213,7 +255,7 @@ describe('POST /api/oauth/token relying-party issuance', () => {
 
   const relyingPartyExchange = async () => {
     (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none', clientType: 'relying-party' });
-    (h.consumeValidCode as Mock).mockResolvedValue(authCode('challenge'));
+    seedValidCode(authCode('challenge'));
     (h.verifyPkce as Mock).mockReturnValue(true);
     return call({ ...baseBody, code_verifier: 'good' });
   };

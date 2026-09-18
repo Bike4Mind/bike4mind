@@ -59,9 +59,11 @@ const handler = baseApi({ auth: false })
         }
       }
 
-      // Atomically claim the code so a leaked code can't be redeemed twice by
-      // concurrent requests. Any subsequent failure leaves it consumed (single-use).
-      const authCode = await oauthAuthorizationCodeRepository.consumeValidCode(code);
+      // Read the code WITHOUT consuming it yet, so a request that fails the checks below - a
+      // client_id/redirect_uri mismatch or a bad/absent PKCE verifier - does not burn a still-valid
+      // single-use code and deny the legitimate client a corrected retry. Consumption is deferred to
+      // the atomic step after validation passes.
+      const authCode = await oauthAuthorizationCodeRepository.findValidCode(code);
       if (!authCode) {
         return res
           .status(400)
@@ -92,6 +94,17 @@ const handler = baseApi({ auth: false })
             .status(400)
             .json({ error: 'invalid_grant', error_description: 'code_verifier does not match code_challenge' });
         }
+      }
+
+      // Validation passed - NOW atomically claim the code (findOneAndUpdate on used:false). A leaked
+      // code still can't be redeemed twice: only one request flips used false->true; a loser, or a
+      // code consumed between the read above and here, gets null and is rejected. Single-use is
+      // preserved, while a validation failure above left the code live for a corrected retry.
+      const consumed = await oauthAuthorizationCodeRepository.consumeValidCode(code);
+      if (!consumed) {
+        return res
+          .status(400)
+          .json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
       }
 
       const user = await userRepository.findById(authCode.userId);
