@@ -35,6 +35,9 @@ import {
   resolveHistoryFetchLimit,
   QuestErrorCode,
   getQuestErrorCode,
+  DEGENERATE_FINISH_REASON,
+  TRUNCATED_FINISH_REASON,
+  isEarlyStop,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -114,6 +117,7 @@ import {
   ELISION_MATCH_MAX,
   ELISION_NAME_MAX,
 } from './elisionStamp';
+import { buildEarlyStopStamp } from './earlyStopStamp';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -4779,7 +4783,7 @@ export class ChatCompletionProcess {
           try {
             const stamp = quest.promptMeta
               ? buildElisionStamp(elisionHits, {
-                  wasTruncated: actualTokenUsage?.stopReason === 'max_tokens',
+                  stoppedEarly: isEarlyStop(actualTokenUsage?.stopReason),
                   priorWarnings: quest.promptMeta.warnings ?? [],
                 })
               : null;
@@ -5054,6 +5058,15 @@ export class ChatCompletionProcess {
           `🔍 [DEBUG] Individual feature durations: ability=${abilityDuration}ms, data=${essentialDataDuration}ms, model=${modelSetupDuration}ms, history=${historyDuration}ms, artifact=${artifactDuration}ms, onComplete=${onCompleteDuration}ms`
         );
 
+        // How generation ended. Computed here rather than at the promptMeta stamping
+        // below because the settlement/usage-event write is the first consumer: a turn we
+        // aborted ourselves still costs the provider tokens, so the billing row has to say
+        // so for a refund sweep to find it.
+        const providerStopReason = actualTokenUsage?.stopReason;
+        const wasTruncated = providerStopReason === TRUNCATED_FINISH_REASON;
+        const wasDegenerate = providerStopReason === DEGENERATE_FINISH_REASON;
+        const earlyStopStamp = buildEarlyStopStamp(providerStopReason);
+
         // P6: Credits reconciliation - settle the pre-reserved credits against actual usage.
         // The balance was already adjusted atomically at pre-reservation time; this step
         // handles the delta and records audit-trail transactions.
@@ -5121,7 +5134,9 @@ export class ChatCompletionProcess {
               // tools included), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
-              status: 'ok',
+              // Not always 'ok': a turn we aborted as degenerate is priced like any other
+              // (the provider tokens were really spent) but has to be findable for a refund.
+              status: earlyStopStamp?.usageEventStatus ?? 'ok',
               latencyMs: Date.now() - processStartTime,
             })
             .catch((usageEventError: unknown) => {
@@ -5257,15 +5272,18 @@ export class ChatCompletionProcess {
           }));
         }
 
-        // Surface the provider's stop reason so truncated responses are no longer
-        // silent. 'max_tokens' means generation was cut off against the
-        // output-token ceiling - which is what leaves a large artifact unclosed.
-        // Persisted on promptMeta so the client can render a truncation/recovery
-        // affordance instead of falling through to raw HTML.
-        const providerStopReason = actualTokenUsage?.stopReason;
-        const wasTruncated = providerStopReason === 'max_tokens';
+        // Surface the stop reason so a reply that ended early is no longer silent:
+        // 'max_tokens' (cut off against the output-token ceiling, which is what leaves a
+        // large artifact unclosed) or 'degenerate_repetition' (we aborted a stream that
+        // had started repeating itself). Persisted on promptMeta so the client can render
+        // the matching notice instead of falling through to raw HTML.
         if (quest.promptMeta) {
           quest.promptMeta.finishReason = providerStopReason;
+        }
+        if (wasDegenerate) {
+          logger.warn(
+            `⚠️ [Degeneration] Stream aborted after the output began repeating itself (model=${currentModel.id}, outputTokens=${outputTokens}, requestedMaxTokens=${safeMaxTokens}). Reply is the partial prefix.`
+          );
         }
         if (wasTruncated) {
           logger.warn(
@@ -5275,12 +5293,12 @@ export class ChatCompletionProcess {
             // this number - hence "requested" rather than the actual ceiling.
             `⚠️ [Truncation] Response hit max_tokens ceiling (model=${currentModel.id}, outputTokens=${outputTokens}, requestedMaxTokens=${safeMaxTokens}). Output may be truncated mid-artifact.`
           );
-          if (quest.promptMeta) {
-            quest.promptMeta.warnings = [
-              ...(quest.promptMeta.warnings ?? []),
-              'Response was truncated against the output-token limit (max_tokens). Large artifacts may be incomplete.',
-            ];
-          }
+        }
+        // Membership-checked for the same reason buildElisionStamp takes priorWarnings: if this
+        // block ever runs twice over a preserved promptMeta, the user must not see the warning
+        // twice.
+        if (earlyStopStamp && quest.promptMeta && !(quest.promptMeta.warnings ?? []).includes(earlyStopStamp.warning)) {
+          quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
         quest.status = 'done';
@@ -5288,11 +5306,12 @@ export class ChatCompletionProcess {
         // Context Telemetry: Finalize and attach to promptMeta
         if (telemetryBuilder) {
           try {
-            // Determine finish reason based on completion state. A max_tokens stop
-            // takes precedence - it maps to the telemetry 'length' bucket so
-            // truncation is observable in dashboards.
+            // Determine finish reason based on completion state. An early stop takes
+            // precedence - both the max_tokens ceiling and a degeneration abort map to
+            // the telemetry 'length' bucket (generation cut short against the output
+            // budget) so neither is counted as a clean 'stop' in dashboards.
             const hasToolCalls = (quest.promptMeta?.functionCalls?.length ?? 0) > 0;
-            const finishReason = wasTruncated ? 'length' : hasToolCalls ? 'tool_use' : 'stop';
+            const finishReason = wasTruncated || wasDegenerate ? 'length' : hasToolCalls ? 'tool_use' : 'stop';
 
             telemetryBuilder.setFinishReason(finishReason);
             telemetryBuilder.setUsedTools(hasToolCalls);
