@@ -9,7 +9,11 @@ import {
 } from './imageSizes';
 
 describe('isSupportedImageSize', () => {
+  // The expected lists below are spelled out rather than derived from IMAGE_SIZE_CONSTRAINTS.
+  // isSupportedImageSize reads that same table, so a derived expectation moves together with a
+  // bad edit to it instead of catching one. Pinning the list literally is what lets these fail.
   it('accepts the gpt-image-1 family presets', () => {
+    expect([...OPENAI_GPT_IMAGE_1_IMAGE_SIZES]).toEqual(['1024x1024', '1024x1536', '1536x1024']);
     for (const size of OPENAI_GPT_IMAGE_1_IMAGE_SIZES) {
       expect(isSupportedImageSize(ImageModels.GPT_IMAGE_1_5, size)).toBe(true);
     }
@@ -25,6 +29,16 @@ describe('isSupportedImageSize', () => {
   });
 
   it('accepts every gpt-image-2 preset, including auto', () => {
+    expect([...OPENAI_GPT_IMAGE_2_IMAGE_SIZES]).toEqual([
+      '1024x1024',
+      '1536x1024',
+      '1024x1536',
+      '2048x2048',
+      '2048x1152',
+      '3840x2160',
+      '2160x3840',
+      'auto',
+    ]);
     for (const size of OPENAI_GPT_IMAGE_2_IMAGE_SIZES) {
       expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, size)).toBe(true);
     }
@@ -59,7 +73,23 @@ describe('isSupportedImageSize', () => {
     expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, '1280 x 960')).toBe(false);
   });
 
+  it('rejects a resolution with a zero edge', () => {
+    // Parsed as a pair, then dropped for having no area - not measured against the constraints.
+    expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, '0x0')).toBe(false);
+    expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, '1024x0')).toBe(false);
+    expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, '0x1024')).toBe(false);
+  });
+
   it('measures a non-GPT-Image model against the legacy dall-e list', () => {
+    // 1024x1024 appears twice: the list concatenates both dall-e tiers, which overlap on it.
+    expect([...OPENAI_LEGACY_IMAGE_SIZES]).toEqual([
+      '256x256',
+      '512x512',
+      '1024x1024',
+      '1024x1024',
+      '1792x1024',
+      '1024x1792',
+    ]);
     for (const size of OPENAI_LEGACY_IMAGE_SIZES) {
       expect(isSupportedImageSize(ImageModels.DALL_E_2, size)).toBe(true);
     }
