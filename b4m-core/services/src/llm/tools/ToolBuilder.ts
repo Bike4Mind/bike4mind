@@ -27,6 +27,7 @@ import {
   getConversationContextSystemMessage,
 } from '../../conversationContextService';
 import { buildSharedTools } from '../sharedToolBuilder';
+import { UNATTRIBUTED_TOOL_CHARGE } from '../settleToolCredits';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
@@ -388,18 +389,28 @@ export class ToolBuilder {
    *
    * `model` is the model that actually incurs the cost (gpt-image-2, a music vendor
    * model, the subagent's chat model) - never the quest's own chat model. It feeds the
-   * aggregate ledger row's attribution; pass it wherever it is resolvable.
+   * aggregate ledger row's attribution; pass it wherever it is resolvable. A charge whose
+   * model cannot be resolved still records UNATTRIBUTED_TOOL_CHARGE, so the row can never
+   * look single-model while billing for a model nobody named.
    */
   private reserveToolCredits(toolName: string, credits: number, model?: string): void {
     const queue = this.deps.toolCreditsMap.get(toolName) ?? [];
     queue.push(credits);
     this.deps.toolCreditsMap.set(toolName, queue);
-    // Only a charging call contributes a model: a zero-credit call is absent from the
-    // aggregate ledger row's amount, so naming its model there would be misleading.
+    // Only a charging call contributes: a zero-credit call is absent from the aggregate
+    // ledger row's amount, so recording anything for it would be misleading.
     // ASSUMES this queue only ever carries positive charges, which every call site holds
     // today. If it is ever reused for corrections or refunds, a negative entry would be
     // silently dropped here - widen this to `credits !== 0` at the same time.
-    if (model && credits > 0) this.deps.toolCreditModels.add(model);
+    //
+    // NOTE this set is RESERVATION-scoped while the row's amount is SETTLEMENT-scoped
+    // (ChatCompletionProcess sums quest.promptMeta.functionCalls[].creditsUsed, which
+    // settleToolCallCredits distributes from these same queues). A reservation with no
+    // surviving function call drops out of the total but keeps its model here, so the two
+    // can disagree: the row can go blank over a model it did not end up billing. That
+    // errs toward saying nothing, never toward a wrong name, which is the direction this
+    // whole rule is built to fail in.
+    if (credits > 0) this.deps.toolCreditModels.add(model ?? UNATTRIBUTED_TOOL_CHARGE);
   }
 
   /**

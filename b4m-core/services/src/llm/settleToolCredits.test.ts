@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveAggregateToolModel, settleToolCallCredits } from './settleToolCredits';
+import { resolveAggregateToolModel, settleToolCallCredits, UNATTRIBUTED_TOOL_CHARGE } from './settleToolCredits';
 
 const sum = (fcs: { creditsUsed?: number }[]) => fcs.reduce((acc, fc) => acc + (fc.creditsUsed ?? 0), 0);
 
@@ -65,5 +65,17 @@ describe('resolveAggregateToolModel', () => {
 
   it('names nothing when no charging model was resolvable', () => {
     expect(resolveAggregateToolModel(new Set())).toBeUndefined();
+  });
+
+  // A delegate_to_agent whose subagent model is absent from availableModels still charges
+  // (delegateToAgent drops the usage event but fires onCredits anyway). Without the
+  // sentinel the set below would hold one entry and the row would be stamped gpt-image-2
+  // while its credits also cover the delegation - authoritative and wrong.
+  it('names nothing when an unattributable charge rides alongside one known model', () => {
+    expect(resolveAggregateToolModel(new Set(['gpt-image-2', UNATTRIBUTED_TOOL_CHARGE]))).toBeUndefined();
+  });
+
+  it('never leaks the sentinel into the ledger when it is the only charge', () => {
+    expect(resolveAggregateToolModel(new Set([UNATTRIBUTED_TOOL_CHARGE]))).toBeUndefined();
   });
 });
