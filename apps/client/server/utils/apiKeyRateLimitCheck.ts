@@ -1,5 +1,5 @@
 import { cacheRepository } from '@bike4mind/database';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { UserApiKeyEvents, IUserApiKeyRateLimit } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const MINUTE_IN_MS = 60_000;
@@ -48,6 +48,17 @@ export const MANAGEMENT_RATE_LIMIT = {
   requestsPerDay: 50,
 } as const;
 
+/**
+ * Which ceiling actually gates a counter: the key's own configured limit for
+ * 'request', or the fixed `MANAGEMENT_RATE_LIMIT` for 'management'. The single
+ * source of truth for that mapping - both the enforcer (`checkApiKeyRateLimit`)
+ * and the admin reset's lockout diagnostic must agree on it, or the diagnostic
+ * could silently report against a ceiling that no longer gates 429s.
+ */
+export function resolveCounterLimit(counter: RateLimitCounter, rateLimit: IUserApiKeyRateLimit): IUserApiKeyRateLimit {
+  return counter === 'management' ? MANAGEMENT_RATE_LIMIT : rateLimit;
+}
+
 export interface RateLimitOptions {
   /**
    * Which counter to charge this request to. Defaults to 'request' (the key's
@@ -83,12 +94,55 @@ export function buildRateLimitKeys(
   };
 }
 
+export interface RateLimitUsage {
+  minute: number;
+  day: number;
+  /** Epoch seconds when the current minute window ends; undefined when no window is open (count 0). */
+  minuteResetAt?: number;
+  /** Epoch seconds when the current day window ends; undefined when no window is open (count 0). */
+  dayResetAt?: number;
+}
+
+export interface ResetApiKeyRateLimitResult {
+  /**
+   * Usage at the moment this counter was cleared. Undefined only when
+   * clearing THIS counter itself failed entirely (both its minute and day
+   * deletes rejected) - the other counter is cleared and reported
+   * independently regardless, so a hiccup on one never hides or blocks the
+   * other. `resetApiKeyRateLimit` itself rejects if every attempted counter
+   * fails this way, so a caller that gets a result back always has at least
+   * one of `request`/`management` defined.
+   */
+  request?: RateLimitUsage;
+  /** Present only when `alsoResetManagement` was set; same failure semantics as `request`. */
+  management?: RateLimitUsage;
+}
+
+/** Minimal logging surface `resetApiKeyRateLimit` needs - satisfied by both `console` and a
+ * request-scoped logger, so callers with request correlation (e.g. `req.logger`) can pass it
+ * through instead of every failure landing in `console.warn` with no way to trace it back. */
+interface CounterLogger {
+  warn: (message: string) => void;
+}
+
 /**
- * Clear a key's minute and day rate-limit counters. Deleting the cache docs
- * also discards each window's stored expiresAt, so the next request opens a
- * fresh fixed window - the intended "reset" semantics. deleteByKey is an
- * exact-match deleteOne, so unrelated cache keys are never touched, and
- * deleting a missing doc is a no-op (idempotent).
+ * Clear a key's minute and day rate-limit counters, returning each counter's
+ * usage exactly as it stood at the moment of deletion. Uses
+ * `deleteByKeyAndReturn` (an atomic `findOneAndDelete`) rather than a
+ * separate read-then-delete, so there is no window in which a concurrent
+ * request can bump a counter between "read its value" and "clear it" - the
+ * value returned here IS the value that was cleared, not a stale snapshot.
+ * Deleting a missing doc is a no-op (idempotent) and reads as usage 0.
+ *
+ * The request and management counters are cleared independently (two
+ * separate minute+day pairs, each with its own error boundary): a failure
+ * clearing one never prevents clearing - or reporting - the other. This
+ * route is the only operator override for a key locked out of its own
+ * management quota, so a transient failure on one counter must never block
+ * recovery of the other. But if EVERY attempted counter fails to clear
+ * anything, that is not a partial degradation - the reset did nothing - so
+ * this rejects instead of returning a result a caller could mistake for
+ * success.
  *
  * Note: embed keys additionally have per-session counters
  * (`embed-session-rate-limit:{sessionId}:minute|:day`, see ./embedSessionRateLimit)
@@ -105,34 +159,94 @@ export function buildRateLimitKeys(
  */
 export async function resetApiKeyRateLimit(
   keyId: string,
-  options: { alsoResetManagement?: boolean } = {}
-): Promise<void> {
+  options: { alsoResetManagement?: boolean; logger?: CounterLogger } = {}
+): Promise<ResetApiKeyRateLimitResult> {
+  const logger = options.logger ?? console;
   const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
-  const deletes = [cacheRepository.deleteByKey(minuteKey), cacheRepository.deleteByKey(dayKey)];
+  const request = deleteCounterGroup(keyId, 'request', minuteKey, dayKey, logger);
 
+  let management: Promise<RateLimitUsage | undefined> = Promise.resolve(undefined);
   if (options.alsoResetManagement) {
     const { minuteKey: managementMinuteKey, dayKey: managementDayKey } = buildRateLimitKeys(keyId, 'management');
-    deletes.push(cacheRepository.deleteByKey(managementMinuteKey), cacheRepository.deleteByKey(managementDayKey));
+    management = deleteCounterGroup(keyId, 'management', managementMinuteKey, managementDayKey, logger);
   }
 
-  await Promise.all(deletes);
-}
+  const [requestUsage, managementUsage] = await Promise.all([request, management]);
 
-export interface RateLimitUsage {
-  minute: number;
-  day: number;
-  /** Epoch seconds when the current minute window ends; undefined when no window is open (count 0). */
-  minuteResetAt?: number;
-  /** Epoch seconds when the current day window ends; undefined when no window is open (count 0). */
-  dayResetAt?: number;
+  if (requestUsage === undefined && (!options.alsoResetManagement || managementUsage === undefined)) {
+    throw new Error(`Failed to clear any rate-limit counters for API key ${keyId} - every counter delete failed`);
+  }
+
+  return { request: requestUsage, management: managementUsage };
 }
 
 /**
- * Read a key's current minute and day counter values without touching them.
- * A missing doc, or one whose fixed window already ended (expiresAt in the
- * past, awaiting TTL cleanup), reads as 0 - the same view the enforcer takes
- * on the next request. The DB usage.* fields on the key doc are not
- * maintained; these cache counters are the live source of truth.
+ * Delete a counter's minute+day pair atomically per key (via
+ * `deleteByKeyAndReturn`) and derive its usage from what was actually
+ * removed. The two deletes settle independently (`Promise.allSettled`, not
+ * `Promise.all`) so one rejecting never discards the other's usage - a
+ * fail-fast `Promise.all` here would throw away a successfully-cleared
+ * minute counter just because the day counter's delete hiccuped. Only when
+ * BOTH reject does this counter's usage read as unknown (`undefined`) rather
+ * than a fabricated value; a single rejection is logged and treated as usage
+ * 0 for that window, same as a missing/expired doc.
+ */
+async function deleteCounterGroup(
+  keyId: string,
+  counter: RateLimitCounter,
+  minuteKey: string,
+  dayKey: string,
+  logger: CounterLogger
+): Promise<RateLimitUsage | undefined> {
+  const [minuteResult, dayResult] = await Promise.allSettled([
+    cacheRepository.deleteByKeyAndReturn(minuteKey),
+    cacheRepository.deleteByKeyAndReturn(dayKey),
+  ]);
+
+  if (minuteResult.status === 'rejected') {
+    logger.warn(
+      `[API_KEY_RATE_LIMIT] Failed to clear ${counter} minute counter for API key ${keyId}: ${minuteResult.reason}`
+    );
+  }
+  if (dayResult.status === 'rejected') {
+    logger.warn(
+      `[API_KEY_RATE_LIMIT] Failed to clear ${counter} day counter for API key ${keyId}: ${dayResult.reason}`
+    );
+  }
+
+  if (minuteResult.status === 'rejected' && dayResult.status === 'rejected') {
+    return undefined;
+  }
+
+  return docsToUsage(
+    minuteResult.status === 'fulfilled' ? minuteResult.value : undefined,
+    dayResult.status === 'fulfilled' ? dayResult.value : undefined
+  );
+}
+
+function docsToUsage(
+  minuteDoc: { result?: unknown; expiresAt?: Date } | null | undefined,
+  dayDoc: { result?: unknown; expiresAt?: Date } | null | undefined
+): RateLimitUsage {
+  const minute = readCounter(minuteDoc ?? null);
+  const day = readCounter(dayDoc ?? null);
+  return {
+    minute: minute.count,
+    day: day.count,
+    minuteResetAt: minute.resetAt,
+    dayResetAt: day.resetAt,
+  };
+}
+
+/**
+ * Read a key's current 'request' counter minute and day values without
+ * touching them. A missing doc, or one whose fixed window already ended
+ * (expiresAt in the past, awaiting TTL cleanup), reads as 0 - the same view
+ * the enforcer takes on the next request. The DB usage.* fields on the key
+ * doc are not maintained; these cache counters are the live source of truth.
+ * No 'management' variant: the admin reset's lockout diagnostic derives
+ * management usage from `resetApiKeyRateLimit`'s own atomic delete instead of
+ * a separate read (see its docstring), and no other caller needs one.
  */
 export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitUsage> {
   const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
@@ -140,13 +254,25 @@ export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitU
     cacheRepository.findByKey(minuteKey),
     cacheRepository.findByKey(dayKey),
   ]);
-  const minute = readCounter(minuteDoc);
-  const day = readCounter(dayDoc);
+  return docsToUsage(minuteDoc, dayDoc);
+}
+
+export interface CounterLockoutState {
+  minuteAtLimit: boolean;
+  dayAtLimit: boolean;
+}
+
+/**
+ * Whether a counter's live usage is at or over its ceiling - i.e. would
+ * currently cause a 429. Read-only, does not touch the counters. Exists so an
+ * admin resetting a key can be told which counter(s) actually caused the
+ * lockout, since resetApiKeyRateLimit clears that state and it can't be
+ * recovered afterward.
+ */
+export function evaluateCounterLockout(usage: RateLimitUsage, limit: IUserApiKeyRateLimit): CounterLockoutState {
   return {
-    minute: minute.count,
-    day: day.count,
-    minuteResetAt: minute.resetAt,
-    dayResetAt: day.resetAt,
+    minuteAtLimit: usage.minute >= limit.requestsPerMinute,
+    dayAtLimit: usage.day >= limit.requestsPerDay,
   };
 }
 
@@ -219,7 +345,7 @@ export async function checkApiKeyRateLimit(
   // A management request is charged to its own counter with its own fixed
   // ceilings, so an exhausted request window neither blocks it nor is advanced
   // by it.
-  const { requestsPerMinute, requestsPerDay } = counter === 'management' ? MANAGEMENT_RATE_LIMIT : rateLimit;
+  const { requestsPerMinute, requestsPerDay } = resolveCounterLimit(counter, rateLimit);
   // What the response advertises as the Limit is always the key's own
   // configured ceiling, even on the management counter - the caller of a
   // management-metered route (the self-service rate-limit PATCH) is reading
