@@ -555,7 +555,8 @@ export class OpenAIImageService extends AIImageService {
         model: editModel,
         prompt: truncatePromptForLog(prompt),
         hasMask: !!maskFile,
-        n,
+        // What the caller asked for, not what renders: this path always returns one image.
+        requestedN: n,
         size,
         quality: editQuality,
         response_format,
@@ -577,7 +578,9 @@ export class OpenAIImageService extends AIImageService {
               image: imageFile,
               prompt,
               mask: maskFile,
-              n,
+              // Pinned, not forwarded from `n`: only data[0] is returned below, so asking
+              // OpenAI for more renders images we pay for and then discard.
+              n: 1,
               size: size as '1024x1024' | '1024x1536' | '1536x1024' | '256x256' | '512x512' | 'auto' | undefined,
               response_format,
               user,
