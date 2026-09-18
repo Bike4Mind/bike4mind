@@ -49,9 +49,10 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       tags: session.tags,
       summary: session.summary,
       summaryAt: session.summaryAt,
-      // Carried even though a snip keeps only the messages AFTER the snip point, so these tags can
-      // describe a quest the copy no longer holds. Same treatment as the summary above it.
-      taggedAt: session.taggedAt,
+      // taggedAt is deliberately NOT carried: a snip keeps only the quests AFTER the snip point, so
+      // the source tags may describe a quest the copy no longer holds. Leaving it unset lets the
+      // groom re-derive tags from what the snip actually has.
+
       // Carried from the source, not re-derived: the parent's scope is already correct and explicit,
       // and re-deriving it here would go through the OWNERSHIP arm alone (no resolveLakeAccess is
       // threaded to this path), which cannot see a teammate-authored organization-lake file. That
