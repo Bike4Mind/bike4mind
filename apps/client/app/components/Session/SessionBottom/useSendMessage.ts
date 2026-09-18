@@ -175,7 +175,12 @@ export function useSendMessage({
   const { getSettingObject, authedSettingsLoaded } = useAdminSettings();
   // Admin-level kill switch. Default to enabled so the classifier runs unless
   // an admin explicitly turns it off; matches `IntentClassifierConfigSchema`.
+  // Gated on `authedSettingsLoaded` for the same reason as the tool union
+  // below: `orchestrationDefaults` is not `publicSafe`, so before the authed
+  // fetch resolves this would read the seed's `intentClassifier.enabled: true`
+  // even for an org that explicitly disabled the classifier.
   const intentClassifierAdminEnabled =
+    authedSettingsLoaded &&
     getSettingObject<{ intentClassifier?: { enabled?: boolean } }>('orchestrationDefaults', {})?.intentClassifier
       ?.enabled !== false;
   // Union base for an agentless agent-executor dispatch. Read from admin
