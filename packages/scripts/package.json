@@ -64,7 +64,8 @@
     "retrieval:model-comparison": "tsx retrieval/model-comparison.ts",
     "retrieval:forced-floor-sweep": "tsx retrieval/forced-floor-sweep.ts",
     "retrieval:fetch-served-text": "tsx retrieval/fetch-served-text.ts",
-    "retrieval:sample-corpus-chunks": "tsx retrieval/sample-corpus-chunks.ts"
+    "retrieval:sample-corpus-chunks": "tsx retrieval/sample-corpus-chunks.ts",
+    "retrieval:extend-fixture-queries": "tsx retrieval/extend-fixture-queries.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

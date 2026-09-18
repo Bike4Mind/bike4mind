@@ -650,3 +650,37 @@ Every captured query carries a `questionHash` of the `PROBE_QUESTIONS` text it e
 fixtures by design: the id still matches, so nothing downstream would have noticed that two arms were
 scored on different questions under one label. Re-capture every arm (the whole set - a mixed pair is
 the bug) before scoring again.
+
+### Phase E: adding questions without re-capturing the corpus
+
+A question being **reworded** invalidates a fixture, as above. A question being **added** does not,
+and the two need opposite responses. Re-capturing to ask a new question re-reads a corpus that has
+not changed to learn nothing new about it - and, on a live lake, reads a corpus that HAS changed, so
+the new questions land on a different snapshot than the old ones. Recall measured on one snapshot
+against a false-positive rate measured on another is not one table, which is the whole reason the
+floor sweep wants both halves of a question set in one run.
+
+`extend-fixture-queries.ts` embeds only the questions the fixture lacks and copies its chunk lines
+byte for byte:
+
+```bash
+npx sst shell --stage production -- tsx packages/scripts/retrieval/extend-fixture-queries.ts \
+  --fixture out/text-embedding-3-small.<lake>.fixture.ndjson \
+  --questions <question file> --userId <your id> \
+  --out out/text-embedding-3-small.<lake>.combined.fixture.ndjson --dry-run
+```
+
+`--dry-run` needs no credential, no stage and no connection - it reads the fixture's header line
+only, so the plan can be checked off-stage in about a second even on a 633 MB capture. Drop it and
+add `--yes` to embed.
+
+Three things it will not do. It refuses a capture whose queries carry no `supporting`, because that
+fixture's ground truth is the committed `PROBE_QUESTIONS` joined by id and splicing an external file
+on would silently retire the text pin above. It re-embeds rather than reuses when a question's text
+hash has moved, and names the id - an earlier table using that vector measured a different question.
+And it takes every `supporting` set from the question file rather than the fixture, so a question the
+screen has reclassified is scored against the new answer, not the captured one.
+
+The output is a new file: the corpus, `capturedAt` and every count are the source capture's, and only
+the query set differs. Reading it back through `readEmbeddingFixtureFile` re-validates it exactly as
+a fresh capture, and the chunk-line count is checked against the header before the file is kept.
