@@ -180,9 +180,7 @@ export const rotateSession = async (
   // flushed; everyone else drops the promise.
   const emit = (type: RotateSessionAuditEvent['type'], extraMetadata?: Record<string, unknown>): Promise<void> => {
     try {
-      return Promise.resolve(
-        audit?.({ type, sid, userId: session.userId, ...(extraMetadata && { metadata: extraMetadata }) })
-      ).catch(() => {});
+      return Promise.resolve(audit?.({ type, sid, userId: session.userId, ...(extraMetadata && { metadata: extraMetadata }) })).catch(() => {});
     } catch {
       return Promise.resolve();
     }

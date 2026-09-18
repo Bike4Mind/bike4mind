@@ -32,6 +32,14 @@ export interface ResolvedImageArgs {
  * but an off-enum size would otherwise be generated at one size and billed at the
  * `1024x1024` row (see `OpenAIImageCostCalculator.normalizeInput`).
  *
+ * That filter is deliberately provider-agnostic even though its reason is OpenAI-specific.
+ * Two dispatch branches read `size`: OpenAI, and the self-hosted `local-image` branch, which
+ * splits the `WxH` string into A1111 width/height and is never priced by this calculator. The
+ * local path is therefore held to OpenAI's priced set for no billing reason of its own - the
+ * effect is limited (panel width/height still take precedence, and LocalImageService falls
+ * back to 512x512), so this stays one rule rather than a per-provider branch. Gate on the
+ * resolved model here if a self-hosted install ever needs sizes outside that set.
+ *
  * Both the credit reservation (`ToolBuilder.reserveImageCredits` reads the `onStart`
  * payload) and the provider dispatch read this output, so the two can never disagree about
  * which args an image ran with. Note that this is an agreement about args, not about price: a

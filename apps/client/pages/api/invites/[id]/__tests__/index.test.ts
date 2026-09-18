@@ -149,10 +149,7 @@ describe('GET /api/invites/[id] - authorization gate', () => {
     (req as any).user = { id: 'u1', email: 'a@x.com' };
     await mockRefs.getHandler!(req, res);
 
-    expect(resolveRedeemableInvite).toHaveBeenCalledWith(
-      INVITE_TOKEN,
-      expect.objectContaining({ db: expect.any(Object) })
-    );
+    expect(resolveRedeemableInvite).toHaveBeenCalledWith(INVITE_TOKEN, expect.objectContaining({ db: expect.any(Object) }));
     expect(res._getStatusCode()).toBe(200);
   });
 

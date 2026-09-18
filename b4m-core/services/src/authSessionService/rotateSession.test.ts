@@ -412,12 +412,7 @@ describe('rotateSession', () => {
       );
       // Revoking here would kill a healthy session AND stamp the theft event on a benign stall.
       expect(authSessions.revokeBySid).not.toHaveBeenCalled();
-      expect(audit).toHaveBeenCalledWith({
-        type: 'refresh_recovery_capped',
-        sid: SID,
-        userId: 'user-1',
-        metadata: { terminal: true },
-      });
+      expect(audit).toHaveBeenCalledWith({ type: 'refresh_recovery_capped', sid: SID, userId: 'user-1', metadata: { terminal: true } });
       expect(audit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'session_reuse_revoked' }));
     });
 
@@ -436,12 +431,7 @@ describe('rotateSession', () => {
         TooManyRequestsError
       );
       expect(authSessions.revokeBySid).not.toHaveBeenCalled();
-      expect(audit).toHaveBeenCalledWith({
-        type: 'refresh_recovery_capped',
-        sid: SID,
-        userId: 'user-1',
-        metadata: { terminal: false },
-      });
+      expect(audit).toHaveBeenCalledWith({ type: 'refresh_recovery_capped', sid: SID, userId: 'user-1', metadata: { terminal: false } });
     });
 
     it('still revokes when the previous hash has genuinely moved on', async () => {

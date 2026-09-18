@@ -33,12 +33,7 @@ const handler = baseApi({ auth: false })
         const rotated = await authSessionService.rotateSession(refresh_token, {
           db: { authSessions: authSessionRepository, users: userRepository },
           signAccessToken,
-          audit: event =>
-            logAuthAudit(req, {
-              userId: event.userId,
-              event: event.type,
-              metadata: { ...event.metadata, sid: event.sid },
-            }),
+          audit: event => logAuthAudit(req, { userId: event.userId, event: event.type, metadata: { ...event.metadata, sid: event.sid } }),
           logger: req.logger,
         });
         return res.json({

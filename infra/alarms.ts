@@ -140,7 +140,9 @@ export const replSandboxUnavailableAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
   : undefined;
 
-export const sessionReuseRevokedAlarm = isMonitoredStage ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm') : undefined;
+export const sessionReuseRevokedAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm')
+  : undefined;
 
 export const sessionRecoveredHighRateAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('SessionRecoveredHighRateAlarm')

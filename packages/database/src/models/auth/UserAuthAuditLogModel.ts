@@ -142,11 +142,7 @@ class UserAuthAuditLogRepository extends BaseRepository<IUserAuthAuditLogDocumen
     return this.model.find({ userId }).sort({ createdAt: -1 }).limit(limit);
   }
 
-  async findByUserAndEvent(
-    userId: string,
-    event: UserAuthAuditEvent,
-    limit = 50
-  ): Promise<IUserAuthAuditLogDocument[]> {
+  async findByUserAndEvent(userId: string, event: UserAuthAuditEvent, limit = 50): Promise<IUserAuthAuditLogDocument[]> {
     return this.model.find({ userId, event }).sort({ createdAt: -1 }).limit(limit);
   }
 }

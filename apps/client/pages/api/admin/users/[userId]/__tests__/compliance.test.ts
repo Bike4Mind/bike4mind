@@ -43,21 +43,10 @@ vi.mock('@bike4mind/database', () => ({
     findByUserAndEvent: (...a: unknown[]) => mockAuthByEvent(...a),
   },
   USER_AUTH_AUDIT_EVENTS: [
-    'login_success',
-    'logout',
-    'password_reset',
-    'mfa_enrolled',
-    'mfa_disabled',
-    'oauth_link',
-    'oauth_unlink',
-    'session_revoked',
-    'session_reuse_revoked',
-    'session_recovered',
-    'refresh_replay_capped',
-    'refresh_recovery_capped',
-    'trusted_device_granted',
-    'trusted_device_used',
-    'trusted_device_revoked',
+    'login_success', 'logout', 'password_reset', 'mfa_enrolled', 'mfa_disabled',
+    'oauth_link', 'oauth_unlink', 'session_revoked', 'session_reuse_revoked',
+    'session_recovered', 'refresh_replay_capped', 'refresh_recovery_capped',
+    'trusted_device_granted', 'trusted_device_used', 'trusted_device_revoked',
   ],
 }));
 
@@ -163,13 +152,7 @@ describe('GET /api/admin/users/:userId/compliance', () => {
 
   it('routes to findByUserAndEvent when ?event= is a valid audit event type', async () => {
     mockAuthByEvent.mockResolvedValue([
-      {
-        event: 'session_reuse_revoked',
-        actorIp: '1.2.3.4',
-        userAgent: 'ua',
-        actorUserId: undefined,
-        createdAt: new Date('2026-09-01'),
-      },
+      { event: 'session_reuse_revoked', actorIp: '1.2.3.4', userAgent: 'ua', actorUserId: undefined, createdAt: new Date('2026-09-01') },
     ]);
     const { res, promise } = run({ user: ADMIN, event: 'session_reuse_revoked' });
     await promise;
