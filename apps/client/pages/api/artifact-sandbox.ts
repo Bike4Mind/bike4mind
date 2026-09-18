@@ -72,6 +72,29 @@ const SANDBOX_HTML = `<!DOCTYPE html>
   // (not { once: true }) so unrelated postMessages from browser extensions or
   // dev tooling cannot silently consume the listener before the parent posts.
   window.parent.postMessage({ type: 'artifact-sandbox-ready' }, '*');
+  // Report the written page's height so the parent can size the frame to its content
+  // rather than to a fixed guess. A cross-origin iframe cannot be measured from outside,
+  // so the measurement has to originate here. Set up AFTER document.write, which replaces
+  // the document (and with it the old body) wholesale.
+  var lastReportedHeight = 0;
+  function reportHeight() {
+    var body = document.body;
+    var docEl = document.documentElement;
+    var height = Math.ceil(Math.max(body ? body.scrollHeight : 0, docEl ? docEl.scrollHeight : 0));
+    if (!height || Math.abs(height - lastReportedHeight) < 2) return;
+    lastReportedHeight = height;
+    window.parent.postMessage({ type: 'artifact-sandbox-height', height: height }, '*');
+  }
+  function watchHeight() {
+    reportHeight();
+    // Late arrivals: webfonts and images land after the document closes.
+    setTimeout(reportHeight, 250);
+    setTimeout(reportHeight, 1200);
+    if (typeof ResizeObserver !== 'undefined' && document.body) {
+      new ResizeObserver(reportHeight).observe(document.body);
+    }
+  }
+
   function handleArtifactMessage(event) {
     if (event.source !== window.parent) return;
     if (!event.data || event.data.type !== 'artifact-html') return;
@@ -79,6 +102,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     document.open();
     document.write(event.data.content);
     document.close();
+    watchHeight();
   }
   window.addEventListener('message', handleArtifactMessage);
 </script>

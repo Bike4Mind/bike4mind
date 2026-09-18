@@ -33,7 +33,6 @@ const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ art
         successMessage: 'Saved React component as TypeScript file',
       })}
       actions={{ copy: true, save: true }}
-      defaultRenderedView={false}
       stats={
         <>
           <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
