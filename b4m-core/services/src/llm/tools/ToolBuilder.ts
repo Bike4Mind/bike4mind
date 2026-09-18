@@ -396,6 +396,9 @@ export class ToolBuilder {
     this.deps.toolCreditsMap.set(toolName, queue);
     // Only a charging call contributes a model: a zero-credit call is absent from the
     // aggregate ledger row's amount, so naming its model there would be misleading.
+    // ASSUMES this queue only ever carries positive charges, which every call site holds
+    // today. If it is ever reused for corrections or refunds, a negative entry would be
+    // silently dropped here - widen this to `credits !== 0` at the same time.
     if (model && credits > 0) this.deps.toolCreditModels.add(model);
   }
 

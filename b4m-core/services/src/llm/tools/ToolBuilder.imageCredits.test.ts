@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ImageModels, ModelBackend, usdToCredits, type ModelInfo } from '@bike4mind/common';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
+import { resolveAggregateToolModel } from '../settleToolCredits';
 
 // Drives the REAL reserveImageCredits -> validateUserCredits -> computeImageUsdCostPerImage
 // chain that onToolStart delegates to. The edit_image tool's own tests mock context.onStart,
@@ -169,5 +170,51 @@ describe('ToolBuilder.reserveImageCredits - ledger model attribution', () => {
     );
 
     expect(toolCreditModels.size).toBe(0);
+  });
+});
+
+// Joins the two halves the unit tests cover separately: the set ToolBuilder populates
+// feeds the resolver that picks the ledger row's model. ChatCompletionProcess owns the
+// literal wiring (`resolveAggregateToolModel(this.toolCreditModels)` at its subtractCredits
+// call) and has no test harness of its own, so this covers the data contract between the
+// two, not that call site.
+describe('charging models -> aggregate ledger model', () => {
+  it('names the image model when it is the only tool that charged', async () => {
+    const { builder, toolCreditModels } = makeBuilder();
+
+    await builder.reserveImageCredits(
+      'image_generation',
+      { model: ImageModels.FLUX_PRO_1_1, n: 1 },
+      true,
+      null,
+      quest(),
+      saveQuest,
+      AVAILABLE_MODELS
+    );
+
+    expect(resolveAggregateToolModel(toolCreditModels)).toBe(ImageModels.FLUX_PRO_1_1);
+  });
+
+  it('names nothing once a second tool charges on a different model', async () => {
+    const { builder, toolCreditModels } = makeBuilder();
+    const q = quest();
+
+    await builder.reserveImageCredits(
+      'image_generation',
+      { model: ImageModels.FLUX_PRO_1_1, n: 1 },
+      true,
+      null,
+      q,
+      saveQuest,
+      AVAILABLE_MODELS
+    );
+    builder.settleAudioCredits(
+      q,
+      { kind: 'speech', provider: 'openai', model: 'tts-1', characters: 1000, paths: ['a.mp3'] },
+      true
+    );
+
+    expect(toolCreditModels.size).toBe(2);
+    expect(resolveAggregateToolModel(toolCreditModels)).toBeUndefined();
   });
 });
