@@ -956,9 +956,10 @@ export class ToolBuilder {
    * MCP integration guidance, conversation context, and agent delegation guidance.
    * Returns a single IMessage or null if there's nothing to add.
    *
-   * NOTE: not pure. When MCP tools are present this method also writes to the session
-   * via `extractAndSaveEntitiesFromUserMessage` to persist entities for later reference
-   * resolution (e.g. "review that PR"). See `# 5. Conversation context` block below.
+   * NOTE: not pure. Every invocation writes to the session via
+   * `extractAndSaveEntitiesFromUserMessage` to persist entities for later reference resolution
+   * (e.g. "review that PR"). This is intentionally independent of MCP availability; see the
+   * `# 5. Conversation context` block below.
    */
   async buildToolPrompt({
     toolPromptId,

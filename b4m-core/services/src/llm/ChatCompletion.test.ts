@@ -40,7 +40,12 @@ import {
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
+import {
+  ToolBuilder,
+  applyQuestStatusChanges,
+  type BuildToolPromptArgs,
+  type BuildToolsArgs,
+} from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -3810,9 +3815,23 @@ describe('ChatCompletionProcess', () => {
       promptMode?: 'raw' | 'grounded' | 'surface';
       skipAutoOffers?: boolean;
       disabledTools?: string[];
+      connectedMcpTools?: boolean;
     }) => {
       mockSession.disabledTools = opts.disabledTools;
-      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue([]);
+      const mcpTools = ['notion__search', 'notion__create_page'].map(name => ({
+        name,
+        toolFn: vi.fn(),
+        toolSchema: { name, description: name, parameters: { type: 'object', properties: {} } },
+        _isMcpTool: true,
+      }));
+      const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockResolvedValue({
+        mcpToolsByServer: opts.connectedMcpTools ? { notion: mcpTools } : {},
+        serverAgentConfig: {},
+      });
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockImplementation(options => {
+        if (!opts.connectedMcpTools) return [];
+        return options.offerOnlyNamedTools ? [mcpTools[0]] : mcpTools;
+      });
       buildToolsSpy.mockClear();
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
@@ -3852,33 +3871,48 @@ describe('ChatCompletionProcess', () => {
 
       await service.process({ body, logger: mockLogger });
 
-      const passedOptions = buildToolsSpy.mock.calls[0]?.[0] as any;
+      const passedOptions = buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined;
+      const toolPromptOptions = buildToolPromptSpy.mock.calls[0]?.[0] as BuildToolPromptArgs | undefined;
+      buildMcpToolsSpy.mockRestore();
       buildToolsSpy.mockRestore();
       buildToolPromptSpy.mockRestore();
-      return passedOptions;
+      return { passedOptions, toolPromptOptions };
     };
 
     it('passes offerOnlyNamedTools: true on a promptMode turn', async () => {
-      const options = await runWithOptions({ promptMode: 'raw' });
-      expect(options?.offerOnlyNamedTools).toBe(true);
+      const { passedOptions } = await runWithOptions({ promptMode: 'raw' });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
     });
 
     it('passes offerOnlyNamedTools: true on an explicit skipAutoOffers turn', async () => {
-      const options = await runWithOptions({ skipAutoOffers: true });
-      expect(options?.offerOnlyNamedTools).toBe(true);
+      const { passedOptions } = await runWithOptions({ skipAutoOffers: true });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
     });
 
     // The default web payload (no promptMode, no skipAutoOffers) must keep reaching MCP tools -
     // this is the regression sharedToolBuilder.mcpNarrowing.test.ts guards from the pure-function
     // side; this pins that ChatCompletionProcess never flips the flag on for an ordinary turn.
     it('passes offerOnlyNamedTools: false on a default turn', async () => {
-      const options = await runWithOptions({});
-      expect(options?.offerOnlyNamedTools).toBe(false);
+      const { passedOptions } = await runWithOptions({});
+      expect(passedOptions?.offerOnlyNamedTools).toBe(false);
     });
 
     it('threads session.disabledTools through as sessionDisabledTools', async () => {
-      const options = await runWithOptions({ disabledTools: ['notion__notion_search'] });
-      expect(options?.sessionDisabledTools).toEqual(['notion__notion_search']);
+      const { passedOptions } = await runWithOptions({ disabledTools: ['notion__notion_search'] });
+      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__notion_search']);
+    });
+
+    it('passes only offered MCP tools into the tool prompt after narrowing', async () => {
+      const { toolPromptOptions } = await runWithOptions({ skipAutoOffers: true, connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+
+    it('passes every offered MCP tool into the tool prompt on a default turn', async () => {
+      const { toolPromptOptions } = await runWithOptions({ connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual([
+        'notion__search',
+        'notion__create_page',
+      ]);
     });
   });
 
