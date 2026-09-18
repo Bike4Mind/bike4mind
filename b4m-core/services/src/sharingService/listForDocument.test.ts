@@ -12,7 +12,7 @@ describe('sharingService - listInvitesForDocument', () => {
     fabFiles: { shareable: { findShareAccessById: Mock } };
     sessions: { shareable: { findShareAccessById: Mock } };
     projects: { shareable: { findShareAccessById: Mock } };
-    organizations: { shareable: { findShareAccessById: Mock }; findById: Mock };
+    organizations: { findById: Mock };
     groups: { findById: Mock };
   };
 
@@ -23,7 +23,7 @@ describe('sharingService - listInvitesForDocument', () => {
       fabFiles: { shareable: { findShareAccessById: vi.fn() } },
       sessions: { shareable: { findShareAccessById: vi.fn() } },
       projects: { shareable: { findShareAccessById: vi.fn() } },
-      organizations: { shareable: { findShareAccessById: vi.fn() }, findById: vi.fn() },
+      organizations: { findById: vi.fn() },
       groups: { findById: vi.fn() },
     };
   });
@@ -50,20 +50,20 @@ describe('sharingService - listInvitesForDocument', () => {
     expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
   });
 
-  it('authorizes a Group via its organization share access', async () => {
+  it('authorizes a Group via findById + membership on its parent org', async () => {
     db.groups.findById.mockResolvedValue({ id: documentId, organizationId: 'org-1' });
-    db.organizations.shareable.findShareAccessById.mockResolvedValue({ id: 'org-1' });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'user-1' }] });
     db.invites.findAllByDocumentId.mockResolvedValue([{ id: 'i3', documentId, type: InviteType.Group }]);
 
     const result = await listInvitesForDocument(user, { documentId, type: InviteType.Group }, { db } as any);
 
-    expect(db.organizations.shareable.findShareAccessById).toHaveBeenCalledWith(user, 'org-1');
+    expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
     expect(result).toHaveLength(1);
   });
 
-  it('denies a Group when the parent organization is not share-accessible', async () => {
+  it('denies a Group when the caller is not a member of the parent org', async () => {
     db.groups.findById.mockResolvedValue({ id: documentId, organizationId: 'org-1' });
-    db.organizations.shareable.findShareAccessById.mockResolvedValue(null);
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [] });
 
     await expect(listInvitesForDocument(user, { documentId, type: InviteType.Group }, { db } as any)).rejects.toThrow(
       UnauthorizedError
@@ -72,13 +72,12 @@ describe('sharingService - listInvitesForDocument', () => {
 
   it('authorizes an Organization invite for an admin via findById', async () => {
     const admin = { id: 'admin-1', isAdmin: true } as any;
-    db.organizations.findById.mockResolvedValue({ id: documentId });
+    db.organizations.findById.mockResolvedValue({ id: documentId, userId: 'other', users: [] });
     db.invites.findAllByDocumentId.mockResolvedValue([{ id: 'i9', documentId, type: InviteType.Organization }]);
 
     const result = await listInvitesForDocument(admin, { documentId, type: InviteType.Organization }, { db } as any);
 
     expect(db.organizations.findById).toHaveBeenCalledWith(documentId);
-    expect(db.organizations.shareable.findShareAccessById).not.toHaveBeenCalled();
     expect(result).toHaveLength(1);
   });
 

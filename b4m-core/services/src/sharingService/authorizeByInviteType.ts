@@ -21,13 +21,11 @@ export interface InviteTypeAuthAdapters {
  * Shared per-invite-type authorization for the invite-management flows that key off a
  * document id (listInvitesForDocument, cancelInviteById). Passes silently when the
  * caller is authorized and throws UnauthorizedError otherwise, so callers can't silently
- * diverge on the type -> access mapping. Share access uses the `shareable` adapter
- * (owner / users-share / groups-share via findShareAccessById), matching the CASL
- * `Permission.share` arms this layer replaced. Organization keeps the admin bypass
- * (sibling create/cancel precedent); Group authorizes through its parent organization's
- * share access with no admin bypass (also matching create/cancel; relies on
- * Group.organizationId, which GroupModel now persists). Any other type (e.g. Tool) has
- * no arm and is denied.
+ * diverge on the type -> access mapping. FabFile, Session, and Project use the
+ * `shareable` adapter (findShareAccessById). Organization and Group use findById +
+ * membership predicate: billing owner, any users[] row, or platform admin -- matching
+ * the same check in create.ts and cancel.ts. Any other type (e.g. Tool) has no arm and
+ * is denied.
  */
 export const authorizeByInviteType = async (
   user: IUserDocument,
