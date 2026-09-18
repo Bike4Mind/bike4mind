@@ -74,23 +74,32 @@ describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
   });
 
   it('clears both window docs for the target key only; unrelated cache keys survive', async () => {
-    const otherKeyId = 'e2e-other-key';
-    await checkApiKeyRateLimit(keyId, rateLimit);
-    await checkApiKeyRateLimit(otherKeyId, rateLimit);
-    // A non-rate-limit cache doc that shares nothing but the collection.
-    await cacheRepository.createOrUpdate({ key: 'unrelated:cache-doc', result: { value: 42 } });
+    // Same freeze rationale as the test above: without it these are live 60s-TTL windows, and a
+    // starved CI runner spanning the sequential awaits below across a real minute rollover is a
+    // false red, not a bug.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
+    try {
+      const otherKeyId = 'e2e-other-key';
+      await checkApiKeyRateLimit(keyId, rateLimit);
+      await checkApiKeyRateLimit(otherKeyId, rateLimit);
+      // A non-rate-limit cache doc that shares nothing but the collection.
+      await cacheRepository.createOrUpdate({ key: 'unrelated:cache-doc', result: { value: 42 } });
 
-    await resetApiKeyRateLimit(keyId);
+      await resetApiKeyRateLimit(keyId);
 
-    // findByKey yields undefined (not null) for a missing doc, so assert falsy/truthy.
-    const target = buildRateLimitKeys(keyId);
-    expect(await cacheRepository.findByKey(target.minuteKey)).toBeFalsy();
-    expect(await cacheRepository.findByKey(target.dayKey)).toBeFalsy();
+      // findByKey yields undefined (not null) for a missing doc, so assert falsy/truthy.
+      const target = buildRateLimitKeys(keyId);
+      expect(await cacheRepository.findByKey(target.minuteKey)).toBeFalsy();
+      expect(await cacheRepository.findByKey(target.dayKey)).toBeFalsy();
 
-    const other = buildRateLimitKeys(otherKeyId);
-    expect(await cacheRepository.findByKey(other.minuteKey)).toBeTruthy();
-    expect(await cacheRepository.findByKey(other.dayKey)).toBeTruthy();
-    expect(await cacheRepository.findByKey('unrelated:cache-doc')).toBeTruthy();
+      const other = buildRateLimitKeys(otherKeyId);
+      expect(await cacheRepository.findByKey(other.minuteKey)).toBeTruthy();
+      expect(await cacheRepository.findByKey(other.dayKey)).toBeTruthy();
+      expect(await cacheRepository.findByKey('unrelated:cache-doc')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('is idempotent: resetting a never-used or already-reset key is a no-op', async () => {
@@ -103,20 +112,27 @@ describe('resetApiKeyRateLimit (end-to-end, real cache repo + Mongo)', () => {
   });
 
   it('alsoResetManagement additionally clears the management counter (#2883)', async () => {
-    await checkApiKeyRateLimit(keyId, rateLimit, undefined, { counter: 'management' });
+    // Same freeze rationale as the two tests above.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2030-01-01T00:00:00.000Z'));
+    try {
+      await checkApiKeyRateLimit(keyId, rateLimit, undefined, { counter: 'management' });
 
-    await resetApiKeyRateLimit(keyId); // routine reset: request counter only
+      await resetApiKeyRateLimit(keyId); // routine reset: request counter only
 
-    const management = buildRateLimitKeys(keyId, 'management');
-    expect(await cacheRepository.findByKey(management.minuteKey)).toBeTruthy();
-    expect(await cacheRepository.findByKey(management.dayKey)).toBeTruthy();
+      const management = buildRateLimitKeys(keyId, 'management');
+      expect(await cacheRepository.findByKey(management.minuteKey)).toBeTruthy();
+      expect(await cacheRepository.findByKey(management.dayKey)).toBeTruthy();
 
-    const result = await resetApiKeyRateLimit(keyId, { alsoResetManagement: true });
+      const result = await resetApiKeyRateLimit(keyId, { alsoResetManagement: true });
 
-    expect(await cacheRepository.findByKey(management.minuteKey)).toBeFalsy();
-    expect(await cacheRepository.findByKey(management.dayKey)).toBeFalsy();
-    // The management usage reported back reflects what was actually cleared -
-    // one call was made above, so the minute counter was at 1 when deleted.
-    expect(result.management).toMatchObject({ minute: 1, day: 1 });
+      expect(await cacheRepository.findByKey(management.minuteKey)).toBeFalsy();
+      expect(await cacheRepository.findByKey(management.dayKey)).toBeFalsy();
+      // The management usage reported back reflects what was actually cleared -
+      // one call was made above, so the minute counter was at 1 when deleted.
+      expect(result.management).toMatchObject({ minute: 1, day: 1 });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
