@@ -1,5 +1,4 @@
 import React from 'react';
-import { Typography } from '@mui/joy';
 import { type HtmlArtifact } from '@bike4mind/common';
 import InlineArtifactPreview from './InlineArtifactPreview';
 import ArtifactPreviewCard from './ArtifactPreviewCard';
@@ -10,10 +9,6 @@ interface HtmlArtifactPreviewCardProps {
 }
 
 const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artifact, onExpand }) => {
-  const lineCount = artifact.content.split('\n').length;
-  const titleMatch = artifact.content.match(/<title>(.*?)<\/title>/i);
-  const htmlTitle = titleMatch ? titleMatch[1] : null;
-
   return (
     <ArtifactPreviewCard
       artifactId={artifact.id}
@@ -36,18 +31,6 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
       actions={{ copy: true, save: true }}
       // Users asking for an "article" should see the article, not a wall of HTML.
       defaultRenderedView
-      stats={
-        <>
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            {lineCount} lines
-          </Typography>
-          {htmlTitle && (
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {htmlTitle}
-            </Typography>
-          )}
-        </>
-      }
       renderPreview={() => (
         <InlineArtifactPreview
           artifact={artifact}

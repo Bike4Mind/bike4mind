@@ -291,12 +291,12 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         sx={theme => ({
           position: 'absolute',
           top: '-8px',
-          // Below `sm` the message stack drops its inline padding (Session/MessageContent),
-          // so the card sits flush with the screen edge and a left overhang would be
-          // clipped. Same breakpoint as that padding; there the pill sits inset from the
-          // card edge instead, keeping only the top overhang.
+          // Inset from the card's left edge, overhanging only the top. It used to overhang
+          // on the left too, which needed a breakpoint dance: below `sm` the message stack
+          // drops its inline padding (Session/MessageContent), so the card sits flush with
+          // the screen edge and a left overhang was clipped. An inset pill has no such
+          // problem at any width.
           left: '16px',
-          [theme.breakpoints.up('sm')]: { left: '-8px' },
           zIndex: 1,
           backgroundColor: brand[800],
           color: 'text.primary',
@@ -318,7 +318,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         <Stack direction="row" spacing={1} alignItems="center">
           <Stack sx={{ minWidth: 0 }}>
             <Typography
-              level="title-sm"
+              level="title-md"
               sx={{
                 color: 'text.primary',
                 minWidth: 0,

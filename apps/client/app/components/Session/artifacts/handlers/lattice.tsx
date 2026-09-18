@@ -85,16 +85,12 @@ const LatticePreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
         // anything from. The card is its summary; clicking it opens the real thing.
         inlineSource={false}
         stats={
-          <>
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {entityCount || 0} entities, {ruleCount || 0} rules
-            </Typography>
-            {currency && (
-              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                {currency}
-              </Typography>
-            )}
-          </>
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            {/* One line, not two siblings - see the same note in the python handler. */}
+            {[`${entityCount || 0} entities, ${ruleCount || 0} rules`, currency || null]
+              .filter(Boolean)
+              .join(' \u2022 ')}
+          </Typography>
         }
       />
     </Box>

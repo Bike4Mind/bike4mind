@@ -169,7 +169,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
         sx={theme => ({
           position: 'absolute',
           top: '-8px',
-          left: '-8px',
+          left: '16px',
           zIndex: 1,
           backgroundColor: brand[800],
           color: 'text.primary',
@@ -194,7 +194,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
           <Stack sx={{ minWidth: 0 }}>
             <Typography
               className="code-artifact-title"
-              level="title-sm"
+              level="title-md"
               sx={{
                 color: 'text.primary',
                 minWidth: 0,

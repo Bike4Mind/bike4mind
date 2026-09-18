@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Box, Typography } from '@mui/joy';
+import { Box } from '@mui/joy';
 import DOMPurify from 'dompurify';
 import type { SvgArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
@@ -64,8 +64,6 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
     [artifactId, svgTitle, artifact.content]
   );
 
-  const lineCount = artifact.content.split('\n').length;
-
   return (
     <Box data-testid={`artifact-preview-svg-${artifactId}`}>
       <ArtifactPreviewCard
@@ -87,11 +85,6 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
           successMessage: 'Saved SVG as file',
         })}
         actions={{ save: true }}
-        stats={
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            {lineCount} lines
-          </Typography>
-        }
         renderPreview={() => (
           <Box
             sx={{

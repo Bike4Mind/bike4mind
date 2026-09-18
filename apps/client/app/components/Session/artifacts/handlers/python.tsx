@@ -61,16 +61,11 @@ const PythonPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactI
         // No inline render: running Python means the Pyodide playground, which lives in
         // the side panel. The card shows source; "open in full viewer" runs it.
         stats={
-          <>
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {lineCount} lines
-            </Typography>
-            {packages.length > 0 && (
-              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                {packages.join(', ')}
-              </Typography>
-            )}
-          </>
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            {/* One line, not two siblings: separate pieces read as unrelated labels.
+                '\u2022' as an escape - source here stays ASCII. */}
+            {[`${lineCount} lines`, packages.length > 0 ? packages.join(', ') : null].filter(Boolean).join(' \u2022 ')}
+          </Typography>
         }
       />
     </Box>
