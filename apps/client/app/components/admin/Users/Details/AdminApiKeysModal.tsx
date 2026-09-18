@@ -66,17 +66,36 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
   };
 
   // Names which counter(s) actually caused the lockout - a bare "reset
-  // succeeded" leaves an admin unable to tell request vs. management. An
-  // entry is undefined when clearing that counter itself failed
-  // (best-effort); silently treated the same as "not at its ceiling".
-  const describeLockoutCause = (lockout: ApiKeyRateLimitResetResponse['lockout']): string => {
-    const causes: string[] = [];
-    if (lockout.request?.minuteAtLimit || lockout.request?.dayAtLimit) causes.push('request');
-    if (lockout.management?.minuteAtLimit || lockout.management?.dayAtLimit) causes.push('management');
-    if (causes.length === 0) return '';
-    return causes.length > 1
-      ? ` - ${causes.join(' and ')} counters were at their ceilings`
-      : ` - ${causes[0]} counter was at its ceiling`;
+  // succeeded" leaves an admin unable to tell request vs. management. A
+  // counter entry is undefined when clearing it failed (best-effort); that
+  // reads as "could not be verified", distinct from a counter that was
+  // actually cleared and found not to be at its ceiling.
+  const describeLockoutCause = (lockout: NonNullable<ApiKeyRateLimitResetResponse['lockout']>): string => {
+    const atCeiling: string[] = [];
+    const unknown: string[] = [];
+    const note = (name: 'request' | 'management', state: typeof lockout.request) => {
+      if (state === undefined) unknown.push(name);
+      else if (state.minuteAtLimit || state.dayAtLimit) atCeiling.push(name);
+    };
+    note('request', lockout.request);
+    note('management', lockout.management);
+
+    const clauses: string[] = [];
+    if (atCeiling.length > 0) {
+      clauses.push(
+        atCeiling.length > 1
+          ? `${atCeiling.join(' and ')} counters were at their ceilings`
+          : `${atCeiling[0]} counter was at its ceiling`
+      );
+    }
+    if (unknown.length > 0) {
+      clauses.push(
+        unknown.length > 1
+          ? `${unknown.join(' and ')} counters could not be verified`
+          : `${unknown[0]} counter could not be verified`
+      );
+    }
+    return clauses.length === 0 ? '' : ` - ${clauses.join('; ')}`;
   };
 
   const handleReset = (key: IUserApiKeyDocument) => {
