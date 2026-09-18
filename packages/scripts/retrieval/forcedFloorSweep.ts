@@ -483,6 +483,18 @@ const falsePositiveCell = (a: Aggregate): string =>
   a.negatives === 0 ? 'n/a (n=0)' : `${pct(a.falsePositiveRate)} (n=${a.negatives})`;
 
 /**
+ * Recall and MRR average over `positives`, and `mean` maps an empty set to 0 rather than NaN, so a
+ * question file carrying only negatives would print `0.0%` and `0.000` on every row - indistinguishable
+ * from a floor that destroyed recall, when the truth is that nothing was measured. A negatives-only
+ * corpus is a legitimate input here (deriving a trustworthy positive key costs far more than
+ * collecting negatives, and the floors are chosen against false positives), so these guard their own
+ * denominator the way `precisionCell` and `falsePositiveCell` already do.
+ */
+const recallCell = (a: Aggregate): string => (a.positives === 0 ? 'n/a (n=0)' : pct(a.recall));
+
+const mrrCell = (a: Aggregate): string => (a.positives === 0 ? 'n/a (n=0)' : a.mrr.toFixed(3));
+
+/**
  * Render the sweep as a Markdown table for pasting into the ticket.
  *
  * `bound` and `cut @` are the two columns a floor decision actually turns on, and neither is
@@ -547,9 +559,9 @@ export function formatFloorSweepTable(rows: readonly FloorSweepRow[]): string {
       falsePositiveCell(r.quality),
       String(r.emptiedPositives),
       String(r.emptiedNegatives),
-      pct(r.quality.recall),
+      recallCell(r.quality),
       precisionCell(r.quality),
-      r.quality.mrr.toFixed(3),
+      mrrCell(r.quality),
       '',
     ].join(' | ')
   );

@@ -535,4 +535,23 @@ describe('formatFloorSweepTable', () => {
     expect(lines[0]).toContain('emptied (pos)');
     expect(lines[0]).toContain('emptied (neg)');
   });
+
+  it('withholds recall and MRR on a negatives-only corpus rather than printing a measured-looking zero', () => {
+    const negativesOnly = [
+      { id: 'q01', vector: [-1, 0], supporting: [] },
+      { id: 'q02', vector: [0, -1], supporting: [] },
+    ];
+    const negRow = buildFloorSweepRow({ config: ZERO_FLOOR_CONFIG, chunks, queries: negativesOnly });
+    const cells = formatFloorSweepTable([negRow]).split('\n')[2].split('|');
+    // mean([]) is 0, not NaN, so an unguarded recall/MRR renders as a real measurement of a floor
+    // that destroyed retrieval - the one reading a negatives-only sweep must never produce.
+    expect(cells.filter(c => c.trim() === 'n/a (n=0)')).toHaveLength(3);
+    expect(cells.map(c => c.trim())).not.toContain('0.000');
+  });
+
+  it('still reports the false-positive rate on a negatives-only corpus, since that is what it measures', () => {
+    const negativesOnly = [{ id: 'q01', vector: [1, 0], supporting: [] }];
+    const negRow = buildFloorSweepRow({ config: ZERO_FLOOR_CONFIG, chunks, queries: negativesOnly });
+    expect(formatFloorSweepTable([negRow]).split('\n')[2]).toContain('100.0% (n=1)');
+  });
 });
