@@ -109,26 +109,43 @@ export function buildDefaultOrchestrationProfile(
 
 /**
  * The agent-mode default toolbelt in server tool vocabulary: the org's
- * `orchestrationDefaults.allowedTools` minus its `deniedTools`. Any field an
- * admin has not set falls back to the `OrchestrationDefaultsSchema` seed, and a
- * malformed stored value falls back to the seed entirely - same degraded-mode
- * reasoning as `buildDefaultOrchestrationProfile` above, whose `dagEnabled`
- * handling this mirrors.
+ * `orchestrationDefaults.allowedTools` minus its `deniedTools`, with
+ * `coordinate_task` dropped when DAG decomposition is off (mirroring
+ * `buildDefaultOrchestrationProfile` above).
  *
- * `resolveDispatchTools` unions this with the user's Smart Tools for an
- * agentless dispatch, so a tool missing here is one the agent silently loses.
+ * Returns `null` for "we do not know the org's policy" - an absent or malformed
+ * stored value. Deliberately not the schema seed: `resolveDispatchTools` unions
+ * this onto the user's Smart Tools and the server does NOT intersect
+ * (`pickEffectiveEnabledTools` REPLACES `profile.allowedTools` with a non-empty
+ * payload; only `deniedTools` is subtracted afterwards), so a guessed base would
+ * hand back tools an admin had narrowed away org-wide. `null` makes the caller
+ * send no payload, leaving the server to resolve the real profile.
  *
- * Sourced from admin settings rather than the schema seed for a load-bearing
- * reason: the server does NOT intersect the payload against the profile.
- * `pickEffectiveEnabledTools` REPLACES `profile.allowedTools` outright with a
- * non-empty `enabledTools` payload - only `deniedTools` is subtracted
- * afterwards, and only a `toolsetIsExclusive` profile ignores the payload. So
- * unioning a hardcoded seed here would override an admin who narrowed
- * `allowedTools` org-wide. `deniedTools` stays the payload-proof surface.
+ * Callers must ALSO treat "the authed settings fetch has not landed" as `null`
+ * rather than passing whatever `getSettingObject` returns: `orchestrationDefaults`
+ * is not `publicSafe`, but `AdminSettingsContext.mergeIntoDefaults` seeds every
+ * key with its compiled-in default, so a defaulted key looks exactly like a real
+ * one here. `useSendMessage` gates on `authedSettingsLoaded` for that reason.
+ *
+ * An empty set is a DIFFERENT, readable answer: an admin who set
+ * `allowedTools: []` (or denied everything) turned the agent toolbelt off
+ * org-wide. Distinguishing the two is the point of the nullable return.
+ *
+ * A tool missing from a non-empty set is a tool the agent silently loses, so
+ * this must stay in sync with `OrchestrationDefaultsSchema`.
  */
-export function agentModeDefaultToolNames(adminDefaults: unknown): ReadonlySet<string> {
-  const parsed = OrchestrationDefaultsSchema.safeParse(adminDefaults ?? {});
-  const defaults = parsed.success ? parsed.data : OrchestrationDefaultsSchema.parse({});
+export function agentModeDefaultToolNames(adminDefaults: unknown): ReadonlySet<string> | null {
+  if (adminDefaults === null || adminDefaults === undefined) return null;
+  const parsed = OrchestrationDefaultsSchema.safeParse(adminDefaults);
+  if (!parsed.success) {
+    // A malformed stored value degrades org-wide and permanently, with no UI
+    // signal, so leave a breadcrumb rather than failing mute.
+    console.warn('[agentMode] orchestrationDefaults failed validation; agentless dispatch will defer to the server', {
+      issues: parsed.error.issues,
+    });
+    return null;
+  }
+  const defaults = parsed.data;
   const denied = new Set(defaults.deniedTools);
   const allowed = defaults.dagEnabled
     ? defaults.allowedTools

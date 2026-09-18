@@ -28,6 +28,14 @@ interface AdminSettingsContextValue {
   getSettingBoolean: (key: string, defaultValue?: boolean) => boolean;
   getSettingNumber: (key: string, defaultValue?: number) => number;
   getSettingObject: <T = object>(key: string, defaultValue?: T) => T | null;
+  /**
+   * Whether the AUTHENTICATED fetch has delivered. False means every key in
+   * `settings` that is not `publicSafe` is the compiled-in `settingsMap`
+   * default, NOT the org's stored value - `mergeIntoDefaults` seeds all of them
+   * either way, so a defaulted key is otherwise indistinguishable from a real
+   * one. Consumers that must not act on a guessed org policy gate on this.
+   */
+  authedSettingsLoaded: boolean;
 }
 
 const AdminSettingsContext = createContext<AdminSettingsContextValue | null>(null);
@@ -232,12 +240,14 @@ export const AdminSettingsProvider: React.FC<AdminSettingsProviderProps> = ({
       getSettingBoolean,
       getSettingNumber,
       getSettingObject,
+      authedSettingsLoaded: authedSettings !== undefined,
     };
   }, [
     settings,
     hasAccessToken,
     isPending,
     publicSettings,
+    authedSettings,
     error,
     refetch,
     getSetting,

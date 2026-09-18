@@ -166,8 +166,9 @@ describe('buildDefaultOrchestrationProfile', () => {
 describe('agentModeDefaultToolNames', () => {
   // This set is what an agentless dispatch unions onto the user's Smart Tools
   // (see `resolveDispatchTools`), so a tool missing here is a tool the agent
-  // silently loses. With no admin config it mirrors OrchestrationDefaultsSchema.
-  const seeded = agentModeDefaultToolNames(undefined);
+  // silently loses. A readable setting an admin never narrowed mirrors
+  // OrchestrationDefaultsSchema.
+  const seeded = agentModeDefaultToolNames({})!;
 
   it('carries the web + storage-backed artifact tools the default profile allows', () => {
     expect(seeded.has('web_search')).toBe(true);
@@ -210,7 +211,7 @@ describe('agentModeDefaultToolNames', () => {
     // Load-bearing: the server REPLACES `profile.allowedTools` with a non-empty
     // payload, so seeding this set from the schema instead of admin config
     // would hand back a tool the admin removed org-wide.
-    const narrowed = agentModeDefaultToolNames({ allowedTools: ['web_search'] });
+    const narrowed = agentModeDefaultToolNames({ allowedTools: ['web_search'] })!;
     expect(narrowed.has('web_search')).toBe(true);
     expect(narrowed.has('image_generation')).toBe(false);
     expect(narrowed.has('recharts')).toBe(false);
@@ -220,20 +221,46 @@ describe('agentModeDefaultToolNames', () => {
     const denied = agentModeDefaultToolNames({
       allowedTools: ['web_search', 'recharts'],
       deniedTools: ['recharts'],
-    });
+    })!;
     expect(denied.has('web_search')).toBe(true);
     expect(denied.has('recharts')).toBe(false);
   });
 
   it('drops coordinate_task when an admin disabled DAG decomposition', () => {
-    expect(agentModeDefaultToolNames({ dagEnabled: false }).has('coordinate_task')).toBe(false);
+    expect(agentModeDefaultToolNames({ dagEnabled: false })!.has('coordinate_task')).toBe(false);
     expect(seeded.has('coordinate_task')).toBe(true);
   });
 
-  it('falls back to the schema seed on a malformed stored setting', () => {
-    // The admin value is untyped JSON; a bad one must degrade to the seed
-    // rather than produce an empty toolbelt.
-    expect(agentModeDefaultToolNames({ allowedTools: 'not-an-array' })).toEqual(seeded);
-    expect(agentModeDefaultToolNames('garbage')).toEqual(seeded);
+  it('returns null - not the schema seed - when the setting is unreadable', () => {
+    // An unreadable setting must not synthesize the full seed: the server does
+    // not intersect, so that payload would re-broaden a narrowed org toolbelt.
+    // The authed settings query is `retry: false`, so a single 429 leaves the
+    // key absent for the whole session.
+    expect(agentModeDefaultToolNames(undefined)).toBeNull();
+    expect(agentModeDefaultToolNames(null)).toBeNull();
+  });
+
+  it('returns null on a malformed stored setting', () => {
+    // The admin value is untyped JSON; a bad one is no more trustworthy than a
+    // missing one, so it degrades to "unknown" rather than to the seed.
+    expect(agentModeDefaultToolNames({ allowedTools: 'not-an-array' })).toBeNull();
+    expect(agentModeDefaultToolNames('garbage')).toBeNull();
+  });
+
+  it('distinguishes an explicitly empty allowedTools from an unreadable setting', () => {
+    // An admin who turned the agent toolbelt off org-wide gets an empty set,
+    // which is a readable answer - not the seed, and not `null`.
+    const emptied = agentModeDefaultToolNames({ allowedTools: [] });
+    expect(emptied).not.toBeNull();
+    expect(emptied!.size).toBe(0);
+  });
+
+  it('is empty when deniedTools covers everything allowedTools lists', () => {
+    const emptied = agentModeDefaultToolNames({
+      allowedTools: ['web_search'],
+      deniedTools: ['web_search'],
+    });
+    expect(emptied).not.toBeNull();
+    expect(emptied!.size).toBe(0);
   });
 });

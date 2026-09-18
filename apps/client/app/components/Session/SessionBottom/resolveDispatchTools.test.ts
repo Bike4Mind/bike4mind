@@ -3,9 +3,10 @@ import type { B4MLLMTools } from '@bike4mind/common';
 import { agentModeDefaultToolNames } from '@client/app/utils/agentOrchestration';
 import { resolveDispatchTools } from './resolveDispatchTools';
 
-// The org's agent-mode toolbelt. Sourced from admin settings in the hook; the
-// schema seed (no admin override) is the representative case here.
-const DEFAULT_TOOLS = agentModeDefaultToolNames(undefined);
+// The org's agent-mode toolbelt. Sourced from admin settings in the hook; a
+// readable setting the admin never narrowed (the schema seed) is the
+// representative case here.
+const DEFAULT_TOOLS = agentModeDefaultToolNames({})!;
 
 /**
  * Before/after regression for #95. Drives the real dispatch decision the hook
@@ -150,5 +151,31 @@ describe('resolveDispatchTools agentless dispatch', () => {
     const result = resolveDispatchTools(undefined, ['deep_research'], undefined, narrowed);
     expect(new Set(result)).toEqual(new Set(['deep_research', 'web_search']));
     expect(result).not.toContain('image_generation');
+  });
+
+  it('sends nothing when the org toolbelt is unreadable, instead of the schema seed', () => {
+    // `agentModeDefaultToolNames` hands back `null` when `orchestrationDefaults`
+    // is absent or malformed. Unioning the seed there would re-broaden a
+    // narrowed org toolbelt for the whole session (the settings query is
+    // `retry: false`), so the whole decision goes back to the server.
+    expect(resolveDispatchTools(undefined, SMART_TOOLS, undefined, null)).toBeUndefined();
+    expect(
+      resolveDispatchTools(undefined, SMART_TOOLS, undefined, agentModeDefaultToolNames('garbage'))
+    ).toBeUndefined();
+  });
+
+  it('honors an admin who emptied allowedTools org-wide', () => {
+    // Deterministic, no settings outage needed: the union base is empty, so a
+    // bare Smart Tools payload would REPLACE `profile.allowedTools: []` and
+    // hand back tools the admin switched off. Send nothing instead.
+    const emptied = agentModeDefaultToolNames({ allowedTools: [] });
+    expect(emptied?.size).toBe(0);
+    expect(resolveDispatchTools(undefined, SMART_TOOLS, undefined, emptied)).toBeUndefined();
+  });
+
+  it('still lets a briefcase override and a mentioned agent through with no usable base', () => {
+    // Precedence is unchanged: only the agentless union depends on the base.
+    expect(resolveDispatchTools(['web_search'], ['web_search'], undefined, null)).toEqual(['web_search']);
+    expect(resolveDispatchTools(undefined, SMART_TOOLS, ['mermaid_chart'], null)).toEqual(['mermaid_chart']);
   });
 });
