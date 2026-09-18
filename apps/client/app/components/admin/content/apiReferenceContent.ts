@@ -58,7 +58,7 @@ Authorization: ApiKey b4m_live_xxxxx
 |--------|----------|-------------|
 | GET | /api/user-api-keys | List your active API keys (add \`?includeDisabled=true\` to also return revoked ones) |
 | POST | /api/api-keys/create | Create a new API key |
-| POST | /api/user-api-keys/[id]/rotate | Rotate an existing key |
+| POST | /api/user-api-keys/[id]/rotate | Rotate an existing key (an API-key caller may only rotate a key whose scopes it already holds - see Scopes below) |
 | POST | /api/user-api-keys/[id]/revoke | Revoke a key |
 | POST | /api/api-keys/[id]/set-active | Activate/deactivate a key |
 | DELETE | /api/api-keys/[id]/delete | Delete a key |
@@ -78,6 +78,10 @@ API keys can be scoped to limit access. Available scopes:
 | \`ai:generate\` | Use image/video/audio generation endpoints |
 | \`ai:chat\` | Send chat messages and use LLM endpoints |
 | \`admin:*\` | Full admin access (superuser only) |
+
+For rotate specifically, scope containment is checked literally: \`admin:*\` is not treated
+as a superset of other scopes, so an \`admin:*\`-scoped key still can't rotate a key holding
+scopes it doesn't literally list.
 
 ### Rate Limits
 
