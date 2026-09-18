@@ -19,6 +19,16 @@ import {
  * into one no article carries, every question citing it loses recall it should have had, and the
  * sweep concludes a budget setting is worse than it is. Retrieval would not have changed at all.
  */
+// The index is generated and no longer committed, so this leg does not run in CI: no test shard
+// runs help:build-index. It is a local-after-a-build check only. runIf rather than an early
+// return so a skipped run REPORTS as skipped - an early return reports as a pass, which reads as
+// coverage that did not happen. Kept rather than deleted because it is the one assertion that
+// reads the ingest's own view of the corpus.
+const INDEX_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../apps/client/app/generated/help-index.json'
+);
+
 describe('probe ground truth', () => {
   it('references only slugs that exist as PUBLIC help articles', async () => {
     // Public is the operative filter: `ingest-help-datalake.ts` ingests accessLevel === 'public'
@@ -34,22 +44,12 @@ describe('probe ground truth', () => {
     ).toEqual([]);
   });
 
-  it('references only slugs the help-lake ingest will actually create', () => {
+  it.runIf(existsSync(INDEX_PATH))('references only slugs the help-lake ingest will actually create', () => {
     // loadHelpArticles reads docs-site; the ingest reads the GENERATED index. They are normally in
     // step, but the index is what determines what ends up in the lake, so the ground truth has to
     // hold against that source specifically - a slug present in docs but absent from the index is
     // an article the probe can never retrieve.
-    const indexPath = path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      '../../../apps/client/app/generated/help-index.json'
-    );
-    // The index is generated and no longer committed, so in CI this leg SKIPS: no test shard runs
-    // help:build-index. It is a local-after-a-build check only. Kept rather than deleted because
-    // it is the one assertion that reads the ingest's own view, but do not read a green CI run as
-    // having exercised it - the docs-site assertion above is what covers the ground truth there.
-    if (!existsSync(indexPath)) return;
-
-    const entries = JSON.parse(readFileSync(indexPath, 'utf-8')).entries as {
+    const entries = JSON.parse(readFileSync(INDEX_PATH, 'utf-8')).entries as {
       slug: string;
       accessLevel: string;
     }[];
