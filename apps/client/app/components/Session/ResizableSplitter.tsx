@@ -135,6 +135,10 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
   // and End on aria-valuemax, since the announced value is the chat pane's.
   const handleKeyResize = useCallback(
     (e: React.KeyboardEvent) => {
+      // Modified arrows belong to the browser, the OS or assistive tech (Alt+Left is
+      // browser-back in some configurations); stepping would also preventDefault them.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
       let newWidth: number;
 
       switch (e.key) {

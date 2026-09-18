@@ -56,6 +56,17 @@ describe('ResizableSplitter', () => {
     expect(handle()).toHaveAttribute('aria-valuenow', '48');
   });
 
+  it('leaves modified arrows to the browser', () => {
+    renderSplitter();
+
+    // Alt+Left is browser-back in some configurations; stepping would also swallow it.
+    for (const modifier of ['ctrlKey', 'metaKey', 'altKey'] as const) {
+      expect(fireEvent.keyDown(handle(), { key: 'ArrowRight', [modifier]: true })).toBe(true);
+    }
+
+    expect(width()).toBe(50);
+  });
+
   // Home and End are named for the value this widget announces (the chat pane), so they land
   // on aria-valuemin and aria-valuemax -- which also drives the separator hard left and hard
   // right, the same direction the arrows travel.
