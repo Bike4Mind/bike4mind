@@ -30,7 +30,6 @@ const REWRITE_SITES = [
   'apps/client/pages/api/fabfiles/[id]/apply-edit.ts',
   'apps/client/pages/api/fabfiles/[id]/edit.ts',
   'b4m-core/services/src/fabFileService/update.ts',
-  'b4m-core/services/src/fabFileService/applyEdit.ts',
   'b4m-core/services/src/fabFileService/edit.ts',
 ];
 

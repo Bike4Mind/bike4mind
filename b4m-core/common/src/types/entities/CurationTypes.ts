@@ -36,13 +36,19 @@ export interface CurationResult {
   tokensProcessed?: number;
   tokensDeducted?: number;
   error?: string;
+  /**
+   * False only for a failure that cannot succeed on redelivery (e.g. an admission gate
+   * refusal). Absent/true means the caller should retry as before - a queue handler
+   * rethrows to let SQS redeliver, only skipping that for an explicit `false`.
+   */
+  retryable?: boolean;
 }
 
 /** Error thrown on curation failure. */
 export class NotebookCurationError extends Error {
   constructor(
     message: string,
-    public code: 'SESSION_NOT_FOUND' | 'INSUFFICIENT_TOKENS' | 'EXPORT_FAILED' | 'STORAGE_FAILED',
+    public code: 'SESSION_NOT_FOUND' | 'INSUFFICIENT_TOKENS' | 'EXPORT_FAILED' | 'STORAGE_FAILED' | 'ADMISSION_REFUSED',
     public originalError?: unknown
   ) {
     super(message);

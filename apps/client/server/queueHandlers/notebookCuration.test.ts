@@ -43,6 +43,7 @@ vi.mock('@bike4mind/database', () => ({
   fabFileRepository: {},
   creditTransactionRepository: {},
   userRepository: {},
+  adminSettingsRepository: {},
   connectDB: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -93,6 +94,7 @@ vi.mock('@bike4mind/observability', () => {
 });
 
 import { dispatch } from './notebookCuration';
+import { NotebookCurationEvents } from '@server/utils/eventBus';
 
 const mockContext = {
   callbackWaitsForEmptyEventLoop: false,
@@ -200,5 +202,52 @@ describe('notebookCuration queue handler idempotency', () => {
     // No idempotency record is written on failure - a redelivery must be free
     // to re-attempt (transient-failure resilience), not silently skipped.
     expect(NotebookCurationJob.updateOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('notebookCuration queue handler - curateNotebook returning success: false', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Session.findById.mockResolvedValue({ _id: 'session-123', userId: 'user-456' });
+    User.findById.mockResolvedValue({ _id: 'user-456' });
+    NotebookCurationJob.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
+    NotebookCurationJob.updateOne.mockResolvedValue({ acknowledged: true });
+  });
+
+  it('notifies the user but does NOT rethrow a permanent admission refusal, so SQS does not retry it', async () => {
+    mockCurateNotebook.mockResolvedValue({
+      success: false,
+      error: 'File size exceeds maximum file size',
+      retryable: false,
+    });
+
+    await expect(dispatch(createEvent(basePayload), mockContext)).resolves.toBeUndefined();
+
+    expect(mockSendToClient).toHaveBeenCalledWith(
+      'user-456',
+      expect.anything(),
+      expect.objectContaining({ status: 'failed', errorMessage: 'File size exceeds maximum file size' })
+    );
+    expect(NotebookCurationEvents.Error.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'File size exceeds maximum file size' })
+    );
+  });
+
+  it('notifies the user and rethrows a transient failure, so SQS retries it', async () => {
+    mockCurateNotebook.mockResolvedValue({
+      success: false,
+      error: 'Temporary storage blip',
+    });
+
+    await expect(dispatch(createEvent(basePayload), mockContext)).rejects.toThrow('Temporary storage blip');
+
+    expect(mockSendToClient).toHaveBeenCalledWith(
+      'user-456',
+      expect.anything(),
+      expect.objectContaining({ status: 'failed', errorMessage: 'Temporary storage blip' })
+    );
+    expect(NotebookCurationEvents.Error.publish).toHaveBeenCalledWith(
+      expect.objectContaining({ error: 'Temporary storage blip' })
+    );
   });
 });

@@ -349,6 +349,10 @@ export async function ingestHelpDatalake(
     // API door, so no reconciler runs here - the `help:<slug>` tag is what satisfies it, and
     // dropping it would silently reproduce the bug this invariant exists to prevent. The
     // `help:<slug>` tag is also how a re-run identifies this member, so it is load-bearing twice.
+    //
+    // No admin MaxFileSize check and no per-user storage quota here, and that is deliberate: the
+    // body is the repo-shipped help corpus, not a user upload, and no `filePath` is set, so no S3
+    // object is ever created for this row and objectCreated.ts's quota charge never fires for it.
     const fabFile = await deps.db.fabFiles.create({
       userId: opts.userId,
       fileName: entry.title,
