@@ -363,7 +363,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   it('leaves a fence followed by a long whitespace run untouched, in bounded time', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
-    for (const label of ['html', 'svg']) {
+    for (const label of ['html', 'svg', 'tsx', 'json']) {
       const input = '```' + label + '\n' + '\n'.repeat(200000) + 'x';
       const startedAt = Date.now();
       expect(convertCodeBlocksToArtifacts(input)).toBe(input);

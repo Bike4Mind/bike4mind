@@ -302,7 +302,7 @@ ${codeContent.trim()}
 function promoteToolCallJsonArtifact(content: string): string {
   // Fence labels a model uses for a tool call; a ```html fence is handled above.
   // The negative lookahead stops ```tool matching inside ```tool_calls etc.
-  const fenceRegex = /```(?:json|tool_code|tool)(?![a-z0-9_])\s*([\s\S]*?)```/gi;
+  const fenceRegex = /```(?:json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
   const afterFences = content.replace(fenceRegex, (match, body) => toolCallJsonToArtifact(body) ?? match);
   if (afterFences !== content) return afterFences;
 

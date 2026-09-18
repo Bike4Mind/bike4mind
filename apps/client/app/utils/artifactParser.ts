@@ -625,7 +625,7 @@ export function convertCodeBlocksToArtifacts(content: string): string {
   // Then process code blocks
   // Detect React component code blocks - use stricter matching
   // Match tsx/jsx explicitly, or javascript/typescript with React patterns
-  const reactCodeBlockRegex = /```(tsx?|jsx|javascript|typescript)\s*([\s\S]*?)```/gi;
+  const reactCodeBlockRegex = /```(tsx?|jsx|javascript|typescript)([\s\S]*?)```/gi;
 
   content = content.replace(reactCodeBlockRegex, (match, language, codeContent) => {
     // For tsx/jsx, always treat as React
@@ -726,7 +726,7 @@ ${codeContent.trim()}
   });
 
   // Detect Python code blocks - convert substantial Python code to Python artifacts
-  const pythonCodeBlockRegex = /```(?:python|py)\s*([\s\S]*?)```/gi;
+  const pythonCodeBlockRegex = /```(?:python|py)([\s\S]*?)```/gi;
 
   content = content.replace(pythonCodeBlockRegex, (match, codeContent) => {
     const trimmedCode = codeContent.trim();
@@ -787,7 +787,7 @@ ${trimmedCode}
 function promoteToolCallJsonArtifact(content: string): string {
   // Fence labels a model uses for a tool call; a ```html fence is handled above.
   // The negative lookahead stops ```tool matching inside ```tool_calls etc.
-  const fenceRegex = /```(?:json|tool_code|tool)(?![a-z0-9_])\s*([\s\S]*?)```/gi;
+  const fenceRegex = /```(?:json|tool_code|tool)(?![a-z0-9_])([\s\S]*?)```/gi;
   const afterFences = content.replace(fenceRegex, (match, body) => toolCallJsonToArtifact(body) ?? match);
   if (afterFences !== content) return afterFences;
 
