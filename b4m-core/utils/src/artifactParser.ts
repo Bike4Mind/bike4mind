@@ -133,9 +133,10 @@ function hasComponentDeclarationLine(body: string): boolean {
   return false;
 }
 
-// Chars of a fence body a promotion predicate reads. A body longer than this stays a
-// plain code block rather than being scanned: the predicates are linear, so the cap is
-// a ceiling on the work any future one can do, not a correctness requirement.
+// Search-window bound for the anchor-search predicates (react, html full-document,
+// svg), not a body-length cap and not applied to every promotion predicate. An
+// anchor inside the window still promotes the full, untruncated body; an anchor
+// past the window leaves the fence a plain code block.
 // MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts.
 const MAX_FENCE_SCAN_CHARS = 256000;
 

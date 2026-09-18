@@ -348,6 +348,16 @@ export function extractPythonPackages(content: string): string[] {
   return Array.from(packages);
 }
 
+// Bound the scan from an `import` token to its `from` clause, and the attribute span
+// of a self-closing tag, so a token that never finds its match cannot rescan the rest
+// of the body from every start position.
+const MAX_IMPORT_CLAUSE_CHARS = 2000;
+const MAX_TAG_ATTR_CHARS = 500;
+
+// Built once rather than per fence.
+const REACT_IMPORT_PATTERN = new RegExp(`import\\s[^\\n]{0,${MAX_IMPORT_CLAUSE_CHARS}}?\\sfrom\\s+['"]react['"]`);
+const SELF_CLOSING_TAG_PATTERN = new RegExp(`<[a-z]+[^>]{0,${MAX_TAG_ATTR_CHARS}}?\\/>`);
+
 /**
  * Extracts React dependencies from import statements
  * Also detects commonly used libraries even if import statement is missing
@@ -355,10 +365,9 @@ export function extractPythonPackages(content: string): string[] {
 export function extractReactDependencies(content: string): string[] {
   const dependencies: Set<string> = new Set();
 
-  // Match import statements
-  // [\s\S]*? (not .*?) so the import clause can span newlines for multi-line
-  // named imports, e.g. `import {\n  A, B\n} from 'recharts'`
-  const importRegex = /import\s+[\s\S]*?\s+from\s+['"]([^'"]+)['"]/g;
+  // The clause span crosses newlines so multi-line named imports still resolve, e.g.
+  // `import {\n  A, B\n} from 'recharts'`.
+  const importRegex = new RegExp(`import\\s[\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?\\sfrom\\s+['"]([^'"]+)['"]`, 'g');
   let match;
 
   while ((match = importRegex.exec(content)) !== null) {
@@ -608,9 +617,10 @@ ${toolOutput.content}
   return processedContent;
 }
 
-// Chars of a fence body a promotion predicate reads. A body longer than this stays a
-// plain code block rather than being scanned: the predicates are linear, so the cap is
-// a ceiling on the work any future one can do, not a correctness requirement.
+// Search-window bound for the anchor-search predicates (react, html full-document,
+// svg), not a body-length cap and not applied to every promotion predicate. An
+// anchor inside the window still promotes the full, untruncated body; an anchor
+// past the window leaves the fence a plain code block.
 // MUST STAY IN SYNC with the twin copy in b4m-core/utils/src/artifactParser.ts.
 const MAX_FENCE_SCAN_CHARS = 256000;
 
@@ -639,15 +649,19 @@ ${codeContent.trim()}
     }
 
     // For javascript/typescript, require strong React indicators
-    // Count React-specific patterns (need at least 2 to convert)
+    // Count React-specific patterns (need at least 2 to convert). Scanned against a
+    // capped prefix, like the html/svg passes below, so an unclosed fence can't make
+    // every predicate rescan an arbitrarily large body; the emitted artifact still
+    // carries the full untruncated codeContent.
+    const scanContent = codeContent.slice(0, MAX_FENCE_SCAN_CHARS);
     const hasReactHooks =
       /\buse(State|Effect|Context|Reducer|Callback|Memo|Ref|ImperativeHandle|LayoutEffect|DebugValue)\b/.test(
-        codeContent
+        scanContent
       );
-    const hasJSXSyntax = /<[A-Z][a-zA-Z0-9]*[\s\/>]/.test(codeContent) || /<[a-z]+[^>]*\/>/.test(codeContent);
-    const hasReactImport = /import\s+.*\s+from\s+['"]react['"]/.test(codeContent);
-    const hasReactComponent = /extends\s+(?:React\.)?Component\b/.test(codeContent);
-    const hasJSXReturn = /return\s*\(\s*</.test(codeContent);
+    const hasJSXSyntax = /<[A-Z][a-zA-Z0-9]*[\s\/>]/.test(scanContent) || SELF_CLOSING_TAG_PATTERN.test(scanContent);
+    const hasReactImport = REACT_IMPORT_PATTERN.test(scanContent);
+    const hasReactComponent = /extends\s+(?:React\.)?Component\b/.test(scanContent);
+    const hasJSXReturn = /return\s*\(\s*</.test(scanContent);
 
     // Count how many React indicators we found
     const reactIndicatorCount = [hasReactHooks, hasJSXSyntax, hasReactImport, hasReactComponent, hasJSXReturn].filter(
