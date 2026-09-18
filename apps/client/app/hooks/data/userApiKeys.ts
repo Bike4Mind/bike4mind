@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding } from '@bike4mind/common';
+import type { CounterLockoutState } from '@server/utils/apiKeyRateLimitCheck';
 import { toast } from 'sonner';
 
 function parseValidationError(error: any): string {
@@ -210,23 +211,15 @@ export function useAdminGetUserApiKeys(userId: string | undefined) {
   });
 }
 
-/** Whether a counter's minute and/or day window was at its ceiling just
- * before a reset - mirrors the server's CounterLockoutState
- * (server/utils/apiKeyRateLimitCheck.ts). */
-export interface RateLimitCounterLockoutState {
-  minuteAtLimit: boolean;
-  dayAtLimit: boolean;
-}
-
 /** Response of POST /api/admin/user-api-keys/[id]/reset-rate-limit. A
- * `lockout` entry is undefined when that counter's usage read failed - a
- * best-effort diagnostic; the reset itself always still ran regardless. */
+ * `lockout` entry is undefined only when clearing that specific counter
+ * failed - the other counter is still cleared and reported independently. */
 export interface ApiKeyRateLimitResetResponse {
   success: boolean;
   id: string;
   lockout: {
-    request?: RateLimitCounterLockoutState;
-    management?: RateLimitCounterLockoutState;
+    request?: CounterLockoutState;
+    management?: CounterLockoutState;
   };
 }
 
