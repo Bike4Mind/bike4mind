@@ -4333,8 +4333,9 @@ export class ChatCompletionProcess {
                 // stopReason follows the same preserve-last-non-null contract as token
                 // counts. Previously this field was overwritten by every callback (via
                 // the whole-object replace), so a tail callback emitting undefined would
-                // clobber a real value. Only the telemetry consumer at line ~3080 reads
-                // this, and it benefits from sticky last-known semantics.
+                // clobber a real value. Read downstream for telemetry, the usage-event
+                // status, and promptMeta.finishReason, all of which benefit from sticky
+                // last-known semantics.
                 if (completionInfo?.stopReason != null) actualTokenUsage.stopReason = completionInfo.stopReason;
               }
             );
@@ -5061,7 +5062,7 @@ export class ChatCompletionProcess {
         // How generation ended. Computed here rather than at the promptMeta stamping
         // below because the settlement/usage-event write is the first consumer: a turn we
         // aborted ourselves still costs the provider tokens, so the billing row has to say
-        // so for a refund sweep to find it.
+        // so a future refund sweep could find it.
         const providerStopReason = actualTokenUsage?.stopReason;
         const wasTruncated = providerStopReason === TRUNCATED_FINISH_REASON;
         const wasDegenerate = providerStopReason === DEGENERATE_FINISH_REASON;
@@ -5070,6 +5071,11 @@ export class ChatCompletionProcess {
         // P6: Credits reconciliation - settle the pre-reserved credits against actual usage.
         // The balance was already adjusted atomically at pre-reservation time; this step
         // handles the delta and records audit-trail transactions.
+        //
+        // NOTE: the usage-event write below (including the degenerate/truncated status)
+        // only fires when credit enforcement is on. A tenant with enforcement off gets no
+        // row for a degenerate turn at all, so the Degenerate Rate KPI under-reports there
+        // and there is nothing for a future refund sweep to find on that tenant.
         if (adminSettingsEnforceCredits) {
           if (!this.db.creditTransactions) {
             throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');

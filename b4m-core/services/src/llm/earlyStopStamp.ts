@@ -5,7 +5,7 @@ import { DEGENERATE_FINISH_REASON, TRUNCATED_FINISH_REASON, type UsageEventStatu
  * on its billing row.
  *
  * Extracted from ChatCompletionProcess for the same reason as elisionStamp - that module is a
- * ~5000-line orchestrator with no test file, and this is the only thing standing between a
+ * large orchestrator best tested indirectly, and this is the only thing standing between a
  * degenerate turn and a row that looks like a clean, fully-valued success.
  *
  * Pure: no I/O, no logging.
@@ -26,7 +26,7 @@ export interface EarlyStopStamp {
   warning: string;
   /**
    * A degeneration abort still burned real provider tokens, so the row prices normally, but
-   * 'degenerate' is what a refund sweep filters on. Truncation stays 'ok': the user got every
+   * 'degenerate' is what a future refund sweep would filter on. Truncation stays 'ok': the user got every
    * token they paid for, just not a finished answer.
    */
   usageEventStatus: UsageEventStatus;
