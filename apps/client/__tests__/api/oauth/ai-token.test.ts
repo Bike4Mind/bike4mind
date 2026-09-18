@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Unwrap the handler: baseApi().use(...).post(fn) => fn
@@ -35,8 +35,10 @@ const mockVerifyClientSecret = vi.fn();
 const mockFindByUserId = vi.fn();
 const mockUserFindById = vi.fn();
 const mockAuditCreate = vi.fn();
+const mockFindGrant = vi.fn();
 vi.mock('@bike4mind/database/auth', () => ({
   oauthClientRepository: { verifyClientSecret: (...a: any[]) => mockVerifyClientSecret(...a) },
+  oauthGrantRepository: { findGrant: (...a: any[]) => mockFindGrant(...a) },
   userApiKeyRepository: { findByUserId: (...a: any[]) => mockFindByUserId(...a) },
   userRepository: { findById: (...a: any[]) => mockUserFindById(...a) },
   UserApiKeyAuditLog: { create: (...a: any[]) => mockAuditCreate(...a) },
@@ -71,6 +73,8 @@ import { CognitoIdTokenError } from '@server/auth/verifyCognitoIdToken';
 
 const FEDERATED_CLIENT = {
   name: 'VibesWire',
+  // relying-party: the grant gate (step 5.5) only fires for these; a first-party client is exempt.
+  clientType: 'relying-party',
   federatedIdp: {
     issuer: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool',
     audience: 'app-client-id',
@@ -100,6 +104,70 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     mockCreateUserApiKey.mockResolvedValue({ id: 'key-1', key: 'b4m_live_deadbeef', scopes: ['ai:generate'] });
     mockAuditCreate.mockResolvedValue({});
     mockRevokeUserApiKey.mockResolvedValue(undefined);
+    // Default: user has an active grant for the client (realistic happy path).
+    mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid'] });
+  });
+
+  afterEach(() => {
+    delete process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT;
+  });
+
+  it('grant gate (enforce): valid token but no grant for this client -> 403 access_denied, no mint', async () => {
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    mockFindGrant.mockResolvedValue(null);
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toBe('access_denied');
+    expect(mockFindGrant).toHaveBeenCalledWith('b4m-user-1', 'client-1');
+    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    expect(mockAuditCreate).not.toHaveBeenCalled();
+  });
+
+  it('grant gate (enforce): active grant -> mints normally', async () => {
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+  });
+
+  it('grant gate (grace, default): no grant still mints but logs a would-reject warning', async () => {
+    mockFindGrant.mockResolvedValue(null);
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
+  });
+
+  it('grant gate (enforce): a first-party client with no grant still mints - the gate never runs for it', async () => {
+    // Regression: enforcing a grant on first-party/pre-existing federated clients (which never go
+    // through code.ts consent and so have no grant row) would 403 every such integration the moment
+    // the lever flips. They must be exempt - findGrant is not even consulted.
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    mockVerifyClientSecret.mockResolvedValue({ ...FEDERATED_CLIENT, clientType: 'first-party' });
+    mockFindGrant.mockResolvedValue(null);
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+    expect(mockFindGrant).not.toHaveBeenCalled();
+  });
+
+  it('grant gate (enforce): a transient grant-lookup error degrades to grace (mints, no 500) instead of blocking', async () => {
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    mockFindGrant.mockRejectedValue(new Error('mongo unavailable'));
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('grant lookup failed'));
   });
 
   it('AC1/AC9: mints a scoped, short-lived key and returns it once', async () => {

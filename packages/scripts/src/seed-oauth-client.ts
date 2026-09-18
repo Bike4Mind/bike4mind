@@ -30,6 +30,7 @@
  */
 
 import crypto from 'crypto';
+import { fileURLToPath } from 'node:url';
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 
@@ -43,7 +44,24 @@ const OAuthClientSchema = new mongoose.Schema(
     name: { type: String, required: true },
     redirectUris: [{ type: String }],
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
-    pkceRequired: { type: Boolean, default: true },
+    // External products registered through this tool are relying parties: they get a
+    // scope/audience-bound OAuth token, not a full first-party session. Default to the
+    // non-privileged class so an unclassified registration is never silently trusted as
+    // first-party (see resolveClientType + OAuthClientModel.ts).
+    clientType: {
+      type: String,
+      enum: ['first-party', 'relying-party'],
+      default: 'relying-party',
+    },
+    // Default mirrors the real model (OAuthClientModel.ts): 'none' fails safe. This script always
+    // passes 'client_secret_post' explicitly at create() because it mints a secret, so the default
+    // never fires today; keeping it aligned means a future call that omits it registers a public
+    // client, not a confidential one it cannot authenticate.
+    tokenEndpointAuthMethod: {
+      type: String,
+      enum: ['none', 'client_secret_post'],
+      default: 'none',
+    },
     isActive: { type: Boolean, default: true },
     federatedIdp: {
       type: new mongoose.Schema(
@@ -119,6 +137,20 @@ function resolveFederatedIdp(clientId: string): FederatedIdpConfig | undefined {
   return { issuer, audience, providerName, ...(jwksUri ? { jwksUri } : {}) };
 }
 
+/**
+ * Trust class for the client being registered. External products default to 'relying-party'
+ * (scope/audience-bound token, no first-party session). Registering a first-party client - one
+ * B4M owns - is the rare case and must be opted into explicitly with CLIENT_TYPE=first-party.
+ */
+export function resolveClientType(): 'first-party' | 'relying-party' {
+  const raw = process.env.CLIENT_TYPE;
+  if (!raw) return 'relying-party';
+  if (raw !== 'first-party' && raw !== 'relying-party') {
+    throw new Error(`CLIENT_TYPE must be 'first-party' or 'relying-party', got '${raw}'`);
+  }
+  return raw;
+}
+
 const OAuthClient = mongoose.model('OAuthClient', OAuthClientSchema);
 
 async function main() {
@@ -148,6 +180,7 @@ async function main() {
   const clientSecretHash = await bcrypt.hash(clientSecret, 10);
 
   const federatedIdp = resolveFederatedIdp(clientId);
+  const clientType = resolveClientType();
 
   await OAuthClient.create({
     clientId,
@@ -155,7 +188,8 @@ async function main() {
     name: clientName,
     redirectUris,
     allowedScopes: ['openid', 'email', 'profile'],
-    pkceRequired: true,
+    tokenEndpointAuthMethod: 'client_secret_post',
+    clientType,
     isActive: true,
     ...(federatedIdp ? { federatedIdp } : {}),
   });
@@ -163,6 +197,9 @@ async function main() {
   console.log('\n✅ OAuth client registered!\n');
   console.log('  client_id    :', clientId);
   console.log('  client_secret:', clientSecret);
+  // Surface the trust class explicitly - it defaults to relying-party and set CLIENT_TYPE=first-party
+  // to opt in, so an operator can confirm which one this registration got.
+  console.log('  client_type  :', clientType);
   if (federatedIdp) {
     console.log('  federated    : yes (may mint per-user ai:generate keys via /api/oauth/ai-token)');
     console.log('    issuer      :', federatedIdp.issuer);
@@ -179,7 +216,10 @@ async function main() {
   await mongoose.disconnect();
 }
 
-main().catch(err => {
-  console.error(err);
-  process.exit(1);
-});
+// Run only when executed directly (npx tsx ...), not when a test imports resolveClientType.
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  main().catch(err => {
+    console.error(err);
+    process.exit(1);
+  });
+}

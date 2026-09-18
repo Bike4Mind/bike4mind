@@ -8,7 +8,9 @@
 
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
+import { oauthGrantRepository } from '@bike4mind/database';
 import { generateAuthCode, validateClient } from '@server/auth/oauthServer';
+import { decideConsent } from '@server/auth/oauthConsent';
 
 const RequestSchema = z.object({
   client_id: z.string(),
@@ -19,6 +21,10 @@ const RequestSchema = z.object({
   code_challenge: z.string().optional(),
   code_challenge_method: z.literal('S256').optional(),
   nonce: z.string().optional(),
+  // The user clicked Allow on the consent screen for this request (relying-party clients only).
+  consent: z.boolean().optional(),
+  // OIDC prompt: 'consent' forces the screen even when a grant already covers the scopes.
+  prompt: z.string().optional(),
 });
 
 const handler = baseApi({ auth: true }).post(async (req, res) => {
@@ -33,7 +39,7 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
     return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
   }
 
-  const { client_id, redirect_uri, scope, code_challenge, nonce } = parsed.data;
+  const { client_id, redirect_uri, scope, code_challenge, nonce, consent, prompt } = parsed.data;
 
   const client = await validateClient(client_id, redirect_uri);
   if (!client) {
@@ -42,7 +48,56 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
       .json({ error: 'unauthorized_client', error_description: 'Unknown client or redirect_uri mismatch' });
   }
 
-  const requestedScopes = scope.split(' ').filter(s => client.allowedScopes.includes(s));
+  // Reject a challenge-less authorization for a public client (RFC 7636 4.4.1)
+  // so the token endpoint never has to redeem a downgraded, PKCE-less code.
+  const isConfidential = client.tokenEndpointAuthMethod === 'client_secret_post';
+  if (!isConfidential && !code_challenge) {
+    return res
+      .status(400)
+      .json({ error: 'invalid_request', error_description: 'code_challenge is required (PKCE) for this client' });
+  }
+
+  // Reject any scope the client is not registered for (RFC 6749 4.1.2.1) rather than silently
+  // dropping it, so a client that asks for more than it may have gets a clear error instead of a
+  // narrower grant it never notices.
+  const requestedScopes = scope.split(' ').filter(Boolean);
+  const disallowedScopes = requestedScopes.filter(s => !client.allowedScopes.includes(s));
+  if (disallowedScopes.length > 0) {
+    return res
+      .status(400)
+      .json({ error: 'invalid_scope', error_description: `Unsupported scope(s): ${disallowedScopes.join(' ')}` });
+  }
+
+  // Consent gate (relying-party clients only; first-party clients keep the silent auto-redirect).
+  // No code is minted until a grant covering the requested scopes exists. A remembered grant skips
+  // the prompt; new or escalated scopes re-prompt (OIDC Core 3.1.2.4).
+  if (client.clientType === 'relying-party') {
+    const grant = await oauthGrantRepository.findGrant(user.id, client_id);
+    const decision = decideConsent({
+      isRelyingParty: true,
+      requestedScopes,
+      grantedScopes: grant?.scopes ?? null,
+      consentGiven: consent === true,
+      forceConsent: prompt === 'consent',
+    });
+
+    if (decision === 'consent_required') {
+      // Interactive signal to the authorize page: render the Allow/Deny screen. No code minted.
+      return res.json({ consent_required: true, client_name: client.name, scopes: requestedScopes });
+    }
+
+    if (consent === true) {
+      // Persist the decision, widening (never shrinking) any prior grant so a re-consent for a
+      // subset does not drop scopes the user already approved.
+      const merged = Array.from(new Set([...(grant?.scopes ?? []), ...requestedScopes]));
+      await oauthGrantRepository.upsertGrant({
+        userId: user.id,
+        clientId: client_id,
+        scopes: merged,
+        source: 'authorize',
+      });
+    }
+  }
 
   const code = await generateAuthCode({
     clientId: client_id,

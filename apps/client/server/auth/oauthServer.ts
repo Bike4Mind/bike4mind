@@ -117,6 +117,25 @@ export interface OAuthTokens {
   expires_in: number;
 }
 
+/**
+ * Which identity claims a token may release, given its scopes and whether it is scope-limited.
+ * A relying-party OAuth grant is scope-limited: `email` releases the email claim, `profile` releases
+ * name/picture (OIDC Core 5.4). A first-party / legacy token is NOT scope-limited and keeps the full
+ * claim set (the pre-scoping behavior). Single source of truth for BOTH the id_token
+ * (generateIdToken below) and the userinfo endpoint (pages/api/oauth/userinfo.ts) so the two
+ * projections cannot drift apart.
+ */
+export function releasedIdentityClaims(opts: { scopes: string[]; scopeLimited: boolean }): {
+  email: boolean;
+  profile: boolean;
+} {
+  const releaseAll = !opts.scopeLimited;
+  return {
+    email: releaseAll || opts.scopes.includes('email'),
+    profile: releaseAll || opts.scopes.includes('profile'),
+  };
+}
+
 export function generateIdToken(params: {
   userId: string;
   email: string;
@@ -124,6 +143,9 @@ export function generateIdToken(params: {
   picture?: string | null;
   clientId: string;
   scopes: string[];
+  // True only for a relying-party OAuth grant; a first-party / legacy caller passes false and gets
+  // the full claim set. See releasedIdentityClaims.
+  scopeLimited: boolean;
   nonce?: string;
 }): string {
   const { privateKey } = getKeyPair();
@@ -136,11 +158,17 @@ export function generateIdToken(params: {
     aud: params.clientId,
     iat: now,
     exp: now + 3600,
-    email: params.email,
-    name: params.name,
   };
 
-  if (params.picture) payload.picture = params.picture;
+  // OIDC claim gating (OpenID Connect Core 5.4), via the shared decision so id_token and userinfo
+  // stay in lockstep: a relying-party grant releases email/name/picture only for the scopes it holds
+  // (an openid-only token carries sub but no PII); a first-party token keeps the full set.
+  const release = releasedIdentityClaims({ scopes: params.scopes, scopeLimited: params.scopeLimited });
+  if (release.email) payload.email = params.email;
+  if (release.profile) {
+    payload.name = params.name;
+    if (params.picture) payload.picture = params.picture;
+  }
   if (params.nonce) payload.nonce = params.nonce;
 
   return jwt.sign(payload, privateKey, {
@@ -184,7 +212,9 @@ export function getOidcDiscovery() {
     subject_types_supported: ['public'],
     id_token_signing_alg_values_supported: ['RS256'],
     scopes_supported: ['openid', 'email', 'profile'],
-    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+    // The token endpoint reads client_secret only from the POST body, and public clients
+    // (PKCE, no secret) are supported - so advertise exactly those two, not client_secret_basic.
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'none'],
     claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'email', 'name', 'picture'],
     code_challenge_methods_supported: ['S256'],
   };
