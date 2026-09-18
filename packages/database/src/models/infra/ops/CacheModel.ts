@@ -41,7 +41,9 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
    * moment of deletion - a single `findOneAndDelete`, so there is no window
    * between reading a counter's value and clearing it for a caller (like a
    * rate-limit reset) that needs to report the value it actually removed.
-   * Returns null when no live document existed for the key.
+   * Unlike `findByKey`, this has no `expiresAt` predicate, so it also matches
+   * (and deletes) an expired-but-not-yet-TTL-swept row. Returns null only
+   * when no document at all exists for the key.
    */
   async deleteByKeyAndReturn(key: string) {
     return this.model.findOneAndDelete({ key });
