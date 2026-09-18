@@ -79,7 +79,6 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
         testIdPrefix="svg"
         // The graphic IS the artifact: always shown, never collapsed, and no source view
         // (so no code toggle) -- but the markup is still worth saving as a file.
-        collapsible={false}
         source={artifact.content}
         saveTooltip="Save as SVG file"
         saveFile={() => ({

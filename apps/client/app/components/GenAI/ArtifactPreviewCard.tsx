@@ -1,12 +1,10 @@
-import React, { useState, type ReactNode } from 'react';
-import { Box, Button, Card, Typography, Chip, Stack, IconButton, Tooltip, Divider } from '@mui/joy';
+import React, { type ReactNode } from 'react';
+import { Box, Button, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import type { Theme } from '@mui/joy';
 import {
   OpenInFullOutlined as ExpandIcon,
   ContentCopyOutlined as CopyIcon,
   SaveOutlined as SaveIcon,
-  ExpandMoreOutlined as ExpandMoreIcon,
-  ExpandLessOutlined as ExpandLessIcon,
 } from '@mui/icons-material';
 import useSessionLayout, {
   setSessionLayout,
@@ -91,7 +89,6 @@ export interface ArtifactPreviewCardProps {
    * Types whose body IS the artifact (SVG) set this false: the graphic is always shown,
    * the chevron is dropped, and clicking the card does not collapse it.
    */
-  collapsible?: boolean;
   onExpand?: () => void;
 }
 
@@ -121,7 +118,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   renderSource,
   actions = {},
   defaultRenderedView = true,
-  collapsible = true,
   onExpand,
 }) => {
   const { currentSession, setCurrentSession, currentSessionId } = useSessions();
@@ -142,9 +138,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   // the `enableArtifacts` flag, which gates artifact GENERATION and has never gated their
   // display -- so it only ever hid the artifact behind a click for the users who had the
   // feature switched on, which is the admin default.
-  const [expandedState, setIsExpanded] = useState(true);
-
-  const isExpanded = collapsible ? expandedState : true;
 
   const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
 
@@ -158,15 +151,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   // teaser is the first three lines of the file, which for HTML is DOCTYPE boilerplate that
   // reads identically on every artifact; source-primary types (React, code, Python) keep it.
   const showSourceBody = hasSource && !renderedView;
-
-  // Clicking anywhere on the card means exactly one thing: expand/collapse, same as the
-  // chevron. Switching between the render and the source is the code/preview button's job
-  // alone -- overloading the card click stole the collapse gesture users expect.
-  const handleToggleExpand = (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    if (!collapsible) return;
-    setIsExpanded(!isExpanded);
-  };
 
   const handleOpenInViewer = (e?: React.MouseEvent) => {
     e?.stopPropagation();
@@ -266,13 +250,13 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         borderWidth: 1,
         borderColor: isSelected ? 'primary.500' : theme.palette.reading.cardLine,
         transition: 'all 0.2s ease-in-out',
-        cursor: collapsible ? 'pointer' : 'default',
+        cursor: 'pointer',
         '&:hover': {
           transform: 'translateY(-2px)',
           boxShadow: 'sm',
         },
       })}
-      onClick={handleToggleExpand}
+      onClick={handleOpenInViewer}
     >
       {/* Type badge: the icon and the type label are one pill overhanging the card
           corner, so the header row carries only the title and the actions. */}
@@ -405,33 +389,12 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                 </Button>
               </Box>
             )}
-
-            {/* The fold chevron sits last, behind a rule: it acts on the whole card, while
-                everything to its left acts on the card's content. Matches
-                CodeArtifactPreviewCard - keep the two in sync. */}
-            {collapsible && (
-              <>
-                <Divider orientation="vertical" sx={{ height: '16px', alignSelf: 'center' }} />
-                <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
-                  <IconButton
-                    size="sm"
-                    variant="plain"
-                    color="neutral"
-                    sx={actionButtonSx}
-                    onClick={handleToggleExpand}
-                    data-testid={`${testIdPrefix}-artifact-toggle-btn`}
-                  >
-                    {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                  </IconButton>
-                </Tooltip>
-              </>
-            )}
           </Box>
         </Stack>
 
         {extra}
 
-        {isExpanded && renderedView ? (
+        {renderedView ? (
           <Box sx={{ mt: 2 }} onClick={e => e.stopPropagation()}>
             {renderPreview?.()}
           </Box>
@@ -450,24 +413,18 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                 lineHeight: 1.4,
                 color: 'text.secondary',
                 overflow: 'auto',
-                maxHeight: isExpanded ? '400px' : '60px',
-                transition: 'max-height 0.3s ease',
               }}
               data-testid={`${testIdPrefix}-artifact-source`}
             >
               <Typography level="body-xs" sx={{ fontFamily: 'inherit', whiteSpace: 'pre-wrap' }}>
-                {isExpanded
-                  ? source
-                  : `${source!.split('\n').slice(0, 3).join('\n').substring(0, 120)}${
-                      source!.length > 120 ? '...' : ''
-                    }`}
+                {source}
               </Typography>
             </Box>
           )
         ) : null}
 
-        {/* Stop propagation so clicks inside the modal don't reach the Card's
-            handleToggleExpand and toggle the expand state behind the open dialog. */}
+        {/* Stop propagation so clicks inside the modal don't reach the Card's onClick and
+            open the viewer behind the open dialog. */}
         <Box onClick={e => e.stopPropagation()}>{artifactShareModal}</Box>
       </Box>
     </Card>

@@ -1,11 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip, Divider } from '@mui/joy';
+import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
   OpenInFullOutlined as ExpandIcon,
   ContentCopyOutlined as CopyIcon,
   SaveOutlined as SaveIcon,
-  ExpandMoreOutlined as ExpandMoreIcon,
-  ExpandLessOutlined as ExpandLessIcon,
 } from '@mui/icons-material';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
@@ -39,11 +37,8 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { setWorkBenchFiles } = useWorkBenchActions();
 
-  // The card's body is shown by default - a collapsed card used to render a 3-line,
-  // 120-character sliver that identified nothing. Bounding is the truncation's job now.
-  const [isExpanded, setIsExpanded] = useState(true);
-  // Separate from `isExpanded`: the chevron folds the whole card to its header, this
-  // reveals the rest of a truncated body in place.
+  // Reveals the rest of a truncated body in place. There is no card-level fold: bounding
+  // the body is the truncation's job, and Show less puts it back.
   const [showFullBody, setShowFullBody] = useState(false);
 
   // Same contract as the reply-level Show More (useContentTruncation): cut on a line
@@ -76,12 +71,6 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       }
     }
   }, [isLargeCodeBlock, isContentReady]);
-
-  // Toggle inline code preview (card click behavior)
-  const handleToggleExpand = (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    setIsExpanded(!isExpanded);
-  };
 
   // Open in full viewer panel (dedicated button)
   const handleOpenInViewer = (e?: React.MouseEvent) => {
@@ -165,14 +154,11 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
         borderWidth: 1,
         borderColor: isSelected ? 'primary.500' : theme.palette.reading.cardLine,
         transition: 'all 0.2s ease-in-out',
-        cursor: 'pointer',
         '&:hover': {
           transform: 'translateY(-2px)',
           boxShadow: 'sm',
-          cursor: 'pointer',
         },
       })}
-      onClick={handleToggleExpand}
     >
       {/* Type badge: the language in a pill overhanging the card corner. Matches
           ArtifactPreviewCard's badge - keep the two in sync. */}
@@ -264,28 +250,10 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
                 <ExpandIcon />
               </IconButton>
             </Tooltip>
-
-            <Divider orientation="vertical" sx={{ height: '16px', alignSelf: 'center' }} />
-
-            <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                sx={actionButtonSx}
-                onClick={handleToggleExpand}
-                data-testid="code-artifact-toggle-btn"
-              >
-                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-              </IconButton>
-            </Tooltip>
           </Box>
         </Stack>
 
-        {/* The chevron folds everything below the header away - a collapsed card is its
-            header alone (type pill, title, line count), which identifies the artifact
-            better than the sliver of body it used to show. */}
-        {!isExpanded ? null : !isContentReady ? (
+        {!isContentReady ? (
           <Box sx={{ mt: 2 }}>
             <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
               Loading large code block ({data.lineCount} lines)...

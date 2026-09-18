@@ -52,7 +52,7 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
         <InlineArtifactPreview
           artifact={artifact}
           type="html"
-          maxHeight={400}
+          maxHeight={240}
           onError={error => console.error('[HtmlArtifactPreviewCard] Preview error:', error)}
         />
       )}

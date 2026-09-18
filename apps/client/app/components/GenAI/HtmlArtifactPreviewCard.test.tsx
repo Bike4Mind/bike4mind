@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -78,15 +78,17 @@ describe('HtmlArtifactPreviewCard', () => {
     }
   );
 
-  it('shows no raw-source teaser once the card is collapsed', () => {
+  // A card no longer folds: the render is bounded by its own cap and the viewer is where a
+  // reader goes for more, so there is no collapsed state left to hide the body - and with it
+  // goes the raw-source teaser, which was DOCTYPE boilerplate identical on every artifact.
+  it('has no fold control and always shows its render', () => {
     render(
       <TestWrapper>
         <HtmlArtifactPreviewCard artifact={artifact} />
       </TestWrapper>
     );
-    fireEvent.click(screen.getByTestId('html-artifact-toggle-btn'));
-    expect(screen.queryByTestId('inline-artifact-preview')).not.toBeInTheDocument();
-    // The teaser was the first three lines of the file -- DOCTYPE boilerplate on every artifact.
+    expect(screen.queryByTestId('html-artifact-toggle-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('inline-artifact-preview')).toBeInTheDocument();
     expect(screen.queryByTestId('html-artifact-source')).not.toBeInTheDocument();
     expect(screen.queryByText(/DOCTYPE/)).not.toBeInTheDocument();
   });
