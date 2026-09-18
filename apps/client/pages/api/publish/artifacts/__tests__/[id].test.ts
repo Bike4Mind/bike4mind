@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import bcrypt from 'bcryptjs';
 
 /**
  * Contract tests for PATCH /api/publish/artifacts/[id] - specifically the domain
@@ -336,5 +337,126 @@ describe('PATCH /api/publish/artifacts/[id] - discoverable de-arms on leaving op
     (a as unknown as { accessGate: unknown }).accessGate = { kind: 'passphrase' };
     const { artifact } = await patchBody({ accessGate: null }, a);
     expect(isDiscoverable(artifact)).toBe(false);
+  });
+});
+
+/**
+ * The gate-enforcement invariant (b4m-bob#275). `GATE_REQUIRES_PUBLIC` used to key on
+ * `visibility === 'public'` alone, which predates the share-token surface: checkShareGrant
+ * runs the SAME checkAccessGate on top of `/a/<token>` possession at any visibility (#383),
+ * and the passphrase-verify route resolves a `share` path by shareToken with no visibility
+ * requirement. So the invariant is "does a surface ENFORCE this gate", and a share token is
+ * such a surface. A private artifact with NO token still fails loud.
+ */
+describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface, not public', () => {
+  async function patchBody(body: Record<string, unknown>, artifact = makeArtifact()) {
+    findOne.mockResolvedValue(artifact);
+    const { req, res } = createMocks({ method: 'PATCH' });
+    (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+    (req as unknown as { user?: unknown }).user = { id: OWNER };
+    (req as unknown as { body: unknown }).body = body;
+    (req as unknown as { logger: unknown }).logger = { warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+    return { res, artifact };
+  }
+
+  /**
+   * A PRIVATE artifact that has been shared by no-sign-in link (`/a/<token>`).
+   *
+   * `toJSON` returns a COPY of accessGate, not the live reference. Real Mongoose toJSON
+   * serializes to a fresh plain object, and the handler's last act is a defensive
+   * `delete json.accessGate.passphraseHash` - against a shared reference that would reach
+   * back into the doc under test and blank the very field these tests assert on (making
+   * the "never echoes the hash" test pass for the wrong reason).
+   */
+  function tokenSharedPrivate() {
+    const a = makeArtifact();
+    a.visibility = 'private';
+    (a as unknown as { shareToken?: string }).shareToken = 'TOKEN-abc123';
+    a.toJSON = function () {
+      const gate = this.accessGate as Record<string, unknown> | null;
+      return { publicId: this.publicId, visibility: this.visibility, accessGate: gate ? { ...gate } : gate };
+    };
+    return a;
+  }
+
+  it('ACCEPTS a passphrase gate on a private artifact that has a share token', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      tokenSharedPrivate()
+    );
+    expect(res._getStatusCode()).toBe(200);
+    const gate = artifact.accessGate as { kind: string; passphraseHash: string };
+    expect(gate.kind).toBe('passphrase');
+    // Stored only as a bcrypt hash - never the raw passphrase.
+    expect(gate.passphraseHash).toEqual(expect.any(String));
+    expect(gate.passphraseHash).not.toBe('a-long-passphrase');
+    expect(await bcrypt.compare('a-long-passphrase', gate.passphraseHash)).toBe(true);
+    expect(artifact.save).toHaveBeenCalled();
+  });
+
+  it('never echoes the passphrase hash back in the response', async () => {
+    const { res } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      tokenSharedPrivate()
+    );
+    expect(res._getStatusCode()).toBe(200);
+    expect(JSON.stringify(res._getJSONData())).not.toContain('passphraseHash');
+  });
+
+  it('ACCEPTS a domain gate on a token-shared private artifact (same enforcing surface)', async () => {
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } },
+      tokenSharedPrivate()
+    );
+    expect(res._getStatusCode()).toBe(200);
+    expect(artifact.accessGate).toEqual({ kind: 'domain', allowedDomains: ['acme.com'] });
+  });
+
+  it('STILL REJECTS a gate on a private artifact with NO share token (nothing would enforce it)', async () => {
+    const a = makeArtifact();
+    a.visibility = 'private';
+    const { res, artifact } = await patchBody(
+      { accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } },
+      a
+    );
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('GATE_REQUIRES_PUBLIC');
+    // Rejected BEFORE persisting - a 400 must not leave a half-applied gate behind.
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it('STILL REJECTS a gate on an organization artifact with no share token', async () => {
+    const a = makeArtifact();
+    a.visibility = 'organization';
+    const { res } = await patchBody({ accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } }, a);
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('GATE_REQUIRES_PUBLIC');
+  });
+
+  it('rejects a short passphrase on a token-shared artifact (the 8-char floor still applies)', async () => {
+    const { res } = await patchBody({ accessGate: { kind: 'passphrase', passphrase: 'short' } }, tokenSharedPrivate());
+    expect(res._getStatusCode()).toBe(400);
+  });
+
+  it('keeps accepting a gate on a public artifact (the original path is unchanged)', async () => {
+    const { res, artifact } = await patchBody({ accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } });
+    expect(res._getStatusCode()).toBe(200);
+    expect((artifact.accessGate as { kind: string }).kind).toBe('passphrase');
+  });
+
+  it('lets the owner CLEAR the gate on a token-shared private artifact', async () => {
+    const a = tokenSharedPrivate();
+    (a as unknown as { accessGate: unknown }).accessGate = { kind: 'passphrase', passphraseHash: 'x' };
+    const { res, artifact } = await patchBody({ accessGate: null }, a);
+    expect(res._getStatusCode()).toBe(200);
+    expect(artifact.accessGate).toBeNull();
+  });
+
+  it('does not purge the CDN for a private artifact gaining a gate - it was never open-public', async () => {
+    const { invalidatePublishCdn } = await import('@server/services/publish');
+    vi.mocked(invalidatePublishCdn).mockClear();
+    await patchBody({ accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } }, tokenSharedPrivate());
+    expect(invalidatePublishCdn).not.toHaveBeenCalled();
   });
 });
