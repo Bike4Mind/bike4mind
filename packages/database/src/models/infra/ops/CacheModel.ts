@@ -36,6 +36,17 @@ class CacheRepository extends BaseRepository<ICacheDocument> implements ICacheRe
     await this.model.deleteOne({ key });
   }
 
+  /**
+   * Atomically delete a counter and return the document as it stood at the
+   * moment of deletion - a single `findOneAndDelete`, so there is no window
+   * between reading a counter's value and clearing it for a caller (like a
+   * rate-limit reset) that needs to report the value it actually removed.
+   * Returns null when no live document existed for the key.
+   */
+  async deleteByKeyAndReturn(key: string) {
+    return this.model.findOneAndDelete({ key });
+  }
+
   async createOrUpdate(data: Omit<ICacheDocument, 'id' | 'updatedAt' | 'createdAt'>): Promise<ICacheDocument> {
     return this.model.findOneAndUpdate({ key: data.key }, data, { upsert: true, new: true });
   }
