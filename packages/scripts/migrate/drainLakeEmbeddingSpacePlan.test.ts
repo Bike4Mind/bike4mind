@@ -10,13 +10,19 @@ import {
   planWaves,
   resolveLakeId,
   tally,
+  toLabel,
   verifyVerdict,
   type DrainFileRow,
   type DrainTarget,
 } from './drainLakeEmbeddingSpacePlan';
 
-const LAKES = ['ionq-sales', 'opti-knowledge'];
-const parse = (...argv: string[]) => parseDrainArgs({ argv, lakes: LAKES });
+const OWNER_A = 'aaaaaaaaaaaaaaaaaaaaaaaa';
+const OWNER_B = 'bbbbbbbbbbbbbbbbbbbbbbbb';
+const SELECT = ['--tag', 'datalake:lake-a', '--prefix', 'la:', '--owners', OWNER_A];
+const SELECTOR = `--tag datalake:lake-a --prefix la: --owners ${OWNER_A}`;
+
+/** The selection flags plus whatever the case is about, since all three are required. */
+const parse = (...argv: string[]) => parseDrainArgs({ argv: [...SELECT, ...argv] });
 
 const dbTarget = (over: Partial<DrainTarget> = {}): DrainTarget => ({
   lakeIdKind: 'db',
@@ -29,12 +35,14 @@ const dbTarget = (over: Partial<DrainTarget> = {}): DrainTarget => ({
 const row = (over: Partial<DrainFileRow> = {}): DrainFileRow => ({ _id: 'f1', userId: 'owner-1', ...over });
 
 describe('parseDrainArgs', () => {
-  it('parses a dry run against a known lake', () => {
-    const out = parse('--lake', 'ionq-sales');
+  it('builds the whole target from the flags, so no lake is named in the repo', () => {
+    const out = parse();
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.value).toEqual({
-      lake: 'ionq-sales',
+      target: { lakeIdKind: 'db', tag: 'datalake:lake-a', prefix: 'la:', owners: [OWNER_A] },
+      label: 'lake-a',
+      selector: SELECTOR,
       execute: false,
       verify: false,
       limit: undefined,
@@ -43,31 +51,73 @@ describe('parseDrainArgs', () => {
     });
   });
 
-  it('prints usage and returns 1 with no --lake', () => {
-    const out = parse('--execute');
-    expect(out.ok).toBe(false);
-    if (out.ok) return;
-    expect(out.exitCode).toBe(1);
-    expect(out.lines[0]).toContain('usage: --lake <ionq-sales|opti-knowledge>');
+  it('treats --registry-id as what makes a target a registry lake', () => {
+    // The kind is derived rather than declared, so "registry with no id" - which resolves to an
+    // empty lakeId that no per-lake pause can match - is unconstructible from the command line.
+    const out = parse('--registry-id', 'lake-a');
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.target.lakeIdKind).toBe('registry');
+    expect(out.value.target.registryId).toBe('lake-a');
+    expect(out.value.selector).toContain('--registry-id lake-a');
   });
 
-  it('refuses an unknown lake rather than scoping to nothing', () => {
-    const out = parse('--lake', 'some-other-lake', '--execute');
+  it('accepts more than one authorized owner', () => {
+    const out = parseDrainArgs({
+      argv: ['--tag', 'datalake:lake-a', '--prefix', 'la:', '--owners', `${OWNER_A},${OWNER_B}`],
+    });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(out.value.target.owners).toEqual([OWNER_A, OWNER_B]);
+  });
+
+  it('prints usage and returns 1 when the selection flags are absent', () => {
+    const out = parseDrainArgs({ argv: ['--execute'] });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.exitCode).toBe(1);
+    expect(out.lines[0]).toMatch(/^STOP: --tag, --prefix and --owners are all required/);
+  });
+
+  it('refuses --tag followed by another flag, which parses as that flag name', () => {
+    // The shape that would otherwise scope the run to the membership of a lake named "--execute".
+    const out = parseDrainArgs({ argv: ['--tag', '--execute', '--prefix', 'la:', '--owners', OWNER_A] });
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.exitCode).toBe(1);
   });
 
-  it('refuses --lake followed by another flag, which parses as that flag name', () => {
-    // The shape that would otherwise run unscoped against whatever "--execute" resolved to.
-    const out = parse('--lake', '--execute');
+  it('refuses a missing --prefix rather than matching on the meta-tag alone', () => {
+    const out = parseDrainArgs({ argv: ['--tag', 'datalake:lake-a', '--owners', OWNER_A] });
+    expect(out.ok).toBe(false);
+  });
+
+  it('refuses a missing --owners, because the audit is what bounds the unanchored prefix arm', () => {
+    const out = parseDrainArgs({ argv: ['--tag', 'datalake:lake-a', '--prefix', 'la:'] });
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.exitCode).toBe(1);
+  });
+
+  it('refuses an owner id that is not a 24-character hex string', () => {
+    // A typo'd id would make the audit refuse every file, which reads as a data problem rather than
+    // as the operator error it is.
+    const out = parseDrainArgs({ argv: ['--tag', 'datalake:lake-a', '--prefix', 'la:', '--owners', 'owner-1'] });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.exitCode).toBe(1);
+    expect(out.lines[0]).toContain('24-character hex');
+  });
+
+  it('refuses an --owners list that is empty once separators are stripped', () => {
+    const out = parseDrainArgs({ argv: ['--tag', 'datalake:lake-a', '--prefix', 'la:', '--owners', ',,'] });
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.lines[0]).toContain('the list is empty');
   });
 
   it('refuses --execute together with --verify instead of silently only reading', () => {
-    const out = parse('--lake', 'ionq-sales', '--execute', '--verify', '--expect', '3');
+    const out = parse('--execute', '--verify', '--expect', '3');
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.exitCode).toBe(1);
@@ -75,7 +125,7 @@ describe('parseDrainArgs', () => {
   });
 
   it('clamps the wave to MAX_WAVE', () => {
-    const out = parse('--lake', 'ionq-sales', '--wave', '10000');
+    const out = parse('--wave', '10000');
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.value.wave).toBe(MAX_WAVE);
@@ -85,7 +135,7 @@ describe('parseDrainArgs', () => {
     // Number('abc') is NaN, so the first `i < length` test in the wave loop is false: no message is
     // ever sent and the run finishes clean. There is no output that distinguishes it from a drain
     // of an already-converged lake.
-    const out = parse('--lake', 'ionq-sales', '--wave', 'abc');
+    const out = parse('--wave', 'abc');
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.exitCode).toBe(1);
@@ -93,35 +143,51 @@ describe('parseDrainArgs', () => {
   });
 
   it('refuses a zero wave, which never advances the loop at all', () => {
-    const out = parse('--lake', 'ionq-sales', '--wave', '0');
+    const out = parse('--wave', '0');
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.exitCode).toBe(1);
   });
 
   it('refuses a zero limit, which executes over nothing', () => {
-    const out = parse('--lake', 'ionq-sales', '--execute', '--limit', '0');
+    const out = parse('--execute', '--limit', '0');
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.exitCode).toBe(1);
   });
 
   it('accepts --expect 0, because that is what the dry run prints for an empty population', () => {
-    const out = parse('--lake', 'ionq-sales', '--execute', '--expect', '0');
+    const out = parse('--execute', '--expect', '0');
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.value.expect).toBe(0);
   });
 
   it('refuses a fractional count', () => {
-    expect(parse('--lake', 'ionq-sales', '--wave', '2.5').ok).toBe(false);
+    expect(parse('--wave', '2.5').ok).toBe(false);
   });
 
   it('falls back to the default wave when the flag is last and has no value', () => {
-    const out = parse('--lake', 'ionq-sales', '--wave');
+    const out = parse('--wave');
     expect(out.ok).toBe(true);
     if (!out.ok) return;
     expect(out.value.wave).toBe(DEFAULT_WAVE);
+  });
+});
+
+describe('toLabel', () => {
+  it('strips the datalake: prefix, since the label names a file rather than a tag', () => {
+    expect(toLabel('datalake:lake-a')).toBe('lake-a');
+  });
+
+  it('replaces every character that has a meaning in a path', () => {
+    // The label is joined into a temp directory twice, for the manifest and the reset log.
+    expect(toLabel('a/b:c d')).toBe('a-b-c-d');
+  });
+
+  it('never starts with a dot, so a tag cannot produce a hidden or traversing filename', () => {
+    expect(toLabel('../../etc')).toBe('etc');
+    expect(toLabel('::::')).toBe('lake');
   });
 });
 
@@ -268,15 +334,15 @@ describe('auditOwners', () => {
 
 describe('checkExpectedPopulation', () => {
   it('stops cleanly on a dry run, printing the population as the number to pass back', () => {
-    const out = checkExpectedPopulation({ lake: 'ionq-sales', execute: false, population: 7 });
+    const out = checkExpectedPopulation({ selector: SELECTOR, execute: false, population: 7 });
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.exitCode).toBe(0);
-    expect(out.lines.join('\n')).toContain('--lake ionq-sales --execute --expect 7');
+    expect(out.lines.join('\n')).toContain(`${SELECTOR} --execute --expect 7`);
   });
 
   it('refuses --execute with no --expect at all', () => {
-    const out = checkExpectedPopulation({ lake: 'ionq-sales', execute: true, population: 7 });
+    const out = checkExpectedPopulation({ selector: SELECTOR, execute: true, population: 7 });
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.exitCode).toBe(2);
@@ -284,18 +350,18 @@ describe('checkExpectedPopulation', () => {
   });
 
   it('refuses a population that drifted between the dry run and the execute run', () => {
-    const out = checkExpectedPopulation({ lake: 'ionq-sales', execute: true, expect: 7, population: 8 });
+    const out = checkExpectedPopulation({ selector: SELECTOR, execute: true, expect: 7, population: 8 });
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.exitCode).toBe(2);
   });
 
   it('proceeds when the approved count is exactly the measured one', () => {
-    expect(checkExpectedPopulation({ lake: 'ionq-sales', execute: true, expect: 8, population: 8 }).ok).toBe(true);
+    expect(checkExpectedPopulation({ selector: SELECTOR, execute: true, expect: 8, population: 8 }).ok).toBe(true);
   });
 
   it('proceeds on an approved empty population', () => {
-    expect(checkExpectedPopulation({ lake: 'ionq-sales', execute: true, expect: 0, population: 0 }).ok).toBe(true);
+    expect(checkExpectedPopulation({ selector: SELECTOR, execute: true, expect: 0, population: 0 }).ok).toBe(true);
   });
 });
 

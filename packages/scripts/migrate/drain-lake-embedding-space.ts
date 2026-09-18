@@ -13,9 +13,9 @@
  * WHY THIS IS STILL HERE RATHER THAN DELETED: that door resolves its lake through
  * `assertLakeAccess`, a `datalakes` collection read, so it can only address a lake that has a
  * document. A REGISTRY lake is a code constant in `b4m-core/common/src/constants/dataLakes.ts` with
- * no row at all - `opti-knowledge`, the largest corpus on the stage, is one - so no `[id]` reaches
- * it and the durable fix cannot drain it by construction. Resolving both kinds (see `lakeIdKind`)
- * is the one capability this script does not share with the door, and it is the reason to keep it.
+ * no row at all, and the largest corpus on this platform is one of them - so no `[id]` reaches it
+ * and the durable fix cannot drain it by construction. Resolving both kinds (see `lakeIdKind`) is
+ * the one capability this script does not share with the door, and it is the reason to keep it.
  *
  * WHAT IT DOES NOT DO: it does not re-embed anything itself. It resets chunk state and enqueues to
  * the same queue the rebuild door uses; the chunk worker deletes the old passages and re-embeds,
@@ -32,7 +32,11 @@
  *
  * HOW TO RUN IT (dry run first; --execute is the only writing mode):
  *   ./for-env bike4mind-prod pnpm sst shell --stage production -- \
- *     pnpm --filter @bike4mind/scripts exec tsx migrate/drain-lake-embedding-space.ts --lake ionq-sales
+ *     pnpm --filter @bike4mind/scripts exec tsx migrate/drain-lake-embedding-space.ts \
+ *     --tag datalake:<slug> --prefix <slug>: --owners <id,id>
+ * The lake's tag, its file-tag prefix and the authorized owner ids are FLAGS, never constants here:
+ * this is a public repo and an owner id is account-tied. Add --registry-id <slug> for a registry
+ * lake. The real invocations live in the private migration runbook, not in this file.
  * `sst shell` and `pnpm --filter` both collapse a non-zero child exit code to 1, so the exit code
  * cannot distinguish "a guard refused" (2) from "it crashed" (1). READ THE OUTPUT, not the status:
  * every refusal prints a line beginning STOP. If the flags do not survive the wrappers the script
@@ -63,7 +67,6 @@ import {
   tally,
   verifyVerdict,
   type DrainFileRow,
-  type DrainTarget,
 } from './drainLakeEmbeddingSpacePlan';
 
 /** Must stay in sync with CONVERGENCE_ORIGIN in b4m-core/common/src/constants/convergenceProvenance.ts.
@@ -72,25 +75,6 @@ const CONVERGENCE_ORIGIN = 'convergence';
 
 const QUERY_TIMEOUT_MS = 30_000;
 
-/** Owner lists measured 2026-09-17; see `owners` in the plan module for what they bound. */
-const TARGETS: Record<string, DrainTarget> = {
-  'ionq-sales': {
-    lakeIdKind: 'db',
-    tag: 'datalake:ionq-sales',
-    prefix: 'ionq:',
-    owners: ['6539a090c2f71a8ee2c1bc3a', '69a2373e4e238aae87a391de', '68ed1c53a686dd0cae83e34d'],
-  },
-  'opti-knowledge': {
-    // Static registry lake: defined in b4m-core/common/src/constants/dataLakes.ts, with no
-    // `datalakes` row, which is why nothing that enumerates that collection can see it.
-    lakeIdKind: 'registry',
-    registryId: 'opti-knowledge',
-    tag: 'datalake:opti-knowledge',
-    prefix: 'opti:',
-    owners: ['6539a090c2f71a8ee2c1bc3a', '69a2373e4e238aae87a391de'],
-  },
-};
-
 /** Every guard's verdict arrives as lines to print plus an exit code; nothing decides silently. */
 const report = (lines: readonly string[]) => {
   for (const line of lines) console.log(line);
@@ -98,11 +82,10 @@ const report = (lines: readonly string[]) => {
 
 /** 0 = ran, 1 = usage or failure, 2 = a guard refused to proceed (nothing was written). */
 async function main(): Promise<number> {
-  const parsed = parseDrainArgs({ argv: process.argv.slice(2), lakes: Object.keys(TARGETS) });
+  const parsed = parseDrainArgs({ argv: process.argv.slice(2) });
   report(parsed.lines);
   if (!parsed.ok) return parsed.exitCode;
-  const { lake, execute, verify, limit, expect: approvedCount, wave } = parsed.value;
-  const target = TARGETS[lake];
+  const { target, label, selector, execute, verify, limit, expect: approvedCount, wave } = parsed.value;
 
   const dbUri = Resource.MONGODB_URI.value;
   if (!dbUri) throw new Error('MONGODB_URI is required');
@@ -110,7 +93,7 @@ async function main(): Promise<number> {
   const db = mongoose.connection.db;
   if (!db) throw new Error('no database on the mongoose connection');
   console.log(`stage=${Resource.App.stage}  db=${db.databaseName}`);
-  console.log(`lake=${lake}  mode=${verify ? 'VERIFY' : execute ? 'EXECUTE' : 'DRY RUN'}\n`);
+  console.log(`lake=${label}  mode=${verify ? 'VERIFY' : execute ? 'EXECUTE' : 'DRY RUN'}\n`);
 
   // Settings are read one row at a time BY NAME: this collection also holds live credentials, so
   // an unprojected sweep would pull one into the output.
@@ -244,14 +227,14 @@ async function main(): Promise<number> {
   // The manifest goes to the OS temp dir at 0600, never into the working tree: this is a public
   // repo and its history is permanent.
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lake-drain-'));
-  const manifest = path.join(outDir, `${lake}-manifest.json`);
+  const manifest = path.join(outDir, `${label}-manifest.json`);
   fs.writeFileSync(
     manifest,
     JSON.stringify(
       {
         capturedAt: new Date().toISOString(),
         stage: Resource.App.stage,
-        lake,
+        lake: label,
         lakeId,
         defaultModel,
         files: stale.map(f => ({
@@ -271,7 +254,7 @@ async function main(): Promise<number> {
   console.log('  This is NOT an undo. The worker deletes the old passages, so a drain can only be');
   console.log('  re-run, never reversed; the manifest records which files were touched and from what.');
 
-  const approved = checkExpectedPopulation({ lake, execute, expect: approvedCount, population: stale.length });
+  const approved = checkExpectedPopulation({ selector, execute, expect: approvedCount, population: stale.length });
   report(approved.lines);
   if (!approved.ok) return approved.exitCode;
 
@@ -282,7 +265,7 @@ async function main(): Promise<number> {
 
   const sqs = new SQSClient({});
   const queueUrl = Resource.fabFileChunkQueue.url;
-  const resetLog = path.join(outDir, `${lake}-reset.log`);
+  const resetLog = path.join(outDir, `${label}-reset.log`);
   let resetTotal = 0;
   let sentTotal = 0;
   const failedSends: string[] = [];
@@ -335,7 +318,7 @@ async function main(): Promise<number> {
     if (failedSends.length > 20) console.log(`    ... and ${failedSends.length - 20} more (see the reset log)`);
     console.log('  re-run this script to pick them up.');
   }
-  console.log(`\nWorkers re-embed asynchronously. Confirm convergence with:\n  --lake ${lake} --verify`);
+  console.log(`\nWorkers re-embed asynchronously. Confirm convergence with:\n  ${selector} --verify`);
   return failedSends.length ? 2 : 0;
 }
 

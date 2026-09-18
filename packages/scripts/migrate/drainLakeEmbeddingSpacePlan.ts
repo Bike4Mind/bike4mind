@@ -58,13 +58,36 @@ export type DrainFileRow = {
 };
 
 export type DrainArgs = {
-  lake: string;
+  /** Built entirely from the flags: this repo is public, so no lake's identity is a constant here. */
+  target: DrainTarget;
+  /** Filesystem-safe name for the manifest and the reset log. */
+  label: string;
+  /** The flags that reproduce this selection, printed in the re-run hints. */
+  selector: string;
   execute: boolean;
   verify: boolean;
   limit?: number;
   expect?: number;
   wave: number;
 };
+
+/** A userId as `str()` renders it, which is what the owner audit compares against. */
+const OBJECT_ID = /^[0-9a-f]{24}$/;
+
+/**
+ * Filesystem-safe name for the manifest and the reset log, derived from the tag.
+ *
+ * Derived rather than a flag of its own because it names two files: whatever an operator typed
+ * would have to be sanitized here anyway, and one fewer flag is one fewer thing to get wrong on a
+ * production invocation.
+ */
+export function toLabel(tag: string): string {
+  const safe = tag
+    .replace(/^datalake:/, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[._-]+/, '');
+  return safe || 'lake';
+}
 
 /**
  * `--flag value` parsing, with every numeric flag validated here rather than where it is used.
@@ -75,20 +98,53 @@ export type DrainArgs = {
  * all - an endless sequence of empty waves against a live database. Refusing the flag is the only
  * outcome an operator can read.
  */
-export function parseDrainArgs(args: { argv: readonly string[]; lakes: readonly string[] }): Decided<DrainArgs> {
-  const { argv, lakes } = args;
-  const flag = (name: string) => {
+export function parseDrainArgs(args: { argv: readonly string[] }): Decided<DrainArgs> {
+  const { argv } = args;
+  /** The raw next token, which is how a numeric flag reaches its NaN refusal below. */
+  const raw = (name: string) => {
     const i = argv.indexOf(`--${name}`);
     return i >= 0 ? argv[i + 1] : undefined;
   };
+  // For a string flag, a value that looks like a flag is a MISSING value: `--tag --execute` would
+  // otherwise scope the entire run to the membership of a lake named "--execute", and a mis-scoped
+  // drain is the one failure mode worth spending a usage line on.
+  const value = (name: string) => {
+    const v = raw(name);
+    return v === undefined || v.startsWith('--') ? undefined : v;
+  };
   const has = (name: string) => argv.includes(`--${name}`);
-  const usage = `usage: --lake <${lakes.join('|')}> [--execute --expect N] [--limit N] [--wave N] [--verify]`;
+  const usage =
+    'usage: --tag <datalakeTag> --prefix <fileTagPrefix> --owners <id,id> [--registry-id <slug>]\n' +
+    '       [--execute --expect N] [--limit N] [--wave N] [--verify]';
 
-  // An unknown value and a missing one land in the same place on purpose: `--lake --execute` parses
-  // as the string "--execute", and running unscoped against whatever that resolved to is the one
-  // failure mode worth spending a usage line on.
-  const lake = flag('lake');
-  if (!lake || !lakes.includes(lake)) return refuse(1, usage);
+  const tag = value('tag');
+  const prefix = value('prefix');
+  const ownersRaw = value('owners');
+  if (!tag || !prefix || !ownersRaw) {
+    return refuse(1, 'STOP: --tag, --prefix and --owners are all required.', usage);
+  }
+
+  // Required rather than defaulted, because the audit is the only thing bounding a prefix arm that
+  // carries no creator anchor. A default would either name a lake in this file or skip the audit
+  // silently - a clean run with no signal, on a pass that deletes passages.
+  const owners = ownersRaw
+    .split(',')
+    .map(o => o.trim())
+    .filter(Boolean);
+  const malformed = owners.filter(o => !OBJECT_ID.test(o));
+  if (owners.length === 0 || malformed.length > 0) {
+    return refuse(
+      1,
+      'STOP: --owners must be a comma-separated list of 24-character hex ids; ' +
+        `${malformed.length > 0 ? `${malformed.length} entry(s) are not` : 'the list is empty'}.`,
+      usage
+    );
+  }
+
+  // The presence of --registry-id IS the lake kind, so the two cannot be stated inconsistently from
+  // here: a registry target carrying no id resolves to an empty lakeId, which no per-lake pause can
+  // match. resolveLakeId still refuses that shape, for callers that build a target by hand.
+  const registryId = value('registry-id');
 
   const execute = has('execute');
   const verify = has('verify');
@@ -104,22 +160,35 @@ export function parseDrainArgs(args: { argv: readonly string[]; lakes: readonly 
     ['expect', true],
     ['wave', false],
   ] as const) {
-    const raw = flag(name);
-    if (raw === undefined) continue;
-    const n = Number(raw);
+    const token = raw(name);
+    if (token === undefined) continue;
+    const n = Number(token);
     // `--expect 0` is allowed because the dry run prints it as the command to run when the
     // population is already empty; a zero limit or wave has no reading that does anything.
     if (!Number.isInteger(n) || n < 0 || (n === 0 && !allowZero)) {
       return refuse(
         1,
-        `STOP: --${name} ${JSON.stringify(raw)} is not a ${allowZero ? 'whole' : 'positive whole'} number.`
+        `STOP: --${name} ${JSON.stringify(token)} is not a ${allowZero ? 'whole' : 'positive whole'} number.`
       );
     }
     counts[name] = n;
   }
 
   return proceed({
-    lake,
+    target: {
+      lakeIdKind: registryId ? 'registry' : 'db',
+      ...(registryId ? { registryId } : {}),
+      tag,
+      prefix,
+      owners,
+    },
+    label: toLabel(tag),
+    selector: [
+      `--tag ${tag}`,
+      `--prefix ${prefix}`,
+      `--owners ${owners.join(',')}`,
+      ...(registryId ? [`--registry-id ${registryId}`] : []),
+    ].join(' '),
     execute,
     verify,
     limit: counts.limit,
@@ -261,14 +330,15 @@ export function auditOwners(args: { rows: readonly DrainFileRow[]; owners: reado
  * against the raw value rather than a defaulted one.
  */
 export function checkExpectedPopulation(args: {
-  lake: string;
+  /** The flags that reproduce this selection, so the printed re-run command is the real one. */
+  selector: string;
   execute: boolean;
   expect?: number;
   population: number;
 }): Decided<'execute'> {
-  const { lake, execute, expect, population } = args;
+  const { selector, execute, expect, population } = args;
   if (!execute) {
-    return refuse(0, `\ndry run: nothing written. To execute:\n  --lake ${lake} --execute --expect ${population}`);
+    return refuse(0, `\ndry run: nothing written. To execute:\n  ${selector} --execute --expect ${population}`);
   }
   if (expect !== population) {
     return refuse(

@@ -40,11 +40,11 @@ describe('planQueryExtension', () => {
     // alone passes every other test here and silently reintroduces it.
     const plan = planQueryExtension({
       existing: [captured('q01', 'what did we measure?', [1, 0])],
-      questions: [question('q01', 'what did we measure on Forte-1?')],
+      questions: [question('q01', 'what did we measure in the second pass?')],
     });
     expect(plan.reused).toHaveLength(0);
     expect(plan.rewordedIds).toEqual(['q01']);
-    expect(plan.toEmbed.map(q => q.question)).toEqual(['what did we measure on Forte-1?']);
+    expect(plan.toEmbed.map(q => q.question)).toEqual(['what did we measure in the second pass?']);
   });
 
   it('takes ground truth from the question file, not from the capture', () => {
