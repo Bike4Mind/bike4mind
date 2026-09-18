@@ -150,9 +150,14 @@ describe('formatChunkSampleDoc', () => {
     expect(out).toContain('drawn from 2 of 2 files');
   });
 
-  it('tells the author to mark a passage unusable rather than skip it silently', () => {
+  it('tells the author to record an unusable passage rather than skip it silently', () => {
     // A hand-made skip is a selection, and an unrecorded selection is the bias this sampler exists
-    // to avoid reintroducing at the last step.
-    expect(doc(bothTexts)).toContain('MARK A PASSAGE UNUSABLE RATHER THAN SKIPPING IT');
+    // to avoid reintroducing at the last step. It must not tell the author to leave the question
+    // empty either: the question file's schema rejects an empty string, so that record throws
+    // rather than being excluded.
+    const out = doc(bothTexts);
+    expect(out).toContain('MARK A PASSAGE UNUSABLE RATHER THAN SKIPPING IT');
+    expect(out).toContain('rejects an empty question');
+    expect(out).not.toContain('empty string');
   });
 });
