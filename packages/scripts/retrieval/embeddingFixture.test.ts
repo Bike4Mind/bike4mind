@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   corpusRegime,
@@ -8,6 +11,8 @@ import {
   isTruncatableModel,
   loadEmbeddingFixture,
   PROD_REGIME_REFERENCE,
+  readEmbeddingFixtureFile,
+  writeEmbeddingFixtureFile,
   type EmbeddingFixture,
 } from './embeddingFixture';
 import { PROBE_QUESTIONS } from './corpus';
@@ -61,6 +66,94 @@ describe('loadEmbeddingFixture', () => {
     expect(fixture.dims).toBe(16);
     expect(fixture.chunks).toHaveLength(21);
     expect(fixture.queries).toHaveLength(5);
+  });
+});
+
+describe('writeEmbeddingFixtureFile / readEmbeddingFixtureFile', () => {
+  const tmp = () => mkdtempSync(path.join(tmpdir(), 'fixture-io-'));
+  const many = (n: number): EmbeddingFixture['chunks'] =>
+    Array.from({ length: n }, (_, i) => ({
+      chunkId: `c${i}`,
+      docId: `doc${i % 3}`,
+      vector: [i, 0, 0, 1],
+      charLength: 2200,
+    }));
+
+  const writeTo = (dir: string, over: Partial<EmbeddingFixture> = {}): string => {
+    const file = path.join(dir, 'arm.fixture.ndjson');
+    writeEmbeddingFixtureFile(file, loadEmbeddingFixture(base(over)));
+    return file;
+  };
+
+  it('round-trips a capture through the line format unchanged', () => {
+    const dir = tmp();
+    const original = loadEmbeddingFixture(base({ chunks: many(1200) } as never));
+    const file = path.join(dir, 'arm.fixture.ndjson');
+    writeEmbeddingFixtureFile(file, original);
+    expect(readEmbeddingFixtureFile(file)).toEqual(original);
+  });
+
+  it('writes one line per chunk plus a header, so no single string holds the corpus', () => {
+    // The whole point of the format: `JSON.stringify` of a real lake exceeds V8's string cap, so a
+    // capture that serialized in one piece would throw after the embedding spend.
+    const file = writeTo(tmp(), { chunks: many(1200) } as never);
+    const lines = readFileSync(file, 'utf8').trimEnd().split('\n');
+    expect(lines).toHaveLength(1201);
+    expect(JSON.parse(lines[0])).toMatchObject({ format: 'ndjson-v1', chunkCount: 1200 });
+    expect(JSON.parse(lines[0])).not.toHaveProperty('chunks');
+    expect(JSON.parse(lines[1])).toMatchObject({ chunkId: 'c0' });
+  });
+
+  it('refuses a truncated capture rather than sweeping whatever survived', () => {
+    // A capture killed mid-write leaves a syntactically perfect file holding part of the corpus.
+    // Floors measured over it look measured, and read as a smaller lake rather than a broken file.
+    const dir = tmp();
+    const file = writeTo(dir, { chunks: many(1200) } as never);
+    const lines = readFileSync(file, 'utf8').trimEnd().split('\n');
+    writeFileSync(file, `${lines.slice(0, 900).join('\n')}\n`);
+    expect(() => readEmbeddingFixtureFile(file)).toThrow(/declares 1200 chunks but carries 899/);
+  });
+
+  it('names the line when a chunk line is corrupt, instead of failing on the whole file', () => {
+    const dir = tmp();
+    const file = writeTo(dir, { chunks: many(10) } as never);
+    const lines = readFileSync(file, 'utf8').trimEnd().split('\n');
+    lines[4] = '{"chunkId":"c3","docId":';
+    writeFileSync(file, `${lines.join('\n')}\n`);
+    expect(() => readEmbeddingFixtureFile(file)).toThrow(/chunk line 4 is unparseable/);
+  });
+
+  it('still applies the width check when the capture arrives from disk', () => {
+    // readEmbeddingFixtureFile assembles the fixture itself, so the guard that a mixed-width capture
+    // must never load has to hold on this path too - not just on the in-memory one above.
+    const dir = tmp();
+    const file = writeTo(dir, { chunks: many(4) } as never);
+    const lines = readFileSync(file, 'utf8').trimEnd().split('\n');
+    lines[2] = JSON.stringify({ chunkId: 'c1', docId: 'docA', vector: [1, 0], charLength: 2200 });
+    writeFileSync(file, `${lines.join('\n')}\n`);
+    expect(() => readEmbeddingFixtureFile(file)).toThrow(/another width/);
+  });
+
+  it('reads the committed synthetic fixture off disk, PRETTY-PRINTED as it is actually stored', () => {
+    // Reads the real file, not a re-stringified copy of the imported object. Both CLIs are pointed at
+    // this path by the runbook, and a pretty-printed capture's first line is a bare `{` - so a reader
+    // that decided the format from line 1 alone rejected the one fixture the repo ships.
+    const fixture = readEmbeddingFixtureFile(path.join(__dirname, 'fixtures/tiny-comparison.fixture.json'));
+    expect(fixture.dims).toBe(16);
+    expect(fixture.chunks).toHaveLength(21);
+    expect(fixture.queries).toHaveLength(5);
+  });
+
+  it('reads a pre-format capture written as one line too', () => {
+    const file = path.join(tmp(), 'legacy.fixture.json');
+    writeFileSync(file, `${JSON.stringify(tinyFixture)}\n`);
+    expect(readEmbeddingFixtureFile(file).chunks).toHaveLength(21);
+  });
+
+  it('rejects a file that is neither a header line nor a whole capture', () => {
+    const file = path.join(tmp(), 'junk.fixture.ndjson');
+    writeFileSync(file, 'not json at all\n');
+    expect(() => readEmbeddingFixtureFile(file)).toThrow(/neither a "ndjson-v1" header line nor a whole/);
   });
 });
 

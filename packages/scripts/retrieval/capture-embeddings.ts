@@ -23,7 +23,7 @@
  * Drop --dry-run and add --yes once the printed cost is acceptable.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
@@ -64,6 +64,7 @@ import {
   hashQuestionText,
   isLongDocumentRegime,
   loadEmbeddingFixture,
+  writeEmbeddingFixtureFile,
 } from './embeddingFixture';
 
 /** The ingest tags each help file `help:<slug>`; that slug is what corpus.ts's ground truth names. */
@@ -407,8 +408,10 @@ for (const model of models) {
   // heterogeneous capture only surfaces in phase B - after the connection and the credentials are
   // gone and re-capturing costs money again.
   loadEmbeddingFixture(fixture);
-  const outPath = path.join(argv['out-dir'], `${model}.${argv.lake}.fixture.json`);
-  writeFileSync(outPath, `${JSON.stringify(fixture)}\n`);
+  // `.ndjson`, because it is not one JSON document - see the format docblock in embeddingFixture.ts
+  // for why a production lake cannot be. The reader still accepts the old single-object `.json`.
+  const outPath = path.join(argv['out-dir'], `${model}.${argv.lake}.fixture.ndjson`);
+  writeEmbeddingFixtureFile(outPath, fixture);
   console.log(`Wrote ${outPath} (${chunks.length} chunks, ${dims} dims)`);
 }
 
@@ -416,6 +419,6 @@ for (const model of models) {
 // defaults - see MODEL-COMPARISON.md step 3.
 console.log(
   '\nNow score them (from the repo root):\n  pnpm --filter @bike4mind/scripts retrieval:model-comparison ' +
-    `--fixtures ${models.map(m => `out/${m}.${argv.lake}.fixture.json`).join(',')}`
+    `--fixtures ${models.map(m => `out/${m}.${argv.lake}.fixture.ndjson`).join(',')}`
 );
 process.exit(0);

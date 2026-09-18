@@ -92,7 +92,7 @@ too, naming the chunk - the batcher's own check fires only after the spend is ap
 
 ```bash
 pnpm --filter @bike4mind/scripts retrieval:model-comparison \
-  --fixtures out/text-embedding-ada-002.system-help.fixture.json,out/text-embedding-3-small.system-help.fixture.json,out/text-embedding-3-large.system-help.fixture.json \
+  --fixtures out/text-embedding-ada-002.system-help.fixture.ndjson,out/text-embedding-3-small.system-help.fixture.ndjson,out/text-embedding-3-large.system-help.fixture.ndjson \
   --widths 3072,1536,512
 ```
 
@@ -375,12 +375,12 @@ repeat the derivation:
 ```bash
 # ada-002 arm
 pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
-  --fixture out/text-embedding-ada-002.system-help.fixture.json \
+  --fixture out/text-embedding-ada-002.system-help.fixture.ndjson \
   --floors 0:0,0:74,85:75,0:76
 
 # 3-small arm
 pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
-  --fixture out/text-embedding-3-small.system-help.fixture.json \
+  --fixture out/text-embedding-3-small.system-help.fixture.ndjson \
   --floors 85:75,0:30,0:35,85:35
 ```
 

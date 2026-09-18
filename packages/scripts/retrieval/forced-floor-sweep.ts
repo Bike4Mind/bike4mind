@@ -13,7 +13,7 @@
  * path in either.
  *
  *   pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
- *     --fixture out/text-embedding-3-small.system-help.fixture.json \
+ *     --fixture out/text-embedding-3-small.system-help.fixture.ndjson \
  *     --floors 0:0,85:75,85:0,90:0,95:0
  *
  * A third component sweeps the SPREAD floor - `85:75:40` is the shipped pair plus a 40% spread
@@ -53,11 +53,10 @@
  * it runs over is the instrument's own.
  */
 
-import { readFileSync } from 'node:fs';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT, FORCED_RETRIEVAL_MAX_SCORED_CHUNKS } from '@bike4mind/common';
-import { loadEmbeddingFixture } from './embeddingFixture';
+import { readEmbeddingFixtureFile } from './embeddingFixture';
 import { resolveQueries } from './modelComparison';
 import {
   buildFloorSweepRow,
@@ -100,7 +99,7 @@ if (!Number.isInteger(argv['char-budget']) || argv['char-budget'] < 1) {
 // describes it, and the id alone cannot say which text was embedded under it. An external capture
 // (`--questions`) is exempt - it carries its own ground truth, written in the same pass as the text,
 // so the two cannot drift apart the way an id join can.
-const fixture = loadEmbeddingFixture(JSON.parse(readFileSync(argv.fixture, 'utf8')) as unknown);
+const fixture = readEmbeddingFixtureFile(argv.fixture);
 
 // Reuses the model comparison's resolver rather than looking the ground truth up here, because it
 // makes an id neither source knows an ERROR. Defaulting such an id to an empty supporting set
