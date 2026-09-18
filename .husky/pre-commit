@@ -54,9 +54,6 @@ if ! node scripts/check-user-lookup-projection.mjs; then
   FINAL_EXIT_CODE=1
 fi
 
-
-
-
 # Check for account-tied IDs in shippable code (open-core readiness)
 echo "Running account-tied ID check..."
 if ! bash scripts/check-no-account-ids.sh; then
