@@ -1,5 +1,9 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
-import { useAdminGetUserApiKeys, useAdminResetApiKeyRateLimit } from '@client/app/hooks/data/userApiKeys';
+import {
+  ApiKeyRateLimitResetResponse,
+  useAdminGetUserApiKeys,
+  useAdminResetApiKeyRateLimit,
+} from '@client/app/hooks/data/userApiKeys';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { ApiKeyStatus, IUserApiKeyDocument } from '@bike4mind/common';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -61,6 +65,20 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
     return STATUS_CHIP[key.status] ?? { color: 'neutral' as const, label: key.status };
   };
 
+  // Names which counter(s) actually caused the lockout, per #2974 - a bare
+  // "reset succeeded" leaves an admin unable to tell request vs. management.
+  // An entry is undefined when its usage read failed (best-effort diagnostic);
+  // silently treated the same as "not at its ceiling".
+  const describeLockoutCause = (lockout: ApiKeyRateLimitResetResponse['lockout']): string => {
+    const causes: string[] = [];
+    if (lockout.request?.minuteAtLimit || lockout.request?.dayAtLimit) causes.push('request');
+    if (lockout.management?.minuteAtLimit || lockout.management?.dayAtLimit) causes.push('management');
+    if (causes.length === 0) return '';
+    return causes.length > 1
+      ? ` - ${causes.join(' and ')} counters were at their ceilings`
+      : ` - ${causes[0]} counter was at its ceiling`;
+  };
+
   const handleReset = (key: IUserApiKeyDocument) => {
     confirm({
       title: 'Reset rate limit',
@@ -69,7 +87,8 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
       onOk: () => {
         setResettingKeyId(key.id);
         resetMutation.mutate(key.id, {
-          onSuccess: () => toast.success(`Rate limit reset for "${key.name}"`),
+          onSuccess: response =>
+            toast.success(`Rate limit reset for "${key.name}"${describeLockoutCause(response.lockout)}`),
           // Clear only our own row: a later reset on another row may already
           // own the spinner when this settle lands.
           onSettled: () => setResettingKeyId(prev => (prev === key.id ? null : prev)),
