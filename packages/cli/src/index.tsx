@@ -60,6 +60,7 @@ import { ConversationContext, reconstructTurnBlocks } from './context/Conversati
 import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
 import { buildWorkflowState } from './utils/workflowState.js';
 import { getProcessHooks } from './utils/processHooks.js';
+import { isValidSessionId, SESSION_ID_PATTERN } from './utils/validateSessionId.js';
 import {
   buildHandoffPrompt,
   parseHandoffResponse,
@@ -627,6 +628,16 @@ function CliApp() {
       // uuid (so a later --resume finds it). Stage launches set neither -> random uuid.
       const pinnedSessionId = process.env.B4M_SESSION_ID;
       const resumeSessionId = process.env.B4M_RESUME_ID;
+      // Both become filesystem path components (session store, debug logs);
+      // reject anything outside the strict charset before use (see validateSessionId).
+      if (pinnedSessionId && !isValidSessionId(pinnedSessionId)) {
+        console.error(`Invalid B4M_SESSION_ID: must match ${SESSION_ID_PATTERN.source}`);
+        process.exit(1);
+      }
+      if (resumeSessionId && !isValidSessionId(resumeSessionId)) {
+        console.error(`Invalid B4M_RESUME_ID: must match ${SESSION_ID_PATTERN.source}`);
+        process.exit(1);
+      }
       let newSession: Session;
       if (resumeSessionId) {
         const resumed = await state.sessionStore.load(resumeSessionId);
