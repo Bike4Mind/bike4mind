@@ -30,7 +30,9 @@ import { userApiKeyService } from '@bike4mind/services';
  * would leave a window for a concurrent request to move a counter between
  * "observed" and "cleared", misreporting the cause. A `lockout` entry is
  * omitted only if clearing that specific counter failed - best-effort, and
- * never blocks clearing (or reporting) the other counter.
+ * never blocks clearing (or reporting) the other counter. If EVERY counter
+ * fails to clear, `resetApiKeyRateLimit` itself rejects rather than
+ * returning a result this route could report as a 200 success.
  */
 const handler = baseApi({ auth: true })
   .use(csrfProtection())
@@ -50,7 +52,7 @@ const handler = baseApi({ auth: true })
         throw new NotFoundError('API key not found');
       }
 
-      const resetUsage = await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true });
+      const resetUsage = await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true, logger: req.logger });
       const rateLimit = apiKey.rateLimit ?? userApiKeyService.API_KEY_RATE_LIMIT_DEFAULTS;
       const lockout = {
         request:
