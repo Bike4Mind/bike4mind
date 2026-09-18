@@ -161,9 +161,11 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
       // These keys would otherwise scroll whichever pane is behind the handle.
       e.preventDefault();
 
-      if (newWidth !== knowledgeViewerWidth) commitWidth(newWidth);
+      // Wrapped like the drag path's commit so the two input paths read the same. It does not
+      // defer the persisted write -- zustand runs that inside set() -- only the re-render.
+      if (newWidth !== knowledgeViewerWidth) startTransition(() => commitWidth(newWidth));
     },
-    [commitWidth, knowledgeViewerWidth, roundedWidth]
+    [commitWidth, knowledgeViewerWidth, roundedWidth, startTransition]
   );
 
   return (
