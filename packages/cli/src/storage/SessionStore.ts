@@ -3,6 +3,7 @@ import path from 'path';
 import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import type { Session } from './types';
+import { isValidSessionId, SESSION_ID_PATTERN } from '../utils/validateSessionId.js';
 
 /**
  * Manages conversation sessions stored as JSON files
@@ -12,6 +13,18 @@ export class SessionStore {
 
   constructor(basePath?: string) {
     this.basePath = basePath || path.join(homedir(), '.bike4mind', 'sessions');
+  }
+
+  /**
+   * A session id becomes a filesystem path component here, so validate it at the
+   * sink (not only at the CLI entrypoint) - a caller reaching load/save/delete
+   * with e.g. `../config` would otherwise traverse out of basePath.
+   */
+  private sessionFilePath(id: string): string {
+    if (!isValidSessionId(id)) {
+      throw new Error(`Invalid session id "${id}": must match ${SESSION_ID_PATTERN.source}`);
+    }
+    return path.join(this.basePath, `${id}.json`);
   }
 
   /**
@@ -36,7 +49,7 @@ export class SessionStore {
     }
 
     await this.init();
-    const filePath = path.join(this.basePath, `${session.id}.json`);
+    const filePath = this.sessionFilePath(session.id);
 
     try {
       await fs.writeFile(filePath, JSON.stringify(session, null, 2), 'utf-8');
@@ -50,7 +63,7 @@ export class SessionStore {
    * Load a session from disk by ID
    */
   async load(id: string): Promise<Session | null> {
-    const filePath = path.join(this.basePath, `${id}.json`);
+    const filePath = this.sessionFilePath(id);
 
     try {
       const data = await fs.readFile(filePath, 'utf-8');
@@ -142,7 +155,7 @@ export class SessionStore {
    * Delete a session
    */
   async delete(id: string): Promise<boolean> {
-    const filePath = path.join(this.basePath, `${id}.json`);
+    const filePath = this.sessionFilePath(id);
 
     try {
       await fs.unlink(filePath);

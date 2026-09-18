@@ -142,11 +142,7 @@ export class CustomCommandStore {
 
       // Project dirs live inside the (untrusted) clone: refuse a symlink whose
       // target escapes the project root. Global dirs stay unconstrained.
-      const commandFiles = await findMarkdownFiles(
-        directory,
-        undefined,
-        source === 'project' ? this.projectRoot : undefined
-      );
+      const commandFiles = await findMarkdownFiles(directory, source === 'project' ? this.projectRoot : undefined);
 
       for (const filePath of commandFiles) {
         try {

@@ -25,6 +25,12 @@ function nonYamlEngineDisabled(): never {
 }
 
 export function parseFrontmatter(content: string): { data: Record<string, unknown>; content: string } {
+  // Strip a leading BOM: gray-matter strips it internally before selecting the
+  // engine, so a BOM-prefixed "---js" file would slip past the fence check below and eval.
+  if (content.charCodeAt(0) === 0xfeff) {
+    content = content.slice(1);
+  }
+
   const fence = content.match(OPENING_FENCE);
   if (fence) {
     const lang = fence[1].trim().toLowerCase();

@@ -631,11 +631,11 @@ function CliApp() {
       // Both become filesystem path components (session store, debug logs);
       // reject anything outside the strict charset before use (see validateSessionId).
       if (pinnedSessionId && !isValidSessionId(pinnedSessionId)) {
-        console.error(`Invalid B4M_SESSION_ID: must match ${SESSION_ID_PATTERN.source}`);
+        console.error(`Invalid session id (--session-id / B4M_SESSION_ID): must match ${SESSION_ID_PATTERN.source}`);
         process.exit(1);
       }
       if (resumeSessionId && !isValidSessionId(resumeSessionId)) {
-        console.error(`Invalid B4M_RESUME_ID: must match ${SESSION_ID_PATTERN.source}`);
+        console.error(`Invalid session id (--resume / B4M_RESUME_ID): must match ${SESSION_ID_PATTERN.source}`);
         process.exit(1);
       }
       let newSession: Session;

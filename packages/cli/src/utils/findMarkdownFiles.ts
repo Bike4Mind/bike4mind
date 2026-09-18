@@ -50,23 +50,26 @@ async function classifyEntry(fullPath: string, entry: DirentLike): Promise<Entry
  * the checkout. Global dirs omit it - that is where dotfile managers legitimately
  * symlink into an out-of-tree immutable store.
  */
-export async function findMarkdownFiles(
-  directory: string,
-  visitedRealPaths: Set<string> = new Set(),
-  containmentRoot?: string
-): Promise<string[]> {
-  const files: string[] = [];
-
-  // Resolve the containment boundary once; realpath is idempotent so threading
-  // the resolved value through recursion keeps every level checking the same root.
+export async function findMarkdownFiles(directory: string, containmentRoot?: string): Promise<string[]> {
+  // Resolve the containment boundary once, then walk with a private visited-set
+  // accumulator (kept out of the public signature so callers can't pass it).
   let realRoot: string | undefined;
   if (containmentRoot !== undefined) {
     try {
       realRoot = await fs.realpath(containmentRoot);
     } catch {
-      return files; // Containment requested but root is unresolvable - refuse all.
+      return []; // Containment requested but root is unresolvable - refuse all.
     }
   }
+  return walkMarkdown(directory, new Set<string>(), realRoot);
+}
+
+async function walkMarkdown(
+  directory: string,
+  visitedRealPaths: Set<string>,
+  realRoot: string | undefined
+): Promise<string[]> {
+  const files: string[] = [];
 
   try {
     const realDirectory = await fs.realpath(directory);
@@ -98,14 +101,17 @@ export async function findMarkdownFiles(
       } catch {
         continue; // Unresolvable target - skip.
       }
-      if (realEntry !== realRoot && !realEntry.startsWith(realRoot + path.sep)) {
+      // A root of `/` already ends in the separator; appending another yields `//`,
+      // which no real path starts with, so it would refuse everything.
+      const prefix = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
+      if (realEntry !== realRoot && !realEntry.startsWith(prefix)) {
         console.warn(`Skipping ${fullPath}: symlink target escapes ${realRoot}`);
         continue;
       }
     }
 
     if (kind === 'directory') {
-      files.push(...(await findMarkdownFiles(fullPath, visitedRealPaths, realRoot)));
+      files.push(...(await walkMarkdown(fullPath, visitedRealPaths, realRoot)));
     } else if (kind === 'file' && entry.name.endsWith('.md')) {
       files.push(fullPath);
     }

@@ -174,4 +174,33 @@ describe('RemoteSkillSource', () => {
 
     expect(result.map(s => s.name)).toEqual(['safe']);
   });
+
+  it('never registers a remote skill that shadows a feature command (tavern/quest/hearth)', async () => {
+    const skills = [
+      { id: '1', name: 'tavern', description: 'evil', body: 'b', userId: 'me' },
+      { id: '2', name: 'quest', description: 'evil', body: 'b', userId: 'me' },
+      { id: '3', name: 'hearth', description: 'evil', body: 'b', userId: 'me' },
+      { id: '4', name: 'safe', description: 'd', body: 'b', userId: 'me' },
+    ];
+    const source = new RemoteSkillSource(makeApiClientWithUser(skills, 'me'), { cacheFilePath: cachePath });
+
+    const result = await source.fetchSkills();
+
+    expect(result.map(s => s.name)).toEqual(['safe']);
+  });
+
+  // Fail-closed contract: when the user can't be verified, a skill carrying any
+  // userId is dropped (even the user's own) - safe over-restriction, not a hole.
+  it('drops own userId-bearing skills when unauthenticated, and registers them once authenticated', async () => {
+    const skills = [
+      { id: '1', name: 'mine', description: 'd', body: 'b', userId: 'me' },
+      { id: '2', name: 'sys', description: 'd', body: 'b' }, // no userId: always allowed
+    ];
+
+    const unauth = new RemoteSkillSource(makeApiClientWithUser(skills, undefined), { cacheFilePath: cachePath });
+    expect((await unauth.fetchSkills()).map(s => s.name)).toEqual(['sys']);
+
+    const auth = new RemoteSkillSource(makeApiClientWithUser(skills, 'me'), { cacheFilePath: makeTempCachePath() });
+    expect((await auth.fetchSkills()).map(s => s.name).sort()).toEqual(['mine', 'sys']);
+  });
 });

@@ -1601,9 +1601,6 @@ importers:
       dayjs:
         specifier: ^1.11.21
         version: 1.11.21
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
       file-type:
         specifier: ^22.0.1
         version: 22.0.1
@@ -1771,9 +1768,6 @@ importers:
       diff:
         specifier: ^9.0.0
         version: 9.0.0
-      dotenv:
-        specifier: ^17.4.2
-        version: 17.4.2
       eventsource-parser:
         specifier: ^3.1.0
         version: 3.1.0

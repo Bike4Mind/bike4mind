@@ -294,7 +294,7 @@ export class AgentStore {
 
       // Project agent dirs live inside the (untrusted) clone: refuse a symlink
       // whose target escapes the project root. Global/builtin dirs stay unconstrained.
-      const files = await findMarkdownFiles(directory, undefined, source === 'project' ? this.projectRoot : undefined);
+      const files = await findMarkdownFiles(directory, source === 'project' ? this.projectRoot : undefined);
 
       for (const filePath of files) {
         try {

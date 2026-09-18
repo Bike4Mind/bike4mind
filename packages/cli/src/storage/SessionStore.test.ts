@@ -626,4 +626,32 @@ describe('SessionStore', () => {
       expect(parsed.messages).toHaveLength(1000);
     });
   });
+
+  // A session id becomes a filesystem path component, so the store validates it at
+  // the sink (not only at the CLI entrypoint): a traversal id must never reach fs.
+  describe('session id path-traversal guard', () => {
+    const traversal = '../../etc/evil';
+
+    it('refuses to load a traversal id before touching the filesystem', async () => {
+      await expect(sessionStore.load(traversal)).rejects.toThrow(/Invalid session id/);
+      expect(fs.readFile).not.toHaveBeenCalled();
+    });
+
+    it('refuses to delete a traversal id', async () => {
+      await expect(sessionStore.delete(traversal)).rejects.toThrow(/Invalid session id/);
+      expect(fs.unlink).not.toHaveBeenCalled();
+    });
+
+    it('refuses to save a session whose id is a traversal id', async () => {
+      const session = createMockSession({ id: traversal });
+      vi.mocked(fs.mkdir).mockResolvedValue(undefined);
+      await expect(sessionStore.save(session)).rejects.toThrow(/Invalid session id/);
+      expect(fs.writeFile).not.toHaveBeenCalled();
+    });
+
+    it('accepts a valid uuid-shaped id (guard does not over-reject)', async () => {
+      vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error('nope'), { code: 'ENOENT' }));
+      await expect(sessionStore.load('550e8400-e29b-41d4-a716-446655440000')).resolves.toBeNull();
+    });
+  });
 });

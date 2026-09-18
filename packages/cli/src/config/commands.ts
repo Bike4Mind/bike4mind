@@ -276,6 +276,24 @@ export function isBuiltInCommand(name: string): boolean {
 }
 
 /**
+ * First-party feature-module slash commands (FeatureModuleRegistry). These are
+ * registered at runtime, not part of COMMANDS, so isBuiltInCommand misses them -
+ * yet a remote/custom skill that shadows one would hijack the feature. Kept as a
+ * static list because RemoteSkillSource filters at fetch time, before any registry
+ * is built. MUST STAY IN SYNC with the feature modules' getCommands() (tavern,
+ * hearth); a drift guard lives in RemoteSkillSource.test.ts.
+ */
+export const RESERVED_FEATURE_COMMANDS: readonly string[] = ['tavern', 'quest', 'hearth'];
+
+/**
+ * Checks if a command name is reserved (a built-in OR a first-party feature command).
+ * Use this, not isBuiltInCommand, when deciding whether an external skill may register.
+ */
+export function isReservedCommandName(name: string): boolean {
+  return isBuiltInCommand(name) || RESERVED_FEATURE_COMMANDS.includes(name);
+}
+
+/**
  * Converts a CustomCommand to a CommandDefinition for unified handling
  * @param customCommand - Custom command to convert
  * @returns CommandDefinition compatible with autocomplete and help
@@ -302,12 +320,16 @@ export function mergeCommands(
   featureCommands?: CommandDefinition[]
 ): CommandDefinition[] {
   const builtInCommands = COMMANDS.map(cmd => ({ ...cmd, source: 'built-in' as const }));
+  // A custom command may not shadow a built-in OR a live feature command; the
+  // latter set is dynamic (plugins), so union it with the passed featureCommands.
+  const featureNames = new Set((featureCommands ?? []).map(cmd => cmd.name));
+  const isReserved = (name: string) => isReservedCommandName(name) || featureNames.has(name);
   const customDefinitions = customCommands
-    .filter(cmd => !isBuiltInCommand(cmd.name)) // Filter out conflicts
+    .filter(cmd => !isReserved(cmd.name)) // Filter out conflicts
     .map(customCommandToDefinition);
 
   // Log warnings for conflicting command names
-  const conflicts = customCommands.filter(cmd => isBuiltInCommand(cmd.name));
+  const conflicts = customCommands.filter(cmd => isReserved(cmd.name));
   if (conflicts.length > 0) {
     console.warn(
       'Warning: The following custom commands have names that conflict with built-in commands and will be ignored:',

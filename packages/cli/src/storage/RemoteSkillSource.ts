@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import type { ApiClient } from '../auth/ApiClient.js';
 import type { CustomCommand } from './types.js';
-import { isBuiltInCommand } from '../config/commands.js';
+import { isReservedCommandName } from '../config/commands.js';
 
 /**
  * Fetches skills authored on B4M web (`/api/skills`) and adapts them to the
@@ -113,16 +113,23 @@ export class RemoteSkillSource {
 
   /**
    * Map server skills to `CustomCommand`, dropping any that must not register:
-   * - a name that shadows a built-in slash command, and
+   * - a name that shadows a built-in OR a first-party feature slash command
+   *   (tavern/quest/hearth), which would otherwise hijack the command, and
    * - a foreign-owned skill (a `userId` other than the current user's), which is
    *   only visible cross-account via `isGlobalRead`.
    * Own, system (no `userId`), and org-scoped (server-gated, no `userId`) skills pass.
+   *
+   * Unauthenticated contract (fail-closed, intentional): when getCurrentUser()
+   * returns null, currentUserId is undefined and every skill carrying a userId -
+   * including the user's OWN - is dropped. This over-restricts rather than risk
+   * registering a foreign skill against an unverifiable identity; own skills
+   * reappear once authenticated.
    */
   private async mapAndFilter(skills: RemoteSkillDocument[]): Promise<CustomCommand[]> {
     const currentUserId = (await this.apiClient.getCurrentUser?.())?.id;
     return skills
       .filter(skill => {
-        if (isBuiltInCommand(skill.name)) return false;
+        if (isReservedCommandName(skill.name)) return false;
         if (skill.userId && skill.userId !== currentUserId) return false;
         return true;
       })

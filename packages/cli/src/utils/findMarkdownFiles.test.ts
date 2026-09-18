@@ -84,7 +84,7 @@ describe('findMarkdownFiles', () => {
       await fs.writeFile(path.join(root, 'ok.md'), '# ok');
       await fs.symlink(target, path.join(root, 'escape.md'));
 
-      const found = await findMarkdownFiles(root, new Set(), root);
+      const found = await findMarkdownFiles(root, root);
 
       expect(found).toEqual([path.join(root, 'ok.md')]);
     });
@@ -94,7 +94,7 @@ describe('findMarkdownFiles', () => {
       await fs.writeFile(path.join(root, 'sub', 'real.md'), '# real');
       await fs.symlink(path.join(root, 'sub', 'real.md'), path.join(root, 'link.md'));
 
-      const found = await findMarkdownFiles(root, new Set(), root);
+      const found = await findMarkdownFiles(root, root);
 
       expect(found.sort()).toEqual([path.join(root, 'link.md'), path.join(root, 'sub', 'real.md')].sort());
     });

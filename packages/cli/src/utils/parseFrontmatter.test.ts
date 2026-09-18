@@ -26,6 +26,14 @@ describe('parseFrontmatter', () => {
     expect(data).toEqual({});
   });
 
+  it('rejects a non-YAML tag even behind a leading BOM', () => {
+    // A leading BOM would otherwise slip the `---js` fence past the language check.
+    const hostile = String.fromCharCode(0xfeff) + '---js\nglobalThis.__frontmatterPwned = true\n---\n\nbody';
+    const { data } = parseFrontmatter(hostile);
+    expect(data).toEqual({});
+    expect((globalThis as Record<string, unknown>).__frontmatterPwned).toBeUndefined();
+  });
+
   it('degrades malformed YAML to empty frontmatter without throwing', () => {
     const { data } = parseFrontmatter('---\n:\n  - : :\nbad indent\n---\n\nbody');
     expect(data).toEqual({});

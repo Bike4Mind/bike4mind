@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -20,6 +20,10 @@ describe('config: no dotenv auto-load', () => {
     fs.writeFileSync(path.join(tmp, '.env'), `${PROBE}=leaked\n`, 'utf-8');
     process.chdir(tmp);
     delete process.env[PROBE];
+    // Drop the module cache so the dynamic import below actually re-runs config.js's
+    // top-level code; without this a config.js imported by an earlier test stays
+    // cached and the "no auto-load" assertion passes vacuously.
+    vi.resetModules();
   });
 
   afterEach(() => {
