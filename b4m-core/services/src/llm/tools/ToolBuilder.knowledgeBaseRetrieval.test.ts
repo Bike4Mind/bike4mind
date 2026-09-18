@@ -1,5 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ToolBuilder, type ToolBuilderConfig } from './ToolBuilder';
+// Section 5 of buildToolPrompt (conversation context) is deliberately ungated, so it runs on
+// every build including these. Mocked rather than left to the try/catch: without it the harness
+// passes an undefined `db.sessions` into the real service and stays green only because the throw
+// is swallowed, which would hide a real failure in this section from both suites.
+vi.mock('../../conversationContextService', () => ({
+  extractAndSaveEntitiesFromUserMessage: vi.fn(async () => {}),
+  getConversationContextSystemMessage: vi.fn(async () => null),
+}));
 
 /**
  * The retrieval nudge is gated on `search_knowledge_base` actually surviving into the offered tool

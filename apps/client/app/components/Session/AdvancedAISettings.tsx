@@ -20,7 +20,7 @@ import { isImageModel } from '@client/app/utils/commands';
 import { keyframes } from '@mui/system';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import ToolsButton from './AISettings/ToolsButton';
-import { ICONED_MCP_SERVERS } from '../common/ToolIndicators';
+import { ICONED_MCP_SERVERS, AGENT_ONLY_MCP_SERVERS } from '../common/ToolIndicators';
 import AgentsButton from './AISettings/AgentsButton';
 import StaleModelPrompt from './AISettings/StaleModelPrompt';
 import BriefcaseButton from './AISettings/BriefcaseButton';
@@ -75,6 +75,7 @@ const AISettings: FC<AISettingsProps> = ({
   const tools = useLLM(state => state.tools);
   const toolMode = useLLM(state => state.toolMode);
   const enabledMcpServers = useLLM(state => state.enabledMcpServers);
+  const skipAutoOffers = useLLM(state => state.skipAutoOffers);
   const { setState: setLLM } = useLLM;
 
   // Presence-only availability of key-gated tools. Already mounted app-wide by
@@ -110,12 +111,20 @@ const AISettings: FC<AISettingsProps> = ({
   const displayTools = filterToolsForDisplay(tools, serverConfig?.toolAvailability);
   const activePrimaryTools = primaryTools.filter(tool => displayTools.includes(tool));
   const isThinkingActive = thinking?.enabled ?? false;
-  // Enabled integrations without their own icon (e.g. linkedin, notion) roll into the
+  // Integrations that actually reach this turn. "Only tools I pick" withholds every
+  // non-agent-only MCP tool server-side (`offerOnlyNamedTools` in sharedToolBuilder), so
+  // those integrations contribute nothing and must not read as active here - the same
+  // reason ToolsButton hides every indicator in Fast mode. Agent-only servers are exempt
+  // from that gate (delegation reaches them either way), so they keep their icon.
+  const activeMcpServers = availableMcpServers.filter(
+    name =>
+      (enabledMcpServers === null || enabledMcpServers.includes(name)) &&
+      (!skipAutoOffers || AGENT_ONLY_MCP_SERVERS.includes(name))
+  );
+  // Active integrations without their own icon (e.g. linkedin, notion) roll into the
   // "+N" badge; iconed ones (ICONED_MCP_SERVERS) are shown as icons and excluded here
-  // so they aren't double-counted. Mirrors ToolIndicators' shouldShowMcpServer logic.
-  const enabledNonIconMcpCount = availableMcpServers.filter(
-    name => !ICONED_MCP_SERVERS.includes(name) && (enabledMcpServers === null || enabledMcpServers.includes(name))
-  ).length;
+  // so they aren't double-counted.
+  const enabledNonIconMcpCount = activeMcpServers.filter(name => !ICONED_MCP_SERVERS.includes(name)).length;
   // Feature-gated switches outside the `tools` array (Quest Master, Agent Detection,
   // Lattice). Must stay in sync with pinnedCount's specialToolsCount in ToolsSection.
   const specialToolsCount =
@@ -195,7 +204,7 @@ const AISettings: FC<AISettingsProps> = ({
           activePrimaryTools={activePrimaryTools}
           isThinkingActive={isThinkingActive}
           otherActiveToolsCount={otherActiveToolsCount}
-          enabledMcpServers={enabledMcpServers}
+          enabledMcpServers={activeMcpServers}
           availableMcpServers={availableMcpServers}
           setTools={newTools => setLLM({ tools: newTools })}
         />

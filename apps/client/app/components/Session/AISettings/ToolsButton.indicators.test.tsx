@@ -19,7 +19,14 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 let modelRepo: Array<{ id: string; name: string; supportsTools?: boolean }> = [];
 
 vi.mock('./ToolsSection', () => ({ default: () => <div data-testid="tools-section" /> }));
-vi.mock('../../common/ToolIndicators', () => ({ default: () => <div data-testid="tool-indicators" /> }));
+// The named exports are re-declared because the real module's consumers (ToolsSection,
+// AdvancedAISettings) import them at module scope - a `default`-only factory makes those
+// imports undefined and the component throws before rendering anything.
+vi.mock('../../common/ToolIndicators', () => ({
+  default: () => <div data-testid="tool-indicators" />,
+  ICONED_MCP_SERVERS: ['github', 'atlassian'],
+  AGENT_ONLY_MCP_SERVERS: ['github', 'atlassian'],
+}));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ data: modelRepo }),
 }));

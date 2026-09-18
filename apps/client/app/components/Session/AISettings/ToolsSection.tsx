@@ -57,6 +57,7 @@ import {
 } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useConfig } from '@client/app/hooks/data/settings';
+import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
 
 /**
  * Tooltip shown when a tool is disabled because its required API key/config is
@@ -218,10 +219,6 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelP
   </Box>
 );
 
-// MCP servers reachable only through agent delegation, not plain chat. Must stay in
-// sync with the built-in agents that claim them via exclusiveMcpServers:
-// GithubManagerAgent ('github') and ProjectManagerAgent ('atlassian').
-const AGENT_ONLY_MCP_SERVERS = ['github', 'atlassian'];
 const AGENT_ONLY_MCP_NOTE = 'Agent mode only - mention an @agent to use it in chat';
 
 // Tools rendered under the "Fun & Novelty" section. They count toward that section's
@@ -1413,7 +1410,7 @@ const ToolsSection = ({
                 />
                 <ToolLabel
                   name="Only tools I pick"
-                  description="Stops the assistant adding tools on its own - file search, app navigation, blog drafting. Saves ~800-1,950 tokens on the turns it applies to."
+                  description="Stops the assistant adding tools on its own - file search, app navigation, blog drafting - and withholds every tool from your connected integrations above, which you pick per server rather than per tool. Turn this off for a turn that needs one. Saves ~800-1,950 tokens, more with an integration connected."
                 />
               </Box>
               <SquareSlideToggle

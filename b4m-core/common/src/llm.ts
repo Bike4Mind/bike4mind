@@ -238,10 +238,18 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * was the only switch for the offer and it also strips every authored prompt, so no caller could
    * have an arm that went unoffered AND kept the abstention licence.
    *
-   * Gates the three auto-add sites (the knowledge offer in resolveEnabledTools, the navigate_view
+   * Gates the auto-add sites (the knowledge offer in resolveEnabledTools, the navigate_view
    * auto-add, the blog/skill gate), unioned with `Boolean(promptMode)` by
    * resolveSkipAutoOffers. A force-on, not an override: `false` under a promptMode still suppresses.
    * Withholding navigate_view also drops the viewRegistry system block, which only describes it.
+   *
+   * `buildSharedTools`' `offerOnlyNamedTools` (see sharedToolBuilder.ts) reads the same union for
+   * the same reason: MCP tools merged past the `enabledTools` filter are withheld too, since the
+   * caller never named them either. Unlike the auto-add sites, this one can still be reached per
+   * tool - a caller with `session.enabledTools` (not the public `tools` field, which
+   * `filterKnownTools` strips non-native ids from before this flag is even consulted) can name one
+   * MCP tool by its namespaced `server__tool` id and keep it while every unnamed sibling is
+   * withheld.
    *
    * Withholds the OFFER, not knowledge: `session.forceKnowledgeRetrieval` is untouched, and an
    * already-attached corpus is inlined rather than deferred to the tool. An arm that must see no

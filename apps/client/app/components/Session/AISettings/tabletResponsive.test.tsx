@@ -39,7 +39,14 @@ function setViewportWidth(width: number) {
 // Stub heavy children so the buttons render in isolation (their dropdown/modal
 // bodies pull in unrelated context chains we don't need for label assertions).
 vi.mock('./ToolsSection', () => ({ default: () => <div data-testid="tools-section" /> }));
-vi.mock('../../common/ToolIndicators', () => ({ default: () => <div data-testid="tool-indicators" /> }));
+// The named exports are re-declared because the real module's consumers (ToolsSection,
+// AdvancedAISettings) import them at module scope - a `default`-only factory makes those
+// imports undefined and the component throws before rendering anything.
+vi.mock('../../common/ToolIndicators', () => ({
+  default: () => <div data-testid="tool-indicators" />,
+  ICONED_MCP_SERVERS: ['github', 'atlassian'],
+  AGENT_ONLY_MCP_SERVERS: ['github', 'atlassian'],
+}));
 vi.mock('./AgentsSection', () => ({ default: () => <div data-testid="agents-section" /> }));
 vi.mock('../../common/AgentsCountBadge', () => ({ default: () => <div data-testid="agents-count-badge" /> }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({

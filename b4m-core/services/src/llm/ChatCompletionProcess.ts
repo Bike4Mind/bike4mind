@@ -600,8 +600,11 @@ export interface ResolveEnabledToolsInput {
    * a mode-driven eval, above all `raw` (the bare-model control arm), must not get surprise tools.
    * The request field is that same suppression without a mode, for an arm that must not be OFFERED
    * knowledge while keeping the authored prompts a mode would strip - it withholds the tool, not
-   * knowledge (same caveat as ChatCompletionInvokeParamsSchema.skipAutoOffers). Caller-selected and
-   * session-forced tools are unaffected; only step 2 is gated.
+   * knowledge (same caveat as ChatCompletionInvokeParamsSchema.skipAutoOffers). Caller-selected
+   * (native) and session-forced tools are unaffected. The same field also gates
+   * `buildSharedTools`' MCP merge (`offerOnlyNamedTools`, fed from here below): MCP tools merged
+   * past the `enabledTools` filter are withheld too, since an MCP tool the caller didn't name by
+   * its `server__tool` id was never subject to `enabledTools` in the first place.
    */
   skipAutoOffers?: boolean;
 }
@@ -2770,6 +2773,15 @@ export class ChatCompletionProcess {
 
       let allTools = toolBuilder.buildTools({
         enabledTools,
+        // Auto-offers are OUR additions, not the caller's, and MCP tools are merged past the
+        // `enabledTools` filter without ever being named - so a caller that suppressed our
+        // additions gets them suppressed here too. This is what makes an empty tool profile
+        // reachable at all for a caller with a server connected (#2960).
+        offerOnlyNamedTools: skipAutoOffers,
+        // Also enforced over the returned list below; passed here as well because two things the
+        // builder produces never appear in that list - MCP tools and the delegate tool's captured
+        // parentTools.
+        sessionDisabledTools: session.disabledTools,
         mcpToolsByServer,
         quest,
         saveQuest,
@@ -2935,10 +2947,17 @@ export class ChatCompletionProcess {
       }
 
       // For tool prompt guidance, only include MCP tools given directly to the main LLM
-      // (agent-only tools like Atlassian are excluded - they're accessed via delegate_to_agent)
+      // (agent-only tools are excluded - they're accessed via delegate_to_agent).
+      //
+      // Intersected with what actually survived into `allTools`: the raw server cache is what the
+      // user connected, not what the model was offered, and everything that narrows the built list
+      // (offerOnlyNamedTools, the session denylist, the local-model trim) happens after this map is
+      // read. Describing a withheld tool in the prompt invites a call the model has no schema for.
+      const offeredToolNameSet = new Set(offeredToolNames);
       const directMcpTools = Object.entries(mcpToolsByServer)
         .filter(([serverName]) => !agentOnlyMcpServers.includes(serverName))
-        .flatMap(([, tools]) => tools);
+        .flatMap(([, tools]) => tools)
+        .filter(tool => offeredToolNameSet.has(tool.toolSchema.name));
 
       // Gate the blog workflow prompt on blog_draft surviving into the final tool set.
       // The auto-add flag alone is not enough: local (Ollama) models have blog_draft

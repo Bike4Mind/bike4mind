@@ -15,6 +15,17 @@ import { green } from '../../utils/themes/colors';
 // instead. Callers computing that count must exclude these to avoid double-counting.
 export const ICONED_MCP_SERVERS = ['github', 'atlassian'];
 
+// MCP servers reachable only through agent delegation, not plain chat. Must stay in sync
+// with the built-in agents that claim them via exclusiveMcpServers: GithubManagerAgent
+// ('github') and ProjectManagerAgent ('atlassian').
+//
+// Lives here rather than in ToolsSection because both that panel and AdvancedAISettings
+// need it, and importing it from ToolsSection would close an import cycle
+// (ToolsSection already imports useAdvancedAISettings). These are also the servers
+// `offerOnlyNamedTools` exempts (sharedToolBuilder.ts), so "Only tools I pick" withholds
+// every OTHER server's tools while these still reach the model through delegation.
+export const AGENT_ONLY_MCP_SERVERS = ['github', 'atlassian'];
+
 interface ToolIndicatorsProps {
   activePrimaryTools: string[];
   isThinkingActive: boolean;

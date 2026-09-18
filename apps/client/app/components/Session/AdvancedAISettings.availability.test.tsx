@@ -26,13 +26,15 @@ const mocks = vi.hoisted(() => {
     thinking: { enabled: false, budget_tokens: 16000 },
     quality: 'standard',
     n: 1,
+    skipAutoOffers: false,
   };
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test double for the Zustand hook (selector + setState)
   const useLLM: any = (selector: (s: Record<string, unknown>) => unknown) => selector(state);
   useLLM.setState = vi.fn();
   const toolAvailability = { value: undefined as Record<string, boolean> | undefined };
   const toolsButtonProps = { value: null as Record<string, unknown> | null };
-  return { state, useLLM, toolAvailability, toolsButtonProps };
+  const mcpServers = { value: [] as Array<{ name: string; enabled: boolean }> };
+  return { state, useLLM, toolAvailability, toolsButtonProps, mcpServers };
 });
 
 vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: mocks.useLLM }));
@@ -40,7 +42,7 @@ vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSessionId: null, workBenchAgents: [] }),
 }));
 vi.mock('@client/app/hooks/data/agents', () => ({ useGetSessionAgents: () => ({ data: [] }) }));
-vi.mock('@client/app/hooks/data/mcpServers', () => ({ useMcpServers: () => ({ data: [] }) }));
+vi.mock('@client/app/hooks/data/mcpServers', () => ({ useMcpServers: () => ({ data: mocks.mcpServers.value }) }));
 vi.mock('@client/app/hooks/data/settings', () => ({
   useConfig: () => ({ data: { toolAvailability: mocks.toolAvailability.value } }),
 }));
@@ -100,6 +102,7 @@ const renderIndicators = () => {
     activePrimaryTools: props?.activePrimaryTools as string[],
     otherActiveToolsCount: props?.otherActiveToolsCount as number,
     tools: props?.tools as string[],
+    enabledMcpServers: props?.enabledMcpServers as string[] | null,
   };
 };
 
@@ -107,6 +110,9 @@ beforeEach(() => {
   mocks.state.tools = [];
   mocks.toolAvailability.value = undefined;
   mocks.toolsButtonProps.value = null;
+  mocks.mcpServers.value = [];
+  mocks.state.enabledMcpServers = null;
+  mocks.state.skipAutoOffers = false;
 });
 
 describe('AdvancedAISettings tool indicators vs availability', () => {
@@ -149,5 +155,48 @@ describe('AdvancedAISettings tool indicators vs availability', () => {
     mocks.state.tools = ['web_search', 'search_knowledge_base'];
     mocks.toolAvailability.value = { web_search: false, search_knowledge_base: false };
     expect(renderIndicators().tools).toEqual(['web_search', 'search_knowledge_base']);
+  });
+});
+
+/**
+ * "Only tools I pick" feeds `offerOnlyNamedTools`, which withholds every non-agent-only MCP
+ * tool server-side (sharedToolBuilder.ts). The indicator row reads only `enabledMcpServers`,
+ * so without this it keeps advertising integrations that contribute nothing to the turn - the
+ * same class of lie ToolsButton already avoids by hiding every indicator in Fast mode.
+ */
+describe('AdvancedAISettings MCP indicators vs "Only tools I pick"', () => {
+  const connect = (...names: string[]) => {
+    mocks.mcpServers.value = names.map(name => ({ name, enabled: true }));
+  };
+
+  it('advertises every enabled integration when the flag is off', () => {
+    connect('notion', 'linkedin', 'atlassian');
+    const indicators = renderIndicators();
+    expect(indicators.enabledMcpServers).toEqual(['notion', 'linkedin', 'atlassian']);
+    expect(indicators.otherActiveToolsCount).toBe(2);
+  });
+
+  it('drops the integrations the flag withholds', () => {
+    connect('notion', 'linkedin');
+    mocks.state.skipAutoOffers = true;
+    const indicators = renderIndicators();
+    expect(indicators.enabledMcpServers).toEqual([]);
+    expect(indicators.otherActiveToolsCount).toBe(0);
+  });
+
+  // Agent-only servers are exempt from the gate (sharedToolBuilder.ts keeps routing them into
+  // the delegation pool), so blanking them too would swap one wrong indicator for another.
+  it('keeps an agent-only integration, which the gate exempts', () => {
+    connect('notion', 'atlassian');
+    mocks.state.skipAutoOffers = true;
+    expect(renderIndicators().enabledMcpServers).toEqual(['atlassian']);
+  });
+
+  // The flag narrows what the server offers; it never re-enables a server the user turned off.
+  it('does not resurrect a server the user disabled', () => {
+    connect('notion', 'atlassian');
+    mocks.state.enabledMcpServers = ['notion'];
+    mocks.state.skipAutoOffers = true;
+    expect(renderIndicators().enabledMcpServers).toEqual([]);
   });
 });
