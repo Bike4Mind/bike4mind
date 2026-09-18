@@ -17,13 +17,21 @@ import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { CONVERGENCE_ORIGIN } from '@server/queueHandlers/convergenceProvenance';
 import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch';
+import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbeddingModel';
 
 /**
- * GET  /api/data-lakes/:id/rechunk           -> { underChunkedCount, failedCount }
- * POST /api/data-lakes/:id/rechunk  { limit } -> { detected, enqueued, remaining }
+ * GET  /api/data-lakes/:id/rechunk  -> { underChunkedCount, failedCount, staleEmbeddingSpaceCount }
+ * POST /api/data-lakes/:id/rechunk  { limit, select } -> { detected, enqueued, remaining }
  *
  * "Rebuild passages": re-chunks the lake's files whose passages predate the passage-target fix
  * (a whole-document blob rather than ~512-token passages), which retrieval can't rank within.
+ *
+ * `select` chooses WHICH population the wave drains; the reset-and-enqueue below is identical for
+ * both, which is why this is one door and not two. `stale-embedding-space` is the whole-lake
+ * re-embed: after the deployment's default embedding model moves, every file still labelled with
+ * the previous space is withheld by the majority vote, silently and with no error - and no other
+ * route selects on a label at all (Converge grades chunk SIZE). Without it the only way to migrate
+ * a lake is a one-off script against the database.
  *
  * Deliberately does NOT reuse the DataLakeBatch progress machinery: that keys off `fabFile.batchId`,
  * and repointing a file's batchId to a maintenance batch would break `applyTaxonomySuggestions` for
@@ -44,9 +52,22 @@ import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch
 
 const RechunkInput = z.object({
   limit: z.number().int().positive().max(dataLakeService.MAX_REBUILD_WAVE).optional(),
+  select: z.enum(['under-chunked', 'stale-embedding-space']).default('under-chunked'),
 });
 
 const detectDeps = { db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository } };
+const spaceDeps = { db: { fabFiles: fabFileRepository } };
+
+/**
+ * The space to compare stored labels against: resolved per DEPLOYMENT (userId `null`), not per
+ * caller, because each file is re-embedded under its own OWNER's identity - so the admin clicking
+ * this is not whose credentials decide where anything lands.
+ *
+ * `undefined` means there is no space to compare against, and both verbs below must treat that as a
+ * reason to stop rather than as a reason to fall back to the advertised setting. See
+ * `resolveEffectiveEmbeddingModel` for the three situations it collapses.
+ */
+const resolveLakeEmbeddingSpace = () => resolveEffectiveEmbeddingModel(null);
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -58,22 +79,57 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     });
     // `failedCount` distinguishes "rebuild finished" from "some files gave up": a failed re-chunk
     // (error set, no chunks) is invisible to detection, so the badge alone would read it as done.
-    const [underChunked, failedCount] = await Promise.all([
+    const embeddingSpace = await resolveLakeEmbeddingSpace();
+    const [underChunked, failedCount, stale] = await Promise.all([
       dataLakeService.detectUnderChunkedFiles(lake, detectDeps),
       dataLakeService.countFailedLakeFiles(lake, { db: { fabFiles: fabFileRepository } }),
+      embeddingSpace ? dataLakeService.detectStaleEmbeddingSpaceFiles(lake, spaceDeps, embeddingSpace) : null,
     ]);
-    return res.json({ underChunkedCount: underChunked.length, failedCount });
+    return res.json({
+      underChunkedCount: underChunked.length,
+      failedCount,
+      // `null`, never 0, when the space could not be resolved. Zero here reads as "nothing to
+      // migrate", and the one case this cannot see is exactly the one where every label comparison
+      // would be wrong - so the caller is told it has no answer instead of a reassuring one.
+      staleEmbeddingSpaceCount: stale ? stale.length : null,
+    });
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {
     assertDataLakeWriteScope(req);
     const { id } = req.query;
-    const { limit } = RechunkInput.parse(req.body ?? {});
+    const { limit, select } = RechunkInput.parse(req.body ?? {});
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeRebuildAccess(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
-    const detected = await dataLakeService.detectUnderChunkedFiles(lake, detectDeps);
+    let detected: dataLakeService.LakeRebuildTarget[];
+    if (select === 'stale-embedding-space') {
+      const embeddingSpace = await resolveLakeEmbeddingSpace();
+      if (!embeddingSpace) {
+        // 409, where the pause below answers 200 with real counts. That arm detected first and is
+        // declining on policy; this one cannot detect at all, so every number it could report would
+        // be a guess - and a 200 carrying zeros is indistinguishable from "nothing to migrate".
+        // Refusing is also the only safe direction: comparing against the advertised setting
+        // instead would select the whole lake on any stage that embeds through the keyless
+        // fallback, at full spend, for a wave that can never converge.
+        req.logger?.error?.(
+          `rechunk: lake ${lake.id} - no resolvable embedding space; re-embed refused before detection`
+        );
+        // `error` is the body key the client's refusal extractor reads (errorHandler.ts); without it
+        // the owner is shown the bare axios string for a 409, which says nothing actionable.
+        return res.status(409).json({
+          outcome: 'unknown-embedding-space',
+          error:
+            'This deployment has no resolvable embedding model, so there is no vector space to migrate ' +
+            'these files into. Set a supported default embedding model, check that its provider ' +
+            'credential is present, then run this again.',
+        });
+      }
+      detected = await dataLakeService.detectStaleEmbeddingSpaceFiles(lake, spaceDeps, embeddingSpace);
+    } else {
+      detected = await dataLakeService.detectUnderChunkedFiles(lake, detectDeps);
+    }
     const wave = detected.slice(0, limit ?? dataLakeService.DEFAULT_REBUILD_WAVE);
 
     let enqueued = 0;

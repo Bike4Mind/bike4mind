@@ -2516,6 +2516,41 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 
   /**
+   * The lake's members still carrying a DIFFERENT file-level embedding space than `embeddingModel`.
+   *
+   * `$nin: [null, '', embeddingModel]` rather than `$ne` plus blank arms, for two reasons. A missing
+   * path reads as null for `$in`, so one operator covers all three blank shapes - which this
+   * deliberately leaves alone, since blank is unattributable rather than foreign. And it keeps every
+   * condition here free of a top-level `$or`: `buildDataLakeMembershipFilter`'s prefix arm IS one,
+   * so spreading it beside an `$or` of our own would silently drop the membership predicate and
+   * offer every file in the install for this lake's re-embed.
+   *
+   * `vectorizedChunkCount: {$gt: 0}` is what makes this a stale-SPACE read rather than a
+   * not-yet-embedded one: a file with no vectors has no space to leave and will be embedded in the
+   * current one unaided. It also drops a file the instant a wave resets it (the reset zeroes this
+   * count), which is what lets a caller read the count falling as progress.
+   */
+  async findFilesOutsideEmbeddingSpaceByScope(
+    scope: DataLakeMembershipScope,
+    embeddingModel: string
+  ): Promise<{ id: string; userId: string }[]> {
+    const docs = await this.fabFileModel
+      .find(
+        {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          isChunking: { $ne: true },
+          vectorizedChunkCount: { $gt: 0 },
+          embeddingModel: { $nin: [null, '', embeddingModel] },
+        },
+        { _id: 1, userId: 1 }
+      )
+      .lean();
+    return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
+  }
+
+  /**
    * The lake's convergence-stranded files: everything the kill switch left with NO searchable
    * passage, by either arm. `error:null` on both, so countFailedFilesByScope cannot see them.
    *

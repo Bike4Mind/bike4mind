@@ -99,6 +99,15 @@ export function LakeInfoPanel({
   const { data: rebuildStatus } = useUnderChunkedCount(lake.id, !!lake.canRebuild);
   const underChunkedCount = rebuildStatus?.underChunkedCount ?? 0;
   const failedCount = rebuildStatus?.failedCount ?? 0;
+  // Members embedded in a PREVIOUS embedding space, which retrieval withholds wholesale rather than
+  // ranking badly - so this is the one lake defect with no symptom an owner can see in search
+  // results, and the reason it gets its own affordance instead of folding into Rebuild passages.
+  //
+  // `?? 0` collapses the server's `null` ("no space to compare against") into "nothing to offer",
+  // which is the right direction: null covers both an unconfigured embedding model and a
+  // rolling-deploy skew against an older server, and an advisory chip would be wrong in the second
+  // case - it would tell every owner their lake might be stale during any deploy window.
+  const staleEmbeddingSpaceCount = rebuildStatus?.staleEmbeddingSpaceCount ?? 0;
   const rechunk = useRechunkDataLake(lake.id);
 
   // Convergence toward the lake's OWN declared chunk policy (#1681). Distinct from "Rebuild
@@ -279,6 +288,35 @@ export function LakeInfoPanel({
                 sx={{ flexShrink: 0, fontSize: '13px' }}
               >
                 Rebuild passages
+              </Button>
+            </Tooltip>
+          )}
+          {/* Re-embed for search. Same `canRebuild` gate and same bounded-wave door as Rebuild
+              passages, and shown for the same reason the sibling is: there is something to repair.
+              Its own button rather than a mode of that one because the two repair unrelated
+              defects - passage SIZE versus vector SPACE - and a lake can need one without the
+              other. This is the only lake defect that is completely silent: the files are healthy
+              on every chip, and retrieval drops them with no error and no low score. */}
+          {lake.canRebuild && staleEmbeddingSpaceCount > 0 && (
+            <Tooltip
+              title={
+                `${staleEmbeddingSpaceCount} file(s) in this lake were embedded with a previous model, so search ` +
+                'cannot compare them against anything and leaves them out entirely. Re-embedding puts them back ' +
+                'in reach; they are unsearchable while it runs. Bounded waves, safe to repeat until zero.'
+              }
+              size="sm"
+            >
+              <Button
+                size="sm"
+                variant="outlined"
+                color="warning"
+                startDecorator={<AutoFixHighIcon sx={{ fontSize: 16 }} />}
+                data-testid={`datalake-reembed-space-btn-${lake.id}`}
+                loading={rechunk.isPending}
+                onClick={() => rechunk.mutate({ select: 'stale-embedding-space' })}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Re-embed for search ({staleEmbeddingSpaceCount})
               </Button>
             </Tooltip>
           )}

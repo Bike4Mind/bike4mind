@@ -57,6 +57,7 @@ import {
   __resetPurgingLakesForTests,
   INITIAL_REBUILD_POLL_STATE,
   nextRebuildPoll,
+  rebuildBacklog,
   lakeMemoryPollInterval,
   LAKE_MEMORY_POLL_MS,
   useBrowsePublicDataLakes,
@@ -832,6 +833,31 @@ describe('useDuplicatePrefixLake freshness', () => {
     expect(result.current).toBeUndefined(); // the warm, collision-free list
     await waitFor(() => expect(result.current?.fileTagPrefix).toBe('legal:'));
     expect(apiGet).toHaveBeenCalledWith('/api/data-lakes');
+  });
+});
+
+/**
+ * What the badge counts as "still to drain". Extracted from the refetchInterval closure and tested
+ * here for the same reason nextRebuildPoll is: the sum decides whether the panel polls at all, and a
+ * wrong one is silent - the badge simply never ticks down.
+ */
+describe('rebuildBacklog', () => {
+  it('sums both repairable populations, so a lake with only stale-space files still polls', () => {
+    // The regression: keying the poll off underChunkedCount alone. Clicking Re-embed on a lake whose
+    // chunk sizes are all fine leaves that count at 0, so polling never starts.
+    expect(rebuildBacklog({ underChunkedCount: 0, staleEmbeddingSpaceCount: 7 })).toBe(7);
+    expect(rebuildBacklog({ underChunkedCount: 3, staleEmbeddingSpaceCount: 7 })).toBe(10);
+  });
+
+  it('treats an unresolvable embedding space as nothing to drain, not as a backlog', () => {
+    // null means the server could not resolve a space to compare against, so there is no wave to
+    // wait on. Counting it as work would poll a rescan every 5s against a count that cannot move.
+    expect(rebuildBacklog({ underChunkedCount: 0, staleEmbeddingSpaceCount: null })).toBe(0);
+    expect(rebuildBacklog({ underChunkedCount: 2, staleEmbeddingSpaceCount: null })).toBe(2);
+  });
+
+  it('is zero before the status has loaded', () => {
+    expect(rebuildBacklog(undefined)).toBe(0);
   });
 });
 

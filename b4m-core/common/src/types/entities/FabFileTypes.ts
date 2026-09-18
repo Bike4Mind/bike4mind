@@ -1622,6 +1622,30 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    */
   findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
   /**
+   * The lake's members PROVEN to sit in a foreign embedding space: file label present, non-empty,
+   * and different from `embeddingModel`. Same {id, userId} shape and same in-flight exclusion as
+   * `findChunkedFilesByScope`, so the two feed the same rebuild wave.
+   *
+   * Keys on the FILE label because that is what the retrieval majority vote withholds on, so this
+   * returns exactly the population being withheld. The label is DERIVED from the chunks
+   * (stampChunkEmbeddingModel), which makes it a summary rather than an independent fact - a
+   * re-embed is therefore verified against the passages, never against this.
+   *
+   * A BLANK label is deliberately NOT selected. Blank is unattributable, not foreign: the vectors
+   * may already be current, and `null` is written ON PURPOSE for a file whose chunks span two
+   * spaces. Re-deriving those belongs to the label-repair pass
+   * (`findVectorizedFilesMissingEmbeddingModel`); selecting them here would re-embed files that
+   * need none while still hiding the ones that do.
+   *
+   * Bounded to files that HAVE vectors, which has a second effect worth relying on: a file drops
+   * out of this set the moment a wave resets it, so a falling count is progress - and a zero means
+   * "none still labelled foreign", NOT "the re-embed finished".
+   */
+  findFilesOutsideEmbeddingSpaceByScope(
+    scope: DataLakeMembershipScope,
+    embeddingModel: string
+  ): Promise<{ id: string; userId: string }[]>;
+  /**
    * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor
    * `countFailedFilesByScope` (needs a non-empty error) - which is how they stayed invisible to

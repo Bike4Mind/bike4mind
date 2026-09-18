@@ -44,13 +44,21 @@ type LakeMemoryHealthMock =
   | undefined;
 const useGetLakeMemoryHealth = vi.fn<[], { data: LakeMemoryHealthMock }>(() => ({ data: undefined }));
 
+// The rebuild door's two selectors share one mutation hook, so the panel's only record of WHICH
+// door an owner opened is the argument it passes - which is what these capture.
+const rechunkMutate = vi.fn();
+type RebuildStatusMock =
+  | { underChunkedCount: number; failedCount: number; staleEmbeddingSpaceCount: number | null }
+  | undefined;
+const useUnderChunkedCount = vi.fn<[], { data: RebuildStatusMock }>(() => ({ data: undefined }));
+
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
     useArchiveDataLake: mutation,
     usePermanentDeleteDataLake: mutation,
-    useUnderChunkedCount: () => ({ data: undefined }),
-    useRechunkDataLake: mutation,
+    useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [])),
+    useRechunkDataLake: () => ({ mutate: rechunkMutate, isPending: false }),
     useLakeConvergencePlan: () => ({ data: undefined }),
     useConvergeDataLake: mutation,
     useGetDataLakeHealth: () => ({ data: undefined, isLoading: false }),
@@ -112,6 +120,9 @@ const renderPanel = (lake: ManagerLake = baseLake) =>
 beforeEach(() => {
   useGetLakeMemoryHealth.mockReset();
   useGetLakeMemoryHealth.mockReturnValue({ data: undefined });
+  useUnderChunkedCount.mockReset();
+  useUnderChunkedCount.mockReturnValue({ data: undefined });
+  rechunkMutate.mockClear();
   buildMutate.mockClear();
   purgeMutate.mockClear();
   buildPending.mockReset();
@@ -314,5 +325,62 @@ describe('LakeInfoPanel - erase memory (purge)', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByTestId('datalake-purge-memory-confirm')).not.toBeInTheDocument();
     expect(purgeMutate).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The re-embed door. This is the one lake defect with no symptom an owner can see: retrieval
+ * withholds a file embedded in a previous space wholesale rather than ranking it badly, so search
+ * looks healthy and simply omits part of the corpus. The affordance below is the only thing that
+ * tells anyone it happened - which is why its visibility rule is tested rather than eyeballed.
+ */
+describe('LakeInfoPanel - re-embed for search', () => {
+  const REEMBED = 'datalake-reembed-space-btn-lake-1';
+
+  it('offers the door with its count, and names the stale-space selector when clicked', async () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: 4 },
+    });
+    const user = userEvent.setup();
+    renderPanel();
+
+    expect(screen.getByTestId(REEMBED)).toHaveTextContent('Re-embed for search (4)');
+
+    await user.click(screen.getByTestId(REEMBED));
+    // The selector IS the whole difference between this door and Rebuild passages - they share the
+    // route, the reset and the mutation hook, so an omitted `select` silently runs the wrong wave.
+    expect(rechunkMutate).toHaveBeenCalledWith({ select: 'stale-embedding-space' });
+  });
+
+  it('stays hidden when every member is already in the current space', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 2, failedCount: 1, staleEmbeddingSpaceCount: 0 },
+    });
+    renderPanel();
+    expect(screen.queryByTestId(REEMBED)).not.toBeInTheDocument();
+  });
+
+  it('stays hidden when the server could not resolve an embedding space', () => {
+    // null is not a backlog. It covers a deployment with no usable embedding model AND a rolling
+    // deploy against a server predating the field, and offering a re-embed in either case would
+    // point owners at a wave with no space to land in.
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: null },
+    });
+    renderPanel();
+    expect(screen.queryByTestId(REEMBED)).not.toBeInTheDocument();
+  });
+
+  it('stays hidden before the status has loaded', () => {
+    renderPanel();
+    expect(screen.queryByTestId(REEMBED)).not.toBeInTheDocument();
+  });
+
+  it('stays hidden for a member who cannot rebuild the lake', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: 4 },
+    });
+    renderPanel({ ...baseLake, canRebuild: false });
+    expect(screen.queryByTestId(REEMBED)).not.toBeInTheDocument();
   });
 });
