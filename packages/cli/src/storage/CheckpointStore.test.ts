@@ -304,3 +304,49 @@ describe('CheckpointStore', () => {
     });
   });
 });
+
+describe('CheckpointStore repo-trust hardening', () => {
+  async function makeBareDir(): Promise<string> {
+    const dir = path.join(tmpdir(), `b4m-ckpt-hardening-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  it('refuses a symlinked shadow-repo and runs no git in the link target', async () => {
+    const proj = await makeBareDir();
+    const outside = await makeBareDir(); // stands in for wherever the link points
+    try {
+      await fs.mkdir(path.join(proj, '.b4m'), { recursive: true });
+      await fs.symlink(outside, path.join(proj, '.b4m', 'shadow-repo'));
+
+      const store = new CheckpointStore(proj);
+      await expect(store.init('sess')).rejects.toThrow(/symlink/i);
+
+      // No shadow git repo was initialized through the link.
+      expect(existsSync(path.join(outside, '.git'))).toBe(false);
+    } finally {
+      await cleanup(proj);
+      await cleanup(outside);
+    }
+  });
+
+  it('does not execute a planted git hook when committing a checkpoint', async () => {
+    const proj = await createTestProject();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      const canary = path.join(proj, 'HOOK_RAN');
+      const hooksDir = path.join(proj, '.b4m', 'shadow-repo', '.git', 'hooks');
+      await fs.writeFile(path.join(hooksDir, 'pre-commit'), `#!/bin/sh\ntouch "${canary}"\n`, { mode: 0o755 });
+
+      await fs.writeFile(path.join(proj, 'f.ts'), 'x', 'utf-8');
+      await store.createCheckpoint('create_file', ['f.ts']);
+
+      // core.hooksPath=/dev/null means the planted hook never fires.
+      expect(existsSync(canary)).toBe(false);
+    } finally {
+      await cleanup(proj);
+    }
+  });
+});

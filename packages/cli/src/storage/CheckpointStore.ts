@@ -62,6 +62,11 @@ export class CheckpointStore {
   async init(sessionId: string): Promise<void> {
     this.sessionId = sessionId;
 
+    // Refuse a symlinked/escaping checkpoint path BEFORE creating anything: a
+    // committed `.b4m/shadow-repo -> ../..` would make every git command run
+    // against the real checkout (or anywhere) instead of the sandbox.
+    await this.assertCheckpointPathsSafe();
+
     // Create .b4m directory
     await fs.mkdir(path.join(this.projectDir, '.b4m'), { recursive: true });
 
@@ -397,14 +402,52 @@ export class CheckpointStore {
   }
 
   /**
-   * Execute a git command in the shadow repo
+   * Refuse a checkpoint path that is a symlink or resolves outside the project.
+   * A planted `.b4m` or `.b4m/shadow-repo` symlink would redirect the shadow git
+   * repo out of the sandbox; lstat does not follow the link.
+   */
+  private async assertCheckpointPathsSafe(): Promise<void> {
+    const b4mDir = path.join(this.projectDir, '.b4m');
+
+    for (const p of [b4mDir, this.shadowRepoDir, this.metadataPath]) {
+      try {
+        if ((await fs.lstat(p)).isSymbolicLink()) {
+          throw new Error(`Refusing symlinked checkpoint path: ${p}`);
+        }
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        // ENOENT - not created yet, nothing to follow.
+      }
+    }
+
+    // Containment: the real .b4m must stay under the real project dir (guards a
+    // symlinked projectDir/.b4m). Skipped when .b4m does not exist yet.
+    try {
+      const realProject = await fs.realpath(this.projectDir);
+      const realB4m = await fs.realpath(b4mDir);
+      const base = path.join(realProject, '.b4m');
+      if (realB4m !== base && !realB4m.startsWith(base + path.sep)) {
+        throw new Error(`Checkpoint dir escaped project: ${realB4m}`);
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+  }
+
+  /**
+   * Execute a git command in the shadow repo.
+   *
+   * Neutralize ambient/planted git config so an attacker `.gitconfig` or hook in
+   * the clone cannot execute: /dev/null for global+system config, and
+   * `core.hooksPath=/dev/null` so no hook runs on commit.
    */
   private git(...args: string[]): string {
-    return execFileSync('git', args, {
+    return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...args], {
       cwd: this.shadowRepoDir,
       encoding: 'utf-8',
       stdio: ['pipe', 'pipe', 'pipe'],
       timeout: 10000,
+      env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' },
     });
   }
 
