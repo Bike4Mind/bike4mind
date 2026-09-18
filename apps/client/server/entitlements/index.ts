@@ -57,10 +57,19 @@ export interface EntitlementUser {
  * memoize per request (`req.entitlements`, following the `req.ability`
  * pattern) at the call site.
  */
-export async function getUserEntitlements(user: EntitlementUser): Promise<EntitlementKey[]> {
+export async function getUserEntitlements(
+  user: EntitlementUser,
+  /**
+   * The user's active subscriptions, when the caller has already loaded them - it
+   * is the same query this function would run. `/api/v1/me` passes them so `tier`
+   * and `entitlements` in one response are derived from one read, and therefore
+   * cannot disagree about whether the caller is paying.
+   */
+  preloadedActiveSubscriptions?: readonly { priceId: string }[]
+): Promise<EntitlementKey[]> {
   // Both reads are independent - run them together to avoid serializing two round-trips.
   const [activeSubscriptions, partnerKeys] = await Promise.all([
-    subscriptionRepository.findActiveUserSubscriptions(user.id),
+    preloadedActiveSubscriptions ?? subscriptionRepository.findActiveUserSubscriptions(user.id),
     partnerEntitlementsForEmail(user.email, user.emailVerified),
   ]);
   // DB-backed partner rules (issue #293) union with the pure registry grants
