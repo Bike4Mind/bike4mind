@@ -48,7 +48,14 @@ const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
             {lineCount} lines
           </Typography>
         }
-        renderPreview={() => <MermaidChart chartDefinition={artifact.content} readOnly />}
+        renderPreview={() => (
+          // Bounded like the react/html inline renders. Without a cap the card took whatever
+          // height the rendered SVG asked for, so re-rendering it - which opening and closing
+          // the viewer triggers - could leave the card standing at full diagram height.
+          <Box sx={{ height: '240px', overflow: 'auto' }}>
+            <MermaidChart chartDefinition={artifact.content} readOnly chromeless />
+          </Box>
+        )}
       />
     </Box>
   );

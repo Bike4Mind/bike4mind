@@ -13,6 +13,12 @@ interface MermaidChartProps {
   onChartChange?: (newDefinition: string) => void;
   readOnly?: boolean;
   className?: string;
+  /**
+   * Drop the tab strip and toolbar and render the diagram alone. For the inline artifact
+   * card, whose job is to say what the artifact is: switching to source and exporting are
+   * the viewer's affordances, and a card carrying its own set duplicated the card's row.
+   */
+  chromeless?: boolean;
 }
 
 const MermaidChart: React.FC<MermaidChartProps> = ({
@@ -22,6 +28,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
   onChartChange,
   readOnly = true,
   className,
+  chromeless = false,
 }) => {
   const theme = useTheme();
   const { showSnackbar } = useSnackbar();
@@ -46,16 +53,33 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
     if (activeTab !== 'chart' || !elementRef.current) return;
 
     let cancelled = false;
+    let retryFrame: number | null = null;
     const container = elementRef.current;
 
     const renderChart = async () => {
       if (cancelled || !elementRef.current) return;
-      // Don't render into a zero-size container - wait for ResizeObserver to retry
-      if (elementRef.current.offsetWidth === 0 && typeof process !== 'undefined' && process.env.NODE_ENV !== 'test')
+      // Don't render into a zero-size container, and retry on the next frame rather than
+      // waiting for a resize that may never come. The observer below only fires on a LATER
+      // size change, so a card whose container measures 0 on first paint and is never
+      // resized again stayed blank until something else moved the layout - opening the
+      // artifact viewer, say, which is how this surfaced.
+      if (elementRef.current.offsetWidth === 0 && typeof process !== 'undefined' && process.env.NODE_ENV !== 'test') {
+        retryFrame = requestAnimationFrame(() => {
+          retryFrame = null;
+          renderChart();
+        });
         return;
+      }
       try {
         setError(null);
-        const { svg } = await mermaid.render('mermaid-chart', localDefinition);
+        // Unique per render: mermaid injects a temporary element under this id, so two
+        // charts sharing one collide - and the same diagram routinely mounts twice at once
+        // (the inline card and the artifact viewer). The loser rendered nothing until some
+        // later re-render happened to find the id free, which is why closing the viewer
+        // appeared to "fix" a blank card. Matches TavernArtifactRenderer, which already
+        // generates a unique id.
+        const renderId = 'mermaid-chart-' + Math.random().toString(36).slice(2);
+        const { svg } = await mermaid.render(renderId, localDefinition);
         if (cancelled || !elementRef.current) return;
 
         elementRef.current.innerHTML = '';
@@ -98,6 +122,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
 
     return () => {
       cancelled = true;
+      if (retryFrame !== null) cancelAnimationFrame(retryFrame);
       observer.disconnect();
     };
   }, [theme.palette.mode, localDefinition, activeTab]);
@@ -221,45 +246,47 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
         onChange={(_, v) => setActiveTab(v as 'chart' | 'source')}
         sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
-          <ArtifactModeTabs
-            previewValue="chart"
-            codeValue="source"
-            previewTestId="mermaid-chart-tab"
-            codeTestId="mermaid-source-tab"
-          />
+        {!chromeless && (
+          <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
+            <ArtifactModeTabs
+              previewValue="chart"
+              codeValue="source"
+              previewTestId="mermaid-chart-tab"
+              codeTestId="mermaid-source-tab"
+            />
 
-          {/* Actions */}
-          <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
-            <IconButton
-              size="sm"
-              variant="soft"
-              onClick={handleCopyDefinition}
-              title="Copy chart definition"
-              data-testid="mermaid-copy-definition-btn"
-            >
-              <Code />
-            </IconButton>
-            <IconButton
-              size="sm"
-              variant="soft"
-              onClick={handleCopy}
-              title={activeTab === 'source' ? 'Copy source code' : 'Copy as PNG'}
-              data-testid="mermaid-copy-btn"
-            >
-              <ContentCopy />
-            </IconButton>
-            <IconButton
-              size="sm"
-              variant="soft"
-              onClick={handleExportPNG}
-              title="Download as PNG"
-              data-testid="mermaid-download-btn"
-            >
-              <Download />
-            </IconButton>
+            {/* Actions */}
+            <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+              <IconButton
+                size="sm"
+                variant="soft"
+                onClick={handleCopyDefinition}
+                title="Copy chart definition"
+                data-testid="mermaid-copy-definition-btn"
+              >
+                <Code />
+              </IconButton>
+              <IconButton
+                size="sm"
+                variant="soft"
+                onClick={handleCopy}
+                title={activeTab === 'source' ? 'Copy source code' : 'Copy as PNG'}
+                data-testid="mermaid-copy-btn"
+              >
+                <ContentCopy />
+              </IconButton>
+              <IconButton
+                size="sm"
+                variant="soft"
+                onClick={handleExportPNG}
+                title="Download as PNG"
+                data-testid="mermaid-download-btn"
+              >
+                <Download />
+              </IconButton>
+            </Box>
           </Box>
-        </Box>
+        )}
 
         <TabPanel value="chart" sx={{ flex: 1, overflow: 'hidden', p: 1, height: 0 }}>
           {error ? (
