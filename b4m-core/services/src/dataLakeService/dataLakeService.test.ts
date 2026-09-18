@@ -761,6 +761,7 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     expect(row?.canManage).toBe(true);
     // A curator is not an owner, so the manage right must not be reported as ownership.
     expect(row?.isOwn).toBe(false);
+    expect(row?.canManageMemory).toBe(false);
   });
 
   it('reports a transferred owner as both manageable and own', async () => {
@@ -772,6 +773,7 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     expect(row?.canManage).toBe(true);
     // An owner grant supersedes createdByUserId, so this is the one grant role that is ownership.
     expect(row?.isOwn).toBe(true);
+    expect(row?.canManageMemory).toBe(true);
   });
 
   it('excludes a reader-only granted lake while the read-grant cutover is off', async () => {

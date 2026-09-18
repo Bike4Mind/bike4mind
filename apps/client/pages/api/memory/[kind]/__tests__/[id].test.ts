@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
-  assertLakeAccess: vi.fn(),
+  assertLakeAccessWithGrants: vi.fn(),
   canShredLakeMemory: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'caller-1', isAdmin: false })),
   readPrincipalMemory: vi.fn(),
@@ -16,7 +16,7 @@ const h = vi.hoisted(() => ({
 }));
 
 // baseApi mock: a callable chain routed by req.method (same shape as the lifecycle test). It does NOT
-// wrap the handler in an error boundary, so a thrown assertLakeAccess denial propagates out of the
+// wrap the handler in an error boundary, so a thrown access denial propagates out of the
 // call - which is exactly how we assert that access denial is delegated to baseApi's onError (a 404).
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
@@ -62,7 +62,10 @@ vi.mock('@bike4mind/memory', () => ({
 }));
 
 vi.mock('@bike4mind/services', () => ({
-  dataLakeService: { assertLakeAccess: h.assertLakeAccess, canShredLakeMemory: h.canShredLakeMemory },
+  dataLakeService: {
+    assertLakeAccessWithGrants: h.assertLakeAccessWithGrants,
+    canShredLakeMemory: h.canShredLakeMemory,
+  },
 }));
 
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
@@ -118,6 +121,7 @@ const LAKE = { id: 'lake-1', datalakeTag: 'tag-abc', createdByUserId: 'creator-1
 
 beforeEach(() => {
   vi.clearAllMocks();
+  h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: [] });
   h.toAccessContext.mockResolvedValue({ userId: 'caller-1', isAdmin: false });
   h.setLakeMemoryCursor.mockResolvedValue(undefined);
   h.stampLakeMemoryPurge.mockResolvedValue(undefined);
@@ -129,7 +133,6 @@ beforeEach(() => {
 
 describe('GET /api/memory/lake/:id - org-shared read', () => {
   it('reads the lake ledger under the creator key, keyed by datalakeTag (not the URL id)', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.readPrincipalMemory.mockResolvedValue({ beliefs: [{ id: 'b1', fact: 'x', embedding: [0.1, 0.2] }] });
     const { res, status, json } = makeRes();
 
@@ -145,7 +148,7 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
   });
 
   it('returns 404 for a static-registry (fallback) lake that has no creator/keyed ledger', async () => {
-    h.assertLakeAccess.mockResolvedValue({ ...LAKE, createdByUserId: '' });
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { ...LAKE, createdByUserId: '' }, grants: [] });
     const { res, status } = makeRes();
 
     await invoke(makeReq({ method: 'GET', kind: 'lake', id: 'lake-1' }), res);
@@ -155,7 +158,6 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
   });
 
   it('returns 404 when the lake has no memory profile yet', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.readPrincipalMemory.mockResolvedValue(null);
     const { res, status } = makeRes();
 
@@ -164,8 +166,8 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
     expect(status).toHaveBeenCalledWith(404);
   });
 
-  it('delegates an access denial to baseApi (assertLakeAccess throws -> propagates, becomes a 404)', async () => {
-    h.assertLakeAccess.mockRejectedValue(new Error('NotFound'));
+  it('delegates an access denial to baseApi (the lake access gate throws -> propagates, becomes a 404)', async () => {
+    h.assertLakeAccessWithGrants.mockRejectedValue(new Error('NotFound'));
     const { res } = makeRes();
 
     await expect(invoke(makeReq({ method: 'GET', kind: 'lake', id: 'lake-1' }), res)).rejects.toThrow('NotFound');
@@ -175,7 +177,6 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
   // already distilled from it, so extracted content can outlive its only source - and no later purge
   // can reach it, because purges are keyed by source id.
   it('withholds a lake belief whose every cited source has been destroyed, and says how many', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.readPrincipalMemory.mockResolvedValue({
       beliefs: [
         { id: 'live', fact: 'still sourced', sources: ['doc-alive'] },
@@ -194,7 +195,6 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
   });
 
   it('keeps a belief with one surviving source among several destroyed ones', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.readPrincipalMemory.mockResolvedValue({
       beliefs: [{ id: 'partial', fact: 'x', sources: ['doc-gone', 'doc-alive'] }],
     });
@@ -211,7 +211,6 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
   // A source-less belief is not an orphan: nothing was destroyed. Treating an empty list as evidence
   // of a purge would silently hide beliefs no purge ever touched.
   it('keeps a belief that cites no sources at all', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.readPrincipalMemory.mockResolvedValue({ beliefs: [{ id: 'sourceless', fact: 'x' }] });
     h.findExistingIdsByIds.mockResolvedValue([]);
     const { res, json } = makeRes();
@@ -234,7 +233,6 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
   });
 
   it('filters the ?q recall arm too, not just the profile listing', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     const orphan = { id: 'orphan', fact: 'from a destroyed doc', sources: ['doc-gone'] };
     h.readPrincipalMemory.mockResolvedValue({ beliefs: [orphan] });
     h.findExistingIdsByIds.mockResolvedValue([]);
@@ -249,7 +247,6 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
   });
 
   it('includes ACT-R recall when ?q is present', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.readPrincipalMemory.mockResolvedValue({ beliefs: [{ id: 'b1', fact: 'x', embedding: [0.1] }] });
     h.recall.mockReturnValue([{ belief: { id: 'b1', fact: 'x', embedding: [0.1] }, relevance: 0.9, score: 1.2 }]);
     const { res, status, json } = makeRes();
@@ -264,9 +261,8 @@ describe('GET /api/memory/lake/:id - org-shared read', () => {
   });
 });
 
-describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
+describe('DELETE /api/memory/lake/:id - owner-gated crypto-shred', () => {
   it('whole-lake purge crypto-shreds the ledger for the creator, keyed by datalakeTag', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.canShredLakeMemory.mockReturnValue(true);
     h.shredPrincipalMemory.mockResolvedValue(5);
     const { res, status, json } = makeRes();
@@ -275,7 +271,8 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
 
     expect(h.canShredLakeMemory).toHaveBeenCalledWith(
       { createdByUserId: 'creator-1' },
-      { userId: 'creator-1', isAdmin: false }
+      { userId: 'creator-1', isAdmin: false },
+      []
     );
     expect(h.shredPrincipalMemory).toHaveBeenCalledWith(
       expect.anything(),
@@ -303,7 +300,6 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
   });
 
   it('a single ?subject shreds one belief (no memento twin - lake memory is pure ledger)', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.canShredLakeMemory.mockReturnValue(true);
     h.shredBelief.mockResolvedValue(1);
     const { res, status, json } = makeRes();
@@ -327,20 +323,38 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
     expect(json).toHaveBeenCalledWith({ ok: true, shredded: 1, deleted: 1 });
   });
 
-  it('a reader who is not the creator gets 403 (not 404 - they can see the lake) and no shred runs', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
-    h.canShredLakeMemory.mockReturnValue(false);
+  it('passes active owner grants to the shred gate so a transferred owner can delete memory', async () => {
+    const ownerGrants = [{ principalType: 'user', principalId: 'new-owner', role: 'owner' }];
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: ownerGrants });
+    h.canShredLakeMemory.mockReturnValue(true);
+    h.shredPrincipalMemory.mockResolvedValue(2);
     const { res, status } = makeRes();
+
+    await invoke(makeReq({ method: 'DELETE', kind: 'lake', id: 'lake-1', user: { id: 'new-owner' } }), res);
+
+    expect(h.canShredLakeMemory).toHaveBeenCalledWith(
+      { createdByUserId: 'creator-1' },
+      { userId: 'new-owner', isAdmin: false },
+      ownerGrants
+    );
+    expect(status).toHaveBeenCalledWith(200);
+  });
+
+  it('a reader who is not the owner gets 403 (not 404 - they can see the lake) and no shred runs', async () => {
+    h.canShredLakeMemory.mockReturnValue(false);
+    const { res, status, json } = makeRes();
 
     await invoke(makeReq({ method: 'DELETE', kind: 'lake', id: 'lake-1', user: { id: 'not-creator' } }), res);
 
     expect(status).toHaveBeenCalledWith(403);
+    // The copy is pinned, not incidental: it is what a denied caller reads, and naming the OWNER
+    // rather than the creator is the half of this gate's widening that reaches a human.
+    expect(json).toHaveBeenCalledWith({ error: 'Only the lake owner can delete its memory.' });
     expect(h.shredPrincipalMemory).not.toHaveBeenCalled();
     expect(h.shredBelief).not.toHaveBeenCalled();
   });
 
-  it('an admin who is not the creator may shred (isAdmin flows into the shred check)', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
+  it('an admin who is not the owner may shred (isAdmin flows into the shred check)', async () => {
     h.canShredLakeMemory.mockReturnValue(true);
     h.shredPrincipalMemory.mockResolvedValue(2);
     const { res, status } = makeRes();
@@ -352,7 +366,8 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
 
     expect(h.canShredLakeMemory).toHaveBeenCalledWith(
       { createdByUserId: 'creator-1' },
-      { userId: 'admin-1', isAdmin: true }
+      { userId: 'admin-1', isAdmin: true },
+      []
     );
     expect(status).toHaveBeenCalledWith(200);
   });
@@ -363,7 +378,6 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
    * stamp is `$max` plus a constant `$set`, so it is idempotent), then the truth on both channels.
    */
   it('retries the fence stamp once, and a landing retry is an ordinary success', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.canShredLakeMemory.mockReturnValue(true);
     h.shredPrincipalMemory.mockResolvedValue(3);
     h.stampLakeMemoryPurge.mockRejectedValueOnce(new Error('write concern timeout')).mockResolvedValueOnce(undefined);
@@ -378,7 +392,6 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
   });
 
   it('audits the destruction and reports 500 with the truth when the fence cannot be raised at all', async () => {
-    h.assertLakeAccess.mockResolvedValue(LAKE);
     h.canShredLakeMemory.mockReturnValue(true);
     h.shredPrincipalMemory.mockResolvedValue(3);
     h.stampLakeMemoryPurge.mockRejectedValue(new Error('write concern timeout'));
@@ -407,7 +420,7 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
     // filter instead of matching on it - so an unguarded tag would turn this keyed crypto-shred into
     // `{ principalKind: 'lake' }` with no id, destroying every lake's key in the collection, other
     // tenants' included. extractLakeMemory and recallLakeMemoryForSession guard the same pair.
-    h.assertLakeAccess.mockResolvedValue({ ...LAKE, datalakeTag: undefined });
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { ...LAKE, datalakeTag: undefined }, grants: [] });
     const { res, status } = makeRes();
 
     await invoke(makeReq({ method: 'DELETE', kind: 'lake', id: 'lake-1', user: { id: 'creator-1' } }), res);
@@ -418,7 +431,7 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
   });
 
   it('returns 404 for a fallback lake before any manage check runs', async () => {
-    h.assertLakeAccess.mockResolvedValue({ ...LAKE, createdByUserId: '' });
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { ...LAKE, createdByUserId: '' }, grants: [] });
     const { res, status } = makeRes();
 
     await invoke(makeReq({ method: 'DELETE', kind: 'lake', id: 'lake-1', user: { id: 'creator-1' } }), res);
@@ -434,7 +447,7 @@ describe('DELETE /api/memory/lake/:id - manage-gated crypto-shred', () => {
     await invoke(unauthedReq, res);
 
     expect(status).toHaveBeenCalledWith(401);
-    expect(h.assertLakeAccess).not.toHaveBeenCalled();
+    expect(h.assertLakeAccessWithGrants).not.toHaveBeenCalled();
   });
 });
 
@@ -458,7 +471,7 @@ describe('kind boundary + owner-scoped regression guards', () => {
     await invoke(makeReq({ method: 'GET', kind: 'user', id: 'caller-1' }), res);
 
     expect(h.readPrincipalMemory).toHaveBeenCalledWith({ kind: 'user', id: 'caller-1' }, expect.anything());
-    expect(h.assertLakeAccess).not.toHaveBeenCalled();
+    expect(h.assertLakeAccessWithGrants).not.toHaveBeenCalled();
     expect(status).toHaveBeenCalledWith(200);
   });
 

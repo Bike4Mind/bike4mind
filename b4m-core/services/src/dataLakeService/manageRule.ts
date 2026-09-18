@@ -58,21 +58,26 @@ export function isLakeCreator(
  * May this actor DESTROY the lake's memory profile? Deliberately NARROWER than `canManageLake`.
  *
  * Reading a lake is org-shared and managing one is grant-aware, but an irreversible crypto-shred of
- * what the whole org reads is creator-or-platform-admin only. No grants and no org rung: a curator or
- * org admin may build the profile and may not erase it.
+ * what the whole org reads is effective-owner-or-platform-admin only. Curator and org-admin rungs may
+ * build the profile and may not erase it. Following effective ownership ensures a transfer also moves
+ * the responsibility for deleting the profile away from the former creator.
  *
  * Named and exported so the API gate and the UI's button flag consult ONE predicate. They were two
  * open-coded expressions - the button rendered on the grant-aware `canManage` while the endpoint
  * called `canManageLake` with neither grants nor `organizationId`, which silently reduces it to this
  * - so curator-grant holders, org admins and transferred owners were all offered a button the
  * endpoint answered with a 403.
+ *
+ * `grants` must be the lake's active, pre-fetched grants. Requiring the snapshot makes an omitted
+ * transfer state a compile error instead of silently restoring the immutable creator's authority.
  */
 export function canShredLakeMemory(
   lake: Pick<IDataLakeDocument, 'createdByUserId'>,
-  actor: Pick<ManageActor, 'userId' | 'isAdmin'>
+  actor: Pick<ManageActor, 'userId' | 'isAdmin'>,
+  grants: readonly LakeGrant[]
 ): boolean {
   if (actor.isAdmin) return true;
-  return isLakeCreator(lake, actor);
+  return isEffectiveOwner(lake, actor, grants);
 }
 
 /**
