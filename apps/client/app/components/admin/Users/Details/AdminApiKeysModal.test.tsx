@@ -95,7 +95,14 @@ describe('AdminApiKeysModal', () => {
   it('shows a bare success toast when neither counter was at its ceiling', () => {
     h.keys = [KEY];
     h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
-      opts?.onSuccess?.({ success: true, id: 'k1', lockout: {} })
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: {
+          request: { minuteAtLimit: false, dayAtLimit: false },
+          management: { minuteAtLimit: false, dayAtLimit: false },
+        },
+      })
     );
     renderModal();
 
@@ -110,7 +117,10 @@ describe('AdminApiKeysModal', () => {
       opts?.onSuccess?.({
         success: true,
         id: 'k1',
-        lockout: { request: { minuteAtLimit: true, dayAtLimit: false }, management: undefined },
+        lockout: {
+          request: { minuteAtLimit: true, dayAtLimit: false },
+          management: { minuteAtLimit: false, dayAtLimit: false },
+        },
       })
     );
     renderModal();
@@ -128,7 +138,10 @@ describe('AdminApiKeysModal', () => {
       opts?.onSuccess?.({
         success: true,
         id: 'k1',
-        lockout: { request: undefined, management: { minuteAtLimit: false, dayAtLimit: true } },
+        lockout: {
+          request: { minuteAtLimit: false, dayAtLimit: false },
+          management: { minuteAtLimit: false, dayAtLimit: true },
+        },
       })
     );
     renderModal();
@@ -138,6 +151,38 @@ describe('AdminApiKeysModal', () => {
     expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
       'Rate limit reset for "pipeline key" - management counter was at its ceiling'
     );
+  });
+
+  it('flags a counter that failed to clear as unverified, distinct from one confirmed clear', () => {
+    // An undefined entry means clearing that counter itself failed - it must not read as
+    // "confirmed not at its ceiling", which would hide a clear failure behind a clean-looking
+    // toast.
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: { request: undefined, management: { minuteAtLimit: false, dayAtLimit: false } },
+      })
+    );
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      'Rate limit reset for "pipeline key" - request counter could not be verified'
+    );
+  });
+
+  it('shows a bare success toast without throwing when the response has no lockout field (deploy skew)', () => {
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({ success: true, id: 'k1' })
+    );
+    renderModal();
+
+    expect(() => fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'))).not.toThrow();
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Rate limit reset for "pipeline key"');
   });
 
   it('names both counters when both were at their ceiling', () => {
