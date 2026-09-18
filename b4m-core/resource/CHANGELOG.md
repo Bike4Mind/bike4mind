@@ -1,5 +1,11 @@
 # @bike4mind/resource
 
+## 0.7.1
+
+### Patch Changes
+
+- [#2957](https://github.com/Bike4Mind/bike4mind/pull/2957) [`7aab21b`](https://github.com/Bike4Mind/bike4mind/commit/7aab21bf76b84a1572904dcd684154f725962b3e) Thanks [@onoya](https://github.com/onoya)! - declare APP_URL so CSRF-protected routes stop returning 403
+
 ## 0.7.0
 
 ### Minor Changes

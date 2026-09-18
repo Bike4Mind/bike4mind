@@ -1,5 +1,21 @@
 # @bike4mind/common
 
+## 10.1.0
+
+### Minor Changes
+
+- [#2949](https://github.com/Bike4Mind/bike4mind/pull/2949) [`8e31cbf`](https://github.com/Bike4Mind/bike4mind/commit/8e31cbfad875f80f372f16032f487cde1e624ce1) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - add an org-level feedback analysis report
+
+### Patch Changes
+
+- [#2977](https://github.com/Bike4Mind/bike4mind/pull/2977) [`4ce553e`](https://github.com/Bike4Mind/bike4mind/commit/4ce553ebc6d706aef224317811c004f64a8df5f3) Thanks [@dea0030](https://github.com/dea0030)! - bill 'auto' GPT-Image quality at the ceiling tier
+
+- [#2981](https://github.com/Bike4Mind/bike4mind/pull/2981) [`3593192`](https://github.com/Bike4Mind/bike4mind/commit/3593192f407f6a1a337824d2d2b1d5e9d9065a8e) Thanks [@onoya](https://github.com/onoya)! - let tool narrowing reach MCP tools
+
+- [#2991](https://github.com/Bike4Mind/bike4mind/pull/2991) [`f687f87`](https://github.com/Bike4Mind/bike4mind/commit/f687f87600e726f00d1a480d12b8e72bbe3f9691) Thanks [@dea0030](https://github.com/dea0030)! - bill edit-image for the one image it renders, not the requested n
+
+- [#3022](https://github.com/Bike4Mind/bike4mind/pull/3022) [`34443c6`](https://github.com/Bike4Mind/bike4mind/commit/34443c6911e1e96197c2f1d6306fc3ebabde5153) Thanks [@onoya](https://github.com/onoya)! - follow effective ownership for lake memory shredding
+
 ## 10.0.0
 
 ### Major Changes
