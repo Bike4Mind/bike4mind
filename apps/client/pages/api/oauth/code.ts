@@ -57,7 +57,16 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
       .json({ error: 'invalid_request', error_description: 'code_challenge is required (PKCE) for this client' });
   }
 
-  const requestedScopes = scope.split(' ').filter(s => client.allowedScopes.includes(s));
+  // Reject any scope the client is not registered for (RFC 6749 4.1.2.1) rather than silently
+  // dropping it, so a client that asks for more than it may have gets a clear error instead of a
+  // narrower grant it never notices.
+  const requestedScopes = scope.split(' ').filter(Boolean);
+  const disallowedScopes = requestedScopes.filter(s => !client.allowedScopes.includes(s));
+  if (disallowedScopes.length > 0) {
+    return res
+      .status(400)
+      .json({ error: 'invalid_scope', error_description: `Unsupported scope(s): ${disallowedScopes.join(' ')}` });
+  }
 
   // Consent gate (relying-party clients only; first-party clients keep the silent auto-redirect).
   // No code is minted until a grant covering the requested scopes exists. A remembered grant skips

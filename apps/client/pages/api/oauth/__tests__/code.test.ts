@@ -115,6 +115,20 @@ describe('POST /api/oauth/code PKCE hardening', () => {
     expect(res.body?.code).toBe('the-code');
     expect(h.generateAuthCode).toHaveBeenCalledOnce();
   });
+
+  it('rejects a scope the client is not registered for (400 invalid_scope), minting no code', async () => {
+    (h.validateClient as Mock).mockResolvedValue({
+      tokenEndpointAuthMethod: 'client_secret_post',
+      allowedScopes: ['openid', 'email', 'profile'],
+    });
+
+    const res = await call({ ...baseBody, scope: 'openid admin:everything' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_scope');
+    expect(res.body?.error_description).toMatch(/admin:everything/);
+    expect(h.generateAuthCode).not.toHaveBeenCalled();
+  });
 });
 
 /**
