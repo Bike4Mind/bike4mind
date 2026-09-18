@@ -222,16 +222,41 @@ describe('GET /api/organizations/:id/feedback-summary', () => {
     expect(res._getJSONData()).toEqual({ status: 'none' });
   });
 
+  const VALID_ARTIFACT = {
+    summaryJobId: 'sum-1',
+    organizationId: 'org1',
+    range: { from: WINDOW.startDate, to: WINDOW.endDate },
+    generatedAt: '2026-02-01T00:00:00.000Z',
+    model: 'claude-haiku',
+    summary: 'Steady week.',
+    counts: {
+      totals: { count: 3 },
+      byDay: [{ day: '2026-01-15', count: 3 }],
+      bySubject: [{ key: 'chat', count: 3 }],
+      byType: [{ key: 'bug', count: 3 }],
+      byStatus: [{ key: 'open', count: 3 }],
+      byTag: [],
+    },
+  };
+
   it('reads the artifact back for a completed job', async () => {
-    const artifact = { summaryJobId: 'sum-1', summary: 'Steady week.' };
     jobFindOne.mockReturnValue({
       sort: () => ({ lean: async () => ({ summaryJobId: 'sum-1', status: 'completed', s3Key: 'k' }) }),
     } as never);
-    mockRefs.getContentAsString = async () => JSON.stringify(artifact);
+    mockRefs.getContentAsString = async () => JSON.stringify(VALID_ARTIFACT);
 
     const res = await runGet();
 
-    expect(res._getJSONData()).toEqual({ status: 'completed', summaryJobId: 'sum-1', artifact });
+    expect(res._getJSONData()).toEqual({ status: 'completed', summaryJobId: 'sum-1', artifact: VALID_ARTIFACT });
+  });
+
+  it('fails explicitly instead of serving a corrupt S3 artifact', async () => {
+    jobFindOne.mockReturnValue({
+      sort: () => ({ lean: async () => ({ summaryJobId: 'sum-1', status: 'completed', s3Key: 'k' }) }),
+    } as never);
+    mockRefs.getContentAsString = async () => JSON.stringify({ summaryJobId: 'sum-1', summary: 'Steady week.' });
+
+    await expect(runGet()).rejects.toThrow(/corrupt/i);
   });
 
   it('reports a failed job with its reason instead of an artifact', async () => {

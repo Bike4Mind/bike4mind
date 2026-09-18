@@ -3,7 +3,8 @@
 // for that window, artifact and all. Same owner/manager gate as the counts route on both, and the
 // worker that consumes the message reports back over the websocket.
 
-import type { OrgFeedbackSummaryArtifact, OrgFeedbackSummaryView } from '@bike4mind/common';
+import type { OrgFeedbackSummaryView } from '@bike4mind/common';
+import { orgFeedbackSummaryArtifactSchema } from '@bike4mind/common';
 import {
   OrgFeedbackSummaryJob,
   ORG_FEEDBACK_SUMMARY_ACTIVE_KEY,
@@ -13,7 +14,7 @@ import { S3Storage } from '@bike4mind/fab-pipeline';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, InternalServerError } from '@server/utils/errors';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { resolveInstantWindow } from '@server/utils/orgFeedbackWindow';
 import { sendToQueue } from '@server/utils/sqs';
@@ -90,10 +91,17 @@ const handler = baseApi()
       }
 
       const raw = await new S3Storage(Resource.appFilesBucket.name).getContentAsString(job.s3Key);
+      const parsed = orgFeedbackSummaryArtifactSchema.safeParse(JSON.parse(raw));
+      // A completed job whose S3 body no longer matches the artifact shape is a data-integrity
+      // problem, not a bad request - fail loudly rather than hand the caller a lie.
+      if (!parsed.success) {
+        throw new InternalServerError(`Corrupt org feedback summary artifact for job ${job.summaryJobId}`);
+      }
+
       return res.status(200).json({
         status: 'completed',
         summaryJobId: job.summaryJobId,
-        artifact: JSON.parse(raw) as OrgFeedbackSummaryArtifact,
+        artifact: parsed.data,
       } satisfies OrgFeedbackSummaryView);
     }
   )

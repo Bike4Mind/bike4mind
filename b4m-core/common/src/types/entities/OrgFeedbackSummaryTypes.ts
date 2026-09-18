@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import type { FeedbackCountBucket } from './FeedbackTypes';
 
 /** Discriminator the org feedback summary carries on the shared quest-export queue. */
@@ -33,6 +34,31 @@ export interface OrgFeedbackSummaryArtifact {
   summary: string;
   counts: OrgFeedbackSummaryCounts;
 }
+
+const feedbackCountBucketSchema = z.object({ key: z.string(), count: z.number() });
+
+const orgFeedbackSummaryCountsSchema = z.object({
+  totals: z.object({ count: z.number() }),
+  byDay: z.array(z.object({ day: z.string(), count: z.number() })),
+  bySubject: z.array(feedbackCountBucketSchema),
+  byType: z.array(feedbackCountBucketSchema),
+  byStatus: z.array(feedbackCountBucketSchema),
+  byTag: z.array(feedbackCountBucketSchema),
+}) satisfies z.ZodType<OrgFeedbackSummaryCounts>;
+
+/**
+ * Validates the S3-persisted artifact at the read boundary. `satisfies` keeps this shape pinned to
+ * `OrgFeedbackSummaryArtifact` at compile time, so the two cannot drift silently.
+ */
+export const orgFeedbackSummaryArtifactSchema = z.object({
+  summaryJobId: z.string(),
+  organizationId: z.string(),
+  range: z.object({ from: z.string(), to: z.string() }),
+  generatedAt: z.string(),
+  model: z.string(),
+  summary: z.string(),
+  counts: orgFeedbackSummaryCountsSchema,
+}) satisfies z.ZodType<OrgFeedbackSummaryArtifact>;
 
 /**
  * GET /api/organizations/:id/feedback-summary for one window.
