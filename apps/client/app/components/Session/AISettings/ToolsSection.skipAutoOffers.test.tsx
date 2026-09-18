@@ -103,4 +103,15 @@ describe('ToolsSection - "Only tools I pick" row', () => {
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     expect(toggleOf(container)!.getAttribute('aria-checked')).toBe('true');
   });
+
+  // The flag also feeds `offerOnlyNamedTools`, which withholds every non-agent-only MCP
+  // tool (sharedToolBuilder.ts). MCP servers are picked per server in this same panel and
+  // nothing in the UI names an individual MCP tool, so a user who reads only the label has
+  // no way to learn that turning this on drops the integrations they toggled on above.
+  it('tells the user that connected integrations are withheld too', () => {
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    const row = container.querySelector('.tool-item-skip-auto-offers');
+    expect(row?.textContent).toContain('integrations');
+    expect(row?.textContent).toContain('Turn this off');
+  });
 });
