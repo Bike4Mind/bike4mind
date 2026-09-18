@@ -5,13 +5,9 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
-import {
-  evaluateCounterLockout,
-  getApiKeyRateLimitUsage,
-  MANAGEMENT_RATE_LIMIT,
-  resetApiKeyRateLimit,
-} from '@server/utils/apiKeyRateLimitCheck';
+import { evaluateCounterLockout, resetApiKeyRateLimit, resolveCounterLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { UserApiKeyEvents } from '@bike4mind/common';
+import { userApiKeyService } from '@bike4mind/services';
 
 /**
  * POST /api/admin/user-api-keys/[id]/reset-rate-limit
@@ -26,10 +22,15 @@ import { UserApiKeyEvents } from '@bike4mind/common';
  * other path back.
  *
  * Response includes `lockout`: per-counter (request/management), per-window
- * (minute/day) whether usage was at/over its ceiling just before this reset -
- * the only way to tell an admin which counter actually caused the lockout,
- * since the reset below clears that state. Best-effort: a counter's entry is
- * undefined if its usage read failed, but that never blocks the reset itself.
+ * (minute/day) whether usage was at/over its ceiling at the moment it was
+ * reset - the only way to tell an admin which counter actually caused the
+ * lockout, since the reset clears that state. Derived directly from what
+ * `resetApiKeyRateLimit` atomically deleted (read and delete happen as one
+ * operation per counter), never from a separate pre-read - a separate read
+ * would leave a window for a concurrent request to move a counter between
+ * "observed" and "cleared", misreporting the cause. A `lockout` entry is
+ * omitted only if clearing that specific counter failed - best-effort, and
+ * never blocks clearing (or reporting) the other counter.
  */
 const handler = baseApi({ auth: true })
   .use(csrfProtection())
@@ -49,29 +50,15 @@ const handler = baseApi({ auth: true })
         throw new NotFoundError('API key not found');
       }
 
-      // Read usage before the reset clears it - this is the only point at
-      // which we can tell the admin which counter(s) actually caused the
-      // lockout (request vs. management, minute vs. day). Best-effort: this
-      // is a diagnostic on top of the reset, not a precondition for it, so a
-      // read failure (e.g. a transient cache blip) must never stop the reset
-      // itself - this route is the only operator override for a key locked
-      // out of its own management quota.
-      const [requestUsage, managementUsage] = await Promise.all([
-        getApiKeyRateLimitUsage(apiKey.id).catch(error => {
-          req.logger.warn(`Failed to read request rate-limit usage for API key ${apiKey.id}: ${error}`);
-          return undefined;
-        }),
-        getApiKeyRateLimitUsage(apiKey.id, 'management').catch(error => {
-          req.logger.warn(`Failed to read management rate-limit usage for API key ${apiKey.id}: ${error}`);
-          return undefined;
-        }),
-      ]);
+      const resetUsage = await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true });
+      const rateLimit = apiKey.rateLimit ?? userApiKeyService.API_KEY_RATE_LIMIT_DEFAULTS;
       const lockout = {
-        request: requestUsage && evaluateCounterLockout(requestUsage, apiKey.rateLimit),
-        management: managementUsage && evaluateCounterLockout(managementUsage, MANAGEMENT_RATE_LIMIT),
+        request:
+          resetUsage.request && evaluateCounterLockout(resetUsage.request, resolveCounterLimit('request', rateLimit)),
+        management:
+          resetUsage.management &&
+          evaluateCounterLockout(resetUsage.management, resolveCounterLimit('management', rateLimit)),
       };
-
-      await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true });
 
       // Attributed to the key owner; resetBy records the acting admin.
       // Best-effort: the reset already happened, and the counter write throws
