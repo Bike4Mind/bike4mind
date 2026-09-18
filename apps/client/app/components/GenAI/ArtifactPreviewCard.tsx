@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Box, Button, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
-import type { Theme } from '@mui/joy';
 import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
 import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import {
@@ -25,22 +24,14 @@ import type { ArtifactType } from '@bike4mind/common';
 // Shared by copy / save / open-in-viewer: 18px glyphs dimmed to 70%, brightening to full
 // on hover, over the same hover fill the sidebar items use (notebooklist.hoverBg) rather
 // than Joy's default plain-variant hover. Joy icons take their color from --Icon-color.
+import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
+
+// Re-exported so existing importers keep working; it lives in common/ to keep this module
+// out of the markdown renderer's import graph (see the note on the recipe itself).
+export { actionButtonSx };
+
 /** How much of a non-rendering artifact's source a card shows before offering the rest. */
 const SOURCE_COLLAPSED_MAX_HEIGHT = 360;
-
-export const actionButtonSx = (theme: Theme) => ({
-  // Joy sizes an IconButton from --IconButton-size; `width`/`height` alone lose to its
-  // own minWidth/minHeight, so all three are needed to get off the 32px `sm` default.
-  '--IconButton-size': '24px',
-  minWidth: '24px',
-  minHeight: '24px',
-  '--Icon-fontSize': '16px',
-  '--Icon-color': theme.vars.palette.text.primary70,
-  '&:hover': {
-    backgroundColor: theme.palette.notebooklist.hoverBg,
-    '--Icon-color': theme.vars.palette.text.primary,
-  },
-});
 
 export interface ArtifactSaveFile {
   fileName: string;
