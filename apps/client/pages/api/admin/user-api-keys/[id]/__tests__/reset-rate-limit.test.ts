@@ -5,8 +5,12 @@ import { createMocks } from 'node-mocks-http';
  * Admin reset-rate-limit route contract: the admin guard short-circuits before
  * any repo call, the id param is validated before the lookup, a missing key
  * 404s before the reset, and a success clears the counters and writes the
- * audit event. The reset primitive itself is covered by
- * server/utils/apiKeyRateLimitCheck.test.ts and apiKeyRateLimitReset.e2e.test.ts.
+ * audit event. The reset primitive itself (atomicity, per-counter failure
+ * isolation) is covered by server/utils/apiKeyRateLimitCheck.test.ts and
+ * apiKeyRateLimitReset.e2e.test.ts - only `resetApiKeyRateLimit` is mocked
+ * here; `evaluateCounterLockout`, `resolveCounterLimit`, and
+ * `MANAGEMENT_RATE_LIMIT` run for real so this route's ceiling-resolution
+ * wiring is actually exercised, not just its mock call shape.
  */
 
 const mockRefs = vi.hoisted(() => ({
@@ -40,15 +44,14 @@ vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: any) => 
 const findById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: { findById } }));
 
-const resetApiKeyRateLimit = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
-const getApiKeyRateLimitUsage = vi.hoisted(() => vi.fn().mockResolvedValue({ minute: 0, day: 0 }));
-const evaluateCounterLockout = vi.hoisted(() => vi.fn().mockReturnValue({ minuteAtLimit: false, dayAtLimit: false }));
-const MANAGEMENT_RATE_LIMIT = vi.hoisted(() => ({ requestsPerMinute: 5, requestsPerDay: 50 }));
-vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
-  resetApiKeyRateLimit,
-  getApiKeyRateLimitUsage,
-  evaluateCounterLockout,
-  MANAGEMENT_RATE_LIMIT,
+const resetApiKeyRateLimit = vi.hoisted(() => vi.fn());
+vi.mock('@server/utils/apiKeyRateLimitCheck', async importOriginal => {
+  const actual = await importOriginal<typeof import('@server/utils/apiKeyRateLimitCheck')>();
+  return { ...actual, resetApiKeyRateLimit };
+});
+
+vi.mock('@bike4mind/services', () => ({
+  userApiKeyService: { API_KEY_RATE_LIMIT_DEFAULTS: { requestsPerMinute: 60, requestsPerDay: 1000 } },
 }));
 
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
@@ -77,15 +80,16 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     findById.mockResolvedValue(storedKey);
-    getApiKeyRateLimitUsage.mockResolvedValue({ minute: 0, day: 0 });
-    evaluateCounterLockout.mockReturnValue({ minuteAtLimit: false, dayAtLimit: false });
+    resetApiKeyRateLimit.mockResolvedValue({
+      request: { minute: 0, day: 0 },
+      management: { minute: 0, day: 0 },
+    });
   });
 
   it('rejects a non-admin before touching any data source', async () => {
     const { req, res } = post({ id: 'key-1' }, { id: 'u1', isAdmin: false });
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/admin/i);
     expect(findById).not.toHaveBeenCalled();
-    expect(getApiKeyRateLimitUsage).not.toHaveBeenCalled();
     expect(resetApiKeyRateLimit).not.toHaveBeenCalled();
   });
 
@@ -109,7 +113,6 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
     findById.mockResolvedValue(null);
     const { req, res } = post({ id: 'ghost' }, admin);
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/not found/i);
-    expect(getApiKeyRateLimitUsage).not.toHaveBeenCalled();
     expect(resetApiKeyRateLimit).not.toHaveBeenCalled();
   });
 
@@ -140,53 +143,57 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
     );
   });
 
-  it('reads request and management usage before resetting, against the right ceilings', async () => {
-    const requestUsage = { minute: 3, day: 40 };
-    const managementUsage = { minute: 5, day: 12 };
-    getApiKeyRateLimitUsage.mockResolvedValueOnce(requestUsage).mockResolvedValueOnce(managementUsage);
-    evaluateCounterLockout
-      .mockReturnValueOnce({ minuteAtLimit: false, dayAtLimit: false }) // request
-      .mockReturnValueOnce({ minuteAtLimit: true, dayAtLimit: false }); // management
+  it("derives lockout against the right ceiling for each counter - the key's own limit for request, the fixed limit for management", async () => {
+    resetApiKeyRateLimit.mockResolvedValue({
+      request: { minute: 60, day: 40 }, // at the key's own 60/min ceiling
+      management: { minute: 5, day: 12 }, // at the fixed 5/min management ceiling
+    });
 
     const { req, res } = post({ id: 'key-1' }, admin);
     await mockRefs.postHandler!(req, res);
 
-    expect(getApiKeyRateLimitUsage).toHaveBeenNthCalledWith(1, storedKey.id);
-    expect(getApiKeyRateLimitUsage).toHaveBeenNthCalledWith(2, storedKey.id, 'management');
-    expect(evaluateCounterLockout).toHaveBeenNthCalledWith(1, requestUsage, storedKey.rateLimit);
-    expect(evaluateCounterLockout).toHaveBeenNthCalledWith(2, managementUsage, MANAGEMENT_RATE_LIMIT);
     expect(res._getJSONData().lockout).toEqual({
-      request: { minuteAtLimit: false, dayAtLimit: false },
+      request: { minuteAtLimit: true, dayAtLimit: false },
       management: { minuteAtLimit: true, dayAtLimit: false },
     });
-
-    // Usage must be read before the reset clears it - otherwise lockout would
-    // always report false since the counters would already be gone.
-    const usageCallOrder = getApiKeyRateLimitUsage.mock.invocationCallOrder[1];
-    const resetCallOrder = resetApiKeyRateLimit.mock.invocationCallOrder[0];
-    expect(usageCallOrder).toBeLessThan(resetCallOrder);
   });
 
-  it('still resets when a usage read fails, omitting only that counter from lockout', async () => {
-    // The lockout diagnostic is best-effort on top of the reset, never a
-    // precondition for it - this route is the only operator override for a
-    // key locked out of its own management quota, so a transient cache read
-    // failure must not block the reset it exists to guarantee.
-    getApiKeyRateLimitUsage.mockRejectedValueOnce(new Error('cache unavailable')).mockResolvedValueOnce({
-      minute: 1,
-      day: 2,
+  it("omits a counter's lockout entry when resetApiKeyRateLimit could not clear it, without failing the request", async () => {
+    // resetApiKeyRateLimit itself isolates per-counter failures (see
+    // apiKeyRateLimitCheck.test.ts) - this route only needs to pass that
+    // result through without treating a missing counter as an error.
+    resetApiKeyRateLimit.mockResolvedValue({
+      request: undefined,
+      management: { minute: 1, day: 2 },
     });
 
     const { req, res } = post({ id: 'key-1' }, admin);
     await mockRefs.postHandler!(req, res);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().lockout).toEqual({
+    const lockout = res._getJSONData().lockout;
+    expect(lockout).toEqual({
       request: undefined,
       management: { minuteAtLimit: false, dayAtLimit: false },
     });
-    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id, { alsoResetManagement: true });
-    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('key-1'));
+    // `toEqual` treats a missing key and an `undefined` value the same, so it
+    // alone doesn't prove `request` is actually absent from the JSON body -
+    // assert the serialized key set directly.
+    expect(Object.keys(lockout)).toEqual(['management']);
+  });
+
+  it('falls back to the default rate limit when the stored key has none, for lockout purposes only', async () => {
+    findById.mockResolvedValue({ ...storedKey, rateLimit: undefined });
+    resetApiKeyRateLimit.mockResolvedValue({
+      request: { minute: 60, day: 0 }, // at the 60/min default
+      management: { minute: 0, day: 0 },
+    });
+
+    const { req, res } = post({ id: 'key-1' }, admin);
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().lockout.request).toEqual({ minuteAtLimit: true, dayAtLimit: false });
   });
 
   it('still succeeds when the audit event write fails (orphaned-key owner)', async () => {
