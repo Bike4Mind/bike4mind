@@ -1,5 +1,17 @@
 # @bike4mind/scripts
 
+## 0.1.80
+
+### Patch Changes
+
+- Updated dependencies [[`254337c`](https://github.com/Bike4Mind/bike4mind/commit/254337c91edeefc41333a60559a15673411bea01), [`eb7dd3c`](https://github.com/Bike4Mind/bike4mind/commit/eb7dd3c80a29133d726df7d03a45529cbd4e7d47), [`a37e4ac`](https://github.com/Bike4Mind/bike4mind/commit/a37e4ac2572b4fe6c0b0d4a97ed2dd69f95b1cfc), [`27173c2`](https://github.com/Bike4Mind/bike4mind/commit/27173c2de2852fcd8f6f0b04a8b5f9281ae0016e), [`6481767`](https://github.com/Bike4Mind/bike4mind/commit/6481767f9507cf6f440f7e941c986762ef3079f0)]:
+  - @bike4mind/common@10.1.1
+  - @bike4mind/fab-pipeline@1.3.13
+  - @bike4mind/llm-adapters@0.15.7
+  - @bike4mind/services@12.1.1
+  - @bike4mind/utils@6.1.3
+  - @bike4mind/database@0.4.4
+
 ## 0.1.79
 
 ### Patch Changes
