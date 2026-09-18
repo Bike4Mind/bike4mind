@@ -63,7 +63,8 @@
     "retrieval:answerability-replay": "tsx retrieval/answerability-replay.ts",
     "retrieval:model-comparison": "tsx retrieval/model-comparison.ts",
     "retrieval:forced-floor-sweep": "tsx retrieval/forced-floor-sweep.ts",
-    "retrieval:fetch-served-text": "tsx retrieval/fetch-served-text.ts"
+    "retrieval:fetch-served-text": "tsx retrieval/fetch-served-text.ts",
+    "retrieval:sample-corpus-chunks": "tsx retrieval/sample-corpus-chunks.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
