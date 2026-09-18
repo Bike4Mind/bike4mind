@@ -328,3 +328,70 @@ describe('parseArtifacts — multi-line and special-character opening tags', () 
     expect(artifacts).toHaveLength(0);
   });
 });
+
+/**
+ * The ```html / ```svg detectors match a fence on its own and check the document
+ * anchors in the callback, so these cases pin the promotion decisions and the
+ * behaviour that changed when the anchors moved out of the patterns.
+ * MUST STAY IN SYNC with the twin suite in apps/client/app/utils/artifactParser.test.ts.
+ */
+describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
+  const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
+  const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
+
+  it('promotes two adjacent html document fences as two artifacts', () => {
+    const out = convertCodeBlocksToArtifacts('```html\n' + DOC + '\n```\n\n```html\n' + DOC + '\n```');
+    expect(wrappers(out)).toBe(2);
+    expect(out).not.toContain('```html');
+  });
+
+  it('promotes two adjacent svg fences as two artifacts', () => {
+    const svg = '<svg viewBox="0 0 2 2"><rect width="1" height="1" /></svg>';
+    const out = convertCodeBlocksToArtifacts('```svg\n' + svg + '\n```\n\n```svg\n' + svg + '\n```');
+    expect(wrappers(out)).toBe(2);
+    expect(out.match(/image\/svg\+xml/g)).toHaveLength(2);
+  });
+
+  it('leaves a ```svg fence with no closing </svg> as a code block', () => {
+    const input = '```svg\n<svg viewBox="0 0 2 2"><rect width="1" height="1" />\n```';
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(wrappers(out)).toBe(0);
+    expect(out).toContain('```svg');
+  });
+
+  it('falls a non-document html fence through to the fragment handler', () => {
+    const out = convertCodeBlocksToArtifacts('```html\n<div class="card">hi</div>\n```');
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('HTML Snippet');
+  });
+
+  it('does not let a later fence promote an earlier one', () => {
+    const out = convertCodeBlocksToArtifacts('```html\nnot markup at all\n```\n\n```html\n' + DOC + '\n```');
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('```html\nnot markup at all\n```');
+  });
+
+  it('promotes a document whose lines are separated by \\r or U+2028', () => {
+    const cr = convertCodeBlocksToArtifacts('```html\r' + DOC.replace('\n', '\r') + '\r```');
+    expect(wrappers(cr)).toBe(1);
+    const ls = convertCodeBlocksToArtifacts('```html\n' + DOC.replace('\n', ' ') + '\n```');
+    expect(wrappers(ls)).toBe(1);
+  });
+
+  it('leaves unterminated html fences untouched, in bounded time', () => {
+    // First body is the pathological shape for the old anchored pattern: both anchors
+    // present, many candidate splits for its two lazy groups, no closing fence. It stays
+    // at ~56KB because past ~100KB of repeated </html> the later bare-document pass, not
+    // these detectors, is what dominates the time. Second body is a plain 260KB fence.
+    const bodies = [
+      '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(4000),
+      '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(20000),
+    ];
+    for (const input of bodies) {
+      const startedAt = Date.now();
+      const out = convertCodeBlocksToArtifacts(input);
+      expect(Date.now() - startedAt).toBeLessThan(2000);
+      expect(out).toBe(input);
+    }
+  });
+});

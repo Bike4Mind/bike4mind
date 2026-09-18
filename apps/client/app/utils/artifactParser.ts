@@ -598,6 +598,12 @@ ${toolOutput.content}
   return processedContent;
 }
 
+// Chars of a fence body a promotion predicate will scan. Past the cap the fence
+// stays a plain code block: the anchors a full document needs sit near its start
+// and its end, so an oversized body is skipped rather than scanned.
+// MUST STAY IN SYNC with the twin copy in b4m-core/utils/src/artifactParser.ts.
+const MAX_FENCE_SCAN_CHARS = 256000;
+
 /**
  * Post-processes AI responses to detect code blocks that should be artifacts
  * and converts them to proper artifact syntax as a fallback
@@ -652,10 +658,15 @@ ${codeContent.trim()}
     return match;
   });
 
-  // Detect HTML code blocks
-  const htmlCodeBlockRegex = /```html\s*((?:.*\n)*?.*<!DOCTYPE.*(?:\n.*)*?.*<\/html>.*(?:\n.*)*?)```/gi;
+  // Detect HTML code blocks. The fence is matched on its own and the document
+  // anchors are checked in the callback. With <!DOCTYPE and </html> anchored inside
+  // the pattern, two lazy multi-line groups had to split the body between them, so a
+  // fence that never closed and repeated </html> cost time quadratic in body size.
+  const htmlCodeBlockRegex = /```html\s*\n?([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
+    const head = codeContent.slice(0, MAX_FENCE_SCAN_CHARS);
+    if (!/<!DOCTYPE/i.test(head) || !/<\/html\s*>/i.test(head)) return match;
     const title = extractHTMLTitle(codeContent) || 'HTML Page';
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
@@ -679,10 +690,12 @@ ${codeContent.trim()}
 </artifact>`;
   });
 
-  // Detect SVG code blocks
-  const svgCodeBlockRegex = /```svg\s*((?:.*\n)*?.*<svg.*(?:\n.*)*?.*<\/svg>.*(?:\n.*)*?)```/gi;
+  // Detect SVG code blocks. Same shape as the HTML pass above: match the fence,
+  // then check for a complete <svg> element in the callback.
+  const svgCodeBlockRegex = /```svg\s*\n?([\s\S]*?)```/gi;
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {
+    if (!/<svg[\s\S]*?<\/svg\s*>/i.test(codeContent.slice(0, MAX_FENCE_SCAN_CHARS))) return match;
     const identifier = 'svg-graphic';
 
     return `<artifact identifier="${identifier}" type="image/svg+xml" title="SVG Graphic">
