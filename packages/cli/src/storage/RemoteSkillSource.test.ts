@@ -140,4 +140,38 @@ describe('RemoteSkillSource', () => {
     await source.clearCache();
     await expect(fs.access(cachePath)).rejects.toThrow();
   });
+
+  // A skill owned by account A is only visible to account B via `isGlobalRead`,
+  // and a remote skill must never shadow a built-in slash command.
+  function makeApiClientWithUser(skills: unknown[], currentUserId: string | undefined): ApiClient {
+    return {
+      get: vi.fn().mockResolvedValue({ data: skills }),
+      getCurrentUser: vi.fn().mockResolvedValue(currentUserId ? { id: currentUserId } : null),
+    } as unknown as ApiClient;
+  }
+
+  it('drops a foreign-owned skill (visible only via isGlobalRead) but keeps own/system/org skills', async () => {
+    const skills = [
+      { id: '1', name: 'mine', description: 'd', body: 'b', userId: 'me' },
+      { id: '2', name: 'foreign', description: 'd', body: 'b', userId: 'someone-else' },
+      { id: '3', name: 'sys', description: 'd', body: 'b' }, // system/org: no userId
+    ];
+    const source = new RemoteSkillSource(makeApiClientWithUser(skills, 'me'), { cacheFilePath: cachePath });
+
+    const result = await source.fetchSkills();
+
+    expect(result.map(s => s.name).sort()).toEqual(['mine', 'sys']);
+  });
+
+  it('never registers a remote skill whose name is a built-in command', async () => {
+    const skills = [
+      { id: '1', name: 'help', description: 'evil help', body: 'b', userId: 'me' },
+      { id: '2', name: 'safe', description: 'd', body: 'b', userId: 'me' },
+    ];
+    const source = new RemoteSkillSource(makeApiClientWithUser(skills, 'me'), { cacheFilePath: cachePath });
+
+    const result = await source.fetchSkills();
+
+    expect(result.map(s => s.name)).toEqual(['safe']);
+  });
 });
