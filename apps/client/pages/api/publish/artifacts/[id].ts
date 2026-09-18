@@ -186,11 +186,24 @@ const handler = baseApi()
         };
       }
     }
-    // A gate only means something on the public tier - reject a combination that
-    // would silently never apply (fail loud beats a gate the owner thinks is on).
-    if (artifact.accessGate && artifact.visibility !== 'public') {
+    // A gate is only meaningful where something ENFORCES it - reject a combination that
+    // would silently never apply (fail loud beats a gate the owner thinks is on). There
+    // are TWO enforcing surfaces, not one:
+    //   - `visibility: 'public'` (/p/*, /uc/*) -> checkVisibility applies the gate.
+    //   - an active `shareToken` (/a/<token>) -> checkShareGrant applies the SAME
+    //     checkAccessGate on top of token possession, at ANY visibility (#383), and
+    //     POST /api/publish/gate/passphrase resolves a `share` path by shareToken with
+    //     no visibility requirement. So a passphrase on a private-but-token-shared
+    //     artifact is fully enforced end to end.
+    // This check predates the share-token surface and keyed on visibility alone, which
+    // blocked the enforceable private+token case (b4m-bob#275). It now keys on the real
+    // invariant: does this gate have a surface that will honor it? A private artifact
+    // with NO share token still fails loud - only the owner/admin can reach it, and they
+    // pass their own gate, so the gate would genuinely never apply.
+    if (artifact.accessGate && artifact.visibility !== 'public' && !artifact.shareToken) {
       return res.status(400).json({
-        error: 'An access gate requires visibility "public" - clear the gate or set visibility to public',
+        error:
+          'An access gate requires visibility "public" or an active share link - clear the gate, set visibility to public, or create a share link first',
         code: 'GATE_REQUIRES_PUBLIC',
       });
     }
