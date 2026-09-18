@@ -3,6 +3,7 @@ import {
   ATTRIBUTABLE_VECTOR_WIDTH,
   classifyFileLabel,
   planFileLabels,
+  residualBucket,
   rollbackLogLines,
   ROLLBACK_LABEL_AND_STAMPED_AT,
   ROLLBACK_LABEL_ONLY,
@@ -177,19 +178,13 @@ describe('rollbackLogLines', () => {
       ADA
     );
 
-    expect(rollbackLogLines(plan)).toEqual([
-      `f1 ${ROLLBACK_LABEL_ONLY}`,
-      `f2 ${ROLLBACK_LABEL_AND_STAMPED_AT}`,
-    ]);
+    expect(rollbackLogLines(plan)).toEqual([`f1 ${ROLLBACK_LABEL_ONLY}`, `f2 ${ROLLBACK_LABEL_AND_STAMPED_AT}`]);
   });
 
   it('never marks a file that already carried a stampedAt, which the pass must not clear', () => {
     // The distinction the per-file field list exists for: clearing it here would unwind a write
     // this pass never made, and the field is ANN-eligibility authority.
-    const plan = planFileLabels(
-      [{ id: 'f1', ...labeled([ADA]), chunkEmbeddingModelStampedAt: new Date() }],
-      ADA
-    );
+    const plan = planFileLabels([{ id: 'f1', ...labeled([ADA]), chunkEmbeddingModelStampedAt: new Date() }], ADA);
 
     expect(rollbackLogLines(plan)).toEqual([`f1 ${ROLLBACK_LABEL_ONLY}`]);
     expect(rollbackLogLines(plan)[0]).not.toContain('chunkEmbeddingModelStampedAt');
@@ -197,12 +192,56 @@ describe('rollbackLogLines', () => {
 
   it('records nothing for a page that stamps nothing, rather than an empty marked line', () => {
     // An empty array is what keeps the caller from appending a bare newline to the log.
-    const plan = planFileLabels(
-      [{ id: 'f1', ...labeled([SMALL]), chunkEmbeddingModelStampedAt: null }],
-      ADA
-    );
+    const plan = planFileLabels([{ id: 'f1', ...labeled([SMALL]), chunkEmbeddingModelStampedAt: null }], ADA);
 
     expect(plan.stamp).toEqual([]);
     expect(rollbackLogLines(plan)).toEqual([]);
+  });
+});
+
+describe('residualBucket', () => {
+  it('counts a file this pass can stamp as still owed a label', () => {
+    expect(residualBucket(labeled([ADA]), ADA)).toBe('owed-a-label');
+    expect(residualBucket(unlabeled(92), ADA)).toBe('owed-a-label');
+  });
+
+  it('counts a refusal this pass cannot resolve as still owed a label', () => {
+    // The pass is not the thing that can fix either of these, but the file is stranded across a
+    // default flip exactly as much as a stampable one, so excluding them would report a completed
+    // repair over files that still go dark.
+    expect(residualBucket(labeled([SMALL]), ADA)).toBe('owed-a-label');
+    expect(residualBucket(unlabeled(5, [1024]), ADA)).toBe('owed-a-label');
+  });
+
+  it('excludes the two categories no run can ever clear', () => {
+    // These are why the naive "every vectorized file carries a label" predicate has no zero: one
+    // has nothing to describe, the other is correctly blank. Both are reported every run forever.
+    expect(residualBucket(labeled([]), ADA)).toBe('counter-only');
+    expect(residualBucket(labeled([ADA, SMALL]), ADA)).toBe('deliberately-blank');
+  });
+
+  it('agrees with classifyFileLabel on every shape, so the two cannot drift', () => {
+    // The completion check and the write decision must not be able to disagree about what a file
+    // is; this pins the delegation rather than trusting it.
+    const shapes = [
+      labeled([ADA]),
+      labeled([SMALL]),
+      labeled([]),
+      labeled([ADA, SMALL]),
+      unlabeled(92),
+      unlabeled(5, [1024]),
+    ];
+    for (const shape of shapes) {
+      const decision = classifyFileLabel(shape, ADA);
+      const expected =
+        decision.action === 'stamp'
+          ? 'owed-a-label'
+          : decision.reason === 'no-vector-bearing-chunks'
+            ? 'counter-only'
+            : decision.reason === 'spans-multiple-spaces'
+              ? 'deliberately-blank'
+              : 'owed-a-label';
+      expect(residualBucket(shape, ADA)).toBe(expected);
+    }
   });
 });

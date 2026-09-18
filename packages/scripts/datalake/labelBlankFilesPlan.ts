@@ -33,14 +33,13 @@
 export const ATTRIBUTABLE_VECTOR_WIDTH = 1536;
 
 export type SkipReason =
-  | 'no-vector-bearing-chunks'
-  | 'foreign-chunk-label'
-  | 'spans-multiple-spaces'
-  | 'unattributable-vector-width';
+  'no-vector-bearing-chunks' | 'foreign-chunk-label' | 'spans-multiple-spaces' | 'unattributable-vector-width';
+
+/** @see residualBucket - the three standing categories a still-unlabeled file can be in. */
+export type ResidualBucket = 'owed-a-label' | 'deliberately-blank' | 'counter-only';
 
 export type LabelDecision =
-  | { action: 'stamp'; label: string }
-  | { action: 'skip'; reason: SkipReason; declared: string[] };
+  { action: 'stamp'; label: string } | { action: 'skip'; reason: SkipReason; declared: string[] };
 
 export interface FileLabelEvidence {
   /** Distinct non-blank `embeddingModel` values across the file's vector-bearing chunks. */
@@ -84,6 +83,41 @@ export function classifyFileLabel(evidence: FileLabelEvidence, embeddingModel: s
     return { action: 'skip', reason: 'foreign-chunk-label', declared: [only] };
   }
   return { action: 'skip', reason: 'spans-multiple-spaces', declared: [...declared].sort() };
+}
+
+/**
+ * Which standing category a STILL-UNLABELED file belongs to, for the completion check.
+ *
+ * Two of the four skip reasons can never be cleared by any number of runs, and conflating them with
+ * the ones that can is what makes a naive completion predicate unsatisfiable:
+ *
+ * - `counter-only` - `vectorizedChunkCount` is a rollup that outlives the chunks it counted, so a
+ *   file can claim vectors it no longer holds. There is no label to write because there is nothing
+ *   to describe, and re-running cannot change that.
+ * - `deliberately-blank` - the file holds vectors in two spaces and no single label is true of both.
+ *   Blank IS the correct value here; writing one would give the file exclusion authority over a
+ *   claim that is false for half its chunks.
+ *
+ * So "every vectorized file carries a label" is the wrong bar - it can never be met. `owed-a-label`
+ * is the population that must reach zero: a file holding vectors in ONE space with no file-level
+ * label, whether this pass can resolve it (`stamp`) or has to refuse it (`foreign-chunk-label`,
+ * `unattributable-vector-width`). A refusal still leaves the file stranded across a default flip, so
+ * it belongs in the count even though this pass is not the thing that can fix it.
+ *
+ * Delegates to `classifyFileLabel` rather than re-testing the evidence, so the completion check and
+ * the write decision cannot disagree about what a file is.
+ */
+export function residualBucket(evidence: FileLabelEvidence, embeddingModel: string): ResidualBucket {
+  const decision = classifyFileLabel(evidence, embeddingModel);
+  if (decision.action === 'stamp') return 'owed-a-label';
+  switch (decision.reason) {
+    case 'no-vector-bearing-chunks':
+      return 'counter-only';
+    case 'spans-multiple-spaces':
+      return 'deliberately-blank';
+    default:
+      return 'owed-a-label';
+  }
 }
 
 export interface FileLabelPlan {

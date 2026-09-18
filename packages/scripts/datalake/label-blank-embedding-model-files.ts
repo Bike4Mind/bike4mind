@@ -55,8 +55,10 @@ import { connectDB, fabFileChunkRepository, fabFileRepository } from '@bike4mind
 import { fabFilesService } from '@bike4mind/services';
 import {
   planFileLabels,
+  residualBucket,
   rollbackLogLines,
   type FileLabelCandidate,
+  type ResidualBucket,
   type SkipReason,
 } from './labelBlankFilesPlan.js';
 
@@ -89,6 +91,38 @@ async function readEvidence(file: {
     unlabeledVectorChunks,
     unlabeledVectorWidths,
   };
+}
+
+/**
+ * Re-page the collection after the writes and bucket what is STILL unlabeled.
+ *
+ * A fresh read, not `before - stamped`, and not a tally of this run's own skip map: both would be
+ * this pass grading its own homework, and the second would miss a stamp that was planned, counted,
+ * and then silently declined by `stampChunkEmbeddingModel` because a chunk moved underneath it.
+ * Asking the collection again is the only way that shows up.
+ *
+ * Costs one more evidence read per still-unlabeled file. After an execute run that set is the skips
+ * alone, and the skips are the population this is reporting on.
+ */
+async function countResidual(opts: Options): Promise<Record<ResidualBucket, number>> {
+  const counts: Record<ResidualBucket, number> = {
+    'owed-a-label': 0,
+    'deliberately-blank': 0,
+    'counter-only': 0,
+  };
+  let afterFileId: string | undefined;
+  for (;;) {
+    const page = await fabFileRepository.findVectorizedFilesMissingEmbeddingModel({
+      limit: opts.batchSize,
+      afterFileId,
+    });
+    if (page.length === 0) break;
+    afterFileId = page[page.length - 1].id;
+    for (const candidate of await Promise.all(page.map(readEvidence))) {
+      counts[residualBucket(candidate, opts.model)]++;
+    }
+  }
+  return counts;
 }
 
 async function main(opts: Options): Promise<number> {
@@ -209,6 +243,17 @@ async function main(opts: Options): Promise<number> {
   // not resolve would otherwise be reporting its own arithmetic back as verification.
   const after = await fabFileRepository.countVectorizedFilesMissingEmbeddingModel();
   console.log(`\nStill unlabeled: ${after} (was ${before}).`);
+
+  // The raw count above can never reach zero, so it is not the bar. Two of its parts are permanent
+  // properties of the corpus rather than work left to do - see residualBucket - and reporting only
+  // the total invites an operator to chase a number that has no zero.
+  const residual = await countResidual(opts);
+  console.log(
+    `  ${residual['counter-only']} hold no vector-bearing chunk (a stale rollup counter, nothing to label)\n` +
+      `  ${residual['deliberately-blank']} span two embedding spaces (blank is the CORRECT label)\n` +
+      `  ${residual['owed-a-label']} hold vectors in one space and are still owed a label`
+  );
+  console.log(`\nCOMPLETION PREDICATE (owed-a-label == 0): ${residual['owed-a-label'] === 0 ? 'MET' : 'NOT MET'}`);
   if (!opts.execute) console.log('Dry run: nothing was written. Re-run with --execute.');
 
   // Only the skips that mean this pass could not do something it SHOULD have been able to do.
@@ -220,6 +265,20 @@ async function main(opts: Options): Promise<number> {
   const actionable = ([...skipsByReason.keys()] as SkipReason[]).filter(
     r => r === 'foreign-chunk-label' || r === 'unattributable-vector-width'
   );
+
+  // An execute run that leaves anything owed a label has not finished, and until this check existed
+  // it exited 0 on exactly one case the skip reasons cannot see: a file this pass planned to stamp
+  // and then did not, because `stampChunkEmbeddingModel` re-derives the label and writes null when a
+  // chunk changed under the plan. A concurrent vectorize can also put a file back into the set
+  // between the writes and the re-read, so this is not proof of a defect - but it is never nothing,
+  // and a caller gating a default-model flip on this script needs it to say so.
+  if (opts.execute && residual['owed-a-label'] > 0) {
+    console.error(
+      `\n${residual['owed-a-label']} file(s) still owed a label after an execute run. Re-run; if the ` +
+        'count does not fall, the remainder is not stampable by this --model and the reasons above say why.'
+    );
+    return 1;
+  }
   return actionable.length > 0 ? 1 : 0;
 }
 
