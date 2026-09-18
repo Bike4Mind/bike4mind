@@ -37,9 +37,14 @@ const CONFIRM_ENV = 'OAUTH_BACKFILL_CONFIRMED';
  * The gate is a throw (not a silent no-op) on purpose: `MigrationManager.up()` records any migration
  * whose `up()` returns as applied, so a log-only return would mark this done and the confirmed run
  * could never happen. Throwing keeps it in the pending set until the operator confirms.
+ *
+ * Because `MigrationManager.up()` runs migrations in ascending-id order and ABORTS the whole run on
+ * the first throw, a fail-closed migration must sort AFTER every other pending one - otherwise its
+ * throw blocks them all until the operator confirms. Its id is therefore kept above the current max
+ * core id; do not renumber it below a migration that must still run. (Guarded in the sibling test.)
  */
 const migration: MigrationFile = {
-  id: 20260912000000,
+  id: 20260918000000,
   name: 'backfill-oauthclient-token-endpoint-auth-method',
 
   up: async () => {

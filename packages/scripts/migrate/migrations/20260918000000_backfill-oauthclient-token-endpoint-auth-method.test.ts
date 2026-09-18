@@ -12,7 +12,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import migration from './20260912000000_backfill-oauthclient-token-endpoint-auth-method';
+import migration from './20260918000000_backfill-oauthclient-token-endpoint-auth-method';
 
 const CONFIRM_ENV = 'OAUTH_BACKFILL_CONFIRMED';
 let logged: string[] = [];
@@ -80,5 +80,13 @@ describe('backfill-oauthclient-token-endpoint-auth-method', () => {
   it('down is a no-op that writes nothing', async () => {
     await migration.down();
     expect(mockUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('sorts after every migration it must not block, so its throw holds only itself', () => {
+    // MigrationManager.up() runs ascending by id and aborts the whole run on the first throw. This
+    // fail-closed migration therefore MUST sort after the migrations that were pending alongside it
+    // (20260913/14/15*) - at id 20260912 it blocked all four until OAUTH_BACKFILL_CONFIRMED was set.
+    // 20260915130000 is the highest of that set; keep this above it.
+    expect(migration.id).toBeGreaterThan(20260915130000);
   });
 });
