@@ -37,7 +37,8 @@
  * cannot distinguish "a guard refused" (2) from "it crashed" (1). READ THE OUTPUT, not the status:
  * every refusal prints a line beginning STOP. If the flags do not survive the wrappers the script
  * prints its usage and exits without reading anything, which is a safe failure rather than a
- * silently unscoped run.
+ * silently unscoped run. Every refusal it can make is a pure function in
+ * `drainLakeEmbeddingSpacePlan.ts` with tests beside it; this file holds only the I/O.
  *
  * FILES ARE UNSEARCHABLE BETWEEN RESET AND RE-CHUNK, and partway through a drain the lake's
  * majority flips to the new space and withholds whatever has not converted yet. The lake is
@@ -48,33 +49,31 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { connectDB, whenCatalogSeeded, mongoose, FabFile, DataLakeModel, fabFileRepository } from '@bike4mind/database';
-import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { Resource } from 'sst';
+import {
+  auditOwners,
+  buildDrainMembershipQuery,
+  checkExpectedPopulation,
+  checkPlatformGuards,
+  parseDrainArgs,
+  planWaves,
+  resolveLakeId,
+  str,
+  tally,
+  verifyVerdict,
+  type DrainFileRow,
+  type DrainTarget,
+} from './drainLakeEmbeddingSpacePlan';
 
 /** Must stay in sync with CONVERGENCE_ORIGIN in b4m-core/common/src/constants/convergenceProvenance.ts.
  *  Inlined so this script does not pull the zod-bearing module in for one string literal. */
 const CONVERGENCE_ORIGIN = 'convergence';
 
-/** The rebuild door's own wave sizes, from b4m-core/services/src/dataLakeService/rebuildLakePassages.ts. */
-const DEFAULT_WAVE = 50;
-const MAX_WAVE = 200;
-
 const QUERY_TIMEOUT_MS = 30_000;
 
-type Target = {
-  /** What goes in the queue message's `lakeId`, which is what the convergence kill switch reads.
-   *  A registry lake's id is its slug; a DB lake's is its document _id, resolved at run time. */
-  lakeIdKind: 'registry' | 'db';
-  registryId?: string;
-  tag: string;
-  prefix: string;
-  /** Owners measured 2026-09-17. A file owned by anyone else means the unanchored prefix arm
-   *  reached outside the population this run was authorized against, so the run aborts. */
-  owners: string[];
-};
-
-const TARGETS: Record<string, Target> = {
+/** Owner lists measured 2026-09-17; see `owners` in the plan module for what they bound. */
+const TARGETS: Record<string, DrainTarget> = {
   'ionq-sales': {
     lakeIdKind: 'db',
     tag: 'datalake:ionq-sales',
@@ -92,55 +91,18 @@ const TARGETS: Record<string, Target> = {
   },
 };
 
-const argv = process.argv.slice(2);
-const flag = (name: string) => {
-  const i = argv.indexOf(`--${name}`);
-  return i >= 0 ? argv[i + 1] : undefined;
-};
-const has = (name: string) => argv.includes(`--${name}`);
-
-const LAKE = flag('lake');
-const EXECUTE = has('execute');
-const VERIFY = has('verify');
-const LIMIT = flag('limit') ? Number(flag('limit')) : undefined;
-const EXPECT = flag('expect') ? Number(flag('expect')) : undefined;
-const WAVE = Math.min(flag('wave') ? Number(flag('wave')) : DEFAULT_WAVE, MAX_WAVE);
-
-const str = (v: unknown) => String(v ?? '');
-
-type FileRow = {
-  _id: unknown;
-  userId?: unknown;
-  fileName?: string;
-  embeddingModel?: string;
-  vectorizedChunkCount?: number;
-  isChunking?: boolean;
-  chunked?: boolean;
-  vectorized?: boolean;
-  chunkRebuildRequestedAt?: unknown;
-};
-
-const tally = (rows: FileRow[], key: (f: FileRow) => string) => {
-  const m = new Map<string, number>();
-  for (const f of rows) {
-    const k = key(f);
-    m.set(k, (m.get(k) ?? 0) + 1);
-  }
-  return [...m.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([v, n]) => `${v} x${n}`)
-    .join(', ');
+/** Every guard's verdict arrives as lines to print plus an exit code; nothing decides silently. */
+const report = (lines: readonly string[]) => {
+  for (const line of lines) console.log(line);
 };
 
 /** 0 = ran, 1 = usage or failure, 2 = a guard refused to proceed (nothing was written). */
 async function main(): Promise<number> {
-  if (!LAKE || !TARGETS[LAKE]) {
-    console.log(
-      `usage: --lake <${Object.keys(TARGETS).join('|')}> [--execute --expect N] [--limit N] [--wave N] [--verify]`
-    );
-    return 1;
-  }
-  const target = TARGETS[LAKE];
+  const parsed = parseDrainArgs({ argv: process.argv.slice(2), lakes: Object.keys(TARGETS) });
+  report(parsed.lines);
+  if (!parsed.ok) return parsed.exitCode;
+  const { lake, execute, verify, limit, expect: approvedCount, wave } = parsed.value;
+  const target = TARGETS[lake];
 
   const dbUri = Resource.MONGODB_URI.value;
   if (!dbUri) throw new Error('MONGODB_URI is required');
@@ -148,7 +110,7 @@ async function main(): Promise<number> {
   const db = mongoose.connection.db;
   if (!db) throw new Error('no database on the mongoose connection');
   console.log(`stage=${Resource.App.stage}  db=${db.databaseName}`);
-  console.log(`lake=${LAKE}  mode=${VERIFY ? 'VERIFY' : EXECUTE ? 'EXECUTE' : 'DRY RUN'}\n`);
+  console.log(`lake=${lake}  mode=${verify ? 'VERIFY' : execute ? 'EXECUTE' : 'DRY RUN'}\n`);
 
   // Settings are read one row at a time BY NAME: this collection also holds live credentials, so
   // an unprojected sweep would pull one into the output.
@@ -159,52 +121,38 @@ async function main(): Promise<number> {
     return row?.settingValue;
   };
 
-  const defaultModel = str(await setting('defaultEmbeddingModel'));
-  if (!defaultModel) {
-    console.log('STOP: defaultEmbeddingModel has no row. Refusing to guess the target space.');
-    return 2;
-  }
-  console.log(`defaultEmbeddingModel = ${defaultModel}`);
-
   // The rebuild door refuses a whole wave when convergence is halted, before touching anything,
-  // because a wave halted mid-flight leaves its files with no passages at all. This mirrors only
-  // the PLATFORM rung, so a scoped row would make the check incomplete - and scopedsettings was
-  // empty at last measurement, which makes a row appearing a reason to stop and re-read.
-  const paused = await setting('PauseLakeConvergence');
-  const scopedRows = await db.collection('scopedsettings').countDocuments({});
-  if (paused) {
-    console.log(`STOP: PauseLakeConvergence = ${JSON.stringify(paused)}. Background lake work is paused.`);
-    return 2;
-  }
-  if (scopedRows > 0) {
-    console.log(
-      `STOP: ${scopedRows} scopedsettings row(s) exist, so this script's platform-only pause check is incomplete.`
-    );
-    return 2;
-  }
+  // because a wave halted mid-flight leaves its files with no passages at all. The pause check here
+  // mirrors only the PLATFORM rung, so a scoped row would make it incomplete - and scopedsettings
+  // was empty at last measurement, which makes a row appearing a reason to stop and re-read.
+  const declaredModel = str(await setting('defaultEmbeddingModel'));
+  console.log(`defaultEmbeddingModel = ${declaredModel || '(no row)'}`);
+  const platform = checkPlatformGuards({
+    defaultModel: declaredModel,
+    paused: await setting('PauseLakeConvergence'),
+    scopedSettingsRows: await db.collection('scopedsettings').countDocuments({}),
+  });
+  report(platform.lines);
+  if (!platform.ok) return platform.exitCode;
+  const defaultModel = platform.value;
 
-  let lakeId = target.registryId ?? '';
-  if (target.lakeIdKind === 'db') {
-    const lake = await DataLakeModel.findOne({ datalakeTag: target.tag }).maxTimeMS(QUERY_TIMEOUT_MS).lean();
-    if (!lake) {
-      console.log(`STOP: no datalakes row carries datalakeTag ${target.tag}.`);
-      return 2;
-    }
-    lakeId = str((lake as { _id: unknown })._id);
-  }
+  const resolved = resolveLakeId({
+    target,
+    lakeRow:
+      target.lakeIdKind === 'db'
+        ? ((await DataLakeModel.findOne({ datalakeTag: target.tag }).maxTimeMS(QUERY_TIMEOUT_MS).lean()) as {
+            _id: unknown;
+          } | null)
+        : null,
+  });
+  report(resolved.lines);
+  if (!resolved.ok) return resolved.exitCode;
+  const lakeId = resolved.value;
   console.log(`lakeId stamped on queue messages = ${lakeId}\n`);
 
-  // tags is an array of OBJECTS carrying a name, and deletedAt is explicit because a lean/raw read
-  // bypasses the soft-delete find hook.
-  const membership = {
-    deletedAt: null,
-    $or: [
-      { tags: { $elemMatch: { name: target.tag } } },
-      { tags: { $elemMatch: { name: { $regex: `^${escapeRegex(target.prefix)}` } } } },
-    ],
-  };
+  const membership = buildDrainMembershipQuery(target);
 
-  if (VERIFY) {
+  if (verify) {
     const all = (await FabFile.find(membership, {
       embeddingModel: 1,
       chunked: 1,
@@ -213,7 +161,7 @@ async function main(): Promise<number> {
       chunkRebuildRequestedAt: 1,
     })
       .maxTimeMS(QUERY_TIMEOUT_MS)
-      .lean()) as unknown as FileRow[];
+      .lean()) as unknown as DrainFileRow[];
 
     console.log(`--- ${all.length} member files ---`);
     console.log(`  embeddingModel: ${tally(all, f => f.embeddingModel ?? 'BLANK')}`);
@@ -265,11 +213,9 @@ async function main(): Promise<number> {
 
     // File-level flags are NOT a completion signal: a drain of this lake showed all 585 files
     // reading vectorized:true while 72% of their passages held no vector at all.
-    console.log(`\n  files not in ${defaultModel}:    ${staleFiles}`);
-    console.log(`  passages not in ${defaultModel}: ${staleChunks}`);
-    console.log('  DRAIN IS COMPLETE WHEN BOTH ARE 0. A zero on the first line alone is a stamp,');
-    console.log('  not a re-embed, and the second line is what retrieval actually scores against.');
-    return staleFiles === 0 && staleChunks === 0 ? 0 : 2;
+    const verdict = verifyVerdict({ defaultModel, staleFiles, staleChunks });
+    report(verdict.lines);
+    return verdict.exitCode;
   }
 
   const stale = (await FabFile.find(
@@ -277,24 +223,17 @@ async function main(): Promise<number> {
     { userId: 1, fileName: 1, embeddingModel: 1, vectorizedChunkCount: 1, isChunking: 1 }
   )
     .maxTimeMS(QUERY_TIMEOUT_MS)
-    .lean()) as unknown as FileRow[];
+    .lean()) as unknown as DrainFileRow[];
 
   const chunkSum = stale.reduce((n, f) => n + (Number(f.vectorizedChunkCount) || 0), 0);
   console.log(`--- population: ${stale.length} files not in ${defaultModel}, ${chunkSum} stored chunks ---`);
   console.log(`  prior labels: ${tally(stale, f => f.embeddingModel ?? 'BLANK')}`);
 
-  const ownerCounts = new Map<string, number>();
-  for (const f of stale) {
-    const id = str(f.userId);
-    ownerCounts.set(id, (ownerCounts.get(id) ?? 0) + 1);
-  }
-  for (const [id, n] of [...ownerCounts.entries()].sort((a, b) => b[1] - a[1])) {
-    const known = target.owners.includes(id);
-    console.log(`  owner ${id} x${n}${known ? '' : '   <-- NOT IN THE AUTHORIZED OWNER LIST'}`);
-  }
-  if ([...ownerCounts.keys()].some(id => !target.owners.includes(id))) {
-    console.log('\nSTOP: the prefix arm reached files owned outside the authorized set. Re-measure and re-authorize.');
-    return 2;
+  const owners = auditOwners({ rows: stale, owners: target.owners });
+  report(owners.lines);
+  if (owners.refusal) {
+    report(owners.refusal.lines);
+    return owners.refusal.exitCode;
   }
 
   const midRun = stale.filter(f => f.isChunking === true).length;
@@ -305,14 +244,14 @@ async function main(): Promise<number> {
   // The manifest goes to the OS temp dir at 0600, never into the working tree: this is a public
   // repo and its history is permanent.
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lake-drain-'));
-  const manifest = path.join(outDir, `${LAKE}-manifest.json`);
+  const manifest = path.join(outDir, `${lake}-manifest.json`);
   fs.writeFileSync(
     manifest,
     JSON.stringify(
       {
         capturedAt: new Date().toISOString(),
         stage: Resource.App.stage,
-        lake: LAKE,
+        lake,
         lakeId,
         defaultModel,
         files: stale.map(f => ({
@@ -332,30 +271,23 @@ async function main(): Promise<number> {
   console.log('  This is NOT an undo. The worker deletes the old passages, so a drain can only be');
   console.log('  re-run, never reversed; the manifest records which files were touched and from what.');
 
-  if (!EXECUTE) {
-    console.log(`\ndry run: nothing written. To execute:\n  --lake ${LAKE} --execute --expect ${stale.length}`);
-    return 0;
-  }
-  if (EXPECT !== stale.length) {
-    console.log(`\nSTOP: --expect ${EXPECT ?? '(absent)'} does not match the measured population ${stale.length}.`);
-    console.log('Pass the number the dry run printed, so a drifted population aborts instead of draining.');
-    return 2;
-  }
+  const approved = checkExpectedPopulation({ lake, execute, expect: approvedCount, population: stale.length });
+  report(approved.lines);
+  if (!approved.ok) return approved.exitCode;
 
-  const ordered = stale.slice(0, LIMIT ?? stale.length);
-  const ownerById = new Map(ordered.map(f => [str(f._id), str(f.userId)] as const));
-  console.log(`\nexecuting over ${ordered.length} file(s) in waves of ${WAVE}`);
+  const waves = planWaves({ ids: stale.map(f => str(f._id)), limit, wave });
+  const ownerById = new Map(stale.map(f => [str(f._id), str(f.userId)] as const));
+  const plannedCount = waves.reduce((n, w) => n + w.length, 0);
+  console.log(`\nexecuting over ${plannedCount} file(s) in waves of ${wave}`);
 
   const sqs = new SQSClient({});
   const queueUrl = Resource.fabFileChunkQueue.url;
-  const resetLog = path.join(outDir, `${LAKE}-reset.log`);
+  const resetLog = path.join(outDir, `${lake}-reset.log`);
   let resetTotal = 0;
   let sentTotal = 0;
   const failedSends: string[] = [];
 
-  for (let i = 0; i < ordered.length; i += WAVE) {
-    const waveIds = ordered.slice(i, i + WAVE).map(f => str(f._id));
-
+  for (const [waveIndex, waveIds] of waves.entries()) {
     // Reset first, then enqueue exactly what the reset changed. The reset is preconditioned on
     // isChunking:{$ne:true}, so a file a worker holds a lease on is skipped rather than having
     // that lease released, and the returned ids are therefore a subset of the wave.
@@ -392,7 +324,7 @@ async function main(): Promise<number> {
       else failedSends.push(resetIds[k]);
     });
     sentTotal += waveSent;
-    console.log(`  wave ${Math.floor(i / WAVE) + 1}: reset ${resetIds.length}/${waveIds.length}, enqueued ${waveSent}`);
+    console.log(`  wave ${waveIndex + 1}: reset ${resetIds.length}/${waveIds.length}, enqueued ${waveSent}`);
   }
 
   console.log(`\nreset ${resetTotal} file(s), enqueued ${sentTotal}.`);
@@ -403,7 +335,7 @@ async function main(): Promise<number> {
     if (failedSends.length > 20) console.log(`    ... and ${failedSends.length - 20} more (see the reset log)`);
     console.log('  re-run this script to pick them up.');
   }
-  console.log(`\nWorkers re-embed asynchronously. Confirm convergence with:\n  --lake ${LAKE} --verify`);
+  console.log(`\nWorkers re-embed asynchronously. Confirm convergence with:\n  --lake ${lake} --verify`);
   return failedSends.length ? 2 : 0;
 }
 
