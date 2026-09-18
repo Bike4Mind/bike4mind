@@ -279,7 +279,9 @@ describe('org feedback report - membership population and denials', () => {
 
   it('honours the date bound at the day boundary', async () => {
     const s = await seedOrgA();
-    const from = dayjs().subtract(5, 'days');
+    // UTC, not local: the route rounds the day boundary in UTC (matching the aggregate's own
+    // UTC grouping), so this machine's local TZ must not be what decides the boundary here.
+    const from = dayjs.utc().subtract(5, 'days');
     const startOfFrom = from.startOf('day').toDate();
 
     await backdate(s.rows.member._id, startOfFrom);
@@ -287,7 +289,7 @@ describe('org feedback report - membership population and denials', () => {
 
     const res = await callReport(
       reportHandler,
-      { id: String(s.orgA._id), from: from.format('YYYY-MM-DD'), to: dayjs().format('YYYY-MM-DD') },
+      { id: String(s.orgA._id), from: from.format('YYYY-MM-DD'), to: dayjs.utc().format('YYYY-MM-DD') },
       s.owner
     );
     const counted = res._getJSONData().byMember.map((m: { userId: string }) => m.userId);

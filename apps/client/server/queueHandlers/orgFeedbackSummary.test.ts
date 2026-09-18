@@ -136,6 +136,33 @@ describe('runOrgFeedbackSummary', () => {
     );
   });
 
+  it('still rethrows the original error when marking the job failed also rejects', async () => {
+    h.complete.mockRejectedValue(new Error('bedrock unavailable'));
+    h.updateOne.mockImplementation(async (_filter: unknown, update: { status?: string }) => {
+      if (update?.status === 'failed') throw new Error('mongo unavailable');
+      return {};
+    });
+
+    await expect(run()).rejects.toThrow('bedrock unavailable');
+
+    const failed = frames().at(-1);
+    expect(failed).toMatchObject({ status: 'failed', errorMessage: 'bedrock unavailable' });
+  });
+
+  it('still rethrows the original error when the failure progress frame also rejects', async () => {
+    h.complete.mockRejectedValue(new Error('bedrock unavailable'));
+    h.sendToClient.mockImplementation(async (_userId: unknown, _endpoint: unknown, payload: { status: string }) => {
+      if (payload.status === 'failed') throw new Error('websocket gone');
+    });
+
+    await expect(run()).rejects.toThrow('bedrock unavailable');
+
+    expect(h.updateOne).toHaveBeenLastCalledWith(
+      { summaryJobId: SUMMARY_JOB_ID },
+      { status: 'failed', errorMessage: 'bedrock unavailable', activeKey: SUMMARY_JOB_ID }
+    );
+  });
+
   it('drops a redelivery whose job row has aged out', async () => {
     h.findOne.mockResolvedValue(null);
     const logger = makeLogger();

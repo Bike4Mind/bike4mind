@@ -231,13 +231,28 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     logger.error(`Org feedback summary ${summaryJobId} failed: ${errorMessage}`);
-    await OrgFeedbackSummaryJob.updateOne(
-      { summaryJobId },
-      { status: 'failed', errorMessage, activeKey: summaryJobId }
-    );
+
+    // Each side-effect below is isolated: a rejection here must never replace `error`, or SQS
+    // retries and the DLQ see this secondary failure instead of the root cause. Both are attempted
+    // even if one throws, since a failed updateOne must not skip the progress frame the client is
+    // waiting on.
+    try {
+      await OrgFeedbackSummaryJob.updateOne(
+        { summaryJobId },
+        { status: 'failed', errorMessage, activeKey: summaryJobId }
+      );
+    } catch (updateError) {
+      logger.error(`Failed to mark summary job ${summaryJobId} as failed: ${String(updateError)}`);
+    }
+
     // Tell the waiting client before rethrowing: the rethrow hands the message back to SQS, and
     // the retries plus the DLQ that follow are silent from the browser's side.
-    await sendProgress(userId, summaryJobId, organizationId, 'failed', 100, errorMessage);
+    try {
+      await sendProgress(userId, summaryJobId, organizationId, 'failed', 100, errorMessage);
+    } catch (progressError) {
+      logger.error(`Failed to send failure progress for summary job ${summaryJobId}: ${String(progressError)}`);
+    }
+
     throw error;
   }
 }

@@ -149,6 +149,29 @@ describe('POST /api/organizations/:id/feedback-summary', () => {
     expect(filter.status.$in).toEqual(['pending', 'processing']);
   });
 
+  it('accepts an identical startDate/endDate and stores the whole UTC day, not a zero-width window', async () => {
+    const sameInstant = '2026-01-15T12:00:00.000Z';
+    const res = await invoke({ startDate: sameInstant, endDate: sameInstant });
+
+    expect(res._getStatusCode()).toBe(202);
+    const created = jobCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect((created.startDate as Date).toISOString()).toBe('2026-01-15T00:00:00.000Z');
+    expect((created.endDate as Date).toISOString()).toBe('2026-01-15T23:59:59.999Z');
+
+    const message = sendToQueue.mock.calls[0][1] as Record<string, unknown>;
+    expect(message.startDate).toBe('2026-01-15T00:00:00.000Z');
+    expect(message.endDate).toBe('2026-01-15T23:59:59.999Z');
+  });
+
+  it('widens a mid-day startDate/endDate out to the UTC day boundaries', async () => {
+    const res = await invoke({ startDate: '2026-01-15T09:30:00.000Z', endDate: '2026-01-17T14:00:00.000Z' });
+
+    expect(res._getStatusCode()).toBe(202);
+    const created = jobCreate.mock.calls[0][0] as Record<string, unknown>;
+    expect((created.startDate as Date).toISOString()).toBe('2026-01-15T00:00:00.000Z');
+    expect((created.endDate as Date).toISOString()).toBe('2026-01-17T23:59:59.999Z');
+  });
+
   it('rejects an inverted range, an oversized one and a missing one without enqueuing', async () => {
     await expect(invoke({ startDate: WINDOW.endDate, endDate: WINDOW.startDate })).rejects.toThrow();
     await expect(
@@ -219,6 +242,23 @@ describe('GET /api/organizations/:id/feedback-summary', () => {
     const res = await runGet();
 
     expect(res._getJSONData()).toEqual({ status: 'failed', summaryJobId: 'sum-1', errorMessage: 'no model' });
+  });
+
+  it('normalizes an un-rounded query the same way POST stores the job, so the two agree', async () => {
+    // A caller who asks with the exact mid-day instants a POST would have widened must still land
+    // on the row that POST's normalized startDate/endDate key.
+    const { req, res } = createMocks({
+      method: 'GET',
+      query: { id: 'org1', startDate: '2026-01-15T09:30:00.000Z', endDate: '2026-01-17T14:00:00.000Z' },
+    });
+    (req as unknown as { user: unknown }).user = { id: 'owner1', isAdmin: false };
+
+    await getHandler(req, res);
+
+    const filter = jobFindOne.mock.calls[0][0] as { startDate: Date; endDate: Date };
+    expect(filter.startDate.toISOString()).toBe('2026-01-15T00:00:00.000Z');
+    expect(filter.endDate.toISOString()).toBe('2026-01-17T23:59:59.999Z');
+    expect(res._getStatusCode()).toBe(200);
   });
 
   it('refuses a caller who may not administer the org', async () => {

@@ -15,6 +15,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { verifyOrgAccess } from '@server/utils/orgAccess';
+import { resolveInstantWindow } from '@server/utils/orgFeedbackWindow';
 import { sendToQueue } from '@server/utils/sqs';
 import { Request, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
@@ -24,21 +25,16 @@ import { z } from 'zod';
 // An LLM pass per request, so this is capped far below the read routes' 10/min.
 const SUMMARY_RATE_LIMIT = { limit: 3, windowMs: 60 * 1000, bucket: 'organizations/feedback-summary' } as const;
 
-// A year of feedback is already more than one prompt can carry, and the window is what bounds the
-// aggregate the worker runs.
-const MAX_WINDOW_DAYS = 365;
-const MAX_WINDOW_MS = MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000;
-
+// `resolveInstantWindow` rounds both instants out to whole UTC days and rejects an over-the-ceiling
+// range, so a same-day window is never zero-width here - the `<=` only rejects an actually inverted
+// pair, and the ceiling itself is enforced once, inside that helper.
 const bodySchema = z
   .object({
     startDate: z.string().min(1).datetime(),
     endDate: z.string().min(1).datetime(),
   })
-  .refine(v => new Date(v.startDate) < new Date(v.endDate), {
-    message: 'startDate must be before endDate',
-  })
-  .refine(v => new Date(v.endDate).getTime() - new Date(v.startDate).getTime() <= MAX_WINDOW_MS, {
-    message: `Range must not exceed ${MAX_WINDOW_DAYS} days`,
+  .refine(v => new Date(v.startDate) <= new Date(v.endDate), {
+    message: 'startDate must not be after endDate',
   });
 
 /** Mongo's duplicate-key error, which here means a job already owns this window. */
@@ -69,13 +65,16 @@ const handler = baseApi()
         startDate: req.query.startDate,
         endDate: req.query.endDate,
       });
+      // Normalized the same way the POST below stores it, so a caller passing the un-rounded
+      // instants it originally asked with still finds the job.
+      const { from, to } = resolveInstantWindow(startDate, endDate);
 
       // Newest first: a window can have been summarized, released and asked for again, and the
       // panel wants the run it is watching, not the one that finished last month.
       const job = await OrgFeedbackSummaryJob.findOne({
         organizationId,
-        startDate: new Date(startDate),
-        endDate: new Date(endDate),
+        startDate: from,
+        endDate: to,
       })
         .sort({ createdAt: -1 })
         .lean();
@@ -112,9 +111,13 @@ const handler = baseApi()
       const body = req.body;
       if (!body || typeof body !== 'object') throw new BadRequestError('Missing request body');
       const { startDate, endDate } = bodySchema.parse(body);
+      // Normalized to whole UTC days: the same instants key the job document, get sent to the
+      // worker, and are what a later GET looks the job up by, so all three must agree by
+      // construction.
+      const { from, to } = resolveInstantWindow(startDate, endDate);
 
       const summaryJobId = uuidv4();
-      const window = { startDate: new Date(startDate), endDate: new Date(endDate) };
+      const window = { startDate: from, endDate: to };
 
       try {
         await OrgFeedbackSummaryJob.create({
@@ -149,8 +152,8 @@ const handler = baseApi()
           jobType: 'orgFeedbackSummary',
           summaryJobId,
           organizationId,
-          startDate,
-          endDate,
+          startDate: from.toISOString(),
+          endDate: to.toISOString(),
           userId: req.user.id,
         });
       } catch (error) {
