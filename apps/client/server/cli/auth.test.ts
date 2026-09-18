@@ -243,6 +243,15 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
       id: 'u1',
     });
   });
+
+  it('rejects a relying-party OAuth access token before hitting the DB (oauthRouteGate does not cover this surface)', async () => {
+    // Wiring guard: this primitive backs the CLI/LLM surfaces the route gate never runs on, so the
+    // kind:oauth rejection here is the ONLY thing keeping a scope-bound OAuth token off them.
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', kind: 'oauth' }, 'test-secret'))).rejects.toThrow(
+      'OAuth access tokens are not accepted on this endpoint'
+    );
+    expect(User.findById).not.toHaveBeenCalled();
+  });
 });
 
 describe('verifyEmbedApiKey (embed credential-class gates)', () => {
