@@ -33,7 +33,7 @@ export const actionButtonSx = (theme: Theme) => ({
   '--IconButton-size': '24px',
   minWidth: '24px',
   minHeight: '24px',
-  '--Icon-fontSize': '18px',
+  '--Icon-fontSize': '16px',
   '--Icon-color': theme.vars.palette.text.primary70,
   '&:hover': {
     backgroundColor: theme.palette.notebooklist.hoverBg,
@@ -323,7 +323,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                   size="sm"
                   variant="plain"
                   color="neutral"
-                  sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
+                  sx={actionButtonSx}
                   onClick={handleCopy}
                   data-testid={`${testIdPrefix}-artifact-copy-btn`}
                 >
@@ -395,9 +395,11 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         {extra}
 
         {renderedView ? (
-          <Box sx={{ mt: 2 }} onClick={e => e.stopPropagation()}>
-            {renderPreview?.()}
-          </Box>
+          // The render stays live: an artifact is an interactive thing, and a counter you
+          // cannot click is a screenshot of one. The viewer opens from the card's chrome and
+          // the viewer button instead. (An HTML preview is an iframe, so clicks inside it
+          // never reach this card at all - that area drives the artifact, nothing else.)
+          <Box sx={{ mt: 2 }}>{renderPreview?.()}</Box>
         ) : showSourceBody ? (
           renderSource ? (
             <Box sx={{ mt: 2 }}>{renderSource()}</Box>

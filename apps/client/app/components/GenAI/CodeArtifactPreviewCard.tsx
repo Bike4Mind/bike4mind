@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
   OpenInFullOutlined as ExpandIcon,
+  ExpandMoreOutlined as ExpandMoreIcon,
+  ExpandLessOutlined as ExpandLessIcon,
   ContentCopyOutlined as CopyIcon,
   SaveOutlined as SaveIcon,
 } from '@mui/icons-material';
@@ -221,13 +223,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}
           >
             <Tooltip title="Copy code to clipboard" placement="top">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
-                onClick={handleCopy}
-              >
+              <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleCopy}>
                 <CopyIcon />
               </IconButton>
             </Tooltip>
@@ -318,6 +314,9 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
                 type="button"
                 level="body-sm"
                 data-testid="code-artifact-show-more-btn"
+                endDecorator={
+                  showFullBody ? <ExpandLessIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />
+                }
                 onClick={e => {
                   e.stopPropagation();
                   setShowFullBody(v => !v);
@@ -328,9 +327,16 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
                   border: 'none',
                   background: 'none',
                   cursor: 'pointer',
+                  // Centred under the body it reveals, like the reply-level Show More.
+                  display: 'flex',
+                  alignItems: 'center',
+                  mx: 'auto',
                   color: 'text.primary',
                   fontWeight: 500,
-                  '&:hover': { textDecoration: 'underline' },
+                  gap: '2px',
+                  // Joy icons read --Icon-color, so the chevron does not follow `color` on
+                  // its own - it has to be named here or it stays the default grey.
+                  '&:hover': { textDecoration: 'underline', '--Icon-color': 'var(--joy-palette-text-primary)' },
                 }}
               >
                 {showFullBody ? 'Show less' : `Show ${codeLines.length - settings.maxVisibleLines} more lines`}
