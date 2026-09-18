@@ -21,12 +21,13 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   App,
   TrustLocationSelector,
+  FolderTrustPrompt,
   RewindSelector,
   SessionSelector,
   EnvironmentPicker,
   ModelPicker,
 } from './components';
-import type { PermissionResponse, EnvChoice } from './components';
+import type { PermissionResponse, EnvChoice, FolderTrustChoice } from './components';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
@@ -231,6 +232,8 @@ interface CliState {
   permissionManager: PermissionManager | null;
   permissionPrompt: PermissionPromptState | null;
   trustLocationSelector: TrustLocationSelectorState | null;
+  /** Startup folder-trust prompt for an untrusted project shipping b4m files. */
+  folderTrustPrompt: { projectRoot: string } | null;
   rewindSelector: RewindSelectorState | null;
   sessionSelector: SessionSelectorState | null;
   showLoginFlow?: boolean;
@@ -290,6 +293,7 @@ function CliApp() {
     permissionManager: null,
     permissionPrompt: null,
     trustLocationSelector: null,
+    folderTrustPrompt: null,
     rewindSelector: null,
     sessionSelector: null,
     orchestrator: null,
@@ -313,6 +317,10 @@ function CliApp() {
   const imageStoreInitPromise = useRef<Promise<ImageStore> | null>(null);
 
   // Durable workflow stores - refs so they're accessible across all callbacks
+  // Guards the one-time startup folder-trust prompt so re-runs of init() (login
+  // flow, env picker) don't re-show it. A ref (not React state) so it survives
+  // init()'s stable closure.
+  const folderTrustResolvedRef = useRef(false);
   const todoStoreRef = useRef(createTodoStore());
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
@@ -511,6 +519,26 @@ function CliApp() {
 
       // Load configuration
       const config = await state.configStore.load();
+
+      // Folder-trust gate: when an untrusted project ships repo-committed b4m
+      // files, prompt ONCE (interactive TTY only) before anything repo-sourced
+      // loads. Non-interactive stays untrusted (fail-safe). The ref guard keeps
+      // re-runs of init() (login/env-picker) from re-showing the prompt.
+      if (
+        !folderTrustResolvedRef.current &&
+        !state.configStore.isProjectTrusted() &&
+        state.configStore.projectHasB4mFiles() &&
+        Boolean(process.stdin.isTTY) &&
+        Boolean(process.stdout.isTTY)
+      ) {
+        folderTrustResolvedRef.current = true;
+        setState(prev => ({
+          ...prev,
+          folderTrustPrompt: { projectRoot: state.configStore.getProjectRealPath() ?? process.cwd() },
+          config,
+        }));
+        return;
+      }
 
       // Load additional directories from config and --add-dir flag
       const configDirs = await state.configStore.getAdditionalDirectories();
@@ -2332,6 +2360,17 @@ function CliApp() {
       }
 
       case 'trust': {
+        // /trust folder - trust the current project root (folder-trust gate).
+        if (args[0] === 'folder') {
+          const root = state.configStore.getProjectRealPath() ?? process.cwd();
+          await state.configStore.trustProject();
+          state.customCommandStore.setProjectTrusted(true);
+          await state.customCommandStore.reloadCommands().catch(() => {});
+          console.log(`\n✅ Trusted project folder: ${root}`);
+          console.log('Project skills are now loaded. Restart b4m to load repo agents and MCP servers.\n');
+          return;
+        }
+
         if (!state.permissionManager) {
           console.log('Permission manager not initialized');
           return;
@@ -2455,6 +2494,17 @@ function CliApp() {
       }
 
       case 'untrust': {
+        // /untrust folder - revoke trust for the current project root.
+        if (args[0] === 'folder') {
+          const root = state.configStore.getProjectRealPath() ?? process.cwd();
+          await state.configStore.untrustProject();
+          state.customCommandStore.setProjectTrusted(false);
+          await state.customCommandStore.reloadCommands().catch(() => {});
+          console.log(`\n✅ Untrusted project folder: ${root}`);
+          console.log('Repo config stays inert. Restart b4m to fully unload repo agents and MCP servers.\n');
+          return;
+        }
+
         if (!state.permissionManager) {
           console.log('Permission manager not initialized');
           return;
@@ -3721,6 +3771,34 @@ function CliApp() {
           if (state.trustLocationSelector) {
             state.trustLocationSelector.resolve(null);
           }
+        }}
+      />
+    );
+  }
+
+  // Show the one-time folder-trust prompt for an untrusted project shipping
+  // repo b4m files. Resolving it re-runs init() (the ref guard prevents a loop).
+  if (state.folderTrustPrompt) {
+    return (
+      <FolderTrustPrompt
+        projectRoot={state.folderTrustPrompt.projectRoot}
+        onSelect={(choice: FolderTrustChoice) => {
+          void (async () => {
+            try {
+              if (choice === 'trust') {
+                await state.configStore.trustProject();
+                console.log('\n✅ Folder trusted. Loading its config, agents, skills and MCP servers.\n');
+              } else {
+                console.log('\nℹ️  Project config stays inert this session. Use /trust folder to trust it later.\n');
+              }
+            } finally {
+              setState(prev => ({ ...prev, folderTrustPrompt: null }));
+              init().catch(err => {
+                console.error('\n❌ Initialization failed:', err instanceof Error ? err.message : String(err), '\n');
+                exit();
+              });
+            }
+          })();
         }}
       />
     );
