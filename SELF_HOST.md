@@ -594,6 +594,36 @@ Known limitations:
 - **A chunk lost to a transient indexing failure has no automatic repair.** If an OpenSearch write fails mid-vectorize (a transient cluster outage), that chunk's content is missing from OpenSearch results until a future re-embed re-processes the file, and its file goes back to the scan path in the meantime - the same shape as the no-backfill gap above, and equally correctness-neutral (the scan path still sees it in Mongo). The compensating cleanup that makes this safe is itself best-effort: it only ever touches the chunks from the batch that failed (never a sibling batch for the same file, so it cannot destroy already-good data), and if the cleanup delete itself fails - most likely from the same outage that failed the write - it logs and moves on rather than retrying.
 - Disable it again by unsetting `B4M_SELF_HOST_OPENSEARCH` - search falls back to the scan path immediately, no data loss.
 
+### In-app help search (keyword by default)
+
+This is a separate corpus from your uploaded files: the **Help** panel and the Help AI chat search the product documentation shipped in `docs-site/docs`, not your Data Lakes. The two halves are built differently, and only one of them needs a key:
+
+| Half | Built by | Needs a key |
+|---|---|---|
+| The article index and the bundled markdown | `prebuild`, on every `next build` | no |
+| The embedding vectors (`help-embeddings.json`) | `pnpm --filter @bike4mind/scripts help:vectorize` | yes, an OpenAI key |
+
+Neither artifact is committed to the repository, so **a stock self-host build has the index but no vectors, and help search runs on keyword matching.** That is the supported default, not a misconfiguration: the Help panel, article browsing and every help link work exactly the same, and the Help AI chat still answers - it just ranks passages lexically instead of semantically, so a question phrased in words the article does not literally use may retrieve less relevant sections.
+
+To get semantic help search, run the vectorizer at build time with your own key:
+
+```bash
+pnpm --filter @bike4mind/client help:build            # index + bundled markdown, no key
+OPENAI_API_KEY=sk-... pnpm --filter @bike4mind/scripts help:vectorize
+```
+
+The first command is not optional. `help:vectorize` does not read `docs-site` directly - it reads the bundled markdown that `help:build` writes under `apps/client/public/help-content/`, which does not exist in a fresh checkout. Running the vectorizer on its own fails with `help-index.json entries have no file in the content root matching its accessLevel`. Any `next build` also produces both, since `prebuild` runs `help:build`; the pair above is the standalone equivalent.
+
+Run it before you build the image so the vectors land in the bundle. It takes well under a minute for the whole corpus and costs a fraction of a cent against `text-embedding-3-small`.
+
+Re-run it whenever you edit the shipped docs. The failure is quieter than it sounds: article bodies are re-read from disk at query time, so an edit that leaves headings alone still serves your new text. What goes stale is the ranking - rename or re-split a heading and that section's vector no longer resolves, so it is dropped from the results silently, and only a query where every selected section drops falls back to keyword.
+
+Without a key the command throws rather than skipping. Set `HELP_EMBEDDINGS_REQUIRED=false` to downgrade that to a logged skip, which is what a build pipeline that does not care about semantic help search wants.
+
+**You need the key in two places, not one.** Building the vectors is only half of it: at query time the app has to embed your question into the same vector space, so it re-reads the model the artifact was built with and asks that provider. Without a usable OpenAI credential on the running app, a perfectly good `help-embeddings.json` still serves keyword results. Set `OPENAI_API_KEY` in `.env.selfhost` (or under **Settings -> API Keys**) as well as at build time.
+
+This is also the one place OpenAI specifically is required: help vectors are always embedded with `text-embedding-3-small`, whatever **Default Embedding Model** you picked for your own files, because the corpus and the query have to share a vector space.
+
 ## Background worker
 
 The `worker` service is the self-host replacement for the hosted background infrastructure (SST queue consumers + cron). It runs no HTTP server and publishes no ports; it just:

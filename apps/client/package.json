@@ -5,7 +5,7 @@
   "scripts": {
     "postinstall": "node scripts/copy-tavern-assets.mjs && node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
     "codegen": "node scripts/generate-premium-glue.mjs",
-    "predev": "node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs",
+    "predev": "node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && node scripts/generate-premium-glue.mjs && pnpm help:build",
     "prebuild": "node scripts/copy-pdf-worker.mjs && node scripts/copy-highs-wasm.mjs && pnpm help:build",
     "dev": "WATCHPACK_POLLING=true next dev",
     "devPerformance": "sst ${SST_ARGS} bind \"bash -c 'NEXT_PUBLIC_VERBOSE_PERFORMANCE=true NODE_OPTIONS=--inspect node_modules/.bin/next dev'\"",
