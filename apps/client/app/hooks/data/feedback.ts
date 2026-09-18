@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { FEEDBACK_LIST_MAX_LIMIT } from '@bike4mind/common';
-import { getFeedbackFromServer } from '@client/app/utils/feedbackAPICalls';
+import { getFeedbackFromServer, getFeedbackRollupFromServer } from '@client/app/utils/feedbackAPICalls';
 import { useUser } from '@client/app/contexts/UserContext';
 import { isOptimisticId } from '@client/app/utils/llm';
 
@@ -53,5 +53,39 @@ export function useGetFeedbackBySessionId(sessionId: string, options: { enabled?
     },
     staleTime: 1000 * 30,
     enabled: (options.enabled ?? true) && Boolean(userId) && !isOptimisticId(sessionId),
+  });
+}
+
+/**
+ * Cache key for the personal rollup read. `userId` is in the key for the same reason as the
+ * session read above: the endpoint answers "my counts", so a key without it would serve one
+ * account's totals to the next account signed in on the same tab.
+ */
+export const feedbackRollupQueryKey = (userId: string | undefined, from: string | undefined, to: string | undefined) =>
+  ['feedback', 'rollup', userId, from, to] as const;
+
+/**
+ * Counts of the signed-in user's own reports over `[from, to)`. The bounds arrive already resolved
+ * from the route's `validateSearch` (see `utils/feedbackRollupWindow.ts`) - this hook must never
+ * default them itself, because a default computed per render churns the query key and refetches
+ * without end.
+ *
+ * `undefined` checks rather than truthiness: an empty bound string is a malformed window the server
+ * should reject with a 422, not a reason to fall through to an unbounded read.
+ */
+export function useFeedbackRollup({ from, to }: { from?: string; to?: string }) {
+  const { currentUser } = useUser();
+  const userId = currentUser?.id;
+
+  return useQuery({
+    queryKey: feedbackRollupQueryKey(userId, from, to),
+    queryFn: async () => {
+      if (!userId) throw new Error('Feedback rollup requires an authenticated user');
+      if (from === undefined || to === undefined) throw new Error('Feedback rollup requires both window bounds');
+
+      return getFeedbackRollupFromServer({ from, to });
+    },
+    staleTime: 1000 * 60,
+    enabled: Boolean(userId) && from !== undefined && to !== undefined,
   });
 }

@@ -21,6 +21,7 @@ import {
   apiKeyService,
   creditService,
   dataLakeService,
+  isOperationalBillingEnabled,
   recordOperationalUsage,
   scopedSettingsService,
 } from '@bike4mind/services';
@@ -40,14 +41,7 @@ import {
   type SettingScope,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import {
-  createTokenizer,
-  getSettingsByNames,
-  getSettingsMap,
-  getSettingsValue,
-  normalizeId,
-  type ITokenizer,
-} from '@bike4mind/utils';
+import { createTokenizer, getSettingsByNames, normalizeId, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { resolveRetrievalLakeScope } from '@server/dataLakes/resolveRetrievalLakeScope';
 import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
@@ -235,6 +229,11 @@ const toScanPayload = (scan: dataLakeService.SemanticSearchScanAccounting) => ({
   ann_files_queried: scan.annFilesQueried,
   ann_hits: scan.annHits,
   ann_models_queried: scan.annModelsQueried,
+  // Scoped files per lake. Without it `files_scoped` is a single number over the union and a
+  // caller cannot tell a lake that contributed nothing from one that contributed most of the
+  // scope - the gap that let a multi-lake search report every lake as searched. The empty-string
+  // key holds files attributable to no lake (the caller's own and shared files).
+  files_by_lake: scan.filesByLake,
   // The ANN share of latency_ms, so a slow search can be attributed from the response itself
   // rather than from CloudWatch minutes later. The counters above cannot tell a 49s search from a
   // 2s one, and this route runs under a 60s Lambda ceiling - a first production search spent 45.4s
@@ -350,13 +349,17 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_QUERY_SCOPES })
       // Gated on the exact pair recordOperationalUsage requires to debit; a deployment that
       // never bills must not start rejecting searches.
       const queryTokens = await countQueryTokens();
-      const billingSettings = await getSettingsMap(
-        { adminSettings: adminSettingsRepository },
-        { names: ['billOperationalUsage', 'enforceCredits'], logger: req.logger }
-      );
-      const shouldBill =
-        (getSettingsValue('billOperationalUsage', billingSettings) ?? false) &&
-        (getSettingsValue('enforceCredits', billingSettings) ?? false);
+      // Shared with the settlement in recordOperationalUsage, so the two cannot drift on
+      // "does operational spend actually debit here".
+      //
+      // Deliberately NOT inside a fail-open try, unlike both the holder read below and the same
+      // helper's use in sessionOperationalCreditPreflight.ts. The philosophies differ because
+      // what a fallback costs differs: there, `shouldBill` gates only the pre-flight and
+      // settlement re-reads the setting in the SessionEvents process, so failing open skips a
+      // check and still charges. Here it gates the check AND the charge in this one request
+      // (see the `shouldBill &&` guard on the settlement below), so falling back to `false`
+      // would hand out an unbilled search. A throw is the safer failure for that shape.
+      const shouldBill = await isOperationalBillingEnabled({ adminSettings: adminSettingsRepository }, req.logger);
 
       // Resolved once and reused by the settlement below, so the pre-flight and the charge
       // can never disagree about which holder pays. Best-effort: a billing-store failure leaves

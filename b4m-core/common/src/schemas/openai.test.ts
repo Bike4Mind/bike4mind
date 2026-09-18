@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels } from '../models';
-import { OpenAIImageGenerationInput, LEGACY_IMAGE_MODEL_MAP } from './openai';
+import { OpenAIImageGenerationInput, LEGACY_IMAGE_MODEL_MAP, toNonWebpOutputFormat } from './openai';
 
 describe('OpenAIImageGenerationInput legacy model remapping', () => {
   it('remaps removed flux-dev to flux-pro-1.1 instead of throwing (regression: #8853)', () => {
@@ -65,5 +65,40 @@ describe('OpenAIImageGenerationInput local-image model ids', () => {
   it('rejects a whitespace-only suffix (no non-whitespace checkpoint name)', () => {
     expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image/   ' })).toThrow();
     expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image/ ' })).toThrow();
+  });
+});
+
+describe('OpenAIImageGenerationInput background', () => {
+  it('accepts the three gpt-image alpha settings', () => {
+    for (const background of ['transparent', 'opaque', 'auto'] as const) {
+      expect(
+        OpenAIImageGenerationInput.parse({ prompt: 'x', model: ImageModels.GPT_IMAGE_2, background }).background
+      ).toBe(background);
+    }
+  });
+
+  it('stays optional so existing clients that never send it still parse', () => {
+    expect(
+      OpenAIImageGenerationInput.parse({ prompt: 'x', model: ImageModels.GPT_IMAGE_2 }).background
+    ).toBeUndefined();
+  });
+
+  it('rejects an unknown background value', () => {
+    expect(() =>
+      OpenAIImageGenerationInput.parse({ prompt: 'x', model: ImageModels.GPT_IMAGE_2, background: 'chroma' })
+    ).toThrow();
+  });
+});
+
+describe('toNonWebpOutputFormat', () => {
+  it('degrades webp to png for providers that only accept png/jpeg', () => {
+    expect(toNonWebpOutputFormat('webp')).toBe('png');
+  });
+
+  it('passes every other value through untouched', () => {
+    expect(toNonWebpOutputFormat('png')).toBe('png');
+    expect(toNonWebpOutputFormat('jpeg')).toBe('jpeg');
+    expect(toNonWebpOutputFormat(null)).toBeNull();
+    expect(toNonWebpOutputFormat(undefined)).toBeUndefined();
   });
 });

@@ -34,7 +34,7 @@
 import { renderRetrievedContentBlock } from '../../../dataLakeService/renderRetrievedContentBlock';
 import { GROUNDED_NO_INVENTION_RULE } from '../../prompts';
 
-const FIXTURE_SECTIONS: string[] = [
+export const FIXTURE_SECTIONS: string[] = [
   [
     '### Customer story - Larkfield Logistics (ID: fixture-customer-larkfield)',
     'Larkfield Logistics rolled the routing product out across their regional fleet in 2024. Across',
@@ -63,6 +63,22 @@ const FIXTURE_SECTIONS: string[] = [
   ].join('\n'),
 ];
 
+const NUMBER_TOKEN = /\d+(?:,\d{3})*(?:\.\d+)?/g;
+const CUSTOMER_STORY_NAME = /Customer story - ([^(]+?)\s*\(ID:/;
+
+/**
+ * Every figure and named customer this corpus actually documents, derived from `FIXTURE_SECTIONS`
+ * rather than hand-maintained beside it - so an edit to the sections cannot desynchronize this from
+ * what they say. `./grade`'s fourth claim (`inventedSpecific`) reads this to tell a reply that cites a
+ * real corpus figure apart from one that invents a new one.
+ */
+export const CORPUS_GROUND_TRUTH: { figures: string[]; entities: string[] } = {
+  figures: Array.from(new Set(FIXTURE_SECTIONS.flatMap(section => section.match(NUMBER_TOKEN) ?? []))),
+  entities: FIXTURE_SECTIONS.map(section => section.match(CUSTOMER_STORY_NAME)?.[1]).filter((name): name is string =>
+    Boolean(name)
+  ),
+};
+
 /**
  * Mirrors `ChatCompletionFeatures.ts` KnowledgeRetrievalFeature, default citation arm. The em dash is
  * escaped because added lines in this repo are ASCII-only, and it is the character production emits.
@@ -82,3 +98,38 @@ const RETRIEVAL_HEADER =
 export function groundedSystemPrompt(rule: string = GROUNDED_NO_INVENTION_RULE): string {
   return RETRIEVAL_HEADER + `${rule}\n\n` + renderRetrievedContentBlock(FIXTURE_SECTIONS);
 }
+
+/**
+ * Every bare number in a piece of text, normalised through `Number` so the ways of writing one value
+ * compare equal - "2,000"/"2000", "8"/"8.0"/"08". Without that a model re-rendering a licensed figure
+ * scored as having invented it.
+ *
+ * Word-bounded, or a digit inside a token is harvested as a figure of its own and licenses it for the
+ * whole reply: "the Q4 2024 figures" would license 4%, and `derive/asked-to-adjudicate`'s "3 routing
+ * nodes" already licensed 3%.
+ */
+export function figuresIn(text: string): string[] {
+  return (text.match(/\b\d[\d,]*(?:\.\d+)?\b/g) ?? []).map(normaliseFigure);
+}
+
+/** Must be applied to BOTH sides of the closed-world check, or the normalisation buys nothing. */
+export function normaliseFigure(figure: string): string {
+  return String(Number(figure.replace(/,/g, '')));
+}
+
+/**
+ * The closed-world allowlist `grade.ts` checks a reply's percentages against: every number the fixture
+ * corpus states. Derived from the sections rather than hand-listed so it cannot go stale against them.
+ *
+ * BARE numbers, not just the ones carrying a percent sign, because the corpus writes ranges where only
+ * the last figure is signed ("average 15 to 20%") - a reply quoting that range honestly must not read
+ * as having supplied the 15 itself.
+ *
+ * FLAT, with no link back to the section or claim a number came from, so the verdict on an invented
+ * percentage turns on digit-string collision: 25 is licensed by the competitive section's "no
+ * competitor has published a figure above 25%", 400 by a shipments-per-hour rate and 2024 by a year.
+ * Deriving it does not protect against that - it is the mechanism: a number added anywhere in the
+ * corpus, for any reason, licenses that percentage for every claim. Closing it needs the reply graded
+ * against the section it cites, which nothing here does.
+ */
+export const CORPUS_FIGURES: ReadonlySet<string> = new Set(FIXTURE_SECTIONS.flatMap(figuresIn));

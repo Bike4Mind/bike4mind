@@ -19,7 +19,7 @@
 import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { cacheRepository, organizationRepository } from '@bike4mind/database';
+import { agentRepository, cacheRepository, organizationRepository } from '@bike4mind/database';
 import {
   oauthClientRepository,
   oauthGrantRepository,
@@ -224,7 +224,7 @@ const handler = baseApi({ auth: false })
           oauthClientId: client_id,
         },
       },
-      { db: { userApiKeys: userApiKeyRepository } }
+      { db: { userApiKeys: userApiKeyRepository, agents: agentRepository } }
     );
 
     // 8. Audit - a single `mint` entry (createUserApiKey does not emit one).

@@ -2,11 +2,7 @@ import { ImageModels } from '@bike4mind/common';
 import { CostCalculator } from './types';
 
 export type OpenAIModel =
-  | ImageModels.GPT_IMAGE_1
-  | ImageModels.GPT_IMAGE_1_5
-  | ImageModels.GPT_IMAGE_1_MINI
-  | ImageModels.GPT_IMAGE_2
-  | string;
+  ImageModels.GPT_IMAGE_1 | ImageModels.GPT_IMAGE_1_5 | ImageModels.GPT_IMAGE_1_MINI | ImageModels.GPT_IMAGE_2 | string;
 
 export interface BaseOpenAIInput {
   model: OpenAIModel;
@@ -28,6 +24,12 @@ type KnownSize = '1024x1024' | '1024x1536' | '1536x1024';
 type PriceKey = `${Tier}_${KnownSize}`;
 
 const DEFAULT_TIER: Tier = 'medium';
+// OpenAI picks the render effort for `quality: 'auto'` per request and never tells us which
+// tier it used, so we bill the ceiling it could have rendered. The prose counterpart of this
+// constant lives in OpenAIImageService.toGptImageQuality (utils), which cannot import it. Under-billing is unrecoverable
+// (the credit hold is set once, before the call, and never reconciled); over-billing an
+// 'auto' request the user opted into is the survivable side of that trade.
+const AUTO_TIER: Tier = 'high';
 const DEFAULT_SIZE: KnownSize = '1024x1024';
 
 const KNOWN_SIZES: readonly KnownSize[] = ['1024x1024', '1024x1536', '1536x1024'] as const;
@@ -105,9 +107,14 @@ function normalizeModelId(modelId: string): ImageModels | null {
 /**
  * Map any Zod-permitted quality/size into the tier+size pair used for price lookup.
  *
- * Pricing is a credit *estimate* - the actual quality/size sent to OpenAI may be 'auto' or a
- * flexible size, in which case OpenAI picks its own defaults. We estimate against 'medium' /
- * 1024x1024 so the credit hold is reasonable; the actual charge is reconciled separately.
+ * There is NO reconciliation step for image credits: ImageGeneration.process() calls getCost()
+ * once, before the OpenAI call, and sets quest.creditsUsed from it. Whatever this returns is
+ * what the user pays, so an input that leaves the render effort up to OpenAI ('auto') is priced
+ * at the ceiling rather than at a guess - see AUTO_TIER.
+ *
+ * Every other under-specified input still defaults leniently (unknown/flexible size -> 1024x1024,
+ * omitted quality -> DEFAULT_TIER): throwing here would cascade into a Quest validation failure,
+ * because the partial-update path in ImageGeneration.process omits the prompt field.
  */
 function normalizeInput(input: OpenAIGPTImageInput): { tier: Tier; size: KnownSize } {
   const tier: Tier = (() => {
@@ -116,12 +123,14 @@ function normalizeInput(input: OpenAIGPTImageInput): { tier: Tier; size: KnownSi
         return 'medium';
       case 'hd':
         return 'high';
+      case 'auto':
+        return AUTO_TIER;
       case 'low':
       case 'medium':
       case 'high':
         return input.quality;
       default:
-        // undefined, 'auto', or any unrecognized value
+        // undefined or any unrecognized value
         return DEFAULT_TIER;
     }
   })();

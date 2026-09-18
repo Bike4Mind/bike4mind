@@ -27,7 +27,7 @@ import { toast } from 'sonner';
 import { useNotebookSearch } from '@client/app/contexts/NotebookSearchContext';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useQuestPreparation } from '@client/app/hooks/useQuestPreparation';
-import KeyboardDoubleArrowDownTwoToneIcon from '@mui/icons-material/KeyboardDoubleArrowDownTwoTone';
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import { useAdminTools } from '@client/app/hooks/useAdminTools';
 import { useStableCallback } from '@client/app/hooks/useStableCallback';
 import ChatHistory from '@client/app/components/Session/ChatHistory';
@@ -72,20 +72,41 @@ const ScrollToBottomButton = memo(
       >
         <IconButton
           size="sm"
-          variant="outlined"
-          sx={{
-            backgroundColor: 'background.body',
-            animation: 'bounce 4s ease-in-out infinite',
-            '&:hover': {
-              animation: 'none',
-              backgroundColor: 'background.body',
-              backgroundImage: theme =>
-                `linear-gradient(${theme.palette.session.hoverBackground}, ${theme.palette.session.hoverBackground})`,
-            },
-            transition: 'transform 0.2s, background-color 0.2s, background-image 0.2s',
+          // plain, not outlined: the surface below is drawn by hand, and Joy's own
+          // variant background would sit opaquely on top of the blur.
+          variant="plain"
+          sx={theme => ({
+            borderRadius: '50%',
+            '--IconButton-size': '34px',
+            minWidth: '34px',
+            minHeight: '34px',
+            '--Icon-fontSize': '18px',
+            color: 'text.primary',
+            // Glass: the transcript stays visible through the button, blurred. The solid
+            // `background` is the fallback wherever color-mix is unsupported - it is a
+            // separate property, so an invalid color-mix drops back to it rather than to
+            // nothing. saturate keeps the blurred content from going grey.
+            background: theme.vars.palette.background.surface,
+            backgroundColor: `color-mix(in srgb, ${theme.vars.palette.background.surface} 55%, transparent)`,
+            backdropFilter: 'blur(12px) saturate(160%)',
+            WebkitBackdropFilter: 'blur(12px) saturate(160%)',
+            border: '1px solid',
+            borderColor: 'border.soft',
+            boxShadow: theme.palette.session.shadowSoft,
+            // Joy's own hover fill would win over a plain `&:hover` here, so cancel it and
+            // let the rule below do the work.
+            '--variant-plainHoverBg': 'transparent',
+            transition: 'background-color 0.2s, border-color 0.2s',
             pointerEvents: 'auto',
-            boxShadow: (theme: { palette: { session: { shadowSoft: string } } }) => theme.palette.session.shadowSoft,
-          }}
+            '&:hover': {
+              backgroundColor: `color-mix(in srgb, ${theme.vars.palette.background.surface} 78%, transparent)`,
+              // The scheme's own hover tint laid over the glass, rather than a second
+              // colour invented here. An image, not a colour, so it stacks on the mix
+              // above instead of replacing it - the blur survives.
+              backgroundImage: `linear-gradient(${theme.palette.session.hoverBackground}, ${theme.palette.session.hoverBackground})`,
+              borderColor: 'border.muted',
+            },
+          })}
           onClick={() => {
             const scroller = scrollerRef.current;
             if (scroller) {
@@ -93,7 +114,7 @@ const ScrollToBottomButton = memo(
             }
           }}
         >
-          <KeyboardDoubleArrowDownTwoToneIcon />
+          <ArrowDownwardIcon />
         </IconButton>
       </Box>
     );
@@ -581,6 +602,11 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, empty
                       <CircularProgress />
                     </Box>
                   )}
+                  {/* Clearance under the last message, whose action row is always on screen and
+                      was landing right on top of the composer. Inside the scroll area rather
+                      than on SessionBottom, so it costs no fixed chrome height and the list
+                      keeps the room it has. */}
+                  <Box sx={{ height: '40px', flexShrink: 0 }} />
                 </>
               }
             />

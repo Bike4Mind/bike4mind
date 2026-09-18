@@ -4,10 +4,15 @@ import {
   ApiKeyType,
   ImageModels,
   BFL_SAFETY_TOLERANCE,
+  TOOL_SELECTABLE_IMAGE_QUALITIES,
   XAI_IMAGE_MODELS,
   GenerateImageToolCall,
   isBflImageModel,
   isGeminiImageModel,
+  isGPTImage2Model,
+  toNonWebpOutputFormat,
+  type ImageOutputFormat,
+  type OpenAIImageBackground,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -26,6 +31,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
 import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
+import { resolveImageArgs } from './resolveImageArgs';
 
 async function downloadImage(url: string) {
   // Handle data URLs (base64 images) from GPT-Image-1
@@ -173,27 +179,47 @@ export const imageGenerationTool: ToolDefinition = {
         quality: toolQuality,
         size: toolSize,
         safety_tolerance: toolSafetyTolerance,
+        background: toolBackground,
+        output_format: toolOutputFormat,
       } = val as ImageGenerateParams & {
         model?: string;
         safety_tolerance?: number;
+        background?: OpenAIImageBackground;
+        output_format?: ImageOutputFormat;
       };
 
       // Use imageConfig settings as defaults, allow tool call to override
-      // Auto-upgrade gpt-image-1 to gpt-image-2 (latest model)
-      let model = imageConfig?.model || ImageModels.GPT_IMAGE_2;
-      if (model === ImageModels.GPT_IMAGE_1) {
-        model = ImageModels.GPT_IMAGE_2;
-      }
-      const n = toolN ?? imageConfig?.n ?? 1;
-      const quality = imageConfig?.quality || toolQuality;
-      const size = imageConfig?.size || toolSize;
+      const output_format = toolOutputFormat ?? imageConfig?.output_format;
+      const background = toolBackground ?? imageConfig?.background;
+
+      // imageConfig is a default, not a pin: the tool call wins for n/size/quality,
+      // while the model stays the client's Smart Tools selection.
+      const {
+        model: resolvedModel,
+        n,
+        size,
+        quality,
+      } = resolveImageArgs(imageConfig, {
+        n: toolN,
+        size: toolSize,
+        quality: toolQuality,
+      });
+
+      // Step any gpt-image-2 selection - default or explicit - down to gpt-image-1.5 when
+      // transparency is requested: gpt-image-2 rejects background: 'transparent' outright,
+      // so sending it there would silently turn a valid request into a 400.
+      // (OpenAIImageService.resolveGptImageOutputOptions is the last-resort backstop
+      // that strips 'transparent' if a gpt-image-2 request reaches it regardless.)
+      const wantsTransparent = background === 'transparent';
+      const model = wantsTransparent && isGPTImage2Model(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const width = imageConfig?.width;
       const height = imageConfig?.height;
       const aspect_ratio = imageConfig?.aspect_ratio;
-      const output_format = imageConfig?.output_format;
       const prompt_upsampling = imageConfig?.prompt_upsampling;
       const seed = imageConfig?.seed;
+      // BFL and Gemini reject webp; only the OpenAI branch gets the raw value.
+      const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
 
       // Determine which service to use based on the model
       const isBFLModel = isBflImageModel(model);
@@ -257,7 +283,7 @@ export const imageGenerationTool: ToolDefinition = {
             width: width ?? 1024,
             height: height ?? 768,
             aspect_ratio: aspect_ratio,
-            output_format: output_format ?? 'png',
+            output_format: nonWebpOutputFormat ?? 'png',
             prompt_upsampling: prompt_upsampling ?? false,
             seed: seed ?? undefined,
             user: context.userId,
@@ -306,7 +332,7 @@ export const imageGenerationTool: ToolDefinition = {
           n,
           model,
           aspect_ratio: aspect_ratio,
-          output_format: output_format ?? 'png',
+          output_format: nonWebpOutputFormat ?? 'png',
           safety_tolerance: safety_tolerance,
           // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
           // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
@@ -373,6 +399,8 @@ export const imageGenerationTool: ToolDefinition = {
             model,
             user: context.userId,
             safety_tolerance,
+            background,
+            output_format,
           });
         } catch (openaiError) {
           // OpenAIImageService maps known API failures (402/401/403/429, moderation) to friendly
@@ -407,8 +435,9 @@ export const imageGenerationTool: ToolDefinition = {
           },
           quality: {
             type: 'string',
-            description: 'The quality of the image that will be generated (OpenAI only)',
-            enum: ['standard', 'hd'],
+            description:
+              "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
+            enum: [...TOOL_SELECTABLE_IMAGE_QUALITIES],
           },
           n: {
             type: 'number',
@@ -419,6 +448,17 @@ export const imageGenerationTool: ToolDefinition = {
             description: 'Safety tolerance level for BFL models (0 most strict, 6 least strict)',
             minimum: BFL_SAFETY_TOLERANCE.MIN,
             maximum: BFL_SAFETY_TOLERANCE.MAX,
+          },
+          background: {
+            type: 'string',
+            description:
+              'Background handling (gpt-image only). Use "transparent" when the user asks for a cutout, sprite, icon, sticker or a logo with no backdrop; it needs an alpha-capable output_format (png or webp).',
+            enum: ['transparent', 'opaque', 'auto'],
+          },
+          output_format: {
+            type: 'string',
+            description: 'Output container. "webp" is gpt-image only; other providers fall back to png.',
+            enum: ['png', 'jpeg', 'webp'],
           },
         },
         additionalProperties: false,

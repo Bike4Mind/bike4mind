@@ -180,6 +180,7 @@ Each arm prints a block shaped like the published prod probe, then one cross-arm
 
 | column | meaning |
 |---|---|
+| `queries` | how many questions the arm was scored over - the denominator of every quality column. Equal across arms by construction (`assertSameQuerySet` rejects a comparison whose fixtures carry different question sets), so it is here to be read, not to be checked. |
 | `band min/max/width` | where the served scores sit, pooled across queries. The collapse this exists to measure. |
 | `spread` | mean rank-1 minus rank-N, where N is the printed `rankDepth` (`RANK_DEPTH`, or fewer on a small corpus). Near zero means the ranking carries no information. |
 | `posTop` / `negTop` | mean rank-1 cosine on answerable vs unanswerable questions. Their **gap** is the floor headroom. |
@@ -343,15 +344,18 @@ sit ABOVE the whole band in either space, so after the flip they would have reje
 every query - the silent outage `b4m-core/common/src/schemas/embedding.ts` records this codebase
 hitting twice already.
 
-**Those three literals are gone** (#2572 item 4a). Both floors now resolve per embedding space from
-`FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` / `MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE` in
-`b4m-core/common/src/constants/embeddingSpaceFloors.ts`, keyed on the space the scores were actually
-produced in - for forced retrieval that is the candidate files' MAJORITY model, not the admin
-default, so a lake still on ada-002 mid-migration keeps its own floor on the same deployment where a
-migrated one gets 3-small's. A space with no measured entry applies no absolute floor and logs at
-error level, leaving the scale-free relative floor as the only gate: less precise, and recoverable,
-where a blackout is not. So the numbers below are still what a floor DOES to recall in each space,
-but the shipped 85:75 row is no longer what a 3-small deployment would run.
+**Those three literals are gone** (#2572 item 4a). The forced-retrieval floor now resolves per
+embedding space from `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` in
+`b4m-core/common/src/constants/embeddingSpaceFloors.ts`, keyed on the candidate files' MAJORITY
+model, not the admin default, so a lake still on ada-002 mid-migration keeps its own floor on the
+same deployment where a migrated one gets 3-small's. A space with no measured entry applies no
+absolute floor and logs at error level, leaving the scale-free relative floor as the only gate: less
+precise, and recoverable, where a blackout is not. So the numbers below are still what a floor DOES
+to recall in each space, but the shipped 85:75 row is no longer what a 3-small deployment would run.
+
+V1 mementos moved off the per-space table entirely in a later change: they now embed in a
+compile-time-pinned space (`MEMENTO_EMBEDDING_ID`) the same way V2 always did, so their floor is a
+single literal (`MEMENTO_MIN_SIMILARITY`, see below) rather than something resolved per space.
 
 A FAB replacement floor is bracketed by `posTop` and `negTop`: roughly 0.38-0.40 for `3-small@1536`.
 That is NOT `MEMENTO_MIN_SIMILARITY` (0.25), which sits below this corpus's `negTop` of 0.3615 and would
@@ -495,6 +499,101 @@ the served path. The rest of the gate - the absolute-floor comparison, the `topS
 application, and the budget walk - is hand-mirrored here and pinned only by comments. It agrees with
 the served scan today, and the budget walk is the one place it knowingly does not (see the
 pre-defang caveat above).
+
+### REFIT: 49 replaces 35 for 3-small, off a 35-file eval lake capture
+
+The 35 above was measured on the `system-help` fixture, which the caveats right above name as the
+wrong regime for this - median chunk 638 chars against a production reference of 2182. This refit
+re-derives the number on a capture of the right shape: a 35-file eval lake capture, median chunk
+1424 chars, p90 2180.
+
+The curve, with the emptied count split into decoys suppressed (negatives, the false-positive-rate
+column `forcedFloorSweep.ts` now prints) and real answers lost (positives):
+
+| floor | emptied | decoys suppressed | real answers lost | recall | MRR |
+|---|---:|---:|---:|---:|---:|
+| 85:35 | 0 | 0 | 0 | 93.8% | 0.774 |
+| 85:41 | 3 | 0 | 3 | 89.6% | 0.743 |
+| 85:45 | 5 | 1 | 4 | 87.5% | 0.722 |
+| 85:47 | 6 | 2 | 4 | 87.5% | 0.722 |
+| **85:49** | **8** | **4** | **4** | **87.5%** | **0.722** |
+| 85:53 | 11 | 5 | 6 | 83.3% | 0.680 |
+
+Real losses saturate at 4 by floor 45 and stay flat through 49, while decoy suppression climbs 1 to
+4 over the same range: 49 is free against 45 and 47 (identical recall and MRR, strictly more decoys
+suppressed) and is the last point before real losses resume at 53. Against 35, it costs 6.3 points
+of recall to suppress 4 of the corpus's 6 decoys - paying recall for false-positive suppression on
+purpose. That trade is only sound because an emptied question is now an honest miss rather than a
+fabrication: `forcedRetrievalAbstention.ts` instructs the model to name what is missing and ask for
+it, and its own docblock records the old answer-ungrounded behaviour as the bug that motivated it.
+
+**Still PROVISIONAL, and here is why the marker stays.** The decoy column is the whole argument for
+49 over 45, and its denominator is 6 negatives against 48 positives - four of six is a strong signal
+on six observations, not a population rate. The recall side is the better-supported half. 49 is the
+right number to ship off this table, but it is not yet a measured floor in the sense 75 is for
+ada-002: a re-measure on a live lake with a larger negative set is the evidence this n=6 cannot
+supply. Re-running `forcedFloorSweep.ts` against a re-embedded production lake (once one exists) is
+what earns the marker's removal, not another eval-lake capture.
+
+
+
+Both floors above answer "how high is high enough" with a line whose position depends on knowing
+where the band sits. Neither can answer a different question: **does the amount retrieved respond to
+what was asked?** Measured on production, it does not - the injected chunk count was 30 or 31 on
+every turn against a given lake set across ~250 turns, for narrow single-fact questions and broad
+multi-part ones alike. The count tracked the character budget, because the budget was the only thing
+that ever stopped.
+
+The arithmetic in point 2 above says why, and it is not a tuning miss. A relative floor is a
+fraction of the top score, so it can only cut when `topScore * relativeFloor` lands inside the band.
+On the ada-002 production lake the per-turn spread is ~0.0279 against a top near 0.77, putting rank
+10 at ~96% of rank 1 - no setting of a fraction-of-top floor discriminates inside a band that tight
+without also discarding rank 2. The absolute floor has the same problem from the other side, and
+#471 moves the band out from under any value fitted today.
+
+`forcedRetrievalSpreadFloorPct` is a third gate with a different shape. It measures DOWN from the
+turn's top score in units of that turn's own top-to-median span:
+
+    cutoff = topScore - spreadFloor * (topScore - median of every score compared)
+
+Two properties follow, and they are why it exists rather than being a fourth number to tune:
+
+- **It is affine-invariant.** "Keep what is within half the distance from the best score to a
+  typical one" is the same cut whether the band is ada-002's 0.80-0.91 or 3-small's 0.23-0.56. It
+  needs no `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` entry and no re-tune after #471, which is
+  what every other floor in this document has needed.
+- **Its survivor count is a property of the question.** A question one passage answers sharply
+  leaves that passage far above the median and admits few; a question the corpus answers diffusely
+  leaves many passages bunched near the top and admits many. Both other floors are functions of the
+  top score alone, so at a fixed setting they cut the same fraction of any band - they cannot tell
+  those two turns apart.
+
+The median is taken over EVERY score compared, not over the pool that cleared the absolute floor:
+gating the population first would make the background a function of the floor this gate exists to be
+independent of. One consequence for anyone reading a small fixture: the statistic only behaves like a
+background when most of what was scanned is irrelevant, which is true of a real scan (thousands of
+chunks, a handful of hits) and false of a 4-chunk toy, where the median lands inside the hit cluster.
+
+It cannot black out a space, which is what makes it safe to key on a statistic of the turn's own
+pool: the cutoff interpolates between two scores that both came from the pool, so it never exceeds
+the top score, and the best candidate always clears its own cutoff. Worst case at any setting is one
+passage, never none.
+
+**It ships OFF (`FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT` = 0) and no magnitude is claimed here.**
+The mechanism is scale-free; a specific percent is not, and picking one needs the same captured
+production lake that #2572 item 4b needs for the other two. What ships alongside it is the
+instrument: `--floors` takes an optional third component (`85:75:40`, omitted meaning off), and the
+sweep prints `spread-bound` and `spread cut @` beside the relative floor's columns.
+
+The column to read for this question is **`sd`**, the standard deviation of the accepted count across
+queries - new, and the only column in the table that is not about how much retrieval admits. A
+configuration can post a healthy recall, a healthy precision and `sd` of 0.0, and that configuration
+is a fixed-size dump that happens to be sized well on average. That is what production is doing
+today, and `sd` is how a candidate floor is judged to have fixed it.
+
+Production turns now record `injected.backgroundScore` beside `injected.topScore`, so the spread
+distribution a value has to be chosen from is collected on live traffic whether or not the floor is
+ever switched on.
 
 ## Out of scope
 

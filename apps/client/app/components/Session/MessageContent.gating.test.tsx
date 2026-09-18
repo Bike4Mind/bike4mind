@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   showCreditsUsed: true,
   serverSettings: [] as Array<{ settingName: string; settingValue: unknown }>,
   sessionFeedback: [] as Array<{ questId?: string }>,
+  sessionFeedbackLoading: false,
 }));
 
 // --- context / data hooks -------------------------------------------------
@@ -26,6 +27,9 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   // organizationId is the org the server (checkScopePermission) will accept a Team publish for;
   // the Team option is gated on the selected org matching it.
   useUser: () => ({ currentUser: { id: 'user-1', organizationId: 'org_42', showCreditsUsed: mocks.showCreditsUsed } }),
+}));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  useUserSettings: () => ({ settings: { contextTelemetryLevel: 'basic' } }),
 }));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: null, setCurrentSession: vi.fn() }),
@@ -51,7 +55,7 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useGetFabFilesByQuestId: () => ({ data: [] }),
 }));
 vi.mock('@client/app/hooks/data/feedback', () => ({
-  useGetFeedbackBySessionId: () => ({ data: mocks.sessionFeedback }),
+  useGetFeedbackBySessionId: () => ({ data: mocks.sessionFeedback, isLoading: mocks.sessionFeedbackLoading }),
   feedbackSessionQueryKey: (sessionId: string, userId: string | undefined) => [
     'feedback',
     'session',
@@ -167,7 +171,10 @@ const messageData = {
 function renderMessageContent(
   data: IChatHistoryItem = messageData,
   queryClient?: QueryClient,
-  onSendMessage: (...args: never[]) => Promise<void> = vi.fn()
+  {
+    onSendMessage = vi.fn(),
+    isLastMessage = false,
+  }: { onSendMessage?: (...args: never[]) => Promise<void>; isLastMessage?: boolean } = {}
 ) {
   render(
     <TestWrapper queryClient={queryClient}>
@@ -178,7 +185,7 @@ function renderMessageContent(
         onDelete={vi.fn()}
         onPinToggle={vi.fn()}
         onSendMessage={onSendMessage as never}
-        isLastMessage={false}
+        isLastMessage={isLastMessage}
         model="gpt-4o"
         totalMessages={1}
         canUseAdminTools={false}
@@ -203,6 +210,8 @@ beforeEach(() => {
   mocks.showCreditsUsed = true;
   mocks.serverSettings = [];
   mocks.sessionFeedback = [];
+  mocks.sessionFeedbackLoading = false;
+  localStorage.clear();
 });
 
 describe('MessageContent actions menu - EnableDataLakes gating', () => {
@@ -310,12 +319,13 @@ describe('MessageContent publish-and-share - visible action-bar button', () => {
     selectedAccountValue = null;
   });
 
-  it('renders the labeled button without opening any menu', () => {
+  it('renders the button without opening any menu', () => {
     renderMessageContent();
 
     const button = screen.getByTestId('message-publish-share-btn');
     expect(button).toBeInTheDocument();
-    expect(button).toHaveTextContent('Publish & Share');
+    // Icon-only, so the accessible name is what carries the label.
+    expect(button).toHaveAccessibleName('Publish & Share');
   });
 
   it('hides the button when the reply has no shareable content', () => {
@@ -394,20 +404,38 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
     expect(modal).toHaveAttribute('data-quest-id', 'quest-1');
   });
 
-  it('renders no "Reported" annotation when this message has no feedback on record', () => {
+  it('leaves the report button unannotated when this message has no feedback on record', () => {
     mocks.sessionFeedback = [];
 
     renderMessageContent();
 
-    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+    // The reported state lives on the button itself; the tooltip title is its
+    // accessible name, so that is what says which state it is in.
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('Report an issue with this message');
   });
 
-  it('renders the "Reported" annotation when this message has a recorded report', () => {
+  it('marks the report button when this message has a recorded report', () => {
     mocks.sessionFeedback = [{ questId: 'quest-1' }];
 
     renderMessageContent();
 
-    expect(screen.getByTestId('message-reported-chip')).toBeInTheDocument();
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('You already reported this message');
+  });
+
+  it('rests a reported message on the word, with the actions behind hover', () => {
+    mocks.sessionFeedback = [{ questId: 'quest-1' }];
+
+    renderMessageContent();
+
+    expect(screen.getByTestId('message-reported-badge')).toHaveTextContent('Reported');
+  });
+
+  it('shows no reported word when this message has no feedback on record', () => {
+    mocks.sessionFeedback = [];
+
+    renderMessageContent();
+
+    expect(screen.queryByTestId('message-reported-badge')).not.toBeInTheDocument();
   });
 
   it('does not annotate a message that was not itself reported', () => {
@@ -415,7 +443,7 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
 
     renderMessageContent();
 
-    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('Report an issue with this message');
   });
 
   // A send that failed leaves the bubble on its optimistic id with status 'done', so the action
@@ -453,7 +481,7 @@ describe('MessageContent report action - persistent affordance (#1869)', () => {
 
     renderMessageContent(optimisticMessageData);
 
-    expect(screen.queryByTestId('message-reported-chip')).not.toBeInTheDocument();
+    expect(screen.getByTestId('message-report-btn')).toHaveAccessibleName('Report an issue with this notebook');
   });
 
   it('invalidates the session-scoped feedback cache once the modal reports a successful submit', () => {
@@ -493,7 +521,7 @@ describe('MessageContent correct-and-retry (#1871)', () => {
   const noAnswer = { ...messageData, replies: [], reply: undefined } as unknown as IChatHistoryItem;
 
   const openComposer = (data: IChatHistoryItem, onSendMessage = vi.fn()) => {
-    renderMessageContent(data, undefined, onSendMessage);
+    renderMessageContent(data, undefined, { onSendMessage });
     fireEvent.click(screen.getByTestId('message-correct-retry-btn'));
     return onSendMessage;
   };
@@ -622,5 +650,81 @@ describe('MessageContent per-message credits-used chip - enforceCredits gating',
     renderMessageContent(creditsMessageData);
 
     expect(screen.queryByTestId('credits-used')).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Wiring for the proactive feedback prompt (#1873). AnswerFeedbackPrompt owns its own gating and
+ * is covered in its own file; what is only observable from here is that MessageContent actually
+ * mounts it, on the right turn, with the props its gating depends on - and mounts it exactly once
+ * despite the duplicated desktop/mobile action rows below it.
+ */
+describe('MessageContent - proactive answer feedback prompt', () => {
+  // Verdict 'fail': a recorded tool failure.
+  const brokenTurn = {
+    ...messageData,
+    promptMeta: { functionCalls: [{ name: 'search_knowledge_base', success: false }] },
+  } as unknown as IChatHistoryItem;
+
+  it('surfaces the prompt on the newest turn when the pipeline says it broke', () => {
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+
+    expect(screen.getByTestId('answer-feedback-prompt')).toBeInTheDocument();
+  });
+
+  it('renders it once, not once per action row', () => {
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+
+    expect(screen.getAllByTestId('answer-feedback-prompt')).toHaveLength(1);
+  });
+
+  it('leaves older turns alone - the newest turn is the frequency cap that matters', () => {
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: false });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  it('stays silent on a healthy turn', () => {
+    renderMessageContent(messageData, undefined, { isLastMessage: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  it('stays silent while the turn is still streaming', () => {
+    // A turn that has not finished has no final verdict to ask about, and the BugReportModal the
+    // prompt targets is not even mounted until the action row renders.
+    const streaming = { ...brokenTurn, status: 'running' } as unknown as IChatHistoryItem;
+
+    renderMessageContent(streaming, undefined, { isLastMessage: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  it('never nags about a turn the user already reported', () => {
+    mocks.sessionFeedback = [{ questId: 'quest-1' }];
+
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  // Fail-closed: the feedback read has no placeholderData, so `isReported` would otherwise resolve
+  // from "unknown" to "false" for one round trip on every fresh load. Without this, an
+  // already-reported failing turn would flash the banner it promises never to show.
+  it('stays silent on a failing turn while the report-status read is still in flight', () => {
+    mocks.sessionFeedbackLoading = true;
+
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+
+    expect(screen.queryByTestId('answer-feedback-prompt')).not.toBeInTheDocument();
+  });
+
+  it('opens the same report modal the persistent Report button opens, anchored to this turn', () => {
+    renderMessageContent(brokenTurn, undefined, { isLastMessage: true });
+    fireEvent.click(screen.getByTestId('answer-feedback-prompt-report-btn'));
+
+    const modal = screen.getByTestId('bug-report-modal-mock');
+    expect(modal).toBeInTheDocument();
+    expect(modal).toHaveAttribute('data-quest-id', 'quest-1');
   });
 });

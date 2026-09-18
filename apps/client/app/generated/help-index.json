@@ -6467,6 +6467,11 @@
           "anchor": "smart-vs-fast-mode"
         },
         {
+          "level": 3,
+          "text": "Only tools I pick",
+          "anchor": "only-tools-i-pick"
+        },
+        {
           "level": 2,
           "text": "Web & Research Tools",
           "anchor": "web-research-tools"
@@ -8975,6 +8980,11 @@
           "level": 3,
           "text": "Enhanced",
           "anchor": "enhanced"
+        },
+        {
+          "level": 2,
+          "text": "Your Own Context Breakdown",
+          "anchor": "your-own-context-breakdown"
         },
         {
           "level": 2,
@@ -16151,6 +16161,11 @@
               "anchor": "smart-vs-fast-mode"
             },
             {
+              "level": 3,
+              "text": "Only tools I pick",
+              "anchor": "only-tools-i-pick"
+            },
+            {
               "level": 2,
               "text": "Web & Research Tools",
               "anchor": "web-research-tools"
@@ -18662,6 +18677,11 @@
             },
             {
               "level": 2,
+              "text": "Your Own Context Breakdown",
+              "anchor": "your-own-context-breakdown"
+            },
+            {
+              "level": 2,
               "text": "Data Retention",
               "anchor": "data-retention"
             },
@@ -19359,5 +19379,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "3c2de6dbae075478"
+  "version": "74db01922ebc9225"
 }

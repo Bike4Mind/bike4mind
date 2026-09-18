@@ -3,6 +3,7 @@ import { OpenAIEmbeddingModel, OllamaEmbeddingModel, getEmbeddingModelCost } fro
 import {
   assertOnePerInput,
   chunkTokenCount,
+  collectCapturableFiles,
   embedAll,
   findOversizedChunks,
   formatCapturePlan,
@@ -18,6 +19,7 @@ import {
 } from './capturePlan';
 import { OPENAI_MAX_INPUTS_PER_REQUEST, OPENAI_MAX_TOKENS_PER_INPUT } from '@bike4mind/fab-pipeline';
 import type { EmbeddingService } from '@bike4mind/fab-pipeline';
+import type { CitableFabFileFieldsWithTags, IFabFileRepository } from '@bike4mind/common';
 
 const SMALL = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
 const LARGE = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE;
@@ -346,5 +348,83 @@ describe('readAllPages', () => {
   // corpus is large enough that nobody would notice it was not progress.
   it('throws rather than spin on a non-advancing cursor', async () => {
     await expect(readAllPages(async () => page(['1', '2']), 2)).rejects.toThrow(/without advancing/);
+  });
+});
+
+describe('collectCapturableFiles', () => {
+  const row = (id: string, extra: Partial<CitableFabFileFieldsWithTags> = {}) =>
+    ({
+      id,
+      fileName: `${id}.md`,
+      chunkCount: 4,
+      vectorizedChunkCount: 4,
+      vectorized: true,
+      tags: [{ name: 'help:getting-started' }],
+      ...extra,
+    }) as CitableFabFileFieldsWithTags;
+
+  const repositoryReturning = (rows: CitableFabFileFieldsWithTags[]) => {
+    const findCitableFieldsWithTagsByIds = vi.fn(async (ids: string[]) =>
+      rows.filter(candidate => ids.includes(String(candidate.id)))
+    );
+    return {
+      fabfiles: { findCitableFieldsWithTagsByIds } as unknown as Pick<
+        IFabFileRepository,
+        'findCitableFieldsWithTagsByIds'
+      >,
+      findCitableFieldsWithTagsByIds,
+    };
+  };
+
+  it('reads through the PROJECTED reader, which is the whole point of the swap', async () => {
+    // Pinned as its own case because a revert to the unprojected reader is invisible in the result:
+    // it satisfies the same predicate and carries the same tags, and just pays a full mongoose
+    // document per candidate id to answer a question about eight scalars and a tag list.
+    const { fabfiles, findCitableFieldsWithTagsByIds } = repositoryReturning([row('a'), row('b'), row('c')]);
+
+    await collectCapturableFiles({ fabfiles, fileIds: ['a', 'b', 'c'], batchSize: 2, helpTagPrefix: 'help:' });
+
+    expect(findCitableFieldsWithTagsByIds).toHaveBeenCalledTimes(2);
+    expect(findCitableFieldsWithTagsByIds.mock.calls.map(([ids]) => ids)).toEqual([['a', 'b'], ['c']]);
+  });
+
+  it('joins each file to its document by the tag slug, falling back to the file id', async () => {
+    const { fabfiles } = repositoryReturning([
+      row('a', { tags: [{ name: 'help:billing' }] as CitableFabFileFieldsWithTags['tags'] }),
+      row('b', { tags: [{ name: 'datalake:ops' }] as CitableFabFileFieldsWithTags['tags'] }),
+    ]);
+
+    const { captured } = await collectCapturableFiles({
+      fabfiles,
+      fileIds: ['a', 'b'],
+      batchSize: 10,
+      helpTagPrefix: 'help:',
+    });
+
+    expect(captured).toEqual([
+      { fileId: 'a', docId: 'billing', embeddingModel: undefined },
+      { fileId: 'b', docId: 'b', embeddingModel: undefined },
+    ]);
+  });
+
+  it('counts a tombstone and an unreachable file as one class, and keeps the lake order', async () => {
+    // Order is the lake's, not the read's, so what lands in a fixture does not depend on Mongo
+    // document order - `c` is returned first here and must still come second.
+    const { fabfiles } = repositoryReturning([
+      row('c'),
+      row('a'),
+      row('archived', { archivedAt: new Date() }),
+      row('partial', { chunkCount: 4, vectorizedChunkCount: 1 }),
+    ]);
+
+    const { captured, filesUnreachable } = await collectCapturableFiles({
+      fabfiles,
+      fileIds: ['a', 'c', 'archived', 'partial', 'tombstone'],
+      batchSize: 10,
+      helpTagPrefix: 'help:',
+    });
+
+    expect(captured.map(file => file.fileId)).toEqual(['a', 'c']);
+    expect(filesUnreachable).toBe(3);
   });
 });

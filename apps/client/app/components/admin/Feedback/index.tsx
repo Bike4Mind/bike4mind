@@ -45,6 +45,7 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { FEEDBACK_ID_PARAM } from '@bike4mind/common';
 import FocusedFeedbackCard from './FocusedFeedbackCard';
 import FeedbackRowLinks from './FeedbackRowLinks';
+import HelpContextChip from './HelpContextChip';
 import { FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
 
 const FeedbackTab: React.FC = () => {
@@ -112,6 +113,7 @@ const FeedbackTab: React.FC = () => {
       Status: feedbackItem.status,
       Username: feedbackItem.username,
       Content: getFeedbackDisplayContent(feedbackItem, ''),
+      HelpArticle: feedbackItem.helpContext?.slug ?? '',
       Organization: feedbackItem.organization,
       UpdatedAt: feedbackItem.updatedAt,
     }));
@@ -423,6 +425,7 @@ const FeedbackTab: React.FC = () => {
                           )}
                         </Stack>
                         {/* Content */}
+                        <HelpContextChip feedbackItem={feedbackItem} />
                         {feedbackItem.contentTruncated && (
                           <Chip size="sm" color="warning" variant="soft" data-testid="feedback-content-truncated-badge">
                             Truncated
@@ -524,6 +527,7 @@ const FeedbackTab: React.FC = () => {
                           </Stack>
                         </Grid>
                         <Grid xs={5.5}>
+                          <HelpContextChip feedbackItem={feedbackItem} />
                           {feedbackItem.contentTruncated && (
                             <Chip
                               size="sm"

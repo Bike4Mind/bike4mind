@@ -200,7 +200,20 @@ async function accountFileFailure(params: {
       });
       // That write is the only thing that destroys the outgoing text, and it is the sole record of
       // why the file was already failing - so it survives here rather than nowhere.
-      if (replaced) logger.warn(`Superseded the stored error on ${fabFileId}: ${replaced}`);
+      if (replaced) {
+        logger.warn(`Superseded the stored error on ${fabFileId}: ${replaced}`);
+        // The client already cleared isChunking/toasted on the first failure (isFirstFailure below
+        // is false here), but a superseding refusal replaces WHY it failed with a different,
+        // terminal reason - notify again so the toast/tooltip text isn't stale until reload.
+        await sendToClient(userId, Resource.websocket.managementEndpoint, {
+          action: 'update_file_chunk_vector_status',
+          fabFileId,
+          ...(action === 'Vectorize enqueue'
+            ? { vectorizeStatus: 'failed' as const }
+            : { chunkStatus: 'failed' as const }),
+          failedMessage: errorMessage,
+        }).catch(err => logger.error(`Error notifying superseded failure for ${fabFileId}: ${err}`));
+      }
     } catch (err) {
       // Swallowed on purpose: the refusal itself is already accounted and about to be rethrown, and
       // the transaction means a failure here left BOTH records untouched - the file keeps the
@@ -209,6 +222,19 @@ async function accountFileFailure(params: {
       logger.error(`Failed to supersede the stored error on ${fabFileId}: ${err}`);
     }
   }
+  if (isFirstFailure) {
+    // Best-effort, mirrors the chunk-complete push below (~line 1021): FilesSection's
+    // update_file_chunk_vector_status subscriber needs this to reconcile a stuck row, and unlike
+    // the data_lake_batch_progress push further down this one applies to a non-batch (single-file
+    // reprocess) failure too, so it fires regardless of batchId.
+    await sendToClient(userId, Resource.websocket.managementEndpoint, {
+      action: 'update_file_chunk_vector_status',
+      fabFileId,
+      ...(action === 'Vectorize enqueue' ? { vectorizeStatus: 'failed' as const } : { chunkStatus: 'failed' as const }),
+      failedMessage: errorMessage,
+    }).catch(err => logger.error(`Error notifying chunk/vectorize failure for ${fabFileId}: ${err}`));
+  }
+
   if (!batchId || !isFirstFailure) return;
 
   try {

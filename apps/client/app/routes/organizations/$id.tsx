@@ -12,7 +12,11 @@ import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import {
+  SubscriptionOwnerType,
+  isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
+} from '@client/lib/subscriptions/types';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import {
   Avatar,
@@ -316,7 +320,9 @@ const OrganizationHeader: FC<{
   const { name, description } = organization;
   const initial = name.charAt(0).toUpperCase();
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
-  const hasActiveSubscription = subscriptions?.some(sub => !sub.canceledAt);
+  const subscription = pickDisplayedSubscription(subscriptions ?? []);
+  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
+  const hasActiveSubscription = !!subscription && !subscription.canceledAt && !paymentIssue;
   const { currentSeats } = useOrganizationSeats(organization.id);
   const { currentUser } = useUser();
   const canManageOrg = useMemo(() => {
@@ -363,10 +369,10 @@ const OrganizationHeader: FC<{
             <Chip
               size="sm"
               variant="soft"
-              color={hasActiveSubscription ? 'success' : 'neutral'}
+              color={paymentIssue ? 'danger' : hasActiveSubscription ? 'success' : 'neutral'}
               startDecorator={<VpnKeyOutlinedIcon sx={{ fontSize: 14 }} />}
             >
-              {hasActiveSubscription ? 'Team Plan' : 'No Active Plan'}
+              {paymentIssue ? 'Payment Issue' : hasActiveSubscription ? 'Team Plan' : 'No Active Plan'}
             </Chip>
           </Stack>
         </Stack>
@@ -380,8 +386,9 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
   const { currentSeats, maxSeats, pendingSeats, availableSeats } = useOrganizationSeats(organization.id);
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
 
-  const activeSubscription = subscriptions?.find(sub => !sub.canceledAt);
-
+  const subscription = pickDisplayedSubscription(subscriptions ?? []);
+  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
+  const activeSubscription = subscription && !subscription.canceledAt && !paymentIssue ? subscription : undefined;
   // Calculate storage usage percentage
   const storageUsed = organization.currentStorageSize || 0;
   const storageLimit = organization.storageLimit || 0;
@@ -471,8 +478,12 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
                 <Typography level="body-sm" color="neutral">
                   Plan
                 </Typography>
-                <Chip size="sm" variant="soft" color={activeSubscription ? 'success' : 'neutral'}>
-                  {activeSubscription ? 'Team Plan' : 'No Active Plan'}
+                <Chip
+                  size="sm"
+                  variant="soft"
+                  color={paymentIssue ? 'danger' : activeSubscription ? 'success' : 'neutral'}
+                >
+                  {paymentIssue ? 'Payment Issue' : activeSubscription ? 'Team Plan' : 'No Active Plan'}
                 </Chip>
               </Stack>
               {activeSubscription && (

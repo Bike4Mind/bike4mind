@@ -10,9 +10,11 @@ import { CreditHolderType, CreditPurchaseStatus, isPlaceholderValue } from '@bik
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { Config, isDevelopment } from '@server/utils/config';
+import { emitMetric } from '@server/utils/cloudwatch';
 import { StripeEvents } from '@server/utils/eventBus';
 import { BadRequestError } from '@server/utils/errors';
 import { customerExists, CustomerType, isStripeConfigured, stripe } from '@server/integrations/stripe/stripe';
+import { voidOpenSubscriptionInvoices } from '@server/integrations/stripe/dunning';
 import { postMessageToSlack } from '@server/integrations/slack/slack';
 import { sendToClient } from '@server/websocket/utils';
 import { creditService } from '@bike4mind/services';
@@ -160,10 +162,19 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       const subscription = event.data.object;
 
       // Update subscription status in unified Subscription model
-      await subscriptionRepository.updateByStripeSubscriptionId(subscription.id, {
+      const updated = await subscriptionRepository.updateByStripeSubscriptionId(subscription.id, {
         status: 'canceled',
         canceledAt: subscription.canceled_at ? dayjs.unix(subscription.canceled_at).toDate() : null,
       });
+
+      // Ownership guard, and the only thing standing between a misrouted event and an
+      // irreversible void: a stage with no row for this subscription does not own it
+      // (the update above is then a no-op), so it must not run the money-affecting
+      // cleanup below. Fails closed; the owning stage handles the same event itself.
+      if (!updated) {
+        req.logger.warn(`Ignoring deleted subscription ${subscription.id}: no matching row in this stage`);
+        break;
+      }
 
       // Safely access userId from metadata (may be missing for legacy subscriptions)
       const userId = subscription.metadata?.userId;
@@ -172,6 +183,31 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
           action: 'invalidate_query',
           queryKey: ['subscriptions'],
         });
+      }
+
+      // Deletion is terminal, and a Billing Portal "cancel immediately" fires this
+      // without a cancel_at_period_end update. Void anything still open so Stripe
+      // stops retrying the invoice and emailing the customer. A no-op when nothing
+      // is open, and it must not fail the delivery - the status write above stands.
+      let cleanupFailed = false;
+      try {
+        const { voided, failed } = await voidOpenSubscriptionInvoices(subscription.id);
+        if (voided.length) {
+          req.logger.info(`Voided open invoices on deleted subscription ${subscription.id}`, { voided });
+        }
+        if (failed.length) {
+          req.logger.error(`Could not void every open invoice on deleted subscription ${subscription.id}`, { failed });
+          cleanupFailed = true;
+        }
+      } catch (error) {
+        req.logger.error(`Failed to clean up open invoices for deleted subscription ${subscription.id}`, { error });
+        cleanupFailed = true;
+      }
+      // A half-voided subscription keeps dunning with no other signal to on-call, so
+      // this emits the same metric as customerSubscriptionUpdated.ts. `emitMetric`
+      // swallows its own failures, so it cannot fail a delivery that already landed.
+      if (cleanupFailed) {
+        await emitMetric('Lumina5/Entitlements', 'DunningCleanupFailed', 1, { reason: 'void_failed' });
       }
 
       break;
