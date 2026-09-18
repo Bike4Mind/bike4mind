@@ -1,8 +1,6 @@
 import {
   IOrganizationDocument,
-  Permission,
   IOrganizationRepository,
-  IUserShare,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORG_MEMBERSHIP_ACL_PERMISSIONS,
 } from '@bike4mind/common';
@@ -20,7 +18,6 @@ interface IOrganizationModel extends Model<IOrganizationDocument, {}> {
   // the static below just $sets whatever it is handed, and passing a partial is how callers
   // avoid reverting a concurrent write to fields they did not touch.
   update: (organization: Partial<IOrganizationDocument> & { id: string }) => Promise<unknown>;
-  findShareAccessById: (userId: string, id: string) => Promise<IOrganizationDocument | null>;
 }
 
 // The users[] ACL permission values that constitute org membership, from the one shared definition
@@ -163,15 +160,6 @@ const OrganizationSchema = new Schema<IOrganizationDocument>(
       virtuals: true,
     },
     statics: {
-      findShareAccessById: async function (userId: string, id: string) {
-        const result = await this.findOne({ _id: id, 'users.userId': userId });
-
-        if (!result) return null;
-
-        result.users.find((u: IUserShare) => u.userId && u.permissions.includes(Permission.share));
-
-        return result;
-      },
       update: function (organization: Partial<IOrganizationDocument> & { id: string }) {
         return this.updateOne({ _id: organization.id }, { $set: organization });
       },

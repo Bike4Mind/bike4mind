@@ -265,11 +265,14 @@ const inviteToOrg = async (
 ) => {
   if (!params.recipients) throw new BadRequestError('Invalid invite organization request');
 
-  const organization = user.isAdmin
-    ? await db.organizations.findById(params.id)
-    : await db.organizations.shareable.findShareAccessById(user, params.id);
-
+  const organization = await db.organizations.findById(params.id);
   if (!organization) throw new BadRequestError('Organization not found');
+  if (!user.isAdmin) {
+    const isMember =
+      organization.userId === user.id ||
+      (organization.users ?? []).some(member => member.userId === user.id);
+    if (!isMember) throw new BadRequestError('Organization not found');
+  }
 
   // We add 1 to include the owner of the organization
   const totalUsers = (organization.users.length ?? 0) + 1;

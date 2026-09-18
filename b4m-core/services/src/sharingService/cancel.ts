@@ -62,16 +62,20 @@ export const cancelInvite = async (
     const session = await db.sessions.findByIdAndUserId(id, user.id);
     if (!session) throw new NotFoundError('Session not found');
   } else if (type === InviteType.Organization) {
-    const organizationa = user.isAdmin
-      ? await db.organizations.findById(id)
-      : await db.organizations.shareable.findShareAccessById(user, id);
-    if (!organizationa) throw new NotFoundError('Organization not found');
+    const org = await db.organizations.findById(id);
+    const isMember =
+      org &&
+      (user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id));
+    if (!isMember) throw new NotFoundError('Organization not found');
   } else if (type === InviteType.Group) {
     const group = await db.groups.findById(id);
     if (!group) throw new NotFoundError('Group not found');
 
-    const organization = await db.organizations.shareable.findShareAccessById(user, group.organizationId);
-    if (!organization) throw new NotFoundError('Group not found');
+    const org = await db.organizations.findById(group.organizationId);
+    const isMember =
+      org &&
+      (user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id));
+    if (!isMember) throw new NotFoundError('Group not found');
   } else if (type === InviteType.Project) {
     // Same share-access predicate the create and list paths use for Project
     // (sharingService/create.ts, authorizeByInviteType.ts).

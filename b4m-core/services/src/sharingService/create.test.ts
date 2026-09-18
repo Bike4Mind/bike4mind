@@ -392,6 +392,92 @@ describe('sharingService - createInvite (recipient resolution)', () => {
 });
 
 /**
+ * Authority tests for the InviteType.Organization arm. An org invite is a membership grant, so it
+ * is gated on actual membership (billing owner, users[] row, or platform admin), not share access.
+ * An outsider gets the same error as a missing org so the org's existence is not disclosed.
+ */
+describe('sharingService - createInvite (organization arm authority)', () => {
+  const OWNER_ID = 'org-owner-1';
+  const MEMBER_ID = 'org-member-1';
+  const OUTSIDER_ID = 'org-outsider-1';
+  const ORG_ID = 'org-auth-1';
+  const ORG_NAME = 'Acme Inc';
+  const RECIPIENT_ID = 'recipient-1';
+
+  const organization = {
+    id: ORG_ID,
+    name: ORG_NAME,
+    userId: OWNER_ID,
+    users: [{ userId: MEMBER_ID, permissions: [] }],
+    seats: 10,
+  };
+
+  const asUser = (id: string, isAdmin = false) => ({ id, username: 'u', isAdmin }) as IUserDocument;
+
+  let db: any;
+
+  beforeEach(() => {
+    db = {
+      invites: {
+        create: vi.fn(async (build: unknown) => ({ id: 'invite-org-1', ...(build as object) })),
+        findAllByDocumentId: vi.fn(async () => []),
+      },
+      users: {
+        findAllByEmailsOrUsernames: vi.fn(async () => []),
+        findByIds: vi.fn(async () => [{ id: RECIPIENT_ID, email: 'r@x.com', username: 'r' }]),
+      },
+      fabFiles: { findByIdAndUserId: vi.fn(), shareable: { findShareAccessById: vi.fn() } },
+      sessions: { findByIdAndUserId: vi.fn() },
+      projects: { shareable: { findShareAccessById: vi.fn() } },
+      organizations: { findById: vi.fn(async () => organization) },
+      groups: { findById: vi.fn() },
+    };
+  });
+
+  const create = (user: IUserDocument) =>
+    createInvite(
+      user,
+      { id: ORG_ID, type: InviteType.Organization, permissions: [], recipients: [RECIPIENT_ID] } as any,
+      { db }
+    );
+
+  it('allows the billing owner to create an org invite', async () => {
+    const invite = await create(asUser(OWNER_ID));
+
+    expect(invite.name).toBe(ORG_NAME);
+    expect(db.invites.create).toHaveBeenCalled();
+  });
+
+  it('allows an org member in the users[] list', async () => {
+    const invite = await create(asUser(MEMBER_ID));
+
+    expect(invite.name).toBe(ORG_NAME);
+    expect(db.invites.create).toHaveBeenCalled();
+  });
+
+  it('allows a platform admin even without direct membership', async () => {
+    const invite = await create(asUser('platform-1', true));
+
+    expect(invite.name).toBe(ORG_NAME);
+    expect(db.invites.create).toHaveBeenCalled();
+  });
+
+  it('rejects an outsider indistinguishably from a missing org', async () => {
+    await expect(create(asUser(OUTSIDER_ID))).rejects.toSatisfy(
+      (e: Error) => e instanceof BadRequestError && e.message === 'Organization not found'
+    );
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the org does not exist', async () => {
+    db.organizations.findById = vi.fn(async () => null);
+
+    await expect(create(asUser(OWNER_ID))).rejects.toThrow(BadRequestError);
+    expect(db.invites.create).not.toHaveBeenCalled();
+  });
+});
+
+/**
  * A sharee re-sharing a document must not be able to mint permissions they do not themselves
  * hold: with `share` alone they could otherwise issue a link carrying `update`/`delete` and
  * redeem it on their own account.

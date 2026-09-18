@@ -13,7 +13,7 @@ export interface InviteTypeAuthAdapters {
   fabFiles: Pick<IFabFileRepository, 'shareable'>;
   sessions: Pick<ISessionRepository, 'shareable'>;
   projects: Pick<IProjectRepository, 'shareable'>;
-  organizations: Pick<IOrganizationRepository, 'shareable' | 'findById'>;
+  organizations: Pick<IOrganizationRepository, 'findById'>;
   groups: { findById: (id: string) => Promise<IGroupDocument | null> };
 }
 
@@ -44,13 +44,17 @@ export const authorizeByInviteType = async (
   } else if (type === InviteType.Project) {
     authorized = await db.projects.shareable.findShareAccessById(user, documentId);
   } else if (type === InviteType.Organization) {
-    authorized = user.isAdmin
-      ? await db.organizations.findById(documentId)
-      : await db.organizations.shareable.findShareAccessById(user, documentId);
+    const org = await db.organizations.findById(documentId);
+    if (org && (user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id))) {
+      authorized = org;
+    }
   } else if (type === InviteType.Group) {
     const group = await db.groups.findById(documentId);
     if (group) {
-      authorized = await db.organizations.shareable.findShareAccessById(user, group.organizationId);
+      const org = await db.organizations.findById(group.organizationId);
+      if (org && (user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id))) {
+        authorized = org;
+      }
     }
   }
 

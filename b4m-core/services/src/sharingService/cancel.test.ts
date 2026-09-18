@@ -44,7 +44,7 @@ describe('sharingService - cancelInvite authority', () => {
       users: { findById: vi.fn() },
       sessions: { findByIdAndUserId: vi.fn(async () => null) },
       fabFiles: { findByIdAndUserId: vi.fn(async () => null) },
-      organizations: { findById: vi.fn(), shareable: { findShareAccessById: vi.fn(async () => null) } },
+      organizations: { findById: vi.fn() },
       projects: { shareable: { findShareAccessById: vi.fn(async () => null) } },
       groups: { findById: vi.fn(async () => null) },
     };
@@ -185,25 +185,22 @@ describe('sharingService - cancelInvite authority', () => {
       expect(result[0].remaining).toBe(0);
     });
 
-    it('Organization: requires the caller hold share access on the org', async () => {
-      db.organizations.shareable.findShareAccessById = vi.fn(async () => ({ id: DOC_ID }));
+    it('Organization: any org member (billing owner, users[], or admin) can cancel', async () => {
+      db.organizations.findById = vi.fn(async () => ({ id: DOC_ID, userId: CALLER_ID, users: [] }));
 
       const result = await cancel(InviteType.Organization);
 
-      expect(db.organizations.shareable.findShareAccessById).toHaveBeenCalledWith(asUser(), DOC_ID);
-      // The non-admin path must not fall back to the unscoped lookup.
-      expect(db.organizations.findById).not.toHaveBeenCalled();
+      expect(db.organizations.findById).toHaveBeenCalledWith(DOC_ID);
       expect(result[0].remaining).toBe(0);
     });
 
-    it("Group: requires share access on the group's owning organization", async () => {
+    it("Group: any member of the group's owning org can cancel", async () => {
       db.groups.findById = vi.fn(async () => ({ id: DOC_ID, organizationId: 'org-9' }));
-      db.organizations.shareable.findShareAccessById = vi.fn(async () => ({ id: 'org-9' }));
+      db.organizations.findById = vi.fn(async () => ({ id: 'org-9', userId: CALLER_ID, users: [] }));
 
       const result = await cancel(InviteType.Group);
 
-      // Scoped to the group's org, not to the group id the caller supplied.
-      expect(db.organizations.shareable.findShareAccessById).toHaveBeenCalledWith(asUser(), 'org-9');
+      expect(db.organizations.findById).toHaveBeenCalledWith('org-9');
       expect(result[0].remaining).toBe(0);
     });
   });
