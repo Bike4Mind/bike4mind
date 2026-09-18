@@ -521,7 +521,9 @@ function CliApp() {
       const history = await state.commandHistoryStore.load();
       setCommandHistory(history);
 
-      // Load custom commands
+      // Load custom commands. Project skills load only for a trusted project
+      // root (folder-trust gate); this must be set before loadCommands().
+      state.customCommandStore.setProjectTrusted(state.configStore.isProjectTrusted());
       try {
         await state.customCommandStore.loadCommands();
       } catch (error) {
@@ -888,6 +890,9 @@ function CliApp() {
             customCommandStore: state.customCommandStore,
             subagentOrchestrator: orchestrator,
             sessionId: newSession.id,
+            // Gate skill lifecycle hook shell commands through permission.
+            permissionManager,
+            promptFn,
           })
         : null;
 

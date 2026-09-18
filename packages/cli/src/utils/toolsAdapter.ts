@@ -21,6 +21,7 @@ import { generateFileDiffPreview, generateFileDeletePreview, generateEditLocalFi
 import { executeTool } from '../llm/ToolRouter';
 import type { ApiClient } from '../auth/ApiClient';
 import { executeHooks, buildHookContext } from '../agents/hookExecutor.js';
+import type { ShellCommandPermissionDeps } from './commandPermission';
 import type { AgentHooks } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
@@ -574,6 +575,12 @@ export interface HookWrapperContext {
   sessionId: string;
   agentName: string;
   cwd: string;
+  /**
+   * Permission collaborators used to gate each agent lifecycle hook's shell
+   * command before it runs. Threaded to executeHooks; every production caller
+   * supplies it.
+   */
+  permission?: ShellCommandPermissionDeps;
 }
 
 /**
@@ -612,7 +619,8 @@ export function wrapToolWithHooks(
             hookEventName: 'PreToolUse',
             toolName,
             toolInput: args as Record<string, unknown>,
-          })
+          }),
+          hookContext.permission
         );
 
         if (preResult.decision === 'deny') {
@@ -646,7 +654,8 @@ export function wrapToolWithHooks(
               toolName,
               toolInput: finalArgs as Record<string, unknown>,
               error: error.message,
-            })
+            }),
+            hookContext.permission
           );
         }
         throw err;
@@ -662,7 +671,8 @@ export function wrapToolWithHooks(
             toolName,
             toolInput: finalArgs as Record<string, unknown>,
             toolResult: observation,
-          })
+          }),
+          hookContext.permission
         );
 
         if (postResult.decision === 'block') {

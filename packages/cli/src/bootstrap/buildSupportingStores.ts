@@ -119,15 +119,20 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
   // Supports both Claude Code convention (.claude/agents/) and B4M convention (.bike4mind/agents/)
   // Global dirs: ~/.claude/agents/, ~/.bike4mind/agents/
   // Project dirs: .claude/agents/, .bike4mind/agents/
+  // Folder-trust gate: an untrusted project contributes no agents and no context
+  // file. (MCP is already gated - config.mcpServers is global-only when the
+  // project is untrusted, so no repo server reaches the manager to spawn.)
+  const projectTrusted = configStore.isProjectTrusted();
   const mcpManager = new McpManager(config);
   const builtinAgentsDir = new URL('../agents/defaults/', import.meta.url).pathname;
   const agentProjectDir = configStore.getProjectConfigDir();
   const agentStore = new AgentStore(builtinAgentsDir, agentProjectDir || process.cwd());
+  agentStore.setProjectTrusted(projectTrusted);
 
   const [, , contextResult] = await Promise.all([
     mcpManager.initialize(),
     agentStore.loadAgents(),
-    loadContextFiles(agentProjectDir),
+    loadContextFiles(projectTrusted ? agentProjectDir : null),
   ]);
 
   const mcpTools = mcpManager.getTools();
