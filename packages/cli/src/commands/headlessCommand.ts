@@ -156,7 +156,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       permissionPolicy = parsePermissionPolicy(policyRaw);
     }
 
-    // Load custom commands (non-critical)
+    // Load custom commands (non-critical). Project skills load only for a
+    // trusted project root (folder-trust gate); a non-interactive run never
+    // auto-trusts, so it picks up project skills only if trusted beforehand.
+    customCommandStore.setProjectTrusted(configStore.isProjectTrusted());
     try {
       await customCommandStore.loadCommands();
     } catch {
@@ -389,7 +392,13 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     const enableSkillTool = config.preferences.enableSkillTool !== false;
     const skillTool = enableSkillTool
-      ? createSkillTool({ customCommandStore, subagentOrchestrator: orchestrator, sessionId: session.id })
+      ? createSkillTool({
+          customCommandStore,
+          subagentOrchestrator: orchestrator,
+          sessionId: session.id,
+          permissionManager,
+          promptFn,
+        })
       : null;
 
     const cliTools = [

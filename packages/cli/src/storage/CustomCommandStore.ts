@@ -23,6 +23,12 @@ export class CustomCommandStore {
   private globalCommandsDirs: string[];
   private projectCommandsDirs: string[];
   private remoteSource?: RemoteSkillSource;
+  /**
+   * Whether the project root is trusted. When false, project command/skill
+   * directories are NOT scanned (folder-trust gate) - only global and remote
+   * skills load. Defaults true so existing callers/tests are unaffected.
+   */
+  private projectTrusted = true;
 
   constructor(projectRoot?: string, options: CustomCommandStoreOptions = {}) {
     this.remoteSource = options.remoteSource;
@@ -60,9 +66,12 @@ export class CustomCommandStore {
       await this.loadCommandsFromDirectory(dir, 'global');
     }
 
-    // Load project commands - these override global via map replacement.
-    for (const dir of this.projectCommandsDirs) {
-      await this.loadCommandsFromDirectory(dir, 'project');
+    // Load project commands - these override global via map replacement. Loaded
+    // ONLY for a trusted project root (folder-trust gate).
+    if (this.projectTrusted) {
+      for (const dir of this.projectCommandsDirs) {
+        await this.loadCommandsFromDirectory(dir, 'project');
+      }
     }
 
     // Fill in remote skills under any name not already taken by a local file.
@@ -79,6 +88,14 @@ export class CustomCommandStore {
    */
   setRemoteSource(source: RemoteSkillSource | undefined): void {
     this.remoteSource = source;
+  }
+
+  /**
+   * Set whether the project root is trusted. When false, `loadCommands()` skips
+   * the project command/skill directories. Call before `loadCommands()`.
+   */
+  setProjectTrusted(trusted: boolean): void {
+    this.projectTrusted = trusted;
   }
 
   /**
