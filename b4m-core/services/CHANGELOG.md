@@ -1,5 +1,27 @@
 # @bike4mind/services
 
+## 12.0.0
+
+### Major Changes
+
+- [#2886](https://github.com/Bike4Mind/bike4mind/pull/2886) [`e44dc29`](https://github.com/Bike4Mind/bike4mind/commit/e44dc2991b87b37d8b69e1bdc39972ed68d14db6) Thanks [@jarlacut](https://github.com/jarlacut)! - gate imports on the admin file-size limit and a per-import storage quota
+
+- [#2930](https://github.com/Bike4Mind/bike4mind/pull/2930) [`f3f76c2`](https://github.com/Bike4Mind/bike4mind/commit/f3f76c21ef2e882fad72db3f0f36c8c5e8113065) Thanks [@jarlacut](https://github.com/jarlacut)! - gate the remaining FabFile ingest doors
+
+### Patch Changes
+
+- [#2852](https://github.com/Bike4Mind/bike4mind/pull/2852) [`ae494b7`](https://github.com/Bike4Mind/bike4mind/commit/ae494b7b21b97337a9af3e715be20e38ea1d696d) Thanks [@vinchi777](https://github.com/vinchi777)! - strip page chrome from URL-ingest text before it reaches embeddings
+
+- Updated dependencies [[`ae494b7`](https://github.com/Bike4Mind/bike4mind/commit/ae494b7b21b97337a9af3e715be20e38ea1d696d), [`f3f76c2`](https://github.com/Bike4Mind/bike4mind/commit/f3f76c21ef2e882fad72db3f0f36c8c5e8113065), [`b8bd20d`](https://github.com/Bike4Mind/bike4mind/commit/b8bd20d40a1551f6b999cb84745a677984144916)]:
+  - @bike4mind/fab-pipeline@1.3.11
+  - @bike4mind/common@10.0.0
+  - @bike4mind/utils@6.1.1
+  - @bike4mind/agents@1.0.11
+  - @bike4mind/auth@0.8.8
+  - @bike4mind/db-core@0.6.3
+  - @bike4mind/llm-adapters@0.15.5
+  - @bike4mind/mcp@2.0.11
+
 ## 11.0.0
 
 ### Major Changes
