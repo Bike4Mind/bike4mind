@@ -1,5 +1,29 @@
 # @bike4mind/services
 
+## 12.1.1
+
+### Patch Changes
+
+- [#2827](https://github.com/Bike4Mind/bike4mind/pull/2827) [`254337c`](https://github.com/Bike4Mind/bike4mind/commit/254337c91edeefc41333a60559a15673411bea01) Thanks [@onoya](https://github.com/onoya)! - linearize the super-linear content parsers
+
+- [#2952](https://github.com/Bike4Mind/bike4mind/pull/2952) [`eb7dd3c`](https://github.com/Bike4Mind/bike4mind/commit/eb7dd3c80a29133d726df7d03a45529cbd4e7d47) Thanks [@dea0030](https://github.com/dea0030)! - offer only priceable image sizes to the chat image tool
+
+- [#3002](https://github.com/Bike4Mind/bike4mind/pull/3002) [`a37e4ac`](https://github.com/Bike4Mind/bike4mind/commit/a37e4ac2572b4fe6c0b0d4a97ed2dd69f95b1cfc) Thanks [@jarlacut](https://github.com/jarlacut)! - carry taggedAt through clone, fork and snip
+
+- [#3016](https://github.com/Bike4Mind/bike4mind/pull/3016) [`27173c2`](https://github.com/Bike4Mind/bike4mind/commit/27173c2de2852fcd8f6f0b04a8b5f9281ae0016e) Thanks [@vinchi777](https://github.com/vinchi777)! - distinguish a derived output cap from a declared one
+
+- [#3019](https://github.com/Bike4Mind/bike4mind/pull/3019) [`6481767`](https://github.com/Bike4Mind/bike4mind/commit/6481767f9507cf6f440f7e941c986762ef3079f0) Thanks [@vinchi777](https://github.com/vinchi777)! - mark degenerate-loop turns so they are not billed as clean successes
+
+- Updated dependencies [[`254337c`](https://github.com/Bike4Mind/bike4mind/commit/254337c91edeefc41333a60559a15673411bea01), [`27173c2`](https://github.com/Bike4Mind/bike4mind/commit/27173c2de2852fcd8f6f0b04a8b5f9281ae0016e), [`6481767`](https://github.com/Bike4Mind/bike4mind/commit/6481767f9507cf6f440f7e941c986762ef3079f0)]:
+  - @bike4mind/common@10.1.1
+  - @bike4mind/fab-pipeline@1.3.13
+  - @bike4mind/llm-adapters@0.15.7
+  - @bike4mind/utils@6.1.3
+  - @bike4mind/agents@1.0.13
+  - @bike4mind/auth@0.8.10
+  - @bike4mind/db-core@0.6.5
+  - @bike4mind/mcp@2.0.13
+
 ## 12.1.0
 
 ### Minor Changes
