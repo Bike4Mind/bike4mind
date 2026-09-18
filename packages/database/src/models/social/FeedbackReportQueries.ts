@@ -51,10 +51,8 @@ async function resolveDisplayNames(userIds: string[]): Promise<Map<string, strin
   return new Map(users.map(user => [String(user.id), user.name || user.username || user.email || String(user.id)]));
 }
 
-async function resolveMembers(userIds: string[]): Promise<OrgFeedbackMember[]> {
-  const names = await resolveDisplayNames(userIds);
-  return userIds.map(userId => ({ userId, displayName: names.get(userId) ?? userId }));
-}
+const toMembers = (userIds: string[], names: Map<string, string>): OrgFeedbackMember[] =>
+  userIds.map(userId => ({ userId, displayName: names.get(userId) ?? userId }));
 
 /**
  * Org-scoped rollup of member-authored feedback. Lives beside the model rather than in the route,
@@ -75,10 +73,13 @@ export async function orgFeedbackReport(params: {
   const { organizationId, from, to, members, subject } = params;
   const range = { from: from.toISOString(), to: to.toISOString() };
 
+  // `aclOnly`, `stampOnly` and every `byMember.userId` below are all subsets of `members.userIds`
+  // (the aggregate's own `$match` guarantees the latter), so this one lookup covers all three.
+  const names = await resolveDisplayNames(members.userIds);
   const membership = {
     memberCount: members.userIds.length,
-    aclOnly: await resolveMembers(members.aclOnly),
-    stampOnly: await resolveMembers(members.stampOnly),
+    aclOnly: toMembers(members.aclOnly, names),
+    stampOnly: toMembers(members.stampOnly, names),
   };
 
   // No members means no authors to match. Also guards `$in: undefined` from a caller that omitted
@@ -100,7 +101,7 @@ export async function orgFeedbackReport(params: {
   ];
 
   // `$dateToString`, not `$dateTrunc` - DocumentDB has neither `$dateTrunc` nor the pipeline form
-  // of `$lookup`, which is also why member display names are resolved in a second query below.
+  // of `$lookup`, which is also why member display names are resolved via a separate query above.
   const facetStages: Record<string, unknown[]> = {
     totals: [{ $group: { _id: null, count: { $sum: 1 } } }, { $project: { _id: 0, count: 1 } }],
     byDay: [
@@ -148,7 +149,6 @@ export async function orgFeedbackReport(params: {
   );
 
   const byMemberRows: { userId: string; count: number }[] = result?.byMember ?? [];
-  const names = await resolveDisplayNames(byMemberRows.map(row => row.userId));
 
   return {
     range,

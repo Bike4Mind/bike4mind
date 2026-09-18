@@ -1,9 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { FeedbackStatus, FeedbackType, OrgMemberPopulation } from '@bike4mind/common';
 import { FeedbackModel } from '../FeedbackModel';
 import { orgFeedbackReport } from '../FeedbackReportQueries';
-import User from '../../auth/UserModel';
+import User, { userRepository } from '../../auth/UserModel';
 import { setupMongoTest } from '../../../__test__/utils';
 
 const oid = () => String(new mongoose.Types.ObjectId());
@@ -174,6 +174,47 @@ describe('orgFeedbackReport', () => {
     expect(report.byDay).toEqual([]);
     expect(report.byMember).toEqual([]);
     expect(report.membership.memberCount).toBe(0);
+  });
+
+  it('resolves every display name from one findByIds call, not one per list', async () => {
+    const orgId = oid();
+    const aclOnlyMember = oid();
+    const stampOnlyMember = oid();
+    const bothMember = oid();
+    await makeUser(aclOnlyMember, 'Acl Only');
+    await makeUser(stampOnlyMember, 'Stamp Only');
+    await makeUser(bothMember, 'Both Sides');
+
+    await makeFeedback({ userId: bothMember, organizationId: orgId, createdAt: JAN_10 });
+    await makeFeedback({ userId: stampOnlyMember, organizationId: orgId, createdAt: JAN_11 });
+
+    const findByIdsSpy = vi.spyOn(userRepository, 'findByIds');
+
+    const report = await orgFeedbackReport({
+      organizationId: orgId,
+      ...WINDOW,
+      members: population([aclOnlyMember, stampOnlyMember, bothMember], {
+        aclOnly: [aclOnlyMember, bothMember],
+        stampOnly: [stampOnlyMember],
+      }),
+    });
+
+    expect(findByIdsSpy).toHaveBeenCalledTimes(1);
+    expect(report.membership.aclOnly).toEqual(
+      expect.arrayContaining([
+        { userId: aclOnlyMember, displayName: 'Acl Only' },
+        { userId: bothMember, displayName: 'Both Sides' },
+      ])
+    );
+    expect(report.membership.stampOnly).toEqual([{ userId: stampOnlyMember, displayName: 'Stamp Only' }]);
+    expect(report.byMember).toEqual(
+      expect.arrayContaining([
+        { userId: bothMember, displayName: 'Both Sides', count: 1 },
+        { userId: stampOnlyMember, displayName: 'Stamp Only', count: 1 },
+      ])
+    );
+
+    findByIdsSpy.mockRestore();
   });
 
   it('narrows every bucket to the requested subject, not just the bySubject one', async () => {
