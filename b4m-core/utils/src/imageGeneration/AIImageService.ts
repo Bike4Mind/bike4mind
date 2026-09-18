@@ -45,6 +45,13 @@ export interface AIImageGenerationOptions {
 export type ImageEditOptions = Omit<AIImageGenerationOptions, 'size'> & {
   mask?: string | null;
   size?: OpenAIImageSize;
+  /**
+   * Accepted for compatibility with AIImageGenerationOptions and ignored: an ImageEditResponse
+   * carries one dataUrl, so no edit implementation renders or returns more than one image. Kept
+   * rather than omitted so existing callers still typecheck. Honor it only once this response
+   * type can carry multiple images, or callers get billed for images they never receive.
+   */
+  n?: number;
 };
 
 /**

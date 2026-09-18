@@ -30,6 +30,7 @@ import {
   isGPTImage2Model,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
+  IMAGES_PER_EDIT_REQUEST,
   ImageModels,
 } from '@bike4mind/common';
 import {
@@ -89,6 +90,11 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   size: z.string().optional(),
   fabFileIds: z.array(z.string()).optional(),
   image: z.string(),
+  // Inherited from OpenAIImageGenerationInput, which allows 1-10 because generation honors it.
+  // Editing renders IMAGES_PER_EDIT_REQUEST whatever this says, so it is accepted (existing
+  // API-key callers keep working) and ignored, never billed. Narrowed here rather than in the
+  // shared input so generation keeps its real range.
+  n: z.number().min(1).max(10).optional(),
 });
 export type ImageEditBody = z.infer<typeof ImageEditBodySchema>;
 
@@ -257,7 +263,6 @@ export class ImageEditService {
   private async validateUserCredits(
     user: IUserDocument,
     model: string,
-    n: number = 1,
     imageParams: Pick<ImageEditBody, 'size' | 'quality'>,
     logger: Logger,
     organization?: IOrganizationDocument | null
@@ -267,9 +272,16 @@ export class ImageEditService {
     const modelInfo = models.find(m => m.id === model);
     if (!modelInfo) throw new BadRequestError(`Invalid model: "${model}" is not available`);
 
-    // Same estimator the chat edit_image tool charges through (ToolBuilder.onToolStart),
-    // so both paths bill identically. Returns { requiredCredits, usdCost } n-scaled.
-    const result = await validateImageUserCredits(user, modelInfo, n, { model, ...imageParams }, logger, organization);
+    // Same estimator the chat edit_image tool charges through (ToolBuilder.onToolStart), so both
+    // paths bill identically. Billed for the one image this path renders, not the requested n.
+    const result = await validateImageUserCredits(
+      user,
+      modelInfo,
+      IMAGES_PER_EDIT_REQUEST,
+      { model, ...imageParams },
+      logger,
+      organization
+    );
 
     // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
     // shared pool. This is the only enforcement point - the settlement write
@@ -290,7 +302,6 @@ export class ImageEditService {
       userId,
       prompt,
       model: requestedModel,
-      n = 1,
       safety_tolerance,
       prompt_upsampling,
       seed,
@@ -371,7 +382,6 @@ export class ImageEditService {
         const { requiredCredits, usdCost } = await this.validateUserCredits(
           user,
           model,
-          n,
           { size, quality },
           logger,
           organization
@@ -487,7 +497,6 @@ export class ImageEditService {
         editResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
           mask: maskBase64Image || null,
           model,
-          n: 1,
           size: size as OpenAIImageSize | undefined,
           quality,
           response_format: 'url',
@@ -628,7 +637,7 @@ export class ImageEditService {
             outputTokens: 0,
             cachedInputTokens: 0,
             cacheWriteTokens: 0,
-            units: n,
+            units: IMAGES_PER_EDIT_REQUEST,
             costUsd: usageCostUsd,
             creditsCharged: quest.creditsUsed,
             status: 'ok',
