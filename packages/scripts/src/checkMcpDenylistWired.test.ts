@@ -75,13 +75,24 @@ describe('every buildSharedTools call offering MCP tools also passes sessionDisa
     const files = out.split('\n').filter(Boolean);
     expect(files.length, `expected buildSharedTools call sites under ${SEARCH_DIRS}`).toBeGreaterThan(0);
 
+    let mcpOfferingCalls = 0;
     const unwired = files.flatMap(file => {
       if (ALLOWLIST.has(file)) return [];
       const source = readFileSync(path.join(REPO_ROOT, file), 'utf8');
-      return callArgumentTexts(source)
-        .filter(call => call.includes('mcpToolsByServer') && !call.includes('sessionDisabledTools'))
-        .map(() => file);
+      const offering = callArgumentTexts(source).filter(call => call.includes('mcpToolsByServer'));
+      mcpOfferingCalls += offering.length;
+      return offering.filter(call => !call.includes('sessionDisabledTools')).map(() => file);
     });
+
+    // Without this the check passes vacuously: a parser that balanced the wrong paren, or a
+    // rename of `mcpToolsByServer`, yields zero parsed calls and an empty `unwired` either way.
+    // Three today - ChatCompletionProcess.process, agentExecutor's processExecution and
+    // dispatchSubagent - asserted as a floor so adding a fourth site does not fail the build.
+    expect(
+      mcpOfferingCalls,
+      'Parsed no buildSharedTools call offering mcpToolsByServer - the option was renamed or ' +
+        'callArgumentTexts stopped matching, so this guard is no longer checking anything.'
+    ).toBeGreaterThanOrEqual(3);
 
     expect(
       unwired,

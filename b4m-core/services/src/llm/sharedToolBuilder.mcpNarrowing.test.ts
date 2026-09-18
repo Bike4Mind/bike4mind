@@ -118,6 +118,21 @@ describe('buildSharedTools: offerOnlyNamedTools withholds unnamed MCP tools', ()
     expect(names).not.toContain('slack__send_message');
   });
 
+  it('gates native and MCP tools by the same named list in one turn', () => {
+    // The mixed shape is the realistic one and the only case where the two halves of the gate can
+    // disagree: native ids are filtered before the MCP merge, namespaced ids inside it, and a
+    // regression in either half alone still leaves one of the single-kind cases above green.
+    const names = build({
+      enabledTools: ['dice_roll', 'slack__send_message'],
+      offerOnlyNamedTools: true,
+      mcpToolsByServer,
+    });
+    expect(names).toEqual(expect.arrayContaining(['dice_roll', 'slack__send_message']));
+    expect(names).not.toContain('current_datetime');
+    expect(names).not.toContain('atlassian__jira_search');
+    expect(names).not.toContain('atlassian__jira_create_issue');
+  });
+
   it('keeps an MCP tool the caller named while withholding its unnamed siblings', () => {
     // "Only what I named" is per tool, not all-or-nothing: naming an MCP tool by its namespaced
     // id must still reach the model.
@@ -197,6 +212,46 @@ describe('buildSharedTools: a non-empty tool profile is unchanged', () => {
 
     expect(names).toEqual([]);
     expect(info.mock.calls.flat().join(' ')).toMatch(/2 agent-only MCP tools/);
+  });
+});
+
+describe('buildSharedTools: the undefined-tool warning still fires for ids no server backs', () => {
+  // The warning is the only signal a caller gets that a name it passed went nowhere, and under
+  // `offerOnlyNamedTools` a name going nowhere is exactly why the turn came back with silence.
+  // Exempting every id containing `__` would have silenced it for the two cases most likely to
+  // produce that silence: a typo, and a server that is no longer connected.
+  const warningsFor = (options: Parameters<typeof buildSharedTools>[2]): string => {
+    const warn = vi.fn();
+    // Logger's methods live on the prototype, so spreading an instance yields an object with
+    // none of them - every level the build path touches has to be supplied here by hand.
+    const logger = { ...new Logger(), warn, info: () => {}, debug: () => {} } as unknown as Logger;
+    buildSharedTools({ ...deps, logger }, callbacks, options);
+    return warn.mock.calls.flat().join(' ');
+  };
+
+  it('stays quiet about a tool on a connected server', () => {
+    const warnings = warningsFor({
+      enabledTools: ['atlassian__jira_search'],
+      offerOnlyNamedTools: true,
+      mcpToolsByServer,
+    });
+    expect(warnings).not.toMatch(/Undefined tools/);
+  });
+
+  it('warns about a namespaced id whose server is not connected', () => {
+    const warnings = warningsFor({ enabledTools: ['notion__search'], offerOnlyNamedTools: true, mcpToolsByServer });
+    expect(warnings).toMatch(/Undefined tools requested.*notion__search/);
+  });
+
+  it('warns about a typo in a connected server prefix', () => {
+    expect(warningsFor({ enabledTools: ['atlassion__jira_search'], mcpToolsByServer })).toMatch(
+      /Undefined tools requested.*atlassion__jira_search/
+    );
+  });
+
+  it('still warns about an unknown native name', () => {
+    const warnings = warningsFor({ enabledTools: ['not_a_tool'], mcpToolsByServer });
+    expect(warnings).toMatch(/Undefined tools requested.*not_a_tool/);
   });
 });
 
@@ -283,7 +338,11 @@ describe('buildSharedTools: the denylist also reaches parentTools, which the ret
 
     const parentTools = (vi.mocked(createDelegateToAgentTool).mock.calls.at(-1)?.[0]?.parentTools ??
       []) as ICompletionOptionTools[];
-    expect(parentTools.map(t => t.toolSchema.name)).not.toContain('current_datetime');
+    const names = parentTools.map(t => t.toolSchema.name);
+    expect(names).not.toContain('current_datetime');
+    // Positive membership, as in the sibling cases: without it an empty parentTools - a captured
+    // reference that never got populated - would satisfy the assertion above.
+    expect(names).toContain('dice_roll');
   });
 
   it('routes an agent-only MCP tool into parentTools for delegation, denylist still applied', () => {

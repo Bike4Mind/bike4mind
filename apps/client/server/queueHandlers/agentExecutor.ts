@@ -1810,7 +1810,12 @@ async function processExecution(
       // applySessionToolPolicy above subtracts these from the NATIVE names only; MCP tools are
       // merged inside buildSharedTools after that filter, so the denylist has to travel with them
       // to reach a `server__tool` id. The chat path gets this from its own post-build pass.
-      sessionDisabledTools: session.disabledTools,
+      //
+      // The profile's own denials ride along for the same reason: applySessionToolPolicy applies
+      // them to `toolNames`, which MCP tools never pass through, so a profile that denies
+      // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
+      // so unioning them cannot widen what this agent is offered.
+      sessionDisabledTools: [...(session.disabledTools ?? []), ...(orchestrationProfile?.deniedTools ?? [])],
       externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,

@@ -281,15 +281,21 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
 }
 
 /**
- * Whether this turn withholds OUR server-side tool auto-offers. Two independent triggers: any
- * `promptMode` (an eval/passthrough surface), or the caller's explicit `skipAutoOffers`. Unioned
- * here rather than at each gate because the rule was previously spelled out per-site and a site was
- * missed - the three auto-add sites in ChatCompletionProcess, plus `buildSharedTools`' MCP merge
- * gate (`offerOnlyNamedTools`, see sharedToolBuilder.ts), must all agree, and a new trigger
- * should mean editing this function and nothing else.
+ * Whether this turn withholds the tools the server adds on its own - the ones the caller never
+ * named. Two independent triggers: any `promptMode` (an eval/passthrough surface), or the caller's
+ * explicit `skipAutoOffers`. Unioned here rather than at each gate because the rule was previously
+ * spelled out per-site and a site was missed - the auto-add sites in ChatCompletionProcess (the
+ * knowledge offer, navigate_view, the blog/skill gate) and `buildSharedTools`' MCP merge gate
+ * (`offerOnlyNamedTools`, see sharedToolBuilder.ts) must all agree, and a new trigger should mean
+ * editing this function and nothing else. The MCP half is the same rule, not an extra one: MCP
+ * tools are merged past the `enabledTools` filter and so are never named by the caller either.
  *
  * A force-on, not an override: `skipAutoOffers: false` under a promptMode still suppresses, because
- * a mode that promises a bare model cannot also carry the provider's tool-use preamble.
+ * a mode that promises a bare model cannot also carry the provider's tool-use preamble - and an
+ * MCP server's schemas are the largest such preamble a turn can carry. The force-on is not a dead
+ * end for a promptMode caller that wants one MCP tool: `tools: allTools` is unconditional at
+ * dispatch, and `offerOnlyNamedTools` narrows to what the caller NAMED, so naming the tool by its
+ * `server__tool` id (via `session.enabledTools`) keeps it while its unnamed siblings are withheld.
  *
  * Siblings below/above resolve the other promptMode-derived axes. Several more are still spelled out
  * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`,

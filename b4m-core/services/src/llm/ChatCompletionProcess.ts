@@ -601,10 +601,10 @@ export interface ResolveEnabledToolsInput {
    * The request field is that same suppression without a mode, for an arm that must not be OFFERED
    * knowledge while keeping the authored prompts a mode would strip - it withholds the tool, not
    * knowledge (same caveat as ChatCompletionInvokeParamsSchema.skipAutoOffers). Caller-selected
-   * (native) and session-forced tools are unaffected; step 2 is one of two things this field
-   * gates. The other is `buildSharedTools`' MCP merge (`offerOnlyNamedTools`, fed by this same
-   * field below): an MCP tool the caller didn't name by its `server__tool` id is withheld too,
-   * because it is a server-side addition never subject to `enabledTools` in the first place.
+   * (native) and session-forced tools are unaffected. The same field also gates
+   * `buildSharedTools`' MCP merge (`offerOnlyNamedTools`, fed from here below): MCP tools merged
+   * past the `enabledTools` filter are withheld too, since an MCP tool the caller didn't name by
+   * its `server__tool` id was never subject to `enabledTools` in the first place.
    */
   skipAutoOffers?: boolean;
 }

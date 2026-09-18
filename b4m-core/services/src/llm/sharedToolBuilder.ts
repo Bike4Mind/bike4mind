@@ -375,11 +375,16 @@ export function buildSharedTools(
       .filter(tool => tool in llmToolDefinitions && isToolOfferable(tool, toolAvailability))
       .map(tool => llmToolDefinitions[tool]);
 
-    // Namespaced `server__tool` ids are excluded here even though they're not native tools: they
-    // are handled by the MCP merge loop below, not skipped, so warning about them as "undefined"
-    // would be a false positive on the one route (`session.enabledTools`) that can name an MCP
-    // tool under `offerOnlyNamedTools`.
-    const undefinedTools = enabledTools.filter(tool => !llmToolDefinitions[tool] && !tool.includes('__'));
+    // Ids namespaced to a CONNECTED server are excluded here even though they're not native
+    // tools: they are handled by the MCP merge loop below, not skipped, so warning about them as
+    // "undefined" would be a false positive on the one route (`session.enabledTools`) that can
+    // name an MCP tool under `offerOnlyNamedTools`. Scoped to the servers actually in
+    // `mcpToolsByServer` rather than to any id containing `__`, so a typo'd, stale, or
+    // disconnected-server id still warns - those are exactly the cases the warning is for, and
+    // under `offerOnlyNamedTools` they are why a caller gets silence instead of the tool it named.
+    const connectedServerPrefixes = Object.keys(mcpToolsByServer).map(serverName => `${serverName}__`);
+    const isConnectedMcpToolId = (tool: string) => connectedServerPrefixes.some(prefix => tool.startsWith(prefix));
+    const undefinedTools = enabledTools.filter(tool => !llmToolDefinitions[tool] && !isConnectedMcpToolId(tool));
     if (undefinedTools.length > 0) {
       logger.warn(`Undefined tools requested (will be skipped): ${undefinedTools.join(', ')}`);
     }
