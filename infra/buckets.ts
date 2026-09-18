@@ -303,6 +303,21 @@ const appFilesBucketLifecycle = new aws.s3.BucketLifecycleConfigurationV2('appFi
         daysAfterInitiation: 1,
       },
     },
+    {
+      // Mirrors the job pointer's own 14-day TTL: the object is unreachable once the pointer
+      // is gone, and must not expire before it either, since lifecycle deletion lags by up to a day.
+      id: 'expire-org-feedback-summaries',
+      status: 'Enabled',
+      filter: {
+        prefix: 'org-feedback-summaries/',
+      },
+      expiration: {
+        days: 14,
+      },
+      abortIncompleteMultipartUpload: {
+        daysAfterInitiation: 1,
+      },
+    },
   ],
 });
 
