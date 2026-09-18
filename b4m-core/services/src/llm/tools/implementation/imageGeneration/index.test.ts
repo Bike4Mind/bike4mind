@@ -23,12 +23,16 @@ vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
 });
 
 const mockGeminiGenerate = vi.fn();
+const mockOpenAIGenerate = vi.fn();
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
     GeminiImageService: vi.fn().mockImplementation(function () {
       return { generate: mockGeminiGenerate };
+    }),
+    OpenAIImageService: vi.fn().mockImplementation(function () {
+      return { generate: mockOpenAIGenerate };
     }),
   };
 });
@@ -128,6 +132,64 @@ describe('image_generation local-image env gating (self-host only)', () => {
   });
 });
 
+describe('image_generation effective-arg precedence (tool call vs client imageConfig)', () => {
+  beforeEach(() => {
+    mockOpenAIGenerate.mockReset();
+    mockOpenAIGenerate.mockResolvedValue([PNG_DATA_URL]);
+    mockCheckImage.mockReset();
+    mockCheckImage.mockResolvedValue(undefined);
+  });
+
+  // The client always sends a fully-populated imageConfig (useSendMessage fills quality from
+  // the persisted store), so "client value || tool value" silently discarded every tier the
+  // model asked for. The tool call must win; the client value is only a fallback.
+  it('a tool-call tier overrides an always-populated client imageConfig quality', async () => {
+    const context = createFakeContext();
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    context.onStart = onStart;
+
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: 'standard',
+      size: '1024x1024',
+    });
+
+    await toolFn({ prompt: 'a red bike', quality: 'hd' });
+
+    expect(onStart).toHaveBeenCalledWith('image_generation', expect.objectContaining({ quality: 'hd' }));
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ quality: 'hd' }));
+  });
+
+  // Billing follows the dispatched args, so what onStart records and what the provider is
+  // handed must be the same resolved set - otherwise the ledger describes an image nobody made.
+  it('bills the same model, n, size and quality it dispatches', async () => {
+    const context = createFakeContext();
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    context.onStart = onStart;
+
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      n: 2,
+      quality: 'low',
+      size: '1024x1024',
+    });
+
+    await toolFn({ prompt: 'a red bike', n: 1, quality: 'high', size: '1024x1536' });
+
+    const resolved = { model: ImageModels.GPT_IMAGE_2, n: 1, quality: 'high', size: '1024x1536' };
+    expect(onStart).toHaveBeenCalledWith('image_generation', expect.objectContaining(resolved));
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining(resolved));
+  });
+
+  // #2889 taught the OpenAI layer to map standard/hd, but the schema still advertised only
+  // those two, so "generate it at low quality" could not be expressed at all.
+  it('exposes the real GPT-image quality tiers in the tool schema', () => {
+    const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
+    const quality = toolSchema.parameters.properties.quality;
+    expect(quality.enum).toEqual(expect.arrayContaining(['low', 'medium', 'high', 'auto']));
+  });
+});
+
 describe('image_generation Gemini branch parameter passthrough', () => {
   // The tool passes safety_tolerance/prompt_upsampling/seed/output_format straight through to
   // GeminiImageService.generate() - buildGenerationConfig() is the single place that refuses to
@@ -160,6 +222,52 @@ describe('image_generation Gemini branch parameter passthrough', () => {
         safety_tolerance: 1,
         output_format: 'jpeg',
       })
+    );
+  });
+});
+
+describe('image_generation OpenAI model selection for transparent backgrounds', () => {
+  beforeEach(() => {
+    mockOpenAIGenerate.mockReset();
+    mockOpenAIGenerate.mockResolvedValue([]);
+  });
+
+  it('steps a default gpt-image-2 selection down to gpt-image-1.5 when transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, {});
+
+    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+  });
+
+  it('steps an explicitly-selected gpt-image-2 down to gpt-image-1.5 when transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+
+    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+  });
+
+  it('keeps the gpt-image-2 default when no transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, {});
+
+    await toolFn({ prompt: 'an inventory icon' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_2 })
     );
   });
 });

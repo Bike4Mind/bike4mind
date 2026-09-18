@@ -92,14 +92,30 @@ export function buildRateLimitKeys(
  *
  * Note: embed keys additionally have per-session counters
  * (`embed-session-rate-limit:{sessionId}:minute|:day`, see ./embedSessionRateLimit)
- * and the 'management' counter has its own keys; this deliberately clears
- * neither - a reset restores the key's request budget, and the management
- * quota is not the budget anyone is asking to have restored.
+ * - this deliberately never touches those.
+ *
+ * By default this also leaves the 'management' counter alone: a routine reset
+ * restores the key's request budget, and the management quota is not the
+ * budget anyone is asking to have restored. Pass `alsoResetManagement: true`
+ * for the one caller that needs the exception - the admin reset endpoint. If
+ * a client exhausts the management counter itself (a retry loop, a scripted
+ * ceiling bump across keys), the self-service rate-limit PATCH - the only API
+ * path back - starts 429ing, and a routine reset would be a no-op against the
+ * counter that's actually stuck, leaving no operator override for up to 24h.
  */
-export async function resetApiKeyRateLimit(keyId: string): Promise<void> {
+export async function resetApiKeyRateLimit(
+  keyId: string,
+  options: { alsoResetManagement?: boolean } = {}
+): Promise<void> {
   const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
-  await cacheRepository.deleteByKey(minuteKey);
-  await cacheRepository.deleteByKey(dayKey);
+  const deletes = [cacheRepository.deleteByKey(minuteKey), cacheRepository.deleteByKey(dayKey)];
+
+  if (options.alsoResetManagement) {
+    const { minuteKey: managementMinuteKey, dayKey: managementDayKey } = buildRateLimitKeys(keyId, 'management');
+    deletes.push(cacheRepository.deleteByKey(managementMinuteKey), cacheRepository.deleteByKey(managementDayKey));
+  }
+
+  await Promise.all(deletes);
 }
 
 export interface RateLimitUsage {
@@ -204,6 +220,14 @@ export async function checkApiKeyRateLimit(
   // ceilings, so an exhausted request window neither blocks it nor is advanced
   // by it.
   const { requestsPerMinute, requestsPerDay } = counter === 'management' ? MANAGEMENT_RATE_LIMIT : rateLimit;
+  // What the response advertises as the Limit is always the key's own
+  // configured ceiling, even on the management counter - the caller of a
+  // management-metered route (the self-service rate-limit PATCH) is reading
+  // limits back to confirm what it just configured, and a fixed 5/50 there
+  // reads as "your write got clamped" rather than "a different counter paid
+  // for this request". Remaining/Reset stay tied to whichever ceiling is
+  // actually enforced, since that's what governs the next 429.
+  const { requestsPerMinute: reportedRequestsPerMinute, requestsPerDay: reportedRequestsPerDay } = rateLimit;
 
   try {
     const { minuteKey, dayKey } = buildRateLimitKeys(keyId, counter);
@@ -224,14 +248,16 @@ export async function checkApiKeyRateLimit(
         retryAfter: minuteResetSeconds,
         limitType: 'minute',
         currentCount: minuteResult.count,
-        headers: buildHeaders(
-          requestsPerMinute,
-          minuteResult.count,
+        headers: buildHeaders({
+          minuteLimit: requestsPerMinute,
+          minuteCount: minuteResult.count,
           minuteResetAt,
-          requestsPerDay,
-          0, // Day counter untouched on a minute-limit rejection
-          Date.now() + DAY_IN_MS // Nominal; the day header is informational here
-        ),
+          dayLimit: requestsPerDay,
+          dayCount: 0, // Day counter untouched on a minute-limit rejection
+          dayResetAt: Date.now() + DAY_IN_MS, // Nominal; the day header is informational here
+          reportedMinuteLimit: reportedRequestsPerMinute,
+          reportedDayLimit: reportedRequestsPerDay,
+        }),
       };
     }
 
@@ -245,14 +271,16 @@ export async function checkApiKeyRateLimit(
 
       return {
         allowed: true,
-        headers: buildHeaders(
-          requestsPerMinute,
-          minuteResult.count,
+        headers: buildHeaders({
+          minuteLimit: requestsPerMinute,
+          minuteCount: minuteResult.count,
           minuteResetAt,
-          requestsPerDay,
+          dayLimit: requestsPerDay,
           dayCount,
-          dayResetAt
-        ),
+          dayResetAt,
+          reportedMinuteLimit: reportedRequestsPerMinute,
+          reportedDayLimit: reportedRequestsPerDay,
+        }),
       };
     }
 
@@ -272,28 +300,32 @@ export async function checkApiKeyRateLimit(
         retryAfter: dayResetSeconds,
         limitType: 'day',
         currentCount: dayResult.count,
-        headers: buildHeaders(
-          requestsPerMinute,
-          minuteResult.count - 1, // Account for rollback
+        headers: buildHeaders({
+          minuteLimit: requestsPerMinute,
+          minuteCount: minuteResult.count - 1, // Account for rollback
           minuteResetAt,
-          requestsPerDay,
-          dayResult.count,
-          dayResetAt
-        ),
+          dayLimit: requestsPerDay,
+          dayCount: dayResult.count,
+          dayResetAt,
+          reportedMinuteLimit: reportedRequestsPerMinute,
+          reportedDayLimit: reportedRequestsPerDay,
+        }),
       };
     }
 
     // Success - both counters incremented atomically
     return {
       allowed: true,
-      headers: buildHeaders(
-        requestsPerMinute,
-        minuteResult.count,
+      headers: buildHeaders({
+        minuteLimit: requestsPerMinute,
+        minuteCount: minuteResult.count,
         minuteResetAt,
-        requestsPerDay,
-        dayResult.count,
-        dayResetAt
-      ),
+        dayLimit: requestsPerDay,
+        dayCount: dayResult.count,
+        dayResetAt,
+        reportedMinuteLimit: reportedRequestsPerMinute,
+        reportedDayLimit: reportedRequestsPerDay,
+      }),
     };
   } catch (error) {
     console.error('[API_KEY_RATE_LIMIT] Error checking rate limit:', error);
@@ -311,23 +343,55 @@ function resetSecondsFrom(resetAtMs: number, windowMs: number): number {
   return Math.max(MIN_RETRY_AFTER_SECONDS, Math.ceil((remainingMs > 0 ? remainingMs : windowMs) / 1000));
 }
 
+interface BuildHeadersParams {
+  /** Enforced ceiling: what the counter is actually metered against. */
+  minuteLimit: number;
+  minuteCount: number;
+  minuteResetAt: number;
+  /** Enforced ceiling: what the counter is actually metered against. */
+  dayLimit: number;
+  dayCount: number;
+  dayResetAt: number;
+  /**
+   * Value advertised in X-RateLimit-Limit-Minute/-Day - always the key's own
+   * configured ceiling, which diverges from the enforced one on the
+   * 'management' counter. Required rather than defaulted: the two are equal
+   * for the 'request' counter, and letting a caller omit it is how the
+   * management path silently regresses to advertising the fixed 5/50.
+   */
+  reportedMinuteLimit: number;
+  reportedDayLimit: number;
+}
+
 /**
  * Build rate limit headers for response
  */
-function buildHeaders(
-  requestsPerMinute: number,
-  currentMinuteCount: number,
-  minuteResetAt: number,
-  requestsPerDay: number,
-  currentDayCount: number,
-  dayResetAt: number
-): RateLimitResult['headers'] {
+function buildHeaders(params: BuildHeadersParams): RateLimitResult['headers'] {
+  const {
+    minuteLimit,
+    minuteCount,
+    minuteResetAt,
+    dayLimit,
+    dayCount,
+    dayResetAt,
+    reportedMinuteLimit,
+    reportedDayLimit,
+  } = params;
+  // Remaining is clamped to the advertised limit as well as the enforced one:
+  // a key may be configured BELOW the management ceiling (limits validate at
+  // min 1), and reporting more headroom than the advertised limit allows is
+  // the same class of confusion the reported limit exists to remove. Accepted
+  // tradeoff: for such a key, Remaining holds flat at the reported limit
+  // across the first several management-metered calls and only drops once
+  // the enforced counter nears its own ceiling - it does not decrement 1:1
+  // with usage in that band. Remaining <= Limit still always holds, and the
+  // enforced counter (not this header) is what actually gates the 429.
   return {
-    'X-RateLimit-Limit-Minute': requestsPerMinute,
-    'X-RateLimit-Remaining-Minute': Math.max(0, requestsPerMinute - currentMinuteCount),
+    'X-RateLimit-Limit-Minute': reportedMinuteLimit,
+    'X-RateLimit-Remaining-Minute': Math.min(reportedMinuteLimit, Math.max(0, minuteLimit - minuteCount)),
     'X-RateLimit-Reset-Minute': Math.floor(minuteResetAt / 1000),
-    'X-RateLimit-Limit-Day': requestsPerDay,
-    'X-RateLimit-Remaining-Day': Math.max(0, requestsPerDay - currentDayCount),
+    'X-RateLimit-Limit-Day': reportedDayLimit,
+    'X-RateLimit-Remaining-Day': Math.min(reportedDayLimit, Math.max(0, dayLimit - dayCount)),
     'X-RateLimit-Reset-Day': Math.floor(dayResetAt / 1000),
   };
 }

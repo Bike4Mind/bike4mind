@@ -47,7 +47,12 @@ const UNCASTABLE = 'legacy-uuid-not-an-objectid';
 const MAXIMAL = {
   name: 'the maximal non-admin caller',
   ctx: ctx({ organizationIds: ['o1'], administeredOrgIds: ['o3'], entitlementKeys: ['e-1'] }),
-  opts: { grantedLakeIds: [LAKE_1], orgGrantedLakes: { o1: [LAKE_2] }, includePublic: true } satisfies Opts,
+  opts: {
+    grantedLakeIds: [LAKE_1],
+    orgGrantedLakes: { o1: [LAKE_2] },
+    supersededOwnLakeIds: [LAKE_3],
+    includePublic: true,
+  } satisfies Opts,
   arms: [...FIND_ACCESSIBLE_ARMS],
 };
 
@@ -106,6 +111,21 @@ const CONTEXTS: { name: string; ctx: AccessContext; opts?: Opts; arms: FindAcces
     opts: { orgGrantedLakes: { o1: [UNCASTABLE], o2: [UNCASTABLE, LAKE_1] } },
     arms: ['owner', 'public', 'orgGate', 'orgGrant'],
   },
+  {
+    // Supersession CONSTRAINS the owner arm rather than adding or removing one - the shape probes
+    // below are what see the constraint; this row is here so a future edit that turns it into its
+    // own arm has to come through FIND_ACCESSIBLE_ARMS like every other arm.
+    name: 'a caller with superseded own lakes',
+    ctx: ctx(),
+    opts: { supersededOwnLakeIds: [LAKE_1] },
+    arms: ['owner', 'public', 'orgGate'],
+  },
+  {
+    name: 'a superseded list of only uncastable ids',
+    ctx: ctx(),
+    opts: { supersededOwnLakeIds: [UNCASTABLE] },
+    arms: ['owner', 'public', 'orgGate'],
+  },
   MAXIMAL,
   // The isAdmin bypass replaces the whole $or instead of adding a disjunct, so it labels no arm -
   // and the parallelism assertion below still has to hold on it (0 arms, no $or).
@@ -127,7 +147,7 @@ describe('buildAccessibleQuery - arm labelling', () => {
     public: a => conjuncts(a)[0]?.isPublic === true,
     orgGate: a => conjuncts(a).length === 3,
     orgAdmin: a => typeof a.organizationId === 'object' && !('_id' in a),
-    grant: a => '_id' in a && !('organizationId' in a),
+    grant: a => '_id' in a && !('organizationId' in a) && !('createdByUserId' in a),
     orgGrant: a => '_id' in a && typeof a.organizationId === 'string',
   };
 
@@ -164,5 +184,51 @@ describe('buildAccessibleQuery - arm labelling', () => {
 
     // Without this, the guards above could hold on a builder the shipped method had stopped using.
     expect(captured).toEqual(buildAccessibleQuery(MAXIMAL.ctx, MAXIMAL.opts).filter);
+  });
+});
+
+/**
+ * The owner arm is creator provenance, and provenance is NOT ownership: a transfer or a departure
+ * hand-off mints an `owner` grant that supersedes the creator without ever touching
+ * `createdByUserId` (see `resolveEffectiveOwnerIds`). These pin the exclusion that keeps the arm in
+ * step with that - shape-level, because the corresponding behavior against real Mongo lives in
+ * `DataLakeModel.test.ts`.
+ */
+describe('buildAccessibleQuery - owner arm supersession', () => {
+  const ownerArm = (opts?: Opts): Record<string, unknown> =>
+    (buildAccessibleQuery(ctx(), opts).filter.$or as Record<string, unknown>[])[0];
+
+  it('stays at bare creator provenance when nothing supersedes', () => {
+    expect(ownerArm()).toEqual({ createdByUserId: 'u1' });
+    expect(ownerArm({ supersededOwnLakeIds: [] })).toEqual({ createdByUserId: 'u1' });
+  });
+
+  it('excludes the superseded lakes without dropping the arm', () => {
+    expect(ownerArm({ supersededOwnLakeIds: [LAKE_1, LAKE_2] })).toEqual({
+      createdByUserId: 'u1',
+      _id: { $nin: [LAKE_1, LAKE_2] },
+    });
+  });
+
+  it('narrows ONLY the owner arm - a superseded lake reached another way keeps that arm intact', () => {
+    // The whole reason this is an exclusion on one disjunct rather than a filter on the result: a
+    // creator demoted to curator by `transferLakeOwnership` still holds the lake, via the grant arm.
+    const or = buildAccessibleQuery(ctx(), {
+      supersededOwnLakeIds: [LAKE_1],
+      grantedLakeIds: [LAKE_1],
+    }).filter.$or as Record<string, unknown>[];
+    expect(or[0]).toEqual({ createdByUserId: 'u1', _id: { $nin: [LAKE_1] } });
+    expect(or).toContainEqual({ _id: { $in: [LAKE_1] } });
+  });
+
+  it('drops an uncastable id rather than CastErroring the whole query', () => {
+    expect(ownerArm({ supersededOwnLakeIds: [UNCASTABLE, LAKE_1] })).toEqual({
+      createdByUserId: 'u1',
+      _id: { $nin: [LAKE_1] },
+    });
+  });
+
+  it('leaves an admin context alone - its $or is replaced outright, so there is no arm to constrain', () => {
+    expect(buildAccessibleQuery(ctx({ isAdmin: true }), { supersededOwnLakeIds: [LAKE_1] }).filter.$or).toBeUndefined();
   });
 });

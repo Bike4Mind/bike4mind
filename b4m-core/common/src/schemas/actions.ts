@@ -1168,6 +1168,7 @@ export const SessionCreatedAction = shareableDocumentSchema.extend({
   summaryTrigger: z.enum(['manual', 'project', 'earlyMilestone', 'contentGrowth', 'throttling']).optional(),
   deletedAt: z.date().optional(),
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
+  taggedAt: z.date().optional(),
   clonedSourceId: z.string().nullable().optional(),
   forkedSourceId: z.string().nullable().optional(),
   isAutoNamed: z.boolean().optional(),

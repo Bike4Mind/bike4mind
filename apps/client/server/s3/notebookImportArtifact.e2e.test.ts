@@ -94,6 +94,7 @@ function makeService() {
     toolRepository: { create: async () => null, find: async () => [], findById: async () => null },
     agentRepository: { create: async () => null },
     userRepository: { findById: async () => ({ id: USER }) },
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {
       uploadFile: async () => null,
       getFileContent: async () => null,

@@ -1,5 +1,5 @@
-import { IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
-import { NotFoundError, secureParameters } from '@bike4mind/utils';
+import { ApiKeyScope, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
+import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
@@ -17,6 +17,12 @@ interface RotateUserApiKeyAdapters {
     userApiKeys: IUserApiKeyRepository;
     organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
   };
+  /**
+   * Scopes of the API key making the request, when the caller authenticated with one.
+   * Undefined for a browser/JWT caller, who is already the full account and gains
+   * nothing from a rotation. See the no-escalation rule below.
+   */
+  callerScopes?: ApiKeyScope[];
 }
 
 export interface RotateUserApiKeyResult {
@@ -24,6 +30,8 @@ export interface RotateUserApiKeyResult {
   name: string;
   keyPrefix: string;
   key: string; // Only returned once during rotation
+  /** Set only when rotation re-owned the key; the user it belonged to before. */
+  previousOwnerUserId?: string;
 }
 
 /**
@@ -41,6 +49,17 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string 
 /**
  * Rotate a key's secret, scoped by resolveOwnedApiKey (the key's minter, or an
  * admin of the org it is billed to).
+ *
+ * Rotation RE-OWNS the key to whoever rotated it. Previously only `keyHash` and
+ * `keyPrefix` were rewritten, never `userId` - so an org admin rotating a
+ * teammate's org-billed key walked away with a plaintext credential that
+ * authenticated as that teammate. Re-owning keeps the org-admin capability (the
+ * rotate-a-teammate's-org-key flow) while making the returned credential act as
+ * the person actually holding it. Billing is untouched: an org-billed key still
+ * bills the org, which is what `billingOwnerType`/`organizationId` govern.
+ *
+ * Callers should surface `previousOwnerUserId` so the original minter can be told
+ * their key changed hands.
  */
 export const rotateUserApiKey = async (
   userId: string,
@@ -55,10 +74,53 @@ export const rotateUserApiKey = async (
     throw new NotFoundError('API key not found');
   }
 
+  // No escalation by rotation. Rotation hands back a working plaintext credential, so
+  // an API-key caller may only rotate a key whose scopes it already holds - otherwise a
+  // deliberately narrow key could name its owner's admin:* key and be answered with one.
+  // A browser/JWT caller is unrestricted: they already hold the whole account.
+  //
+  // Containment is LITERAL and deliberately does not treat `admin:*` as a superset of
+  // other scopes (unlike hearthWire's grant check): rotation mints a credential, so a
+  // caller must prove it literally holds every scope on the target, not merely a wildcard
+  // that would expand to them. `callerScopes` present (even the empty array) means an
+  // API-key caller and enters the check; an empty array therefore DENIES every scoped key
+  // rather than being read as "unrestricted". Only an absent `callerScopes` (browser/JWT)
+  // skips it.
+  if (adapters.callerScopes) {
+    const callerScopes = adapters.callerScopes;
+    const escalating = (apiKey.scopes ?? []).filter(scope => !callerScopes.includes(scope));
+    if (escalating.length > 0) {
+      throw new ForbiddenError('Cannot rotate a key holding scopes the calling key does not have');
+    }
+  }
+
+  const previousOwnerUserId = apiKey.userId?.toString();
+  const reOwned = !!previousOwnerUserId && previousOwnerUserId !== userId;
+
+  // An embed key's userId is not just an owner label: the embed runtime resolves the
+  // bound agent's ownership, the owner's BYOK LLM keys, tool availability and KB access
+  // all from it (embedRoute.ts, embed/serve.ts). Re-owning it to the rotator either 403s
+  // the public widget ('Agent is not owned by the embed key') when the bound agent is the
+  // original owner's personal agent, or - when the agent is org-shared so the ownership
+  // check still passes - SILENTLY repoints the widget to the rotator's BYOK keys, tools
+  // and KB. An ownership check can't separate those cases: the BYOK/tool/KB surfaces
+  // resolve from userId unconditionally, so any change of owner corrupts them. Refuse
+  // every cross-owner re-own of an agent-bound embed key. The owner rotating their own
+  // key (not re-owned) is unaffected; a leaked teammate key is rotated by its owner, or
+  // the agent is rebound first.
+  if (reOwned && apiKey.agentId && (apiKey.scopes ?? []).includes(ApiKeyScope.EMBED_CHAT)) {
+    throw new ForbiddenError(
+      'Cannot rotate this embed key to a new owner: its bound agent drives the widget LLM keys, tools and knowledge base access, which are tied to the current owner. Have the owner rotate it, or rebind the agent first.'
+    );
+  }
+
   const { key, keyPrefix, keyHash } = generateNewApiKey();
 
   apiKey.keyHash = keyHash;
   apiKey.keyPrefix = keyPrefix;
+  if (reOwned) {
+    apiKey.userId = userId;
+  }
 
   await db.userApiKeys.update(apiKey);
 
@@ -67,5 +129,6 @@ export const rotateUserApiKey = async (
     name: apiKey.name,
     keyPrefix: apiKey.keyPrefix,
     key, // This is the only time the raw key is returned
+    ...(reOwned ? { previousOwnerUserId } : {}),
   };
 };

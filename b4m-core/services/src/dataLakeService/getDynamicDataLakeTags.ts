@@ -14,7 +14,12 @@ import { usableObjectIds } from '@bike4mind/db-core';
 import type { Logger } from '@bike4mind/observability';
 import { isDatalakeTagWellFormed } from './createDataLake';
 import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
-import { grantedLakeReachForTurn, resolveEnforceReadGrants, type LakeGrantReach } from './resolveLakeReadAccess';
+import {
+  grantedLakeReachForTurn,
+  resolveEnforceReadGrants,
+  supersededOwnLakeIdsForTurn,
+  type LakeGrantReach,
+} from './resolveLakeReadAccess';
 import { membershipOrgIdsForTurn } from './membershipOrgIdsForTurn';
 
 /**
@@ -29,7 +34,10 @@ import { membershipOrgIdsForTurn } from './membershipOrgIdsForTurn';
  */
 export interface DataLakeAccessContext {
   db: {
-    dataLakes?: Pick<IDataLakeRepository, 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById'>;
+    dataLakes?: Pick<
+      IDataLakeRepository,
+      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById' | 'findIdsCreatedBy'
+    >;
     /**
      * Resolves the caller's org membership set (owner + `users[]` ACL) internally from
      * `user.id` - required so an absent resolver can't silently drop every org lake (#1674).
@@ -54,7 +62,7 @@ export interface DataLakeAccessContext {
      * same helper resolved against the same setting, so retrieval remains a subset of browse (see
      * resolveRetrievalLakeScope's header) rather than growing an arm browse lacks.
      */
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal'>;
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
     /**
      * Reads the `EnforceLakeReadGrants` cutover flag. Named to match ToolContext/
      * ChatCompletionContext, which already carry it, so every chat and tool surface satisfies this
@@ -249,6 +257,12 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // Same reason as ownedDynamicIds: createdByUserId survives only on the raw documents, and
   // whole-lake queries (see ResolvedLakeAccess) cannot anchor a prefix arm without it.
   const creatorByDynamicId = new Map<string, string>();
+  // Lakes the caller created but no longer effectively owns. Used TWICE below and both uses are
+  // load-bearing: it narrows the repo's creator arm, and it narrows `ownedDynamicIds` so the
+  // in-memory restoration cannot put back a gated lake the narrowed query correctly withheld.
+  // DEGRADES OPEN (stays empty) when the grant read fails or no grant repo is wired, matching
+  // `supersededOwnLakeIdsFor` - the floor is then today's behavior, never worse.
+  let supersededOwnLakeIds = new Set<string>();
   if (context.db.dataLakes) {
     // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
     // legible error naming the missing adapter. Resolved only on this branch - a static-registry-
@@ -297,6 +311,36 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         context.logger?.warn('[dataLakes] access-grant lookup failed; resolving lakes without the grant arm', err);
         lakeViewComplete = false;
       }
+      // The other half of the same access model: `findActiveByUserTagsAndEntitlements`'s creator arm
+      // is bare provenance, and `createdByUserId` is immutable, so a creator transferred or departed
+      // off a lake keeps GROUNDING on it long after browse stopped listing it. Same
+      // `userId && dataLakeAccessGrants` guard as the reach - with no grant repo nothing can
+      // supersede anyone - but deliberately NOT the same try: a failure here widens the view rather
+      // than narrowing it, so it owes a different warning and must NOT set `lakeViewComplete`, which
+      // means "lakes may be MISSING" and is what consumers read to refuse an unreachability verdict.
+      //
+      // NOT gated on `includeReaders`: an owner-role grant is what moves ownership, and it is
+      // honored on both sides of the cutover (`grantedLakeReachFor` admits owner/curator
+      // unconditionally too). `isAdmin: false` is deliberate rather than a stub - this resolver has
+      // no admin bypass by design (see the header), so an admin's creator arm narrows like anyone's.
+      try {
+        supersededOwnLakeIds = new Set(
+          await supersededOwnLakeIdsForTurn(
+            context,
+            { userId, isAdmin: false },
+            context.db.dataLakes,
+            context.db.dataLakeAccessGrants
+          )
+        );
+      } catch (err) {
+        // Degrades OPEN: the creator arm stays at bare provenance, which is exactly today's
+        // behavior, never worse. Logged because it is the only trace - an unread failure here is
+        // indistinguishable from "this caller has been superseded on nothing".
+        context.logger?.warn(
+          '[dataLakes] ownership-supersession lookup failed; creator arm left at bare provenance',
+          err
+        );
+      }
     }
     // The repo silently drops an unusable dataLakeId from its `_id` arms instead of failing, so a
     // bad grant makes its lake vanish while the read reports success - the same partial view as the
@@ -318,7 +362,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         entitlementKeys,
         organizationIds,
         userId,
-        reach
+        { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
       );
       dynamicDataLakes = dbLakes.map(toDataLakeConfig);
       for (const dl of dbLakes) {
@@ -331,7 +375,13 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       // short-circuit, not the guard.
       if (userId) {
         for (const dl of dbLakes) {
-          if (String(dl.createdByUserId) === userId) ownedDynamicIds.add(dl.id);
+          // The supersession check is not redundant with the query's: this set drives the
+          // `ownedGatedLakes` restoration below, which deliberately RE-ADMITS a lake the pure
+          // tag/entitlement predicate dropped. Without it the query narrowing would be undone in
+          // memory for exactly the gated lakes that most need it.
+          if (String(dl.createdByUserId) === userId && !supersededOwnLakeIds.has(dl.id)) {
+            ownedDynamicIds.add(dl.id);
+          }
         }
       }
       // Intersected with what the query actually returned, so a stale grant naming a deleted or

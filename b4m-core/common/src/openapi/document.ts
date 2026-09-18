@@ -39,7 +39,11 @@ function servers() {
 function infoDescription(): string {
   return [
     'Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions ' +
-      'that validate requests at runtime, so this spec cannot drift from the implementation.',
+      'that validate requests at runtime, so this spec cannot drift from the implementation - with ' +
+      'one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes ' +
+      "a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained " +
+      'against that handler rather than runtime-validated, and can drift if the handler changes ' +
+      'without a matching schema update.',
     '',
     '## Authentication',
     'Send an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` ' +
@@ -124,9 +128,7 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
       source:
         `curl ${curlFlags} -X ${method.toUpperCase()} "${url}" \\\n` +
         `  -H "Authorization: Bearer ${authToken}"` +
-        (hasBody
-          ? ` \\\n  -H "Content-Type: application/json" \\\n  --data-binary @- <<'${d}'\n${pretty}\n${d}`
-          : ''),
+        (hasBody ? ` \\\n  -H "Content-Type: application/json" \\\n  --data-binary @- <<'${d}'\n${pretty}\n${d}` : ''),
     },
     {
       lang: 'JavaScript',
@@ -190,6 +192,19 @@ function operationMetadata() {
     // Statuses each contract declares ITSELF, as opposed to the 401/403 that
     // registerContract injects - the distinction rate-limit headers turn on below.
     declaredStatuses: new Map(contracts.map(c => [c.operationId, new Set(Object.keys(c.responses))])),
+    // Statuses whose contract declares a pollResult. The shape is a component
+    // registerContract already registered; this pass is what points the response at
+    // it, since the generator models no "the outcome arrives elsewhere" relation.
+    pollResultStatuses: new Map(
+      contracts.map(c => [
+        c.operationId,
+        new Set(
+          Object.entries(c.responses)
+            .filter(([, spec]) => spec.pollResult)
+            .map(([status]) => status)
+        ),
+      ])
+    ),
   };
 }
 
@@ -287,9 +302,17 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
 
       const emitsRateLimitHeaders = meta.rateLimitHeaderOps.has(opId);
       const declaredStatuses = meta.declaredStatuses.get(opId);
+      const pollResultStatuses = meta.pollResultStatuses.get(opId);
       for (const status of Object.keys(op.responses ?? {})) {
         const response = op.responses[status];
         response.headers = { ...REQUEST_ID_HEADER_SPEC, ...(response.headers ?? {}) };
+        // An extension rather than a second media type under `content`: this body
+        // belongs to the poll operation, and claiming this status can return it
+        // would make a generated client parse an ACK as the outcome. The prose
+        // lives on the component it points at.
+        if (pollResultStatuses?.has(status)) {
+          response['x-poll-result'] = { schema: { $ref: `#/components/schemas/${opId}${status}PollResult` } };
+        }
         if (emitsRateLimitHeaders && !isInjectedAuthFailure(status, declaredStatuses)) {
           response.headers = { ...response.headers, ...RATE_LIMIT_HEADER_SPEC };
         }
