@@ -22,12 +22,14 @@ export class CustomCommandStore {
   private commands: Map<string, CustomCommand> = new Map();
   private globalCommandsDirs: string[];
   private projectCommandsDirs: string[];
+  private projectRoot: string;
   private remoteSource?: RemoteSkillSource;
 
   constructor(projectRoot?: string, options: CustomCommandStoreOptions = {}) {
     this.remoteSource = options.remoteSource;
     const home = os.homedir();
     const root = projectRoot || process.cwd();
+    this.projectRoot = root;
 
     // Global commands directories (loaded first, later directories override earlier)
     // Supports Bike4Mind commands, Claude Code commands, and Claude Code skills
@@ -138,7 +140,13 @@ export class CustomCommandStore {
         return;
       }
 
-      const commandFiles = await findMarkdownFiles(directory);
+      // Project dirs live inside the (untrusted) clone: refuse a symlink whose
+      // target escapes the project root. Global dirs stay unconstrained.
+      const commandFiles = await findMarkdownFiles(
+        directory,
+        undefined,
+        source === 'project' ? this.projectRoot : undefined
+      );
 
       for (const filePath of commandFiles) {
         try {

@@ -14,8 +14,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import matter from 'gray-matter';
 import { findMarkdownFiles } from '../utils/findMarkdownFiles.js';
+import { parseFrontmatter } from '../utils/parseFrontmatter.js';
 import { ChatModels } from '@bike4mind/common';
 import type { AgentDefinition, AgentSource, AgentHooks } from './types.js';
 import {
@@ -237,6 +237,7 @@ export class AgentStore {
   private globalClaudeAgentsDir: string;
   private projectB4MAgentsDir: string;
   private projectClaudeAgentsDir: string;
+  private projectRoot: string;
 
   /**
    * Creates a new AgentStore
@@ -246,6 +247,7 @@ export class AgentStore {
    */
   constructor(builtinDir: string, projectRoot?: string) {
     const root = projectRoot || process.cwd();
+    this.projectRoot = root;
     const home = os.homedir();
 
     // Built-in agents shipped with CLI
@@ -290,7 +292,9 @@ export class AgentStore {
         return;
       }
 
-      const files = await findMarkdownFiles(directory);
+      // Project agent dirs live inside the (untrusted) clone: refuse a symlink
+      // whose target escapes the project root. Global/builtin dirs stay unconstrained.
+      const files = await findMarkdownFiles(directory, undefined, source === 'project' ? this.projectRoot : undefined);
 
       for (const filePath of files) {
         try {
@@ -316,7 +320,7 @@ export class AgentStore {
    */
   private async parseAgentFile(filePath: string, source: AgentSource): Promise<AgentDefinition> {
     const content = await fs.readFile(filePath, 'utf-8');
-    const { data: frontmatter, content: body } = matter(content);
+    const { data: frontmatter, content: body } = parseFrontmatter(content);
 
     const parsed = AgentFrontmatterSchema.parse(frontmatter);
 

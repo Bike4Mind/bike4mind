@@ -43,12 +43,30 @@ async function classifyEntry(fullPath: string, entry: DirentLike): Promise<Entry
  * walk that only accepts real files finds zero global skills on those machines.
  *
  * Directories are deduped by realpath so a cyclic link cannot spin forever.
+ *
+ * `containmentRoot` scopes symlink following to a trust domain: when set, any
+ * entry (file OR directory) whose realpath escapes the root is refused, so a
+ * hostile clone cannot point a project SKILL.md/command/agent at a file outside
+ * the checkout. Global dirs omit it - that is where dotfile managers legitimately
+ * symlink into an out-of-tree immutable store.
  */
 export async function findMarkdownFiles(
   directory: string,
-  visitedRealPaths: Set<string> = new Set()
+  visitedRealPaths: Set<string> = new Set(),
+  containmentRoot?: string
 ): Promise<string[]> {
   const files: string[] = [];
+
+  // Resolve the containment boundary once; realpath is idempotent so threading
+  // the resolved value through recursion keeps every level checking the same root.
+  let realRoot: string | undefined;
+  if (containmentRoot !== undefined) {
+    try {
+      realRoot = await fs.realpath(containmentRoot);
+    } catch {
+      return files; // Containment requested but root is unresolvable - refuse all.
+    }
+  }
 
   try {
     const realDirectory = await fs.realpath(directory);
@@ -71,9 +89,23 @@ export async function findMarkdownFiles(
   for (const entry of entries) {
     const fullPath = path.join(directory, entry.name);
     const kind = await classifyEntry(fullPath, entry);
+    if (kind === 'other') continue;
+
+    if (realRoot !== undefined) {
+      let realEntry: string;
+      try {
+        realEntry = await fs.realpath(fullPath);
+      } catch {
+        continue; // Unresolvable target - skip.
+      }
+      if (realEntry !== realRoot && !realEntry.startsWith(realRoot + path.sep)) {
+        console.warn(`Skipping ${fullPath}: symlink target escapes ${realRoot}`);
+        continue;
+      }
+    }
 
     if (kind === 'directory') {
-      files.push(...(await findMarkdownFiles(fullPath, visitedRealPaths)));
+      files.push(...(await findMarkdownFiles(fullPath, visitedRealPaths, realRoot)));
     } else if (kind === 'file' && entry.name.endsWith('.md')) {
       files.push(fullPath);
     }
