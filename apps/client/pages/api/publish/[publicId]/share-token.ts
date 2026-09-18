@@ -12,6 +12,9 @@ const shareTokenBodySchema = z.object({
  * Owner-only management of a published artifact's no-sign-in share token (the
  * capability behind `/a/<shareToken>`).
  *
+ *   GET    - report whether a link is live, WITHOUT minting one, so the owner-facing
+ *          surface can offer Revoke on a cold page load. Returns the token
+ *          itself: the caller is the owner, who may already hold it.
  *   POST   { regenerate?: boolean } - mint the token if absent (idempotent);
  *          `regenerate: true` rotates it, which instantly revokes every
  *          outstanding `/a` link WITHOUT touching the artifact or its `/p/*` URL.
@@ -25,6 +28,7 @@ interface ShareTokenArtifactLean {
   publicId: string;
   ownerId: string;
   shareToken?: string;
+  shareTokenUpdatedAt?: Date | null;
 }
 
 async function loadOwnedArtifact(req: Request, res: Response): Promise<ShareTokenArtifactLean | null> {
@@ -50,6 +54,25 @@ async function loadOwnedArtifact(req: Request, res: Response): Promise<ShareToke
 }
 
 const handler = baseApi()
+  .get(async (req: Request, res: Response) => {
+    // The body carries the capability token itself, so it must never sit in a shared
+    // cache. Set before the gate so the 400/401/403/404 bodies are covered too (same
+    // placement and reason as annotations/[publicId]/can-comment.ts).
+    res.setHeader('Cache-Control', 'private, no-store');
+
+    const artifact = await loadOwnedArtifact(req, res);
+    if (!artifact) return;
+
+    // Read-only: never mints. `hasShareToken` is what drives the owner's controls, so a
+    // surface can render Copy/Regenerate/Revoke on first paint instead of having to POST
+    // (which would mint a link merely by looking).
+    return res.status(200).json({
+      hasShareToken: Boolean(artifact.shareToken),
+      shareToken: artifact.shareToken ?? null,
+      shareUrl: artifact.shareToken ? `/a/${artifact.shareToken}` : null,
+      shareTokenUpdatedAt: artifact.shareTokenUpdatedAt ?? null,
+    });
+  })
   .post(async (req: Request, res: Response) => {
     const artifact = await loadOwnedArtifact(req, res);
     if (!artifact) return;
