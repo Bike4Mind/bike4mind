@@ -212,12 +212,19 @@ const processNotebookImport = async (
         userRepository: {
           findById: async (id: string) => User.findById(id).session(session),
         },
+        // Read once per import, for the MaxFileSize gate on knowledge files. No `ctx` for the same
+        // reason as createSessionWrites above: transactionAsyncLocalStorage carries the session in
+        // on its own, so a cache miss here runs inside the import transaction. Safe as it stands -
+        // this is a read of a collection the import never writes, and it is near-always served from
+        // the process-wide settings cache - but a `skipCache` read or any settings WRITE added here
+        // would be joining the transaction, not standing outside it.
+        adminSettings: adminSettingsRepository,
         fileStorageService: {
           getFileContent: async (path: string) => {
             try {
               // This adapter has no live caller today (copyFileFromUrl(), the only call
-              // site that would need it, is an unimplemented stub that just returns the
-              // source URL unchanged), but it reads raw bytes from a storage path with no
+              // site that would need it, is an unimplemented stub that throws), but it
+              // reads raw bytes from a storage path with no
               // moderation check. Gate defensively so a future implementation of
               // copyFileFromUrl() can't leak a held/blocked uploaded image's bytes. No
               // FabFile match (e.g. a non-fabfile asset) falls through unaffected.

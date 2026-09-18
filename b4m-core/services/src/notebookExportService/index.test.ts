@@ -662,6 +662,7 @@ describe('notebook export - knowledge file bytes', () => {
       toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
       agentRepository: { create: vi.fn() },
       userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-2' }) },
+      adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
       fileStorageService: {
         uploadFile: vi.fn(async (_path: string, content: Buffer) => {
           uploads.push(content);

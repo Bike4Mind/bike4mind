@@ -202,6 +202,7 @@ describe('notebook round trip: artifacts', () => {
       toolRepository: { create: async () => null, find: async () => [], findById: async () => null },
       agentRepository: { create: async () => null },
       userRepository: { findById: async () => ({ id: USER }) },
+      adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
       fileStorageService: {
         getFileContent: async () => null,
         uploadFile: async () => {},

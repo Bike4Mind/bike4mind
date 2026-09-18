@@ -10,6 +10,7 @@ import {
   KnowledgeType,
   SupportedFabFileMimeTypes,
   isStorableFabFileMimeType,
+  settingsMap,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -120,12 +121,17 @@ export interface CreateFabFileAdapters {
   mimeTypePrecedence?: 'extension-first' | 'claim-first';
 }
 
-// Only reached when the `MaxFileSize` settings row exists but fails the schema (a non-numeric
-// stored value, or a cleared field - stored as '', which coerces to 0 and fails the schema's
-// `min: 1`) - a missing row never gets here, since the schema's own `.prefault(30)` already
-// resolves `getSettingsValue` to 30 before this default arg is consulted. Matches that prefault
-// value so the two cases can't diverge if the schema changes.
-const DEFAULT_MAX_FILE_SIZE = 30;
+/**
+ * MB. Only reached when the `MaxFileSize` settings row exists but fails the schema (a non-numeric
+ * stored value, or a cleared field - stored as '', which coerces to 0 and fails the schema's
+ * `min: 1`) - a missing row never gets here, since the schema's own prefault already resolves
+ * `getSettingsValue` before this default arg is consulted. Read from the setting rather than
+ * re-spelled so the two cases cannot diverge; the literal is only the never-taken arm of
+ * makeNumberSetting's optional `defaultValue`, and an undefined here would make a door's byte
+ * limit NaN, which admits every file. Shared with the notebook-import door, which gates on the
+ * same setting.
+ */
+export const MAX_FILE_SIZE_DEFAULT_MB = settingsMap.MaxFileSize.defaultValue ?? 30;
 const DEFAULT_EXPIRE_IN_SECONDS = 3600 * 24 * 5; // 5 days
 
 /**
@@ -185,7 +191,7 @@ export const createFabFile = async (
   let filePath = params.prefix ? `${params.prefix}/` : '';
   filePath += `${uuidv4()}${ext ? `.${ext}` : '.txt'}`; // Ensure file has an extension for storage
 
-  const maxFileSize = getSettingsValue('MaxFileSize', await getSettingsMap(db), DEFAULT_MAX_FILE_SIZE) * 1024 * 1024;
+  const maxFileSize = getSettingsValue('MaxFileSize', await getSettingsMap(db), MAX_FILE_SIZE_DEFAULT_MB) * 1024 * 1024;
 
   if (params.fileSize >= maxFileSize) throw new BadRequestError('File size exceeds maximum file size');
 
