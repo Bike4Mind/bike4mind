@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import type { ApiClient } from '../auth/ApiClient.js';
 import type { CustomCommand } from './types.js';
+import { isBuiltInCommand } from '../config/commands.js';
 
 /**
  * Fetches skills authored on B4M web (`/api/skills`) and adapts them to the
@@ -24,6 +25,9 @@ interface RemoteSkillDocument {
   argumentHint?: string;
   allowedTools?: string[];
   disableModelInvocation?: boolean;
+  /** Owning user. A foreign value means the skill is only visible via
+   *  `isGlobalRead` (cross-account) and must not be registered locally. */
+  userId?: string;
 }
 
 interface RemoteSkillListResponse {
@@ -74,7 +78,7 @@ export class RemoteSkillSource {
   async fetchSkills(): Promise<CustomCommand[]> {
     const cached = await this.readCache();
     if (cached && this.isFresh(cached)) {
-      return cached.skills.map(skill => this.toCustomCommand(skill));
+      return this.mapAndFilter(cached.skills);
     }
 
     try {
@@ -89,7 +93,7 @@ export class RemoteSkillSource {
       if (shouldWrite) {
         await this.writeCache({ fetchedAt: new Date().toISOString(), skills });
       }
-      return skills.map(skill => this.toCustomCommand(skill));
+      return this.mapAndFilter(skills);
     } catch (error) {
       // Network / auth failure - degrade gracefully to the cache if we have one.
       // The CLI is expected to keep working offline; surface the error in debug
@@ -101,10 +105,28 @@ export class RemoteSkillSource {
         );
       }
       if (cached) {
-        return cached.skills.map(skill => this.toCustomCommand(skill));
+        return this.mapAndFilter(cached.skills);
       }
       return [];
     }
+  }
+
+  /**
+   * Map server skills to `CustomCommand`, dropping any that must not register:
+   * - a name that shadows a built-in slash command, and
+   * - a foreign-owned skill (a `userId` other than the current user's), which is
+   *   only visible cross-account via `isGlobalRead`.
+   * Own, system (no `userId`), and org-scoped (server-gated, no `userId`) skills pass.
+   */
+  private async mapAndFilter(skills: RemoteSkillDocument[]): Promise<CustomCommand[]> {
+    const currentUserId = (await this.apiClient.getCurrentUser?.())?.id;
+    return skills
+      .filter(skill => {
+        if (isBuiltInCommand(skill.name)) return false;
+        if (skill.userId && skill.userId !== currentUserId) return false;
+        return true;
+      })
+      .map(skill => this.toCustomCommand(skill));
   }
 
   /** For tests and the `/commands:reload` handler - clears the on-disk cache. */

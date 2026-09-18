@@ -74,4 +74,39 @@ describe('findMarkdownFiles', () => {
 
     expect(found).toEqual([]);
   });
+
+  // A hostile clone's project skills/commands/agents dir must not follow a
+  // symlink out of the checkout; global dirs (no containment root) still may.
+  describe('containmentRoot', () => {
+    it('skips a symlink whose target escapes the containment root', async () => {
+      const target = path.join(store, 'evil.md'); // outside `root`
+      await fs.writeFile(target, '# evil');
+      await fs.writeFile(path.join(root, 'ok.md'), '# ok');
+      await fs.symlink(target, path.join(root, 'escape.md'));
+
+      const found = await findMarkdownFiles(root, new Set(), root);
+
+      expect(found).toEqual([path.join(root, 'ok.md')]);
+    });
+
+    it('follows a symlink whose target stays inside the containment root', async () => {
+      await fs.mkdir(path.join(root, 'sub'));
+      await fs.writeFile(path.join(root, 'sub', 'real.md'), '# real');
+      await fs.symlink(path.join(root, 'sub', 'real.md'), path.join(root, 'link.md'));
+
+      const found = await findMarkdownFiles(root, new Set(), root);
+
+      expect(found.sort()).toEqual([path.join(root, 'link.md'), path.join(root, 'sub', 'real.md')].sort());
+    });
+
+    it('still follows an out-of-tree symlink when no containment root is set', async () => {
+      const target = path.join(store, 'SKILL.md');
+      await fs.writeFile(target, '# skill');
+      await fs.symlink(target, path.join(root, 'SKILL.md'));
+
+      const found = await findMarkdownFiles(root); // global behavior - unconstrained
+
+      expect(found).toEqual([path.join(root, 'SKILL.md')]);
+    });
+  });
 });
