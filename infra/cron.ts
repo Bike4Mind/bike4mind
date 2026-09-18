@@ -1,6 +1,6 @@
 import { execSync } from 'child_process';
-import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
+import { computeHelpCorpusHash } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { emailJobQueue } from './emailMarketing';
 import { allSecrets } from './secrets';
@@ -833,19 +833,12 @@ const driveLakeResyncPollCron = new sst.aws.Cron('driveLakeResyncPoll', {
 execSync('pnpm --filter @bike4mind/scripts help:build-index', { stdio: 'inherit' });
 
 // Hashes the index's BYTES, not a git blob: it is no longer tracked, so `git ls-tree` cannot see
-// it. Both halves are needed - docs-site covers the article bodies the mirror ingests, which the
-// index does not carry, and the index covers a generator change that alters its shape.
-//
-// Hashed in Node rather than by piping to md5sum, which the old one-liner did. A shell pipeline
-// ending in `awk` reports its LAST command's status, so an absent md5sum (not a macOS default)
-// silently yielded an empty hash - pinning HELP_CORPUS_VERSION to a constant, which is precisely
-// the stale-corpus loop the block above exists to prevent - and an absent index silently hashed
-// the docs alone. Both now throw.
-const HELP_CORPUS_HASH = createHash('md5')
-  .update(execSync('git ls-tree -r HEAD docs-site/docs').toString())
-  .update(readFileSync('apps/client/app/generated/help-index.json'))
-  .digest('hex')
-  .slice(0, 8);
+// it. The computation lives in @bike4mind/infra because nothing imports this file, so that is the
+// only place its failure modes can be tested - see helpCorpusHash.ts for which ones and why.
+const HELP_CORPUS_HASH = computeHelpCorpusHash({
+  readDocsTree: () => execSync('git ls-tree -r HEAD docs-site/docs').toString(),
+  readIndex: () => readFileSync('apps/client/app/generated/help-index.json'),
+});
 
 const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
   schedule: 'rate(6 hours)',
