@@ -1,4 +1,4 @@
-import { ImageModels } from '@bike4mind/common';
+import { GPTImage1Size, IMAGE_SIZE_CONSTRAINTS, ImageModels } from '@bike4mind/common';
 import { CostCalculator } from './types';
 
 export type OpenAIModel =
@@ -14,13 +14,15 @@ export interface BaseOpenAIInput {
 export interface OpenAIGPTImageInput extends BaseOpenAIInput {
   model: OpenAIModel;
   quality?: 'standard' | 'hd' | 'low' | 'medium' | 'high' | 'auto';
-  size?: '1024x1024' | '1024x1536' | '1536x1024' | (string & {}) | null;
+  size?: GPTImage1Size | (string & {}) | null;
 }
 
 export type OpenAICostInput = OpenAIGPTImageInput;
 
 type Tier = 'low' | 'medium' | 'high';
-type KnownSize = '1024x1024' | '1024x1536' | '1536x1024';
+// The priced sizes are exactly the gpt-image-1 tier's. Widening that list breaks the
+// PriceKey-keyed tables below until a price is supplied for each new size, which is the point.
+type KnownSize = GPTImage1Size;
 type PriceKey = `${Tier}_${KnownSize}`;
 
 const DEFAULT_TIER: Tier = 'medium';
@@ -30,9 +32,9 @@ const DEFAULT_TIER: Tier = 'medium';
 // (the credit hold is set once, before the call, and never reconciled); over-billing an
 // 'auto' request the user opted into is the survivable side of that trade.
 const AUTO_TIER: Tier = 'high';
-const DEFAULT_SIZE: KnownSize = '1024x1024';
+const DEFAULT_SIZE: KnownSize = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.defaultSize;
 
-const KNOWN_SIZES: readonly KnownSize[] = ['1024x1024', '1024x1536', '1536x1024'] as const;
+const KNOWN_SIZES: readonly KnownSize[] = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
 
 const GPT_IMAGE_1_PRICES: Record<PriceKey, number> = {
   low_1024x1024: 0.011,

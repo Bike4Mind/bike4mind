@@ -83,6 +83,7 @@ export * from './utils/internalStaffDomains';
 export * from './utils/countCodePoints';
 export * from './utils/forcedRetrievalFloors';
 export * from './utils/modelHelpers';
+export * from './utils/imageSizes';
 export * from './utils/activity';
 export * from './utils/sseEvents';
 export * from './utils/streamVisibility';
