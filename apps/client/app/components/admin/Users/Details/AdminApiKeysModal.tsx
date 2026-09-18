@@ -65,10 +65,10 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
     return STATUS_CHIP[key.status] ?? { color: 'neutral' as const, label: key.status };
   };
 
-  // Names which counter(s) actually caused the lockout, per #2974 - a bare
-  // "reset succeeded" leaves an admin unable to tell request vs. management.
-  // An entry is undefined when its usage read failed (best-effort diagnostic);
-  // silently treated the same as "not at its ceiling".
+  // Names which counter(s) actually caused the lockout - a bare "reset
+  // succeeded" leaves an admin unable to tell request vs. management. An
+  // entry is undefined when clearing that counter itself failed
+  // (best-effort); silently treated the same as "not at its ceiling".
   const describeLockoutCause = (lockout: ApiKeyRateLimitResetResponse['lockout']): string => {
     const causes: string[] = [];
     if (lockout.request?.minuteAtLimit || lockout.request?.dayAtLimit) causes.push('request');
@@ -87,8 +87,10 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
       onOk: () => {
         setResettingKeyId(key.id);
         resetMutation.mutate(key.id, {
+          // `?? {}` guards a stale bundled client against a server response
+          // shape that predates the `lockout` field.
           onSuccess: response =>
-            toast.success(`Rate limit reset for "${key.name}"${describeLockoutCause(response.lockout)}`),
+            toast.success(`Rate limit reset for "${key.name}"${describeLockoutCause(response.lockout ?? {})}`),
           // Clear only our own row: a later reset on another row may already
           // own the spinner when this settle lands.
           onSettled: () => setResettingKeyId(prev => (prev === key.id ? null : prev)),
