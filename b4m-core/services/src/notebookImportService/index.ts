@@ -57,6 +57,12 @@ export interface NotebookImportAdapters {
      */
     create: (data: Record<string, unknown> & { id?: never }) => Promise<NotebookRef>;
     find: (query: { userId: string; name: string }) => Promise<NotebookRef[]>;
+    /**
+     * `null` CLEARS the stored field; `undefined` leaves it untouched. The distinction is not
+     * stylistic: `BaseRepository.update` issues `$set`, and mongoose deletes every `undefined`
+     * value from that payload - so an explicit `null` is the only way this port can express
+     * "clear it". Every field the overwrite branch writes relies on this.
+     */
     updateById: (id: string, data: Record<string, unknown>) => Promise<unknown>;
   };
   /** Typed because the caller's implementation of these two carries the insert-never-upsert rule. */
@@ -357,6 +363,9 @@ export class NotebookImportService {
       summary: notebook.summary,
       summaryAt: notebook.summaryAt ? new Date(notebook.summaryAt) : undefined,
       tags: notebook.tags || [],
+      // `undefined` here and not `null`: on an insert there is nothing to clear, and a `null` would
+      // claim a stamp state a never-tagged notebook never had.
+      taggedAt: notebook.taggedAt ? new Date(notebook.taggedAt) : undefined,
       isAutoNamed: notebook.isAutoNamed,
       lastUsedModel: notebook.lastUsedModel,
       ...attachmentIds,
@@ -436,13 +445,23 @@ export class NotebookImportService {
         await this.adapters.chatHistoryRepository.deleteMany({ sessionId: existingSession.id });
         await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
 
-        // Update session metadata
+        // Update session metadata. The file owns this notebook's metadata, so a value it does not
+        // carry is written as an explicit `null` rather than left out - mongoose deletes every
+        // `undefined` from the `$set`, so an omitted field silently keeps the target's old value.
+        //
+        // The stamped pair is what makes that load-bearing: `spider.ts` re-tags only when
+        // `!session.taggedAt`, so writing `tags: []` while leaving the target's `taggedAt` behind
+        // strands the notebook - tagless, and never tagged again.
         await this.adapters.sessionRepository.updateById(existingSession.id, {
           lastUpdated: new Date(notebook.lastUpdated),
-          summary: notebook.summary,
-          summaryAt: notebook.summaryAt ? new Date(notebook.summaryAt) : undefined,
-          tags: notebook.tags,
-          lastUsedModel: notebook.lastUsedModel,
+          summary: notebook.summary ?? null,
+          summaryAt: notebook.summaryAt ? new Date(notebook.summaryAt) : null,
+          tags: notebook.tags || [],
+          taggedAt: notebook.taggedAt ? new Date(notebook.taggedAt) : null,
+          // Not `?? null` like the pairs above: no gate keys off this field, so clearing a target's
+          // last-used model because an older file omits it loses information for no gain. Omitting
+          // the key means "leave it", which is what the dropped-`undefined` behaviour did anyway.
+          ...(notebook.lastUsedModel !== undefined && { lastUsedModel: notebook.lastUsedModel }),
         });
 
         return existingSession.id;

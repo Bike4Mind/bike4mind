@@ -68,6 +68,7 @@ type SessionRow = Pick<
   | 'summary'
   | 'summaryAt'
   | 'tags'
+  | 'taggedAt'
   | 'isAutoNamed'
   | 'lastUsedModel'
   | 'knowledgeIds'
@@ -307,6 +308,10 @@ export class NotebookExportService {
       summary: session.summary,
       summaryAt: session.summaryAt ? new Date(session.summaryAt).toISOString() : undefined,
       tags: session.tags || [],
+      // Emitted beside `tags` for the same reason `summaryAt` sits beside `summary`: the stamp and
+      // the value it belongs to have to travel together, or an import cannot tell a tagged file
+      // from an untagged one and leaves the target's stale stamp in place.
+      taggedAt: session.taggedAt ? new Date(session.taggedAt).toISOString() : undefined,
       isAutoNamed: session.isAutoNamed || false,
       lastUsedModel: session.lastUsedModel ?? undefined,
       chatHistory,
