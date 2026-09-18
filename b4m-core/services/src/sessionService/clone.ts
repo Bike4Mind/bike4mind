@@ -53,9 +53,10 @@ export const cloneSession = async (
   const buildCloneSession = {
     name: `Cloned ${session.name}`,
     knowledgeIds: session.knowledgeIds,
-    tags: session.tags ? session.tags : [],
+    tags: session.tags ?? [],
     summary: session.summary,
     summaryAt: session.summaryAt,
+    taggedAt: session.taggedAt,
     clonedSourceId: session.id,
     // Carried from the source, not re-derived: the owner's scope is already correct and explicit,
     // and re-deriving here would go through the OWNERSHIP arm alone (no resolveLakeAccess is threaded
@@ -91,9 +92,6 @@ export const cloneSession = async (
         }
       : {}),
   };
-  if (session.summary) buildCloneSession.summary = session.summary;
-  if (session.summaryAt) buildCloneSession.summaryAt = session.summaryAt;
-
   // Forward the WHOLE adapters object, not just `db`: `resolveLakeAccess` and `logger` live on
   // CreateSessionAdapters and clone previously dropped them here, so a non-owner's derivation ran
   // with no lake arm and - crucially - no intersection, persisting a tag for a lake they may not
