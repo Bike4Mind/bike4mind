@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels } from '@bike4mind/common';
 import { resolveImageArgs, type ImageToolArgs } from './resolveImageArgs';
+import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
 describe('resolveImageArgs', () => {
   it('lets each tool-call arg win over the client imageConfig value', () => {
@@ -48,5 +49,32 @@ describe('resolveImageArgs', () => {
 
   it('defaults to the current GPT-image model when no config is supplied', () => {
     expect(resolveImageArgs(undefined, {}).model).toBe(ImageModels.GPT_IMAGE_2);
+  });
+
+  // The tool schema only offers priceable sizes, but an enum is advisory - a model that
+  // invents '1792x1024' would render at that size and bill at the 1024x1024 price row.
+  describe('model-supplied size', () => {
+    it.each(PRICEABLE_IMAGE_SIZES)('lets a priceable %s win over the client imageConfig', size => {
+      expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_2, size: '1024x1024' }, { size }).size).toBe(size);
+    });
+
+    it.each(['1792x1024', '1024x1792', '256x256', '512x512', 'auto', 'not-a-size'])(
+      'discards unpriceable %s in favor of the client imageConfig',
+      size => {
+        expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_2, size: '1536x1024' }, { size }).size).toBe(
+          '1536x1024'
+        );
+      }
+    );
+
+    it('leaves size undefined when it is unpriceable and the client supplied none', () => {
+      expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_2 }, { size: '1792x1024' }).size).toBeUndefined();
+    });
+
+    // The panel is authoritative for its own exotic presets: gpt-image-2 renders them and the
+    // calculator estimates at 1024x1024, which is the pre-existing (documented) behavior.
+    it('still honors a client imageConfig size outside the priceable set', () => {
+      expect(resolveImageArgs({ model: ImageModels.GPT_IMAGE_2, size: '2048x2048' }, {}).size).toBe('2048x2048');
+    });
   });
 });
