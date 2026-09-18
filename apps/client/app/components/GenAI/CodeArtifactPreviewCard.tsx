@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip, Divider } from '@mui/joy';
 import {
   OpenInFullOutlined as ExpandIcon,
   ContentCopyOutlined as CopyIcon,
@@ -12,6 +12,7 @@ import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { toast } from 'sonner';
@@ -38,7 +39,23 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { setWorkBenchFiles } = useWorkBenchActions();
 
-  const [isExpanded, setIsExpanded] = useState(false);
+  // The card's body is shown by default - a collapsed card used to render a 3-line,
+  // 120-character sliver that identified nothing. Bounding is the truncation's job now.
+  const [isExpanded, setIsExpanded] = useState(true);
+  // Separate from `isExpanded`: the chevron folds the whole card to its header, this
+  // reveals the rest of a truncated body in place.
+  const [showFullBody, setShowFullBody] = useState(false);
+
+  // Same contract as the reply-level Show More (useContentTruncation): cut on a line
+  // boundary at the user's own `maxVisibleLines`, and honour their auto-collapse switch
+  // rather than inventing a second, private rule for artifacts.
+  const { settings } = useUserSettings();
+  const codeLines = useMemo(() => data.code.split('\n'), [data.code]);
+  const needsTruncation = settings.autoCollapseContent && codeLines.length > settings.maxVisibleLines;
+  const visibleCode = useMemo(
+    () => (needsTruncation && !showFullBody ? codeLines.slice(0, settings.maxVisibleLines).join('\n') : data.code),
+    [needsTruncation, showFullBody, codeLines, settings.maxVisibleLines, data.code]
+  );
 
   // Lazy loading for large code blocks to prevent UI freeze
   const isLargeCodeBlock = data.lineCount > 300 || data.code.length > 30000;
@@ -133,15 +150,20 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
     <Card
       className="code-artifact-preview-card"
       variant="outlined"
-      sx={{
+      sx={theme => ({
         // Matches ArtifactPreviewCard: the sidebar/header surface, not Joy's undefined
         // background.level1 default.
         backgroundColor: 'background.surface2',
+        // The same veil ArtifactPreviewCard and a fenced code block carry, so a code
+        // card sits in the same family as every other artifact rather than reading as
+        // a flat panel. backgroundImage, not a background shorthand, so the fill above
+        // still resolves per color scheme.
+        backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
         borderRadius: '8px',
         position: 'relative',
         overflow: 'visible',
         borderWidth: 1,
-        borderColor: isSelected ? 'primary.500' : 'neutral.outlinedBorder',
+        borderColor: isSelected ? 'primary.500' : theme.palette.reading.cardLine,
         transition: 'all 0.2s ease-in-out',
         cursor: 'pointer',
         '&:hover': {
@@ -149,7 +171,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
           boxShadow: 'sm',
           cursor: 'pointer',
         },
-      }}
+      })}
       onClick={handleToggleExpand}
     >
       {/* Type badge: the language in a pill overhanging the card corner. Matches
@@ -178,8 +200,10 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       {/* Main Content */}
       {/* No padding here: the Card already provides it. */}
       <Box className="code-artifact-content">
-        {/* Title leads the row so the stats line below aligns flush with it; the chevron
-            follows immediately. Matches ArtifactPreviewCard - keep the two in sync. */}
+        {/* Title leads the row so the stats line below aligns flush with it; every control
+            sits at the trailing edge, with the fold chevron last behind a rule - it acts on
+            the whole card, the others act on its content. Matches ArtifactPreviewCard -
+            keep the two in sync. */}
         <Stack className="code-artifact-header" direction="row" spacing={1} alignItems="center">
           <Stack direction="row" alignItems="center" sx={{ minWidth: 0, gap: '4px' }}>
             <Typography
@@ -197,32 +221,6 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             >
               {data.title}
             </Typography>
-
-            <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                // Joy icons read --Icon-fontSize / --Icon-color; plain `fontSize`/`color`
-                // on the button is outranked by the theme's own icon styles.
-                sx={theme => ({
-                  flexShrink: 0,
-                  marginLeft: 0,
-                  // Joy sizes IconButton from --IconButton-size; `width`/`height` alone
-                  // lose to its minWidth/minHeight defaults.
-                  '--IconButton-size': '24px',
-                  minWidth: '24px',
-                  minHeight: '24px',
-                  '--Icon-fontSize': '16px',
-                  '--Icon-color': theme.vars.palette.text.tertiary,
-                  '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
-                })}
-                onClick={handleToggleExpand}
-                data-testid="code-artifact-toggle-btn"
-              >
-                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-              </IconButton>
-            </Tooltip>
           </Stack>
 
           <Box sx={{ flex: 1 }} />
@@ -257,10 +255,33 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
               <ExpandIcon />
             </IconButton>
           </Tooltip>
+
+          <Divider orientation="vertical" sx={{ height: '16px', alignSelf: 'center', mx: '2px' }} />
+
+          <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              sx={actionButtonSx}
+              onClick={handleToggleExpand}
+              data-testid="code-artifact-toggle-btn"
+            >
+              {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+            </IconButton>
+          </Tooltip>
         </Stack>
 
-        {/* Loading skeleton for large code blocks */}
-        {!isContentReady ? (
+        {/* Stays outside the fold: with no body showing, the line count is part of what
+            identifies a collapsed card. */}
+        <Typography className="code-artifact-stats" level="body-xs" sx={{ color: 'text.tertiary' }}>
+          {data.lineCount} lines of code
+        </Typography>
+
+        {/* The chevron folds everything below the header away - a collapsed card is its
+            header alone (type pill, title, line count), which identifies the artifact
+            better than the sliver of body it used to show. */}
+        {!isExpanded ? null : !isContentReady ? (
           <Box sx={{ mt: 2 }}>
             <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
               Loading large code block ({data.lineCount} lines)...
@@ -281,25 +302,15 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
           </Box>
         ) : (
           <>
-            {/* Code Stats */}
-            <Typography
-              className="code-artifact-stats"
-              level="body-xs"
-              sx={{
-                color: 'text.tertiary',
-              }}
-            >
-              {data.lineCount} lines of code
-            </Typography>
-
-            {/* Code Preview (expandable) */}
+            {/* Code body. No inner scroller: a second scrolling surface inside the
+                transcript traps the wheel as the pointer crosses it, and a fixed 400px
+                window made every card claim the same height whatever it held. The page
+                is the only scroller; length is bounded by truncation instead. */}
             <Box
               sx={{
                 mt: 2,
                 borderRadius: 'sm',
-                overflow: 'auto',
-                maxHeight: isExpanded ? '400px' : '60px',
-                transition: 'max-height 0.3s ease',
+                position: 'relative',
                 '& pre': { margin: '0 !important', borderRadius: '4px' },
               }}
             >
@@ -309,13 +320,50 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
                 customStyle={{ margin: 0, fontSize: '14px', lineHeight: 1.4, padding: '8px' }}
                 wrapLongLines
               >
-                {isExpanded
-                  ? data.code
-                  : `${data.code.split('\n').slice(0, 3).join('\n').substring(0, 120)}${
-                      data.code.length > 120 ? '...' : ''
-                    }`}
+                {visibleCode}
               </SyntaxHighlighter>
+              {/* Fade over the last rows, so the cut reads as "continues" rather than
+                  as the end of the file. Non-interactive so it can't eat a text selection. */}
+              {needsTruncation && !showFullBody && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: '48px',
+                    pointerEvents: 'none',
+                    borderRadius: '0 0 4px 4px',
+                    background: `linear-gradient(180deg, transparent, ${oneDark['pre[class*="language-"]']?.background ?? 'rgba(0,0,0,0.6)'})`,
+                  }}
+                />
+              )}
             </Box>
+
+            {needsTruncation && (
+              <Typography
+                component="button"
+                type="button"
+                level="body-sm"
+                data-testid="code-artifact-show-more-btn"
+                onClick={e => {
+                  e.stopPropagation();
+                  setShowFullBody(v => !v);
+                }}
+                sx={{
+                  mt: '16px',
+                  p: 0,
+                  border: 'none',
+                  background: 'none',
+                  cursor: 'pointer',
+                  color: 'text.primary',
+                  fontWeight: 500,
+                  '&:hover': { textDecoration: 'underline' },
+                }}
+              >
+                {showFullBody ? 'Show less' : `Show ${codeLines.length - settings.maxVisibleLines} more lines`}
+              </Typography>
+            )}
           </>
         )}
       </Box>

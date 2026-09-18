@@ -1,5 +1,5 @@
 import React, { useState, type ReactNode } from 'react';
-import { Box, Button, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
+import { Box, Button, Card, Typography, Chip, Stack, IconButton, Tooltip, Divider } from '@mui/joy';
 import type { Theme } from '@mui/joy';
 import {
   OpenInFullOutlined as ExpandIcon,
@@ -33,6 +33,11 @@ import type { ArtifactType } from '@bike4mind/common';
 // on hover, over the same hover fill the sidebar items use (notebooklist.hoverBg) rather
 // than Joy's default plain-variant hover. Joy icons take their color from --Icon-color.
 export const actionButtonSx = (theme: Theme) => ({
+  // Joy sizes an IconButton from --IconButton-size; `width`/`height` alone lose to its
+  // own minWidth/minHeight, so all three are needed to get off the 32px `sm` default.
+  '--IconButton-size': '24px',
+  minWidth: '24px',
+  minHeight: '24px',
   '--Icon-fontSize': '18px',
   '--Icon-color': theme.vars.palette.text.primary70,
   '&:hover': {
@@ -320,34 +325,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             >
               {title}
             </Typography>
-
-            {collapsible && (
-              <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="neutral"
-                  // Joy icons read --Icon-fontSize / --Icon-color; plain `fontSize`/`color`
-                  // on the button is outranked by the theme's own icon styles.
-                  sx={theme => ({
-                    flexShrink: 0,
-                    marginLeft: 0,
-                    // Joy sizes IconButton from --IconButton-size; `width`/`height` alone
-                    // lose to its minWidth/minHeight defaults.
-                    '--IconButton-size': '24px',
-                    minWidth: '24px',
-                    minHeight: '24px',
-                    '--Icon-fontSize': '16px',
-                    '--Icon-color': theme.vars.palette.text.tertiary,
-                    '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
-                  })}
-                  onClick={handleToggleExpand}
-                  data-testid={`${testIdPrefix}-artifact-toggle-btn`}
-                >
-                  {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-                </IconButton>
-              </Tooltip>
-            )}
           </Stack>
 
           <Box sx={{ flex: 1 }} />
@@ -447,6 +424,27 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                 Share
               </Button>
             </Box>
+          )}
+
+          {/* The fold chevron sits last, behind a rule: it acts on the whole card, while
+              everything to its left acts on the card's content. Matches
+              CodeArtifactPreviewCard - keep the two in sync. */}
+          {collapsible && (
+            <>
+              <Divider orientation="vertical" sx={{ height: '16px', alignSelf: 'center', mx: '2px' }} />
+              <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+                <IconButton
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  sx={actionButtonSx}
+                  onClick={handleToggleExpand}
+                  data-testid={`${testIdPrefix}-artifact-toggle-btn`}
+                >
+                  {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+              </Tooltip>
+            </>
           )}
         </Stack>
 
