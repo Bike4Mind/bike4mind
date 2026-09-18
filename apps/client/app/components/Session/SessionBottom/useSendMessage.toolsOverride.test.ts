@@ -29,6 +29,18 @@ describe('useSendMessage - briefcase toolsOverride on the orchestration path (#9
     expect(source).toMatch(/getSettingObject<unknown>\('orchestrationDefaults', undefined\)/);
   });
 
+  it('withholds the union base until the AUTHED settings fetch has landed', () => {
+    // `mergeIntoDefaults` seeds `orchestrationDefaults` with the compiled-in
+    // schema default for the public CDN query too, so without this gate the
+    // full seed ships whenever the authed fetch failed - re-broadening a
+    // narrowed org toolbelt. Guarding the wiring, since the behavior itself
+    // lives in the provider.
+    expect(source).toMatch(
+      /authedSettingsLoaded\s*\?\s*agentModeDefaultToolNames\(orchestrationDefaultsSetting\)\s*:\s*null/
+    );
+    expect(source).toMatch(/const \{ getSettingObject, authedSettingsLoaded \} = useAdminSettings\(\);/);
+  });
+
   it('assigns enabledTools inside the agent-executor branch and passes it to agentExecution.start', () => {
     const branchIdx = source.indexOf("routeTarget === 'agent_executor'");
     const enabledToolsIdx = source.indexOf('const enabledTools =');
