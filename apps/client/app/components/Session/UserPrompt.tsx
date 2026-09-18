@@ -1,5 +1,5 @@
 import { UserPromptProps } from './types/UserPromptTypes';
-import { CopyCodeButton } from './CopyCodeButton';
+import CodeBlockHeader, { CODE_BLOCK_INNER_STYLE } from './CodeBlockHeader';
 import { Box, IconButton, Typography, Tooltip } from '@mui/joy';
 import ReactMarkdown, { ExtraProps } from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -153,12 +153,11 @@ const PromptContent: FC<{
         node?.position?.start.column !== node?.position?.end.column;
 
       return !inline ? (
-        <Box sx={{ position: 'relative' }}>
-          <CopyCodeButton code={children!.toString()} language={language} />
-          <SyntaxHighlighter style={oneDark} customStyle={{ paddingTop: '32px' }} language={language} PreTag="div">
+        <CodeBlockHeader code={children!.toString()} language={language}>
+          <SyntaxHighlighter style={oneDark} customStyle={CODE_BLOCK_INNER_STYLE} language={language} PreTag="pre">
             {String(children).replace(/\n$/, '')}
           </SyntaxHighlighter>
-        </Box>
+        </CodeBlockHeader>
       ) : (
         <Box
           component="code"

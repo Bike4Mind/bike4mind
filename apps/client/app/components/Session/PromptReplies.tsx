@@ -19,7 +19,7 @@ import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
 import QuoteActions from './QuoteActions';
 import { link } from './MarkdownLink';
 import { PromptReplyProps, ReplyContainerProps } from './types/UserPromptTypes';
-import { CopyCodeButton } from './CopyCodeButton';
+import CodeBlockHeader, { CODE_BLOCK_INNER_STYLE } from './CodeBlockHeader';
 import ThoughtBubbles from './ThoughtBubbles';
 import CodeArtifactPreviewCard from '../GenAI/CodeArtifactPreviewCard';
 import ContentTransformPreviewCard from '../GenAI/ContentTransformPreviewCard';
@@ -381,19 +381,18 @@ const createCodeComponent = (syntaxTheme: PrismStyle) => {
     // Inline code or short snippet
     if (inline || lineCount <= 10) {
       return !inline ? (
-        <Box sx={{ position: 'relative' }}>
-          <CopyCodeButton code={codeContent} language={language} />
+        <CodeBlockHeader code={codeContent} language={language}>
           <SyntaxHighlighter
             // @ts-ignore - ignoring style prop type issue
             style={syntaxTheme}
-            customStyle={{ paddingTop: '32px' }}
+            customStyle={CODE_BLOCK_INNER_STYLE}
             language={language}
-            PreTag="div"
+            PreTag="pre"
             {...props}
           >
             {codeContent}
           </SyntaxHighlighter>
-        </Box>
+        </CodeBlockHeader>
       ) : (
         // Bare <code>: observatory.css owns the inline-code skin, and a hardcoded
         // sx here would only lose to it on specificity while reading as live.
