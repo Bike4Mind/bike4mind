@@ -1,5 +1,15 @@
 # @bike4mind/common
 
+## 10.0.0
+
+### Major Changes
+
+- [#2930](https://github.com/Bike4Mind/bike4mind/pull/2930) [`f3f76c2`](https://github.com/Bike4Mind/bike4mind/commit/f3f76c21ef2e882fad72db3f0f36c8c5e8113065) Thanks [@jarlacut](https://github.com/jarlacut)! - gate the remaining FabFile ingest doors
+
+### Patch Changes
+
+- [#2988](https://github.com/Bike4Mind/bike4mind/pull/2988) [`b8bd20d`](https://github.com/Bike4Mind/bike4mind/commit/b8bd20d40a1551f6b999cb84745a677984144916) Thanks [@ken-b4m](https://github.com/ken-b4m)! - pin memento embedding space and refit the 3-small floor
+
 ## 9.0.0
 
 ### Major Changes

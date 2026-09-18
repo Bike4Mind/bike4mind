@@ -1,5 +1,12 @@
 # @bike4mind/llm-adapters
 
+## 0.15.5
+
+### Patch Changes
+
+- Updated dependencies [[`f3f76c2`](https://github.com/Bike4Mind/bike4mind/commit/f3f76c21ef2e882fad72db3f0f36c8c5e8113065), [`b8bd20d`](https://github.com/Bike4Mind/bike4mind/commit/b8bd20d40a1551f6b999cb84745a677984144916)]:
+  - @bike4mind/common@10.0.0
+
 ## 0.15.4
 
 ### Patch Changes
