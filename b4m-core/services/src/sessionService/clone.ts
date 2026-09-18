@@ -78,7 +78,18 @@ export const cloneSession = async (
     // retrievalTags reads as "already lake-scoped") and no way to clear either from the UI.
     // Same owner-only gate: a non-owner falls back to derivation, which the explicit marker would
     // otherwise suppress, leaving them with neither a copied scope nor a derived one.
-    ...(isOwner ? { retrievalTags: session.retrievalTags, lakeScopeExplicit: session.lakeScopeExplicit } : {}),
+    // forceKnowledgeRetrieval rides with the scope so a persisted opt-out (`false`) survives:
+    // createSession reads an explicit lake scope as forced retrieval, and omitting it would turn
+    // that opt-out back ON here. An ABSENT flag is deliberately left to that implication rather
+    // than pinned to `false`, so a copy of a lake session predating it picks up the corrected
+    // behavior; the copy then forces retrieval where its source does not.
+    ...(isOwner
+      ? {
+          retrievalTags: session.retrievalTags,
+          lakeScopeExplicit: session.lakeScopeExplicit,
+          forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
+        }
+      : {}),
   };
   if (session.summary) buildCloneSession.summary = session.summary;
   if (session.summaryAt) buildCloneSession.summaryAt = session.summaryAt;

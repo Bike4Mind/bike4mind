@@ -240,3 +240,60 @@ describe('createSession knowledgeIds validation', () => {
     expect(created[0].preauthorizedLakeIds).toBeUndefined();
   });
 });
+
+/**
+ * Forced retrieval implied by a declared lake scope. A session bound by `retrievalTags` +
+ * `lakeScopeExplicit` reaches no lake-defaults merge (that is keyed on `dataLakeId` at the route),
+ * so without this it was born with the flag unset and searched the lake only sometimes.
+ */
+describe('createSession forced retrieval from an explicit lake scope', () => {
+  const user = { id: 'u1' } as IUserDocument;
+
+  const makeAdapters = () => {
+    const findAllAccessibleByIds = vi.fn().mockResolvedValue([]);
+    return {
+      adapters: {
+        db: {
+          sessions: { create: vi.fn(async (d: unknown) => ({ id: 's1', ...(d as object) })) },
+          projects: {} as never,
+          fabFiles: { shareable: { findAllAccessibleByIds } } as never,
+          agents: { shareable: { findAllAccessibleByIds } } as never,
+        },
+      },
+    };
+  };
+
+  it('turns forced retrieval on for a session scoped to a named lake', async () => {
+    const { adapters } = makeAdapters();
+    const session = await createSession(
+      user,
+      { name: 'n', retrievalTags: ['datalake:acme'], lakeScopeExplicit: true, retrievalVectorizedOnly: true },
+      adapters as never
+    );
+    expect(session.forceKnowledgeRetrieval).toBe(true);
+    // The fix must not cost the scoping correctness it builds on.
+    expect(session.retrievalTags).toEqual(['datalake:acme']);
+  });
+
+  it('leaves an explicit opt-out off', async () => {
+    const { adapters } = makeAdapters();
+    const session = await createSession(
+      user,
+      { name: 'n', retrievalTags: ['datalake:acme'], lakeScopeExplicit: true, forceKnowledgeRetrieval: false },
+      adapters as never
+    );
+    expect(session.forceKnowledgeRetrieval).toBe(false);
+  });
+
+  it('leaves the flag unset on an ordinary session that named no lake', async () => {
+    const { adapters } = makeAdapters();
+    const session = await createSession(user, { name: 'n' }, adapters as never);
+    expect(session.forceKnowledgeRetrieval).toBeUndefined();
+  });
+
+  it('leaves the flag unset for an explicit scope that selected no lake', async () => {
+    const { adapters } = makeAdapters();
+    const session = await createSession(user, { name: 'n', lakeScopeExplicit: true }, adapters as never);
+    expect(session.forceKnowledgeRetrieval).toBeUndefined();
+  });
+});
