@@ -158,9 +158,10 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
         // boundary itself rather than as chrome belonging to either pane. They have to be
         // exactly half the width, because SessionContainer sizes the two panes in
         // percentages that already sum to 100% and no child of that row sets flex-grow:
-        // anything the handle adds or subtracts survives as free space instead of being
-        // absorbed, and the row is row-reverse with the default justify-content, so the
-        // leftover parks on the physical left of the chat pane.
+        // anything the handle subtracts survives as free space instead of being absorbed.
+        // A positive contribution would not: the default flex-shrink: 1 absorbs overflow,
+        // which is how this broke before. The row is row-reverse with the default
+        // justify-content, so the leftover parks on the physical left of the chat pane.
         width: `${SPLITTER_WIDTH_PX}px`,
         marginX: `${-(SPLITTER_WIDTH_PX / 2)}px`,
         cursor: 'col-resize',
