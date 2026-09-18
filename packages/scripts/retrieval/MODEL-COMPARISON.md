@@ -617,6 +617,68 @@ Production turns now record `injected.backgroundScore` beside `injected.topScore
 distribution a value has to be chosen from is collected on live traffic whether or not the floor is
 ever switched on.
 
+### REFIT: 58 replaces 49 for 3-small, off the LIVE `opti-knowledge` capture
+
+The refit above was fitted to 35 files and 6 negatives. This one is fitted to a 520-file /
+21,327-chunk capture of the live `opti-knowledge` lake (1536 dims, captured 2026-09-18) swept
+against 30 positives authored from that corpus's own passages plus screened negatives, so recall and
+false-positive rate come out of ONE corpus snapshot. The negatives were screened by reading the
+served chunk TEXT, which reclassified 44 of 89 as answerable; the two right-hand columns are that
+screen's two defensible readings, counting a PARTIAL answer as answerable or as a false positive.
+
+| floor | recall | positives emptied | FP (45 strict neg) | FP (61 partial-as-neg) |
+|---:|---:|---:|---:|---:|
+| 85:49 (the previous value) | 100.0% | 0 | 71.1% | 78.7% |
+| 85:53 | 100.0% | 0 | 64.4% | 73.8% |
+| 85:55 | 96.7% | 1 | 60.0% | 68.9% |
+| **85:58 (shipped)** | **93.3%** | **2** | **42.2%** | **52.5%** |
+| 85:61 | 86.7% | 4 | 22.2% | 36.1% |
+| 85:64 | 76.7% | 7 | 13.3% | 19.7% |
+| 85:75 (ada-002's floor) | 20.0% | 24 | 0.0% | 0.0% |
+
+**The band of this capture, which is what a floor has to clear:** band max **0.8731**, and per-query
+best score spans 0.3587 to 0.8731. Positives' best score runs min 0.5481 / p50 0.6884 / max 0.8731;
+negatives' best score runs min 0.3587 / p50 0.5634 / max 0.6890. The 0.5588 band max in the arm
+table above belongs to the 35-file capture and was never a bound on this corpus - the same space
+reaches 0.8731 on a production-class one. `embeddingSpaceFloors.test.ts` asserts every shipped floor
+against these numbers.
+
+Two things follow from those distributions, and both match the sweep exactly. A floor of 55 empties
+precisely one positive, because one positive's best chunk scores 0.5481. A floor of 70 empties all
+45 strict negatives, because the best-scoring negative reaches only 0.6890. The distributions
+OVERLAP heavily (negatives' max sits above positives' min), which is why the curve is smooth and no
+floor is a breakpoint to discover.
+
+**Why 58 rather than the separation optimum, which is 61-64.** Recall here is measured on positives
+authored FROM corpus passages, so each supporting document is the easiest possible match for its own
+question, making this recall an upper bound on recall against a real user's phrasing. The
+false-positive rate carries no matching optimism. An optimistic recall beside an honest
+false-positive rate biases the optimum high, so the shipped floor is the low end of the bracket.
+
+**What 49 got wrong was not its magnitude.** It emptied ZERO positives - it was not buying recall
+protection, it simply was not cutting - while 71-79% of screened true negatives still got something
+served. The whole range 0-53 costs no recall on this corpus.
+
+Recall in this table is of the ACCEPTED set, so it answers "did the floor cut the supporting
+document", which is the floor's own question, and is not a claim the model saw it: `served/q` is 6.0
+against `accepted/q` of 62.4 at floor 49. Precision is over distinct DOCUMENTS. The 256-chunk
+candidate pool cap truncated the set on 75 of 75 queries, so every `cut @` rank in the raw sweep is
+a rank within a truncated pool.
+
+**Reproducing it** needs the capture, which is gitignored and costs provider spend to remake. The
+question sets are private (their ids name partners and competitors). Given the capture:
+
+```bash
+npx tsx retrieval/forced-floor-sweep.ts \
+  --fixture out/text-embedding-3-small.opti-knowledge.combined.fixture.ndjson \
+  --floors 0:0,85:45,85:47,85:49,85:53,85:55,85:58,85:61,85:64,85:67,85:70,85:73,85:75
+```
+
+The partial-as-negative column was DERIVED rather than re-embedded: `emptied` and the false-positive
+rate are both functions of `accepted === 0` per query and queries score independently, so the 16
+screened PARTIAL negatives were swept alone and their emptied counts added to the 45. At floor 49
+that derivation reproduces the screen's independently computed 78.7% exactly.
+
 ## Out of scope
 
 This harness measures. It does not change anything. Flipping `defaultEmbeddingModel`, re-embedding the
