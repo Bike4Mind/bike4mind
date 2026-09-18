@@ -211,13 +211,15 @@ export function useAdminGetUserApiKeys(userId: string | undefined) {
   });
 }
 
-/** Response of POST /api/admin/user-api-keys/[id]/reset-rate-limit. A
- * `lockout` entry is undefined only when clearing that specific counter
- * failed - the other counter is still cleared and reported independently. */
+/** Response of POST /api/admin/user-api-keys/[id]/reset-rate-limit. Within
+ * `lockout`, a `request`/`management` entry is undefined when clearing that
+ * specific counter failed - the other counter is still cleared and reported
+ * independently. `lockout` itself is optional only for a stale bundled
+ * client talking to a server build that predates this field (deploy skew). */
 export interface ApiKeyRateLimitResetResponse {
   success: boolean;
   id: string;
-  lockout: {
+  lockout?: {
     request?: CounterLockoutState;
     management?: CounterLockoutState;
   };
