@@ -598,9 +598,9 @@ ${toolOutput.content}
   return processedContent;
 }
 
-// Chars of a fence body a promotion predicate will scan. Past the cap the fence
-// stays a plain code block: the anchors a full document needs sit near its start
-// and its end, so an oversized body is skipped rather than scanned.
+// Chars of a fence body a promotion predicate reads. A body longer than this stays a
+// plain code block rather than being scanned: the predicates are linear, so the cap is
+// a ceiling on the work any future one can do, not a correctness requirement.
 // MUST STAY IN SYNC with the twin copy in b4m-core/utils/src/artifactParser.ts.
 const MAX_FENCE_SCAN_CHARS = 256000;
 
@@ -695,7 +695,12 @@ ${codeContent.trim()}
   const svgCodeBlockRegex = /```svg\s*\n?([\s\S]*?)```/gi;
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {
-    if (!/<svg[\s\S]*?<\/svg\s*>/i.test(codeContent.slice(0, MAX_FENCE_SCAN_CHARS))) return match;
+    // Located in two forward scans rather than one <svg...</svg> pattern, which
+    // re-scans to the end of the body from every <svg that has no closer. Closers only
+    // move forward, so the first opening is the only one worth testing.
+    const svgHead = codeContent.slice(0, MAX_FENCE_SCAN_CHARS);
+    const svgAt = svgHead.search(/<svg/i);
+    if (svgAt < 0 || !/<\/svg\s*>/i.test(svgHead.slice(svgAt))) return match;
     const identifier = 'svg-graphic';
 
     return `<artifact identifier="${identifier}" type="image/svg+xml" title="SVG Graphic">
@@ -822,11 +827,7 @@ function toolCallJsonToArtifact(candidate: string): string | null {
   );
   if (!html) return null;
 
-  // Strip double quotes from the model-controlled title before interpolating it
-  // into title="...": the artifact attribute parser (ATTRIBUTE_REGEX) has no
-  // escape mechanism, so an embedded " would truncate the attribute. Apostrophes
-  // are safe inside a double-quoted value and are kept.
-  const title = (extractHTMLTitle(html) || 'HTML Page').replace(/"/g, '') || 'HTML Page';
+  const title = extractHTMLTitle(html) || 'HTML Page';
   const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
   return `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${html.trim()}
@@ -846,21 +847,51 @@ function looksLikeHtml(value: string): boolean {
  * see all earlier conversions.
  */
 function promoteBareHtmlDocument(content: string): string {
-  const bareHtmlDocRegex = /(<!DOCTYPE\s+html[\s\S]*?<\/html\s*>|<html[\s\S]*?<\/html\s*>)/gi;
-  return content.replace(bareHtmlDocRegex, (match, doc, offset, full: string) => {
-    const before = full.slice(0, offset);
-    // Skip if the document sits inside a code fence (odd number of ``` before it)...
-    if ((before.match(/```/g) || []).length % 2 === 1) return match;
-    // ...or inside an already-open <artifact> tag.
-    const opens = (before.match(/<artifact\b/gi) || []).length;
-    const closes = (before.match(/<\/artifact>/gi) || []).length;
-    if (opens > closes) return match;
+  // Two forward cursors instead of one <html>...</html> pattern, and guard counts that
+  // accumulate over the gap since the previous document instead of re-reading the whole
+  // prefix: both of the old shapes re-scanned from the start of the message on every
+  // candidate, so this pass cost time quadratic in the message length.
+  // MUST STAY IN SYNC with the twin copy in b4m-core/utils/src/artifactParser.ts.
+  const openRegex = /<!DOCTYPE\s+html|<html/gi;
+  const closeRegex = /<\/html\s*>/gi;
+  let out = '';
+  let copiedTo = 0;
+  let promoted = false;
+  let scannedTo = 0;
+  let fences = 0;
+  let artifactOpens = 0;
+  let artifactCloses = 0;
+  let open: RegExpExecArray | null;
+  while ((open = openRegex.exec(content)) !== null) {
+    closeRegex.lastIndex = open.index + open[0].length;
+    const close = closeRegex.exec(content);
+    // Closers only move forward, so a later opening cannot have one either.
+    if (!close) break;
+    const start = open.index;
+    const end = close.index + close[0].length;
+    openRegex.lastIndex = end;
+
+    const gap = content.slice(scannedTo, start);
+    fences += (gap.match(/```/g) || []).length;
+    artifactOpens += (gap.match(/<artifact\b/gi) || []).length;
+    artifactCloses += (gap.match(/<\/artifact>/gi) || []).length;
+    scannedTo = start;
+
+    // Skip a document sitting inside a code fence (odd number of ``` before it) or
+    // inside an already-open <artifact> tag.
+    if (fences % 2 === 1 || artifactOpens > artifactCloses) continue;
+
+    const doc = content.slice(start, end);
     const title = extractHTMLTitle(doc) || 'HTML Page';
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
-    return `<artifact identifier="${identifier}" type="text/html" title="${title}">
+    out += content.slice(copiedTo, start);
+    out += `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${doc.trim()}
 </artifact>`;
-  });
+    copiedTo = end;
+    promoted = true;
+  }
+  return promoted ? out + content.slice(copiedTo) : content;
 }
 
 /**
@@ -883,11 +914,16 @@ function extractComponentName(code: string): string | null {
 }
 
 /**
- * Extracts title from HTML content
+ * Extracts title from HTML content, minus any double quote. Every caller interpolates
+ * the result into title="...", and the artifact attribute parser (ATTRIBUTE_REGEX) has
+ * no escape mechanism, so an embedded " in this model-controlled text would truncate
+ * the attribute and leave the rest of the title to be read as further attributes.
+ * Apostrophes are safe inside a double-quoted value and are kept.
  */
 function extractHTMLTitle(code: string): string | null {
   const titleMatch = code.match(/<title>(.*?)<\/title>/i);
-  return titleMatch ? titleMatch[1] : null;
+  if (!titleMatch) return null;
+  return titleMatch[1].replace(/"/g, '') || null;
 }
 
 /**

@@ -483,10 +483,11 @@ describe('elidedReplyWarning', () => {
 });
 
 /**
- * The ```html / ```svg detectors match a fence on its own and check the document
- * anchors in the callback, so these cases pin the promotion decisions and the
- * behaviour that changed when the anchors moved out of the patterns.
- * MUST STAY IN SYNC with the twin suite in b4m-core/utils/src/artifactParser.test.ts.
+ * The fenced detectors match a fence on its own and check the promotion anchors in the
+ * callback, so these cases pin the promotion decisions and the behaviour that changed
+ * when the anchors moved out of the patterns. Mirrors the twin suite in b4m-core/utils/src/artifactParser.test.ts,
+ * except for the react-fence cases: that detector's promotion rules are not shared
+ * between the two copies.
  */
 describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
@@ -527,17 +528,44 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   it('promotes a document whose lines are separated by \\r or U+2028', () => {
     const cr = convertCodeBlocksToArtifacts('```html\r' + DOC.replace('\n', '\r') + '\r```');
     expect(wrappers(cr)).toBe(1);
-    const ls = convertCodeBlocksToArtifacts('```html\n' + DOC.replace('\n', ' ') + '\n```');
+    const ls = convertCodeBlocksToArtifacts('```html\n' + DOC.replace('\n', '\u2028') + '\n```');
     expect(wrappers(ls)).toBe(1);
+  });
+
+  it('leaves an unterminated react fence untouched, in bounded time', () => {
+    // Same pathological shape as the html case: component markers present on many
+    // lines, no closing fence. The old anchored pattern was quadratic in body size.
+    const input = '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(8000);
+    const startedAt = Date.now();
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    expect(out).toBe(input);
+  });
+
+  it('drops a double quote from a promoted document title', () => {
+    const doc = '<!DOCTYPE html>\n<html><head><title>a" type="text/plain</title></head><body>x</body></html>';
+    for (const input of [doc, '```html\n' + doc + '\n```']) {
+      const out = convertCodeBlocksToArtifacts(input);
+      expect(out).toContain('type="text/html"');
+      expect(out).toMatch(/title="a type=text\/plain"/);
+    }
+  });
+
+  it('leaves an svg fence with no closing tag untouched, in bounded time', () => {
+    // Openings with no closer: the shape that made a single <svg...</svg> predicate
+    // re-scan the body from each one.
+    const input = '```svg\n' + '<svg '.repeat(51200) + '\n```';
+    const startedAt = Date.now();
+    const out = convertCodeBlocksToArtifacts(input);
+    expect(Date.now() - startedAt).toBeLessThan(1000);
+    expect(out).toBe(input);
   });
 
   it('leaves unterminated html fences untouched, in bounded time', () => {
     // First body is the pathological shape for the old anchored pattern: both anchors
-    // present, many candidate splits for its two lazy groups, no closing fence. It stays
-    // at ~56KB because past ~100KB of repeated </html> the later bare-document pass, not
-    // these detectors, is what dominates the time. Second body is a plain 260KB fence.
+    // present, many candidate splits for its two lazy groups, no closing fence.
     const bodies = [
-      '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(4000),
+      '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(16000),
       '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(20000),
     ];
     for (const input of bodies) {
@@ -545,6 +573,51 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
       const out = convertCodeBlocksToArtifacts(input);
       expect(Date.now() - startedAt).toBeLessThan(2000);
       expect(out).toBe(input);
+    }
+  });
+});
+
+/**
+ * promoteBareHtmlDocument is module-private and runs last inside
+ * convertCodeBlocksToArtifacts, so these cases drive it through the public entry point.
+ * MUST STAY IN SYNC with the twin suite in b4m-core/utils/src/artifactParser.test.ts.
+ */
+describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
+  const wrappers = (s: string) => (s.match(/<artifact /g) || []).length;
+  const BARE = '<!DOCTYPE html>\n<html><head><title>Bare</title></head><body>hi</body></html>';
+
+  it('promotes a bare document sitting in prose', () => {
+    const out = convertCodeBlocksToArtifacts('Here you go:\n\n' + BARE + '\n\nEnjoy.');
+    expect(wrappers(out)).toBe(1);
+    expect(out).toContain('title="Bare"');
+    expect(out).toContain('Here you go:');
+    expect(out).toContain('Enjoy.');
+  });
+
+  it('promotes two bare documents in one message', () => {
+    expect(wrappers(convertCodeBlocksToArtifacts(BARE + '\n---\n' + BARE))).toBe(2);
+  });
+
+  it('skips a document inside an open code fence or an open artifact tag', () => {
+    expect(wrappers(convertCodeBlocksToArtifacts('```\n' + BARE))).toBe(0);
+    const wrapped = '<artifact identifier="x" type="text/html" title="X">\n' + BARE + '\n</artifact>';
+    expect(wrappers(convertCodeBlocksToArtifacts(wrapped))).toBe(1);
+  });
+
+  it('stays bounded on many html openings, with and without closers', () => {
+    // Each body is a shape that used to make this pass quadratic in message length:
+    // many complete documents (guard re-read the whole prefix per match), openings that
+    // never close (pattern re-scanned to end of input from each one), and the same
+    // inside an unterminated fence.
+    const bodies = [
+      '<html></html>\n'.repeat(60000),
+      '<html>\n'.repeat(60000),
+      '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(60000),
+    ];
+    for (const input of bodies) {
+      const startedAt = Date.now();
+      convertCodeBlocksToArtifacts(input);
+      expect(Date.now() - startedAt).toBeLessThan(1500);
     }
   });
 });
