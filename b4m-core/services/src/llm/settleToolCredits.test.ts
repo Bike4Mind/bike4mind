@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { settleToolCallCredits } from './settleToolCredits';
+import { resolveAggregateToolModel, settleToolCallCredits } from './settleToolCredits';
 
 const sum = (fcs: { creditsUsed?: number }[]) => fcs.reduce((acc, fc) => acc + (fc.creditsUsed ?? 0), 0);
 
@@ -45,5 +45,25 @@ describe('settleToolCallCredits', () => {
     const map = new Map([['music_generation', [100, 200]]]);
     settleToolCallCredits([{ name: 'music_generation' }, { name: 'music_generation' }], map);
     expect(map.get('music_generation')).toEqual([100, 200]);
+  });
+});
+
+describe('resolveAggregateToolModel', () => {
+  // The bug this locks: the aggregate row carried the quest's CHAT model, so an image
+  // billed to gpt-image-2 rendered as global.anthropic.claude-sonnet-5.
+  it('names the single model that actually charged', () => {
+    expect(resolveAggregateToolModel(new Set(['gpt-image-2']))).toBe('gpt-image-2');
+  });
+
+  it('collapses repeat calls on one model to that model', () => {
+    expect(resolveAggregateToolModel(['gpt-image-2', 'gpt-image-2'])).toBe('gpt-image-2');
+  });
+
+  it('names nothing rather than one of several models', () => {
+    expect(resolveAggregateToolModel(new Set(['gpt-image-2', 'flux-pro-1.1']))).toBeUndefined();
+  });
+
+  it('names nothing when no charging model was resolvable', () => {
+    expect(resolveAggregateToolModel(new Set())).toBeUndefined();
   });
 });

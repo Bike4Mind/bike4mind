@@ -37,3 +37,22 @@ export function settleToolCallCredits<T extends SettleableFunctionCall>(
     return fc;
   });
 }
+
+/**
+ * Pick the model to stamp on a quest's single aggregate `tool_usage` ledger row.
+ *
+ * The row sums every charging tool call in the quest, so it can name a model only when
+ * exactly one model charged. With two or more it returns undefined: an aggregate that
+ * names one of several models reads as authoritative while being wrong, and the ledger
+ * renders an absent model plainly. It also returns undefined when nothing resolvable
+ * charged (e.g. a delegate_to_agent charge whose subagent model was unresolvable) -
+ * never the quest's own chat model, which is what the row used to carry regardless of
+ * which tool actually incurred the cost.
+ *
+ * Per-call provider/model attribution is not lost either way: it lives on the
+ * `feature: 'tool'` usage events (ToolBuilder.buildToolUsageEvent).
+ */
+export function resolveAggregateToolModel(chargedModels: Iterable<string>): string | undefined {
+  const distinct = Array.from(new Set(chargedModels));
+  return distinct.length === 1 ? distinct[0] : undefined;
+}
