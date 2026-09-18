@@ -90,11 +90,10 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   size: z.string().optional(),
   fabFileIds: z.array(z.string()).optional(),
   image: z.string(),
-  // Inherited from OpenAIImageGenerationInput, which allows 1-10 because generation honors it.
-  // Editing renders IMAGES_PER_EDIT_REQUEST whatever this says, so it is accepted (existing
-  // API-key callers keep working) and ignored, never billed. Narrowed here rather than in the
-  // shared input so generation keeps its real range.
-  n: z.number().min(1).max(10).optional(),
+  // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
+  // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
+  // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
+  // request succeeds today.
 });
 export type ImageEditBody = z.infer<typeof ImageEditBodySchema>;
 
