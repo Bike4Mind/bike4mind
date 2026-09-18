@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
+import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
 // The agent-tool image_generation path must run the SAME moderation gate the
 // queue-handler ImageGeneration service uses, before context.imageGenerateStorage.upload().
@@ -194,6 +195,32 @@ describe('image_generation effective-arg precedence (tool call vs client imageCo
     const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
     const quality = toolSchema.parameters.properties.quality;
     expect(quality.enum).toEqual(['standard', 'hd', 'low', 'medium', 'high']);
+  });
+
+  // #2936: the schema advertised five sizes but the calculator prices three, so four of them
+  // rendered at the asked-for size and billed at the 1024x1024 row. Offer only priceable sizes.
+  it('offers only sizes the cost calculator can price in the tool schema', () => {
+    const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
+
+    expect(toolSchema.parameters.properties.size.enum).toEqual([...PRICEABLE_IMAGE_SIZES]);
+  });
+
+  // The enum is advisory to the model, so the resolver has to hold the line too.
+  it('ignores an off-enum model size and bills what it dispatches', async () => {
+    const context = createFakeContext();
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    context.onStart = onStart;
+
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: 'high',
+      size: '1536x1024',
+    });
+
+    await toolFn({ prompt: 'a red bike', size: '1792x1024' });
+
+    expect(onStart).toHaveBeenCalledWith('image_generation', expect.objectContaining({ size: '1536x1024' }));
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ size: '1536x1024' }));
   });
 });
 
