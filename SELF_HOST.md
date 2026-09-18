@@ -567,7 +567,7 @@ Notes:
 
 Prefer a hosted embedder over the local one? Set a real key in `.env.selfhost` and it takes priority over the local Ollama default:
 
-- `OPENAI_API_KEY` - enables OpenAI embeddings (`text-embedding-ada-002` by default).
+- `OPENAI_API_KEY` - enables OpenAI embeddings (`text-embedding-3-small` by default).
 - `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Settings -> API Keys**.
 
 Then pick the cloud model under **Settings -> AI -> Default Embedding Model** and re-upload (or reprocess via **/api/files/reprocess**) so files embed with it.

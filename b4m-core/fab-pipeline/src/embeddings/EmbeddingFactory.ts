@@ -167,6 +167,17 @@ export class EmbeddingFactory {
    */
   public getDefaultEmbeddingModel(): SupportedEmbeddingModel {
     // Priority 1: OpenAI (if a real API key is available - a placeholder does not count)
+    //
+    // DELIBERATELY STILL ada-002 while `defaultEmbeddingModelForEnv` advertises 3-small, and NOT an
+    // oversight in that flip. This is the query-embedding model for attached-file cosine selection
+    // (processFabFilesServer), where `userVectorPrompt` is a dict keyed by model that is only ever
+    // given ONE entry. Per-file routing then looks the vector up by the FILE's own label, so moving
+    // this to 3-small makes every ada-002 attachment miss the key: cosine is skipped, large files are
+    // head-truncated instead of similarity-selected, and a vectorized-only format (a .pptx, say)
+    // drops out of the prompt entirely - silently, on every chat and agent turn carrying a file.
+    //
+    // The fix is to populate that dict per distinct file label in the batch, not to change this
+    // constant. Until then this stays where the corpus is.
     if (!isPlaceholderApiKey(this.config.openaiApiKey)) {
       return OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
     }

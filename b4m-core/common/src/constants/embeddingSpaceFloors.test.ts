@@ -81,9 +81,10 @@ describe('shipped floors sit inside the band they gate', () => {
 });
 
 describe('behavior preservation on the model in production today', () => {
-  // ada-002 is `defaultEmbeddingModelForEnv()`'s cloud default, so this entry is what an untouched
-  // deployment resolves to. It must equal the setting's declared default, or shipping this change
-  // would itself move the floor under everyone rather than only under a model migration.
+  // ada-002 is no longer `defaultEmbeddingModelForEnv()`'s cloud default, but it is still the space
+  // every legacy corpus sits in, so this entry is what an un-migrated lake resolves to. It must
+  // equal the setting's declared default, or a deploy would move the floor under a corpus nobody
+  // re-embedded rather than only under a model migration.
   it('resolves the ada-002 forced floor to the declared setting default', () => {
     expect(
       cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)
