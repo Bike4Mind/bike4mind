@@ -8,6 +8,7 @@ vi.mock('../projectService', () => ({ addSessions: vi.fn() }));
 import { createSession } from './create';
 import type { CreateSessionAdapters } from './create';
 import type { IUserDocument } from '@bike4mind/common';
+import { UnprocessableEntityError } from '@bike4mind/utils';
 
 describe('createSession - agent object-level authz', () => {
   const user = { id: 'attacker' } as IUserDocument;
@@ -295,5 +296,46 @@ describe('createSession forced retrieval from an explicit lake scope', () => {
     const { adapters } = makeAdapters();
     const session = await createSession(user, { name: 'n', lakeScopeExplicit: true }, adapters as never);
     expect(session.forceKnowledgeRetrieval).toBeUndefined();
+  });
+});
+
+/** Pins both guarantees create.ts documents on `taggedAt`: kept by secureParameters, string form rejected. */
+describe('createSession taggedAt validation', () => {
+  const user = { id: '67cbd75e2415ca84138fada7' } as IUserDocument;
+
+  function makeAdapters() {
+    const created: Record<string, unknown>[] = [];
+    const adapters = {
+      db: {
+        sessions: {
+          create: vi.fn(async (data: Record<string, unknown>) => {
+            created.push(data);
+            return { ...data, id: 'session-1' };
+          }),
+        },
+        projects: {},
+        fabFiles: { shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) } },
+        agents: { shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) } },
+      },
+    } as unknown as CreateSessionAdapters;
+    return { adapters, created };
+  }
+
+  it('rejects a string taggedAt instead of silently dropping it', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      createSession(
+        user,
+        { name: 'ok', taggedAt: '2026-05-01' } as unknown as Parameters<typeof createSession>[1],
+        adapters
+      )
+    ).rejects.toThrow(UnprocessableEntityError);
+  });
+
+  it('carries a real Date taggedAt onto the persisted payload', async () => {
+    const { adapters, created } = makeAdapters();
+    const taggedAt = new Date('2026-05-01T00:00:00.000Z');
+    await createSession(user, { name: 'ok', taggedAt }, adapters);
+    expect(created[0].taggedAt).toEqual(taggedAt);
   });
 });
