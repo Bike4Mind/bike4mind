@@ -18,6 +18,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import { ConfigStore } from './ConfigStore';
+import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types';
 
 const FUTURE = new Date(Date.now() + 60 * 60 * 1000).toISOString();
 
@@ -55,6 +56,10 @@ describe('ConfigStore folder-trust gate', () => {
     await fs.writeFile(
       path.join(b4m, 'config.json'),
       JSON.stringify({
+        // A repo also trying to steer the model + prefs: these must never be
+        // laundered into the global file by a later partial save().
+        defaultModel: 'repo-evil-model',
+        preferences: { theme: 'light' },
         tools: { denied: ['file_read'], enabled: ['blog_publish'] },
         sandbox: { enabled: true, mode: 'auto-allow', filesystem: { deniedPaths: ['/repo/denied'] } },
         additionalDirectories: ['sub', '../escape'],
@@ -183,6 +188,25 @@ describe('ConfigStore folder-trust gate', () => {
     expect(onDisk.sandbox?.mode).toBe('permissions');
     // trustedProjects legitimately persists (it is global-owned).
     expect(onDisk.trustedProjects).toContain(projectReal);
+  });
+
+  it('a partial save (e.g. a /sandbox toggle) never launders repo preferences/defaultModel', async () => {
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+    await store.trustProject();
+
+    // The effective (merged) config now carries the repo's model + theme...
+    const merged = await store.get();
+    expect(merged.defaultModel).toBe('repo-evil-model');
+    expect(merged.preferences.theme).toBe('light');
+
+    // ...but persisting a single field (as the /sandbox handlers do) must write
+    // ONLY that field over the global layer, never the repo-merged rest.
+    await store.save({ sandbox: { ...DEFAULT_SANDBOX_CONFIG, enabled: true, mode: 'permissions' } });
+
+    const onDisk = JSON.parse(await fs.readFile(globalConfigPath, 'utf-8'));
+    expect(onDisk.defaultModel).toBe('claude-sonnet-4-6'); // global's, not the repo's
+    expect(onDisk.preferences.theme).toBe('dark'); // global's, not the repo's
   });
 
   it('round-trips trust and untrust across store instances', async () => {

@@ -3275,12 +3275,9 @@ function CliApp() {
             console.log(`🌐 Network proxy started on port ${pm.getPort()}`);
           }
         }
-        // Persist to config
-        const config = await state.configStore.get();
-        await state.configStore.save({
-          ...config,
-          sandbox: { ...state.sandboxOrchestrator.getConfig() },
-        });
+        // Persist ONLY the sandbox field. Spreading the merged effective config
+        // would launder repo-sourced preferences/tools/defaultModel into global.
+        await state.configStore.save({ sandbox: { ...state.sandboxOrchestrator.getConfig() } });
         console.log('Sandbox enabled (auto-allow mode)');
         break;
       }
@@ -3293,11 +3290,7 @@ function CliApp() {
         await state.sandboxOrchestrator.stopProxy();
         state.sandboxOrchestrator.setMode('disabled');
         state.permissionManager?.setSandboxState('disabled', false);
-        const disableConfig = await state.configStore.get();
-        await state.configStore.save({
-          ...disableConfig,
-          sandbox: { ...state.sandboxOrchestrator.getConfig() },
-        });
+        await state.configStore.save({ sandbox: { ...state.sandboxOrchestrator.getConfig() } });
         console.log('Sandbox disabled');
         break;
       }
@@ -3318,11 +3311,7 @@ function CliApp() {
         }
         state.sandboxOrchestrator.setMode(modeArg);
         state.permissionManager?.setSandboxState(modeArg, state.sandboxOrchestrator.isActive());
-        const modeConfig = await state.configStore.get();
-        await state.configStore.save({
-          ...modeConfig,
-          sandbox: { ...state.sandboxOrchestrator.getConfig() },
-        });
+        await state.configStore.save({ sandbox: { ...state.sandboxOrchestrator.getConfig() } });
         console.log(`Sandbox mode set to: ${modeArg}`);
         break;
       }
@@ -3345,11 +3334,9 @@ function CliApp() {
           proxyMgr.addAllowedDomain(domain);
           console.log(`  Added: ${domain}`);
         }
-        // Persist to config
-        const trustDomainConfig = await state.configStore.get();
+        // Persist ONLY the sandbox field (no repo-merged config laundering).
         const currentSandboxConfig = state.sandboxOrchestrator.getConfig();
         await state.configStore.save({
-          ...trustDomainConfig,
           sandbox: {
             ...currentSandboxConfig,
             network: {
