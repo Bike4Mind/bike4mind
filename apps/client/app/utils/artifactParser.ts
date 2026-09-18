@@ -450,6 +450,16 @@ export function validateArtifactContent(
 /**
  * Detects tool outputs (JSON responses from tools) and converts them to artifact syntax
  */
+/**
+ * Removes double quotes from model-controlled text bound for a title="..." attribute.
+ * The artifact attribute parser (ATTRIBUTE_REGEX) has no escape mechanism, so one would
+ * truncate the attribute and leave the rest to be read as further attributes.
+ * extractHTMLTitle applies the same rule to a <title> element.
+ */
+function stripTitleQuotes(title: string): string {
+  return title.replace(/"/g, '');
+}
+
 function convertToolOutputsToArtifacts(content: string): string {
   // Look for any JSON-like structure that contains type field with our target types
   // This approach is more forgiving of escaping variations
@@ -512,7 +522,7 @@ function convertToolOutputsToArtifacts(content: string): string {
 
         if ((toolOutput.type === 'rechart' || toolOutput.type === 'recharts') && toolOutput.content) {
           const identifier = `recharts-${Date.now()}`;
-          const title = toolOutput.metadata?.title || 'Interactive Chart';
+          const title = stripTitleQuotes(toolOutput.metadata?.title || 'Interactive Chart') || 'Interactive Chart';
 
           // Validate recharts content structure
           let rechartsContent;
@@ -540,7 +550,7 @@ ${typeof toolOutput.content === 'string' ? toolOutput.content : JSON.stringify(t
 
         if (toolOutput.type === 'mermaid' && toolOutput.content) {
           const identifier = `mermaid-${Date.now()}`;
-          const title = toolOutput.metadata?.title || 'Mermaid Diagram';
+          const title = stripTitleQuotes(toolOutput.metadata?.title || 'Mermaid Diagram') || 'Mermaid Diagram';
 
           const artifactSyntax = `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">
 ${toolOutput.content}
@@ -579,7 +589,7 @@ ${toolOutput.content}
 
           if (toolOutput.type === 'mermaid' && toolOutput.content) {
             const identifier = `mermaid-${Date.now()}`;
-            const title = toolOutput.metadata?.title || 'Mermaid Diagram';
+            const title = stripTitleQuotes(toolOutput.metadata?.title || 'Mermaid Diagram') || 'Mermaid Diagram';
 
             const artifactSyntax = `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">
 ${toolOutput.content}
@@ -658,11 +668,15 @@ ${codeContent.trim()}
     return match;
   });
 
+  // The rewritten fence patterns put no \s* in front of the body group: it is greedy
+  // over the characters the lazy body matches anyway, so on a fence label followed by a
+  // long whitespace run and no closer it gives back one character at a time and rescans,
+  // which is quadratic. Every callback trims the body, so the leading break is free.
   // Detect HTML code blocks. The fence is matched on its own and the document
   // anchors are checked in the callback. With <!DOCTYPE and </html> anchored inside
   // the pattern, two lazy multi-line groups had to split the body between them, so a
   // fence that never closed and repeated </html> cost time quadratic in body size.
-  const htmlCodeBlockRegex = /```html\s*\n?([\s\S]*?)```/gi;
+  const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
     // The closer must follow the declaration, as the anchored pattern required. The
@@ -682,7 +696,7 @@ ${codeContent.trim()}
   // fragments). The DOCTYPE-requiring regex above already converted full documents,
   // so any remaining ```html fence is a fragment - still better presented as a
   // previewable artifact than left as a raw code block.
-  const htmlFragmentFenceRegex = /```html\s*\n?([\s\S]*?)```/gi;
+  const htmlFragmentFenceRegex = /```html([\s\S]*?)```/gi;
   content = content.replace(htmlFragmentFenceRegex, (match, codeContent) => {
     // Require at least one HTML tag so a mislabeled fence of plain text is left alone.
     if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent)) return match;
@@ -695,7 +709,7 @@ ${codeContent.trim()}
 
   // Detect SVG code blocks. Same shape as the HTML pass above: match the fence,
   // then check for a complete <svg> element in the callback.
-  const svgCodeBlockRegex = /```svg\s*\n?([\s\S]*?)```/gi;
+  const svgCodeBlockRegex = /```svg([\s\S]*?)```/gi;
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {
     // Located in two forward scans rather than one <svg...</svg> pattern, which

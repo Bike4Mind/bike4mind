@@ -360,6 +360,17 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(out).toContain('```svg');
   });
 
+  it('leaves a fence followed by a long whitespace run untouched, in bounded time', () => {
+    // Greedy whitespace ahead of the lazy body group backtracks one character at a time
+    // when the fence never closes, which is quadratic in the length of the run.
+    for (const label of ['html', 'svg']) {
+      const input = '```' + label + '\n' + '\n'.repeat(200000) + 'x';
+      const startedAt = Date.now();
+      expect(convertCodeBlocksToArtifacts(input)).toBe(input);
+      expect(Date.now() - startedAt).toBeLessThan(1000);
+    }
+  });
+
   it('does not promote an svg fence whose closer precedes its opening tag', () => {
     const input = '```svg\n</svg>\n<svg viewBox="0 0 2 2">\n```';
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
