@@ -6,7 +6,7 @@ import {
   IProjectRepository,
   ISessionRepository,
   IUserDocument,
-  orgAclRowConfersMembership,
+  isOrgMember,
 } from '@bike4mind/common';
 import { UnauthorizedError } from '@bike4mind/utils';
 
@@ -24,8 +24,8 @@ export interface InviteTypeAuthAdapters {
  * caller is authorized and throws UnauthorizedError otherwise, so callers can't silently
  * diverge on the type -> access mapping. FabFile, Session, and Project use the
  * `shareable` adapter (findShareAccessById). Organization and Group use findById +
- * membership predicate: billing owner, orgAclRowConfersMembership users[] row, or platform admin --
- * matching the canonical predicate in @bike4mind/common. Any other type (e.g. Tool) has no arm and
+ * membership predicate via isOrgMember (billing owner, orgAclRowConfersMembership users[] row, or
+ * platform admin). Any other type (e.g. Tool) has no arm and
  * is denied.
  */
 export const authorizeByInviteType = async (
@@ -44,14 +44,14 @@ export const authorizeByInviteType = async (
     authorized = await db.projects.shareable.findShareAccessById(user, documentId);
   } else if (type === InviteType.Organization) {
     const org = await db.organizations.findById(documentId);
-    if (org && (user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id && orgAclRowConfersMembership(m)))) {
+    if (org && isOrgMember(user, org)) {
       authorized = org;
     }
   } else if (type === InviteType.Group) {
     const group = await db.groups.findById(documentId);
     if (group) {
       const org = await db.organizations.findById(group.organizationId);
-      if (org && (user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id && orgAclRowConfersMembership(m)))) {
+      if (org && isOrgMember(user, org)) {
         authorized = org;
       }
     }

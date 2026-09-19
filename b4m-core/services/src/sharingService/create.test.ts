@@ -24,8 +24,8 @@ describe('sharingService - createInvite (group arm authority)', () => {
     userId: OWNER_ID,
     adminUserIds: [ADMIN_MEMBER_ID],
     users: [
-      { userId: ADMIN_MEMBER_ID, permissions: [] },
-      { userId: PLAIN_MEMBER_ID, permissions: [] },
+      { userId: ADMIN_MEMBER_ID, permissions: ['read'] },
+      { userId: PLAIN_MEMBER_ID, permissions: ['read'] },
     ],
   };
 
