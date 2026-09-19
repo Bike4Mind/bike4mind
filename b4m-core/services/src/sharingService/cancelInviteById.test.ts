@@ -11,7 +11,7 @@ describe('sharingService - cancelInviteById', () => {
     fabFiles: { shareable: { findShareAccessById: Mock } };
     sessions: { shareable: { findShareAccessById: Mock } };
     projects: { shareable: { findShareAccessById: Mock } };
-    organizations: { shareable: { findShareAccessById: Mock }; findById: Mock };
+    organizations: { findById: Mock };
     groups: { findById: Mock };
   };
 
@@ -22,7 +22,7 @@ describe('sharingService - cancelInviteById', () => {
       fabFiles: { shareable: { findShareAccessById: vi.fn() } },
       sessions: { shareable: { findShareAccessById: vi.fn() } },
       projects: { shareable: { findShareAccessById: vi.fn() } },
-      organizations: { shareable: { findShareAccessById: vi.fn() }, findById: vi.fn() },
+      organizations: { findById: vi.fn() },
       groups: { findById: vi.fn() },
     };
   });
@@ -73,16 +73,15 @@ describe('sharingService - cancelInviteById', () => {
       recipients: { pending: [], accepted: [], refused: [] },
     };
     db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
-    db.organizations.findById.mockResolvedValue({ id: 'org-1' });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [] });
 
     await cancelInviteById(admin, { id: 'inv-1' }, { db } as any);
 
     expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
-    expect(db.organizations.shareable.findShareAccessById).not.toHaveBeenCalled();
     expect(db.invites.update).toHaveBeenCalled();
   });
 
-  it('authorizes a Group invite via the parent organization share access (no admin bypass)', async () => {
+  it('authorizes a Group invite via the parent org (findById + membership)', async () => {
     const invite = {
       id: 'inv-1',
       type: InviteType.Group,
@@ -92,11 +91,11 @@ describe('sharingService - cancelInviteById', () => {
     };
     db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
     db.groups.findById.mockResolvedValue({ id: 'grp-1', organizationId: 'org-1' });
-    db.organizations.shareable.findShareAccessById.mockResolvedValue({ id: 'org-1' });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'user-1', permissions: ['read'] }] });
 
     await cancelInviteById(user, { id: 'inv-1' }, { db } as any);
 
-    expect(db.organizations.shareable.findShareAccessById).toHaveBeenCalledWith(user, 'org-1');
+    expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
     expect(db.invites.update).toHaveBeenCalled();
   });
 
