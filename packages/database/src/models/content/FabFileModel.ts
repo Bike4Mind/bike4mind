@@ -2538,6 +2538,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  /** Ceiling on one stale-space read. Far above any real lake; see the note in the docblock
+   *  below for why a lake at the cap loses nothing. */
+  private static readonly STALE_EMBEDDING_SPACE_SCAN_LIMIT = 10_000;
+
   /**
    * The lake's members still carrying a DIFFERENT file-level embedding space than `embeddingModel`.
    *
@@ -2551,7 +2555,9 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
    * `vectorizedChunkCount: {$gt: 0}` is what makes this a stale-SPACE read rather than a
    * not-yet-embedded one: a file with no vectors has no space to leave and will be embedded in the
    * current one unaided. It also drops a file the instant a wave resets it (the reset zeroes this
-   * count), which is what lets a caller read the count falling as progress.
+   * count), which is what lets a caller read the count falling as progress - and is also what makes
+   * the cap below safe: a lake larger than one read re-offers its remainder on the next wave, so a
+   * capped result reads as "at least this many" rather than losing anything.
    */
   async findFilesOutsideEmbeddingSpaceByScope(
     scope: DataLakeMembershipScope,
@@ -2569,6 +2575,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         },
         { _id: 1, userId: 1 }
       )
+      .limit(FabFileRepository.STALE_EMBEDDING_SPACE_SCAN_LIMIT)
       .lean();
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
