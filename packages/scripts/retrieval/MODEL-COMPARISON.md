@@ -92,7 +92,7 @@ too, naming the chunk - the batcher's own check fires only after the spend is ap
 
 ```bash
 pnpm --filter @bike4mind/scripts retrieval:model-comparison \
-  --fixtures out/text-embedding-ada-002.system-help.fixture.json,out/text-embedding-3-small.system-help.fixture.json,out/text-embedding-3-large.system-help.fixture.json \
+  --fixtures out/text-embedding-ada-002.system-help.fixture.ndjson,out/text-embedding-3-small.system-help.fixture.ndjson,out/text-embedding-3-large.system-help.fixture.ndjson \
   --widths 3072,1536,512
 ```
 
@@ -375,14 +375,36 @@ repeat the derivation:
 ```bash
 # ada-002 arm
 pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
-  --fixture out/text-embedding-ada-002.system-help.fixture.json \
+  --fixture out/text-embedding-ada-002.system-help.fixture.ndjson \
   --floors 0:0,0:74,85:75,0:76
 
 # 3-small arm
 pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
-  --fixture out/text-embedding-3-small.system-help.fixture.json \
+  --fixture out/text-embedding-3-small.system-help.fixture.ndjson \
   --floors 85:75,0:30,0:35,85:35
 ```
+
+#### Screening what a floor actually served
+
+A sweep row says a negative question was served six chunks. Whether that is a false positive depends
+on whether those six answer it - and a question the corpus genuinely answers is not a negative at
+all, so counting it as one inflates the very rate the floor is being graded on. The fixture carries
+no chunk text and, for a production lake, no file names either, so this cannot be settled offline:
+
+```bash
+# Phase B, with the served ids kept
+pnpm --filter @bike4mind/scripts retrieval:forced-floor-sweep \
+  --fixture out/text-embedding-3-small.<lake>.fixture.ndjson \
+  --floors 85:49 --emit-served out/served.json
+
+# Phase C: one read, keyed on chunk id, for exactly those chunks
+npx sst shell --stage <stage> -- tsx packages/scripts/retrieval/fetch-served-text.ts \
+  --served out/served.json --questions <question file> --out out/screen.md
+```
+
+`out/screen.md` pairs each question with the text of what it was served. **Judge it from the
+passages.** Screening by file name has been tried and reversed the answer on a sixth of the cases it
+was used on - a plausible-looking name is not evidence about the chunk that was actually scored.
 
 **These two runs are what produced the MEASURED table below, and neither is reproducible from a
 clean clone.** `packages/scripts/out/` is gitignored, so the captures are not committed - 452 chunks
@@ -595,6 +617,68 @@ Production turns now record `injected.backgroundScore` beside `injected.topScore
 distribution a value has to be chosen from is collected on live traffic whether or not the floor is
 ever switched on.
 
+### REFIT: 58 replaces 49 for 3-small, off the LIVE `opti-knowledge` capture
+
+The refit above was fitted to 35 files and 6 negatives. This one is fitted to a 520-file /
+21,327-chunk capture of the live `opti-knowledge` lake (1536 dims, captured 2026-09-18) swept
+against 30 positives authored from that corpus's own passages plus screened negatives, so recall and
+false-positive rate come out of ONE corpus snapshot. The negatives were screened by reading the
+served chunk TEXT, which reclassified 44 of 89 as answerable; the two right-hand columns are that
+screen's two defensible readings, counting a PARTIAL answer as answerable or as a false positive.
+
+| floor | recall | positives emptied | FP (45 strict neg) | FP (61 partial-as-neg) |
+|---:|---:|---:|---:|---:|
+| 85:49 (the previous value) | 100.0% | 0 | 71.1% | 78.7% |
+| 85:53 | 100.0% | 0 | 64.4% | 73.8% |
+| 85:55 | 96.7% | 1 | 60.0% | 68.9% |
+| **85:58 (shipped)** | **93.3%** | **2** | **42.2%** | **52.5%** |
+| 85:61 | 86.7% | 4 | 22.2% | 36.1% |
+| 85:64 | 76.7% | 7 | 13.3% | 19.7% |
+| 85:75 (ada-002's floor) | 20.0% | 24 | 0.0% | 0.0% |
+
+**The band of this capture, which is what a floor has to clear:** band max **0.8731**, and per-query
+best score spans 0.3587 to 0.8731. Positives' best score runs min 0.5481 / p50 0.6884 / max 0.8731;
+negatives' best score runs min 0.3587 / p50 0.5634 / max 0.6890. The 0.5588 band max in the arm
+table above belongs to the 35-file capture and was never a bound on this corpus - the same space
+reaches 0.8731 on a production-class one. `embeddingSpaceFloors.test.ts` asserts every shipped floor
+against these numbers.
+
+Two things follow from those distributions, and both match the sweep exactly. A floor of 55 empties
+precisely one positive, because one positive's best chunk scores 0.5481. A floor of 70 empties all
+45 strict negatives, because the best-scoring negative reaches only 0.6890. The distributions
+OVERLAP heavily (negatives' max sits above positives' min), which is why the curve is smooth and no
+floor is a breakpoint to discover.
+
+**Why 58 rather than the separation optimum, which is 61-64.** Recall here is measured on positives
+authored FROM corpus passages, so each supporting document is the easiest possible match for its own
+question, making this recall an upper bound on recall against a real user's phrasing. The
+false-positive rate carries no matching optimism. An optimistic recall beside an honest
+false-positive rate biases the optimum high, so the shipped floor is the low end of the bracket.
+
+**What 49 got wrong was not its magnitude.** It emptied ZERO positives - it was not buying recall
+protection, it simply was not cutting - while 71-79% of screened true negatives still got something
+served. The whole range 0-53 costs no recall on this corpus.
+
+Recall in this table is of the ACCEPTED set, so it answers "did the floor cut the supporting
+document", which is the floor's own question, and is not a claim the model saw it: `served/q` is 6.0
+against `accepted/q` of 62.4 at floor 49. Precision is over distinct DOCUMENTS. The 256-chunk
+candidate pool cap truncated the set on 75 of 75 queries, so every `cut @` rank in the raw sweep is
+a rank within a truncated pool.
+
+**Reproducing it** needs the capture, which is gitignored and costs provider spend to remake. The
+question sets are private (their ids name partners and competitors). Given the capture:
+
+```bash
+npx tsx retrieval/forced-floor-sweep.ts \
+  --fixture out/text-embedding-3-small.opti-knowledge.combined.fixture.ndjson \
+  --floors 0:0,85:45,85:47,85:49,85:53,85:55,85:58,85:61,85:64,85:67,85:70,85:73,85:75
+```
+
+The partial-as-negative column was DERIVED rather than re-embedded: `emptied` and the false-positive
+rate are both functions of `accepted === 0` per query and queries score independently, so the 16
+screened PARTIAL negatives were swept alone and their emptied counts added to the 45. At floor 49
+that derivation reproduces the screen's independently computed 78.7% exactly.
+
 ## Out of scope
 
 This harness measures. It does not change anything. Flipping `defaultEmbeddingModel`, re-embedding the
@@ -628,3 +712,37 @@ Every captured query carries a `questionHash` of the `PROBE_QUESTIONS` text it e
 fixtures by design: the id still matches, so nothing downstream would have noticed that two arms were
 scored on different questions under one label. Re-capture every arm (the whole set - a mixed pair is
 the bug) before scoring again.
+
+### Phase E: adding questions without re-capturing the corpus
+
+A question being **reworded** invalidates a fixture, as above. A question being **added** does not,
+and the two need opposite responses. Re-capturing to ask a new question re-reads a corpus that has
+not changed to learn nothing new about it - and, on a live lake, reads a corpus that HAS changed, so
+the new questions land on a different snapshot than the old ones. Recall measured on one snapshot
+against a false-positive rate measured on another is not one table, which is the whole reason the
+floor sweep wants both halves of a question set in one run.
+
+`extend-fixture-queries.ts` embeds only the questions the fixture lacks and copies its chunk lines
+byte for byte:
+
+```bash
+npx sst shell --stage production -- tsx packages/scripts/retrieval/extend-fixture-queries.ts \
+  --fixture out/text-embedding-3-small.<lake>.fixture.ndjson \
+  --questions <question file> --userId <your id> \
+  --out out/text-embedding-3-small.<lake>.combined.fixture.ndjson --dry-run
+```
+
+`--dry-run` needs no credential, no stage and no connection - it reads the fixture's header line
+only, so the plan can be checked off-stage in about a second even on a 633 MB capture. Drop it and
+add `--yes` to embed.
+
+Three things it will not do. It refuses a capture whose queries carry no `supporting`, because that
+fixture's ground truth is the committed `PROBE_QUESTIONS` joined by id and splicing an external file
+on would silently retire the text pin above. It re-embeds rather than reuses when a question's text
+hash has moved, and names the id - an earlier table using that vector measured a different question.
+And it takes every `supporting` set from the question file rather than the fixture, so a question the
+screen has reclassified is scored against the new answer, not the captured one.
+
+The output is a new file: the corpus, `capturedAt` and every count are the source capture's, and only
+the query set differs. Reading it back through `readEmbeddingFixtureFile` re-validates it exactly as
+a fresh capture, and the chunk-line count is checked against the header before the file is kept.

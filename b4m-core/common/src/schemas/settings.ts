@@ -46,11 +46,11 @@ import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/Sc
 
 /**
  * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
- * text-embedding-ada-002, 49 for text-embedding-3-small").
+ * text-embedding-ada-002, 58 for text-embedding-3-small").
  *
- * Rendered rather than written out in prose because these numbers are expected to move - 49 is
- * provisional until it is re-derived against a production lake - and a description that restates
- * the table is a wrong number shown to operators the moment it drifts, with nothing failing.
+ * Rendered rather than written out in prose because these numbers move as each space is re-measured
+ * against a production lake, and a description that restates the table is a wrong number shown to
+ * operators the moment it drifts, with nothing failing.
  */
 const forcedRetrievalFloorsBySpaceSummary = Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)
   .map(([space, pct]) => `${pct} for ${space}`)
