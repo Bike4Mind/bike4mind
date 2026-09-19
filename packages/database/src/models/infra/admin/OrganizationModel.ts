@@ -1,6 +1,7 @@
 import {
   IOrganizationDocument,
   IOrganizationRepository,
+  IUserShare,
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORG_MEMBERSHIP_ACL_PERMISSIONS,
 } from '@bike4mind/common';
@@ -265,7 +266,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    */
   async addMemberRaisingSeats(
     organizationId: string,
-    member: IOrganizationDocument['users'][number]
+    member: IUserShare
   ): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
@@ -302,7 +303,7 @@ export class OrganizationRepository extends BaseRepository<IOrganizationDocument
    */
   async addMemberIfUnderCeiling(
     organizationId: string,
-    member: IOrganizationDocument['users'][number]
+    member: IUserShare
   ): Promise<IOrganizationDocument | null> {
     return this.organizationModel.findOneAndUpdate(
       {
