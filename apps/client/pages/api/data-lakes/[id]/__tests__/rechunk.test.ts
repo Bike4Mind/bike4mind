@@ -104,7 +104,12 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
     h.countFailedLakeFiles.mockResolvedValue(1);
     h.detectStaleEmbeddingSpaceFiles.mockResolvedValue([{ fabFileId: 'f9', userId: 'u1' }]);
     const { json } = await invoke('GET');
-    expect(json).toHaveBeenCalledWith({ underChunkedCount: 2, failedCount: 1, staleEmbeddingSpaceCount: 1 });
+    expect(json).toHaveBeenCalledWith({
+      underChunkedCount: 2,
+      failedCount: 1,
+      staleEmbeddingSpaceCount: 1,
+      embeddingSpaceResolved: true,
+    });
     expect(h.assertLakeAccess).toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
@@ -113,10 +118,20 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
   it('reports the stale-space count as null - never 0 - when the space cannot be resolved', async () => {
     // 0 would read as "nothing to migrate", which is the one answer this situation cannot support:
     // with no space to compare against, every label comparison would be wrong.
+    //
+    // `embeddingSpaceResolved: false` is the other half, and the pair is the point: a null count
+    // alone cannot tell a client whether the space failed to resolve or the field is simply absent
+    // because the server predates it. Only a server that ran the resolution can say, so the flag
+    // has to be present and false here, never omitted.
     h.detectUnderChunkedFiles.mockResolvedValue([]);
     h.resolveEffectiveEmbeddingModel.mockResolvedValue(undefined);
     const { json } = await invoke('GET');
-    expect(json).toHaveBeenCalledWith({ underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: null });
+    expect(json).toHaveBeenCalledWith({
+      underChunkedCount: 0,
+      failedCount: 0,
+      staleEmbeddingSpaceCount: null,
+      embeddingSpaceResolved: false,
+    });
     expect(h.detectStaleEmbeddingSpaceFiles).not.toHaveBeenCalled();
   });
 
