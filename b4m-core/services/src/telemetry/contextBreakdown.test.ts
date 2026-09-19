@@ -34,7 +34,7 @@ const fullPromptMeta = (): PromptMeta => ({
     outcome: 'ok',
     mode: 'forced',
     surfaces: ['forced'],
-    dataLakeTags: ['ionq'],
+    dataLakeTags: ['northwind'],
     injected: { chunks: 3, chars: 900 },
   },
   offeredTools: ['search_knowledge_base', 'web_fetch'],
