@@ -47,7 +47,7 @@
  *   npx sst shell --stage production -- tsx packages/scripts/datalake/label-blank-embedding-model-files.ts --model text-embedding-ada-002 --execute
  */
 
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
@@ -147,12 +147,22 @@ async function main(opts: Options): Promise<number> {
   // APPENDED, never truncated. This script is resumable, so the run that finishes the job is often
   // not the one that stamped most of it - truncating here would discard the earlier run's ids while
   // leaving its writes in place, which is precisely the partial-failure case the log exists for.
-  if (opts.execute) {
-    appendFileSync(
-      opts.rollbackLog,
-      `# run ${new Date().toISOString()} stage=${Resource.App.stage} model=${opts.model}\n`
-    );
-  }
+  //
+  // Written lazily, on the first line that actually has something to record. An eager header made
+  // the wrong-model abort below print "Nothing was written" over a file it had just created, and
+  // `out/` is gitignored, so on a fresh clone it does not exist and the first append must create it.
+  let rollbackHeaderWritten = false;
+  const appendRollback = (body: string) => {
+    if (!rollbackHeaderWritten) {
+      mkdirSync(path.dirname(opts.rollbackLog), { recursive: true });
+      appendFileSync(
+        opts.rollbackLog,
+        `# run ${new Date().toISOString()} stage=${Resource.App.stage} model=${opts.model}\n`
+      );
+      rollbackHeaderWritten = true;
+    }
+    appendFileSync(opts.rollbackLog, body);
+  };
 
   for (;;) {
     const page = await fabFileRepository.findVectorizedFilesMissingEmbeddingModel({
@@ -190,7 +200,7 @@ async function main(opts: Options): Promise<number> {
     // Before the writes, not after: a crash mid-pass otherwise leaves stamps that cannot be
     // unwound, because nothing recorded which files this pass labeled.
     if (opts.execute && plan.stamp.length > 0) {
-      appendFileSync(opts.rollbackLog, rollbackLogLines(plan).join('\n') + '\n');
+      appendRollback(rollbackLogLines(plan).join('\n') + '\n');
     }
     rollbackIds.push(...plan.rollbackStampedAtIds);
 

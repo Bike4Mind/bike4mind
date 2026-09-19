@@ -224,8 +224,14 @@ async function main(): Promise<number> {
     console.log(`  note: ${midRun} file(s) are mid-chunk and the reset precondition will skip them`);
   }
 
-  // The manifest goes to the OS temp dir at 0600, never into the working tree: this is a public
-  // repo and its history is permanent.
+  const approved = checkExpectedPopulation({ selector, execute, expect: approvedCount, population: stale.length });
+  report(approved.lines);
+  if (!approved.ok) return approved.exitCode;
+
+  // Past the execute gate, never before it: a dry run is a read, its "nothing written" line has to
+  // stay literally true, and a rehearsal must not leave a file of account-tied ids sitting on the
+  // operator's disk. The OS temp dir at 0600, never the working tree: this is a public repo and its
+  // history is permanent.
   const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lake-drain-'));
   const manifest = path.join(outDir, `${label}-manifest.json`);
   fs.writeFileSync(
@@ -253,10 +259,6 @@ async function main(): Promise<number> {
   console.log(`\nmanifest of prior state: ${manifest}`);
   console.log('  This is NOT an undo. The worker deletes the old passages, so a drain can only be');
   console.log('  re-run, never reversed; the manifest records which files were touched and from what.');
-
-  const approved = checkExpectedPopulation({ selector, execute, expect: approvedCount, population: stale.length });
-  report(approved.lines);
-  if (!approved.ok) return approved.exitCode;
 
   const waves = planWaves({ ids: stale.map(f => str(f._id)), limit, wave });
   const ownerById = new Map(stale.map(f => [str(f._id), str(f.userId)] as const));
