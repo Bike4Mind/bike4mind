@@ -167,6 +167,7 @@ jobs:
           # script. Unset on a public fork → those two checks are skipped.
           DENY_ACCOUNT_IDS: ${{ vars.DENY_ACCOUNT_IDS }}
           DENY_BRAND_DOMAINS: ${{ vars.DENY_BRAND_DOMAINS }}
+          DENY_PARTNER_NAMES: ${{ vars.DENY_PARTNER_NAMES }}
 
       - name: Verify open-core snapshot export-ignore exclusions
         run: |

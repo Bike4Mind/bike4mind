@@ -48,9 +48,16 @@ EXCLUDE_DIRS=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build
 # own scripts/ dir from the scan). They come from CI config instead:
 #   DENY_ACCOUNT_IDS   — pipe-joined account IDs,   e.g. "111111111111|222222222222"
 #   DENY_BRAND_DOMAINS — pipe-joined ERE domains,   e.g. "example\.com"
-# Set both as repo/org variables on the private source repo (wired into ci.yml).
-# Unset (e.g. on a public fork) simply skips those two checks — a fork has no B4M
+#   DENY_PARTNER_NAMES - pipe-joined ERE names,     e.g. "acme|globex"
+# Set all three as repo/org variables on the private source repo (wired into ci.yml).
+# Unset (e.g. on a public fork) simply skips those checks - a fork has no B4M
 # account IDs to catch, so there is nothing to protect there.
+#
+# DENY_PARTNER_NAMES matches case-insensitively and on word boundaries, so a name that
+# is also a common substring does not fire on every unrelated identifier that contains
+# it. Sample data in a fixture is the usual way one of these gets in: a name with
+# irregular capitalisation makes a normalizer's behaviour vivid in a test, which is
+# exactly why someone reaches for a real one. Use an invented name instead.
 #
 # A bare 24-character lowercase hex run is a Mongo ObjectId as `toString()` renders it, so it is
 # a user, org or document id pasted into source - the shape CLAUDE.md answers with "resolve at
@@ -89,6 +96,25 @@ allow_patterns=$(grep -vE '^[[:space:]]*(#|$)' "$ALLOWLIST" || true)
 
 raw_findings=$(grep -rEn "${INCLUDES[@]}" "${EXCLUDE_FILES[@]}" "${EXCLUDE_DIRS[@]}" \
   -e "$ALWAYS_PATTERN" -e "$FALLBACK_PATTERN" "${SCAN_DIRS[@]}" 2>/dev/null || true)
+
+# Partner names get their own pass rather than joining the alternation above, for two
+# reasons. It is case-insensitive, because a name is written every way a person types it
+# and the spelling worth catching is the one nobody looked for - but folding case over the
+# alternation above would make `\bG-[A-Z0-9]{8,}\b` match `g-` as well, which fires on
+# every minified bundle in the tree. And it skips packages/premium, where the private
+# overlay repos are checked out in-tree: none of their content is tracked here, they
+# legitimately name partners in their own private history, and including them would fail
+# this hook for every developer who has one checked out.
+#
+# EXCLUDE_FILES applies here too, and for a name it bites harder than elsewhere: sample
+# data in a fixture is the usual way one of these gets in, because a name with irregular
+# capitalisation makes a normalizer's behaviour vivid in an assertion. So this arm covers
+# shippable code and leaves the likeliest hiding place to review. Use an invented name.
+if [ -n "${DENY_PARTNER_NAMES:-}" ]; then
+  partner_findings=$(grep -rEni "${INCLUDES[@]}" "${EXCLUDE_FILES[@]}" "${EXCLUDE_DIRS[@]}" \
+    --exclude-dir=premium -e "\\b(${DENY_PARTNER_NAMES})\\b" "${SCAN_DIRS[@]}" 2>/dev/null || true)
+  raw_findings=$(printf '%s\n%s\n' "$raw_findings" "$partner_findings" | grep -v '^$' || true)
+fi
 
 if [ -n "$allow_patterns" ] && [ -n "$raw_findings" ]; then
   findings=$(echo "$raw_findings" | grep -vEf <(echo "$allow_patterns") || true)
