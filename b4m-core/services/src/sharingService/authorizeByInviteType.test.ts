@@ -38,7 +38,7 @@ describe('sharingService - authorizeByInviteType', () => {
   });
 
   it('authorizes an Organization via findById + membership check (billing owner, member, or admin)', async () => {
-    const org = { id: 'org', userId: 'owner', users: [{ userId: 'member-1' }] };
+    const org = { id: 'org', userId: 'owner', users: [{ userId: 'member-1', permissions: ['read'] }] };
 
     // billing owner
     db.organizations.findById.mockResolvedValue(org);
@@ -66,7 +66,7 @@ describe('sharingService - authorizeByInviteType', () => {
   });
 
   it('authorizes a Group via findById + membership on its parent org', async () => {
-    const org = { id: 'org-1', userId: 'owner', users: [{ userId: 'a' }] };
+    const org = { id: 'org-1', userId: 'owner', users: [{ userId: 'a', permissions: ['read'] }] };
     db.groups.findById.mockResolvedValue({ id: 'grp', organizationId: 'org-1' });
     db.organizations.findById.mockResolvedValue(org);
 
@@ -77,7 +77,7 @@ describe('sharingService - authorizeByInviteType', () => {
     // platform admin also passes
     vi.clearAllMocks();
     db.groups.findById.mockResolvedValue({ id: 'grp', organizationId: 'org-1' });
-    db.organizations.findById.mockResolvedValue(org);
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'owner', users: [{ userId: 'a', permissions: ['read'] }] });
     await authorizeByInviteType({ id: 'x', isAdmin: true } as any, InviteType.Group, 'grp', db as any);
     expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
   });

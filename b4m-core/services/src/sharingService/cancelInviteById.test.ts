@@ -91,7 +91,7 @@ describe('sharingService - cancelInviteById', () => {
     };
     db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
     db.groups.findById.mockResolvedValue({ id: 'grp-1', organizationId: 'org-1' });
-    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'user-1' }] });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'user-1', permissions: ['read'] }] });
 
     await cancelInviteById(user, { id: 'inv-1' }, { db } as any);
 

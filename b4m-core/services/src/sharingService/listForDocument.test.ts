@@ -52,7 +52,7 @@ describe('sharingService - listInvitesForDocument', () => {
 
   it('authorizes a Group via findById + membership on its parent org', async () => {
     db.groups.findById.mockResolvedValue({ id: documentId, organizationId: 'org-1' });
-    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'user-1' }] });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'user-1', permissions: ['read'] }] });
     db.invites.findAllByDocumentId.mockResolvedValue([{ id: 'i3', documentId, type: InviteType.Group }]);
 
     const result = await listInvitesForDocument(user, { documentId, type: InviteType.Group }, { db } as any);

@@ -408,7 +408,8 @@ describe('sharingService - createInvite (organization arm authority)', () => {
     id: ORG_ID,
     name: ORG_NAME,
     userId: OWNER_ID,
-    users: [{ userId: MEMBER_ID, permissions: [] }],
+    adminUserIds: [MEMBER_ID],
+    users: [{ userId: MEMBER_ID, permissions: ['read'] }],
     seats: 10,
   };
 
@@ -448,11 +449,24 @@ describe('sharingService - createInvite (organization arm authority)', () => {
     expect(db.invites.create).toHaveBeenCalled();
   });
 
-  it('allows an org member in the users[] list', async () => {
+  it('allows an appointed org admin (in adminUserIds + users[])', async () => {
     const invite = await create(asUser(MEMBER_ID));
 
     expect(invite.name).toBe(ORG_NAME);
     expect(db.invites.create).toHaveBeenCalled();
+  });
+
+  it('rejects a plain member not in adminUserIds (disclosure guard passes, authority gate throws)', async () => {
+    const plainMemberOrg = {
+      ...organization,
+      adminUserIds: [],
+      users: [{ userId: MEMBER_ID, permissions: ['read'] as string[] }],
+    };
+    db.organizations.findById = vi.fn(async () => plainMemberOrg);
+
+    const { ForbiddenError } = await import('@bike4mind/utils');
+    await expect(create(asUser(MEMBER_ID))).rejects.toThrow(ForbiddenError);
+    expect(db.invites.create).not.toHaveBeenCalled();
   });
 
   it('allows a platform admin even without direct membership', async () => {

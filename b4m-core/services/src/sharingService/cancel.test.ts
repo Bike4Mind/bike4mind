@@ -185,7 +185,7 @@ describe('sharingService - cancelInvite authority', () => {
       expect(result[0].remaining).toBe(0);
     });
 
-    it('Organization: any org member (billing owner, users[], or admin) can cancel', async () => {
+    it('Organization: billing owner can cancel org invites', async () => {
       db.organizations.findById = vi.fn(async () => ({ id: DOC_ID, userId: CALLER_ID, users: [] }));
 
       const result = await cancel(InviteType.Organization);
@@ -194,7 +194,7 @@ describe('sharingService - cancelInvite authority', () => {
       expect(result[0].remaining).toBe(0);
     });
 
-    it("Group: any member of the group's owning org can cancel", async () => {
+    it("Group: billing owner of the group's owning org can cancel", async () => {
       db.groups.findById = vi.fn(async () => ({ id: DOC_ID, organizationId: 'org-9' }));
       db.organizations.findById = vi.fn(async () => ({ id: 'org-9', userId: CALLER_ID, users: [] }));
 

@@ -267,12 +267,16 @@ const inviteToOrg = async (
 
   const organization = await db.organizations.findById(params.id);
   if (!organization) throw new BadRequestError('Organization not found');
-  if (!user.isAdmin) {
-    const isMember =
-      organization.userId === user.id ||
-      (organization.users ?? []).some(member => member.userId === user.id);
-    if (!isMember) throw new BadRequestError('Organization not found');
-  }
+  // Disclosure guard: collapse non-member into the same error as "org not found" so the org's
+  // existence is not confirmed to callers who have no relationship with it.
+  const isInOrganization =
+    user.isAdmin ||
+    organization.userId === user.id ||
+    (organization.users ?? []).some(member => member.userId === user.id);
+  if (!isInOrganization) throw new BadRequestError('Organization not found');
+  // Authority gate: minting an org invite spends a seat, so only billing owner, appointed
+  // org admin (adminUserIds), or platform admin may do this -- same bar as group-invite minting.
+  assertCanManageOrgGroups(user, organization);
 
   // We add 1 to include the owner of the organization
   const totalUsers = (organization.users.length ?? 0) + 1;

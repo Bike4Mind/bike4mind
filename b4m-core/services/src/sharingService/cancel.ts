@@ -7,8 +7,10 @@ import {
   IProjectRepository,
   ISessionDocument,
   IUserDocument,
+  orgAclRowConfersMembership,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters, UnprocessableEntityError } from '@bike4mind/utils';
+import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
 import { z } from 'zod';
 
 const cancelInviteSchema = z.object({
@@ -63,19 +65,24 @@ export const cancelInvite = async (
     if (!session) throw new NotFoundError('Session not found');
   } else if (type === InviteType.Organization) {
     const org = await db.organizations.findById(id);
-    const isMember =
-      org &&
-      (user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id));
-    if (!isMember) throw new NotFoundError('Organization not found');
+    if (!org) throw new NotFoundError('Organization not found');
+    // Disclosure guard: collapse non-member into the same error as "not found".
+    const isInOrganization =
+      user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id);
+    if (!isInOrganization) throw new NotFoundError('Organization not found');
+    // Authority gate: only billing owner, appointed org admin, or platform admin may cancel org invites.
+    assertCanManageOrgGroups(user, org);
   } else if (type === InviteType.Group) {
     const group = await db.groups.findById(id);
     if (!group) throw new NotFoundError('Group not found');
-
     const org = await db.organizations.findById(group.organizationId);
-    const isMember =
-      org &&
-      (user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id));
-    if (!isMember) throw new NotFoundError('Group not found');
+    if (!org) throw new NotFoundError('Group not found');
+    // Disclosure guard: collapse non-member into the same error as "not found".
+    const isInOrganization =
+      user.isAdmin || org.userId === user.id || (org.users ?? []).some(m => m.userId === user.id);
+    if (!isInOrganization) throw new NotFoundError('Group not found');
+    // Authority gate: only billing owner, appointed org admin, or platform admin may cancel group invites.
+    assertCanManageOrgGroups(user, org);
   } else if (type === InviteType.Project) {
     // Same share-access predicate the create and list paths use for Project
     // (sharingService/create.ts, authorizeByInviteType.ts).
