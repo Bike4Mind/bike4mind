@@ -92,6 +92,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // migrate", and the one case this cannot see is exactly the one where every label comparison
       // would be wrong - so the caller is told it has no answer instead of a reassuring one.
       staleEmbeddingSpaceCount: stale ? stale.length : null,
+      // The discriminator no client can derive for itself: a null count means EITHER the line above
+      // or a rolling-deploy skew against a server predating the field, and only a server that
+      // actually ran the resolution can say which. So an ABSENT value has to keep reading as skew.
+      embeddingSpaceResolved: !!embeddingSpace,
     });
   })
   .post(async (req: Request<{}, unknown, unknown, { id: string }>, res) => {

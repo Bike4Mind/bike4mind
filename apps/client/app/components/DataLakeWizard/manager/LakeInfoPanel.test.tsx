@@ -48,7 +48,13 @@ const useGetLakeMemoryHealth = vi.fn<[], { data: LakeMemoryHealthMock }>(() => (
 // door an owner opened is the argument it passes - which is what these capture.
 const rechunkMutate = vi.fn();
 type RebuildStatusMock =
-  | { underChunkedCount: number; failedCount: number; staleEmbeddingSpaceCount: number | null }
+  | {
+      underChunkedCount: number;
+      failedCount: number;
+      staleEmbeddingSpaceCount: number | null;
+      // Optional here on purpose: the cases that omit it are the ones that must stay silent.
+      embeddingSpaceResolved?: boolean | null;
+    }
   | undefined;
 const useUnderChunkedCount = vi.fn<[], { data: RebuildStatusMock }>(() => ({ data: undefined }));
 
@@ -382,5 +388,53 @@ describe('LakeInfoPanel - re-embed for search', () => {
     });
     renderPanel({ ...baseLake, canRebuild: false });
     expect(screen.queryByTestId(REEMBED)).not.toBeInTheDocument();
+  });
+});
+
+describe('LakeInfoPanel - unresolvable embedding space', () => {
+  const CHIP = 'datalake-embedding-space-unknown-chip-lake-1';
+
+  it('says so when the server reports it could not resolve a space', () => {
+    // The only place an owner can learn this. The re-embed button is hidden by the same null count,
+    // and the route's 409 naming the remedy is reachable from nowhere else.
+    useUnderChunkedCount.mockReturnValue({
+      data: {
+        underChunkedCount: 0,
+        failedCount: 0,
+        staleEmbeddingSpaceCount: null,
+        embeddingSpaceResolved: false,
+      },
+    });
+    renderPanel();
+    expect(screen.getByTestId(CHIP)).toBeInTheDocument();
+  });
+
+  it('stays quiet when the server did not answer at all - that is a deploy skew, not a diagnosis', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: null },
+    });
+    renderPanel();
+    expect(screen.queryByTestId(CHIP)).not.toBeInTheDocument();
+  });
+
+  it('stays quiet on a healthy lake', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: 0, embeddingSpaceResolved: true },
+    });
+    renderPanel();
+    expect(screen.queryByTestId(CHIP)).not.toBeInTheDocument();
+  });
+
+  it('stays quiet for a member who cannot rebuild the lake', () => {
+    useUnderChunkedCount.mockReturnValue({
+      data: {
+        underChunkedCount: 0,
+        failedCount: 0,
+        staleEmbeddingSpaceCount: null,
+        embeddingSpaceResolved: false,
+      },
+    });
+    renderPanel({ ...baseLake, canRebuild: false });
+    expect(screen.queryByTestId(CHIP)).not.toBeInTheDocument();
   });
 });

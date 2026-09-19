@@ -107,6 +107,11 @@ export function LakeInfoPanel({
   // which is the right direction: null covers both an unconfigured embedding model and a
   // rolling-deploy skew against an older server, and an advisory chip would be wrong in the second
   // case - it would tell every owner their lake might be stale during any deploy window.
+  //
+  // The cost, taken knowingly: only the skew case is transient. On a self-host whose configured
+  // provider credential is missing or a placeholder there is no keyless fallback, so the first case
+  // persists until an operator changes configuration - and nothing else reports it, because the
+  // route's 409 naming the remedy is only reachable from the button this hides.
   const staleEmbeddingSpaceCount = rebuildStatus?.staleEmbeddingSpaceCount ?? 0;
   const rechunk = useRechunkDataLake(lake.id);
 
@@ -130,6 +135,13 @@ export function LakeInfoPanel({
   // absence of a button is explained rather than read as "healthy".
   const showConvergeBlocked =
     !!lake.canRebuild && convergencePlan?.refusal === null && convergeWaveSize === 0 && convergeBlockedCount > 0;
+
+  // The other half of the `?? 0` above: collapsing "no answer" into "no button" is right for an
+  // action and silent for a diagnosis, and every sibling surface guards on the same falsy value, so
+  // an owner in this state currently hears nothing from anywhere. `=== false`, never `!` - a server
+  // that did not answer at all is the deploy-skew window, and firing on it would tell every owner
+  // their lake might be stale during any deploy.
+  const showEmbeddingSpaceUnknown = !!lake.canRebuild && rebuildStatus?.embeddingSpaceResolved === false;
 
   // Lake memory: the manual build/rebuild door + purge, manage-gated like Settings/Access -
   // only an editor can spend the daily build cap or erase the profile.
@@ -365,6 +377,26 @@ export function LakeInfoPanel({
                 sx={{ flexShrink: 0 }}
               >
                 {convergeBlockedCount} blocked by another lake
+              </Chip>
+            </Tooltip>
+          )}
+          {showEmbeddingSpaceUnknown && (
+            <Tooltip
+              title={
+                'This deployment has no resolvable embedding model, so there is no way to tell which files ' +
+                'sit in the current vector space and re-embedding is unavailable. Set a supported default ' +
+                'embedding model and check that its provider credential is present.'
+              }
+              size="sm"
+            >
+              <Chip
+                size="sm"
+                variant="soft"
+                color="neutral"
+                data-testid={`datalake-embedding-space-unknown-chip-${lake.id}`}
+                sx={{ flexShrink: 0 }}
+              >
+                Embedding space unknown
               </Chip>
             </Tooltip>
           )}

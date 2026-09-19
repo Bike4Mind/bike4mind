@@ -1363,6 +1363,13 @@ export type LakeRebuildStatus = {
    * that predates this field, and in both the honest answer is "no count", not "nothing to do".
    */
   staleEmbeddingSpaceCount: number | null;
+  /**
+   * Whether the server could resolve an embedding space at all, or `null` when it did not say - an
+   * older server omits the field, which is the rolling-deploy skew and must stay silent. `false` is
+   * a configuration state that persists until an operator changes it (a self-host with no usable
+   * provider credential has no keyless fallback), not a window that closes on its own.
+   */
+  embeddingSpaceResolved: boolean | null;
 };
 
 /** Extra polls after the backlog clears, at SETTLE_MS each - about three minutes of cover. */
@@ -1433,6 +1440,8 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
         // `?? null`, not `?? 0`: an older server omits the field entirely, and defaulting that to a
         // zero would advertise "no stale files" on a lake nobody has measured.
         staleEmbeddingSpaceCount: res.data.staleEmbeddingSpaceCount ?? null,
+        // Same reason, and `?? null` is load-bearing here too: absent is not `false`.
+        embeddingSpaceResolved: res.data.embeddingSpaceResolved ?? null,
       };
     },
     enabled: enabled && !!dataLakeId,
@@ -1489,18 +1498,36 @@ export function useRechunkDataLake(dataLakeId: string | null) {
         // Worded for what this wave actually does. "Rebuilding into passages" would be wrong here:
         // the files are already correctly chunked, and what changes is the vector space they are
         // searchable in - which is also why the unsearchable window is stated.
-        toast.success(
-          data.enqueued > 0
-            ? `Re-embedding ${data.enqueued} file(s) into the current embedding space - ${data.remaining} ` +
-                'remaining. They are unsearchable until re-indexing completes.'
-            : 'Every file in this lake is already in the current embedding space.'
+        //
+        // Three arms, not two, and the reassuring one keys on `detected` rather than `enqueued`.
+        // `enqueued` is the wave MINUS the sends that failed and the files a worker already held,
+        // and the reset drops a wave's passages before any send can fail - so a run whose sends all
+        // failed answers 200 with `enqueued: 0` on a non-empty `detected`, and the two-arm form told
+        // the owner the lake was clean at the one moment it had just been emptied. Only
+        // `detected === 0` means there was nothing to do.
+        if (data.enqueued > 0) {
+          toast.success(
+            `Re-embedding ${data.enqueued} file(s) into the current embedding space - ${data.remaining} ` +
+              'remaining. They are unsearchable until re-indexing completes.'
+          );
+        } else if (data.detected > 0) {
+          toast.warning(
+            `${data.detected} file(s) need re-embedding but none were queued - either a worker already ` +
+              'has them, or the queue rejected them. Any the queue rejected are unsearchable until a ' +
+              're-run succeeds.'
+          );
+        } else {
+          toast.success('Every file in this lake is already in the current embedding space.');
+        }
+      } else if (data.enqueued > 0) {
+        toast.success(`Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`);
+      } else if (data.detected > 0) {
+        toast.warning(
+          `${data.detected} file(s) need rebuilding but none were queued - either a worker already has ` +
+            'them, or the queue rejected them. Re-run this if the count does not fall.'
         );
       } else {
-        toast.success(
-          data.enqueued > 0
-            ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
-            : 'All files are already chunked into passages.'
-        );
+        toast.success('All files are already chunked into passages.');
       }
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
