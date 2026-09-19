@@ -135,6 +135,21 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
     expect(h.detectStaleEmbeddingSpaceFiles).not.toHaveBeenCalled();
   });
 
+  it('answers 0 with the flag TRUE on a converged lake - not the same shape as an unresolved space', async () => {
+    // The third corner, and the one a mutant walks through if it is left unasserted: space resolves
+    // AND nothing is stale. Deriving the flag from the count instead of the space - `!!stale?.length`
+    // is the natural slip - passes both cases above and reports `false` here, which is every healthy
+    // lake. LakeInfoPanel keys its "embedding space unknown" chip off exactly that value.
+    h.detectUnderChunkedFiles.mockResolvedValue([]);
+    const { json } = await invoke('GET');
+    expect(json).toHaveBeenCalledWith({
+      underChunkedCount: 0,
+      failedCount: 0,
+      staleEmbeddingSpaceCount: 0,
+      embeddingSpaceResolved: true,
+    });
+  });
+
   it('compares against the DEPLOYMENT space, not the calling admin', async () => {
     // Each file is re-embedded under its own owner, so the caller's credentials are not what
     // decides where anything lands - passing their id would compare against the wrong space.

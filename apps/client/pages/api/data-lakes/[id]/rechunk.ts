@@ -20,7 +20,8 @@ import { isConvergenceHalted } from '@server/queueHandlers/convergenceKillSwitch
 import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbeddingModel';
 
 /**
- * GET  /api/data-lakes/:id/rechunk  -> { underChunkedCount, failedCount, staleEmbeddingSpaceCount }
+ * GET  /api/data-lakes/:id/rechunk  -> { underChunkedCount, failedCount, staleEmbeddingSpaceCount,
+ *                                        embeddingSpaceResolved }
  * POST /api/data-lakes/:id/rechunk  { limit, select } -> { detected, enqueued, remaining }
  *
  * "Rebuild passages": re-chunks the lake's files whose passages predate the passage-target fix
