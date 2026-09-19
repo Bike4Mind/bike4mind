@@ -177,8 +177,11 @@ export class EmbeddingFactory {
     // drops out of the prompt entirely, on every chat and agent turn carrying a file. The miss is
     // symmetric - the lookup is label-agnostic - but its blast radius is not: an unlabeled file
     // resolves to ada-002, so keying here covers labeled and unlabeled rows both, where 3-small
-    // would cover only the explicitly labeled. The drop reaches the model as an `unsupported_type`
-    // notice and reaches the user as nothing at all; no client surface reads those notices.
+    // would cover only the explicitly labeled. The drop raises an `unsupported_type` notice, which
+    // reaches the user as well as the model - `toAttachmentNoticeStrings` puts it in the transcript
+    // and `AttachmentNotices` renders it. So the failure is visible, but the notice misattributes
+    // it: it blames the file type, when that type was always going to be served from its vectors
+    // and what actually went missing was the query vector for its label.
     //
     // The fix is to populate that dict per distinct file label in the batch, not to change this
     // constant. Until then this stays where the corpus is.

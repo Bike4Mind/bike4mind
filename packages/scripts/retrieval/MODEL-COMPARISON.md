@@ -421,7 +421,10 @@ arms, 12000-char budget. Read the caveats at the end of this subsection before q
 
 Shipped defaults are `forcedRetrievalRelativeFloorPct` 85 and `forcedRetrievalMinSimilarityPct` 75.
 The 75 is now the ada-002 entry of `FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE` rather than a
-single global default; 3-small resolves to 35, and this table is where that 35 comes from.
+single global default. This table is where 3-small's first floor of 35 came from, and that number
+is SUPERSEDED: the shipped 3-small entry is 58, refit on a larger corpus measured on recall and
+false positives together rather than on this one. See "Why 58 rather than the separation optimum"
+below. Do not quote the 35.
 
 | arm | floors | accepted/q | served/q | relative bound | emptied | recall | precision |
 |---|---:|---:|---:|---:|---:|---:|---:|
