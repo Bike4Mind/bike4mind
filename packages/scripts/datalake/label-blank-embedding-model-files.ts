@@ -48,6 +48,8 @@
  */
 
 import { appendFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { Resource } from 'sst';
@@ -282,6 +284,8 @@ async function main(opts: Options): Promise<number> {
   return actionable.length > 0 ? 1 : 0;
 }
 
+const SCRIPTS_PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+
 const argv = yargs(hideBin(process.argv))
   .option('execute', { type: 'boolean', default: false, describe: 'Actually write (default: dry-run)' })
   .option('batch-size', { type: 'number', default: 500, describe: 'Files read per page' })
@@ -294,7 +298,10 @@ const argv = yargs(hideBin(process.argv))
   })
   .option('rollback-log', {
     type: 'string',
-    default: 'label-blank-files-rollback.txt',
+    // packages/scripts/out/ is gitignored and the repo root's out/ is not, so a cwd-relative default
+    // dropped a file of account-owned document ids into the working tree of a public repo. Resolved
+    // absolutely, the same way the retrieval scripts do it, so the cwd it is run from stops mattering.
+    default: path.resolve(SCRIPTS_PACKAGE_DIR, 'out', 'label-blank-files-rollback.txt'),
     describe: 'Where to record ids that had no prior chunkEmbeddingModelStampedAt, written before the stamps',
   })
   .parseSync();

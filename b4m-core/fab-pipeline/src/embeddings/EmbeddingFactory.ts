@@ -174,7 +174,11 @@ export class EmbeddingFactory {
     // given ONE entry. Per-file routing then looks the vector up by the FILE's own label, so moving
     // this to 3-small makes every ada-002 attachment miss the key: cosine is skipped, large files are
     // head-truncated instead of similarity-selected, and a vectorized-only format (a .pptx, say)
-    // drops out of the prompt entirely - silently, on every chat and agent turn carrying a file.
+    // drops out of the prompt entirely, on every chat and agent turn carrying a file. The miss is
+    // symmetric - the lookup is label-agnostic - but its blast radius is not: an unlabeled file
+    // resolves to ada-002, so keying here covers labeled and unlabeled rows both, where 3-small
+    // would cover only the explicitly labeled. The drop reaches the model as an `unsupported_type`
+    // notice and reaches the user as nothing at all; no client surface reads those notices.
     //
     // The fix is to populate that dict per distinct file label in the batch, not to change this
     // constant. Until then this stays where the corpus is.

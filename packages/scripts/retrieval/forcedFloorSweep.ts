@@ -76,7 +76,9 @@ export const ZERO_FLOOR_CONFIG: FloorConfig = { relativeFloorPct: 0, minSimilari
  * The ADA-002 rung of the shipped defaults, deliberately behavior-preserving rather than tuned.
  *
  * Not "the" shipped pair any more: the absolute floor resolves per embedding space
- * (FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE), so a 3-small deployment runs 85:49, not 85:75.
+ * (FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE), so a deployment outside ada-002 runs a different
+ * absolute floor than this constant carries - read the value there, not from a number written here,
+ * which is how this line went stale the first time.
  * Used here as a fixture and a familiar reference point - a sweep is driven by `--floors`, which
  * is the only honest way to grade a fixture whose arm this constant knows nothing about.
  */
