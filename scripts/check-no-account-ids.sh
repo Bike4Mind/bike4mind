@@ -111,8 +111,12 @@ raw_findings=$(grep -rEn "${INCLUDES[@]}" "${EXCLUDE_FILES[@]}" "${EXCLUDE_DIRS[
 # capitalisation makes a normalizer's behaviour vivid in an assertion. So this arm covers
 # shippable code and leaves the likeliest hiding place to review. Use an invented name.
 if [ -n "${DENY_PARTNER_NAMES:-}" ]; then
+  # The overlay skip is a path filter, not --exclude-dir=premium: that matches a directory NAME
+  # anywhere in the tree, so any future apps/.../premium/ would stop being scanned without anyone
+  # deciding it should. Only the in-tree overlay checkout is meant to be exempt.
   partner_findings=$(grep -rEni "${INCLUDES[@]}" "${EXCLUDE_FILES[@]}" "${EXCLUDE_DIRS[@]}" \
-    --exclude-dir=premium -e "\\b(${DENY_PARTNER_NAMES})\\b" "${SCAN_DIRS[@]}" 2>/dev/null || true)
+    -e "\\b(${DENY_PARTNER_NAMES})\\b" "${SCAN_DIRS[@]}" 2>/dev/null \
+    | grep -v '^packages/premium/' || true)
   raw_findings=$(printf '%s\n%s\n' "$raw_findings" "$partner_findings" | grep -v '^$' || true)
 fi
 
