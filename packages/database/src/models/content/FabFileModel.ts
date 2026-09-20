@@ -769,9 +769,9 @@ const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUr
  *
  * Not widened here because the fix is not free and this projection is not this change's to rewrite:
  * `notes` is owner-authored free text and the tagless reader runs once per cited source on every chat
- * turn that touches a lake. `isCapturableFile` instead excludes `vectorizedOnly` from its own options
- * type, which makes the gap unrepresentable for the capture. The live reader still has it. Widen this
- * projection - or narrow that caller the same way - before relying on a `vectorizedOnly` verdict.
+ * turn that touches a lake. No caller narrows its way around the gap either - excluding
+ * `vectorizedOnly` from an options type would make it unrepresentable, and nothing does - so the live
+ * reader is the only shape it has. Widen this projection before relying on a `vectorizedOnly` verdict.
  */
 const CITABLE_PROJECTION =
   '_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt';
