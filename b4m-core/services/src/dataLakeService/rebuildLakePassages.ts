@@ -13,7 +13,13 @@ export const MAX_REBUILD_WAVE = 200;
  *  An id-less lake would fail closed to meta-tag-only instead of failing to compile. */
 type ScopeSourceLake = Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>;
 
-export type UnderChunkedFile = { fabFileId: string; userId: string };
+/** A file a rebuild wave will reset and re-enqueue, paired with the OWNER's userId the chunk job
+ *  has to run under. Every detector in this file returns this shape, so one caller drains any of
+ *  them through the same reset-and-enqueue. */
+export type LakeRebuildTarget = { fabFileId: string; userId: string };
+
+/** The name this file's original detector shipped under. Kept because it is exported. */
+export type UnderChunkedFile = LakeRebuildTarget;
 
 type DetectDeps = {
   db: {
@@ -79,6 +85,48 @@ export const detectUnderChunkedFiles = async (
   // file - and because `underChunkedCount` is rendered as a file count.
   const seen = new Set(strandedFirst.map(f => f.fabFileId));
   return [...strandedFirst, ...underChunked.filter(f => !seen.has(f.fabFileId))];
+};
+
+type StaleEmbeddingSpaceDeps = {
+  db: { fabFiles: Pick<IFabFileRepository, 'findFilesOutsideEmbeddingSpaceByScope'> };
+};
+
+/**
+ * The lake's members that retrieval is withholding because they are embedded in a different space
+ * than `embeddingModel` - the set a whole-lake re-embed has to drain.
+ *
+ * This is the population nothing else selects. "Rebuild passages" picks up oversized and stranded
+ * files; convergence grades chunk-SIZE policy and never reads a label at all. So after the
+ * deployment's default embedding model moves, a legacy corpus is withheld wholesale with no error
+ * anywhere and no route that offers to repair it: the majority vote embeds the query in the lake's
+ * majority space and drops every file outside it, and because a same-width vector from another
+ * model raises nothing, a cross-space comparison returns meaningless scores rather than failing.
+ *
+ * `embeddingModel` MUST be the model this deployment will REALLY embed with, resolved through the
+ * credential seam (`resolveEffectiveEmbeddingModel`), never the advertised setting read raw. On a
+ * stage holding no key for the configured model the vectorizer falls back to the keyless embedder
+ * and stamps what it fell back TO, so targeting the advertised value would select the entire lake
+ * for a wave that can never converge - the files come back stamped exactly as they were, and the
+ * next wave selects them again at full spend.
+ *
+ * KNOWN BOUND: the space is a per-caller fact, because a personal API key can resolve a different
+ * embedder, while a lake's members can belong to several owners. This door targets ONE space, so a
+ * member whose owner embeds elsewhere stays selected after every wave. The visible symptom is
+ * `remaining` never reaching zero; the counts are honest, but the re-offer is not free.
+ *
+ * Pure over its repo seam, like the detector above: no I/O of its own, unit-testable without a
+ * database.
+ */
+export const detectStaleEmbeddingSpaceFiles = async (
+  lake: ScopeSourceLake,
+  { db }: StaleEmbeddingSpaceDeps,
+  embeddingModel: string
+): Promise<LakeRebuildTarget[]> => {
+  const files = await db.fabFiles.findFilesOutsideEmbeddingSpaceByScope(
+    resolveLakeMembershipScope(lake),
+    embeddingModel
+  );
+  return files.map(f => ({ fabFileId: f.id, userId: f.userId }));
 };
 
 /**

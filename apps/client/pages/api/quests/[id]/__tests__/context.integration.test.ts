@@ -53,7 +53,7 @@ const PROMPT_META = {
   generatedAt: '2026-09-16T10:00:00.000Z',
   model: { name: 'claude-opus-4-8', contextWindow: 200000, parameters: { maxTokens: 8192 } },
   tokenUsage: { inputTokens: 7040, outputTokens: 512, cacheReadInputTokens: 6000, settledBasis: 'provider' },
-  retrieval: { attempted: true, outcome: 'ok', surfaces: ['forced'], dataLakeTags: ['ionq'] },
+  retrieval: { attempted: true, outcome: 'ok', surfaces: ['forced'], dataLakeTags: ['northwind'] },
   offeredTools: ['search_knowledge_base'],
   functionCalls: [{ name: 'search_knowledge_base', success: true, executionTime: 120, returnValue: 'SECRET-RETURN' }],
   contextTelemetry: { anonymousSessionId: { hash: 'SECRET-HASH' } },

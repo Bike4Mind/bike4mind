@@ -17,6 +17,8 @@
  */
 
 import { createHash } from 'crypto';
+import { closeSync, openSync, readFileSync, readSync, unlinkSync, writeSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { z } from 'zod';
 import { isSupportedEmbeddingModel, OpenAIEmbeddingModel } from '@bike4mind/common';
 import { truncateAndNormalize } from '../help/utils';
@@ -151,6 +153,293 @@ export function loadEmbeddingFixture(raw: unknown): EmbeddingFixture {
   }
   assertQuestionTextMatches(fixture);
   return fixture;
+}
+
+/**
+ * On-disk form of a capture: a header line carrying everything except `chunks`, then one chunk per
+ * line.
+ *
+ * A production lake cannot be one JSON string. 21k chunks at 1536 dims is ~33M floats, and a real
+ * embedding component costs 18-20 characters at full precision, so the vectors alone come to ~655M
+ * characters against V8's ~537M cap on a single string. `JSON.stringify` throws
+ * `RangeError: Invalid string length` - after the capture has been paid for - and a whole-file
+ * `JSON.parse` on the read side hits the same wall, so streaming only the write would produce a file
+ * nothing could read back. Newline-delimited, no single string exceeds one chunk at any corpus size
+ * or width, which is what keeps the 3-large arm (double the dims) from reintroducing this.
+ *
+ * Reading stays synchronous and buffer-based rather than moving to a `readline` stream: the callers
+ * are two small CLIs, and a Buffer is not subject to the string cap, so the per-line decode is all
+ * that is needed to stay under it.
+ */
+const FIXTURE_FORMAT = 'ndjson-v1';
+/** Chunk lines per `writeSync`. Trades ~40 syscalls for a 21k-chunk corpus against a bounded join. */
+const FIXTURE_WRITE_BATCH = 500;
+const NEWLINE = 0x0a;
+
+const FixtureHeaderSchema = EmbeddingFixtureSchema.omit({ chunks: true }).extend({
+  format: z.literal(FIXTURE_FORMAT),
+  /**
+   * Chunk lines the writer claims it wrote, and the guard that matters most here: a capture killed
+   * partway through leaves a syntactically perfect file holding a fraction of the corpus. Without a
+   * declared count, a floor swept over that file returns numbers that look measured, and truncation
+   * is indistinguishable from a smaller lake.
+   */
+  chunkCount: z.number().int().nonnegative(),
+});
+
+export type FixtureHeader = z.infer<typeof FixtureHeaderSchema>;
+
+/**
+ * Bytes per header read. The header carries every QUERY vector, so it is megabytes: 89 queries at
+ * 1536 dims is 2.6 MB on the real `opti-knowledge` capture, and a byte-at-a-time scan for the first
+ * newline would be the slowest part of a splice that otherwise never decodes a vector.
+ */
+const HEADER_READ_CHUNK = 1 << 20;
+/** Give up rather than buffering a whole corpus hunting a newline that is not coming. */
+const HEADER_READ_MAX = 64 << 20;
+/** Bytes per copy read when chunk lines are moved verbatim. Never parsed, so this is pure I/O. */
+const CHUNK_COPY_CHUNK = 8 << 20;
+
+function readHeaderLine(file: string): { text: string; chunkOffset: number } {
+  const fd = openSync(file, 'r');
+  try {
+    const parts: Buffer[] = [];
+    let scanned = 0;
+    for (;;) {
+      const buf = Buffer.allocUnsafe(HEADER_READ_CHUNK);
+      const read = readSync(fd, buf, 0, HEADER_READ_CHUNK, scanned);
+      if (read === 0) break;
+      const slice = buf.subarray(0, read);
+      parts.push(slice);
+      const found = slice.indexOf(NEWLINE);
+      if (found !== -1) {
+        const end = scanned + found;
+        // A newline cannot occur inside a UTF-8 multi-byte sequence, so cutting on that byte is exact.
+        return { text: Buffer.concat(parts).toString('utf8', 0, end), chunkOffset: end + 1 };
+      }
+      scanned += read;
+      if (scanned > HEADER_READ_MAX) {
+        throw new Error(
+          `Fixture "${file}" has no line break in its first ${HEADER_READ_MAX} bytes, so it is not a ` +
+            `"${FIXTURE_FORMAT}" capture.`
+        );
+      }
+    }
+    if (parts.length === 0) {
+      throw new Error(`Fixture "${file}" is empty, so it carries no header line.`);
+    }
+    // No line break anywhere: a COMPACT whole-JSON capture. Returned as the header line so the
+    // format check rejects it by name, rather than reported as an empty file, which it is not.
+    const all = Buffer.concat(parts);
+    return { text: all.toString('utf8'), chunkOffset: all.length };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Read a capture's header WITHOUT parsing its chunk lines.
+ *
+ * `readEmbeddingFixtureFile` is the wrong tool for a question about the header alone: it parses
+ * 21,327 chunk lines and holds 33M floats to answer it. `chunkOffset` is where the chunk lines
+ * begin, which is what lets them be copied rather than re-serialized.
+ *
+ * Refuses a whole-JSON capture by name. That form holds its chunks in the same document as its
+ * queries, so it has no header to replace - and the failure has to be explicit, because the reader
+ * deliberately accepts both forms and a caller cannot tell them apart from the extension.
+ */
+export function readEmbeddingFixtureHeader(file: string): { header: FixtureHeader; chunkOffset: number } {
+  const { text, chunkOffset } = readHeaderLine(file);
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (error) {
+    // Names the likeliest cause rather than only the parse error: a PRETTY-PRINTED whole-JSON
+    // capture - which the committed test fixtures are - has `{` on its first line, so it arrives
+    // here rather than at the format check below.
+    throw new Error(
+      `Fixture "${file}" does not begin with a parseable header line (${(error as Error).message}). A ` +
+        `"${FIXTURE_FORMAT}" capture carries its whole header on one line; a whole-JSON capture keeps ` +
+        'its chunks in the same document as its queries and cannot be spliced.'
+    );
+  }
+  if (typeof raw !== 'object' || raw === null || (raw as { format?: unknown }).format !== FIXTURE_FORMAT) {
+    throw new Error(
+      `Fixture "${file}" does not declare format "${FIXTURE_FORMAT}". A whole-JSON capture keeps its ` +
+        'chunks in the same document as its queries, so there is no header line to rewrite.'
+    );
+  }
+  return { header: FixtureHeaderSchema.parse(raw), chunkOffset };
+}
+
+/**
+ * Write a new capture carrying `queries` over this one's chunk lines, copied byte for byte.
+ *
+ * Extending a capture's question set costs the embedding of the new questions and nothing else: the
+ * corpus vectors are already on disk and are the expensive half. Re-capturing to add a question
+ * instead has a worse problem than cost - a live lake moves, so the new fixture would be a
+ * DIFFERENT corpus, and two question sets measured either side of that are not one table. This keeps
+ * the snapshot fixed and changes only what is asked of it.
+ *
+ * The chunk lines are moved as bytes, never parsed and re-serialized, so a float cannot be reprinted
+ * at a different precision and the copy is verified by counting lines against the header's declared
+ * `chunkCount`. On a mismatch the output is deleted: a fixture with new queries over a short corpus
+ * scores as a complete one, which is the failure the count exists to prevent.
+ */
+export function rewriteFixtureQueries(args: { source: string; out: string; queries: EmbeddingFixture['queries'] }): {
+  chunkLines: number;
+  queries: number;
+} {
+  const { header, chunkOffset } = readEmbeddingFixtureHeader(args.source);
+  if (resolve(args.source) === resolve(args.out)) {
+    throw new Error(
+      `Refusing to rewrite "${args.source}" in place: the chunk lines are read from it while the new ` +
+        'header is written, so the corpus would be truncated by its own replacement.'
+    );
+  }
+  if (args.queries.length === 0) {
+    throw new Error(`Refusing to write "${args.out}" with no queries; a capture with none scores nothing.`);
+  }
+  const offWidth = args.queries.filter(q => q.vector.length !== header.dims);
+  if (offWidth.length > 0) {
+    throw new Error(
+      `Capture "${header.corpus}" is ${header.dims} dims but ${offWidth.length} new query vector(s) ` +
+        `are not (${offWidth
+          .slice(0, 5)
+          .map(q => `${q.id}:${q.vector.length}`)
+          .join(', ')}). Cosine ` +
+        'across two widths scores 0 and disappears into the ranking as an ordinary low score.'
+    );
+  }
+  const seen = new Set<string>();
+  const duplicates = [
+    ...new Set(args.queries.filter(q => (seen.has(q.id) ? true : (seen.add(q.id), false))).map(q => q.id)),
+  ];
+  if (duplicates.length > 0) {
+    throw new Error(`Refusing to write repeated query id(s): ${duplicates.join(', ')}.`);
+  }
+  // Mirrors `resolveQueries`: a half-external query set cannot be scored, because the queries without
+  // ground truth fall back to corpus.ts and silently mix two of them.
+  const external = args.queries.filter(q => q.supporting !== undefined).length;
+  if (external !== 0 && external !== args.queries.length) {
+    throw new Error(
+      `Refusing to write ground truth on ${external} of ${args.queries.length} queries; a partly ` +
+        'external question set scores against two ground truths at once.'
+    );
+  }
+
+  const src = openSync(args.source, 'r');
+  const dst = openSync(args.out, 'w');
+  let lines = 0;
+  let offset = chunkOffset;
+  let lastByte = NEWLINE;
+  try {
+    writeSync(dst, `${JSON.stringify({ ...header, queries: args.queries })}\n`);
+    const buf = Buffer.allocUnsafe(CHUNK_COPY_CHUNK);
+    for (;;) {
+      const read = readSync(src, buf, 0, CHUNK_COPY_CHUNK, offset);
+      if (read === 0) break;
+      writeSync(dst, buf, 0, read);
+      const slice = buf.subarray(0, read);
+      for (let at = slice.indexOf(NEWLINE); at !== -1; at = slice.indexOf(NEWLINE, at + 1)) lines++;
+      lastByte = slice[read - 1];
+      offset += read;
+    }
+  } finally {
+    closeSync(src);
+    closeSync(dst);
+  }
+  // A final chunk line with no trailing break still holds a chunk.
+  if (offset > chunkOffset && lastByte !== NEWLINE) lines++;
+  if (lines !== header.chunkCount) {
+    unlinkSync(args.out);
+    throw new Error(
+      `Copied ${lines} chunk line(s) from "${args.source}" whose header declares ${header.chunkCount}. ` +
+        'Refusing to leave a capture with new queries over a short corpus - it would score as a ' +
+        'complete one over a smaller lake.'
+    );
+  }
+  return { chunkLines: lines, queries: args.queries.length };
+}
+
+export function writeEmbeddingFixtureFile(file: string, fixture: EmbeddingFixture): void {
+  const { chunks, ...meta } = fixture;
+  const fd = openSync(file, 'w');
+  try {
+    writeSync(fd, `${JSON.stringify({ ...meta, format: FIXTURE_FORMAT, chunkCount: chunks.length })}\n`);
+    for (let i = 0; i < chunks.length; i += FIXTURE_WRITE_BATCH) {
+      writeSync(
+        fd,
+        `${chunks
+          .slice(i, i + FIXTURE_WRITE_BATCH)
+          .map(c => JSON.stringify(c))
+          .join('\n')}\n`
+      );
+    }
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/**
+ * Read a capture from disk and validate it exactly as `loadEmbeddingFixture` does.
+ *
+ * Also accepts a pre-format capture, which is a single JSON document. The line format announces
+ * itself in its header, and anything else is read whole - not the other way round, because the
+ * committed synthetic fixtures are PRETTY-PRINTED, so their first line is bare `{` and only a
+ * whole-file parse can read them. Keying off the file extension would be worse still: the runbook
+ * points both CLIs at a `.json` that is a real capture.
+ */
+export function readEmbeddingFixtureFile(file: string): EmbeddingFixture {
+  const buf = readFileSync(file);
+  const firstBreak = buf.indexOf(NEWLINE);
+  let header: unknown;
+  try {
+    header = JSON.parse(buf.toString('utf8', 0, firstBreak === -1 ? buf.length : firstBreak));
+  } catch {
+    header = undefined;
+  }
+  const isLineFormat =
+    typeof header === 'object' && header !== null && (header as { format?: unknown }).format === FIXTURE_FORMAT;
+  if (!isLineFormat) {
+    try {
+      return loadEmbeddingFixture(JSON.parse(buf.toString('utf8')) as unknown);
+    } catch (error) {
+      throw new Error(
+        `Fixture "${file}" is neither a "${FIXTURE_FORMAT}" header line nor a whole JSON capture: ` +
+          `${(error as Error).message}`
+      );
+    }
+  }
+
+  const parsedHeader = FixtureHeaderSchema.parse(header);
+  const chunks: unknown[] = [];
+  let offset = firstBreak === -1 ? buf.length : firstBreak + 1;
+  while (offset < buf.length) {
+    const found = buf.indexOf(NEWLINE, offset);
+    const end = found === -1 ? buf.length : found;
+    const line = buf.toString('utf8', offset, end).trim();
+    offset = end + 1;
+    if (line === '') continue;
+    try {
+      chunks.push(JSON.parse(line));
+    } catch (error) {
+      throw new Error(
+        `Fixture "${file}" chunk line ${chunks.length + 1} is unparseable: ${(error as Error).message}. ` +
+          'A capture interrupted mid-write ends in a partial line; re-capture rather than trimming it.'
+      );
+    }
+  }
+  if (chunks.length !== parsedHeader.chunkCount) {
+    throw new Error(
+      `Fixture "${file}" declares ${parsedHeader.chunkCount} chunks but carries ${chunks.length}. ` +
+        'A truncated capture scores as a complete one over a smaller corpus, so this refuses rather ' +
+        'than reporting floors measured against whatever survived. Re-capture.'
+    );
+  }
+  // The header's own `format` and `chunkCount` are dropped here by the schema, which strips unknown
+  // keys - they describe the file, not the capture.
+  return loadEmbeddingFixture({ ...parsedHeader, chunks });
 }
 
 /**

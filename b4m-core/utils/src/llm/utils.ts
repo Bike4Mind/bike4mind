@@ -1712,8 +1712,10 @@ export async function processFabFilesServer(
           delivered: false,
         });
       } else {
-        // Files without embeddingModel are old files that were vectorized with the default embedding
-        // model, which is text-embedding-ada-002.
+        // ada-002 is the HISTORICAL space unlabeled rows were written in, NOT the current default -
+        // the default is 3-small now, and re-deriving this value from the default would read a legacy
+        // corpus in a space it was never written in. Both models are 1536 wide, so the width guard
+        // below cannot catch that; this constant is the only thing standing in its way.
         const embeddingModel =
           (file.embeddingModel as SupportedEmbeddingModel) ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
         const userVector = userVectorPrompt[embeddingModel];

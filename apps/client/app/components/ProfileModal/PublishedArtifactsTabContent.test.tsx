@@ -345,9 +345,9 @@ describe('PublishedArtifactsTabContent - search, facets and paging', () => {
     renderTab();
     await screen.findByTestId('published-artifact-pub-1');
 
-    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'ionq' } });
+    fireEvent.change(screen.getByTestId('published-artifacts-search'), { target: { value: 'northwind' } });
 
-    await waitFor(() => expect(lastQuery().q).toBe('ionq'));
+    await waitFor(() => expect(lastQuery().q).toBe('northwind'));
   });
 
   it('filters on a facet chip and turns the filter off when clicked again', async () => {
@@ -432,7 +432,7 @@ describe('PublishedArtifactsTabContent - search, facets and paging', () => {
  */
 describe('PublishedArtifactsTabContent - tags and covers', () => {
   const lastQuery = () => mockList.mock.calls[mockList.mock.calls.length - 1][0] as Record<string, unknown>;
-  const tagged = { ...bundleRow, tags: ['ionq', 'weekly'] };
+  const tagged = { ...bundleRow, tags: ['northwind', 'weekly'] };
 
   it('shows a generated cover for every row, so no row is ever an empty frame', async () => {
     renderTab();
@@ -444,31 +444,31 @@ describe('PublishedArtifactsTabContent - tags and covers', () => {
     mockList.mockResolvedValue(page([tagged]));
     renderTab();
     await screen.findByTestId('published-artifact-tags-pub-1');
-    expect(screen.getByTestId('published-artifact-tag-pub-1-ionq')).not.toBeNull();
+    expect(screen.getByTestId('published-artifact-tag-pub-1-northwind')).not.toBeNull();
   });
 
   it('filters by a tag when its chip on a row is clicked', async () => {
     // Seeing a label and wanting everything sharing it is one impulse, so the chip is the control.
     mockList.mockResolvedValue(page([tagged]));
     renderTab();
-    await screen.findByTestId('published-artifact-tag-pub-1-ionq');
+    await screen.findByTestId('published-artifact-tag-pub-1-northwind');
 
-    fireEvent.click(screen.getByTestId('published-artifact-tag-pub-1-ionq'));
+    fireEvent.click(screen.getByTestId('published-artifact-tag-pub-1-northwind'));
 
-    await waitFor(() => expect(lastQuery().tag).toBe('ionq'));
+    await waitFor(() => expect(lastQuery().tag).toBe('northwind'));
   });
 
   it('filters from a toolbar tag chip and toggles it off again', async () => {
     mockList.mockResolvedValue(
-      page([tagged], { facets: { kind: {}, visibility: {}, gate: {}, comments: 0, tag: { ionq: 6 } } })
+      page([tagged], { facets: { kind: {}, visibility: {}, gate: {}, comments: 0, tag: { northwind: 6 } } })
     );
     renderTab();
-    await screen.findByTestId('published-artifacts-facet-tag-ionq');
+    await screen.findByTestId('published-artifacts-facet-tag-northwind');
 
-    fireEvent.click(screen.getByTestId('published-artifacts-facet-tag-ionq'));
-    await waitFor(() => expect(lastQuery().tag).toBe('ionq'));
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-tag-northwind'));
+    await waitFor(() => expect(lastQuery().tag).toBe('northwind'));
 
-    fireEvent.click(screen.getByTestId('published-artifacts-facet-tag-ionq'));
+    fireEvent.click(screen.getByTestId('published-artifacts-facet-tag-northwind'));
     await waitFor(() => expect(lastQuery().tag).toBeUndefined());
   });
 
@@ -510,7 +510,7 @@ describe('PublishedArtifactsTabContent - tags and covers', () => {
     const input = screen.getByTestId('published-artifact-tag-input-pub-1');
     // Re-entering an existing tag normalizes to the same list; a write here would be a pointless
     // round trip and a spurious "Tags updated" toast.
-    fireEvent.change(input, { target: { value: 'ionq' } });
+    fireEvent.change(input, { target: { value: 'northwind' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => expect(mockToastSuccess).not.toHaveBeenCalled());
@@ -669,10 +669,10 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
     const listCalls = mockList.mock.calls.map(c => c[0] as Record<string, unknown>).filter(c => c.facets !== true);
     return listCalls[listCalls.length - 1];
   };
-  const tagged = { ...bundleRow, tags: ['ionq', 'weekly'] };
+  const tagged = { ...bundleRow, tags: ['northwind', 'weekly'] };
 
   it('says so when a tag is REJECTED rather than rewritten', async () => {
-    // A rewrite (IonQ -> ionq) is self-explanatory. A drop - over-long, or past the cap - left the
+    // A rewrite (NorthWind -> northwind) is self-explanatory. A drop - over-long, or past the cap - left the
     // equality check seeing no change, so there was no write, no toast, and the chip the person just
     // typed vanished on the next render. That reads as the field being broken.
     mockList.mockResolvedValue(page([{ ...bundleRow, tags: [] }]));
@@ -742,7 +742,7 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
   });
 
   it('stays SILENT when a tag is only deduped, rather than blaming its length', async () => {
-    // MUI compares options with ===, so typing `IonQ` beside an existing `ionq` chip appends the
+    // MUI compares options with ===, so typing `NorthWind` beside an existing `northwind` chip appends the
     // case variant and the normalizer then dedupes it. The old check fired on any shortening, so an
     // owner got "Tags can be at most 40 characters" about a four-character tag.
     mockList.mockResolvedValue(page([tagged]));
@@ -751,7 +751,7 @@ describe('PublishedArtifactsTabContent - tag review fixes', () => {
     expandRow('pub-1');
 
     const input = screen.getByTestId('published-artifact-tag-input-pub-1');
-    fireEvent.change(input, { target: { value: 'IonQ' } });
+    fireEvent.change(input, { target: { value: 'NorthWind' } });
     fireEvent.keyDown(input, { key: 'Enter' });
 
     await waitFor(() => expect(mockUpdateTags).not.toHaveBeenCalled());

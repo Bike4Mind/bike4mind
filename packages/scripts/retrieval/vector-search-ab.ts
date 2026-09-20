@@ -52,6 +52,7 @@
 
 import { writeFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
 import { Resource } from 'sst';
@@ -73,6 +74,8 @@ import { PROBE_QUESTIONS, type ProbeQuestion } from './corpus.js';
 import { aggregate, scoreQuestion, type Aggregate, type QuestionOutcome } from './metrics.js';
 
 const logger = new Logger();
+
+const SCRIPTS_PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 const HELP_LAKE_SLUG = 'system-help';
 const HELP_TAG_PREFIX = 'help:';
@@ -421,7 +424,10 @@ async function main(opts: { userId: string; label: string; outDir: string }): Pr
       },
       null,
       2
-    )
+    ),
+    // The report carries served chunk ids, so it is owner-readable only - matching every other
+    // artifact these scripts write.
+    { mode: 0o600 }
   );
   console.log(`\nreport: ${outPath}`);
 
@@ -437,7 +443,14 @@ const argv = yargs(hideBin(process.argv))
     describe: "Probe user; must be the help lake's createdByUserId",
   })
   .option('label', { type: 'string', demandOption: true, describe: 'Names the report file, e.g. pre / post' })
-  .option('out-dir', { type: 'string', default: 'packages/scripts/out', describe: 'Report directory' })
+  // Resolved against the package, not the cwd: the documented invocation runs from
+  // packages/scripts, where a relative default lands in a nested out/ that no .gitignore rule
+  // covers - dropping account-owned document ids into the working tree of a public repo.
+  .option('out-dir', {
+    type: 'string',
+    default: path.resolve(SCRIPTS_PACKAGE_DIR, 'out'),
+    describe: 'Report directory',
+  })
   .parseSync();
 
 main({ userId: argv.userId, label: argv.label, outDir: argv['out-dir'] })

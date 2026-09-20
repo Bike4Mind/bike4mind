@@ -3,12 +3,12 @@ import { buildListQuery } from './buildListQuery';
 
 describe('buildListQuery - search', () => {
   it('matches the term against title AND description, case-insensitively', () => {
-    const { match } = buildListQuery({ q: 'IonQ' });
+    const { match } = buildListQuery({ q: 'NorthWind' });
     const or = match.$or as Array<Record<string, RegExp>>;
 
     expect(or).toHaveLength(2);
-    expect(or[0].title.test('ionq weekly')).toBe(true);
-    expect(or[1].description.test('About IONQ')).toBe(true);
+    expect(or[0].title.test('northwind weekly')).toBe(true);
+    expect(or[1].description.test('About NORTHWIND')).toBe(true);
   });
 
   it('treats the term as a literal, so regex metacharacters cannot widen the match', () => {
@@ -101,7 +101,7 @@ describe('buildListQuery - tags', () => {
   it('matches the normalized form exactly, so the multikey index applies', () => {
     // Stored tags are normalized, so an exact equality match is both correct and indexable - a
     // case-insensitive regex here would give up the index for nothing.
-    expect(buildListQuery({ tag: '  IonQ ' }).match.tags).toBe('ionq');
+    expect(buildListQuery({ tag: '  NorthWind ' }).match.tags).toBe('northwind');
   });
 
   it('ignores a blank tag rather than matching artifacts with an empty tag', () => {

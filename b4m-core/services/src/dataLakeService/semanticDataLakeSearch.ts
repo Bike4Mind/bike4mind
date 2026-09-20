@@ -2,11 +2,11 @@ import {
   DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
   DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
-  defaultEmbeddingModelForEnv,
   FabFileChunkVector,
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
+  OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   type ChunkStallReason,
   type DataLakeMembershipScope,
@@ -1490,13 +1490,17 @@ async function rankChunksForFiles(args: {
       skippedChunks: mismatchReport.skippedChunks.byReason,
     });
   }
-  // Unlabeled chunks are scored on the assumption they were embedded with the deployment default.
-  // Under any other query model that assumption is probably wrong, and since we choose not to
-  // exclude them, the choice needs to be auditable.
-  if (mismatchReport.unlabeled.chunks > 0 && embeddingModel !== defaultEmbeddingModelForEnv()) {
+  // Unlabeled chunks are scored on the assumption they were embedded in ada-002, and the constant
+  // is deliberately NOT the deployment default. An unset label means the row predates the field, so
+  // its space is a HISTORICAL fact that no current setting can restate; keying this off the default
+  // inverts the diagnostic the moment that default moves - it would go quiet on exactly the case
+  // worth auditing (a 3-small query scoring legacy chunks) and fire on the one that is fine.
+  //
+  // Since we choose to score them rather than exclude them, that choice has to stay auditable.
+  if (mismatchReport.unlabeled.chunks > 0 && embeddingModel !== OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002) {
     logger?.warn?.('[semanticSearch] scored chunks with no recorded embedding model', {
       queryEmbeddingModel: embeddingModel,
-      assumedModel: defaultEmbeddingModelForEnv(),
+      assumedModel: OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002,
       unlabeledChunks: mismatchReport.unlabeled.chunks,
       unlabeledFiles: mismatchReport.unlabeled.files,
     });

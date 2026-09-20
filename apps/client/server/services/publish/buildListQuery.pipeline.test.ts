@@ -27,7 +27,7 @@ function pipelineShape(scope: Record<string, unknown>, match: Record<string, unk
 describe('buildListQuery in the route pipeline', () => {
   /** Every axis at once, using the REAL implementation - no mock. */
   const REAL = buildListQuery({
-    q: 'ionq',
+    q: 'northwind',
     kind: 'bundle',
     visibility: 'private',
     gate: 'none',

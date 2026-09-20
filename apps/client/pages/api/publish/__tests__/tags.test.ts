@@ -50,13 +50,13 @@ describe('GET /api/publish/tags', () => {
   it('returns artifact tags with their use counts, most-used first', async () => {
     aggregate.mockResolvedValue([
       { _id: 'security', n: 3 },
-      { _id: 'ionq', n: 6 },
+      { _id: 'northwind', n: 6 },
     ]);
 
     const res = await run();
 
     expect(res._getJSONData().tags).toEqual([
-      { tag: 'ionq', count: 6 },
+      { tag: 'northwind', count: 6 },
       { tag: 'security', count: 3 },
     ]);
   });
@@ -64,26 +64,26 @@ describe('GET /api/publish/tags', () => {
   it('adds AppFile tags to the vocabulary at count 0', async () => {
     // Honest rather than tidy: a file tag is part of the caller's vocabulary but is not yet used
     // on anything published, and the UI can order suggestions on that.
-    aggregate.mockResolvedValue([{ _id: 'ionq', n: 2 }]);
+    aggregate.mockResolvedValue([{ _id: 'northwind', n: 2 }]);
     distinct.mockResolvedValue(['contracts']);
 
     const res = await run();
 
     expect(res._getJSONData().tags).toEqual([
-      { tag: 'ionq', count: 2 },
+      { tag: 'northwind', count: 2 },
       { tag: 'contracts', count: 0 },
     ]);
   });
 
   it('normalizes the AppFile side, so one label is one entry across both vocabularies', async () => {
-    // Those tags were written without this normalizer, so without normalizing here `IonQ` from a
-    // file and `ionq` from an artifact would be offered as two separate suggestions.
-    aggregate.mockResolvedValue([{ _id: 'ionq', n: 4 }]);
-    distinct.mockResolvedValue(['IonQ', '  ionq  ']);
+    // Those tags were written without this normalizer, so without normalizing here `NorthWind` from a
+    // file and `northwind` from an artifact would be offered as two separate suggestions.
+    aggregate.mockResolvedValue([{ _id: 'northwind', n: 4 }]);
+    distinct.mockResolvedValue(['NorthWind', '  northwind  ']);
 
     const res = await run();
 
-    expect(res._getJSONData().tags).toEqual([{ tag: 'ionq', count: 4 }]);
+    expect(res._getJSONData().tags).toEqual([{ tag: 'northwind', count: 4 }]);
   });
 
   it("excludes AppFile's reserved tags, which mark a role rather than label a subject", async () => {

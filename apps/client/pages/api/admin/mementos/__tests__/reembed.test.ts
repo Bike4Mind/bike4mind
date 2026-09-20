@@ -47,7 +47,15 @@ function makeReq(body: Record<string, unknown> = {}, user: Record<string, unknow
   return { req: req as any, res: res as any };
 }
 
-const emptyStats = { total: 0, alreadyCurrent: 0, reembedded: 0, failed: 0, skippedEmpty: 0, errors: [] };
+const emptyStats = {
+  total: 0,
+  alreadyCurrent: 0,
+  reembedded: 0,
+  failed: 0,
+  skippedEmpty: 0,
+  stoppedAtLimit: false,
+  errors: [],
+};
 
 describe('/api/admin/mementos/reembed', () => {
   beforeEach(() => {
@@ -82,7 +90,7 @@ describe('/api/admin/mementos/reembed', () => {
     const { req, res } = makeReq({ skip: 0 });
     await (handler as any)._post(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(reembedMock).toHaveBeenCalledWith('u1', { dryRun: true });
+    expect(reembedMock).toHaveBeenCalledWith('u1', expect.objectContaining({ dryRun: true }));
     expect(res._getJSONData()).toMatchObject({ dryRun: true });
   });
 
@@ -90,7 +98,7 @@ describe('/api/admin/mementos/reembed', () => {
     userIdPage = [{ _id: 'u1' }];
     const { req, res } = makeReq({ skip: 0, execute: true });
     await (handler as any)._post(req, res);
-    expect(reembedMock).toHaveBeenCalledWith('u1', { dryRun: false });
+    expect(reembedMock).toHaveBeenCalledWith('u1', expect.objectContaining({ dryRun: false }));
   });
 
   it('sums per-user stats across the page and reports pagination', async () => {
@@ -283,14 +291,17 @@ describe('/api/admin/mementos/reembed', () => {
     // One entry per failed MEMENTO, not per user, so a provider outage across a full page is
     // unbounded without a cap. `failed` stays authoritative; the omitted count is derivable from it.
     userIdPage = Array.from({ length: 25 }, (_, i) => ({ _id: `u-${i}` }));
+    // 3 per user: 75 failures is comfortably over the 50-entry sample cap while staying under the
+    // per-request provider-call ceiling, so this test still measures only the cap.
     reembedMock.mockImplementation((userId: string) =>
       Promise.resolve({
-        total: 40,
+        total: 3,
         alreadyCurrent: 0,
         reembedded: 0,
-        failed: 40,
+        failed: 3,
         skippedEmpty: 0,
-        errors: Array.from({ length: 40 }, (_, i) => `memento ${userId}-m${i}: 429 rate limited`),
+        stoppedAtLimit: false,
+        errors: Array.from({ length: 3 }, (_, i) => `memento ${userId}-m${i}: 429 rate limited`),
       })
     );
 
@@ -298,11 +309,105 @@ describe('/api/admin/mementos/reembed', () => {
     await (handler as any)._post(req, res);
 
     const body = res._getJSONData();
-    expect(body.failed).toBe(1000);
+    expect(body.failed).toBe(75);
     expect(body.failedMementos).toHaveLength(50);
     // Still a usable sample: the entries that survived carry their owning userId.
     expect(body.failedMementos[0]).toBe('user u-0 memento u-0-m0: 429 rate limited');
     // A page that repaired nothing must still halt the loop.
     expect(body.hasMore).toBe(false);
+  });
+
+  it('truncates a page at the provider-call ceiling rather than running past the edge timeout', async () => {
+    // BATCH_SIZE caps users, which bounds nothing: one user's stale set is unbounded, so an
+    // uncapped page runs past the 60s edge cut and the caller gets a gateway error with no totals
+    // while the origin keeps writing. The ceiling turns that into an ordinary 200 plus hasMore.
+    userIdPage = Array.from({ length: 25 }, (_, i) => ({ _id: `u-${i}` }));
+    reembedMock.mockResolvedValue({
+      total: 60,
+      alreadyCurrent: 0,
+      reembedded: 60,
+      failed: 0,
+      skippedEmpty: 0,
+      stoppedAtLimit: false,
+      errors: [],
+    });
+
+    const { req, res } = makeReq({ skip: 0, execute: true });
+    await (handler as any)._post(req, res);
+
+    const body = res._getJSONData();
+    // Two users spend 120 calls, so the third is never started.
+    expect(body.processedUsers).toBe(2);
+    expect(reembedMock).toHaveBeenCalledTimes(2);
+    expect(body.reembedded).toBe(120);
+    expect(body.hasMore).toBe(true);
+    // The remaining allowance is handed down, so one user cannot overrun the whole request's budget.
+    expect(reembedMock.mock.calls[1][1]).toMatchObject({ limit: 40 });
+  });
+
+  it('reports hasMore when the service stopped a single user short, even on a partial page', async () => {
+    // The other truncation shape: the page was never full and the loop never broke, but one user's
+    // own stale set outran the allowance. Without reading stoppedAtLimit this returns hasMore:false
+    // and the operator stops with that user half-repaired.
+    userIdPage = [{ _id: 'u1' }];
+    reembedMock.mockResolvedValue({
+      total: 500,
+      alreadyCurrent: 0,
+      reembedded: 100,
+      failed: 0,
+      skippedEmpty: 0,
+      stoppedAtLimit: true,
+      errors: [],
+    });
+
+    const { req, res } = makeReq({ skip: 0, execute: true });
+    await (handler as any)._post(req, res);
+
+    expect(res._getJSONData().hasMore).toBe(true);
+  });
+
+  it('halts a truncated page that repaired nothing, instead of re-queueing the same failures', async () => {
+    // Truncation must not defeat the progress gate: a page that spends its whole allowance on
+    // failures would otherwise report hasMore forever and never reach the users behind it.
+    userIdPage = Array.from({ length: 25 }, (_, i) => ({ _id: `u-${i}` }));
+    reembedMock.mockResolvedValue({
+      total: 100,
+      alreadyCurrent: 0,
+      reembedded: 0,
+      failed: 100,
+      skippedEmpty: 0,
+      stoppedAtLimit: true,
+      errors: [],
+    });
+
+    const { req, res } = makeReq({ skip: 0, execute: true });
+    await (handler as any)._post(req, res);
+
+    const body = res._getJSONData();
+    expect(body.reembedded).toBe(0);
+    expect(body.hasMore).toBe(false);
+  });
+
+  it('answers the same field set on an empty page as on a populated one', async () => {
+    // A caller tracking progress as `total - alreadyCurrent` used to crash on the missing keys at
+    // the exact moment the pass succeeded and the stale set emptied - completion read as a fault.
+    userIdPage = [];
+
+    const { req, res } = makeReq({ skip: 7 });
+    await (handler as any)._post(req, res);
+
+    expect(res._getJSONData()).toEqual({
+      processedUsers: 0,
+      dryRun: true,
+      total: 0,
+      alreadyCurrent: 0,
+      reembedded: 0,
+      failed: 0,
+      skippedEmpty: 0,
+      failedUsers: [],
+      failedMementos: [],
+      hasMore: false,
+      nextSkip: 7,
+    });
   });
 });

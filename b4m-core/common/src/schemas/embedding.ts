@@ -68,7 +68,14 @@ export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
   if (selfHost && hasOllama && !hasCloudEmbeddingKey) {
     return OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B;
   }
-  return OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+  // 3-small, not ada-002: it is the model new work should be created in. Both are 1536 wide, so a
+  // stage that changes over here produces vectors the width guards cannot tell apart - what keeps
+  // spaces separated is the per-file `embeddingModel` label, never the dimension.
+  //
+  // Changing this does NOT migrate an existing deployment. Any stage holding a stored
+  // `defaultEmbeddingModel` row reads that row instead (the value here is only the setting's
+  // `defaultValue`), so this decides the default for a stage that has never configured one.
+  return OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
 }
 
 /**

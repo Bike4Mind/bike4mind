@@ -1,0 +1,346 @@
+/**
+ * One-off drain of a data lake's corpus into the platform default embedding space.
+ *
+ * WHY THIS EXISTS RATHER THAN A ROUTE: `defaultEmbeddingModel` is now text-embedding-3-small while
+ * every lake corpus is still ada-002. Forced retrieval embeds the query in the lake's MAJORITY
+ * model and `partitionFilesByEmbeddingModel` withholds every file outside it, so a newly ingested
+ * 3-small file lands in an ada-002 lake and is served in zero answers. The lake-wide rebuild door
+ * (`apps/client/pages/api/data-lakes/[id]/rechunk.ts`) now carries the embedding-space selector
+ * this script was written ahead of, so for a lake that HAS a `datalakes` document that door is the
+ * durable fix and should be preferred: it holds the right authorization and the right write
+ * primitive, and an admin can drive it without a shell.
+ *
+ * WHY THIS IS STILL HERE RATHER THAN DELETED: that door resolves its lake through
+ * `assertLakeAccess`, a `datalakes` collection read, so it can only address a lake that has a
+ * document. A REGISTRY lake is a code constant in `b4m-core/common/src/constants/dataLakes.ts` with
+ * no row at all, and the largest corpus on this platform is one of them - so no `[id]` reaches it
+ * and the durable fix cannot drain it by construction. Resolving both kinds (see `lakeIdKind`) is
+ * the one capability this script does not share with the door, and it is the reason to keep it.
+ *
+ * WHAT IT DOES NOT DO: it does not re-embed anything itself. It resets chunk state and enqueues to
+ * the same queue the rebuild door uses; the chunk worker deletes the old passages and re-embeds,
+ * reading `defaultEmbeddingModel` live. A reset file takes the FRESH path in the chunk handler
+ * because the reset clears `chunked` and `noExtractableTextAt`, so `resolveResumeEmbeddingModel`
+ * never fires and cannot pin the file back to the space it just left.
+ *
+ * SCOPE DEVIATION, on purpose: membership here is `metaTag OR prefix` with NO creator anchor on the
+ * prefix arm, which is wider than the retrieval predicate for a DB lake (buildDataLakeMembershipQuery
+ * anchors that arm to the lake creator). For a drain, converting an extra prefix-tagged file into
+ * the default space can only make that file's space agree with more readers, never fewer, and it
+ * avoids leaving a file behind in the minority space for a later membership change to surface. The
+ * owner allowlist is what bounds the widening: a file owned outside it aborts the run.
+ *
+ * HOW TO RUN IT (dry run first; --execute is the only writing mode):
+ *   ./for-env bike4mind-prod pnpm sst shell --stage production -- \
+ *     pnpm --filter @bike4mind/scripts exec tsx migrate/drain-lake-embedding-space.ts \
+ *     --tag datalake:<slug> --prefix <slug>: --owners <id,id>
+ * The lake's tag, its file-tag prefix and the authorized owner ids are FLAGS, never constants here:
+ * this is a public repo and an owner id is account-tied. Add --registry-id <slug> for a registry
+ * lake. The real invocations live in the private migration runbook, not in this file.
+ * `sst shell` and `pnpm --filter` both collapse a non-zero child exit code to 1, so the exit code
+ * cannot distinguish "a guard refused" (2) from "it crashed" (1). READ THE OUTPUT, not the status:
+ * every refusal prints a line beginning STOP. If the flags do not survive the wrappers the script
+ * prints its usage and exits without reading anything, which is a safe failure rather than a
+ * silently unscoped run. Every refusal it can make is a pure function in
+ * `drainLakeEmbeddingSpacePlan.ts` with tests beside it; this file holds only the I/O.
+ *
+ * FILES ARE UNSEARCHABLE BETWEEN RESET AND RE-CHUNK, and partway through a drain the lake's
+ * majority flips to the new space and withholds whatever has not converted yet. The lake is
+ * degraded in both directions until the pass completes, so run it through rather than trickling,
+ * and take the smaller lake first.
+ */
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { connectDB, whenCatalogSeeded, mongoose, FabFile, DataLakeModel, fabFileRepository } from '@bike4mind/database';
+import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { Resource } from 'sst';
+import {
+  auditOwners,
+  buildDrainMembershipQuery,
+  checkExpectedPopulation,
+  checkPlatformGuards,
+  parseDrainArgs,
+  planWaves,
+  resolveLakeId,
+  str,
+  tally,
+  verifyVerdict,
+  type DrainFileRow,
+} from './drainLakeEmbeddingSpacePlan';
+
+/** Must stay in sync with CONVERGENCE_ORIGIN in b4m-core/common/src/constants/convergenceProvenance.ts.
+ *  Inlined so this script does not pull the zod-bearing module in for one string literal. */
+const CONVERGENCE_ORIGIN = 'convergence';
+
+const QUERY_TIMEOUT_MS = 30_000;
+
+/** Every guard's verdict arrives as lines to print plus an exit code; nothing decides silently. */
+const report = (lines: readonly string[]) => {
+  for (const line of lines) console.log(line);
+};
+
+/** 0 = ran, 1 = usage or failure, 2 = a guard refused to proceed (nothing was written). */
+async function main(): Promise<number> {
+  const parsed = parseDrainArgs({ argv: process.argv.slice(2) });
+  report(parsed.lines);
+  if (!parsed.ok) return parsed.exitCode;
+  const { target, label, selector, execute, verify, limit, expect: approvedCount, wave } = parsed.value;
+
+  const dbUri = Resource.MONGODB_URI.value;
+  if (!dbUri) throw new Error('MONGODB_URI is required');
+  await connectDB(dbUri.replace('%STAGE%', Resource.App.stage));
+  const db = mongoose.connection.db;
+  if (!db) throw new Error('no database on the mongoose connection');
+  console.log(`stage=${Resource.App.stage}  db=${db.databaseName}`);
+  console.log(`lake=${label}  mode=${verify ? 'VERIFY' : execute ? 'EXECUTE' : 'DRY RUN'}\n`);
+
+  // Settings are read one row at a time BY NAME: this collection also holds live credentials, so
+  // an unprojected sweep would pull one into the output.
+  const setting = async (name: string) => {
+    const row = await db
+      .collection('adminsettings')
+      .findOne({ settingName: name }, { projection: { settingValue: 1 } });
+    return row?.settingValue;
+  };
+
+  // The rebuild door refuses a whole wave when convergence is halted, before touching anything,
+  // because a wave halted mid-flight leaves its files with no passages at all. The pause check here
+  // mirrors only the PLATFORM rung, so a scoped row would make it incomplete - and scopedsettings
+  // was empty at last measurement, which makes a row appearing a reason to stop and re-read.
+  const declaredModel = str(await setting('defaultEmbeddingModel'));
+  console.log(`defaultEmbeddingModel = ${declaredModel || '(no row)'}`);
+  const platform = checkPlatformGuards({
+    defaultModel: declaredModel,
+    paused: await setting('PauseLakeConvergence'),
+    scopedSettingsRows: await db.collection('scopedsettings').countDocuments({}),
+  });
+  report(platform.lines);
+  if (!platform.ok) return platform.exitCode;
+  const defaultModel = platform.value;
+
+  const resolved = resolveLakeId({
+    target,
+    lakeRow:
+      target.lakeIdKind === 'db'
+        ? ((await DataLakeModel.findOne({ datalakeTag: target.tag }).maxTimeMS(QUERY_TIMEOUT_MS).lean()) as {
+            _id: unknown;
+          } | null)
+        : null,
+  });
+  report(resolved.lines);
+  if (!resolved.ok) return resolved.exitCode;
+  const lakeId = resolved.value;
+  console.log(`lakeId stamped on queue messages = ${lakeId}\n`);
+
+  const membership = buildDrainMembershipQuery(target);
+
+  if (verify) {
+    const all = (await FabFile.find(membership, {
+      embeddingModel: 1,
+      chunked: 1,
+      vectorized: 1,
+      vectorizedChunkCount: 1,
+      chunkRebuildRequestedAt: 1,
+    })
+      .maxTimeMS(QUERY_TIMEOUT_MS)
+      .lean()) as unknown as DrainFileRow[];
+
+    console.log(`--- ${all.length} member files ---`);
+    console.log(`  embeddingModel: ${tally(all, f => f.embeddingModel ?? 'BLANK')}`);
+    console.log(`  chunked:        ${tally(all, f => String(!!f.chunked))}`);
+    console.log(`  vectorized:     ${tally(all, f => String(!!f.vectorized))}`);
+    const inFlight = all.filter(f => f.chunkRebuildRequestedAt && !f.vectorized).length;
+    console.log(`  rebuild requested, not yet vectorized: ${inFlight}  (workers still catching up)`);
+    const staleFiles = all.filter(f => (f.embeddingModel ?? '') !== defaultModel).length;
+
+    // The file's own label is a STAMP, not the vectors. A file can read 3-small while its passages
+    // still hold ada-002 vectors, and that lake looks healthy everywhere while scoring query
+    // similarity across two spaces - noise, with no error anywhere. fabfilechunks.fabFileId is a
+    // STRING, so joining on ObjectId here returns zero and reads as "no chunks".
+    const ids = all.map(f => str(f._id));
+    const chunkLabels = await db
+      .collection('fabfilechunks')
+      .aggregate(
+        [
+          { $match: { fabFileId: { $in: ids } } },
+          { $group: { _id: '$embeddingModel', n: { $sum: 1 } } },
+          { $sort: { n: -1 } },
+        ],
+        { maxTimeMS: QUERY_TIMEOUT_MS }
+      )
+      .toArray();
+    const chunkTotal = chunkLabels.reduce((n, r) => n + (r.n as number), 0);
+    const staleChunks = chunkLabels.filter(r => str(r._id) !== defaultModel).reduce((n, r) => n + (r.n as number), 0);
+    console.log(`\n--- ${chunkTotal} passages actually stored for those files ---`);
+    console.log(`  chunk embeddingModel: ${chunkLabels.map(r => `${r._id ?? 'BLANK'} x${r.n}`).join(', ')}`);
+
+    // An unlabelled passage is benign or serious depending on one field, and the counts alone
+    // cannot tell them apart: with no vector it is simply awaiting embedding and will resolve
+    // itself, but WITH a vector it is embedded and unlabelled, which retrieval's space filter
+    // cannot see - withheld permanently, with no error raised anywhere.
+    const unlabelled = {
+      fabFileId: { $in: ids },
+      $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
+    };
+    const blankTotal = await db.collection('fabfilechunks').countDocuments(unlabelled, { maxTimeMS: QUERY_TIMEOUT_MS });
+    if (blankTotal > 0) {
+      const blankEmbedded = await db
+        .collection('fabfilechunks')
+        .countDocuments({ ...unlabelled, 'vector.0': { $exists: true } }, { maxTimeMS: QUERY_TIMEOUT_MS });
+      console.log(
+        `  of ${blankTotal} unlabelled: ${blankTotal - blankEmbedded} awaiting embedding (benign, re-check),`
+      );
+      console.log(`     ${blankEmbedded} ALREADY EMBEDDED but unlabelled (a real defect - retrieval cannot see these)`);
+    }
+
+    // File-level flags are NOT a completion signal: a drain of this lake showed all 585 files
+    // reading vectorized:true while 72% of their passages held no vector at all.
+    const verdict = verifyVerdict({ defaultModel, staleFiles, staleChunks });
+    report(verdict.lines);
+    return verdict.exitCode;
+  }
+
+  const stale = (await FabFile.find(
+    { ...membership, embeddingModel: { $ne: defaultModel } },
+    { userId: 1, fileName: 1, embeddingModel: 1, vectorizedChunkCount: 1, isChunking: 1 }
+  )
+    .maxTimeMS(QUERY_TIMEOUT_MS)
+    .lean()) as unknown as DrainFileRow[];
+
+  const chunkSum = stale.reduce((n, f) => n + (Number(f.vectorizedChunkCount) || 0), 0);
+  console.log(`--- population: ${stale.length} files not in ${defaultModel}, ${chunkSum} stored chunks ---`);
+  console.log(`  prior labels: ${tally(stale, f => f.embeddingModel ?? 'BLANK')}`);
+
+  const owners = auditOwners({ rows: stale, owners: target.owners });
+  report(owners.lines);
+  if (owners.refusal) {
+    report(owners.refusal.lines);
+    return owners.refusal.exitCode;
+  }
+
+  const midRun = stale.filter(f => f.isChunking === true).length;
+  if (midRun) {
+    console.log(`  note: ${midRun} file(s) are mid-chunk and the reset precondition will skip them`);
+  }
+
+  const approved = checkExpectedPopulation({ selector, execute, expect: approvedCount, population: stale.length });
+  report(approved.lines);
+  if (!approved.ok) return approved.exitCode;
+
+  // Past the execute gate, never before it: a dry run is a read, its "nothing written" line has to
+  // stay literally true, and a rehearsal must not leave a file of account-tied ids sitting on the
+  // operator's disk. The OS temp dir at 0600, never the working tree: this is a public repo and its
+  // history is permanent.
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lake-drain-'));
+  const manifest = path.join(outDir, `${label}-manifest.json`);
+  fs.writeFileSync(
+    manifest,
+    JSON.stringify(
+      {
+        capturedAt: new Date().toISOString(),
+        stage: Resource.App.stage,
+        lake: label,
+        lakeId,
+        defaultModel,
+        files: stale.map(f => ({
+          fabFileId: str(f._id),
+          userId: str(f.userId),
+          fileName: f.fileName ?? null,
+          priorEmbeddingModel: f.embeddingModel ?? null,
+          priorVectorizedChunkCount: f.vectorizedChunkCount ?? 0,
+        })),
+      },
+      null,
+      2
+    ),
+    { mode: 0o600 }
+  );
+  console.log(`\nmanifest of prior state: ${manifest}`);
+  console.log('  This is NOT an undo. The worker deletes the old passages, so a drain can only be');
+  console.log('  re-run, never reversed; the manifest records which files were touched and from what.');
+
+  const waves = planWaves({ ids: stale.map(f => str(f._id)), limit, wave });
+  const ownerById = new Map(stale.map(f => [str(f._id), str(f.userId)] as const));
+  const plannedCount = waves.reduce((n, w) => n + w.length, 0);
+  console.log(`\nexecuting over ${plannedCount} file(s) in waves of ${wave}`);
+
+  const sqs = new SQSClient({});
+  const queueUrl = Resource.fabFileChunkQueue.url;
+  const resetLog = path.join(outDir, `${label}-reset.log`);
+  let resetTotal = 0;
+  let sentTotal = 0;
+  const failedSends: string[] = [];
+
+  for (const [waveIndex, waveIds] of waves.entries()) {
+    // Reset first, then enqueue exactly what the reset changed. The reset is preconditioned on
+    // isChunking:{$ne:true}, so a file a worker holds a lease on is skipped rather than having
+    // that lease released, and the returned ids are therefore a subset of the wave.
+    const resetIds = await fabFileRepository.resetChunkStateByIds(waveIds);
+    resetTotal += resetIds.length;
+    fs.appendFileSync(resetLog, resetIds.join('\n') + '\n', { mode: 0o600 });
+
+    // allSettled, not all: one failed send must not abandon the rest of the wave. A reset file
+    // whose send never landed reads as chunkless, which is what the daily chunk rescue sweep
+    // selects on - so it self-heals, but slowly and against a platform-wide per-run cap. Re-running
+    // this script is the faster remedy, since such a file is still in the stale set.
+    const results = await Promise.allSettled(
+      resetIds.map(id =>
+        sqs.send(
+          new SendMessageCommand({
+            QueueUrl: queueUrl,
+            MessageBody: JSON.stringify({
+              fabFileId: id,
+              // The FILE OWNER, not whoever runs this: the worker resolves the file through the
+              // owner's access, the way the rebuild door does.
+              userId: ownerById.get(id),
+              // Provenance is what makes an in-flight drain haltable via PauseLakeConvergence.
+              // Without it these messages read as user work and cannot be stopped once sent.
+              origin: CONVERGENCE_ORIGIN,
+              lakeId,
+            }),
+          })
+        )
+      )
+    );
+    let waveSent = 0;
+    results.forEach((r, k) => {
+      if (r.status === 'fulfilled') waveSent += 1;
+      else failedSends.push(resetIds[k]);
+    });
+    sentTotal += waveSent;
+    console.log(`  wave ${waveIndex + 1}: reset ${resetIds.length}/${waveIds.length}, enqueued ${waveSent}`);
+  }
+
+  console.log(`\nreset ${resetTotal} file(s), enqueued ${sentTotal}.`);
+  console.log(`reset ids: ${resetLog}`);
+  if (failedSends.length) {
+    console.log(`  ${failedSends.length} send(s) FAILED - those files are reset but not queued:`);
+    for (const id of failedSends.slice(0, 20)) console.log(`    ${id}`);
+    if (failedSends.length > 20) console.log(`    ... and ${failedSends.length - 20} more (see the reset log)`);
+    console.log('  re-run this script to pick them up.');
+  }
+  console.log(`\nWorkers re-embed asynchronously. Confirm convergence with:\n  ${selector} --verify`);
+  return failedSends.length ? 2 : 0;
+}
+
+/**
+ * `process.exitCode` + an explicit disconnect, never `process.exit()`: Node's stdout is
+ * asynchronous when it is a pipe, which the `sst shell` invocation guarantees, and `process.exit()`
+ * does not drain it. The last lines printed are the manifest path, the reset-log path and the
+ * failed-send list - exactly what an operator needs to finish or re-run a partial drain.
+ */
+void (async () => {
+  try {
+    process.exitCode = await main();
+  } catch (e) {
+    console.error(e);
+    process.exitCode = 1;
+  } finally {
+    // connectDB (priceCatalogBootstrap) kicks off a fire-and-forget catalog seed. Disconnecting
+    // under it throws MongoExpiredSessionError and dumps a stack trace AFTER the report, burying
+    // the lines above. whenCatalogSeeded never rejects.
+    await whenCatalogSeeded().catch(() => {});
+    await mongoose.disconnect().catch(() => {});
+  }
+})();

@@ -4,7 +4,9 @@ const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   assertLakeRebuildAccess: vi.fn(),
   detectUnderChunkedFiles: vi.fn(),
+  detectStaleEmbeddingSpaceFiles: vi.fn(),
   countFailedLakeFiles: vi.fn(),
+  resolveEffectiveEmbeddingModel: vi.fn(),
   resetChunkStateByIds: vi.fn(),
   sendToQueue: vi.fn(),
   getSourceQueueUrl: vi.fn(() => 'https://sqs.example.com/fab-file-chunk'),
@@ -29,10 +31,14 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeAccess: h.assertLakeAccess,
     assertLakeRebuildAccess: h.assertLakeRebuildAccess,
     detectUnderChunkedFiles: h.detectUnderChunkedFiles,
+    detectStaleEmbeddingSpaceFiles: h.detectStaleEmbeddingSpaceFiles,
     countFailedLakeFiles: h.countFailedLakeFiles,
     DEFAULT_REBUILD_WAVE: 50,
     MAX_REBUILD_WAVE: 200,
   },
+}));
+vi.mock('@server/embeddings/effectiveEmbeddingModel', () => ({
+  resolveEffectiveEmbeddingModel: h.resolveEffectiveEmbeddingModel,
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: {},
@@ -77,6 +83,9 @@ beforeEach(() => {
   h.assertLakeAccess.mockResolvedValue(lake);
   h.assertLakeRebuildAccess.mockResolvedValue(lake);
   h.countFailedLakeFiles.mockResolvedValue(0);
+  h.detectStaleEmbeddingSpaceFiles.mockResolvedValue([]);
+  // A deployment whose space IS resolvable, so the refusal arm is opt-in rather than the default.
+  h.resolveEffectiveEmbeddingModel.mockResolvedValue('text-embedding-3-small');
   // By default the claim wins every id it's asked for, each with a claim stamp (the token the
   // message carries so the worker can reject a superseded/duplicate delivery).
   // Returns the ids actually reset - a file a worker is mid-run on is skipped (round-8 P1).
@@ -93,11 +102,60 @@ describe('GET /api/data-lakes/[id]/rechunk', () => {
       { fabFileId: 'f2', userId: 'u1' },
     ]);
     h.countFailedLakeFiles.mockResolvedValue(1);
+    h.detectStaleEmbeddingSpaceFiles.mockResolvedValue([{ fabFileId: 'f9', userId: 'u1' }]);
     const { json } = await invoke('GET');
-    expect(json).toHaveBeenCalledWith({ underChunkedCount: 2, failedCount: 1 });
+    expect(json).toHaveBeenCalledWith({
+      underChunkedCount: 2,
+      failedCount: 1,
+      staleEmbeddingSpaceCount: 1,
+      embeddingSpaceResolved: true,
+    });
     expect(h.assertLakeAccess).toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
     expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+  });
+
+  it('reports the stale-space count as null - never 0 - when the space cannot be resolved', async () => {
+    // 0 would read as "nothing to migrate", which is the one answer this situation cannot support:
+    // with no space to compare against, every label comparison would be wrong.
+    //
+    // `embeddingSpaceResolved: false` is the other half, and the pair is the point: a null count
+    // alone cannot tell a client whether the space failed to resolve or the field is simply absent
+    // because the server predates it. Only a server that ran the resolution can say, so the flag
+    // has to be present and false here, never omitted.
+    h.detectUnderChunkedFiles.mockResolvedValue([]);
+    h.resolveEffectiveEmbeddingModel.mockResolvedValue(undefined);
+    const { json } = await invoke('GET');
+    expect(json).toHaveBeenCalledWith({
+      underChunkedCount: 0,
+      failedCount: 0,
+      staleEmbeddingSpaceCount: null,
+      embeddingSpaceResolved: false,
+    });
+    expect(h.detectStaleEmbeddingSpaceFiles).not.toHaveBeenCalled();
+  });
+
+  it('answers 0 with the flag TRUE on a converged lake - not the same shape as an unresolved space', async () => {
+    // The third corner, and the one a mutant walks through if it is left unasserted: space resolves
+    // AND nothing is stale. Deriving the flag from the count instead of the space - `!!stale?.length`
+    // is the natural slip - passes both cases above and reports `false` here, which is every healthy
+    // lake. LakeInfoPanel keys its "embedding space unknown" chip off exactly that value.
+    h.detectUnderChunkedFiles.mockResolvedValue([]);
+    const { json } = await invoke('GET');
+    expect(json).toHaveBeenCalledWith({
+      underChunkedCount: 0,
+      failedCount: 0,
+      staleEmbeddingSpaceCount: 0,
+      embeddingSpaceResolved: true,
+    });
+  });
+
+  it('compares against the DEPLOYMENT space, not the calling admin', async () => {
+    // Each file is re-embedded under its own owner, so the caller's credentials are not what
+    // decides where anything lands - passing their id would compare against the wrong space.
+    h.detectUnderChunkedFiles.mockResolvedValue([]);
+    await invoke('GET');
+    expect(h.resolveEffectiveEmbeddingModel).toHaveBeenCalledWith(null);
   });
 });
 
@@ -250,5 +308,85 @@ describe('POST /api/data-lakes/[id]/rechunk', () => {
     await expect(invoke('POST', {})).rejects.toThrow(/permission to rebuild/);
     expect(h.detectUnderChunkedFiles).not.toHaveBeenCalled();
     expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('defaults to the under-chunked selector, and costs no embedding-space read', async () => {
+    h.detectUnderChunkedFiles.mockResolvedValue([{ fabFileId: 'f1', userId: 'u1' }]);
+    await invoke('POST', {});
+    expect(h.detectStaleEmbeddingSpaceFiles).not.toHaveBeenCalled();
+    expect(h.resolveEffectiveEmbeddingModel).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/[id]/rechunk  select: stale-embedding-space', () => {
+  const body = { select: 'stale-embedding-space' };
+
+  it('drains the stale-space set through the same reset and enqueue', async () => {
+    // The two selectors differ only in WHICH files they name; the reset, the owner identity and the
+    // convergence stamp are shared, which is why this is one door.
+    h.detectStaleEmbeddingSpaceFiles.mockResolvedValue([
+      { fabFileId: 'f1', userId: 'owner-1' },
+      { fabFileId: 'f2', userId: 'owner-2' },
+    ]);
+    const { json } = await invoke('POST', body);
+
+    expect(h.detectUnderChunkedFiles).not.toHaveBeenCalled();
+    expect(h.detectStaleEmbeddingSpaceFiles).toHaveBeenCalledWith(lake, expect.anything(), 'text-embedding-3-small');
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['f1', 'f2']);
+    // Each message carries the FILE's owner, not the caller: the chunk worker loads the file under
+    // that identity, so the admin's id would fail the accessibility read.
+    expect(h.sendToQueue).toHaveBeenCalledWith('https://sqs.example.com/fab-file-chunk', {
+      fabFileId: 'f2',
+      userId: 'owner-2',
+      origin: 'convergence',
+      lakeId: 'lakeDoc1',
+    });
+    expect(json).toHaveBeenCalledWith({ detected: 2, enqueued: 2, remaining: 0 });
+  });
+
+  it('REFUSES with 409 before detection when the deployment space cannot be resolved', async () => {
+    // Comparing against the advertised setting instead would select the whole lake on any stage
+    // that embeds through the keyless fallback - at full spend, for a wave that can never converge,
+    // because the files come back stamped exactly as they were.
+    h.resolveEffectiveEmbeddingModel.mockResolvedValue(undefined);
+    const { res, json } = await invoke('POST', body);
+
+    expect(h.detectStaleEmbeddingSpaceFiles).not.toHaveBeenCalled();
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    // A status, not a 200 with zeros: the pause arm can report real counts because it detected
+    // first, and this one cannot detect at all, so no number it returned would be honest.
+    expect(res.status).toHaveBeenCalledWith(409);
+    // Exact key set, matcher on the prose only: `error` is the key the client's refusal extractor
+    // reads, and dropping it would show the owner the bare axios status string instead.
+    expect(json).toHaveBeenCalledWith({
+      outcome: 'unknown-embedding-space',
+      error: expect.stringContaining('embedding model'),
+    });
+  });
+
+  it('caps the wave and reports the remainder, so a whole-lake migration is bounded', async () => {
+    h.detectStaleEmbeddingSpaceFiles.mockResolvedValue([
+      { fabFileId: 'a', userId: 'u' },
+      { fabFileId: 'b', userId: 'u' },
+      { fabFileId: 'c', userId: 'u' },
+    ]);
+    const { json } = await invoke('POST', { ...body, limit: 2 });
+    expect(h.resetChunkStateByIds).toHaveBeenCalledWith(['a', 'b']);
+    expect(json).toHaveBeenCalledWith({ detected: 3, enqueued: 2, remaining: 1 });
+  });
+
+  it('is refused by the convergence kill switch before the reset, like the other selector', async () => {
+    h.isConvergenceHalted.mockResolvedValue(true);
+    h.detectStaleEmbeddingSpaceFiles.mockResolvedValue([{ fabFileId: 'f1', userId: 'u1' }]);
+    const { json } = await invoke('POST', body);
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ detected: 1, enqueued: 0, remaining: 1, outcome: 'paused' });
+  });
+
+  it('rejects an unknown selector rather than silently falling back to under-chunked', async () => {
+    await expect(invoke('POST', { select: 'everything' })).rejects.toThrow();
+    expect(h.detectUnderChunkedFiles).not.toHaveBeenCalled();
+    expect(h.detectStaleEmbeddingSpaceFiles).not.toHaveBeenCalled();
   });
 });

@@ -707,7 +707,7 @@ export default function PublishedArtifactsTabContent() {
                         //
                         // The REASON comes from the entries, not from `tags.length < entered.length`
                         // - that is true of any shortening, dedupe and blank-drop included. MUI
-                        // compares options with ===, so typing `IonQ` beside an existing `ionq` chip
+                        // compares options with ===, so typing `NorthWind` beside an existing `northwind` chip
                         // appends the variant and the normalizer then dedupes it: the old check
                         // reported a length problem about a four-character tag. Blanks and duplicates
                         // stay SILENT, for the same reason a rewrite does - they explain themselves.

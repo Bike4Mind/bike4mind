@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { DATA_LAKES, OVERSIZED_PASSAGE_TOKEN_THRESHOLD, effectiveTagPrefixArm } from '@bike4mind/common';
-import { detectUnderChunkedFiles, countFailedLakeFiles } from './rebuildLakePassages';
+import { detectUnderChunkedFiles, countFailedLakeFiles, detectStaleEmbeddingSpaceFiles } from './rebuildLakePassages';
 import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
 
 const lake = {
@@ -109,6 +109,40 @@ describe('detectUnderChunkedFiles', () => {
   });
 });
 
+describe('detectStaleEmbeddingSpaceFiles', () => {
+  const makeSpaceDeps = (files: { id: string; userId: string }[]) => ({
+    db: { fabFiles: { findFilesOutsideEmbeddingSpaceByScope: vi.fn().mockResolvedValue(files) } },
+  });
+
+  it('pairs each stale member with its OWNER userId, in the order the repo returned them', async () => {
+    const deps = makeSpaceDeps([
+      { id: 'f2', userId: 'owner-2' },
+      { id: 'f1', userId: 'owner-1' },
+    ]);
+    const result = await detectStaleEmbeddingSpaceFiles(lake, deps, 'text-embedding-3-small');
+    expect(result).toEqual([
+      { fabFileId: 'f2', userId: 'owner-2' },
+      { fabFileId: 'f1', userId: 'owner-1' },
+    ]);
+  });
+
+  it('queries the lake membership scope and forwards the target space verbatim', async () => {
+    // Verbatim matters: the caller resolves the space through the credential seam, and a detector
+    // that normalised or defaulted it would put the wave into a space nothing will embed into.
+    const deps = makeSpaceDeps([]);
+    await detectStaleEmbeddingSpaceFiles(lake, deps, 'voyage-3');
+    expect(deps.db.fabFiles.findFilesOutsideEmbeddingSpaceByScope).toHaveBeenCalledWith(
+      lakeMembershipScope(lake),
+      'voyage-3'
+    );
+  });
+
+  it('returns empty when no member is labelled foreign', async () => {
+    const deps = makeSpaceDeps([]);
+    expect(await detectStaleEmbeddingSpaceFiles(lake, deps, 'text-embedding-3-small')).toEqual([]);
+  });
+});
+
 describe('countFailedLakeFiles', () => {
   it('delegates to the repo with the lake membership scope and returns the count', async () => {
     const countFailedFilesByScope = vi.fn().mockResolvedValue(3);
@@ -146,6 +180,19 @@ describe('registry-lake membership scope', () => {
     const expected = registryMembershipScope(REGISTRY_LAKE);
     expect(deps.db.fabFiles.findChunkedFilesByScope).toHaveBeenCalledWith(expected);
     expect(deps.db.fabFiles.findConvergencePausedFilesByScope).toHaveBeenCalledWith(expected);
+  });
+
+  it('scopes detectStaleEmbeddingSpaceFiles through registryMembershipScope', async () => {
+    const findFilesOutsideEmbeddingSpaceByScope = vi.fn().mockResolvedValue([]);
+    await detectStaleEmbeddingSpaceFiles(
+      REGISTRY_LAKE,
+      { db: { fabFiles: { findFilesOutsideEmbeddingSpaceByScope } } },
+      'text-embedding-3-small'
+    );
+    expect(findFilesOutsideEmbeddingSpaceByScope).toHaveBeenCalledWith(
+      registryMembershipScope(REGISTRY_LAKE),
+      'text-embedding-3-small'
+    );
   });
 
   it('scopes countFailedLakeFiles through registryMembershipScope', async () => {

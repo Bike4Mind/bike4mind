@@ -124,3 +124,43 @@ describe('FabFileChunkRepository.findChunkFieldsByFabFileIds', () => {
     ]);
   });
 });
+
+describe('FabFileChunkRepository.findTextsByChunkIds', () => {
+  it('returns text for exactly the ids asked for, and nothing around them', async () => {
+    const [one, two, other] = await Promise.all([
+      makeChunk(fileA, 'first passage'),
+      makeChunk(fileA, 'second passage'),
+      makeChunk(fileB, 'someone else'),
+    ]);
+
+    const rows = await fabFileChunkRepository.findTextsByChunkIds([String(one._id), String(other._id)]);
+
+    // `two` shares a file with `one` and is absent: the read is keyed on chunk id, not on the file
+    // the chunk belongs to, which is what keeps a served-set read from pulling whole files.
+    expect(rows.map(r => r.text).sort()).toEqual(['first passage', 'someone else']);
+    expect(rows.every(r => r.id && r.fabFileId)).toBe(true);
+    expect(rows.find(r => r.text === 'someone else')?.fabFileId).toBe(fileB);
+    expect(String(two._id)).not.toBe('');
+  });
+
+  it('omits an id that no longer exists rather than failing the batch', async () => {
+    const live = await makeChunk(fileC, 'still here');
+    const gone = await makeChunk(fileC, 'deleted since the capture');
+    await FabFileChunk.deleteOne({ _id: gone._id });
+
+    const rows = await fabFileChunkRepository.findTextsByChunkIds([String(live._id), String(gone._id)]);
+
+    // A chunk can be replaced by re-vectorization between a capture and this read, so a short
+    // result is data the caller reports, not an error here.
+    expect(rows).toHaveLength(1);
+    expect(rows[0].text).toBe('still here');
+  });
+
+  it('short-circuits an empty id list instead of querying for everything', async () => {
+    await makeChunk(fileA, 'must not come back');
+
+    // `{ _id: { $in: [] } }` would be harmless, but the guard is what makes that true by
+    // construction rather than by Mongo's behavior on an empty $in.
+    expect(await fabFileChunkRepository.findTextsByChunkIds([])).toEqual([]);
+  });
+});

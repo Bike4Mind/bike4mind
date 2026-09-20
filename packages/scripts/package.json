@@ -23,6 +23,7 @@
     "datalake:check-prefix-dupes": "tsx migrate/check-datalake-prefix-dupes.ts",
     "datalake:check-prefix-whitespace": "tsx migrate/check-datalake-prefix-whitespace.ts",
     "datalake:check-prefix-only-members": "tsx migrate/check-datalake-prefix-only-members.ts",
+    "datalake:drain-embedding-space": "tsx migrate/drain-lake-embedding-space.ts",
     "datalake:ingest-pdfs": "tsx datalake/ingest-pdf-datalake.ts",
     "datalake:check-stranded-drive-connections": "tsx datalake/check-stranded-drive-connections.ts",
     "datalake:check-stale-vector-claims": "tsx datalake/check-stale-vector-claims.ts",
@@ -62,7 +63,10 @@
     "retrieval:capture-embeddings": "tsx retrieval/capture-embeddings.ts",
     "retrieval:answerability-replay": "tsx retrieval/answerability-replay.ts",
     "retrieval:model-comparison": "tsx retrieval/model-comparison.ts",
-    "retrieval:forced-floor-sweep": "tsx retrieval/forced-floor-sweep.ts"
+    "retrieval:forced-floor-sweep": "tsx retrieval/forced-floor-sweep.ts",
+    "retrieval:fetch-served-text": "tsx retrieval/fetch-served-text.ts",
+    "retrieval:sample-corpus-chunks": "tsx retrieval/sample-corpus-chunks.ts",
+    "retrieval:extend-fixture-queries": "tsx retrieval/extend-fixture-queries.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

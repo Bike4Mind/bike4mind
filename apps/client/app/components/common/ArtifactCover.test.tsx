@@ -91,7 +91,7 @@ const renderCover = (publicId: string, title?: string) => {
 
 describe('ArtifactCover', () => {
   it('shows the title initial as a secondary cue', () => {
-    expect(renderCover('pub_x', 'ionq weekly').textContent).toBe('I');
+    expect(renderCover('pub_x', 'northwind weekly').textContent).toBe('N');
   });
 
   it('renders without a title', () => {
