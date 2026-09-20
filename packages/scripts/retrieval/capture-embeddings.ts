@@ -23,7 +23,7 @@
  * Drop --dry-run and add --yes once the printed cost is acceptable.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yargs from 'yargs';
@@ -40,7 +40,7 @@ import {
 import { apiKeyService } from '@bike4mind/services';
 import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { ApiKeyType, countCodePoints } from '@bike4mind/common';
+import { ApiKeyType, countCodePoints, DATA_LAKES } from '@bike4mind/common';
 import { parseProbeQuestions, PROBE_QUESTIONS, type ProbeQuestion } from './corpus';
 import {
   assertOnePerInput,
@@ -64,6 +64,7 @@ import {
   hashQuestionText,
   isLongDocumentRegime,
   loadEmbeddingFixture,
+  writeEmbeddingFixtureFile,
 } from './embeddingFixture';
 
 /** The ingest tags each help file `help:<slug>`; that slug is what corpus.ts's ground truth names. */
@@ -78,7 +79,7 @@ const argv = await yargs(hideBin(process.argv))
   .option('lake', {
     type: 'string',
     default: 'system-help',
-    describe: 'Data-lake slug (org-less lakes only) or datalakeTag (any lake)',
+    describe: 'Data-lake slug (org-less or built-in lakes) or datalakeTag (any lake)',
   })
   .option('userId', {
     type: 'string',
@@ -149,16 +150,26 @@ await connectDB(Resource.MONGODB_URI.value.replace('%STAGE%', Resource.App.stage
 console.log(`Connected (stage: ${Resource.App.stage})`);
 
 // --- Resolve the corpus (read-only) ---
-// By slug first, then by datalakeTag. `findBySlug` with no org list only reaches an ORG-LESS lake
-// (its own docblock: the own-org arm is skipped when organizationIds is empty), so `system-help`
-// resolves and the org-owned production lake the runbook calls the confirmatory arm does not.
-// `datalakeTag` carries a globally-unique index, so it resolves either without an org.
+// Three arms, because a lake is persisted, org-owned, or neither. `findBySlug` with no org list only
+// reaches an ORG-LESS lake (its own docblock: the own-org arm is skipped when organizationIds is
+// empty), so `system-help` resolves and an org-owned lake does not; `datalakeTag` carries a
+// globally-unique index, so it resolves either without an org. Both of those read `datalakes`, and a
+// BUILT-IN lake has no row there at all - DATA_LAKES is curated config, which is why nothing that
+// enumerates that collection can see one (see `isFallbackLake`). Built-ins are read-only by
+// construction and a capture only reads, so the registry is a third resolution arm rather than a
+// failure: without it the largest corpus on the stage is unreachable by this instrument. It goes
+// last so a persisted lake still wins on a slug the registry happens to share.
+const registryLake = DATA_LAKES.find(dl => dl.slug === argv.lake || dl.datalakeTag === argv.lake);
 const lake =
-  (await dataLakeRepository.findBySlug(argv.lake)) ?? (await dataLakeRepository.findByDatalakeTag(argv.lake));
+  (await dataLakeRepository.findBySlug(argv.lake)) ??
+  (await dataLakeRepository.findByDatalakeTag(argv.lake)) ??
+  // A built-in carries no lifecycle field: being in the constant IS its active state, so the status
+  // gate below has nothing to read here and 'active' states that rather than bypassing the check.
+  (registryLake ? { datalakeTag: registryLake.datalakeTag, status: 'active' } : undefined);
 if (!lake) {
   throw new Error(
-    `No lake on this stage with slug or datalakeTag "${argv.lake}". An ORG-OWNED lake is not ` +
-      'resolvable by slug here - pass its datalakeTag instead.'
+    `No lake on this stage with slug or datalakeTag "${argv.lake}", and none built in. An ` +
+      'ORG-OWNED lake is not resolvable by slug here - pass its datalakeTag instead.'
   );
 }
 if (lake.status !== 'active') throw new Error(`Lake "${argv.lake}" is ${lake.status}, not active.`);
@@ -397,8 +408,10 @@ for (const model of models) {
   // heterogeneous capture only surfaces in phase B - after the connection and the credentials are
   // gone and re-capturing costs money again.
   loadEmbeddingFixture(fixture);
-  const outPath = path.join(argv['out-dir'], `${model}.${argv.lake}.fixture.json`);
-  writeFileSync(outPath, `${JSON.stringify(fixture)}\n`);
+  // `.ndjson`, because it is not one JSON document - see the format docblock in embeddingFixture.ts
+  // for why a production lake cannot be. The reader still accepts the old single-object `.json`.
+  const outPath = path.join(argv['out-dir'], `${model}.${argv.lake}.fixture.ndjson`);
+  writeEmbeddingFixtureFile(outPath, fixture);
   console.log(`Wrote ${outPath} (${chunks.length} chunks, ${dims} dims)`);
 }
 
@@ -406,6 +419,6 @@ for (const model of models) {
 // defaults - see MODEL-COMPARISON.md step 3.
 console.log(
   '\nNow score them (from the repo root):\n  pnpm --filter @bike4mind/scripts retrieval:model-comparison ' +
-    `--fixtures ${models.map(m => `out/${m}.${argv.lake}.fixture.json`).join(',')}`
+    `--fixtures ${models.map(m => `out/${m}.${argv.lake}.fixture.ndjson`).join(',')}`
 );
 process.exit(0);

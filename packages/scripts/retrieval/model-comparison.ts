@@ -11,15 +11,15 @@
  * path in either.
  *
  *   pnpm --filter @bike4mind/scripts retrieval:model-comparison \
- *     --fixtures out/text-embedding-ada-002.system-help.fixture.json,out/text-embedding-3-small.system-help.fixture.json \
+ *     --fixtures out/text-embedding-ada-002.system-help.fixture.ndjson,out/text-embedding-3-small.system-help.fixture.ndjson \
  *     --widths 3072,1536,512
  *
  * See MODEL-COMPARISON.md for the full runbook and how to read the output.
  */
 
-import { readFileSync } from 'node:fs';
 import yargs from 'yargs';
 import { hideBin } from 'yargs/helpers';
+import { readEmbeddingFixtureFile } from './embeddingFixture';
 import { reportFromRaw } from './modelComparison';
 
 const argv = await yargs(hideBin(process.argv))
@@ -48,5 +48,5 @@ const widths = argv.widths
 if (paths.length === 0) throw new Error('--fixtures matched no paths.');
 if (widths.length === 0) throw new Error(`--widths "${argv.widths}" parsed to no positive integers.`);
 
-const raws = paths.map(p => JSON.parse(readFileSync(p, 'utf8')) as unknown);
+const raws = paths.map(p => readEmbeddingFixtureFile(p) as unknown);
 console.log(reportFromRaw(raws, widths));
