@@ -678,13 +678,6 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    * (label = the model about to stamp them); the distinct set is empty for both.
    */
   countUnlabeledVectorChunksByFabFileId(fabFileId: string): Promise<number>;
-  /**
-   * Distinct vector WIDTHS among a file's unlabeled vector-bearing chunks - the same rows
-   * `countUnlabeledVectorChunksByFabFileId` counts. Width attributes a vector to a model only
-   * weakly (ten registered models are 1024 wide), so a caller inferring a label from it needs the
-   * full distinct set: one unexpected width retires the inference. Malformed rows read as -1.
-   */
-  distinctUnlabeledVectorWidthsByFabFileId(fabFileId: string): Promise<number[]>;
   /** One page of vector-bearing chunks missing `embeddingModel`, ascending by `_id` - backfill's keyset cursor. */
   findChunksMissingEmbeddingModel(options?: {
     limit?: number;
@@ -1305,25 +1298,6 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * @param hashes - Array of SHA-256 content hashes to look up.
    * @returns Files matching any of the provided hashes.
    */
-  /**
-   * One page of vectorized files carrying no FILE-level `embeddingModel`, ascending by `_id` - the
-   * label-repair pass's keyset cursor. Blank is three shapes here as it is at chunk level, and the
-   * `null` one is written deliberately when a file's chunks span two spaces, so a caller must
-   * re-derive each file's label rather than assume every row in the page wants stamping.
-   * `chunkEmbeddingModelStampedAt` is projected because the stamp overwrites it unconditionally and
-   * it is ANN-eligibility authority, so a reversible pass has to record which rows carried none.
-   */
-  findVectorizedFilesMissingEmbeddingModel(options?: { limit?: number; afterFileId?: string }): Promise<
-    Array<{
-      id: string;
-      userId: string;
-      vectorizedChunkCount: number;
-      chunkEmbeddingModelStampedAt: Date | null;
-      deleted: boolean;
-    }>
-  >;
-  /** How many vectorized files still carry no FILE-level label - the repair pass's completion predicate. */
-  countVectorizedFilesMissingEmbeddingModel(): Promise<number>;
   findByContentHashes(userId: string, hashes: string[]): Promise<IFabFileDocument[]>;
   /**
    * Files in a lake matching any hash, by META-TAG ONLY - deliberately narrower than the
@@ -1633,9 +1607,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    *
    * A BLANK label is deliberately NOT selected. Blank is unattributable, not foreign: the vectors
    * may already be current, and `null` is written ON PURPOSE for a file whose chunks span two
-   * spaces. Re-deriving those belongs to the label-repair pass
-   * (`findVectorizedFilesMissingEmbeddingModel`); selecting them here would re-embed files that
-   * need none while still hiding the ones that do.
+   * spaces. Re-deriving those belongs to a label-repair pass; selecting them here would
+   * re-embed files that need none while still hiding the ones that do.
    *
    * Bounded to files that HAVE vectors, which has a second effect worth relying on: a file drops
    * out of this set the moment a wave resets it, so a falling count is progress - and a zero means

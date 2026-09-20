@@ -1,12 +1,12 @@
 /**
  * The arithmetic of the three forced-retrieval relevance floors, shared by the served path
- * (`ChatCompletionFeatures.ts`, `KnowledgeRetrievalFeature`) and the offline sweep that exists to
- * pick their values (`packages/scripts/retrieval/forcedFloorSweep.ts`).
+ * (`ChatCompletionFeatures.ts`, `KnowledgeRetrievalFeature`) and by any offline sweep that exists
+ * to pick their values.
  *
- * It lives here for the same reason `retrieval/scoreDistribution.ts` routes its scoring through the
- * shipped `computeCosineSimilarity` rather than a local copy: a harness that reimplements the gate
- * it is measuring can drift from it, and a sweep fitted to a drifted gate recommends a value for a
- * filter that does not exist. Both callers multiplying the same way makes that impossible by
+ * It lives here so a sweep routes its arithmetic through the shipped code rather than a local copy,
+ * the same reason a score-distribution measurement routes through the shipped
+ * `computeCosineSimilarity`: a harness that reimplements the gate it is measuring can drift from it,
+ * and a sweep fitted to a drifted gate recommends a value for a filter that does not exist. Both callers multiplying the same way makes that impossible by
  * construction, which a cross-reference comment cannot promise.
  *
  * UNITS. Every number here is a 0..1 cosine fraction. The three admin settings store whole-number

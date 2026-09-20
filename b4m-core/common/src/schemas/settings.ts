@@ -3738,7 +3738,7 @@ export const settingsMap = {
       'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
       'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
       'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
-      'embedding model; the sweep tool is packages/scripts/retrieval/forcedFloorSweep.ts.',
+      'embedding model.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,
@@ -3765,8 +3765,7 @@ export const settingsMap = {
       'space and does not need re-tuning when the embedding model changes. Lower is stricter (10 ' +
       'keeps only passages within a tenth of the way down to the median); 100 cuts at the median ' +
       'itself. It can never empty a turn - the best passage always clears its own cutoff. Ships ' +
-      'off because no magnitude has been measured yet; measure one with the sweep tool at ' +
-      'packages/scripts/retrieval/forcedFloorSweep.ts before turning it on.',
+      'off because no magnitude has been measured yet; measure one offline before turning it on.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 11,
