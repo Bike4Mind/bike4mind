@@ -127,12 +127,6 @@ const unlabeledVectorChunkFilter = (fabFileId: string) => ({
   $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
 });
 
-/** Vectorized files with no FILE-level label - the same three blank shapes, one level up. */
-const blankFileLabelFilter = {
-  vectorizedChunkCount: { $gt: 0 },
-  $or: [{ embeddingModel: { $exists: false } }, { embeddingModel: null }, { embeddingModel: '' }],
-};
-
 export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument> implements IFabFileChunkRepository {
   constructor(private fabFileChunkModel: IFabFileChunkModel) {
     super(fabFileChunkModel);
@@ -376,29 +370,6 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
   }
 
   /**
-   * Chunk text for a SET OF CHUNK IDS - `findTextsByFabFileId`'s counterpart for a caller that
-   * holds ids rather than a file.
-   *
-   * Keyed on `_id`, so the read is exactly the chunks asked for and never a whole file around them.
-   * That precision is the point: an offline retrieval instrument captures chunk ids and vectors but
-   * no text, and reading back only what a question was actually served is both the narrowest query
-   * and the least corpus text to handle.
-   *
-   * A requested id that no longer exists is simply absent from the result. Chunks are replaced by
-   * re-vectorization, so an id captured earlier can legitimately be gone by the read, and that is a
-   * fact for the caller to report rather than an error here.
-   */
-  async findTextsByChunkIds(chunkIds: string[]): Promise<{ id: string; fabFileId: string; text: string }[]> {
-    if (chunkIds.length === 0) return [];
-    const docs = await this.fabFileChunkModel
-      .find({ _id: { $in: chunkIds } })
-      .select({ _id: 1, fabFileId: 1, text: 1 })
-      .sort({ _id: 1 })
-      .lean();
-    return docs.map(d => ({ id: String(d._id), fabFileId: String(d.fabFileId ?? ''), text: d.text ?? '' }));
-  }
-
-  /**
    * Every chunk of a file, vectorless ones included. Callers that page a bounded window
    * need this to tell "you are holding the whole file" from "you are holding a slice" -
    * counting only what a projected reader returned cannot make that distinction.
@@ -539,24 +510,6 @@ export class FabFileChunkRepository extends BaseRepository<IFabFileChunkDocument
    */
   async countUnlabeledVectorChunksByFabFileId(fabFileId: string): Promise<number> {
     return this.fabFileChunkModel.countDocuments(unlabeledVectorChunkFilter(fabFileId));
-  }
-
-  /**
-   * The distinct vector WIDTHS among this file's unlabeled vector-bearing chunks, through the same
-   * filter as the count above so the two describe the same rows.
-   *
-   * Width is the only evidence available about an unlabeled vector's model, and it is weak: ten
-   * registered models are 1024 wide. A caller deciding a label from it therefore needs the whole
-   * distinct set, not a sample - one row of an unexpected width is enough to retire the inference.
-   * Non-array `vector` values collapse to -1 rather than raising, so a malformed row shows up as a
-   * width no model claims instead of aborting the read.
-   */
-  async distinctUnlabeledVectorWidthsByFabFileId(fabFileId: string): Promise<number[]> {
-    const rows = await this.fabFileChunkModel.aggregate<{ _id: number }>([
-      { $match: unlabeledVectorChunkFilter(fabFileId) },
-      { $group: { _id: { $cond: [{ $isArray: '$vector' }, { $size: '$vector' }, -1] } } },
-    ]);
-    return rows.map(r => r._id).sort((a, b) => a - b);
   }
 
   /**
@@ -816,9 +769,9 @@ const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUr
  *
  * Not widened here because the fix is not free and this projection is not this change's to rewrite:
  * `notes` is owner-authored free text and the tagless reader runs once per cited source on every chat
- * turn that touches a lake. `isCapturableFile` instead excludes `vectorizedOnly` from its own options
- * type, which makes the gap unrepresentable for the capture. The live reader still has it. Widen this
- * projection - or narrow that caller the same way - before relying on a `vectorizedOnly` verdict.
+ * turn that touches a lake. No caller narrows its way around the gap either - excluding
+ * `vectorizedOnly` from an options type would make it unrepresentable, and nothing does - so the live
+ * reader is the only shape it has. Widen this projection before relying on a `vectorizedOnly` verdict.
  */
 const CITABLE_PROJECTION =
   '_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt';
@@ -1695,62 +1648,6 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { _id: fabFileId },
       { $set: { chunkedPassageTokenTarget, chunkPolicyConflict: conflict } }
     );
-  }
-
-  /**
-   * One page of vectorized files carrying no FILE-level `embeddingModel`, ascending by `_id` - the
-   * label-repair pass's keyset cursor (see packages/scripts/datalake).
-   *
-   * Blank is three shapes, and matching only `$exists: false` would walk past the two that matter
-   * most here: `null`, which stampChunkEmbeddingModel writes deliberately when a file's chunks span
-   * two spaces, and `''` from an older write path. That `null` case is why a caller must re-derive
-   * the label per file rather than assume every row in this page wants stamping - one of them may
-   * be blank on purpose.
-   *
-   * `chunkEmbeddingModelStampedAt` is projected because it is ANN-eligibility authority and the
-   * stamp overwrites it unconditionally, so a pass that may need unwinding has to record which rows
-   * carried none beforehand.
-   *
-   * `includeDeleted` is REQUIRED, not a widening: `softDeletePlugin` hooks `find` but not
-   * `countDocuments`, so without it this page silently omits soft-deleted rows that
-   * `countVectorizedFilesMissingEmbeddingModel` still counts - and a pass using that count as its
-   * completion predicate could never drive it to zero, because the rows it must stamp are the ones
-   * it cannot see. A soft-deleted file also keeps its vectors and can be restored, so leaving it
-   * unlabeled strands it after the default moves, which is the failure this population exists to
-   * prevent. `deletedAt` is projected so the caller can still report them separately.
-   */
-  async findVectorizedFilesMissingEmbeddingModel(options: { limit?: number; afterFileId?: string } = {}) {
-    const { limit = 500, afterFileId } = options;
-    const docs = await this.fabFileModel
-      .find({
-        ...blankFileLabelFilter,
-        ...(afterFileId ? { _id: { $gt: afterFileId } } : {}),
-      })
-      .setOptions({ includeDeleted: true })
-      .select({ _id: 1, userId: 1, vectorizedChunkCount: 1, chunkEmbeddingModelStampedAt: 1, deletedAt: 1 })
-      .sort({ _id: 1 })
-      .limit(limit)
-      .lean();
-    return docs.map(d => ({
-      id: String(d._id),
-      userId: d.userId ? String(d.userId) : '',
-      vectorizedChunkCount: d.vectorizedChunkCount ?? 0,
-      chunkEmbeddingModelStampedAt: d.chunkEmbeddingModelStampedAt ?? null,
-      deleted: Boolean(d.deletedAt),
-    }));
-  }
-
-  /**
-   * The label-repair pass's completion predicate, as a count straight from the collection rather
-   * than a tally the pass itself kept - a pass that skipped rows it could not resolve would
-   * otherwise report its own success.
-   *
-   * Counts soft-deleted rows, which is why the finder above must return them too - see the
-   * `includeDeleted` note there. `countDocuments` takes no soft-delete hook, so these two agree
-   * only because that option is set, and an integration test pins the agreement.
-   */
-  async countVectorizedFilesMissingEmbeddingModel(): Promise<number> {
-    return this.fabFileModel.countDocuments(blankFileLabelFilter);
   }
 
   async findByContentHashes(userId: string, hashes: string[]): Promise<IFabFileDocument[]> {

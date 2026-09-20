@@ -19,9 +19,9 @@
  * reimplementation that could drift from it.
  *
  * WHICH IS WHY IT DOES NOT SWEEP THE TWO FORCED FLOORS. Doing so here would write settings the
- * probed path never reads and print rows that differ only by noise. They are swept offline instead,
- * over captured embedding fixtures, by `forced-floor-sweep.ts`: both floors are pure arithmetic over
- * one turn's ranked pool, so measuring them needs neither a tool call nor a stage.
+ * probed path never reads and print rows that differ only by noise. Both floors are pure arithmetic
+ * over one turn's ranked pool, so they are swept offline over captured embedding fixtures instead -
+ * measuring them needs neither a tool call nor a stage.
  *
  * HOW IT SEES WHAT WAS SERVED. The tool already reports every read to the lake audit trail
  * (`recordLakeAccessEvent`, `knowledgeBaseSearch/index.ts:974`) carrying the deduped file ids, chunk

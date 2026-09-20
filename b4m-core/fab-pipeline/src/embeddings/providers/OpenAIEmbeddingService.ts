@@ -48,8 +48,8 @@ const headerOrNull = (httpResponse: Response, name: string): string | null => {
 
 /**
  * The ceilings `generateEmbeddingBatch` splits on, at module scope and exported because a cost
- * PREFLIGHT has to model the same split before it spends (packages/scripts/retrieval/capturePlan.ts).
- * A second copy of these numbers in a script cannot track a provider change.
+ * PREFLIGHT has to model the same split before it spends. A second copy of these numbers in a
+ * script cannot track a provider change.
  */
 export const OPENAI_MAX_INPUTS_PER_REQUEST = 2048;
 export const OPENAI_MAX_TOKENS_PER_INPUT = 8192;

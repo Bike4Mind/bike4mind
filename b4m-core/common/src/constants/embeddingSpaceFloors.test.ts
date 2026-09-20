@@ -4,8 +4,8 @@ import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT } from './forcedRetrieval';
 import { OpenAIEmbeddingModel, OllamaEmbeddingModel, VoyageAIEmbeddingModel } from '../schemas/embedding';
 
 /**
- * The top of each space's MEASURED cosine band over the FILE corpus, as percents, from the captures
- * in `packages/scripts/retrieval/MODEL-COMPARISON.md`. 3-small's is the live 520-file /
+ * The top of each space's MEASURED cosine band over the FILE corpus, as percents, from the offline
+ * model-comparison captures. 3-small's is the live 520-file /
  * 21,327-chunk `opti-knowledge` capture, NOT the 35-file one whose band topped out at 55.88 - the
  * same space reaches 87.31 on a production-class corpus, so the smaller capture's band was never a
  * bound on this one. A floor at or above one of

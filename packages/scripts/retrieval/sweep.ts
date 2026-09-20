@@ -12,7 +12,7 @@ import type { Aggregate } from './metrics';
 /**
  * One point in the sweep. All three knobs are admin settings introduced by #1955 (PR #2009), and all
  * three belong to the `search_knowledge_base` TOOL path - forced retrieval reads none of them. Its
- * own two floors are swept by `forcedFloorSweep.ts`; see `recall-probe.ts`' header for why the two
+ * own two floors are swept offline instead; see `recall-probe.ts`' header for why the two
  * instruments are separate rather than five columns of one table.
  *
  * `tokenBudget` is `kbSearchResultTokenBudget`: approximate tokens of served passage text one call
