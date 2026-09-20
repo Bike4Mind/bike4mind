@@ -65,8 +65,8 @@ const CHARS_PER_TOKEN = 3.5;
  * model's input window rather than its output limit; see attachedContentExtractionBudget.
  *
  * Exported because it is also the DEPTH a score-distribution measurement has to inspect to be
- * measuring the served ranking (packages/scripts/retrieval/scoreDistribution.ts). A copy of the
- * number over there would let the harness and the product drift silently.
+ * measuring the served ranking. A copy of the number inside such a harness would let it and the
+ * product drift silently.
  */
 export const COSINE_SEARCH_TOP_K = 10;
 

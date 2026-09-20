@@ -127,8 +127,6 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findChunkedFilesByScope: vi.fn(),
   findFilesOutsideEmbeddingSpaceByScope: vi.fn(),
   findConvergencePausedFilesByScope: vi.fn(),
-  findVectorizedFilesMissingEmbeddingModel: vi.fn(),
-  countVectorizedFilesMissingEmbeddingModel: vi.fn(),
   resetChunkStateByIds: vi.fn(),
   markConvergencePaused: vi.fn(),
   countFailedFilesByScope: vi.fn(),

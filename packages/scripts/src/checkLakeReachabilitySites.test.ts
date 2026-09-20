@@ -10,7 +10,7 @@ import ts from 'typescript';
  * the SITES that hold a copy of it, and the CLAUSE SET each of those copies actually spells.
  *
  * The site half tracks which files carry the fully-vectorized comparison and how many copies each
- * holds, so a fourth copy fails. The clause half then reads each copy's enclosing predicate through
+ * holds, so an unregistered copy fails. The clause half then reads each copy's enclosing predicate through
  * the TypeScript AST and requires the live and retrieval-excluded clauses to be in it - deleting one
  * leaves the matched line byte-identical, so the site half alone would stay green.
  *
@@ -24,10 +24,10 @@ import ts from 'typescript';
  * invisible, which is the honest limit of a grep-and-AST tripwire over duplicated logic.
  *
  * Why the clause half is AST-scoped and not a wider regex: the clauses sit on their OWN lines (and
- * as a bare conjunction in one of the three copies rather than an early return), so a line-oriented
+ * as a bare conjunction in ChatCompletionProcess rather than an early return), so a line-oriented
  * detector cannot see them however wide it is. A file-scoped symbol search would see them and be
- * vacuous - two of the three sites mention these symbols outside the predicate, so it would pass on
- * a predicate that had lost the clause entirely. It is narrower still than the enclosing function:
+ * vacuous - ChatCompletionProcess names deletedAt and archivedAt again in a separate, deliberately
+ * looser predicate, so such a search would pass on a gate that had lost the clause entirely. It is narrower still than the enclosing function:
  * only what the predicate APPLIES counts (see appliedIdentifiers), so a clause left computed in a
  * local that nothing returns or branches on is a failure rather than a pass.
  *
@@ -47,9 +47,10 @@ import ts from 'typescript';
  *    path, if it ever swallows a real copy.
  *
  * Sibling of checkEmbeddingModelComparisonSites, and deliberately a second test rather than a wider
- * one. That guard watches the `embeddingModel` exact-match clause; `isCapturableFile` omits that
- * clause on purpose (the comparison harness varies the model), so it is correctly invisible there -
- * and was therefore guarded by nothing. This is the clause set it does share.
+ * one. That guard watches a different clause (`embeddingModel` exact match) over a different site
+ * set, most of which carries no reachability rule at all, and finds its sites from wording in
+ * `isForeignEmbeddingModel`'s docstring. This one finds its sites by grep and AST. Merged, one test
+ * would have to assert two inventories that only partly overlap.
  *
  * Same failure shape as its sibling: the rule is duplicated across packages with no shared symbol,
  * relaxing one copy does not propagate, and the symptom is silent - a doc the served path cannot
@@ -58,8 +59,8 @@ import ts from 'typescript';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 /**
- * The three copies. `matches` is how many CODE lines in the file the patterns below hit, so a
- * fourth copy added inside an already-listed file is caught too.
+ * The two copies. `matches` is how many CODE lines in the file the patterns below hit, so a
+ * third copy added inside an already-listed file is caught too.
  */
 const SITES: { path: string; matches: number; note: string }[] = [
   {
@@ -71,11 +72,6 @@ const SITES: { path: string; matches: number; note: string }[] = [
     path: 'apps/client/server/memory/lakeSourceReachability.ts',
     matches: 1,
     note: 'isFabFileCitable: may a lake belief lean on this doc without dangling its citation',
-  },
-  {
-    path: 'packages/scripts/retrieval/capturePlan.ts',
-    matches: 1,
-    note: 'isCapturableFile: may this file enter the embedding-comparison corpus. Omits embeddingModel',
   },
 ];
 
@@ -215,9 +211,9 @@ const NOT_THIS_RULE: { pattern: RegExp; reason: string }[] = [
  * an early return for a conjunction, rename the local, or reorder the tests, and the rule is still
  * intact so long as the predicate still reads these fields.
  *
- * `embeddingModel` is deliberately absent. `isCapturableFile` omits that clause on purpose, so
- * requiring it here would fail a copy that is correct - and it is already guarded, for the two sites
- * that do carry it, by checkEmbeddingModelComparisonSites.
+ * `embeddingModel` is deliberately absent. It is a separate clause with its own guard
+ * (checkEmbeddingModelComparisonSites), and a copy of the reachability rule written for a caller
+ * that deliberately varies the model is still a correct copy - requiring it here would fail one.
  */
 const REQUIRED_CLAUSES: { clause: string; symbols: string[]; why: string }[] = [
   {
@@ -481,7 +477,7 @@ describe('the lake reachability clause set moves in lockstep', () => {
     expect(
       unexpected,
       'A new site gates on "fully vectorized". If it is asking whether RETRIEVAL can reach the doc, ' +
-        'it is a fourth copy of the reachability rule: register it in SITES here and give it a ' +
+        'it is another copy of the reachability rule: register it in SITES here and give it a ' +
         'MUST STAY IN SYNC pointer naming one of the others. If it is asking a different question ' +
         'about the same counters (has indexing settled, did this vectorize finish), add a ' +
         'NOT_THIS_RULE entry saying so.'
@@ -533,7 +529,7 @@ describe('the lake reachability clause set moves in lockstep', () => {
     expect(
       orphans,
       'This copy of the reachability rule names none of the others, so whoever edits it gets no ' +
-        'signal that two more must move with it. Add a MUST STAY IN SYNC comment naming a sibling.'
+        'signal that another copy must move with it. Add a MUST STAY IN SYNC comment naming it.'
     ).toEqual([]);
   });
 });

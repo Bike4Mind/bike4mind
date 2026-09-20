@@ -15,7 +15,7 @@ import { OpenAIEmbeddingModel } from '../schemas/embedding';
  *   - ABOVE the band: every candidate is rejected and retrieval goes dark while every log line
  *     still reads "no relevant content found". Measured, not hypothesised - ada-002's shipped 0.75
  *     sits above the whole of `text-embedding-3-small`'s 0.2293-0.5588 band and empties 30 of 30
- *     probe queries (`packages/scripts/retrieval/MODEL-COMPARISON.md`).
+ *     probe queries.
  *   - BELOW the band: the gate rejects nothing while reading like a quality filter. The same 75 on
  *     a production lake whose band sat at 0.8025-0.9140 never once bound.
  * Same setting, same model, opposite failures on two corpora. `MEMENTO_MIN_SIMILARITY`'s header
