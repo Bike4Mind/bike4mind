@@ -22,6 +22,14 @@ const monorepoRoot = new URL('../../', import.meta.url).pathname;
  */
 const HELP_CONTENT_ROOTS = ['./public/help-content/**/*', './app/generated/help-content-admin/**/*'];
 
+/**
+ * The generated help search artifacts, as outputFileTracingIncludes entries. Kept apart from
+ * HELP_CONTENT_ROOTS because the routes need different subsets: /api/help serves the index, and
+ * only /api/help/chat retrieves against the vectors. See the comment at the include site.
+ */
+const HELP_INDEX = './app/generated/help-index.json';
+const HELP_EMBEDDINGS = './app/generated/help-embeddings.json';
+
 const selfHostResolveAlias = process.env.B4M_SELF_HOST === 'true' ? { sst: '@bike4mind/resource' } : {};
 
 // NEXT_PUBLIC_CDN_URL is an absolute URL on deployed stages, but on personal
@@ -122,12 +130,23 @@ const nextConfig = {
   // 250 MB ceiling. Opaque paths mean nothing traces these files, so they MUST be declared here:
   // the two halves are a pair, and dropping either one silently 404s every admin help article or
   // silently re-adds the 47 MB. See server/help/contentPath.ts.
+  //
+  // Help search artifacts: declared for the opposite reason to the roots above. Their read sites
+  // (pages/api/help/index.ts and server/help/retrieval.ts) build a path.join(process.cwd(),
+  // '<literal>'), a shape the tracer CAN fold to a concrete file, so both artifacts have been
+  // reaching the standalone tree on their own - off a tracer implementation detail with no config
+  // contract behind it. These entries make that a declaration. Under Turbopack the tracer is
+  // Turbopack's own rather than nft, whose collect-build-traces is gated off; the includes here
+  // are still live, while the excludes below are dormant. help-embeddings.json exists only when
+  // an embedding key was present at build time (see .gitignore), and an include matching no file
+  // is a silent no-op, so declaring it costs a keyless build nothing.
   outputFileTracingIncludes: {
     '/api/data-lakes/rlm-answer': [ISOLATED_VM_PREBUILDS],
     '/api/deep-agent/spin': [ISOLATED_VM_PREBUILDS],
     '/api/agents/[id]/missions': [ISOLATED_VM_PREBUILDS],
+    '/api/help': [HELP_INDEX],
     '/api/help/content': HELP_CONTENT_ROOTS,
-    '/api/help/chat': HELP_CONTENT_ROOTS,
+    '/api/help/chat': [...HELP_CONTENT_ROOTS, HELP_INDEX, HELP_EMBEDDINGS],
   },
 
   // DORMANT under Turbopack, which is what `next build` uses here: Next only applies these in
