@@ -858,6 +858,26 @@ On the two routes above that redeem a share, \`[id]\` is the invite's **share to
 
 ---
 
+### Account (Caller Identity)
+
+#### Get the Authenticated Caller
+
+\`\`\`
+GET /api/v1/me
+\`\`\`
+
+**Required API-key scope:** \`me:read\`.
+
+Returns the caller's own id, display name, plan tier, personal credit balance, and
+entitlement keys. It takes no user id, owner id, or impersonation parameter, and
+issues no browser session \u2014 unlike \`/api/identify\`, which does both.
+
+> **This endpoint is generated from its contract.** The full response reference lives
+> in the [generated API docs](/api/v1/docs) under \`getMe\`, derived from the same
+> object the handler validates against.
+
+---
+
 ### Subscriptions & Billing
 
 | Method | Endpoint | Description |

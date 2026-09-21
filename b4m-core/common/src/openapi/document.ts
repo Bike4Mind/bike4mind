@@ -117,15 +117,18 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
   // `requests` exposes one function per verb (requests.get/post/put/patch/delete/...),
   // matching the lowercase HTTP method name exactly.
   const pyMethod = method.toLowerCase();
+  // A GET/HEAD request cannot carry a body: browser and Node `fetch` both throw
+  // `TypeError: Request with GET/HEAD method cannot have body`, so a sample that
+  // sent one would be copy-paste-broken rather than merely redundant.
+  const hasBody = !['get', 'head'].includes(pyMethod);
   return [
     {
       lang: 'curl',
       label: 'curl',
       source:
         `curl ${curlFlags} -X ${method.toUpperCase()} "${url}" \\\n` +
-        `  -H "Authorization: Bearer ${authToken}" \\\n` +
-        `  -H "Content-Type: application/json" \\\n` +
-        `  --data-binary @- <<'${d}'\n${pretty}\n${d}`,
+        `  -H "Authorization: Bearer ${authToken}"` +
+        (hasBody ? ` \\\n  -H "Content-Type: application/json" \\\n  --data-binary @- <<'${d}'\n${pretty}\n${d}` : ''),
     },
     {
       lang: 'JavaScript',
@@ -133,8 +136,11 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
       source:
         `const res = await fetch("${url}", {\n` +
         `  method: "${method.toUpperCase()}",\n` +
-        `  headers: {\n    "Authorization": "Bearer ${authToken}",\n    "Content-Type": "application/json",\n  },\n` +
-        `  body: JSON.stringify(${pretty}),\n});`,
+        `  headers: {\n    "Authorization": "Bearer ${authToken}",` +
+        (hasBody ? `\n    "Content-Type": "application/json",` : '') +
+        `\n  },\n` +
+        (hasBody ? `  body: JSON.stringify(${pretty}),\n` : '') +
+        `});`,
     },
     {
       lang: 'Python',
@@ -142,8 +148,9 @@ function codeSamples(path: string, body: unknown, streaming: boolean, authToken:
       source:
         `import requests\n\n` +
         `res = requests.${pyMethod}(\n    "${url}",\n` +
-        `    headers={"Authorization": "Bearer ${authToken}"},\n` +
-        `    json=${toPythonLiteral(body)},${pyStream}\n)`,
+        `    headers={"Authorization": "Bearer ${authToken}"},` +
+        (hasBody ? `\n    json=${toPythonLiteral(body)},` : '') +
+        `${pyStream}\n)`,
     },
   ];
 }
@@ -273,6 +280,7 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     { name: 'AI', description: 'Chat, completions, and server-side tool execution.' },
     { name: 'Sessions', description: 'Sessions (called "notebooks" in the product UI) and their attached knowledge.' },
     { name: 'Audio', description: 'Speech, music, and sound-effect generation.' },
+    { name: 'Account', description: "The caller's own identity, plan tier, credit balance, and entitlements." },
   ];
 
   // Attach per-operation vendor extensions + headers by operationId. Restrict to
