@@ -971,6 +971,20 @@ describe('POST /api/chat (integration - wait path promptDetails exposure)', () =
     });
 
     it('carries type unconditionally on a real answer, matching the polled quest, and omits errorCode', async () => {
+      // The quest carries a stale `insufficient_credits` from a prior failed attempt: the
+      // ChatCompletionInvoke retry clears it, but this is the negative control for the gate
+      // itself, so the fixture models the state where it did not. Without `type === 'error'`
+      // gating the field, this answer would report a billing failure. The default mockProcess
+      // never sets errorCode, so the assertion below passes with or without the gate - which is
+      // why the stale code has to be planted. Mirrors the poller's equivalent in
+      // pages/api/quests/[id]/__tests__/index.integration.test.ts.
+      mockProcess.mockImplementation(async ({ prefetchedQuest }: { prefetchedQuest: Record<string, unknown> }) => {
+        prefetchedQuest.reply = 'Here is your answer.';
+        prefetchedQuest.replies = [prefetchedQuest.reply as string];
+        prefetchedQuest.type = 'message';
+        prefetchedQuest.errorCode = 'insufficient_credits';
+        prefetchedQuest.status = 'done';
+      });
       const { req, res } = fire({ body: { message: 'hello', sessionId: 'sess-1', wait: true } });
       await handler(req, res);
       const body = res._getJSONData();
