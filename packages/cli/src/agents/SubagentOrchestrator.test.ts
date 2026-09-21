@@ -4,8 +4,14 @@ import { existsSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import type { AgentDefinition, AgentHooks } from './types.js';
-import type { ICompletionBackend, CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters';
+import type {
+  ICompletionBackend,
+  CompletionInfo,
+  ICompletionOptions,
+  ICompletionOptionTools,
+} from '@bike4mind/llm-adapters';
 import type { IMessage } from '@bike4mind/common';
+import type { ReActAgent } from '@bike4mind/agents';
 import { SubagentOrchestrator, type OrchestratorDependencies, type SpawnAgentOptions } from './SubagentOrchestrator.js';
 import { MAX_SUBAGENT_DEPTH } from './types.js';
 import { AgentHistoryStore } from './AgentHistoryStore.js';
@@ -294,6 +300,72 @@ describe('SubagentOrchestrator hook trust gate', () => {
       parentSessionId: 'session-1',
     });
 
+    expect(existsSync(canary)).toBe(true);
+  });
+
+  // The Stop-hook cases above prove the run-level gate; these prove the PER-TOOL
+  // gate (wrapToolWithHooks over filteredTools). We inject a real tool, capture the
+  // agent's wrapped tools, and execute one directly - so the PreToolUse hook fires
+  // only when the source is trusted. Reverting the :379 gate to agentDef.hooks makes
+  // the dynamic case create the canary and fail.
+  function preToolHook(canaryPath: string): AgentHooks {
+    return { PreToolUse: [{ hooks: [{ type: 'command', command: `touch "${canaryPath}"` }] }] };
+  }
+
+  function canaryTool(): ICompletionOptionTools {
+    return {
+      toolSchema: { name: 'canary_tool', description: 'test canary', parameters: { type: 'object', properties: {} } },
+      toolFn: async () => 'ok',
+    } as unknown as ICompletionOptionTools;
+  }
+
+  it('does not fire a dynamic (inline) agent PreToolUse tool hook when the tool runs', async () => {
+    canary = path.join(os.tmpdir(), `agent-pretool-dynamic-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const orchestrator = createRunnableOrchestrator(new AgentHistoryStore(), createOneShotLlm('done'));
+    let captured: ReActAgent | undefined;
+    orchestrator.setBeforeRunCallback(agent => {
+      captured = agent;
+    });
+
+    await orchestrator.delegateToAgent({
+      task: 'do the thing',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: { ...inlineAgent(), hooks: preToolHook(canary) } as SpawnAgentOptions['agentDefinition'],
+      additionalTools: [canaryTool()],
+    });
+
+    const wrapped = captured?.getTools().find(t => t.toolSchema.name === 'canary_tool');
+    expect(wrapped).toBeDefined();
+    await wrapped!.toolFn({});
+    expect(existsSync(canary)).toBe(false);
+  });
+
+  it('fires a global (user-trusted) agent PreToolUse tool hook when the tool runs', async () => {
+    canary = path.join(os.tmpdir(), `agent-pretool-global-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    const storedDef = {
+      ...inlineAgent(),
+      name: 'trusted',
+      source: 'global',
+      filePath: '/home/user/.bike4mind/agents/trusted.md',
+      hooks: preToolHook(canary),
+    } as unknown as AgentDefinition;
+    const orchestrator = orchestratorWithStoredAgent(storedDef, createOneShotLlm('done'));
+    let captured: ReActAgent | undefined;
+    orchestrator.setBeforeRunCallback(agent => {
+      captured = agent;
+    });
+
+    await orchestrator.delegateToAgent({
+      task: 'do the thing',
+      agentName: 'trusted',
+      parentSessionId: 'session-1',
+      additionalTools: [canaryTool()],
+    });
+
+    const wrapped = captured?.getTools().find(t => t.toolSchema.name === 'canary_tool');
+    expect(wrapped).toBeDefined();
+    await wrapped!.toolFn({});
     expect(existsSync(canary)).toBe(true);
   });
 });

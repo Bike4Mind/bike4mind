@@ -3,12 +3,15 @@
  * its projectRoot to findMarkdownFiles for `project` sources, so a symlinked agent
  * whose target escapes the checkout is not loaded. Drop the containmentRoot arg in
  * loadAgentsFromDirectory and this test fails (the escaping agent loads).
+ *
+ * Hermetic: os.homedir is mocked to an empty temp dir so a machine-local global
+ * agent cannot leak into these assertions.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { tmpdir } from 'os';
+import os from 'os';
 import { AgentStore } from './AgentStore.js';
 
 const VALID_AGENT = '---\ndescription: an agent\n---\n\nSystem prompt body.';
@@ -16,9 +19,10 @@ const VALID_AGENT = '---\ndescription: an agent\n---\n\nSystem prompt body.';
 let projectRoot: string;
 let outside: string;
 let builtinDir: string;
+let fakeHome: string;
 
 async function mkTmp(prefix: string): Promise<string> {
-  const dir = path.join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   await fs.mkdir(dir, { recursive: true });
   return dir;
 }
@@ -27,10 +31,13 @@ beforeEach(async () => {
   projectRoot = await mkTmp('b4m-agentstore-proj');
   outside = await mkTmp('b4m-agentstore-outside');
   builtinDir = await mkTmp('b4m-agentstore-builtin');
+  fakeHome = await mkTmp('b4m-agentstore-home');
+  vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
 });
 
 afterEach(async () => {
-  for (const d of [projectRoot, outside, builtinDir]) {
+  vi.restoreAllMocks();
+  for (const d of [projectRoot, outside, builtinDir, fakeHome]) {
     await fs.rm(d, { recursive: true, force: true }).catch(() => {});
   }
 });

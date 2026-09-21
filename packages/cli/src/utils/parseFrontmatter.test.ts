@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { parseFrontmatter } from './parseFrontmatter.js';
+import { logger } from './Logger.js';
 
 vi.mock('./Logger.js', () => ({ logger: { warn: vi.fn() } }));
 
@@ -26,12 +27,19 @@ describe('parseFrontmatter', () => {
     expect(data).toEqual({});
   });
 
-  it('rejects a non-YAML tag even behind a leading BOM', () => {
-    // A leading BOM would otherwise slip the `---js` fence past the language check.
+  it('strips a leading BOM so the non-YAML tag is caught at the fence check', () => {
+    // Isolate this test's warn calls: the non-BOM `---js` case above also warns
+    // with the same message, so a stale call would mask a missing BOM strip.
+    vi.mocked(logger.warn).mockClear();
+
     const hostile = String.fromCharCode(0xfeff) + '---js\nglobalThis.__frontmatterPwned = true\n---\n\nbody';
     const { data } = parseFrontmatter(hostile);
     expect(data).toEqual({});
     expect((globalThis as Record<string, unknown>).__frontmatterPwned).toBeUndefined();
+
+    // Pins the BOM strip: without it the fence regex misses `---js` (BOM is the
+    // first char) and the engine-disabled path fires a different warning instead.
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('Ignoring non-YAML frontmatter language "js"'));
   });
 
   it('degrades malformed YAML to empty frontmatter without throwing', () => {
