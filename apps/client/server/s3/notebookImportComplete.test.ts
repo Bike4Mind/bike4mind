@@ -86,6 +86,7 @@ vi.mock('@server/utils/importHistoryProgress', () => ({
 vi.mock('uuid', () => ({ v4: () => 'test-uuid' }));
 
 import { dispatch, discardUploadedKnowledgeFiles } from './notebookImportComplete';
+import { moderateImportedKnowledgeFiles } from '@server/s3/moderateImportedKnowledgeFiles';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -161,8 +162,12 @@ describe('notebook import duplicate-event guard', () => {
  * handler removes them. Only the callback's own catch sees the paths the failed attempt reported:
  * `withTransaction` re-runs the callback on a transient error against a fresh service, so cleanup
  * after it rejects would miss every earlier attempt's objects.
+ *
+ * The committed path is the other half of the same coin. Those objects DO have rows pointing at
+ * them, and `result.importedKnowledgeFilePaths` is what the post-commit moderation pass scans, so
+ * the cleanup has to leave that list alone rather than sharing state with it.
  */
-describe('notebook import rollback cleanup', () => {
+describe('notebook import: uploaded knowledge objects track the transaction outcome', () => {
   beforeEach(() => {
     h.getMetadata.mockResolvedValue({ size: 10 });
     // Both the data and the options key are read through this one mock; the payload is irrelevant
@@ -196,6 +201,24 @@ describe('notebook import rollback cleanup', () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining('Failed to delete uploaded knowledge file'),
       expect.objectContaining({ path: 'knowledge/user-1/a' })
+    );
+  });
+
+  it('deletes nothing, and hands the paths to the moderation pass, when the import commits', async () => {
+    h.importNotebooks.mockResolvedValue({
+      importedNotebooks: 1,
+      importedMessages: 0,
+      skippedNotebooks: 0,
+      importedKnowledgeFilePaths: ['knowledge/user-1/a'],
+    });
+
+    await run();
+
+    // These rows committed, so their objects are referenced and must survive - the compensation
+    // exists only for the rejection path, and must not reach into the committed one.
+    expect(h.deleteFile).not.toHaveBeenCalled();
+    expect(moderateImportedKnowledgeFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ filePaths: ['knowledge/user-1/a'] })
     );
   });
 });
