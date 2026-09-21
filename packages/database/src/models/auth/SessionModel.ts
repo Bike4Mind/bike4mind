@@ -473,6 +473,38 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return this.sessionModel.countDocuments({ userId, ...deletedAtFilter });
   }
 
+  /**
+   * Untagged notebooks the tagging handler will actually spend an operations-model completion on.
+   *
+   * Narrower than `{ taggedAt: null }` on purpose. `sessionTagging.ts` aborts at its no-quest
+   * branch BEFORE the completion and writes nothing, so a questless notebook stays `taggedAt:
+   * null` and is re-counted on every run. The spider's credit pre-flight sizes a run from this
+   * number, and `assertSessionOperationalCredits` only gates - it never debits - so counting that
+   * notebook does not overcharge anyone; it refuses a low-balance admin a run that would have
+   * spent nothing on it.
+   *
+   * `deletedAt: null` is stated explicitly on BOTH collections rather than left to
+   * `softDeletePlugin`, which hooks only `find` and `findOne`: `distinct` does not inherit it, and
+   * the handler's gate IS a hooked `findOne`, so omitting it would price a notebook whose only
+   * quest is soft-deleted. (`deletedAt: null` matches a missing field as well as a null one.)
+   *
+   * Must stay in step with the handler's gate: if that stops keying on quest existence, so does
+   * this.
+   */
+  async countTaggableNotebooks(userId: string): Promise<number> {
+    const untagged = await this.sessionModel.find({ userId, deletedAt: null, taggedAt: null }, { _id: 1 });
+    if (untagged.length === 0) return 0;
+
+    const Quest = this.questModel || mongoose.models.Quest || mongoose.model('Quest');
+    // `distinct` collapses a notebook's many quests to one entry, so the length IS the notebook
+    // count - no second pass needed.
+    const taggable = await Quest.distinct('sessionId', {
+      sessionId: { $in: untagged.filter(s => s._id != null).map(s => s._id.toString()) },
+      deletedAt: null,
+    });
+    return taggable.length;
+  }
+
   async countActiveVoiceSessionsByUserId(userId: string) {
     const sixtyMinutesAgo = new Date(Date.now() - 60 * 60 * 1000);
     return this.sessionModel.countDocuments({

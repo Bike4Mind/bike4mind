@@ -11,24 +11,40 @@ type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'emb
 
 /**
  * The spider operations whose handlers settle through `recordSessionOperationalUsage`, and so are
- * the ones a credit pre-flight can size, mapped to the session field whose absence means the
- * handler will still act on that notebook (`server/events/spider.ts:96-99`). The other three
- * record no operational usage at all: `messageCount` is a pure recount, `curation` publishes to a
- * handler with no billing path, and the spider generates embeddings inline without recording
- * usage. Typed against the operation union so a renamed member fails the build rather than
- * silently costing nothing.
+ * the ones a credit pre-flight can size, each mapped to the count of notebooks it should be
+ * charged for. The other three record no operational usage at all: `messageCount` is a pure
+ * recount, `curation` publishes to a handler with no billing path, and the spider generates
+ * embeddings inline without recording usage. Typed against the operation union so a renamed
+ * member fails the build rather than silently costing nothing.
  *
- * Both legs narrow. `taggedAt` did not until it was declared on the Session schema: strict mode
- * had been dropping it from every write, so `{ taggedAt: null }` below matched the whole
- * collection and the `tags` leg priced the full notebook count. That was still the accurate
- * number, because the same missing field made `spider.ts` re-tag every notebook too. Both moved
- * together when the path landed, so the pre-flight and the gate stay in agreement: the `tags` leg
- * now prices only the untagged notebooks the spider will actually act on.
+ * Both legs narrow past "every notebook", but not the same way, because the two handlers abort on
+ * different things:
+ *
+ * - `summarize` can use `summaryAt: null` directly. Its one pre-model return
+ *   (`server/events/sessionSummarization.ts`) also requires `!needsInitialSummaryId`, and a
+ *   notebook with no `summaryAt` has no `summaryModelId` either, so that return never fires for
+ *   the notebooks counted here: even an empty one reaches the model and settles.
+ * - `tags` cannot use `taggedAt: null` alone. `server/events/sessionTagging.ts` aborts before the
+ *   model when the notebook has no quest AND writes nothing, so such a notebook is dispatched,
+ *   counted, and re-counted on every run while settling nothing.
+ *   `countTaggableNotebooks` adds the quest-existence term that mirrors that gate.
+ *
+ * What remains is a gap this pre-flight cannot close: it prices DISPATCHES, and a dispatch is not
+ * a settlement. A notebook whose completion never parses is charged on every run with no attempt
+ * cap, and one that gains its first quest between this count and the spider's pass settles
+ * without having been counted. `assertSessionOperationalCredits` only gates and never debits
+ * (see its docstring), so neither moves a balance - they only shift the refusal threshold.
  */
 const SPENDING_SPIDER_OPERATIONS = {
-  summarize: 'summaryAt',
-  tags: 'taggedAt',
-} as const satisfies Partial<Record<SpiderOperation, string>>;
+  summarize: (userId: string) =>
+    sessionRepository.count({
+      userId,
+      $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
+      // `null` matches missing-or-null, which is what the handler's `!session.summaryAt` accepts.
+      summaryAt: null,
+    }),
+  tags: (userId: string) => sessionRepository.countTaggableNotebooks(userId),
+} as const satisfies Partial<Record<SpiderOperation, (userId: string) => Promise<number>>>;
 
 type SpendingSpiderOperation = keyof typeof SPENDING_SPIDER_OPERATIONS;
 
@@ -82,19 +98,11 @@ const handler = baseApi().post(
         // already-groomed notebook per operation, so pricing a re-run at notebooks x operations
         // would refuse an 800-notebook account 1600 credits for the five notebooks left to do.
         // Deduped because the requested list is caller-supplied and a repeat would double-count.
-        // See SPENDING_SPIDER_OPERATIONS: both legs narrow against a persisted timestamp.
+        // See SPENDING_SPIDER_OPERATIONS for what each leg counts and why they differ.
         const ungroomedCounts = await Promise.all(
           Array.from(new Set(requestedOperations))
             .filter(isSpendingSpiderOperation)
-            .map(operation =>
-              sessionRepository.count({
-                userId,
-                $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
-                // `null` matches missing-or-null, which is what the handler's `!session.summaryAt`
-                // test accepts.
-                [SPENDING_SPIDER_OPERATIONS[operation]]: null,
-              })
-            )
+            .map(operation => SPENDING_SPIDER_OPERATIONS[operation](userId))
         );
 
         await assertSessionOperationalCredits({
