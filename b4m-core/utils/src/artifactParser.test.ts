@@ -1,14 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { convertCodeBlocksToArtifacts } from './artifactParser';
-import { parseArtifacts, isSvgGraphicallyEmpty } from './artifactParser';
+import { convertCodeBlocksToArtifacts, parseArtifacts, isSvgGraphicallyEmpty } from './artifactParser';
 
-// A run under this is noise-dominated: flooring it before dividing keeps timer jitter
-// on a fast, near-instant call from inflating the growth ratio. Set well above the
-// ~2ms these cases actually take, so a shared CI runner under load cannot trip the
-// ratio on scheduling noise alone; a real regression is caught by the ceiling below.
+// The baseline-vs-SMALL_INPUT_MS_CEILING check below is the real regression guard: it
+// fails fast instead of letting a hang run out the clock. The ratio check is secondary
+// and, in practice, close to a fixed budget rather than a true ratio: every baseline
+// measured here lands under this floor, so flooring the denominator reduces
+// `ratio < GROWTH_RATIO_CEILING` to `doubledMs < GROWTH_RATIO_CEILING * MIN_BASELINE_MS`.
+// The floor exists because a near-instant call is noise-dominated - without it, timer
+// jitter alone could inflate the ratio past the ceiling.
 const MIN_BASELINE_MS = 25;
-// Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and
-// cubic (~8x), so the ratio check has margin on both sides.
+// Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and cubic
+// (~8x) - see MIN_BASELINE_MS above for why this is a secondary check in practice.
 const GROWTH_RATIO_CEILING = 3;
 // Generous on purpose: this only exists to catch a genuine wedge, not to pin steady-state timing.
 const SMALL_INPUT_MS_CEILING = 500;
@@ -403,7 +405,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
     for (const label of ['html', 'svg', 'tsx', 'json', 'mermaid']) {
-      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 50000);
+      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 120000);
     }
   });
 
@@ -443,10 +445,12 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(ls).toContain('HTML Page');
   });
 
-  it('leaves an unterminated react fence untouched, scaling linearly', () => {
-    // Same pathological shape as the html case: component markers present on many
-    // lines, no closing fence. The old anchored pattern was quadratic in body size.
-    assertLinearGrowth(n => '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(n), 1000);
+  it('leaves an unterminated react fence untouched', () => {
+    // Not a growth-ratio case: the fence never closes, so the react regex fails on its
+    // first (and only) anchor attempt regardless of body size - measured linear on both
+    // the pre-fix and current parser, so there is no old-vs-new gap to pin here.
+    const input = '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(1000);
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
   it('drops a double quote from a promoted document title', () => {
@@ -459,21 +463,37 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   });
 
   it('leaves an svg fence with no closing tag untouched, scaling linearly', () => {
-    // Openings with no closer: the shape that made a single <svg...</svg> predicate
-    // re-scan the body from each one.
-    assertLinearGrowth(n => '```svg\n' + '<svg '.repeat(n) + '\n```', 10000);
+    // Openings with no closer. This copy's hasCompleteSvg is a plain indexOf scan and
+    // stays fast at any size; small=400 is chosen for the twin client parser, whose old
+    // doubly-anchored <svg>...</svg> pattern already takes ~0.6s there (vs ~0.01ms on
+    // the current parser) - a much larger size would only add runtime, not separation.
+    assertLinearGrowth(n => '```svg\n' + '<svg '.repeat(n) + '\n```', 400);
   });
 
-  it('leaves a single-line react fence untouched, scaling linearly', () => {
-    // One line, no newlines to bound a per-keyword rescan, no component marker.
-    assertLinearGrowth(n => '```tsx\n' + 'const '.repeat(n) + '\n```', 8000);
+  it('leaves a single-line react fence untouched', () => {
+    // Not a growth-ratio case: one line, no closing fence, and the react regex fails
+    // its only anchor attempt regardless of body size - measured linear on both the
+    // pre-fix and current parser.
+    const input = '```tsx\n' + 'const '.repeat(8000) + '\n```';
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
-  it('leaves unterminated html fences untouched, scaling linearly', () => {
-    // First body is the pathological shape for the old anchored pattern: both anchors
-    // present, many candidate splits for its two lazy groups, no closing fence.
-    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500);
-    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(n), 3800);
+  it('leaves an unterminated html fence untouched, scaling linearly', () => {
+    // Many <!DOCTYPE occurrences and no </html> anywhere, so the old parser's lazy scan
+    // retried from each occurrence in turn. This size is chosen for the twin client
+    // parser, whose old fence pattern is worse (doubly-anchored) and clearly breaches
+    // the ceiling here; this copy's old parser is quadratic on the same shape but with
+    // a smaller constant, so it does not breach until a much larger size.
+    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 1600);
+  });
+
+  it('leaves an unterminated html fence with no promotable markup untouched', () => {
+    // Not a growth-ratio case: a single <!DOCTYPE anchor followed by many closed
+    // <div> lines and no </html> ever. The old pattern still resolves this in one
+    // linear pass (its anchor never repeats), so there is no old-vs-new gap to pin;
+    // this instead just pins that a large, never-closing fence body is left alone.
+    const input = '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(3800);
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
   // The mermaid fence body is the one that cannot simply drop its leading \s*: the old
@@ -585,13 +605,14 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
   it('stays bounded on many html openings, with and without closers, scaling linearly', () => {
     // Each shape used to make this pass quadratic in message length: many complete
     // documents (guard re-read the whole prefix per match), openings that never close
-    // (pattern re-scanned to end of input from each one), and the same inside an
-    // unterminated fence. This test only cares about growth, not the output shape
-    // (these bodies do get promoted), so it skips the output equality check.
+    // (pattern re-scanned to end of input from each one), and many never-closing
+    // openings inside an unterminated fence. This test only cares about growth, not
+    // the output shape (the first two get promoted, the third stays a code block
+    // since its fence never closes), so it skips the output equality check.
     const noOutputCheck = () => {};
-    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 3500, noOutputCheck);
-    assertLinearGrowth(n => '<html>\n'.repeat(n), 7000, noOutputCheck);
-    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500, noOutputCheck);
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 22000, noOutputCheck);
+    assertLinearGrowth(n => '<html>\n'.repeat(n), 28000, noOutputCheck);
+    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 1600, noOutputCheck);
   });
 });
 

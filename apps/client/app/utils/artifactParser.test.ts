@@ -13,13 +13,16 @@ import {
   elidedReplyWarning,
 } from './artifactParser';
 
-// A run under this is noise-dominated: flooring it before dividing keeps timer jitter
-// on a fast, near-instant call from inflating the growth ratio. Set well above the
-// ~2ms these cases actually take, so a shared CI runner under load cannot trip the
-// ratio on scheduling noise alone; a real regression is caught by the ceiling below.
+// The baseline-vs-SMALL_INPUT_MS_CEILING check below is the real regression guard: it
+// fails fast instead of letting a hang run out the clock. The ratio check is secondary
+// and, in practice, close to a fixed budget rather than a true ratio: every baseline
+// measured here lands under this floor, so flooring the denominator reduces
+// `ratio < GROWTH_RATIO_CEILING` to `doubledMs < GROWTH_RATIO_CEILING * MIN_BASELINE_MS`.
+// The floor exists because a near-instant call is noise-dominated - without it, timer
+// jitter alone could inflate the ratio past the ceiling.
 const MIN_BASELINE_MS = 25;
-// Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and
-// cubic (~8x), so the ratio check has margin on both sides.
+// Headroom over linear scaling (~2x) while staying clear of quadratic (~4x) and cubic
+// (~8x) - see MIN_BASELINE_MS above for why this is a secondary check in practice.
 const GROWTH_RATIO_CEILING = 3;
 // Generous on purpose: this only exists to catch a genuine wedge, not to pin steady-state timing.
 const SMALL_INPUT_MS_CEILING = 500;
@@ -560,7 +563,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
     for (const label of ['html', 'svg', 'tsx', 'python', 'json']) {
-      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 50000);
+      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 120000);
     }
   });
 
@@ -621,10 +624,12 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(ls).toContain('HTML Page');
   });
 
-  it('leaves an unterminated react fence untouched, scaling linearly', () => {
-    // Same pathological shape as the html case: component markers present on many
-    // lines, no closing fence. The old anchored pattern was quadratic in body size.
-    assertLinearGrowth(n => '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(n), 1000);
+  it('leaves an unterminated react fence untouched', () => {
+    // Not a growth-ratio case: the fence never closes, so the react regex fails on its
+    // first (and only) anchor attempt regardless of body size - measured linear on both
+    // the pre-fix and current parser, so there is no old-vs-new gap to pin here.
+    const input = '```tsx\n' + 'const App = () => null; export default App;\n'.repeat(1000);
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
   it('drops a double quote from a promoted document title', () => {
@@ -656,16 +661,26 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   });
 
   it('leaves an svg fence with no closing tag untouched, scaling linearly', () => {
-    // Openings with no closer: the shape that made a single <svg...</svg> predicate
-    // re-scan the body from each one.
-    assertLinearGrowth(n => '```svg\n' + '<svg '.repeat(n) + '\n```', 10000);
+    // Openings with no closer: the shape that made the old doubly-anchored
+    // <svg>...</svg> pattern re-scan the body from each one. At small=400 the pre-fix
+    // parser already takes ~0.6s (vs ~0.01ms on the current parser), so a much larger
+    // size would only add runtime, not separation.
+    assertLinearGrowth(n => '```svg\n' + '<svg '.repeat(n) + '\n```', 400);
   });
 
-  it('leaves unterminated html fences untouched, scaling linearly', () => {
-    // First body is the pathological shape for the old anchored pattern: both anchors
-    // present, many candidate splits for its two lazy groups, no closing fence.
-    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500);
-    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(n), 3800);
+  it('leaves an unterminated html fence untouched, scaling linearly', () => {
+    // Many <!DOCTYPE occurrences and no </html> anywhere: the shape that made the old
+    // doubly-anchored html pattern retry its full inner scan from each occurrence.
+    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 1600);
+  });
+
+  it('leaves an unterminated html fence with no promotable markup untouched', () => {
+    // Not a growth-ratio case: a single <!DOCTYPE anchor followed by many closed
+    // <div> lines and no </html> ever. The old pattern still resolves this in one
+    // linear pass (its anchor never repeats), so there is no old-vs-new gap to pin;
+    // this instead just pins that a large, never-closing fence body is left alone.
+    const input = '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(3800);
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 });
 
@@ -712,13 +727,14 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
   it('stays bounded on many html openings, with and without closers, scaling linearly', () => {
     // Each shape used to make this pass quadratic in message length: many complete
     // documents (guard re-read the whole prefix per match), openings that never close
-    // (pattern re-scanned to end of input from each one), and the same inside an
-    // unterminated fence. This test only cares about growth, not the output shape
-    // (these bodies do get promoted), so it skips the output equality check.
+    // (pattern re-scanned to end of input from each one), and many never-closing
+    // openings inside an unterminated fence. This test only cares about growth, not
+    // the output shape (the first two get promoted, the third stays a code block
+    // since its fence never closes), so it skips the output equality check.
     const noOutputCheck = () => {};
-    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 3500, noOutputCheck);
-    assertLinearGrowth(n => '<html>\n'.repeat(n), 7000, noOutputCheck);
-    assertLinearGrowth(n => '```html\n<!DOCTYPE html>\n' + '<html></html>\n'.repeat(n), 3500, noOutputCheck);
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 22000, noOutputCheck);
+    assertLinearGrowth(n => '<html>\n'.repeat(n), 28000, noOutputCheck);
+    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 1600, noOutputCheck);
   });
 });
 
@@ -730,6 +746,13 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
  * the react fences, which are also excluded - the per-language react predicates
  * differ from core's hasComponentDeclarationLine by design), so the python case below
  * only pins the one shape both agree on (a small fence neither promotes).
+ *
+ * The core side of this comparison (coreConvertCodeBlocksToArtifacts / coreParseArtifacts)
+ * resolves through @bike4mind/utils' package exports to b4m-core/utils/dist, not source.
+ * `pnpm turbo:core:build` rebuilds that dist after any core change; CI is safe because
+ * turbo's test task depends on ^build, but running this file alone via
+ * `pnpm --filter @bike4mind/client test artifactParser` silently validates a stale core
+ * build if the dist is out of date.
  */
 describe('parity with the core parser', () => {
   const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
@@ -787,5 +810,15 @@ describe('parity with the core parser', () => {
       expect(clientResult.artifacts[0].type).toBe(type);
       expect(coreResult.artifacts[0].type).toBe(type);
     }
+
+    // The checks above pin each side against a hardcoded expectation independently,
+    // which would stay green even if the two parsers diverged on title, content, or
+    // any artifact past the first. Compare them directly, over every artifact.
+    const pick = (a: { type: string; title: string; content: string }) => ({
+      type: a.type,
+      title: a.title,
+      content: a.content,
+    });
+    expect(clientResult.artifacts.map(pick)).toEqual(coreResult.artifacts.map(pick));
   });
 });
