@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip, Button } from '@mui/joy';
-import { Edit, Visibility, ArrowForward } from '@mui/icons-material';
+import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
+import { Edit } from '@mui/icons-material';
 import ContentPreviewModal from '../ProfileModal/ContentPreviewModal';
+import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
+import { brand } from '@client/app/utils/themes/themePrimitives';
 
 interface TransformedContent {
   title: string;
@@ -17,14 +19,14 @@ interface ContentTransformPreviewCardProps {
 /**
  * Inline preview card for a drafted blog post (emitted by the blog_draft tool).
  *
- * Design notes:
- * - One success accent rail is the only structural color; the title reads in
- *   `text.primary` ink so the headline leads instead of competing with green.
- * - The footer CTA is a solid `success` Button so its foreground/background pair
- *   is legible in both light and dark modes (avoids the `success.700`-on-near-black
- *   contrast bug).
- * - Two distinct intents: the pencil opens the modal straight in edit mode; the
- *   card / primary button open it in preview (review then publish).
+ * Built to the same anatomy as ArtifactPreviewCard - overhanging type badge, title with
+ * its small print beneath, actions trailing on the same row - because a draft sits in the
+ * transcript beside artifact cards and used to be the one card that read as a different
+ * component. It had its own green accent rail, a second type chip on the right saying
+ * roughly what the badge says, and a full-width Preview & Publish button.
+ *
+ * Clicking the card opens the review modal, which is where publishing lives; the pencil
+ * opens the same modal straight in edit mode.
  */
 const ContentTransformPreviewCard: React.FC<ContentTransformPreviewCardProps> = ({ data }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -50,141 +52,105 @@ const ContentTransformPreviewCard: React.FC<ContentTransformPreviewCardProps> = 
         variant="outlined"
         data-testid="blog-draft-card"
         sx={theme => ({
-          backgroundColor: 'background.level1',
-          // Same card recipe as the artifact cards and fenced code blocks: the fill
-          // stays the theme's own surface, with a brand-blue veil falling across it.
+          // The artifact-card recipe, shared so a blog draft reads as the same family as
+          // every other card a reply produces. surface2 rather than background.level1,
+          // which this theme never defines - it used to resolve to a Joy default that
+          // matched nothing else in the transcript.
+          backgroundColor: 'background.surface2',
           backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
-          borderRadius: '10px',
-          borderColor: theme.palette.reading.cardLine,
+          borderRadius: '8px',
           position: 'relative',
-          overflow: 'hidden', // clip the accent rail to the radius
-          p: 0, // inner Box owns padding (avoids doubling Card's default)
-          transition: 'box-shadow 0.2s ease-in-out, border-color 0.2s ease-in-out',
-          // success accent rail: the only structural color, brightens on hover
-          '&::before': {
-            content: '""',
-            position: 'absolute',
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: '3px',
-            backgroundColor: 'success.solidBg',
-            opacity: 0.65,
-            transition: 'opacity 0.2s ease-in-out',
-          },
-          // The card itself is presentational (no whole-card onClick) so we don't nest
-          // interactive controls inside a clickable region. The pencil + primary button
-          // own the actions and are natively keyboard-accessible.
+          overflow: 'visible',
+          borderWidth: 1,
+          borderColor: theme.palette.reading.cardLine,
+          transition: 'all 0.2s ease-in-out',
+          cursor: 'pointer',
           '&:hover': {
+            transform: 'translateY(-2px)',
             boxShadow: 'sm',
-            borderColor: 'success.outlinedBorder',
-            '&::before': { opacity: 1 },
           },
         })}
+        onClick={openPreview}
       >
-        <Box sx={{ p: 1.5, pl: 2 }}>
-          {/* Eyebrow: type + word count on the left, type chip on the right */}
-          <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 0.5 }}>
-            <Typography
-              level="body-xs"
-              sx={{
-                color: 'text.tertiary',
-                textTransform: 'uppercase',
-                letterSpacing: '0.08em',
-                fontWeight: 'lg',
-              }}
-            >
-              Blog Draft &middot; {wordCount.toLocaleString()} words
-            </Typography>
-            <Chip size="sm" variant="soft" color="success">
-              Blog Post
-            </Chip>
-          </Stack>
+        {/* Type badge overhanging the top-left corner, as every artifact card has. */}
+        <Chip
+          size="sm"
+          variant="solid"
+          data-testid="blog-draft-badge"
+          sx={theme => ({
+            position: 'absolute',
+            top: '-8px',
+            left: '16px',
+            zIndex: 1,
+            backgroundColor: brand[800],
+            color: 'text.primary',
+            border: 'none',
+            paddingInline: '8px',
+            '&:hover': { backgroundColor: brand[800] },
+            // Light mode's text.primary is near-black and unreadable on the blue pill.
+            [theme.getColorSchemeSelector('light')]: { color: '#fff' },
+          })}
+        >
+          {/* Escaped bullet: added lines are ASCII-only (see CLAUDE.md), and an escape
+              stays greppable in review. */}
+          {`Blog draft \u2022 ${wordCount.toLocaleString()} words`}
+        </Chip>
 
-          {/* Title (ink) + edit pencil */}
-          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 0.75 }}>
-            <Typography
-              level="title-md"
-              sx={{
-                color: 'text.primary',
-                fontWeight: 'lg',
-                flex: 1,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {data.title}
-            </Typography>
-
-            <Tooltip title="Edit draft" placement="top">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                data-testid="blog-draft-edit-btn"
-                onClick={e => {
-                  e.stopPropagation();
-                  openEdit();
+        <Box>
+          {/* Title and its small print are one block, so the trailing control centres
+              against the pair rather than the title alone - as in ArtifactPreviewCard. */}
+          <Stack direction="row" spacing={1} alignItems="center">
+            <Stack sx={{ minWidth: 0 }}>
+              <Typography
+                level="title-md"
+                sx={{
+                  color: 'text.primary',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
                 }}
-                sx={{ opacity: 0.6, '&:hover': { opacity: 1 } }}
               >
-                <Edit />
-              </IconButton>
-            </Tooltip>
-          </Stack>
-
-          {/* Summary */}
-          <Typography
-            level="body-sm"
-            sx={{
-              color: 'text.secondary',
-              lineHeight: 1.55,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              display: '-webkit-box',
-              WebkitLineClamp: 2,
-              WebkitBoxOrient: 'vertical',
-              mb: 1.25,
-            }}
-          >
-            {data.summary}
-          </Typography>
-
-          {/* Tags */}
-          {data.suggestedTags && data.suggestedTags.length > 0 && (
-            <Stack direction="row" sx={{ flexWrap: 'wrap', gap: 0.5 }}>
-              {data.suggestedTags.slice(0, 3).map((tag, index) => (
-                <Chip key={index} size="sm" variant="plain" color="neutral" sx={{ color: 'text.tertiary' }}>
-                  {tag}
-                </Chip>
-              ))}
-              {data.suggestedTags.length > 3 && (
-                <Chip size="sm" variant="plain" color="neutral" sx={{ color: 'text.tertiary' }}>
-                  +{data.suggestedTags.length - 3}
-                </Chip>
+                {data.title}
+              </Typography>
+              {data.summary && (
+                <Typography
+                  level="body-sm"
+                  sx={{
+                    color: 'text.secondary',
+                    lineHeight: 1.55,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: 'vertical',
+                  }}
+                >
+                  {data.summary}
+                </Typography>
               )}
             </Stack>
-          )}
 
-          {/* Primary action: solid button guarantees contrast in both modes */}
-          <Box sx={{ mt: 1.5, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
-            <Button
-              fullWidth
-              size="sm"
-              variant="solid"
-              color="success"
-              data-testid="blog-draft-preview-btn"
-              startDecorator={<Visibility sx={{ fontSize: '16px' }} />}
-              endDecorator={<ArrowForward sx={{ fontSize: '16px' }} />}
-              onClick={e => {
-                e.stopPropagation();
-                openPreview();
-              }}
-            >
-              Preview &amp; Publish
-            </Button>
-          </Box>
+            <Box sx={{ flex: 1 }} />
+
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
+              <Tooltip title="Edit draft" placement="top">
+                <IconButton
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  sx={actionButtonSx}
+                  data-testid="blog-draft-edit-btn"
+                  onClick={e => {
+                    e.stopPropagation();
+                    openEdit();
+                  }}
+                >
+                  <Edit />
+                </IconButton>
+              </Tooltip>
+            </Box>
+          </Stack>
         </Box>
       </Card>
 
