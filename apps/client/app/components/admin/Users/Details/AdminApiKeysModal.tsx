@@ -1,9 +1,6 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
-import {
-  ApiKeyRateLimitResetResponse,
-  useAdminGetUserApiKeys,
-  useAdminResetApiKeyRateLimit,
-} from '@client/app/hooks/data/userApiKeys';
+import { useAdminGetUserApiKeys, useAdminResetApiKeyRateLimit } from '@client/app/hooks/data/userApiKeys';
+import type { ApiKeyRateLimitResetResponse } from '@client/app/hooks/data/userApiKeys';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { ApiKeyStatus, IUserApiKeyDocument } from '@bike4mind/common';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
