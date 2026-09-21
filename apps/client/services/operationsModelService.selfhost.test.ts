@@ -133,3 +133,44 @@ describe('OperationsModelService self-host default text model', () => {
     expect(result.modelId).toBe('gpt-4o-mini');
   });
 });
+
+describe('OperationsModelService optional image model', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.B4M_SELF_HOST;
+    delete process.env.OLLAMA_PULL_MODELS;
+    mockGetEffectiveLLMApiKeys.mockResolvedValue(noCloudKeys);
+  });
+  afterEach(() => {
+    delete process.env.B4M_SELF_HOST;
+    delete process.env.OLLAMA_PULL_MODELS;
+  });
+
+  it('resolves with no image model, and the text model intact, when the catalog has none', async () => {
+    primeDefaults([GPT_MINI]);
+    mockGetDefaultImageModel.mockReturnValue(undefined);
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+    expect(result.imageModelId).toBeNull();
+    expect(result.imageModelInfo).toBeNull();
+    expect(result.imageLlm).toBeNull();
+  });
+
+  it('resolves with no image model, and the text model intact, when the image backend fails to construct', async () => {
+    primeDefaults([IMAGE, GPT_MINI]);
+    // IMAGE's backend fails to build (e.g. local-image server unreachable); the
+    // text model must still resolve.
+    mockGetLlmByModel.mockImplementation((_apiKeyTable: unknown, opts: { modelInfo: ModelInfo }) =>
+      opts.modelInfo.id === IMAGE.id ? null : { complete: vi.fn() }
+    );
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+    expect(result.imageModelId).toBeNull();
+    expect(result.imageModelInfo).toBeNull();
+    expect(result.imageLlm).toBeNull();
+  });
+});

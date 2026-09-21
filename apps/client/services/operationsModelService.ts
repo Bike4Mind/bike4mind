@@ -121,6 +121,39 @@ export class OperationsModelService {
   }
 
   /**
+   * Build a usable image backend starting from `candidate`, retrying down
+   * getDefaultImageModel's priority order when a candidate's backend fails to
+   * construct (e.g. a local-image model whose server is currently
+   * unreachable). Returns `{ undefined, null }` once every image model in the
+   * catalog has been tried and none could build.
+   */
+  private static pickWorkingImageModel(
+    apiKeyTable: OperationsApiKeyTable,
+    models: ModelInfo[],
+    candidate: ModelInfo | undefined,
+    logLabel: string
+  ): { imageModelInfo: ModelInfo | undefined; imageLlm: ICompletionBackend | null } {
+    const tried = new Set<string>();
+    let next = candidate;
+
+    while (next && !tried.has(next.id)) {
+      tried.add(next.id);
+      const llm = getLlmByModel(apiKeyTable, { modelInfo: next, logger: this.logger });
+      if (llm) {
+        return { imageModelInfo: next, imageLlm: llm };
+      }
+
+      this.logger.warn(
+        `Failed to initialize ${logLabel} image model ${next.id} - trying the next available image model`
+      );
+      next = getDefaultImageModel(models, tried);
+    }
+
+    this.logger.warn(`No usable image models available for ${logLabel} - continuing without image support`);
+    return { imageModelInfo: undefined, imageLlm: null };
+  }
+
+  /**
    * Resolve ONLY the operations text model and its LLM - never image or speech.
    *
    * Background tasks (research, summaries) need a text model and must not fail when
@@ -219,22 +252,9 @@ export class OperationsModelService {
       // Image model is optional - a deployment with no configured image backend
       // (e.g. self-host with no BFL/OpenAI/local-image key) has none, and
       // text-only operations callers must not fail on that account.
-      let imageLlm: ICompletionBackend | null = null;
-      if (!imageModelInfo) {
-        this.logger.warn('No image models available for operations - continuing without image support');
-      } else {
-        imageLlm = getLlmByModel(apiKeyTable, {
-          modelInfo: imageModelInfo,
-          logger: this.logger,
-        });
-
-        if (!imageLlm) {
-          this.logger.warn(
-            `Failed to initialize LLM for operations image model ${config.imageModelId} - continuing without image support`
-          );
-          imageModelInfo = undefined;
-        }
-      }
+      const imagePick = OperationsModelService.pickWorkingImageModel(apiKeyTable, models, imageModelInfo, 'operations');
+      imageModelInfo = imagePick.imageModelInfo;
+      const imageLlm = imagePick.imageLlm;
 
       // Speech model is optional - proceed without it if unavailable
       const speechModelInfo = models.find(m => m.id === config.speechModelId);
@@ -312,25 +332,18 @@ export class OperationsModelService {
     }
 
     // Image model is optional - see getOperationsModel's comment.
-    let imageLlm: ICompletionBackend | null = null;
-    if (!imageModelInfo) {
-      this.logger.warn('No image models available for operations - continuing without image support');
-    } else {
-      imageLlm = getLlmByModel(apiKeyTable, {
-        modelInfo: imageModelInfo,
-        logger: this.logger,
-      });
-
-      if (!imageLlm) {
-        this.logger.warn(
-          `Failed to initialize hardcoded default operations image model ${imageModelInfo.id} - continuing without image support`
-        );
-        imageModelInfo = undefined;
-      } else {
-        this.logger.info(
-          `Using hardcoded default operations image model: ${imageModelInfo.id} (${imageModelInfo.backend})`
-        );
-      }
+    const imagePick = OperationsModelService.pickWorkingImageModel(
+      apiKeyTable,
+      models,
+      imageModelInfo,
+      'hardcoded default operations'
+    );
+    imageModelInfo = imagePick.imageModelInfo;
+    const imageLlm = imagePick.imageLlm;
+    if (imageModelInfo) {
+      this.logger.info(
+        `Using hardcoded default operations image model: ${imageModelInfo.id} (${imageModelInfo.backend})`
+      );
     }
 
     // Speech model is optional
@@ -422,23 +435,16 @@ export class OperationsModelService {
     let imageModelInfo = getDefaultImageModel(models);
 
     // Image model is optional - see getOperationsModel's comment.
-    let imageLlm: ICompletionBackend | null = null;
-    if (!imageModelInfo) {
-      this.logger.warn('No image models available for operations - continuing without image support');
-    } else {
-      imageLlm = getLlmByModel(apiKeyTable, {
-        modelInfo: imageModelInfo,
-        logger: this.logger,
-      });
-
-      if (!imageLlm) {
-        this.logger.warn(
-          `Failed to initialize default operations image model ${imageModelInfo.id} - continuing without image support`
-        );
-        imageModelInfo = undefined;
-      } else {
-        this.logger.info(`Using default image model: ${imageModelInfo.id} (${imageModelInfo.backend})`);
-      }
+    const imagePick = OperationsModelService.pickWorkingImageModel(
+      apiKeyTable,
+      models,
+      imageModelInfo,
+      'default operations'
+    );
+    imageModelInfo = imagePick.imageModelInfo;
+    const imageLlm = imagePick.imageLlm;
+    if (imageModelInfo) {
+      this.logger.info(`Using default image model: ${imageModelInfo.id} (${imageModelInfo.backend})`);
     }
 
     // Speech model is optional

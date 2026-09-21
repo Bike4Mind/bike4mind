@@ -176,6 +176,14 @@ export function getLlmByModel(
     case 'aws':
       backend = new AWSBackend();
       break;
+    case 'local-image': {
+      // Discovered at runtime by LocalImageBackend.getModelInfo, which sets no
+      // adapterFamily (see mergeCatalog's DISPATCHABLE_ADAPTER_FAMILIES comment) -
+      // this legacy switch is the only path these records reach.
+      const localImageBaseUrl = apiKeyTable['local-image'];
+      backend = localImageBaseUrl ? new LocalImageBackend(localImageBaseUrl, logger) : null;
+      break;
+    }
     default:
       backend = null;
   }
