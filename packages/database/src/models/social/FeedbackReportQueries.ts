@@ -129,7 +129,12 @@ export async function orgFeedbackReport(params: {
     // Tags are free-form, so their key space is unbounded - capped, unlike the groupings above,
     // whose keys are enum-sized and whose member list is bounded by the org's seat cap.
     byTag: [
-      { $unwind: '$tags' },
+      // $setUnion before $unwind, matching the personal rollup's tags arm: the create contract
+      // does not dedupe tags, so a report tagged the same thing twice would otherwise count twice
+      // here and once there, and the two byTag breakdowns would not reconcile. The $isArray guard
+      // keeps a non-array `tags` from hard-erroring every arm of this $facet, not just this one.
+      { $addFields: { tags: { $setUnion: [{ $cond: [{ $isArray: '$tags' }, '$tags', []] }, []] } } },
+      { $unwind: { path: '$tags', preserveNullAndEmptyArrays: false } },
       { $group: { _id: '$tags', count: { $sum: 1 } } },
       { $project: { _id: 0, key: '$_id', count: 1 } },
       { $sort: { count: -1 as const, key: 1 as const } },

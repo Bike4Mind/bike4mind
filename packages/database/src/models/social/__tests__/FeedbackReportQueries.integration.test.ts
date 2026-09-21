@@ -254,6 +254,27 @@ describe('orgFeedbackReport', () => {
   // the row's tag list, not the row count.
   const tagKeys = (count: number) => Array.from({ length: count }, (_, i) => `tag-${String(i).padStart(2, '0')}`);
 
+  // The personal rollup's tags arm dedupes before unwinding; this side has to agree, or the two
+  // byTag breakdowns disagree on any report whose author sent the same tag twice.
+  it('counts a repeated tag once rather than once per occurrence', async () => {
+    const orgId = oid();
+    const author = oid();
+    await makeUser(author, 'Author');
+    await makeFeedback({
+      userId: author,
+      organizationId: orgId,
+      createdAt: JAN_10,
+      tags: ['billing', 'billing', 'ux'],
+    });
+
+    const report = await orgFeedbackReport({ organizationId: orgId, ...WINDOW, members: population([author]) });
+
+    expect(report.byTag).toEqual([
+      { key: 'billing', count: 1 },
+      { key: 'ux', count: 1 },
+    ]);
+  });
+
   it('leaves byTag unflagged when the distinct tags land exactly on the ceiling', async () => {
     const orgId = oid();
     const author = oid();

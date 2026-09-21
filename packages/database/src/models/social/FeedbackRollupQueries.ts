@@ -70,7 +70,9 @@ export function buildFeedbackWindowFilter(
   }
 
   // $and rather than a merged object literal: a scope can carry its own $and/$or arm and a spread
-  // would silently drop one side of it (same reason as the feedback list route).
+  // would silently drop one side of it (same reason as the feedback list route). MongoDB's planner
+  // normalizes $and onto the same compound indexes a flat filter would use; FeedbackModel's header
+  // warns that DocumentDB plans this collection differently, and that engine is not covered here.
   return { $and: [scope, { createdAt: { $gte: from, $lte: to } }] };
 }
 

@@ -15,7 +15,8 @@ const DEFAULT_WINDOW_DAYS = 30;
 // which are the most expensive reads in this area - byDay alone emits one row per day of whatever
 // range the caller asks for, so leaving them unbounded while the cheaper path is capped gets it
 // backwards. One constant for every feedback window, re-exported under the name these routes and
-// their tests already import.
+// their tests already import. This is what moved the org ceiling from a local 365 to 366 covered
+// days; the comparison below did not move it.
 export const MAX_WINDOW_DAYS = FEEDBACK_ROLLUP_MAX_WINDOW_DAYS;
 const MAX_WINDOW_MS = MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 
@@ -27,9 +28,10 @@ const windowSchema = z.object({
 /** The one place both window helpers below enforce ordering and the ceiling. */
 function assertWindowBounds(fromDate: Date, toDate: Date): void {
   if (fromDate > toDate) throw new BadRequestError('Invalid range: from must not be after to');
-  // Both bounds are inclusive here (the day rounding below ends `to` at 23:59:59.999), so the
-  // measured gap is one instant short of the coverage it stands for - hence `>=`, the same
-  // comparison FeedbackRollupQuerySchema applies to the same constant.
+  // Both bounds are inclusive, so the gap measures one instant less than the coverage it stands
+  // for. `>=` is the rule FeedbackRollupQuerySchema applies to the same constant; both callers
+  // below round `to` out to 23:59:59.999, so the gap never lands on the boundary and `>` would
+  // read the same here - it is written this way so the two sides state one rule, not two.
   if (toDate.getTime() - fromDate.getTime() >= MAX_WINDOW_MS) {
     throw new BadRequestError(`Range must not exceed ${MAX_WINDOW_DAYS} days`);
   }
