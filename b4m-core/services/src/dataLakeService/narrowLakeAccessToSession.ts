@@ -86,6 +86,11 @@ export function narrowLakeAccessToSession(
     // session-creation tag derivation, which never receives a narrowed set) - it is carried so the
     // value keeps meaning the same thing wherever the set travels, not to satisfy a live caller.
     lakeViewComplete: access.lakeViewComplete,
+    // Carried through unchanged: this narrowing is subtractive on the SESSION's behalf and does
+    // not change how many lakes the caller's org/tags surfaced but could not pass the gate for
+    // (#3055) - that count was already fixed upstream. Unlike lakeViewComplete above, this one
+    // DOES have a live downstream reader (the retrieval seed in ChatCompletionProcess).
+    excludedByAccessCount: access.excludedByAccessCount,
     dataLakeTags: access.dataLakeTags.filter(tag => wanted.has(tag)),
     dataLakeTagPrefixes: access.dataLakeTagPrefixes.filter(prefix => retainedPrefixes.has(prefix)),
     scopedTagPrefixes: access.scopedTagPrefixes.filter(prefix => retainedPrefixes.has(prefix)),
