@@ -60,6 +60,7 @@ export * from './ResearchDataTypes';
 export * from './TaskScheduleTypes';
 export * from './TagTypes';
 export * from './FeedbackTypes';
+export * from './OrgFeedbackSummaryTypes';
 export * from './ModalTypes';
 export * from './RegistrationInviteType';
 export * from './CounterTypes';

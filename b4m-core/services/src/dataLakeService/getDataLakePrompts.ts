@@ -3,7 +3,7 @@ import type { DataLakeConfig, IDataLakeDocument } from '@bike4mind/common';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import type { DataLakeAccessContext } from './getDynamicDataLakeTags';
 import { filterStillManagedLakes, type ManageRecheckAdapter } from './filterStillManagedLakes';
-import { grantedLakeReachForTurn } from './resolveLakeReadAccess';
+import { grantedLakeReachForTurn, supersededOwnLakeIdsForTurn } from './resolveLakeReadAccess';
 import { membershipOrgIdsForTurn } from './membershipOrgIdsForTurn';
 import { isDatalakeTagWellFormed } from './createDataLake';
 
@@ -18,7 +18,9 @@ import { isDatalakeTagWellFormed } from './createDataLake';
  */
 export function datalakeTagsFrom(tagNames: Iterable<string>): string[] {
   const out = new Set<string>();
-  for (const name of tagNames) if (name.startsWith(DATALAKE_TAG_PREFIX)) out.add(name);
+  // `tags` is a schema-less Mongo array; a legacy row can carry a tag object with no `name`, so a
+  // caller's `.map(t => t.name)` can hand this an iterable containing non-string entries.
+  for (const name of tagNames) if (typeof name === 'string' && name.startsWith(DATALAKE_TAG_PREFIX)) out.add(name);
   return [...out];
 }
 
@@ -76,10 +78,22 @@ export interface DataLakePrompt {
  * by contract (resolved via `IOrganizationRepository.findMembershipOrgIds`).
  */
 function isTrustedForInjection(
-  lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId'>,
-  actor: { userId?: string; organizationIds?: string[] }
+  lake: Pick<IDataLakeDocument, 'id' | 'createdByUserId' | 'organizationId'>,
+  actor: { userId?: string; organizationIds?: string[]; supersededOwnLakeIds?: ReadonlySet<string> }
 ): boolean {
-  if (actor.userId && lake.createdByUserId && String(lake.createdByUserId) === actor.userId) return true;
+  // The creator arm is provenance, and `createdByUserId` is immutable: without the supersession
+  // check a creator transferred or departed off a lake keeps injecting its system prompt into
+  // their own turns forever. This check is NOT redundant with the query narrowing - the query
+  // decides which rows are candidates, this decides which candidates are TRUSTED, and a lake the
+  // caller still reaches by an org or grant arm arrives here regardless.
+  if (
+    actor.userId &&
+    lake.createdByUserId &&
+    String(lake.createdByUserId) === actor.userId &&
+    !actor.supersededOwnLakeIds?.has(lake.id)
+  ) {
+    return true;
+  }
   const lakeOrg = normalizeId(lake.organizationId);
   return !!lakeOrg && (actor.organizationIds ?? []).includes(lakeOrg);
 }
@@ -126,6 +140,31 @@ async function injectionGrantedLakeIds(context: DataLakeAccessContext, userId: s
     INCLUDE_READER_GRANTS
   );
   return new Set(reach.grantedLakeIds);
+}
+
+/**
+ * Lakes this caller created but no longer effectively owns - the exclusion the injection path owes
+ * both of its creator-provenance arms (the repo's query arm and `isTrustedForInjection`'s).
+ *
+ * Unlike `injectionGrantedLakeIds` above there is nothing to pin here: supersession is not a
+ * widening that the reader cutover could activate, it is a narrowing of an arm that already exists,
+ * and an owner-role grant moves ownership on both sides of the flag. So this needs no
+ * `includeReaders` argument and no membership org ids.
+ *
+ * Gated on `dataLakes` for the same reason as its neighbour, and on `dataLakeAccessGrants` because
+ * with no grant repo nothing can supersede anyone. THROWS on a read failure, like its neighbour -
+ * the caller owns the consequence.
+ */
+async function injectionSupersededOwnLakeIds(context: DataLakeAccessContext, userId: string): Promise<Set<string>> {
+  if (!context.db.dataLakes || !context.db.dataLakeAccessGrants) return new Set();
+  return new Set(
+    await supersededOwnLakeIdsForTurn(
+      context,
+      { userId, isAdmin: false },
+      context.db.dataLakes,
+      context.db.dataLakeAccessGrants
+    )
+  );
 }
 
 /**
@@ -252,15 +291,32 @@ export async function getAccessibleDataLakePrompts(
   // direction only - see `injectionGrantedLakeIds`, which owns the arguments this site passes. The
   // memo keys on those arguments for that reason, so the two sites cannot collide in it either.
   let grantedLakeIds = new Set<string>();
+  // Lakes the caller created but no longer effectively owns - narrows the repo's creator arm AND
+  // `isTrustedForInjection`'s. Degrades open (stays empty) on a failed read, like the grant arm
+  // beside it: the floor is then today's behavior. Resolved under the same `userId` guard, and
+  // through the same per-turn memo, because this function also runs per turn.
+  let supersededOwnLakeIds = new Set<string>();
   if (userId) {
     try {
       grantedLakeIds = await injectionGrantedLakeIds(context, userId);
     } catch (err) {
-      // Fail closed, loudly: the arm contributes nothing, which denies a legitimate curator their
-      // lake's prompt rather than granting anyone one. Warned rather than thrown so a transient
-      // grant-read failure degrades this one feature instead of the turn (see Fail-safe above).
+      // Fail closed, loudly, for the GRANT arm: it contributes nothing, which denies a legitimate
+      // curator their lake's prompt rather than granting anyone one. Warned rather than thrown so a
+      // transient grant-read failure degrades this one feature instead of the turn (see Fail-safe
+      // above).
       context.logger?.warn(
         '[dataLakes] prompt access-grant lookup failed; resolving lake prompts without the grant arm',
+        err
+      );
+    }
+    // Separate try on purpose, unlike the grant arm above: a failed supersession read WIDENS the
+    // creator arms rather than narrowing them, so it is neither the same failure nor the same log
+    // line. Degrades open to exactly today's behavior, never wider.
+    try {
+      supersededOwnLakeIds = await injectionSupersededOwnLakeIds(context, userId);
+    } catch (err) {
+      context.logger?.warn(
+        '[dataLakes] prompt ownership-supersession lookup failed; creator arm left at bare provenance',
         err
       );
     }
@@ -281,7 +337,7 @@ export async function getAccessibleDataLakePrompts(
         entitlementKeys,
         organizationIds,
         userId,
-        { grantedLakeIds: [...grantedLakeIds] }
+        { grantedLakeIds: [...grantedLakeIds], supersededOwnLakeIds: [...supersededOwnLakeIds] }
       );
       // Union in any pre-authorized lake not already returned above - a manage-but-not-member
       // lake fails the ordinary tag/entitlement/org predicate by construction, so it would
@@ -338,7 +394,7 @@ export async function getAccessibleDataLakePrompts(
           // defense-in-depth, not a live repro.
           (grantedLakeIds.has(lake.id) && isDatalakeTagWellFormed(lake)) ||
           (lakeMatchesAccess(lake, normalizedTags, normalizedKeys) &&
-            isTrustedForInjection(lake, { userId, organizationIds }))) &&
+            isTrustedForInjection(lake, { userId, organizationIds, supersededOwnLakeIds }))) &&
         // Retrieval scope: keep only lakes this turn actually used. `datalakeTag` is the exact
         // string a lake's files carry, so this is a precise lake<->retrieval match, not a prefix.
         (!restrictTags || restrictTags.has(lake.datalakeTag))
@@ -370,7 +426,10 @@ export async function getAccessibleDataLakePrompts(
           // arm below is the whole of registry-lake injection trust - the scope decided above.
           dl =>
             isTrustedForInjection(
-              { createdByUserId: '', organizationId: dl.organizationId },
+              // `createdByUserId: ''` keeps the creator arm permanently shut for registry lakes, so
+              // `id` is never read - passed truthfully rather than stubbed so it stays correct if
+              // that ever changes.
+              { id: dl.id, createdByUserId: '', organizationId: dl.organizationId },
               { userId, organizationIds }
             ) &&
             (!restrictTags || restrictTags.has(dl.datalakeTag))

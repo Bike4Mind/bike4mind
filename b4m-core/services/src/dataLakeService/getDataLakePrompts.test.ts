@@ -242,7 +242,10 @@ describe('getAccessibleDataLakePrompts', () => {
     const ctx = makeContext([makeLake()], { id: OWNER, tags: ['Opti'] }, [ORG]);
     ctx.entitlementKeys = ['product:pro'];
     await getAccessibleDataLakePrompts(ctx);
-    expect(ctx.findMock).toHaveBeenCalledWith(['Opti'], ['product:pro'], [ORG], OWNER, { grantedLakeIds: [] });
+    expect(ctx.findMock).toHaveBeenCalledWith(['Opti'], ['product:pro'], [ORG], OWNER, {
+      grantedLakeIds: [],
+      supersededOwnLakeIds: [],
+    });
   });
 
   /**
@@ -317,7 +320,10 @@ describe('getAccessibleDataLakePrompts', () => {
       // tag/org/public/owner arms, so the in-memory arm above would have nothing to admit.
       const ctx = asCurator('curator');
       await getAccessibleDataLakePrompts(ctx);
-      expect(ctx.findMock).toHaveBeenCalledWith([], [], [ORG], CURATOR, { grantedLakeIds: ['shared'] });
+      expect(ctx.findMock).toHaveBeenCalledWith([], [], [ORG], CURATOR, {
+        grantedLakeIds: ['shared'],
+        supersededOwnLakeIds: [],
+      });
     });
 
     it('does NOT inject for a reader grant', async () => {
@@ -459,7 +465,10 @@ describe('getAccessibleDataLakePrompts', () => {
         expect.any(Error)
       );
       // The arm contributes nothing rather than the whole read being abandoned - the query still ran.
-      expect(ctx.findMock).toHaveBeenCalledWith([], [], [ORG], CURATOR, { grantedLakeIds: [] });
+      expect(ctx.findMock).toHaveBeenCalledWith([], [], [ORG], CURATOR, {
+        grantedLakeIds: [],
+        supersededOwnLakeIds: [],
+      });
     });
 
     it('resolves no grant arm for an id-less caller', async () => {

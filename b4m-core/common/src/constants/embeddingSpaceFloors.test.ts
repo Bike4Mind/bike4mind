@@ -1,15 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import {
-  FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE,
-  MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE,
-  cosineFloorPctForSpace,
-} from './embeddingSpaceFloors';
+import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, cosineFloorPctForSpace } from './embeddingSpaceFloors';
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT } from './forcedRetrieval';
 import { OpenAIEmbeddingModel, OllamaEmbeddingModel, VoyageAIEmbeddingModel } from '../schemas/embedding';
 
 /**
- * The top of each space's MEASURED cosine band over the FILE corpus, as whole-number percents, from
- * the two captures in `packages/scripts/retrieval/MODEL-COMPARISON.md`. A floor at or above one of
+ * The top of each space's MEASURED cosine band over the FILE corpus, as percents, from the offline
+ * model-comparison captures. 3-small's is the live 520-file /
+ * 21,327-chunk `opti-knowledge` capture, NOT the 35-file one whose band topped out at 55.88 - the
+ * same space reaches 87.31 on a production-class corpus, so the smaller capture's band was never a
+ * bound on this one. A floor at or above one of
  * these rejects every chunk on every query in that space - the silent outage this module exists to
  * make impossible - so these are the numbers every shipped FORCED-RETRIEVAL floor is checked
  * against below. They say nothing about the memento corpus; see the check itself for why.
@@ -23,7 +22,7 @@ import { OpenAIEmbeddingModel, OllamaEmbeddingModel, VoyageAIEmbeddingModel } fr
  */
 const MEASURED_BAND_MAX_PCT: Readonly<Record<string, number>> = {
   [OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002]: 91.4,
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL]: 55.88,
+  [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL]: 87.31,
 };
 
 describe('cosineFloorPctForSpace', () => {
@@ -33,7 +32,7 @@ describe('cosineFloorPctForSpace', () => {
     ).toBe(75);
     expect(
       cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL)
-    ).toBe(35);
+    ).toBe(58);
   });
 
   // The whole contract. `noUncheckedIndexedAccess` is off in this repo, so a bare `TABLE[space]`
@@ -57,16 +56,10 @@ describe('cosineFloorPctForSpace', () => {
     }
   });
 
-  it('reports absence rather than borrowing a neighbouring table entry', () => {
-    // 3-small has a forced-retrieval floor and no V1 memento floor. The tables must not be
-    // interchangeable: a memento is one sentence and a chunk is a passage, so their score
-    // distributions differ even inside one vector space.
+  it('reports absence for a space with no recorded floor rather than a default of 0', () => {
     expect(
-      cosineFloorPctForSpace(MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL)
+      cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_LARGE)
     ).toBeUndefined();
-    expect(
-      cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL)
-    ).toBe(35);
   });
 });
 
@@ -76,6 +69,10 @@ describe('shipped floors sit inside the band they gate', () => {
   // to name: a memento is one sentence and a chunk is a passage, so they do not share a band even
   // inside one vector space. No memento-corpus band has been captured, so those entries cannot be
   // checked this way - asserting them here would pass by luck and read as coverage.
+  // This catches the TOTAL outage and only that: the band max is one chunk's score on one query,
+  // so a floor just beneath it would empty nearly every query and still pass here. Whether a floor
+  // is well chosen is a recall/false-positive question, answered by the sweep table in the module
+  // docblock, not by this bound.
   it('no forced-retrieval floor is at or above its space band max', () => {
     for (const [space, floorPct] of Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)) {
       const bandMaxPct = MEASURED_BAND_MAX_PCT[space];
@@ -91,20 +88,13 @@ describe('shipped floors sit inside the band they gate', () => {
 });
 
 describe('behavior preservation on the model in production today', () => {
-  // ada-002 is `defaultEmbeddingModelForEnv()`'s cloud default, so this entry is what an untouched
-  // deployment resolves to. It must equal the setting's declared default, or shipping this change
-  // would itself move the floor under everyone rather than only under a model migration.
+  // ada-002 is no longer `defaultEmbeddingModelForEnv()`'s cloud default, but it is still the space
+  // every legacy corpus sits in, so this entry is what an un-migrated lake resolves to. It must
+  // equal the setting's declared default, or a deploy would move the floor under a corpus nobody
+  // re-embedded rather than only under a model migration.
   it('resolves the ada-002 forced floor to the declared setting default', () => {
     expect(
       cosineFloorPctForSpace(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)
     ).toBe(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT);
-  });
-
-  // Both V1 memento call sites hardcoded 0.75 before this. Neither passes a floor now, so this
-  // entry is the only thing keeping ada-002 recall identical to what it was.
-  it('resolves the ada-002 V1 memento floor to the literal both call sites used to hardcode', () => {
-    expect(
-      cosineFloorPctForSpace(MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)
-    ).toBe(75);
   });
 });

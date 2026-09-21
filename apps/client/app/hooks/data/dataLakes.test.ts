@@ -57,6 +57,7 @@ import {
   __resetPurgingLakesForTests,
   INITIAL_REBUILD_POLL_STATE,
   nextRebuildPoll,
+  rebuildBacklog,
   lakeMemoryPollInterval,
   LAKE_MEMORY_POLL_MS,
   useBrowsePublicDataLakes,
@@ -83,6 +84,7 @@ import {
   useDismissTaxonomy,
   useGrantLakeAccess,
   useRevokeLakeAccess,
+  useUnderChunkedCount,
 } from './dataLakes';
 
 const PAGE_SIZE = 24;
@@ -836,6 +838,31 @@ describe('useDuplicatePrefixLake freshness', () => {
 });
 
 /**
+ * What the badge counts as "still to drain". Extracted from the refetchInterval closure and tested
+ * here for the same reason nextRebuildPoll is: the sum decides whether the panel polls at all, and a
+ * wrong one is silent - the badge simply never ticks down.
+ */
+describe('rebuildBacklog', () => {
+  it('sums both repairable populations, so a lake with only stale-space files still polls', () => {
+    // The regression: keying the poll off underChunkedCount alone. Clicking Re-embed on a lake whose
+    // chunk sizes are all fine leaves that count at 0, so polling never starts.
+    expect(rebuildBacklog({ underChunkedCount: 0, staleEmbeddingSpaceCount: 7 })).toBe(7);
+    expect(rebuildBacklog({ underChunkedCount: 3, staleEmbeddingSpaceCount: 7 })).toBe(10);
+  });
+
+  it('treats an unresolvable embedding space as nothing to drain, not as a backlog', () => {
+    // null means the server could not resolve a space to compare against, so there is no wave to
+    // wait on. Counting it as work would poll a rescan every 5s against a count that cannot move.
+    expect(rebuildBacklog({ underChunkedCount: 0, staleEmbeddingSpaceCount: null })).toBe(0);
+    expect(rebuildBacklog({ underChunkedCount: 2, staleEmbeddingSpaceCount: null })).toBe(2);
+  });
+
+  it('is zero before the status has loaded', () => {
+    expect(rebuildBacklog(undefined)).toBe(0);
+  });
+});
+
+/**
  * Rebuild badge poll cadence. This logic has now carried two consecutive defects - it stopped
  * polling before the work it reported on had finished, and then, once both counts were summed, it
  * could never stop at all - and both shipped because nothing executed it. nextRebuildPoll is pure
@@ -1247,6 +1274,91 @@ describe('useRechunkDataLake paused refusal (#2223)', () => {
 
     expect(toast.success).toHaveBeenCalledWith('All files are already chunked into passages.');
     expect(toast.warning).not.toHaveBeenCalled();
+  });
+});
+
+describe('useRechunkDataLake: enqueued 0 on a non-empty detection', () => {
+  beforeEach(() => {
+    vi.mocked(toast.success).mockClear();
+    vi.mocked(toast.warning).mockClear();
+  });
+
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useRechunkDataLake('lake1'), { wrapper });
+  };
+
+  it('warns rather than calling the lake clean when the re-embed wave queued nothing', async () => {
+    // The reset deletes a wave's passages BEFORE any send, so a run whose sends all failed returns
+    // this shape after emptying the files it names. Keyed on `enqueued` alone, the owner was told
+    // every file was already in the current space at the one moment that was least true.
+    apiPost.mockResolvedValueOnce({ data: { detected: 7, enqueued: 0, remaining: 7 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ select: 'stale-embedding-space' });
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('none were queued'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+
+  it('keeps the reassuring re-embed wording for a genuinely empty detection', async () => {
+    apiPost.mockResolvedValueOnce({ data: { detected: 0, enqueued: 0, remaining: 0 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync({ select: 'stale-embedding-space' });
+    });
+
+    expect(toast.success).toHaveBeenCalledWith('Every file in this lake is already in the current embedding space.');
+    expect(toast.warning).not.toHaveBeenCalled();
+  });
+
+  it('warns on the passages wave too, where the same all-sends-failed shape arrives', async () => {
+    apiPost.mockResolvedValueOnce({ data: { detected: 5, enqueued: 0, remaining: 5 } });
+
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync(undefined);
+    });
+
+    expect(toast.warning).toHaveBeenCalledWith(expect.stringContaining('none were queued'));
+    expect(toast.success).not.toHaveBeenCalled();
+  });
+});
+
+describe('useUnderChunkedCount: the unresolvable-space discriminator', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(() => useUnderChunkedCount('lake1'), { wrapper });
+  };
+
+  beforeEach(() => {
+    apiGet.mockReset();
+  });
+
+  it('carries a server-reported FALSE through, so the panel can say the space is unknown', async () => {
+    apiGet.mockResolvedValue({
+      data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: null, embeddingSpaceResolved: false },
+    });
+    const { result } = mount();
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.embeddingSpaceResolved).toBe(false);
+  });
+
+  it('maps an ABSENT field to null, not false - an older server is a deploy skew, not a diagnosis', async () => {
+    // The whole point of the field. `?? false` here would light the advisory for every owner on
+    // the planet during any rolling deploy, which is the false positive the panel's `?? 0` was
+    // originally written to avoid.
+    apiGet.mockResolvedValue({ data: { underChunkedCount: 0, failedCount: 0, staleEmbeddingSpaceCount: null } });
+    const { result } = mount();
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data?.embeddingSpaceResolved).toBeNull();
   });
 });
 

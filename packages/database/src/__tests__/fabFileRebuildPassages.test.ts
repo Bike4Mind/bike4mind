@@ -103,6 +103,71 @@ describe('FabFileRepository.findChunkedFilesByScope', () => {
   });
 });
 
+describe('FabFileRepository.findFilesOutsideEmbeddingSpaceByScope', () => {
+  setupMongoTest();
+  beforeEach(async () => {
+    await FabFile.deleteMany({});
+  });
+
+  const CURRENT = 'text-embedding-3-small';
+  const LEGACY = 'text-embedding-ada-002';
+  /** A vectorized member, which is what makes a label a stale SPACE rather than a pending embed. */
+  const labeled = (label: unknown, over: Record<string, unknown> = {}) =>
+    makeFile({
+      userId: 'owner',
+      vectorizedChunkCount: 3,
+      ...(label === undefined ? {} : { embeddingModel: label }),
+      ...over,
+    });
+
+  it('returns only members PROVEN foreign, leaving every blank shape alone', async () => {
+    const [stale] = await FabFile.create([labeled(LEGACY)]);
+    await FabFile.create([
+      labeled(CURRENT),
+      // The three blank shapes. Blank is unattributable rather than foreign - the vectors may
+      // already be current, and null is written deliberately for a file whose chunks span two
+      // spaces - so this read must not offer any of them. That is a KNOWN gap and not an
+      // oversight: retrieval withholds an unlabeled file too, and the label-repair pass is what
+      // resolves it.
+      labeled(undefined),
+      labeled(null),
+      labeled(''),
+      // Foreign label but nothing embedded: no space to leave, and the next embed lands in the
+      // current one unaided. Also the shape a wave's own reset leaves behind, which is what lets
+      // the count fall as progress instead of pinning at the lake size.
+      labeled(LEGACY, { vectorizedChunkCount: 0 }),
+      labeled(LEGACY, { isChunking: true }),
+      labeled(LEGACY, { deletedAt: new Date() }),
+      labeled(LEGACY, { archivedAt: new Date() }),
+      labeled(LEGACY, { tags: [{ name: 'datalake:other', strength: 1 }] }),
+    ]);
+
+    const result = await fabFileRepository.findFilesOutsideEmbeddingSpaceByScope(
+      { ...scope, kind: 'owned' as const },
+      CURRENT
+    );
+    expect(result).toEqual([{ id: stale._id.toString(), userId: 'owner' }]);
+  });
+
+  it('keeps the membership predicate under a PREFIX scope, where it is itself an $or', async () => {
+    // The spread in this read is only safe while its own conditions name no top-level `$or`: the
+    // prefix arm IS one, so a sibling would replace it and the read would offer every foreign-
+    // labelled file in the install for this lake's re-embed. A non-member with the same stale label
+    // is what catches that.
+    const prefixScope = { kind: 'owned' as const, datalakeTag: TAG, fileTagPrefix: 'proj:', creatorUserId: 'owner' };
+    const [ownerFile] = await FabFile.create([labeled(LEGACY, { tags: [{ name: 'proj:reports', strength: 1 }] })]);
+    await FabFile.create([
+      // Same prefix tag, different owner: the prefix arm's ownership conjunct excludes it.
+      labeled(LEGACY, { userId: 'intruder', tags: [{ name: 'proj:reports', strength: 1 }] }),
+      // No lake signal at all.
+      labeled(LEGACY, { tags: [] }),
+    ]);
+
+    const result = await fabFileRepository.findFilesOutsideEmbeddingSpaceByScope(prefixScope, CURRENT);
+    expect(result).toEqual([{ id: ownerFile._id.toString(), userId: 'owner' }]);
+  });
+});
+
 describe('FabFileRepository.findConvergencePausedFilesByScope', () => {
   setupMongoTest();
   beforeEach(async () => {

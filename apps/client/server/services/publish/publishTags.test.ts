@@ -8,20 +8,20 @@ import { normalizePublishTag, normalizePublishTags, PUBLISH_TAGS_MAX, PUBLISH_TA
  */
 describe('normalizePublishTag', () => {
   it('trims, collapses internal whitespace and lowercases', () => {
-    expect(normalizePublishTag('  IonQ  ')).toBe('ionq');
+    expect(normalizePublishTag('  NorthWind  ')).toBe('northwind');
     expect(normalizePublishTag('Security   Review')).toBe('security review');
     expect(normalizePublishTag('WEEKLY')).toBe('weekly');
   });
 
   it('makes differently-typed spellings of one label converge', () => {
-    const spellings = ['IonQ', 'ionq', ' IONQ ', 'IonQ '];
+    const spellings = ['NorthWind', 'northwind', ' NORTHWIND ', 'NorthWind '];
     expect(new Set(spellings.map(normalizePublishTag)).size).toBe(1);
   });
 });
 
 describe('normalizePublishTags', () => {
   it('dedupes case-insensitively, keeping the first occurrence', () => {
-    expect(normalizePublishTags(['IonQ', 'security', 'ionq'])).toEqual(['ionq', 'security']);
+    expect(normalizePublishTags(['NorthWind', 'security', 'northwind'])).toEqual(['northwind', 'security']);
   });
 
   it('drops blanks rather than storing empty chips', () => {
@@ -40,7 +40,7 @@ describe('normalizePublishTags', () => {
   });
 
   it('is idempotent - normalizing stored tags again changes nothing', () => {
-    const once = normalizePublishTags(['  Weekly ', 'IonQ', 'ionq', '']);
+    const once = normalizePublishTags(['  Weekly ', 'NorthWind', 'northwind', '']);
     expect(normalizePublishTags(once)).toEqual(once);
   });
 });

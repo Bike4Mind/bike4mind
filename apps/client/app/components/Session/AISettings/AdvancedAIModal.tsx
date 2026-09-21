@@ -707,7 +707,13 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // the input remainder negative). Show the default that selecting it would apply instead - that
   // is genuinely what you get, since buildModelSelectionPatch recomputes it on every switch.
   const outputTokens = readOnly ? computeDefaultMaxTokens(modelInfo) : (max_tokens ?? 4096);
-  const outputCeiling = modelInfo.max_tokens ?? 16384;
+  // A derived ceiling states nothing about the model (see computeDefaultMaxTokens), so the
+  // slider's range must not fall back below the default it just rendered above - that would
+  // put the read-out outside its own track and snap the budget back down on the first drag.
+  const outputCeiling =
+    modelInfo.maxOutputTokensDerived === true
+      ? Math.max(modelInfo.max_tokens ?? 0, computeDefaultMaxTokens(modelInfo))
+      : (modelInfo.max_tokens ?? 16384);
   const contextWindow = modelInfo.contextWindow ?? 0;
   const inputTokens = Math.max(0, contextWindow - outputTokens);
   // A slider needs a range to be worth drawing. Four Llama models in the catalog advertise exactly

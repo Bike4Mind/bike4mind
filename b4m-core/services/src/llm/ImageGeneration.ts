@@ -41,6 +41,8 @@ import {
   getQuestErrorCode,
   resolveImageDimensions,
   BFL_DIMENSION_BOUNDS,
+  ImageOutputFormatSchema,
+  toNonWebpOutputFormat,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -102,7 +104,7 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   safety_tolerance: BFLSafetyToleranceSchema,
   prompt_upsampling: z.boolean().optional().prefault(false),
   seed: z.number().nullable().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional().prefault('png'),
+  output_format: ImageOutputFormatSchema.nullable().optional().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
@@ -236,8 +238,26 @@ export class ImageGenerationService {
     const now = new Date();
 
     const parsedBody = GenerateImageIvokeParamsSchema.parse(body);
-    const { sessionId, prompt, model, questId, fabFileIds, promptEnhancement, organizationId, intent, ...rest } =
-      parsedBody;
+    const {
+      sessionId,
+      prompt,
+      model: requestedModel,
+      questId,
+      fabFileIds,
+      promptEnhancement,
+      organizationId,
+      intent,
+      ...rest
+    } = parsedBody;
+    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
+    // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
+    // silently turn a valid request into an opaque image (OpenAIImageService's own backstop
+    // drops the field rather than erroring). Resolved before billing so credits/promptMeta
+    // key off the model actually used.
+    const model =
+      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+        ? ImageModels.GPT_IMAGE_1_5
+        : requestedModel;
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
 
@@ -258,6 +278,7 @@ export class ImageGenerationService {
         prompt_upsampling: rest.prompt_upsampling,
         seed: rest.seed,
         output_format: rest.output_format,
+        background: rest.background,
         // `null` means "unset" for seed/output_format (both nullable), and PromptMetaZodSchema
         // declares these as plain optional numbers/enums, not nullable - a persisted `null` (the
         // client's own default) fails /api/feedback's validation when a bug report posts it back.
@@ -654,11 +675,15 @@ export class ImageGenerationService {
       prompt_upsampling,
       seed,
       output_format,
+      background,
       aspect_ratio,
       fabFileIds,
       organizationId,
       intent = 'fresh',
     } = ImageGenerationBodySchema.parse(body);
+
+    // BFL and Gemini reject webp; only the gpt-image branch below gets the raw value.
+    const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
@@ -715,14 +740,22 @@ export class ImageGenerationService {
 
       // For GPT image models (except gpt-image-2 which supports flexible sizes),
       // normalize size to a valid GPT size. BFL sizes like '1440x810'
-      // can reach here if the user switched models without resetting their size selection.
-      const effectiveSize =
+      // can reach here if the user switched models without resetting their size selection,
+      // or if the transparent-background step-down above moved a gpt-image-2-only size
+      // (e.g. 2048x2048, 3840x2160) onto gpt-image-1.5.
+      const needsSizeNormalization =
         isGPTImageModel(model) &&
         !isGPTImage2Model(model) &&
         size &&
-        !(OPENAI_IMAGE_SIZES as readonly string[]).includes(size)
-          ? (OPENAI_IMAGE_SIZES[0] as string)
-          : size;
+        !(OPENAI_IMAGE_SIZES as readonly string[]).includes(size);
+      if (needsSizeNormalization) {
+        logger.debug('Normalizing image size not supported by the resolved model', {
+          resolvedModel: model,
+          requestedSize: size,
+          normalizedSize: OPENAI_IMAGE_SIZES[0],
+        });
+      }
+      const effectiveSize = needsSizeNormalization ? (OPENAI_IMAGE_SIZES[0] as string) : size;
 
       // Validate credits before proceeding
       let usageCostUsd = 0;
@@ -851,7 +884,7 @@ export class ImageGenerationService {
           promptLength: truncatedPrompt.length,
           n,
           aspect_ratio,
-          output_format,
+          output_format: nonWebpOutputFormat,
           safety_tolerance,
         });
 
@@ -897,14 +930,14 @@ export class ImageGenerationService {
             model,
             n,
             aspect_ratio,
-            output_format,
+            output_format: nonWebpOutputFormat,
             safety_tolerance,
           });
           const editPromises = Array.from({ length: n }, () =>
             geminiService.edit(preparedImage, truncatedPrompt, {
               model: model as any,
               aspect_ratio,
-              output_format,
+              output_format: nonWebpOutputFormat,
               safety_tolerance,
             })
           );
@@ -962,7 +995,7 @@ export class ImageGenerationService {
             model: model as any,
             n,
             aspect_ratio,
-            output_format,
+            output_format: nonWebpOutputFormat,
             safety_tolerance,
             // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
             // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
@@ -986,7 +1019,7 @@ export class ImageGenerationService {
           width,
           height,
           aspect_ratio,
-          output_format,
+          output_format: nonWebpOutputFormat,
           safety_tolerance,
           prompt_upsampling,
           seed,
@@ -1075,7 +1108,7 @@ export class ImageGenerationService {
             safety_tolerance,
             prompt_upsampling,
             seed,
-            output_format,
+            output_format: nonWebpOutputFormat,
             aspect_ratio,
           };
 
@@ -1106,7 +1139,7 @@ export class ImageGenerationService {
             prompt_upsampling,
             image_prompt: base64Image,
             seed,
-            output_format,
+            output_format: nonWebpOutputFormat,
             n,
           });
         } else {
@@ -1119,7 +1152,7 @@ export class ImageGenerationService {
             image_prompt: base64Image,
             prompt_upsampling,
             seed,
-            output_format,
+            output_format: nonWebpOutputFormat,
             n,
           });
         }
@@ -1166,6 +1199,14 @@ export class ImageGenerationService {
           if (mappedQuality) {
             openaiParams.quality = mappedQuality;
           }
+          // Alpha controls: gpt-image is the only family that accepts them, and
+          // `background: 'transparent'` is what produces a real cutout PNG.
+          if (background) {
+            openaiParams.background = background;
+          }
+          if (output_format) {
+            openaiParams.output_format = output_format;
+          }
         } else {
           // Other OpenAI models support these parameters
           openaiParams.quality = quality;
@@ -1182,6 +1223,8 @@ export class ImageGenerationService {
           size: openaiParams.size,
           quality: openaiParams.quality,
           style: openaiParams.style,
+          background: openaiParams.background,
+          output_format: openaiParams.output_format,
           n: openaiParams.n,
         });
 

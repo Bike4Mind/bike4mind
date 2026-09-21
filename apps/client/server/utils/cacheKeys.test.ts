@@ -23,10 +23,10 @@ describe('CacheKeys', () => {
         })
       ).toBe('model-metrics:v1:51d5aaf35280f540');
 
-      expect(CacheKeys.spend({})).toBe('admin-spend:v1:4f53cda18c2baa0c');
+      expect(CacheKeys.spend({})).toBe('admin-spend:v2:4f53cda18c2baa0c');
       expect(
         CacheKeys.spend({ dateFrom: '2026-01-01', dateTo: '2026-01-31', userFilter: 'u1', modelFilter: 'gpt' })
-      ).toBe('admin-spend:v1:2860ffe8a3ae5348');
+      ).toBe('admin-spend:v2:2860ffe8a3ae5348');
 
       expect(CacheKeys.eventMetrics({})).toBe('event-metrics:v1:4f53cda18c2baa0c');
       expect(

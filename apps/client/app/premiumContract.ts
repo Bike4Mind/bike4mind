@@ -39,6 +39,15 @@ export interface PremiumRouteDescriptor {
    */
   appShell?: boolean;
   /**
+   * STRUCTURAL field, like `appShell`. `true` -> the route renders for signed-out
+   * visitors: parented under the root route with no `RestrictedPage`, no
+   * `ProviderBundle` and no consent guard, the way `/login` and `/verify-email`
+   * are. The page carries its own authorization (a capability in the URL) and
+   * must set none of `appShell`, `requireEntitlement`, `requireFeatureTag` or
+   * `fallbackPath`; `partitionPremiumRoutes` throws on that combination.
+   */
+  public?: boolean;
+  /**
    * Entitlement key gating the route (`RestrictedPage.requireEntitlement`).
    * Omitted -> no entitlement gate; with no other gate set the route is
    * login-only.

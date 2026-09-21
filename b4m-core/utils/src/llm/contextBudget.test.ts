@@ -70,10 +70,32 @@ describe('safeInputWindow', () => {
     expect(safeInputWindow(LLAMA_8K, 999_999)).toBe(8000 - 2048 - 1000);
   });
 
+  // A derived cap is not what the model can emit, and resolveOutputMaxTokens declines to clamp a
+  // reasoning model to it - so reserving it here would under-reserve against the request actually
+  // sent and let assembly overrun the window.
+  it('reserves the whole request when the cap was only derived', () => {
+    const derivedCap = {
+      contextWindow: 200_000,
+      max_tokens: 4096,
+      maxOutputTokensDerived: true,
+      type: 'text' as const,
+    };
+    expect(safeInputWindow(derivedCap, 64_000)).toBe(200_000 - 64_000 - 1000);
+  });
+
   // The caller's empty-prompt guard reads a non-positive budget as a misconfigured model, so clamping
   // here would turn a loud failure into a silently empty prompt.
   it('goes negative rather than clamping on a model that reserves its whole window', () => {
     expect(safeInputWindow({ contextWindow: 8192, max_tokens: 8192, type: 'text' }, 8192)).toBeLessThan(0);
+  });
+
+  // ModelInfo.max_tokens is typed `number`, but that is a claim toModelInfo makes about catalog
+  // data, not a guarantee about every caller - context-dry-run.ts builds a synthetic ModelInfo with
+  // max_tokens genuinely absent, cast past the type. Reserving the raw request (rather than
+  // Math.min against undefined) keeps this a real number instead of NaN.
+  it('reserves the requested output rather than NaN when max_tokens is genuinely absent', () => {
+    const noDeclaredCap = { contextWindow: 200_000, max_tokens: undefined, type: 'text' as const };
+    expect(safeInputWindow(noDeclaredCap, 8192)).toBe(200_000 - 8192 - 1000);
   });
 });
 

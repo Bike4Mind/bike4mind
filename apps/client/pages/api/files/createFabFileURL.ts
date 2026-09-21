@@ -8,7 +8,6 @@ import {
 } from '@bike4mind/database';
 import { Permission } from '@bike4mind/common';
 import { fabFilesService } from '@bike4mind/services';
-import { createFabFile } from '@server/managers/fabFileManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@server/utils/errors';
@@ -38,7 +37,7 @@ const handler = baseApi()
             db: {
               fabFiles: FabFile,
               adminSettings: adminSettingsRepository,
-              // Absent, the admission lever (#1680) resolves platform-only here, so a per-org/owner/lake
+              // Absent, the admission lever resolves platform-only here, so a per-org/owner/lake
               // enforcement override would silently not apply on this door.
               scopedSettings: scopedSettingsRepository,
               users: User,
@@ -53,23 +52,21 @@ const handler = baseApi()
         )
       );
 
-      const savedFabFile = await createFabFile(newFabFile, req.ability!);
-
       await logEvent(
         {
           userId,
           type: FileEvents.CREATE_FILE_URL,
           metadata: {
-            fileId: savedFabFile.id,
-            fileSize: savedFabFile.fileSize,
-            mimeType: savedFabFile.mimeType,
+            fileId: newFabFile.id,
+            fileSize: newFabFile.fileSize,
+            mimeType: newFabFile.mimeType,
             fileUrl: url,
           },
         },
         { ability: req.ability }
       );
 
-      return res.json(savedFabFile);
+      return res.json(newFabFile);
     })
   );
 

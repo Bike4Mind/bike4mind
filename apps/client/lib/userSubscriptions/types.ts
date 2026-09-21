@@ -1,6 +1,6 @@
 import { IBaseRepository, IMongoDocument, SettingKey } from '@bike4mind/common';
 import Stripe from 'stripe';
-import type { ISubscription } from '@client/lib/subscriptions/types';
+import type { ISubscription, SubscriptionSource } from '@client/lib/subscriptions/types';
 
 export enum SubscriptionPlanInterval {
   Monthly = 'monthly',
@@ -59,6 +59,12 @@ export interface IUserSubscription extends IMongoDocument {
   /** Stripe Subscription Product Price ID */
   priceId: string;
   status: Stripe.Subscription.Status;
+  /**
+   * How this subscription came to exist; propagated from the unified `Subscription`
+   * row by `subscriptionToUserSubscription`. Optional because rows written before
+   * the field existed read back without it (see `resolveSubscriptionSource`).
+   */
+  source?: SubscriptionSource;
   /**
    * This field is used to store the date when the subscription was canceled.
    */

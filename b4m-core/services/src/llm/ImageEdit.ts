@@ -21,13 +21,17 @@ import {
   IOrganizationDocument,
   ImageModerationIncident as ImageModerationIncidentInput,
   insufficientCreditsError,
+  ImageOutputFormatSchema,
 } from '@bike4mind/common';
 import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
+  isGPTImage2Model,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
+  IMAGES_PER_EDIT_REQUEST,
+  ImageModels,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -79,13 +83,17 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
     .prefault(BFL_SAFETY_TOLERANCE.DEFAULT),
   prompt_upsampling: z.boolean().optional().prefault(false),
   seed: z.number().nullable().optional(),
-  output_format: z.enum(['jpeg', 'png']).optional().prefault('png'),
+  output_format: ImageOutputFormatSchema.nullable().optional().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
   size: z.string().optional(),
   fabFileIds: z.array(z.string()).optional(),
   image: z.string(),
+  // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
+  // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
+  // accepted and ignored, never billed. Narrowing it to 1 here would 400 an API-key caller whose
+  // request succeeds today.
 });
 export type ImageEditBody = z.infer<typeof ImageEditBodySchema>;
 
@@ -162,9 +170,24 @@ export class ImageEditService {
   public async invoke({ body, userId }: { body: z.infer<typeof EditImageRequestBodySchema>; userId: string }) {
     const now = new Date();
 
-    const { sessionId, prompt, model, questId, fabFileIds, organizationId, ...rest } =
-      EditImageRequestBodySchema.parse(body);
+    const {
+      sessionId,
+      prompt,
+      model: requestedModel,
+      questId,
+      fabFileIds,
+      organizationId,
+      ...rest
+    } = EditImageRequestBodySchema.parse(body);
     if (fabFileIds.length === 0) throw new BadRequestError('No fabFileIds provided');
+
+    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
+    // gpt-image-2 rejects background: 'transparent' outright. Resolved here, before
+    // promptMeta is built, so the persisted model matches what actually renders and bills.
+    const model =
+      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+        ? ImageModels.GPT_IMAGE_1_5
+        : requestedModel;
 
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
@@ -239,7 +262,6 @@ export class ImageEditService {
   private async validateUserCredits(
     user: IUserDocument,
     model: string,
-    n: number = 1,
     imageParams: Pick<ImageEditBody, 'size' | 'quality'>,
     logger: Logger,
     organization?: IOrganizationDocument | null
@@ -249,9 +271,16 @@ export class ImageEditService {
     const modelInfo = models.find(m => m.id === model);
     if (!modelInfo) throw new BadRequestError(`Invalid model: "${model}" is not available`);
 
-    // Same estimator the chat edit_image tool charges through (ToolBuilder.onToolStart),
-    // so both paths bill identically. Returns { requiredCredits, usdCost } n-scaled.
-    const result = await validateImageUserCredits(user, modelInfo, n, { model, ...imageParams }, logger, organization);
+    // Same estimator the chat edit_image tool charges through (ToolBuilder.onToolStart), so both
+    // paths bill identically. Billed for the one image this path renders, not the requested n.
+    const result = await validateImageUserCredits(
+      user,
+      modelInfo,
+      IMAGES_PER_EDIT_REQUEST,
+      { model, ...imageParams },
+      logger,
+      organization
+    );
 
     // Org-billed: enforce the per-member cap here, at pre-flight, before touching the
     // shared pool. This is the only enforcement point - the settlement write
@@ -271,12 +300,12 @@ export class ImageEditService {
       questId,
       userId,
       prompt,
-      model,
-      n = 1,
+      model: requestedModel,
       safety_tolerance,
       prompt_upsampling,
       seed,
       output_format = 'jpeg',
+      background,
       aspect_ratio,
       fabFileIds,
       size,
@@ -284,6 +313,12 @@ export class ImageEditService {
       image: sourceImageUrl,
       organizationId,
     } = ImageEditBodySchema.parse(body);
+    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
+    // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
+    // silently turn a valid request into an opaque image. Resolved before billing so
+    // credits key off the model actually used.
+    const model =
+      background === 'transparent' && isGPTImage2Model(requestedModel) ? ImageModels.GPT_IMAGE_1_5 : requestedModel;
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
@@ -346,7 +381,6 @@ export class ImageEditService {
         const { requiredCredits, usdCost } = await this.validateUserCredits(
           user,
           model,
-          n,
           { size, quality },
           logger,
           organization
@@ -462,11 +496,12 @@ export class ImageEditService {
         editResponse = await service.edit(sourceBase64Image, truncatedPrompt, {
           mask: maskBase64Image || null,
           model,
-          n: 1,
           size: size as OpenAIImageSize | undefined,
           quality,
           response_format: 'url',
           user: userId,
+          background,
+          output_format,
         });
       }
 
@@ -601,7 +636,7 @@ export class ImageEditService {
             outputTokens: 0,
             cachedInputTokens: 0,
             cacheWriteTokens: 0,
-            units: n,
+            units: IMAGES_PER_EDIT_REQUEST,
             costUsd: usageCostUsd,
             creditsCharged: quest.creditsUsed,
             status: 'ok',

@@ -1,5 +1,5 @@
 import { emailJobRepository } from '@bike4mind/database';
-import { EmailJobOverallStatus } from '@bike4mind/common';
+import { ApiKeyScope, EmailJobOverallStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sendToQueue } from '@server/utils/sqs';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
@@ -26,7 +26,7 @@ const RecipientFilterSchema = z
  * - Supports partial sends (specific users only)
  * - Supports test mode (redirect to test recipients)
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }

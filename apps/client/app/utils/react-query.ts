@@ -402,8 +402,11 @@ export const useSubscribeCollection = <T>(
           // Always empty: the server owns the projection (it merges in exclusion-based
           // fieldLimits per collection, e.g. password/stripeCustomerId for `users`). A
           // client-supplied inclusion projection can't be honored on those collections -
-          // it would mix inclusions with the server's exclusions and be dropped - so we
-          // don't offer one. `fields` is still required by the wire schema.
+          // it would mix inclusions with the server's exclusions and be dropped - so this
+          // hook does not offer one. `fields` is still required by the wire schema.
+          // The sibling subscribe path, useCollectionQuery (hooks/useCollection.ts), does
+          // forward a caller-supplied projection; that is the case the drop-inclusions
+          // guard in server/websocket/dataSubscribeRequest.ts handles.
           fields: {},
           fetchInitialData: options?.fetchInitialData ?? true,
         };

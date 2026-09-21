@@ -116,6 +116,16 @@ describe('GET /api/usage - access', () => {
       expect(res._getJSONData().ownerId).toBe(ORG);
       expect(res._getJSONData().ownerType).toBe('Organization');
     });
+
+    it('resolves an org-billed key name and prefix onto the by-API-key cut', async () => {
+      mockApiKeyUsageForOwner.mockResolvedValue([
+        { apiKeyId: 'key-1', requests: 5, creditsSpent: 10, inputTokens: 100, outputTokens: 50 },
+      ]);
+      mockFindByOrganizationId.mockResolvedValue([{ id: 'key-1', name: 'Org Key', keyPrefix: 'b4m_live_abcd' }]);
+      const { res, run } = call({ isAdmin: false });
+      await run();
+      expect(res._getJSONData().byApiKey[0]).toMatchObject({ keyName: 'Org Key', keyPrefix: 'b4m_live_abcd' });
+    });
   });
 
   describe('User owner', () => {

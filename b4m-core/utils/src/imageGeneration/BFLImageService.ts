@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import axios from 'axios';
-import { ImageModels, BFL_SAFETY_TOLERANCE, isBflUltraImageModel } from '@bike4mind/common';
+import { ImageModels, BFL_SAFETY_TOLERANCE, isBflUltraImageModel, toNonWebpOutputFormat } from '@bike4mind/common';
 import { redactErrorForLog } from './redactErrorForLog';
 
 export class BFLImageService extends AIImageService {
@@ -208,7 +208,10 @@ export class BFLImageService extends AIImageService {
         image,
         mask,
         guidance: guidance ?? undefined,
-        output_format: output_format || 'jpeg',
+        // BFL rejects webp; ImageEditOptions.output_format is typed as ImageOutputFormat
+        // (shared with providers that do accept it), so this call site must degrade it
+        // itself rather than relying on the type to reject it at compile time.
+        output_format: toNonWebpOutputFormat(output_format) || 'jpeg',
       };
 
       const cleanedBody = this.stripNullFields(requestBody);
