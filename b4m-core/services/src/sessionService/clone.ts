@@ -56,6 +56,7 @@ export const cloneSession = async (
     tags: session.tags ?? [],
     summary: session.summary,
     summaryAt: session.summaryAt,
+    summaryTrigger: session.summaryTrigger,
     taggedAt: session.taggedAt,
     clonedSourceId: session.id,
     // Carried from the source, not re-derived: the owner's scope is already correct and explicit,

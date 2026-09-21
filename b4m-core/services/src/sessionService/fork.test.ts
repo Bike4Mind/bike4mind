@@ -79,6 +79,51 @@ describe('forkSession', () => {
     );
   });
 
+  /**
+   * `summaryTrigger` is the WHY beside `summaryAt`'s WHEN. A fork already inherits the summary text
+   * and its timestamp - both claims about a run on the SOURCE - so dropping the trigger leaves the
+   * copy claiming a summary with no provenance, the exact state the admin summarization-spend view
+   * exists to read.
+   */
+  it('carries the source session summaryTrigger onto the fork', async () => {
+    const { db } = makeAdapters();
+    const summaryAt = new Date('2026-01-01T00:00:00.000Z');
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryAt,
+      summaryTrigger: 'manual',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: 'the gist', summaryAt, summaryTrigger: 'manual' })
+    );
+  });
+
+  // A source summarized before the field existed must not come out of the copy carrying an invented
+  // provenance; the copy passes the field through explicitly, so the key is present holding undefined.
+  it('does not fabricate a summaryTrigger when the source has none', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+  });
+
   it('forks messages up to the fork point when the message belongs to the session', async () => {
     const { db, created } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });

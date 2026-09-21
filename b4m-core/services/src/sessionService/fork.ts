@@ -49,6 +49,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       tags: session.tags,
       summary: session.summary,
       summaryAt: session.summaryAt,
+      summaryTrigger: session.summaryTrigger,
       taggedAt: session.taggedAt,
       forkedSourceId: session.id,
       // Carried from the source, not re-derived: the parent's scope is already correct and explicit,

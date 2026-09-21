@@ -163,6 +163,73 @@ describe('cloneSession - redaction at the copy boundary', () => {
   });
 
   /**
+   * `summaryTrigger` is the WHY beside `summaryAt`'s WHEN. A clone already inherits the summary text
+   * and its timestamp - both claims about a run on the SOURCE - so dropping the trigger leaves the
+   * copy claiming a summary with no provenance, the exact state the admin summarization-spend view
+   * exists to read.
+   */
+  it('carries the source session summaryTrigger onto the clone', async () => {
+    const { db } = makeAdapters('caller-1');
+    const summaryAt = new Date('2026-01-01T00:00:00.000Z');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryAt,
+      summaryTrigger: 'manual',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: 'the gist', summaryAt, summaryTrigger: 'manual' })
+    );
+  });
+
+  /**
+   * Like `taggedAt` and unlike the lake scope, the trigger sits OUTSIDE the isOwner gate: it says
+   * how the summary the share holder's copy already carries came to be, and no reachability
+   * question rides on it. Pins that against an edit that reflexively folds it into that gate.
+   */
+  it('carries summaryTrigger even when the caller only holds a share', async () => {
+    const { db } = makeAdapters('owner-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1', // caller-1 holds only a share
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryTrigger: 'project',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ summaryTrigger: 'project' }));
+  });
+
+  // A source summarized before the field existed must not come out of the copy carrying an invented
+  // provenance; the copy passes the field through explicitly, so the key is present holding undefined.
+  it('does not fabricate a summaryTrigger when the source has none', async () => {
+    const { db } = makeAdapters('caller-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+  });
+
+  /**
    * Same boundary as this file's docblock, one field further along: a share grant lets you READ the
    * source, not inherit its lake scope. The cloner may not reach that lake, and the explicit-wins arm
    * in createSession skips the derivation, so nothing on this path would check. Inheriting it would

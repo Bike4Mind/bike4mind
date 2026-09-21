@@ -66,12 +66,16 @@ describe('Session.summaryTrigger', () => {
     expect(stored?.summaryTrigger).toBe(trigger);
   });
 
-  // Without this the enum could be dropped entirely and every case above would still pass.
-  it('rejects a value outside the list', async () => {
-    await expect(insertSession({ summaryTrigger: 'milestone' })).rejects.toThrow(mongoose.Error.ValidationError);
+  // Without this the enum could be dropped entirely and every case above would still pass. Both
+  // values are the ones the drifted enum used to accept, so this also pins that the drift is gone.
+  it.each(['milestone', 'growth'])('rejects %s, a value outside the list', async trigger => {
+    await expect(insertSession({ summaryTrigger: trigger })).rejects.toThrow(mongoose.Error.ValidationError);
   });
 
-  // The path the summarization handler actually writes through.
+  // The path the summarization handler actually writes through. NOT an enum reproducer: BaseModel's
+  // _plainUpdate calls findOneAndUpdate without runValidators, so this leg passed against the
+  // drifted enum too. What it guards is that the path is DECLARED (strict mode drops an undeclared
+  // key out of the `$set`) and that the value reaches the raw document unchanged.
   it('persists summaryTrigger alongside the summary through sessionRepository.update', async () => {
     const session = await insertSession();
     const summaryAt = new Date('2024-05-01T12:00:00.000Z');

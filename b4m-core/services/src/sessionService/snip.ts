@@ -49,6 +49,7 @@ export const snipSession = async (userId: string, parameters: SnipSessionParamet
       tags: session.tags,
       summary: session.summary,
       summaryAt: session.summaryAt,
+      summaryTrigger: session.summaryTrigger,
       // taggedAt is deliberately NOT carried: a snip keeps only the quests AFTER the snip point, so
       // the source tags may describe a quest the copy no longer holds. Leaving it unset lets the
       // groom re-derive tags from what the snip actually has.

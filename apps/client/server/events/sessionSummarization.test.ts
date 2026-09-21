@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
+import { SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
@@ -426,7 +427,10 @@ describe('sessionSummarization provenance', () => {
     h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
   });
 
-  it.each(['manual', 'project', 'earlyMilestone', 'contentGrowth'] as const)(
+  // Derived, not hand-listed, so a sixth trigger picks up handler coverage for free.
+  // 'throttling' is filtered out: shouldSummarizeSession returns it as the reason it DECLINED to
+  // summarize, so it never reaches this handler and asserting a write for it would be fiction.
+  it.each(SESSION_SUMMARY_TRIGGERS.filter(trigger => trigger !== 'throttling'))(
     'writes the %s trigger alongside the summary',
     async trigger => {
       await run({ trigger });
