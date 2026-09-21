@@ -38,6 +38,7 @@ interface ControlPanelProps {
   onSetDateRange: (preset: string) => void;
   onApplyFilters: () => void;
   isLoading: boolean;
+  isFetching: boolean;
   hideCategoryFilter?: boolean;
 }
 
@@ -74,6 +75,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onSetDateRange,
   onApplyFilters,
   isLoading,
+  isFetching,
   hideCategoryFilter,
 }) => {
   const isMobile = useIsMobile();
@@ -306,7 +308,7 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 variant="outlined"
                 color="primary"
                 onClick={onRefresh}
-                disabled={isLoading}
+                disabled={isFetching}
                 data-testid="refresh-btn"
               >
                 <RefreshIcon />

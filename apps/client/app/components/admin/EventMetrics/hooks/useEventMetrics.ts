@@ -38,7 +38,11 @@ export const useEventMetrics = (filters?: MetricsFilters) => {
 
   const forceRefresh = async () => {
     // Force a server-side cache refresh
-    await fetchEventMetrics(filters, true);
+    try {
+      await fetchEventMetrics(filters, true);
+    } catch {
+      // Swallowed here so refetch() below always runs; the query's own error state surfaces the failure.
+    }
     // Then invalidate client query to get the new data
     return query.refetch();
   };
