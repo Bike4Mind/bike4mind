@@ -38,6 +38,7 @@ const toDistribution = (categories: ContextBreakdown['categories']): TokenDistri
   urlContent: categories.urlContent,
   toolSchemas: categories.toolDefinitions,
   userPrompt: categories.userMessage,
+  lakeRetrieval: categories.lakeRetrieval,
 });
 
 const CategoryTable: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => {
@@ -47,6 +48,7 @@ const CategoryTable: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => {
     ['Tool definitions', categories.toolDefinitions],
     ['Attached files', categories.attachedFiles],
     ['Conversation history', categories.conversationHistory],
+    ['Lake retrieval', categories.lakeRetrieval],
     ['Memory', categories.memory],
     ['URL content', categories.urlContent],
     ['Your message', categories.userMessage],

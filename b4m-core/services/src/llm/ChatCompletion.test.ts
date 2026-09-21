@@ -4513,11 +4513,11 @@ describe('ChatCompletionProcess', () => {
     const runWithTools = async (opts: {
       tools: any[];
       // Either one count applied to every message source, or an explicit per-source queue in
-      // calculateTotalTokenLength's call order: [messages, mementos, fab, url, history, userPrompt].
-      // The per-source form lets a test give systemPrompts a non-degenerate value so the
-      // "tools are not folded into the system-prompt remainder" property is actually asserted.
+      // calculateTotalTokenLength's call order: [messages, mementos, fab, url, history, userPrompt,
+      // lakeRetrieval]. The per-source form lets a test give systemPrompts a non-degenerate value so
+      // the "tools are not folded into the system-prompt remainder" property is actually asserted.
       messagesTokenCount?: number;
-      sourceTokenCounts?: [number, number, number, number, number, number];
+      sourceTokenCounts?: [number, number, number, number, number, number, number];
       // Full control over calculateTotalTokenLength, for the cases that need to differentiate the
       // real count from the estimateOnly one (e.g. rejecting the former and resolving the latter).
       tokenLengthImpl?: (messages: any, options: any) => Promise<number>;
@@ -4582,18 +4582,45 @@ describe('ChatCompletionProcess', () => {
     };
 
     it('folds tool-schema tokens into inputTokens without inflating the systemPrompts remainder', async () => {
-      // Per-source counts: messages 100, memento/fab/url 0, history 10, userPrompt 5; tools -> 30.
-      // systemPrompts = totalTokens(100) - knownSources(0+0+0+10+5) = 85, independent of tools.
-      // inputTokens = totalTokens(100) + toolSchemas(30) = 130. A mutation that derived
-      // systemPrompts from inputTokens (115) or subtracted tools (55) would fail this.
+      // Per-source counts: messages 100, memento/fab/url 0, history 10, userPrompt 5, lakeRetrieval
+      // 0; tools -> 30. systemPrompts = totalTokens(100) - knownSources(0+0+0+10+5+0) = 85,
+      // independent of tools. inputTokens = totalTokens(100) + toolSchemas(30) = 130. A mutation
+      // that derived systemPrompts from inputTokens (115) or subtracted tools (55) would fail this.
       const promptMeta = await runWithTools({
         tools: [probeTool, probeTool],
-        sourceTokenCounts: [100, 0, 0, 0, 10, 5],
+        sourceTokenCounts: [100, 0, 0, 0, 10, 5, 0],
         toolCountImpl: (text: any) => (typeof text === 'string' ? 30 : 7),
       });
       expect(promptMeta.context.tokensBySource.toolSchemas).toBe(30);
       expect(promptMeta.context.tokensBySource.systemPrompts).toBe(85);
+      expect(promptMeta.context.tokensBySource.lakeRetrieval).toBe(0);
       expect(promptMeta.tokenUsage.inputTokens).toBe(130);
+    });
+
+    it('carves lake-retrieval tokens out of the systemPrompts remainder instead of double counting them', async () => {
+      // Per-source counts: messages 200, memento/fab/url 0, history 10, userPrompt 5,
+      // lakeRetrieval 60. systemPrompts = totalTokens(200) - knownSources(0+0+0+10+5+60) = 125.
+      // Before this bucket existed, lakeRetrieval's 60 tokens would have landed inside
+      // systemPrompts (185) instead of its own field.
+      const promptMeta = await runWithTools({
+        tools: [],
+        sourceTokenCounts: [200, 0, 0, 0, 10, 5, 60],
+        toolCountImpl: () => 7,
+      });
+      expect(promptMeta.context.tokensBySource.lakeRetrieval).toBe(60);
+      expect(promptMeta.context.tokensBySource.systemPrompts).toBe(125);
+      // Every bucket sums back to inputTokens (no tools here, so inputTokens === totalTokens).
+      const bySource = promptMeta.context.tokensBySource;
+      expect(
+        bySource.systemPrompts +
+          bySource.conversationHistory +
+          bySource.mementos +
+          bySource.fabFiles +
+          bySource.urlContent +
+          bySource.toolSchemas +
+          bySource.userPrompt +
+          bySource.lakeRetrieval
+      ).toBe(promptMeta.tokenUsage.inputTokens);
     });
 
     it('serializes every tool as {name, description, input_schema} and joins them', async () => {

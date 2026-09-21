@@ -435,6 +435,7 @@ export class TelemetryBuilder {
       urlContent: this.tokensBySource.urlContent ?? 0,
       toolSchemas: this.tokensBySource.toolSchemas ?? 0,
       userPrompt: this.tokensBySource.userPrompt ?? 0,
+      lakeRetrieval: this.tokensBySource.lakeRetrieval ?? 0,
     };
 
     // Build complete contextWindow with defaults

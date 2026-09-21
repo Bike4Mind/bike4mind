@@ -31,9 +31,13 @@ export const TOKEN_SOURCE_COLORS: Record<keyof TokenDistribution, string> = {
   urlContent: '#8bc34a',
   toolSchemas: '#4caf50',
   userPrompt: '#ff9800',
+  lakeRetrieval: '#9c27b0',
 };
 
 export const TokenDistributionBar = ({ tokensBySource }: { tokensBySource: TokenDistribution }) => {
+  // lakeRetrieval is optional on the schema - absent on a turn recorded before this bucket
+  // existed, which must read as "not recorded" (0 here) rather than throw on the missing key.
+  const lakeRetrieval = tokensBySource.lakeRetrieval ?? 0;
   const total =
     tokensBySource.systemPrompts +
     tokensBySource.conversationHistory +
@@ -41,7 +45,8 @@ export const TokenDistributionBar = ({ tokensBySource }: { tokensBySource: Token
     tokensBySource.fabFiles +
     tokensBySource.urlContent +
     tokensBySource.toolSchemas +
-    tokensBySource.userPrompt;
+    tokensBySource.userPrompt +
+    lakeRetrieval;
 
   if (total === 0) return <Typography level="body-sm">No token data</Typography>;
 
@@ -53,6 +58,7 @@ export const TokenDistributionBar = ({ tokensBySource }: { tokensBySource: Token
     { key: 'urlContent', label: 'URLs', value: tokensBySource.urlContent },
     { key: 'toolSchemas', label: 'Tools', value: tokensBySource.toolSchemas },
     { key: 'userPrompt', label: 'User', value: tokensBySource.userPrompt },
+    { key: 'lakeRetrieval', label: 'Lake retrieval', value: lakeRetrieval },
   ];
   const segments = allSegments.filter(s => s.value > 0);
 

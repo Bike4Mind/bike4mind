@@ -11,6 +11,7 @@ const tokensBySource = {
   urlContent: 100,
   toolSchemas: 900,
   userPrompt: 40,
+  lakeRetrieval: 250,
 };
 
 const fullPromptMeta = (): PromptMeta => ({
@@ -150,7 +151,16 @@ describe('buildContextBreakdown', () => {
       memory: 300,
       urlContent: 100,
       userMessage: 40,
+      lakeRetrieval: 250,
     });
+  });
+
+  it('defaults lakeRetrieval to zero when tokensBySource predates the category', () => {
+    const noLakeRetrieval = fullPromptMeta();
+    delete (noLakeRetrieval.context!.tokensBySource as { lakeRetrieval?: number }).lakeRetrieval;
+
+    const breakdown = buildContextBreakdown(noLakeRetrieval, { questId: 'quest-1' });
+    expect(breakdown.categories.lakeRetrieval).toBe(0);
   });
 
   it('counts tool invocations per name and marks tools the model was never offered', () => {
@@ -228,6 +238,7 @@ describe('buildContextBreakdown', () => {
         memory: 0,
         urlContent: 0,
         userMessage: 0,
+        lakeRetrieval: 0,
       },
       layers: [],
       tools: [],

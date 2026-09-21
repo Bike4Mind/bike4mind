@@ -99,6 +99,10 @@ export const TokensBySourceSchema = z.object({
   urlContent: z.number(),
   toolSchemas: z.number(),
   userPrompt: z.number(),
+  // Forced data-lake retrieval content injected this turn, counted separately from the
+  // system-prompt remainder it used to be folded into. Optional so a row captured before this
+  // field existed still parses.
+  lakeRetrieval: z.number().optional(),
 });
 
 // Context window telemetry

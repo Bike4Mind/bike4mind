@@ -30,6 +30,7 @@ const breakdown: ContextBreakdown = {
     memory: 0,
     urlContent: 0,
     userMessage: 40,
+    lakeRetrieval: 350,
   },
   layers: [
     { source: 'hardcoded', name: 'date_time_context', tokenCount: 60, wasIncluded: true },
@@ -72,6 +73,14 @@ describe('ContextBreakdownModal', () => {
     renderModal();
 
     expect(screen.getByTestId('context-breakdown-categories-table').textContent).toContain('184,768');
+  });
+
+  it('surfaces lake retrieval as its own category row', () => {
+    renderModal();
+
+    const table = screen.getByTestId('context-breakdown-categories-table');
+    expect(table.textContent).toContain('Lake retrieval');
+    expect(table.textContent).toContain('350');
   });
 
   it('does not query while closed', () => {

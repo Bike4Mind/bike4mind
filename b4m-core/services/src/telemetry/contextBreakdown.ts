@@ -40,6 +40,15 @@ export type ContextBreakdownCategories = {
   memory: number;
   urlContent: number;
   userMessage: number;
+  /**
+   * Forced data-lake retrieval content injected this turn (KnowledgeRetrievalFeature), counted
+   * with the same tokenizer as every other bucket before it folds into `systemPromptBilled` - see
+   * ChatCompletionProcess's tokensBySource assembly. Distinct from `retrieval` below, which is a
+   * verdict (tags/surfaces/scope), not a token count. Zero on a turn recorded before this field
+   * existed, same as a turn that genuinely injected nothing - `tokensBySource.lakeRetrieval` being
+   * absent is not otherwise surfaced here.
+   */
+  lakeRetrieval: number;
 };
 
 export type ContextBreakdown = {
@@ -79,6 +88,7 @@ const EMPTY_CATEGORIES: ContextBreakdownCategories = {
   memory: 0,
   urlContent: 0,
   userMessage: 0,
+  lakeRetrieval: 0,
 };
 
 function buildLayers(details: SystemPromptDetail[] | undefined): ContextBreakdownLayer[] {
@@ -163,6 +173,9 @@ export function buildContextBreakdown(
         memory: tokensBySource.mementos,
         urlContent: tokensBySource.urlContent,
         userMessage: tokensBySource.userPrompt,
+        // Absent on a turn recorded before this bucket existed - zero reads the same as "recorded
+        // and genuinely empty" for this category, matching every other bucket's absent-tolerance.
+        lakeRetrieval: tokensBySource.lakeRetrieval ?? 0,
       }
     : {
         ...EMPTY_CATEGORIES,

@@ -3,7 +3,14 @@
  * Mirrors the `tokensBySource` breakdown computed in ChatCompletionProcess.
  */
 export type TokenSource =
-  'systemPrompts' | 'conversationHistory' | 'mementos' | 'fabFiles' | 'urlContent' | 'toolSchemas' | 'userPrompt';
+  | 'systemPrompts'
+  | 'conversationHistory'
+  | 'mementos'
+  | 'fabFiles'
+  | 'urlContent'
+  | 'toolSchemas'
+  | 'userPrompt'
+  | 'lakeRetrieval';
 
 export interface ContextOverflowMessageParams {
   /** Human-readable model name (e.g. "Claude 4.5 Sonnet"). */
@@ -38,6 +45,8 @@ const SOURCE_REMEDIATION: Partial<Record<TokenSource, string>> = {
   mementos: 'Most of your context comes from saved memories. Reduce how many mementos are in play, then try again.',
   toolSchemas:
     'Most of your context is tool definitions. Turn off tools you are not using (Smart Tools and MCP servers) for this chat, then try again.',
+  lakeRetrieval:
+    'Most of your context is retrieved data-lake content. Narrow your question, scope it to fewer lakes, or ask for a summary instead of the full source, then try again.',
 };
 
 const GENERIC_REMEDIATION =
