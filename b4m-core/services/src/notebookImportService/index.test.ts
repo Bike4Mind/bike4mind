@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { DefaultLLMParams } from '@bike4mind/common';
+import { invalidateSettingsCache } from '@bike4mind/utils';
 import { NotebookImportService } from './index';
 import type { NotebookImportAdapters } from './index';
 
@@ -31,7 +32,19 @@ const NOTEBOOK = {
 
 const PAYLOAD = { exportVersion: '1.0.0', notebooks: [NOTEBOOK] };
 
-function makeAdapters(existingSessions: unknown[] = []) {
+/** Small, so the over-sized fixtures stay cheap to build rather than real 30MB buffers. */
+const MAX_FILE_SIZE_MB = 1;
+
+/**
+ * The admin-settings cache behind `getSettingsMap` is a process-wide singleton with a TTL, so
+ * without this the first import in the worker fixes `MaxFileSize` for every later one - including
+ * tests in other files that share the worker and supply a different value.
+ */
+beforeEach(() => {
+  invalidateSettingsCache();
+});
+
+function makeAdapters(existingSessions: unknown[] = [], user: Record<string, unknown> = { id: 'user-1' }) {
   const bulkCreate = vi.fn().mockResolvedValue(undefined);
   const adapters = {
     sessionRepository: {
@@ -47,7 +60,11 @@ function makeAdapters(existingSessions: unknown[] = []) {
     createArtifact: vi.fn().mockResolvedValue({ id: 'artifact_code_red-circle-a1b2c3_1700000000000_0' }),
     toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
     agentRepository: { create: vi.fn() },
-    userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-1' }) },
+    userRepository: { findById: vi.fn().mockResolvedValue(user) },
+    adminSettings: {
+      findAll: async () => [{ settingName: 'MaxFileSize', settingValue: String(MAX_FILE_SIZE_MB) }],
+      findBySettingNames: async () => [],
+    },
     fileStorageService: { uploadFile: vi.fn(), getFileContent: vi.fn(), getSignedUrl: vi.fn() },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     generateId: () => 'generated-id',
@@ -201,6 +218,103 @@ describe('attachment ids come from the store, not from this service', () => {
   it('does not send an id the session schema will drop', async () => {
     const { created } = await runWithAttachments({ preserveIds: true });
     expect('id' in created).toBe(false);
+  });
+});
+
+/**
+ * `tags`/`taggedAt` and `summary`/`summaryAt` are pairs, and an overwrite is where they get split.
+ * The payload used to carry `undefined` for a value the file lacked, and mongoose deletes every
+ * `undefined` from a `$set` - so the target's stale stamp survived a write that looked correct, and
+ * `spider.ts` re-tags only when `!session.taggedAt`. The split was permanent.
+ */
+describe('notebook import: an overwrite writes what the file owns, and clears the rest', () => {
+  /** Runs an overwrite over an existing session and returns the metadata update payload. */
+  async function runOverwrite(notebookOverrides: Record<string, unknown> = {}) {
+    const { adapters } = makeAdapters([EXISTING]);
+    await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      {
+        exportVersion: '1.0.0',
+        notebooks: [{ ...NOTEBOOK, ...notebookOverrides }],
+      } as never,
+      { ...OPTIONS, conflictResolution: 'overwrite' } as never
+    );
+    const updateById = adapters.sessionRepository.updateById as ReturnType<typeof vi.fn>;
+    expect(updateById).toHaveBeenCalledTimes(1);
+    return updateById.mock.calls[0][1] as Record<string, unknown>;
+  }
+
+  it('writes taggedAt: null for an untagged file, so the notebook can be tagged again', async () => {
+    const payload = await runOverwrite();
+
+    expect(payload.tags).toEqual([]);
+    // `toBeNull`, never `toBeUndefined`: the key has to carry a clearable value, because mongoose
+    // drops an `undefined` from the `$set` and the target's stamp then survives the write.
+    expect(payload.taggedAt).toBeNull();
+  });
+
+  it('carries the file stamp when it has one, so the spider need not pay to re-tag', async () => {
+    const payload = await runOverwrite({
+      tags: [{ name: 'carried', strength: 7 }],
+      taggedAt: '2026-05-06T07:08:09.000Z',
+    });
+
+    expect(payload.tags).toEqual([{ name: 'carried', strength: 7 }]);
+    expect(payload.taggedAt).toEqual(new Date('2026-05-06T07:08:09.000Z'));
+  });
+
+  it('clears summary and summaryAt as a pair, for the same reason', async () => {
+    // A summary left next to content it no longer describes is the same silent inconsistency.
+    const payload = await runOverwrite();
+
+    expect(payload.summary).toBeNull();
+    expect(payload.summaryAt).toBeNull();
+  });
+
+  it('sends no undefined value, which is what a silently-dropped field looks like', async () => {
+    const payload = await runOverwrite();
+
+    expect(Object.values(payload)).not.toContain(undefined);
+    expect(Object.keys(payload)).toEqual(
+      expect.arrayContaining(['lastUpdated', 'summary', 'summaryAt', 'tags', 'taggedAt'])
+    );
+  });
+
+  it('leaves lastUsedModel out of the write when the file omits it, so the target keeps its own', async () => {
+    // Deliberate asymmetry: no gate keys off this field, so clearing it loses information for
+    // nothing. Omitting the key is how "leave it" is expressed to `$set`.
+    const payload = await runOverwrite();
+
+    expect('lastUsedModel' in payload).toBe(false);
+  });
+});
+
+describe('notebook import: the create branch stamps a tagged file', () => {
+  async function runCreate(notebookOverrides: Record<string, unknown> = {}) {
+    const { adapters } = makeAdapters();
+    await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      {
+        exportVersion: '1.0.0',
+        notebooks: [{ ...NOTEBOOK, ...notebookOverrides }],
+      } as never,
+      OPTIONS as never
+    );
+    return (adapters.sessionRepository.create as ReturnType<typeof vi.fn>).mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it('carries the stamp the file carries', async () => {
+    const created = await runCreate({ taggedAt: '2026-05-06T07:08:09.000Z' });
+
+    expect(created.taggedAt).toEqual(new Date('2026-05-06T07:08:09.000Z'));
+  });
+
+  it('leaves the stamp unset for a file with none, rather than claiming one', async () => {
+    const created = await runCreate();
+
+    // `undefined` and not `null` here: on an insert there is nothing to clear, and a `null` would
+    // claim a stamp state a never-tagged notebook never had.
+    expect(created.taggedAt).toBeUndefined();
   });
 });
 
@@ -372,5 +486,295 @@ describe('notebook import: artifacts', () => {
     expect(result.success).toBe(true);
     expect(result.importedAttachments).toBe(0);
     expect(result.warnings?.join(' ')).toContain('nope');
+  });
+});
+
+/**
+ * The two admission gates the upload door (fabFileService/create.ts) has always applied and this
+ * one did not. Both must skip one file and let the batch carry on: an import that refused the whole
+ * notebook over one attachment would be a worse regression than the hole it closes.
+ */
+describe('notebook import: knowledge file admission', () => {
+  /** Embedded content, so the gate sees server-measured bytes rather than the declared size. */
+  const embedded = (name: string, bytes: number) => ({
+    id: `exported-${name}`,
+    name,
+    mimeType: 'application/pdf',
+    size: bytes,
+    content: Buffer.alloc(bytes).toString('base64'),
+  });
+
+  function makeKnowledgeAdapters(user?: Record<string, unknown>) {
+    const { adapters } = makeAdapters([], user);
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-knowledge-id' });
+    return adapters;
+  }
+
+  async function importKnowledge(files: Record<string, unknown>[], user?: Record<string, unknown>) {
+    const adapters = makeKnowledgeAdapters(user);
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      { exportVersion: '1.0.0', notebooks: [{ ...NOTEBOOK, knowledge: files }] } as never,
+      { ...OPTIONS, importKnowledge: true } as never
+    );
+
+    const attached = (adapters.sessionRepository.updateById as ReturnType<typeof vi.fn>).mock.calls[0][1];
+    return { adapters, result, importedIds: attached.knowledgeIds as string[] };
+  }
+
+  it('aborts the whole import when the admin settings read fails', async () => {
+    const adapters = makeKnowledgeAdapters();
+    adapters.adminSettings.findAll = vi.fn().mockRejectedValue(new Error('settings unavailable'));
+
+    // Fail-closed, and deliberately not a per-file warning: an unresolved MaxFileSize means the
+    // gate cannot be applied at all, so admitting the import would write bytes past a limit nobody
+    // read. Refusing the whole job is recoverable - the user still holds the export file.
+    const error = await new NotebookImportService(adapters)
+      .importNotebooks(
+        'user-1',
+        { exportVersion: '1.0.0', notebooks: [{ ...NOTEBOOK, knowledge: [embedded('any.pdf', 10)] }] } as never,
+        { ...OPTIONS, importKnowledge: true } as never
+      )
+      .catch((e: unknown) => e as { code?: string; details?: unknown });
+
+    expect(error.code).toBe('IMPORT_FAILED');
+    // The outer handler rewrites every unexpected error to one IMPORT_FAILED string, so only
+    // `details` distinguishes this failure from any other.
+    expect((error.details as Error).message).toMatch(/settings unavailable/);
+    expect(adapters.fileStorageService.uploadFile).not.toHaveBeenCalled();
+    expect(adapters.sessionRepository.create).not.toHaveBeenCalled();
+  });
+
+  it('gates on the setting default when no MaxFileSize row is stored', async () => {
+    const adapters = makeKnowledgeAdapters();
+    adapters.adminSettings.findAll = vi.fn().mockResolvedValue([]);
+
+    // The only case that exercises the fallback: every other fixture here supplies a row, and the
+    // e2e lane that stubs findAll to [] never asserts the resulting limit. A fallback that resolved
+    // to NaN would admit every file, since `size >= NaN` is false.
+    // Plain characters rather than an encoded buffer - the gate measures string length and refuses
+    // before decoding, which is the only reason a fixture this size is affordable.
+    const huge = { id: 'x', name: 'huge.pdf', mimeType: 'application/pdf', size: 1, content: 'A'.repeat(42_000_000) };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      { exportVersion: '1.0.0', notebooks: [{ ...NOTEBOOK, knowledge: [huge] }] } as never,
+      { ...OPTIONS, importKnowledge: true } as never
+    );
+
+    expect(result.warnings).toEqual([expect.stringMatching(/huge\.pdf.*exceeds the 30MB maximum file size/)]);
+    expect(adapters.fileStorageService.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('skips a knowledge file over MaxFileSize and warns rather than aborting the import', async () => {
+    // Exactly at the limit, which the upload door also refuses (`>=`).
+    const { adapters, result, importedIds } = await importKnowledge([
+      embedded('over-sized.pdf', MAX_FILE_SIZE_MB * 1024 * 1024),
+      embedded('small.pdf', 10),
+    ]);
+
+    // Matches the gate's own wording: on the file name alone this test and the quota one below
+    // would each still pass if the other gate had fired.
+    expect(result.warnings).toEqual([expect.stringMatching(/over-sized\.pdf.*maximum file size/)]);
+    expect(importedIds).toHaveLength(1);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ fileName: 'small.pdf' })
+    );
+    // Only the admitted file reaches storage. A refused file that had already been uploaded would
+    // leave an object no FabFile row points at - uncounted, unmoderated and never cleaned up.
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(1);
+    // The notebook itself still landed - the skip never reached the transaction.
+    expect(result.importedNotebooks).toBe(1);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('counts bytes admitted earlier in the same import against the quota', async () => {
+    // 1MB storageLimit (x 1e6) and nothing used: each file passes on its own against the snapshot,
+    // and only the running total refuses the second one.
+    const { adapters, result, importedIds } = await importKnowledge(
+      [embedded('first.pdf', 600_000), embedded('second.pdf', 600_000)],
+      { id: 'user-1', storageLimit: 1, currentStorageSize: 0 }
+    );
+
+    expect(result.warnings).toEqual([expect.stringMatching(/second\.pdf.*storage limit/)]);
+    expect(importedIds).toHaveLength(1);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ fileName: 'first.pdf' })
+    );
+  });
+
+  it('skips a knowledge file over the storage quota and warns', async () => {
+    // storageLimit is MB x 1e6, so 999_000 bytes already used leaves 1000 bytes of headroom.
+    const { adapters, result, importedIds } = await importKnowledge(
+      [embedded('quota-buster.pdf', 2000), embedded('small.pdf', 10)],
+      { id: 'user-1', storageLimit: 1, currentStorageSize: 999_000 }
+    );
+
+    expect(result.warnings).toEqual([expect.stringMatching(/quota-buster\.pdf.*storage limit/)]);
+    expect(importedIds).toHaveLength(1);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ fileName: 'small.pdf' })
+    );
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(1);
+    expect(result.importedNotebooks).toBe(1);
+    expect(result.errors).toEqual([]);
+  });
+
+  it('does not charge the quota for a URL reference, which stores nothing', async () => {
+    const { adapters, result, importedIds } = await importKnowledge(
+      [
+        { id: 'exported-ref', name: 'ref.pdf', mimeType: 'application/pdf', size: 900_000, contentUrl: 'https://x/y' },
+        embedded('real.pdf', 600_000),
+      ],
+      { id: 'user-1', storageLimit: 1, currentStorageSize: 0 }
+    );
+
+    // copyFileFromUrl is an unimplemented throw, so those declared 900_000 bytes never reach
+    // storage and must not eat the 1_000_000-byte budget real.pdf has to fit inside. The size is
+    // unvalidated JSON off the uploaded payload, so charging it would also let a negative or
+    // non-numeric value disable the quota gate for the rest of the import.
+    expect(result.warnings).toEqual([expect.stringMatching(/ref\.pdf.*not implemented/)]);
+    expect(importedIds).toHaveLength(1);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(expect.objectContaining({ fileName: 'real.pdf' }));
+  });
+
+  it('refuses a URL reference as unimplemented even when its declared size is over the limit', async () => {
+    const { adapters, result } = await importKnowledge([
+      {
+        id: 'exported-huge-ref',
+        name: 'huge-ref.pdf',
+        mimeType: 'application/pdf',
+        size: MAX_FILE_SIZE_MB * 1024 * 1024 * 10,
+        contentUrl: 'https://x/y',
+      },
+    ]);
+
+    // The declared size is the only one this branch has, and it is unvalidated JSON, so neither
+    // gate may judge it. Blaming the file-size limit would tell the user to shrink a file that
+    // would be refused at any size.
+    expect(result.warnings).toEqual([expect.stringMatching(/huge-ref\.pdf.*not implemented/)]);
+    expect(adapters.fileStorageService.uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('books the stored byte length, not the pre-decode gate length, on malformed base64', async () => {
+    // '!' is not a base64 character: byteLength derives 300_000 from the string length alone,
+    // Buffer.from drops every character and yields 0.
+    const junk = '!'.repeat(400_000);
+    const { adapters, result } = await importKnowledge([
+      { id: 'exported-junk', name: 'junk.pdf', mimeType: 'application/pdf', size: 300_000, content: junk },
+    ]);
+
+    expect(Buffer.byteLength(junk, 'base64')).toBe(300_000);
+    expect(result.warnings).toEqual([]);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 0 }));
+
+    const [, uploaded] = (adapters.fileStorageService.uploadFile as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect((uploaded as Buffer).byteLength).toBe(0);
+  });
+
+  it('gates on server-measured bytes rather than the declared size', async () => {
+    const { adapters, result } = await importKnowledge([
+      { ...embedded('liar.pdf', MAX_FILE_SIZE_MB * 1024 * 1024), size: 1 },
+      { ...embedded('small.pdf', 4096), size: 1 },
+    ]);
+
+    expect(result.warnings).toEqual([expect.stringMatching(/liar\.pdf.*maximum file size/)]);
+    // The row records the measured bytes too, so an understated size cannot slip past the storage
+    // accounting that runs off it later.
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({ fileName: 'small.pdf', fileSize: 4096 })
+    );
+  });
+
+  it('carries the accumulator across notebooks within one import', async () => {
+    const adapters = makeKnowledgeAdapters({ id: 'user-1', storageLimit: 1, currentStorageSize: 0 });
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      {
+        exportVersion: '1.0.0',
+        notebooks: [
+          { ...NOTEBOOK, id: 'notebook-a', name: 'A', knowledge: [embedded('a.pdf', 600_000)] },
+          { ...NOTEBOOK, id: 'notebook-b', name: 'B', knowledge: [embedded('b.pdf', 600_000)] },
+        ],
+      } as never,
+      { ...OPTIONS, importKnowledge: true } as never
+    );
+
+    // importKnowledgeFiles runs once per notebook, so the accumulator has to be instance state to
+    // see notebook A's bytes from notebook B. A per-call local would admit both.
+    expect(result.warnings).toEqual([expect.stringMatching(/b\.pdf.*storage limit/)]);
+    expect(result.importedNotebooks).toBe(2);
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not charge the quota for a file whose upload failed', async () => {
+    const adapters = makeKnowledgeAdapters({ id: 'user-1', storageLimit: 1, currentStorageSize: 0 });
+    (adapters.fileStorageService.uploadFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('storage unavailable')
+    );
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      {
+        exportVersion: '1.0.0',
+        notebooks: [{ ...NOTEBOOK, knowledge: [embedded('a.pdf', 600_000), embedded('b.pdf', 600_000)] }],
+      } as never,
+      { ...OPTIONS, importKnowledge: true } as never
+    );
+
+    // 1MB of headroom and two 600_000-byte files: b fits only because a's failed upload spent
+    // nothing. Charging before the upload lands refuses b instead, which is the regression this
+    // covers - every other case here resolves uploadFile, so nothing else would catch it.
+    expect(result.warnings).toEqual([expect.stringMatching(/a\.pdf.*storage unavailable/)]);
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(2);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledTimes(1);
+    expect(adapters.knowledgeRepository.create).toHaveBeenCalledWith(expect.objectContaining({ fileName: 'b.pdf' }));
+  });
+
+  it('keeps charging the quota for a stored file whose row write failed', async () => {
+    const adapters = makeKnowledgeAdapters({ id: 'user-1', storageLimit: 1, currentStorageSize: 0 });
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('write failed'));
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      {
+        exportVersion: '1.0.0',
+        notebooks: [{ ...NOTEBOOK, knowledge: [embedded('a.pdf', 600_000), embedded('b.pdf', 600_000)] }],
+      } as never,
+      { ...OPTIONS, importKnowledge: true } as never
+    );
+
+    // The mirror of the upload-failure case above, and the reason the charge sits above the row
+    // write rather than below it: a.pdf's bytes are in the bucket even though its row never landed,
+    // so b.pdf must not be handed headroom those bytes already occupy. Moving the charge below the
+    // create admits b.
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/a\.pdf.*write failed/),
+      expect.stringMatching(/b\.pdf.*storage limit/),
+    ]);
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it('resets the accumulator between imports on one service instance', async () => {
+    const adapters = makeKnowledgeAdapters({ id: 'user-1', storageLimit: 1, currentStorageSize: 0 });
+
+    const service = new NotebookImportService(adapters);
+    const runImport = () =>
+      service.importNotebooks(
+        'user-1',
+        { exportVersion: '1.0.0', notebooks: [{ ...NOTEBOOK, knowledge: [embedded('big.pdf', 600_000)] }] } as never,
+        { ...OPTIONS, importKnowledge: true } as never
+      );
+
+    const first = await runImport();
+    const second = await runImport();
+
+    // Without the reset the second import starts 600_000 bytes in the red and refuses its only
+    // file. Nothing else in this file reuses an instance, so this is the only cover that line has.
+    expect(first.warnings).toEqual([]);
+    expect(second.warnings).toEqual([]);
+    expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(2);
   });
 });

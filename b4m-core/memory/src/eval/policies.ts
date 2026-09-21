@@ -20,13 +20,12 @@ export interface V1Options {
    * V1's topicality floor: a memento below this cosine is NOT injected at all. The whole reason V1
    * stays quiet on an off-topic question - and the thing V2 currently has no answer to.
    *
-   * The default below mirrors the ada-002 entry of MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE
-   * (@bike4mind/common) - keep in sync, per this package's no-dependency-on-common convention.
-   * `getRelevantMementos` no longer takes a literal: it resolves the floor from the space it
-   * embedded in, because a raw cosine fitted to one model rejects everything in the next. So an
-   * eval run over a corpus embedded with anything but ada-002 must pass that space's floor
-   * EXPLICITLY - leaving this default in place would measure V1 against a gate production would
-   * never apply there.
+   * The default below is a fixed historical baseline (the ada-002 literal both production V1 call
+   * sites used to hardcode), NOT a live mirror of `getRelevantMementos`'s current floor
+   * (`MEMENTO_MIN_SIMILARITY`, @bike4mind/common) - this package deliberately has no dependency on
+   * common, so nothing here tracks that constant automatically. An eval run over a corpus embedded
+   * in a space other than ada-002 must pass that space's floor EXPLICITLY, or it measures V1
+   * against a gate production would never apply there.
    */
   minSimilarity?: number;
 }

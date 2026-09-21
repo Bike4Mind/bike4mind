@@ -41,6 +41,7 @@ const h = vi.hoisted(() => {
         .filter(id => id === SESSION_ID)
         .map(id => ({ id, _id: id, userId: OWNER_ID, users: [{ userId: COLLABORATOR_ID }] }))
     ),
+    runOrgFeedbackSummary: vi.fn(async () => undefined),
     planFindById: vi.fn(),
     questFind: vi.fn(() => ({
       lean: async () => [{ _id: 'q1', sessionId: SESSION_ID, reply: `![fig](${OWNER_IMAGE_URL})`, images: [] }],
@@ -79,13 +80,16 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
 }));
 
+// The real parse, not an identity stub: this queue now carries two message shapes and the union
+// that tells them apart is what these tests drive.
 vi.mock('@bike4mind/utils', () => ({
-  secureParameters: <T>(obj: T) => obj,
+  secureParameters: (obj: unknown, schema: { parse: (value: unknown) => unknown }) => schema.parse(obj),
   getSettingsByNames: vi.fn(),
 }));
 
 vi.mock('@bike4mind/common', () => ({
   ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku' },
+  ORG_FEEDBACK_SUMMARY_JOB_TYPE: 'orgFeedbackSummary',
   isImageServeable: (f: { moderationStatus?: string } | null) => f?.moderationStatus === 'clean',
 }));
 
@@ -119,6 +123,23 @@ vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn() }));
 vi.mock('@client/app/utils/subQuestStatusPresentation', () => ({ getSubQuestStatusIcon: () => '' }));
 
 vi.mock('./createZipBuffer', () => ({ createZipBuffer: h.createZipBuffer }));
+
+// The summary worker is exercised in its own file; here only the routing matters. The payload
+// schema is real because the dispatch's union is built from it at module load.
+vi.mock('@server/queueHandlers/orgFeedbackSummary', async () => {
+  const { z } = await import('zod');
+  return {
+    OrgFeedbackSummaryPayload: z.object({
+      jobType: z.literal('orgFeedbackSummary'),
+      summaryJobId: z.string(),
+      organizationId: z.string(),
+      startDate: z.string(),
+      endDate: z.string(),
+      userId: z.string(),
+    }),
+    runOrgFeedbackSummary: h.runOrgFeedbackSummary,
+  };
+});
 
 import { dispatch } from './questExport';
 
@@ -229,5 +250,46 @@ describe('questExport owner-arm readability', () => {
     const markdown = exportedMarkdown();
     expect(markdown).toContain(SECRET_REPLY);
     expect(markdown).not.toContain('_Response content unavailable._');
+  });
+});
+
+/**
+ * This queue carries the org feedback summary too - see `orgFeedbackSummary.ts` for why it rides
+ * here rather than on a queue of its own. Both arms are asserted because the untagged shape is
+ * what every message already in flight looks like.
+ */
+describe('questExport queue multiplex', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes a tagged summary message to the summary worker', async () => {
+    const event = {
+      Records: [
+        {
+          body: JSON.stringify({
+            jobType: 'orgFeedbackSummary',
+            summaryJobId: 'sum-1',
+            organizationId: 'org-1',
+            startDate: '2026-08-01T00:00:00.000Z',
+            endDate: '2026-08-31T00:00:00.000Z',
+            userId: 'requester-1',
+          }),
+        },
+      ],
+    };
+
+    await dispatch(event as never, {} as never, makeLogger() as never);
+
+    expect(h.runOrgFeedbackSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ summaryJobId: 'sum-1' }),
+      expect.anything()
+    );
+    expect(h.planFindById).not.toHaveBeenCalled();
+  });
+
+  it('still exports an untagged legacy message', async () => {
+    await runExport(h.OWNER_ID);
+
+    expect(h.runOrgFeedbackSummary).not.toHaveBeenCalled();
+    expect(h.createZipBuffer).toHaveBeenCalledTimes(1);
   });
 });

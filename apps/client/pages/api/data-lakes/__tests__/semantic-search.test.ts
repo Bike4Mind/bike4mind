@@ -354,12 +354,14 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
     expect(searchAdapters().vectorIndex).toBeUndefined();
   });
 
-  it('falls back to ada-002 when the admin setting is unset or no longer supported', async () => {
+  it('falls back to the deployment default when the admin setting is unset or no longer supported', async () => {
     mockGetSettingsValue.mockResolvedValue('some-retired-model');
 
     await handler(makeReq({ query: 'onboarding' }), makeRes());
 
-    expect(searchParams().embeddingModel).toBe('text-embedding-ada-002');
+    // The default for NEW work, not the assumed space of an unlabeled legacy row - those are
+    // different questions and this route answers the first one. See resolveDefaultEmbeddingModel.
+    expect(searchParams().embeddingModel).toBe('text-embedding-3-small');
   });
 
   it('warns when the configured model is unsupported, since the symptom is an empty result set', async () => {
@@ -377,7 +379,7 @@ describe('POST /api/data-lakes/semantic-search lake scoping', () => {
 
     await handler(req, makeRes());
 
-    expect(searchParams().embeddingModel).toBe('text-embedding-ada-002');
+    expect(searchParams().embeddingModel).toBe('text-embedding-3-small');
     expect(req.logger.warn).not.toHaveBeenCalled();
   });
 

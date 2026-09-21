@@ -18,6 +18,12 @@ import { createFabFileByUrl } from './createByUrl';
 
 const URL_UNDER_TEST = 'https://example.com/article';
 
+// Long enough to clear MIN_CONTENT_LENGTH_FOR_DEDUP, unlike the 'body text' default mock below.
+const LONG_BODY_TEXT =
+  'This article body has more than a hundred characters of genuine content, well past the ' +
+  'boilerplate-remnant length that skips content-hash dedup.';
+const LONG_BODY_TEXT_HASH = 'f2048f73c97722d6e40abe470e0563fed1ccf1f80a0a1ed6ce25e8ab72290a60';
+
 let fabFilesCreate: Mock;
 let storageUpload: Mock;
 
@@ -199,13 +205,14 @@ describe('createFabFileByUrl', () => {
     // #2027: URL-created files previously stored NO contentHash at all, which is why the link path
     // had nothing to dedupe against. Stamped only for a caller that opts into ingest-time dedup -
     // see the next test for why NOT stamping it for every caller matters.
+    fetchAndParseURL.mockResolvedValue({ title: 'An Article', textContent: LONG_BODY_TEXT, mimeType: 'text/plain' });
     const checkDuplicate = vi.fn().mockResolvedValue(null);
 
     await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), checkDuplicate });
 
     const created = fabFilesCreate.mock.calls[0][0];
-    // sha256('body text'), computed independently rather than trusted from the implementation.
-    expect(created.contentHash).toBe('d9fbbc91492fbb3ba8e57ca15b039134e7098030a89578315a4c354f9117ccf2');
+    // sha256(LONG_BODY_TEXT), computed independently rather than trusted from the implementation.
+    expect(created.contentHash).toBe(LONG_BODY_TEXT_HASH);
   });
 
   it('does NOT stamp a contentHash when no caller opts into checkDuplicate (web upload, proposal admission)', async () => {
@@ -220,10 +227,39 @@ describe('createFabFileByUrl', () => {
     expect(created.contentHash).toBeUndefined();
   });
 
-  it('rejects a URL that yields no extractable text instead of creating a phantom file', async () => {
-    // A page with no extractable text used to create a zero-byte file: fileSize 0 only trips the
-    // upper size bound, and the upload happily succeeds with empty content. Refusing here means
-    // the row is never created at all, instead of relying on a later chunk scan to notice.
+  it('does not compute, check, or stamp a contentHash for HTML text below MIN_CONTENT_LENGTH_FOR_DEDUP', async () => {
+    // A chrome-pruning rollback can leave a link-directory-style page with nothing but a short
+    // boilerplate remnant. Hashing that remnant would let two UNRELATED pages that happen to reduce
+    // to the same short text collide on content hash - the second would be rejected outright as a
+    // duplicate of the first, instead of just being thinner than it should be.
+    fetchAndParseURL.mockResolvedValue({ title: 'Thin Page', textContent: 'body text', mimeType: 'text/plain' });
+    const checkDuplicate = vi.fn().mockResolvedValue(null);
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), checkDuplicate });
+
+    expect(checkDuplicate).not.toHaveBeenCalled();
+    const created = fabFilesCreate.mock.calls[0][0];
+    expect(created.contentHash).toBeUndefined();
+  });
+
+  it('does compute, check, and stamp a contentHash for PDF bytes shorter than MIN_CONTENT_LENGTH_FOR_DEDUP', async () => {
+    // The dedup skip above is specific to HTML EXTRACTION's chrome-pruning floor - a short PDF is
+    // just a short PDF, with no equivalent boilerplate-collision risk, so it is unaffected.
+    const shortPdfBytes = Buffer.from('short pdf');
+    fetchAndParseURL.mockResolvedValue({ title: 'Short.pdf', textContent: shortPdfBytes, mimeType: 'application/pdf' });
+    const checkDuplicate = vi.fn().mockResolvedValue(null);
+
+    await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), checkDuplicate });
+
+    expect(checkDuplicate).toHaveBeenCalled();
+    const created = fabFilesCreate.mock.calls[0][0];
+    expect(created.contentHash).toBeDefined();
+  });
+
+  it('does not compute, check, or stamp a contentHash when the fetch returned no content', async () => {
+    // Regression guard: computeContentHash('') would otherwise be a shared dedup key across every
+    // JS-only/paywalled page that yields no extractable text, making unrelated empty fetches look
+    // like duplicates of each other.
     fetchAndParseURL.mockResolvedValue({ textContent: '', mimeType: 'text/html', title: 'Empty Page' });
     const checkDuplicate = vi.fn().mockResolvedValue(null);
 
@@ -258,18 +294,20 @@ describe('createFabFileByUrl per-content dedup (checkDuplicate)', () => {
   });
 
   it('creates normally when checkDuplicate finds nothing', async () => {
+    fetchAndParseURL.mockResolvedValue({ title: 'An Article', textContent: LONG_BODY_TEXT, mimeType: 'text/plain' });
     const checkDuplicate = vi.fn().mockResolvedValue(null);
 
     const result = await createFabFileByUrl('user-1', { url: URL_UNDER_TEST }, { ...adapters(), checkDuplicate });
 
     // Pinned to the actual hash, not just "some string": proves checkDuplicate is keyed on the
     // real content hash rather than a placeholder that happens to also be a string.
-    expect(checkDuplicate).toHaveBeenCalledWith('d9fbbc91492fbb3ba8e57ca15b039134e7098030a89578315a4c354f9117ccf2');
+    expect(checkDuplicate).toHaveBeenCalledWith(LONG_BODY_TEXT_HASH);
     expect(result.id).toBe('fab-1');
     expect(fabFilesCreate).toHaveBeenCalled();
   });
 
   it('throws DuplicateFabFileError carrying the match and the newly-fetched title, and creates nothing', async () => {
+    fetchAndParseURL.mockResolvedValue({ title: 'An Article', textContent: LONG_BODY_TEXT, mimeType: 'text/plain' });
     const existing = { id: 'fab-existing', fileName: 'An Article (older)' };
     const checkDuplicate = vi.fn().mockResolvedValue(existing);
 

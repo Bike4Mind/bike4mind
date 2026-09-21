@@ -12,6 +12,8 @@ interface PlanCardProps {
   features: string[];
   isPopular?: boolean;
   isCurrentPlan?: boolean;
+  /** True when the current plan's billing is stuck (past_due/unpaid/incomplete). */
+  hasPaymentIssue?: boolean;
   currentPlanDetails?: {
     periodEndsAt: Date;
     canceledAt: Date | null;
@@ -29,6 +31,7 @@ const PlanCard = ({
   features,
   isPopular,
   isCurrentPlan,
+  hasPaymentIssue,
   currentPlanDetails,
   actionButton,
 }: PlanCardProps) => {
@@ -130,7 +133,7 @@ const PlanCard = ({
             sx={{
               fontSize: '14px',
               border: '1px solid',
-              borderColor: 'neutral.700',
+              borderColor: hasPaymentIssue ? 'danger.500' : 'neutral.700',
               borderRadius: '10px',
               width: '100%',
               py: '14px',
@@ -138,16 +141,20 @@ const PlanCard = ({
           >
             <Typography
               sx={{
-                color: 'neutral.500',
+                color: hasPaymentIssue ? 'danger.500' : 'neutral.500',
                 textAlign: 'center',
                 fontSize: '14px',
                 lineHeight: '14px',
                 mb: '17px',
               }}
             >
-              {t('subscription_modal.subscription_renewal', {
-                date: dayjs(currentPlanDetails.periodEndsAt).format('MMM D, YYYY'),
-              })}
+              {/* A delinquent plan still renews on paper, so saying so would read as
+                  healthy - the user needs the reason their card was declined. */}
+              {hasPaymentIssue
+                ? t('subscriptions.payment_issue')
+                : t('subscription_modal.subscription_renewal', {
+                    date: dayjs(currentPlanDetails.periodEndsAt).format('MMM D, YYYY'),
+                  })}
             </Typography>
             <Box sx={{ fontSize: '16px', lineHeight: '16px', textAlign: 'center' }}>****</Box>
           </Box>

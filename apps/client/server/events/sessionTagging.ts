@@ -6,6 +6,15 @@ import { SessionEvents } from '@server/utils/eventBus';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';
 
+// A name that is blank after trim is not a usable tag: keeping it would let one blank element make
+// an otherwise-unusable completion look like a success. Shared by both parse paths so they cannot
+// drift; the caller's `.map` trims, but this decides whether there is anything to trim.
+function hasUsableTagName(tag: unknown): boolean {
+  if (!tag || typeof tag !== 'object') return false;
+  const { name } = tag as { name?: unknown };
+  return String(name ?? '').trim().length > 0;
+}
+
 /**
  * Attempt to extract and parse JSON array from LLM response
  * Handles common LLM formatting issues like trailing commas, markdown code blocks, etc.
@@ -41,12 +50,10 @@ function parseTagsFromLLMResponse(text: string | undefined | null): Array<{ name
     if (!Array.isArray(parsed)) return null;
 
     // Validate and normalize the structure
-    return parsed
-      .filter(tag => tag && typeof tag === 'object' && tag.name)
-      .map(tag => ({
-        name: String(tag.name).trim(),
-        strength: Math.min(Math.max(Number(tag.strength) || 5, 1), 10),
-      }));
+    return parsed.filter(hasUsableTagName).map(tag => ({
+      name: String(tag.name).trim(),
+      strength: Math.min(Math.max(Number(tag.strength) || 5, 1), 10),
+    }));
   } catch {
     // If standard parsing fails, try a more aggressive cleanup
     try {
@@ -56,12 +63,10 @@ function parseTagsFromLLMResponse(text: string | undefined | null): Array<{ name
         const strictJson = strictArrayMatch[0].replace(/,(\s*[}\]])/g, '$1');
         const parsed = JSON.parse(strictJson);
         if (Array.isArray(parsed)) {
-          return parsed
-            .filter(tag => tag && typeof tag === 'object' && tag.name)
-            .map(tag => ({
-              name: String(tag.name).trim(),
-              strength: Math.min(Math.max(Number(tag.strength) || 5, 1), 10),
-            }));
+          return parsed.filter(hasUsableTagName).map(tag => ({
+            name: String(tag.name).trim(),
+            strength: Math.min(Math.max(Number(tag.strength) || 5, 1), 10),
+          }));
         }
       }
     } catch {
@@ -118,11 +123,11 @@ export const handler = withEventContext(async (event, logger) => {
   // Find the first Quest document submitted by the user from the Session
   const quest = await questRepository.findOne({ sessionId: session.id });
   if (!quest) {
-    // This is expected for empty notebooks - mark as tagged with empty tags and return gracefully
-    logger.info(`No quests found for session ${sessionId} - marking as tagged with empty tags`);
-    session.tags = [];
-    session.taggedAt = new Date();
-    await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
+    // Deliberately writes nothing. `taggedAt` records that tags were derived from a notebook's
+    // content, and none was read here - stamping it would close the spider's `!taggedAt` gate
+    // (spider.ts) forever on a notebook that was never tagged. `tags` is left alone because a
+    // clone or an import can legitimately carry tags into a notebook with no quests of its own.
+    logger.info(`No quests found for session ${sessionId} - nothing to tag yet`);
     return;
   }
 
@@ -187,13 +192,11 @@ export const handler = withEventContext(async (event, logger) => {
     // visibility change or soft-delete the owner made during it.
     await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
   } else {
-    // Log the failure but don't throw - mark as attempted
+    // Logged, not thrown, and deliberately writes nothing. This branch fires on an empty as well
+    // as an unparseable completion, both transient, so neither the tags already on the session nor
+    // the spider's `!taggedAt` gate may be touched: a stamp would turn one bad completion into a
+    // permanent "already tagged", and a wipe would destroy tags a clone or an import carried in.
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
     logger.debug(`Raw LLM response: ${tagsText?.substring(0, 500)}${(tagsText?.length || 0) > 500 ? '...' : ''}`);
-
-    // Mark as tagged with empty tags to prevent retry loops
-    session.tags = [];
-    session.taggedAt = new Date();
-    await sessionRepository.update({ id: session.id, tags: session.tags, taggedAt: session.taggedAt });
   }
 });

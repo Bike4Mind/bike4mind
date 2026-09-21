@@ -76,6 +76,7 @@
     "@typescript-eslint/eslint-plugin": "^8.63.0",
     "@typescript-eslint/parser": "^8.63.0",
     "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "esbuild": "0.28.1",
     "eslint": "^9.39.2",
     "eslint-plugin-react": "^7.37.5",
     "eslint-plugin-react-hooks": "^7.1.1",
@@ -147,6 +148,7 @@
       "js-yaml@>=4.0.0 <5.0.0": "^4.3.1",
       "js-yaml@>=5.0.0 <6.0.0": "^5.2.2",
       "html-to-text@>=10.0.0 <11.0.0": "^10.0.1",
+    "htmlparser2@>=11.0.0": "^10.1.0",
       "deepmerge-ts@<8.0.0": "^8.0.1",
       "undici@>=7.0.0 <8.0.0": "^7.29.0"
     },

@@ -83,6 +83,16 @@ vi.mock('@server/integrations/stripe/stripe', () => ({
   CustomerType: { User: 'user', Organization: 'organization' },
 }));
 
+const mockVoidOpenSubscriptionInvoices = vi.fn();
+vi.mock('@server/integrations/stripe/dunning', () => ({
+  voidOpenSubscriptionInvoices: (...args: unknown[]) => mockVoidOpenSubscriptionInvoices(...args),
+}));
+
+const mockEmitMetric = vi.fn();
+vi.mock('@server/utils/cloudwatch', () => ({
+  emitMetric: (...args: unknown[]) => mockEmitMetric(...args),
+}));
+
 vi.mock('@server/utils/config', () => ({
   Config: {
     MONGODB_URI: 'mongodb://localhost/test',
@@ -202,6 +212,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
     mockStampCreditLot.mockResolvedValue(undefined);
     mockAddCredits.mockResolvedValue(undefined);
     mockClawbackCreditLotsByStripeRef.mockResolvedValue(undefined);
+    mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: [], failed: [] });
   });
 
   describe('payment_intent.succeeded', () => {
@@ -627,6 +638,85 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
 
       await invokeWebhookWithEvent(intentFailedEvent);
       expect(mockUpdateTransactionStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('customer.subscription.deleted', () => {
+    const deletedEvent = {
+      type: 'customer.subscription.deleted',
+      data: {
+        object: {
+          id: 'sub_deleted',
+          canceled_at: 1700000000,
+          metadata: { userId: 'user_xyz' },
+        },
+      },
+    };
+
+    beforeEach(() => {
+      // The branch runs the irreversible invoice cleanup only for a subscription this
+      // stage owns, and the row is the evidence of ownership.
+      mockUpdateByStripeSubscriptionId.mockResolvedValue({ subscriptionId: 'sub_deleted' });
+    });
+
+    it('voids the open invoices for the deleted subscription', async () => {
+      // A Billing Portal "cancel immediately" arrives only as this event, so it is
+      // the last chance to close the invoice that is still dunning the customer.
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockUpdateByStripeSubscriptionId).toHaveBeenCalledWith(
+        'sub_deleted',
+        expect.objectContaining({ status: 'canceled', canceledAt: new Date(1700000000 * 1000) })
+      );
+      expect(mockSendToClient).toHaveBeenCalledWith(
+        'user_xyz',
+        expect.anything(),
+        expect.objectContaining({ action: 'invalidate_query', queryKey: ['subscriptions'] })
+      );
+      expect(mockVoidOpenSubscriptionInvoices).toHaveBeenCalledWith('sub_deleted');
+    });
+
+    it('does not touch Stripe when this stage has no row for the subscription', async () => {
+      // A cross-stage misroute. The status write is a harmless no-op, but voiding
+      // invoices on a subscription this stage does not own cannot be undone.
+      mockUpdateByStripeSubscriptionId.mockResolvedValue(null);
+
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockVoidOpenSubscriptionInvoices).not.toHaveBeenCalled();
+    });
+
+    it('still records the deletion when the invoice cleanup fails', async () => {
+      mockVoidOpenSubscriptionInvoices.mockRejectedValue(new Error('stripe unavailable'));
+
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockUpdateByStripeSubscriptionId).toHaveBeenCalledWith(
+        'sub_deleted',
+        expect.objectContaining({ status: 'canceled', canceledAt: new Date(1700000000 * 1000) })
+      );
+      // Still-dunning invoices need the on-call metric, not just a log line.
+      expect(mockEmitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
+        reason: 'void_failed',
+      });
+    });
+
+    it('emits the cleanup-failed metric when only some invoices could not be voided', async () => {
+      mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_a'], failed: ['in_b'] });
+
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockEmitMetric).toHaveBeenCalledWith('Lumina5/Entitlements', 'DunningCleanupFailed', 1, {
+        reason: 'void_failed',
+      });
+    });
+
+    it('stays quiet when every open invoice was voided', async () => {
+      mockVoidOpenSubscriptionInvoices.mockResolvedValue({ voided: ['in_a'], failed: [] });
+
+      await invokeWebhookWithEvent(deletedEvent);
+
+      expect(mockEmitMetric).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,5 +1,10 @@
 import { z } from 'zod';
 import type { ApiErrorCode } from '../apiErrorCodes';
+// Specific file, not the `../types` barrel: this module is imported by the
+// contracts, which the CI openapi job runs against an install-only tree (see the
+// note in tools.contract.ts).
+import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
+import type { IChatHistoryItem } from '../types/entities/SessionTypes';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 
 /**
@@ -87,12 +92,15 @@ export const SimplifiedChatRequestSchema = z.object({
     .describe(
       'Suppress tools the server would otherwise attach on its own for this session (the ' +
         'knowledge-base search offer, in-app view navigation, blog drafting/editing/publishing, ' +
-        'and skill invocation). Tools you request explicitly are unaffected. One system-prompt ' +
-        'block goes with them: withholding in-app view navigation also drops the view-registry ' +
-        'block that exists only to describe it. No other prompt content changes. This does not ' +
-        'switch off retrieval: a session with forced knowledge retrieval still retrieves, and ' +
-        'documents already attached to the session are still placed in the prompt directly. Any ' +
-        'promptMode suppresses these too, so false has no effect alongside one.'
+        'skill invocation, and every tool from a connected MCP server). Native tools you request ' +
+        'explicitly in `tools` are unaffected, but an MCP server tool cannot be named through this ' +
+        'field, so with this flag set a caller with an MCP server connected sees none of its ' +
+        'tools regardless of `tools`. One system-prompt block goes with them: withholding in-app ' +
+        'view navigation also drops the view-registry block that exists only to describe it. No ' +
+        'other prompt content changes. This does not switch off retrieval: a session with forced ' +
+        'knowledge retrieval still retrieves, and documents already attached to the session are ' +
+        'still placed in the prompt directly. Any promptMode suppresses these too, so false has ' +
+        'no effect alongside one.'
     ),
   // With wait, also return the per-source system prompt breakdown the completion was
   // assembled from (promptDetails), so callers can verify what fed the model instead of
@@ -165,6 +173,50 @@ export const ChatAckSchema = z.object({
 });
 
 export type ChatAck = z.infer<typeof ChatAckSchema>;
+
+/**
+ * The quest a `wait: false` caller polls at `GET /api/quests/{id}` - the outcome
+ * of the turn the ACK above only acknowledged.
+ *
+ * Deliberately the OUTCOME SUBSET, not the whole quest: that endpoint is a plain
+ * handler rather than a contract, so this models only what decides whether the
+ * turn succeeded, and a poll body carries further fields (`images`, `files`,
+ * `toolPayloads`, `promptMeta`, ...). Must stay in sync with that handler's
+ * `res.json` shape (apps/client/pages/api/quests/[id]/index.ts) - unlike a
+ * contract-registered request/response schema, nothing validates this at
+ * runtime. The "parses against the published ChatQuestPollResultSchema"
+ * integration test (index.integration.test.ts) only proves the handler's
+ * CURRENT response satisfies this schema - a non-strict `z.object` strips
+ * unknown keys rather than rejecting them, and only `id` is required, so a
+ * field the handler starts returning without a matching addition here keeps
+ * that test green. The real per-field coverage lives in the sibling
+ * assertions in that same test file; a shape addition still needs a schema
+ * update by hand.
+ *
+ * A failed turn is still `status: 'done'` with the failure text in `reply`, so
+ * `reply` alone cannot tell an answer from a failure - `type` and `errorCode` are
+ * what separate a CLASSIFIED failure. A run recovered from a timeout with partial
+ * content is not one of those: `terminalRecoveryFor` (questTimeoutRecovery.ts)
+ * flips only `status` to preserve the surviving content, so it polls back as
+ * `type: 'message'` even though it never finished.
+ */
+export const ChatQuestPollResultSchema = z.object({
+  id: z.string(),
+  status: z.enum(['stopped', 'running', 'done']).optional(),
+  // A finished turn that FAILED is `type: 'error'` carrying the failure text in
+  // `reply`; anything else is a real reply.
+  type: z
+    .enum(['message', 'oob', 'error', 'system', 'voice_transcript'] satisfies IChatHistoryItem['type'][])
+    .optional(),
+  // Machine-readable classifier on a `type: 'error'` quest. Values derive from
+  // QUEST_ERROR_CODES so this enum can't drift from the TS union - the same
+  // vocabulary the WebSocket quest payload publishes (see schemas/actions.ts).
+  errorCode: z.enum(QUEST_ERROR_CODES).optional(),
+  reply: z.string().nullable().optional(),
+  replies: z.array(z.string()).optional(),
+});
+
+export type ChatQuestPollResult = z.infer<typeof ChatQuestPollResultSchema>;
 
 /**
  * Reusable JSON error envelope (plain; the OpenAPI layer annotates it).
