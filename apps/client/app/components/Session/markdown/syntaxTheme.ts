@@ -38,7 +38,11 @@ const DARK: Palette = {
   // are the same values, and are what render before hydration or in a test that
   // mounts without the app theme.
   bg: 'var(--joy-palette-reading-surface, #13181C)',
-  fg: '#A6B5C1',
+  // Plain, uncoloured code - base text, variables, properties - reads in the app's own
+  // text.primary, so a snippet is set in the same ink as the prose around it. Only tokens
+  // that mean something (keyword, string, number, comment) get a colour of their own. The
+  // fallback is text.primary's literal value for renders with no theme attached.
+  fg: 'var(--joy-palette-text-primary, #D1E4F4)',
   ink: '#E8EDF2',
   ink3: '#8090A0',
   keyword: '#8FC1F0',
@@ -50,8 +54,8 @@ const DARK: Palette = {
 };
 
 const LIGHT: Palette = {
-  bg: 'var(--joy-palette-reading-surface, #F4F7F9)',
-  fg: '#425663',
+  bg: 'var(--joy-palette-reading-surface, #FFFFFF)',
+  fg: 'var(--joy-palette-text-primary, #335F70)',
   ink: '#141F28',
   ink3: '#5B6C7A',
   keyword: '#2364A8',
