@@ -57,6 +57,11 @@ export type PassageRange = { start: number; end: number };
  * Returns null rather than a best guess: an approximate range would scroll the reader to the wrong
  * paragraph and assert - with a highlight - that it is the cited one, which is worse than showing
  * the document unmarked. Callers are expected to fall back to rendering the passage separately.
+ *
+ * The ONE case that does return a guess: a passage that appears verbatim more than once (a
+ * boilerplate clause, a header echoed in an appendix) marks the FIRST occurrence, which may not be
+ * the cited one. Nothing on the wire can disambiguate it - `chunkId` carries no source offset - so
+ * narrowing this needs a chunk-offset field at the assembly sites, not a smarter match here.
  */
 export function locateCitedPassage(source: string, passage: string): PassageRange | null {
   const withoutClipMarker = passage.endsWith(CLIP_MARKER) ? passage.slice(0, -CLIP_MARKER.length) : passage;

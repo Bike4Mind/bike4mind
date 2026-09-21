@@ -76,6 +76,18 @@ describe('redactPromptMetaForViewer', () => {
     expect(redactPromptMetaForViewer(noCalls, false)).toBe(noCalls);
   });
 
+  it('returns the SAME reference when citables is explicitly null', () => {
+    // `citables: null` is a real shape off Mongo. A falsy-but-not-undefined citables must not read
+    // as "changed" and force a copy on a promptMeta that lost nothing.
+    const nullCitables = { model: { name: 'gpt-4' }, citables: null };
+    expect(redactPromptMetaForViewer(nullCitables, false)).toBe(nullCitables);
+  });
+
+  it('returns the SAME reference when citables is present but carries nothing owner-only', () => {
+    const fileLevel = { model: { name: 'gpt-4' }, citables: [{ id: 'f1', metadata: { chunkId: 'c1' } }] };
+    expect(redactPromptMetaForViewer(fileLevel, false)).toBe(fileLevel);
+  });
+
   it('passes null/undefined through unchanged regardless of isOwner', () => {
     expect(redactPromptMetaForViewer(null, false)).toBeNull();
     expect(redactPromptMetaForViewer(undefined, false)).toBeUndefined();

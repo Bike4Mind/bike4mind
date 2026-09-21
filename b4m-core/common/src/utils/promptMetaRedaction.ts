@@ -70,6 +70,17 @@ type RedactablePromptMeta = {
 const OWNER_ONLY_CITABLE_METADATA_FIELDS = ['fullContext'] as const;
 
 /**
+ * The same owner-only policy expressed as Mongo projection paths, for the WS data-subscribe branch
+ * that has to enforce it at query level rather than by redacting documents it already holds
+ * (apps/client/server/websocket/dataSubscribeFieldLimits.ts). Derived from the two field lists
+ * above so a new owner-only field cannot close the REST boundary and leave the socket one open.
+ */
+export const OWNER_ONLY_PROMPT_META_PROJECTION_PATHS: readonly string[] = [
+  ...OWNER_ONLY_FUNCTION_CALL_FIELDS.map(field => `promptMeta.functionCalls.${field}`),
+  ...OWNER_ONLY_CITABLE_METADATA_FIELDS.map(field => `promptMeta.citables.metadata.${field}`),
+];
+
+/**
  * Strip owner-only metadata from citation chips for a non-owner viewer.
  *
  * Copies at both levels it edits - the array, and the `metadata` of a chip that actually carries
@@ -110,7 +121,9 @@ export function redactPromptMetaForViewer<T extends RedactablePromptMeta>(
   isOwner: boolean
 ): T | null | undefined {
   if (isOwner || promptMeta == null) return promptMeta;
-  const citables = promptMeta.citables ? redactCitablesForViewer(promptMeta.citables) : undefined;
+  // Falls back to the input (not `undefined`) so a null/absent citables still compares equal to
+  // itself below and keeps the documented same-reference return.
+  const citables = promptMeta.citables ? redactCitablesForViewer(promptMeta.citables) : promptMeta.citables;
   // functionCalls always copies when present, so its mere presence is a change; citables only
   // counts as one when a chip actually lost a field.
   if (!promptMeta.functionCalls && citables === promptMeta.citables) return promptMeta;
