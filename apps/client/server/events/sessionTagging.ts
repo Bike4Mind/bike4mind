@@ -117,10 +117,11 @@ export const handler = withEventContext(async (event, logger) => {
     }
   }
 
-  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
-  logger.info(`Using operations model for tagging: ${modelInfo.name} (${modelInfo.backend})`);
-
-  // Find the first Quest document submitted by the user from the Session
+  // The first Quest submitted from this Session, looked up BEFORE the operations model is
+  // resolved. The no-quest branch below writes nothing, so it never closes the spider's
+  // `!taggedAt` gate and the notebook is re-dispatched on every pass; resolving admin settings,
+  // provider keys and the model catalog above this point would pay for all of that on every
+  // pass, for zero completions.
   const quest = await questRepository.findOne({ sessionId: session.id });
   if (!quest) {
     // Deliberately writes nothing. `taggedAt` records that tags were derived from a notebook's
@@ -130,6 +131,9 @@ export const handler = withEventContext(async (event, logger) => {
     logger.info(`No quests found for session ${sessionId} - nothing to tag yet`);
     return;
   }
+
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
+  logger.info(`Using operations model for tagging: ${modelInfo.name} (${modelInfo.backend})`);
 
   // Ask an LLM to tag the user's first Quest
   logger.info(`Tagging based on Quest ${quest.id}`);

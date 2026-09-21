@@ -5,6 +5,10 @@
  * pin the resulting invariant: the success branch is the handler's ONLY writer. Stamping
  * `taggedAt` closes the spider's `!taggedAt` gate (spider.ts) for good, so only a branch that
  * actually derived tags from the notebook's content may do it.
+ *
+ * `getOperationsModel` and `llm.complete` are spies rather than inert stubs because two of the
+ * invariants here are about work NOT done: an early return must cost neither an admin-settings
+ * resolve nor a completion. Asserting only on `sessionUpdate` cannot see either.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -12,6 +16,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   sessionUpdate: vi.fn(),
   questFindOne: vi.fn(),
+  getOperationsModel: vi.fn(),
+  llmComplete: vi.fn(),
+  recordUsage: vi.fn(),
   completionText: [] as (string | null)[],
   session: {} as Record<string, unknown>,
 }));
@@ -37,26 +44,11 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@client/services/operationsModelService', () => ({
-  OperationsModelService: {
-    getOperationsModel: async () => ({
-      modelId: 'test-model',
-      modelInfo: { name: 'Test Model', backend: 'test' },
-      llm: {
-        complete: async (
-          _modelId: string,
-          _messages: unknown,
-          _options: unknown,
-          onChunk: (chunk: (string | null)[]) => Promise<void>
-        ) => {
-          await onChunk(h.completionText);
-        },
-      },
-    }),
-  },
+  OperationsModelService: { getOperationsModel: h.getOperationsModel },
 }));
 
 vi.mock('@server/events/recordSessionOperationalUsage', () => ({
-  recordSessionOperationalUsage: vi.fn(),
+  recordSessionOperationalUsage: h.recordUsage,
 }));
 
 import { handler } from './sessionTagging';
@@ -72,11 +64,33 @@ const run = () =>
     logger
   );
 
+/** Every assertion that a branch spent nothing: no model resolve, no completion, no settlement. */
+const expectNoOperationalSpend = () => {
+  expect(h.getOperationsModel).not.toHaveBeenCalled();
+  expect(h.llmComplete).not.toHaveBeenCalled();
+  expect(h.recordUsage).not.toHaveBeenCalled();
+};
+
 describe('sessionTagging', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.completionText = [];
     h.questFindOne.mockResolvedValue({ id: 'quest-1', prompt: 'How do pulsars form?' });
+    h.llmComplete.mockImplementation(
+      async (
+        _modelId: string,
+        _messages: unknown,
+        _options: unknown,
+        onChunk: (chunk: (string | null)[]) => Promise<void>
+      ) => {
+        await onChunk(h.completionText);
+      }
+    );
+    h.getOperationsModel.mockImplementation(async () => ({
+      modelId: 'test-model',
+      modelInfo: { name: 'Test Model', backend: 'test' },
+      llm: { complete: h.llmComplete },
+    }));
     // Pre-existing tags, as a clone or an import leaves them. `updatedAt` is old enough to clear
     // the handler's 10s duplicate-processing guard.
     h.session = {
@@ -147,5 +161,69 @@ describe('sessionTagging', () => {
     await run();
 
     expect(h.sessionUpdate).not.toHaveBeenCalled();
+  });
+
+  // The ordering half of the no-quest case, and the reason the quest lookup sits ABOVE
+  // `getOperationsModel`. A questless notebook is re-dispatched on every spider pass (nothing is
+  // written to close the gate), so resolving admin settings, provider keys and the model catalog
+  // there is a per-pass cost for zero completions.
+  it('resolves no operations model for a notebook with no quests', async () => {
+    h.questFindOne.mockResolvedValue(null);
+
+    await run();
+
+    expect(h.questFindOne).toHaveBeenCalledTimes(1);
+    expectNoOperationalSpend();
+  });
+
+  describe('duplicate-processing guard', () => {
+    // Two handlers racing the same session: the second sees tags written seconds ago and bails
+    // rather than paying for a second completion over the same content.
+    it('skips a session whose tags were written within the last 10s', async () => {
+      h.session.updatedAt = new Date(Date.now() - 1_000);
+
+      await run();
+
+      expect(h.sessionUpdate).not.toHaveBeenCalled();
+      expectNoOperationalSpend();
+      // Bails before the quest lookup too, so the guard costs one session read and nothing else.
+      expect(h.questFindOne).not.toHaveBeenCalled();
+    });
+
+    // The guard is scoped to sessions that ALREADY have tags. An untagged session updated a
+    // moment ago (a rename, a share change) is the normal first-tagging case and must proceed.
+    it('does not skip a recently updated session that has no tags', async () => {
+      h.session.tags = [];
+      h.session.updatedAt = new Date(Date.now() - 1_000);
+      h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+
+      await run();
+
+      expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
+      expect(h.llmComplete).toHaveBeenCalledTimes(1);
+    });
+
+    // Past the 10s window the guard releases, so a stale tagged session can be re-tagged. This is
+    // the branch the rest of this file's fixture depends on: it backdates `updatedAt` by 60s.
+    it('does not skip a tagged session whose last update is older than 10s', async () => {
+      h.session.updatedAt = new Date(Date.now() - 60_000);
+      h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+
+      await run();
+
+      expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    // `updatedAt` is optional on the session type, and the guard only reads the clock when it is
+    // present. A tagged session with no `updatedAt` therefore falls through rather than being
+    // treated as infinitely recent.
+    it('does not skip a tagged session with no updatedAt', async () => {
+      delete h.session.updatedAt;
+      h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+
+      await run();
+
+      expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
+    });
   });
 });
