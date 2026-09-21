@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 /**
@@ -99,5 +100,44 @@ describe('outputFileTracingExcludes floor', () => {
     // at request time - without pinning a literal that is now in the wrong file.
     expect(read('packages/scripts/help/utils.ts')).toContain("PUBLIC_HELP_CONTENT_DIR = 'public/help-content'");
     expect(read('apps/client/server/help/retrieval.ts')).toContain('PUBLIC_HELP_CONTENT_DIR');
+  });
+});
+
+/**
+ * @serwist/turbopack's service-worker route is compiled into the Next server function, and
+ * upstream references native `esbuild` with a static `import('esbuild')` in a branch that only
+ * runs on Windows. That one specifier put @esbuild/<platform>'s 10.9 MB binary into the
+ * deployment package on every platform. Measured: neither an outputFileTracingExcludes glob nor
+ * a Turbopack resolveAlias removes it, because an external declaration tells the packager to
+ * ship the module whole. patches/@serwist__turbopack@9.5.3.patch deletes the branch instead.
+ *
+ * Asserted against the INSTALLED package rather than the patch file: that is the artifact the
+ * build reads, so this fails whether the patch is dropped, regenerated without the deletion, or
+ * outgrown by a version bump - all three restore the 10.9 MB silently otherwise.
+ */
+describe('the serwist route keeps native esbuild out of the server function', () => {
+  const requireFromClient = createRequire(path.join(REPO_ROOT, 'apps/client/package.json'));
+
+  it('ships a @serwist/turbopack whose only esbuild import is the wasm one', () => {
+    const installed = fs.readFileSync(requireFromClient.resolve('@serwist/turbopack'), 'utf8');
+    expect(installed, 'the wasm branch must still be the one that builds the worker').toContain(
+      "import('esbuild-wasm')"
+    );
+    expect(
+      codeOnly(installed),
+      'a static import of native esbuild here re-adds @esbuild/<platform> to the Lambda'
+    ).not.toMatch(/import\(\s*'esbuild'\s*\)/);
+  });
+
+  it('registers the patch that removes the branch', () => {
+    expect(read('package.json')).toContain('"@serwist/turbopack@9.5.3": "patches/@serwist__turbopack@9.5.3.patch"');
+  });
+
+  it('does not declare native esbuild external, which is what made the packager ship it', () => {
+    const config = read('apps/client/next.config.mjs');
+    const externals = /serverExternalPackages:\s*\[[\s\S]*?\n {2}\],/.exec(config);
+    expect(externals, 'serverExternalPackages block not found').not.toBeNull();
+    expect(codeOnly(externals![0])).toContain("'esbuild-wasm'");
+    expect(codeOnly(externals![0])).not.toMatch(/'esbuild'/);
   });
 });

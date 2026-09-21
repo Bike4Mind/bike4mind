@@ -204,8 +204,20 @@ const nextConfig = {
     '@aws-sdk/client-transcribe',
     '@aws-sdk/credential-provider-node',
     '@opensearch-project/opensearch',
-    // Serwist uses esbuild to bundle the service worker at runtime
-    'esbuild',
+    // @serwist/turbopack builds the service worker with esbuild-wasm. In production that happens
+    // during `next build`: the route is force-static, so it is prerendered and the handler never
+    // runs in the Lambda. Under `next dev` the handler does run, on the first request for
+    // /serwist/sw.js, and caches the result for the life of the dev server. External because
+    // Turbopack cannot parse the package's binaries.
+    //
+    // Native `esbuild` is deliberately absent. Upstream picks between `import('esbuild')` and
+    // `import('esbuild-wasm')` at runtime, but which branch RUNS and which specifier is IMPORTED
+    // are different questions and only the second decides what ships: the static reference alone
+    // dragged @esbuild/<platform>'s 10.9 MB native binary into the server function. Neither a
+    // trace exclusion (an external declaration tells the packager to ship the module, so there is
+    // no traced dependency left to prune) nor a Turbopack resolveAlias (externals are resolved
+    // past it) removes that - both were measured. patches/@serwist__turbopack@9.5.3.patch deletes
+    // the native branch instead, which is why this list no longer needs an `esbuild` entry.
     'esbuild-wasm',
   ],
 

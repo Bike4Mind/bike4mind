@@ -43,6 +43,9 @@ patchedDependencies:
   '@mui/joy@5.0.0-beta.52':
     hash: 6279adfa79ae9e84eae3d5b5a9328ab690a33a0794f3b44d0b7c8dafa8825bd4
     path: patches/@mui__joy@5.0.0-beta.52.patch
+  '@serwist/turbopack@9.5.3':
+    hash: 2622ebea0997570e2e7066797a807ea21391b9bc6c99059b00081c548cf80479
+    path: patches/@serwist__turbopack@9.5.3.patch
 
 importers:
 
@@ -736,7 +739,7 @@ importers:
         version: 1.61.1
       '@serwist/turbopack':
         specifier: 9.5.3
-        version: 9.5.3(esbuild-wasm@0.28.1)(esbuild@0.28.1)(next@16.2.11(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.61.1)(@types/node@24.12.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)(typescript@5.9.3)
+        version: 9.5.3(patch_hash=2622ebea0997570e2e7066797a807ea21391b9bc6c99059b00081c548cf80479)(esbuild-wasm@0.28.1)(esbuild@0.28.1)(next@16.2.11(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.61.1)(@types/node@24.12.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)(typescript@5.9.3)
       '@tanstack/react-query-devtools':
         specifier: ^5.101.2
         version: 5.101.2(@tanstack/react-query@5.101.2(react@19.2.7))(react@19.2.7)
@@ -16136,7 +16139,7 @@ snapshots:
     transitivePeerDependencies:
       - browserslist
 
-  '@serwist/turbopack@9.5.3(esbuild-wasm@0.28.1)(esbuild@0.28.1)(next@16.2.11(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.61.1)(@types/node@24.12.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)(typescript@5.9.3)':
+  '@serwist/turbopack@9.5.3(patch_hash=2622ebea0997570e2e7066797a807ea21391b9bc6c99059b00081c548cf80479)(esbuild-wasm@0.28.1)(esbuild@0.28.1)(next@16.2.11(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.61.1)(@types/node@24.12.3)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)(typescript@5.9.3)':
     dependencies:
       '@serwist/build': 9.5.3(browserslist@4.28.9)(typescript@5.9.3)
       '@serwist/utils': 9.5.3(browserslist@4.28.9)
