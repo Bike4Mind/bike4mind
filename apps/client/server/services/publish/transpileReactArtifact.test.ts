@@ -523,11 +523,36 @@ describe('extractImportedModules import-clause scan (perf and correctness)', () 
     expect(() => assertPublishableDependencies(src)).not.toThrow();
   });
 
-  it('does not flag a supported module whose import clause exceeds the 2000-char bound', () => {
-    // Documents the residual behavior delta from bounding the scan: a clause this long is not
-    // realistic hand-written or generated code, but it silently stops matching rather than erroring.
+  it('still flags a module whose import clause runs to thousands of characters', () => {
     const hugeNamedClause = Array.from({ length: 400 }, (_, i) => `Icon${i}`).join(', ');
     const src = `import { ${hugeNamedClause} } from 'unsupported-pkg';`;
-    expect(() => assertPublishableDependencies(src)).not.toThrow();
+    expect(() => assertPublishableDependencies(src)).toThrow(UnsupportedReactDependencyError);
   });
+});
+
+describe('one-specifier-per-line lucide-react imports of any size', () => {
+  const iconImport = (count: number) =>
+    `import {\n${Array.from({ length: count }, (_, i) => `  Icon${i},`).join('\n')}\n} from 'lucide-react';\n` +
+    `export default function App() {\n  return <div><Icon0 /></div>;\n}\n`;
+
+  // 200 icons is the regression guard: that clause is just over 2000 characters, the length at
+  // which a bounded clause scan stops matching and leaves a bare ESM import in the bundle, which
+  // then dies at load with "Cannot use import statement outside a module".
+  for (const count of [150, 200]) {
+    it(`rewrites a ${count}-icon import and emits no bare import`, async () => {
+      const source = iconImport(count);
+      const clauseLength = source.indexOf('} from') + 1 - source.indexOf('{');
+      expect(clauseLength).toBeGreaterThan(count === 200 ? 2000 : 1500);
+
+      expect(rewriteImportsToRequire(source)).toContain(`require('lucide-react')`);
+
+      const transpiled = await transpileReactSource(source);
+      expect(transpiled).toContain(`require('lucide-react')`);
+      expect(transpiled).not.toMatch(/(^|[^\w$.])import\s/);
+      expect(() => new Function(transpiled)).not.toThrow();
+
+      const { indexHtml } = await buildReactArtifactBundle({ source, title: 'Icons' });
+      expect(indexHtml).toContain(PUBLISH_REACT_DEP_SCRIPTS['lucide-react'].path);
+    });
+  }
 });

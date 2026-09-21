@@ -1,5 +1,6 @@
 import { REACT_BLESSED_SCRIPT_PATHS, PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
 import { checkHasDefaultExport } from '@client/app/utils/artifactParser';
+import { scanImportStatements, type ImportStatement } from '@client/app/utils/importStatements';
 import { LUCIDE_WRAPPER_FN } from '@client/app/utils/reactArtifactDeps';
 import { PUBLISH_HOST } from './validateBundle';
 
@@ -18,10 +19,6 @@ import { PUBLISH_HOST } from './validateBundle';
  *
  * Scope: SINGLE-FILE artifacts only (multi-file is rejected up front, matching the sandbox).
  */
-
-// Mirrors MAX_IMPORT_CLAUSE_CHARS in apps/client/app/utils/artifactParser.ts: comfortably above
-// even a large multi-line named-import destructuring block, while bounding the failed-match scan.
-const MAX_IMPORT_CLAUSE_CHARS = 2000;
 
 /**
  * Dependencies whose PUBLISH story exists. `react` is the base runtime (react-dom + prop-types
@@ -86,6 +83,33 @@ function findRelativeImport(source: string): string | null {
   return null;
 }
 
+const WS = /\s/;
+
+function replaceImportStatements(
+  source: string,
+  opts: { typeKeyword?: boolean; consumeTrailing?: boolean },
+  replace: (statement: ImportStatement, text: string) => string
+): string {
+  const statements = scanImportStatements(source, opts);
+  if (!statements.length) return source;
+  let out = '';
+  let at = 0;
+  for (const statement of statements) {
+    out += source.slice(at, statement.index) + replace(statement, source.slice(statement.index, statement.end));
+    at = statement.end;
+  }
+  return out + source.slice(at);
+}
+
+/** First `{...}` span, as `/\{([\s\S]*?)\}/` would find it but without its per-brace rescan: if the
+ *  first `{` has no `}` after it, no later `{` does either. `greedy` matches `/\{([\s\S]*)\}/`. */
+function braceSpan(text: string, greedy = false): { open: number; close: number } | null {
+  const open = text.indexOf('{');
+  if (open === -1) return null;
+  const close = greedy ? text.lastIndexOf('}') : text.indexOf('}', open + 1);
+  return close > open ? { open, close } : null;
+}
+
 /**
  * Remove TypeScript type-only import syntax, which carries no runtime binding. The import rewrite
  * and dependency scan below are regex passes that run BEFORE Babel's typescript preset, so they'd
@@ -100,30 +124,22 @@ function findRelativeImport(source: string): string | null {
  * a modifier when followed by another binding identifier that is not `as`.
  */
 export function stripTypeOnlyImports(source: string): string {
-  // Both clause scans are length-bounded (MAX_IMPORT_CLAUSE_CHARS above): this runs first in
-  // every pipeline branch (extractImportedModules, rewriteImportsToRequire, transpileReactSource),
-  // so an unbounded scan here defeats the same bound applied downstream.
-  return source
-    .replace(
-      new RegExp(`import\\s+type\\s+[\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?\\s+from\\s+['"][^'"]+['"]\\s*;?`, 'g'),
-      ''
-    )
-    .replace(
-      new RegExp(`import\\s+([\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?)\\s+from\\s+['"][^'"]+['"]\\s*;?`, 'g'),
-      (stmt: string, clause: string) => {
-        const braceMatch = clause.match(/\{([\s\S]*?)\}/);
-        if (!braceMatch) return stmt;
-        const kept = braceMatch[1]
-          .split(',')
-          .map(s => s.trim())
-          .filter(Boolean)
-          .filter(spec => !/^type\s+(?!as\b)\w/.test(spec));
-        // No value bindings left and no default/namespace before the brace -> whole import was type-only.
-        const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
-        if (!kept.length && !beforeBrace) return '';
-        return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
-      }
-    );
+  const withoutTypeStatements = replaceImportStatements(source, { typeKeyword: true, consumeTrailing: true }, () => '');
+  return replaceImportStatements(withoutTypeStatements, { consumeTrailing: true }, ({ clause }, text) => {
+    const braces = braceSpan(clause);
+    if (!braces) return text;
+    const kept = clause
+      .slice(braces.open + 1, braces.close)
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .filter(spec => !/^type\s+(?!as\b)\w/.test(spec));
+    // No value bindings left and no default/namespace before the brace -> whole import was type-only.
+    const beforeBrace = clause.slice(0, braces.open).replace(/,\s*$/, '').trim();
+    if (!kept.length && !beforeBrace) return '';
+    const inText = braceSpan(text);
+    return inText ? `${text.slice(0, inText.open)}{ ${kept.join(', ')} }${text.slice(inText.close + 1)}` : text;
+  });
 }
 
 /** React APIs pre-injected as bare globals in the bootstrap (see HOOK_GLOBALS). A named import of
@@ -145,9 +161,8 @@ const HOOK_GLOBAL_NAMES: readonly string[] = [
  *    NOT already covered by HOOK_GLOBALS (useLayoutEffect, useId, forwardRef, memo, ...) are bound
  *    from `React` so they resolve instead of throwing ReferenceError at first render.
  *  - other modules map to `require('pkg')`, handling default / named / namespace / mixed forms.
- * Uses lazy, length-bounded `[\s\S]{0,N}?` (not greedy `[^;]+`) so adjacent semicolon-less imports
- * (valid via ASI) are not conflated into one broken match, and a `from`-less import can't rescan
- * the rest of the source from every start position. Exported for unit tests.
+ * Statement boundaries come from scanImportStatements, so adjacent semicolon-less imports (valid
+ * via ASI) are not conflated into one broken match. Exported for unit tests.
  */
 export function rewriteImportsToRequire(rawSource: string): string {
   const source = stripTypeOnlyImports(rawSource); // TS type imports have no runtime binding
@@ -163,17 +178,10 @@ export function rewriteImportsToRequire(rawSource: string): string {
         return m ? `${m[1]}: ${m[2]}` : spec;
       })
       .join(', ');
-  // Same bounded-clause reasoning as extractImportedModules below: an unbounded lazy scan here
-  // hits the identical quadratic cost on a `from`-less import, and this runs on the same
-  // untrusted source right after that scan in the buildReactArtifactBundle pipeline.
-  const importClauseRe = new RegExp(
-    `import\\s+([\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?)\\s+from\\s+['"]([^'"]+)['"]`,
-    'g'
-  );
-  return source.replace(importClauseRe, (_match, clauseRaw: string, mod: string) => {
+  const rewritten = replaceImportStatements(source, {}, ({ clause: clauseRaw, specifier: mod }) => {
     const clause = clauseRaw.trim();
-    const namedMatch = clause.match(/\{([\s\S]*)\}/);
-    const namedRaw = namedMatch ? namedMatch[1].trim() : '';
+    const named = braceSpan(clause, true);
+    const namedRaw = named ? clause.slice(named.open + 1, named.close).trim() : '';
     const nsMatch = clause.match(/\*\s+as\s+(\w+)/);
     const defMatch = clause.match(/^(\w+)\b/); // leading bare identifier = default binding
     const hasDefault = !!defMatch && !clause.startsWith('{') && !clause.startsWith('*');
@@ -201,19 +209,55 @@ export function rewriteImportsToRequire(rawSource: string): string {
     if (hasDefault) return `const ${defMatch![1]} = require('${mod}');`;
     return `const ${clause} = require('${mod}');`;
   });
+
+  // The shape above is always rewritable, so a survivor means the scanner missed one. Failing the
+  // publish beats serving a page that dies with "Cannot use import statement outside a module".
+  const survivor = findSurvivingEsmImport(rewritten);
+  if (survivor) {
+    throw new ReactArtifactTranspileError(
+      `Could not rewrite an ESM import for a script bundle: ${JSON.stringify(survivor.slice(0, 120))}`
+    );
+  }
+  return rewritten;
+}
+
+/**
+ * A line-initial `import ... from '<spec>'` still present after the rewrite. Deliberately NOT built
+ * on scanImportStatements - a check sharing the scanner could never catch a gap in it. Each
+ * statement is bounded by the first `;` or quote after it and the cursor only advances, so this
+ * stays linear on the `from`-less input that made the original regexes quadratic.
+ */
+function findSurvivingEsmImport(code: string): string | null {
+  const lineInitialImport = /^[ \t]*import\s/gm;
+  let m: RegExpExecArray | null;
+  while ((m = lineInitialImport.exec(code)) !== null) {
+    const importEnd = m.index + m[0].length - 1; // the mandatory whitespace char after `import`
+    let p = importEnd;
+    while (p < code.length && code[p] !== ';' && code[p] !== "'" && code[p] !== '"') p++;
+    let r = p + 1;
+    if (p < code.length && code[p] !== ';') {
+      while (r < code.length && code[r] !== "'" && code[r] !== '"') r++;
+      let q = p;
+      while (q > importEnd && WS.test(code[q - 1])) q--;
+      // The full rewritable shape: a non-empty quoted specifier, and `\s+` on BOTH sides of the
+      // clause. A one-space `import from 'x'`, a `}from 'm'` and an empty `from ''` are none of
+      // them rewritable nor scanner matches, so none may trip the net.
+      const quoted = r > p + 1 && r < code.length;
+      if (quoted && q < p && code.slice(q - 4, q) === 'from' && q - 4 - importEnd >= 2 && WS.test(code[q - 5])) {
+        return code.slice(m.index, r + 1);
+      }
+    }
+    lineInitialImport.lastIndex = Math.max(p + 1, r);
+  }
+  return null;
 }
 
 /** Module specifiers from real `import ... from '...'` statements (non-relative only). */
 function extractImportedModules(rawSource: string): string[] {
   const source = stripTypeOnlyImports(rawSource); // don't gate a type-only import as a runtime dep
   const mods = new Set<string>();
-  // Bound the clause scan so a `from`-less `import` can't rescan the rest of the source from
-  // every start position (quadratic); [\s\S] still crosses newlines for multi-line named imports.
-  const re = new RegExp(`import\\s+[\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?\\s+from\\s+['"]([^'"]+)['"]`, 'g');
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(source)) !== null) {
-    const mod = m[1];
-    if (!mod.startsWith('.') && !mod.startsWith('/')) mods.add(mod);
+  for (const { specifier } of scanImportStatements(source)) {
+    if (!specifier.startsWith('.') && !specifier.startsWith('/')) mods.add(specifier);
   }
   return [...mods];
 }

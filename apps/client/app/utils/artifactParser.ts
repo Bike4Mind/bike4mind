@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import { detectElidedContent } from '@bike4mind/utils/artifactElision';
 import { tryParseChartJSON } from './chartJsonParser';
+import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
 
 // Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
 // stays in sync with the core parser and PromptReplies truncation detector.
@@ -369,20 +370,6 @@ export function extractPythonPackages(content: string): string[] {
   return Array.from(packages);
 }
 
-// Bound the scan from an `import` token to its `from` clause so a token that never
-// finds its match cannot rescan the rest of the body from every start position.
-const MAX_IMPORT_CLAUSE_CHARS = 2000;
-
-// Built once rather than per fence. `(?=(\s+))\1` is a possessive `\s+`: a JS lookahead
-// is never retried, so each whitespace run is consumed maximally instead of backtracking
-// against the neighboring clause, which is what made the `import\s+.*\s+from` this
-// replaces cost time quadratic in a long whitespace run. Match set is unchanged: the
-// clause is still single-line and, like the `.*`, may end only on a non-whitespace
-// character, and only a maximal run can be followed by the literal `from`.
-const REACT_IMPORT_PATTERN = new RegExp(
-  `import(?=(\\s+))\\1(?:[^\\n]{0,${MAX_IMPORT_CLAUSE_CHARS}}[^\\s])?(?=(\\s+))\\2from\\s+['"]react['"]`
-);
-
 /**
  * A self-closing tag, e.g. `<path d="..."/>`, as `/<[a-z]+[^>]*\/>/` matched it. That
  * pattern re-scans to the end of the input from every `<` when no `>` follows, so this
@@ -407,15 +394,11 @@ function hasSelfClosingTag(code: string): boolean {
 export function extractReactDependencies(content: string): string[] {
   const dependencies: Set<string> = new Set();
 
-  // The clause span crosses newlines so multi-line named imports still resolve, e.g.
+  // The clause crosses newlines so multi-line named imports still resolve, e.g.
   // `import {\n  A, B\n} from 'recharts'`.
-  const importRegex = new RegExp(`import\\s[\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?\\sfrom\\s+['"]([^'"]+)['"]`, 'g');
-  let match;
-
-  while ((match = importRegex.exec(content)) !== null) {
-    const dependency = match[1];
-    if (!dependency.startsWith('.') && !dependency.startsWith('/')) {
-      dependencies.add(dependency);
+  for (const { specifier } of scanImportStatements(content)) {
+    if (!specifier.startsWith('.') && !specifier.startsWith('/')) {
+      dependencies.add(specifier);
     }
   }
 
@@ -727,7 +710,7 @@ ${codeContent.trim()}
         scanContent
       );
     const hasJSXSyntax = /<[A-Z][a-zA-Z0-9]*[\s\/>]/.test(scanContent) || hasSelfClosingTag(scanContent);
-    const hasReactImport = REACT_IMPORT_PATTERN.test(scanContent);
+    const hasReactImport = hasSingleLineImportFrom(scanContent, 'react');
     const hasReactComponent = /extends\s+(?:React\.)?Component\b/.test(scanContent);
     const hasJSXReturn = /return\s*\(\s*</.test(scanContent);
 
