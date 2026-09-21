@@ -22,12 +22,16 @@ import {
   ImageModerationIncident as ImageModerationIncidentInput,
   insufficientCreditsError,
   ImageOutputFormatSchema,
+  AttachmentLakeAccess,
+  IFabFileDocument,
 } from '@bike4mind/common';
 import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
   isGPTImage2Model,
+  isGPTImageModel,
+  MAX_REFERENCE_IMAGES,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
   IMAGES_PER_EDIT_REQUEST,
@@ -89,6 +93,9 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   aspect_ratio: z.string().optional(),
   size: z.string().optional(),
   fabFileIds: z.array(z.string()).optional(),
+  // Declared here as well as on EditImageRequestBodySchema: invoke() parses the queue payload
+  // through this schema, and an undeclared key is stripped before it reaches process().
+  referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   image: z.string(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
@@ -127,6 +134,8 @@ interface IImageEditServiceOptions {
   imageProcessorLambdaName?: string;
   /** Checks an edited image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
   imageModerationService?: ImageModerationService;
+  /** Mirrors ImageGenerationService: scopes fabFile lookups so a lake-only image still resolves. */
+  resolveLakeAccess?: (user: IUserDocument, logger: Logger) => Promise<AttachmentLakeAccess>;
 }
 
 async function downloadImage(url: string) {
@@ -152,6 +161,7 @@ export class ImageEditService {
   private tokenizer: TiktokenTokenizer;
   private imageProcessorLambdaName?: string;
   private imageModerationService?: ImageModerationService;
+  private resolveLakeAccess?: IImageEditServiceOptions['resolveLakeAccess'];
 
   constructor(options: IImageEditServiceOptions) {
     this.db = options.db;
@@ -163,6 +173,7 @@ export class ImageEditService {
     this.abilityGetter = options.abilityGetter;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.imageModerationService = options.imageModerationService;
+    this.resolveLakeAccess = options.resolveLakeAccess;
     this.deleteFabFile = options.deleteFabFile;
     this.tokenizer = new TiktokenTokenizer({ logger: Logger.globalInstance });
   }
@@ -294,6 +305,68 @@ export class ImageEditService {
     return result;
   }
 
+  /**
+   * Resolves explicit gpt-image style anchors for the edit path, in the caller's order.
+   *
+   * Access-scoped via findAccessibleInIds - deliberately NOT the unscoped findAllInIds this
+   * file still uses for the mask lookup, which predates it. A reference the caller named but
+   * we cannot serve is an error rather than a silent drop: these ids were asked for by name,
+   * and quietly rendering fewer anchors bills for an image the user did not describe.
+   * Mirrors ImageGenerationService.resolveReferenceImages - keep the two in step.
+   */
+  private async resolveReferenceImages({
+    referenceImageFabFileIds,
+    userId,
+    userGroups,
+    lakeAccess,
+    model,
+    logger,
+  }: {
+    referenceImageFabFileIds?: string[];
+    userId: string;
+    userGroups?: string[];
+    lakeAccess?: AttachmentLakeAccess;
+    model: string;
+    logger: Logger;
+  }): Promise<IFabFileDocument[]> {
+    if (!referenceImageFabFileIds?.length) {
+      return [];
+    }
+
+    if (!isGPTImageModel(model)) {
+      logger.debug('Dropping reference images for a model that cannot carry them', {
+        model,
+        requested: referenceImageFabFileIds.length,
+      });
+      return [];
+    }
+
+    // A repeated id would occupy an anchor slot and pay OpenAI's per-image input cost twice
+    // for bytes the model has already seen. First occurrence wins, so the caller's ordering
+    // survives de-duplication. Counted after de-duplication, because the cap exists to bound
+    // how many images we actually pay to send.
+    const uniqueIds = [...new Set(referenceImageFabFileIds)];
+    if (uniqueIds.length > MAX_REFERENCE_IMAGES) {
+      throw new BadRequestError(`At most ${MAX_REFERENCE_IMAGES} reference images may be supplied`);
+    }
+
+    const files = await this.db.fabFiles.findAccessibleInIds(uniqueIds, { userId, userGroups }, lakeAccess);
+    const byId = new Map(files.filter(file => !!file.id).map(file => [file.id as string, file]));
+
+    return uniqueIds.map(id => {
+      const file = byId.get(id);
+      if (!file) throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
+      if (!file.mimeType.startsWith('image')) throw new BadRequestError(`Reference image ${id} is not an image`);
+      if (!isImageServeable(file)) {
+        throw new BadRequestError(`Reference image ${id} is not available (moderation pending or blocked)`);
+      }
+      // Without a storage path there is nothing to presign. An error rather than a skip, so a
+      // half-rendered set can never reach the provider through this path either.
+      if (!file.filePath) throw new BadRequestError(`Reference image ${id} has no stored file`);
+      return file;
+    });
+  }
+
   public async process({ body, logger }: { body: z.infer<typeof ImageEditBodySchema>; logger: Logger }) {
     const {
       sessionId,
@@ -308,6 +381,7 @@ export class ImageEditService {
       background,
       aspect_ratio,
       fabFileIds,
+      referenceImageFabFileIds,
       size,
       quality,
       image: sourceImageUrl,
@@ -465,10 +539,35 @@ export class ImageEditService {
       const signedUrl = fileImage?.filePath ? await this.fabFileStorage.getSignedUrl(fileImage.filePath) : undefined;
       const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl) : undefined;
 
+      // Owner-wide lake access, mirroring ImageGenerationService: a lake-only anchor the
+      // workbench admitted must still resolve. Absent resolver degrades to
+      // owner/share/global-read only - never widens, never fails the run.
+      //
+      // Resolved only when anchors were actually requested. Unlike ImageGenerationService,
+      // which needs lake arms for the primary-image lookup on every run, this path uses them
+      // for anchors alone - so an unconditional call would add a lake-membership roundtrip to
+      // every edit, including the mask-only mainline that had none before this feature.
+      const lakeAccess =
+        referenceImageFabFileIds?.length && this.resolveLakeAccess
+          ? await this.resolveLakeAccess(user, logger)
+          : undefined;
+      const referenceImages = await this.resolveReferenceImages({
+        referenceImageFabFileIds,
+        userId,
+        userGroups: user.groups ?? undefined,
+        lakeAccess,
+        model,
+        logger,
+      });
+      const referenceImageUrls = await Promise.all(
+        referenceImages.map(reference => this.fabFileStorage.getSignedUrl(reference.filePath as string))
+      );
+
       Logger.globalInstance.debug(`[DEBUG] Processing ${provider} image edit:`, {
         model,
         aspect_ratio,
         hasMask: !!maskBase64Image,
+        referenceImageCount: referenceImageUrls.length,
       });
 
       let editResponse: ImageEditResponse;
@@ -502,6 +601,9 @@ export class ImageEditService {
           user: userId,
           background,
           output_format,
+          // Trail the edit source; OpenAI binds the mask to the first entry, which must stay
+          // `sourceBase64Image` or an inpainting request would mask an anchor instead.
+          referenceImages: referenceImageUrls,
         });
       }
 
