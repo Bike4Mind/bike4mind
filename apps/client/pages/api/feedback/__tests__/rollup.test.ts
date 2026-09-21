@@ -22,6 +22,8 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
     post: () => chain,
+    // The route chains rateLimit before .get; the capture harness only needs the chain back.
+    use: () => chain,
   };
   return {
     baseApi: (options: unknown) => {

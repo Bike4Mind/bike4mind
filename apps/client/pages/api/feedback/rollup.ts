@@ -1,6 +1,7 @@
 import { FeedbackModel, convertPipelineForDocumentDB, executeFacetCompatible } from '@bike4mind/database';
 import { FeedbackRollupQuerySchema, parseFeedbackRollupBound } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import {
   buildFeedbackRollupPipeline,
   toFeedbackRollupResponse,
@@ -23,36 +24,44 @@ import {
  * The aggregate is uncached and heavier than the paged list. The window cap in
  * FeedbackRollupQuerySchema and the shared per-dimension top-N bound the MATCHED set and the
  * RESPONSE size respectively - top-N is applied per arm only after $group has already
- * accumulated the whole matched set, so it never bounds the work a request can ask for. This
- * route carries no rate-limit option of its own (no JWT-path limiter exists), so `maxTimeMS`
- * below is the actual per-request work bound.
+ * accumulated the whole matched set, so it never bounds the work a request can ask for. Two
+ * separate bounds cover that: `rateLimit` below caps how many of these a single principal can
+ * ask for per window (it keys on `req.user.id`, which `jwtOnly` guarantees), and `maxTimeMS`
+ * bounds the work of any one request.
  */
 // Same value/shape as apps/client/pages/api/users/counterLogs.ts's own aggregate timeout.
 const FEEDBACK_ROLLUP_MAX_TIME_MS = 45000;
 
-const handler = baseApi({ auth: 'jwtOnly' }).get(async (req, res) => {
-  // Explicit rather than inherited: `jwtOnly` already rejects an unauthenticated request, but a
-  // rollup that fell through to an undefined scope would aggregate the whole collection.
-  const userId = req.user?.id;
-  if (!userId) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+const ONE_MINUTE_MS = 60 * 1000;
+// The interactive date-window picker is the only caller and refetches on a window change, not on
+// a timer, so a conservative cap matching the neighbouring routes leaves it ample headroom.
+const FEEDBACK_ROLLUP_RATE_LIMIT = 20;
 
-  // The schema has no `userId` key, so `?userId=<someone-else>` is stripped here rather than
-  // reaching the pipeline. Never read the principal off the query on this route.
-  const query = FeedbackRollupQuerySchema.parse(req.query);
-  const from = parseFeedbackRollupBound(query.from);
-  const to = parseFeedbackRollupBound(query.to);
+const handler = baseApi({ auth: 'jwtOnly' })
+  .use(rateLimit({ limit: FEEDBACK_ROLLUP_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'feedback-rollup' }))
+  .get(async (req, res) => {
+    // Explicit rather than inherited: `jwtOnly` already rejects an unauthenticated request, but a
+    // rollup that fell through to an undefined scope would aggregate the whole collection.
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
 
-  const { pipeline, facetStages } = buildFeedbackRollupPipeline({ userId }, from, to);
-  const [facet] = (await executeFacetCompatible(FeedbackModel, convertPipelineForDocumentDB(pipeline), facetStages, {
-    maxTimeMS: FEEDBACK_ROLLUP_MAX_TIME_MS,
-  })) as FeedbackRollupFacet[];
+    // The schema has no `userId` key, so `?userId=<someone-else>` is stripped here rather than
+    // reaching the pipeline. Never read the principal off the query on this route.
+    const query = FeedbackRollupQuerySchema.parse(req.query);
+    const from = parseFeedbackRollupBound(query.from);
+    const to = parseFeedbackRollupBound(query.to);
 
-  // A per-principal aggregate: never a shared cache entry, and never stored by an intermediary.
-  res.setHeader('Cache-Control', 'private, no-store');
-  return res.json(toFeedbackRollupResponse(facet, from, to));
-});
+    const { pipeline, facetStages } = buildFeedbackRollupPipeline({ userId }, from, to);
+    const [facet] = (await executeFacetCompatible(FeedbackModel, convertPipelineForDocumentDB(pipeline), facetStages, {
+      maxTimeMS: FEEDBACK_ROLLUP_MAX_TIME_MS,
+    })) as FeedbackRollupFacet[];
+
+    // A per-principal aggregate: never a shared cache entry, and never stored by an intermediary.
+    res.setHeader('Cache-Control', 'private, no-store');
+    return res.json(toFeedbackRollupResponse(facet, from, to));
+  });
 
 export const config = {
   api: {
