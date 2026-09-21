@@ -20,12 +20,14 @@ describe('buildFeedbackRollupPipeline', () => {
     expect(match.$match.$and[1].createdAt.$gte).toEqual(FROM);
   });
 
-  it('bounds the window half-open - $gte on the lower bound, $lt on the upper, never $lte', () => {
+  it('bounds the window inclusively - $gte on the lower bound, $lte on the upper, never $lt', () => {
     const [match] = stages({ userId: 'a' });
     const bounds = match.$match.$and[1].createdAt;
 
-    expect(Object.keys(bounds).sort()).toEqual(['$gte', '$lt']);
-    expect(bounds.$lt).toEqual(TO);
+    // Matches the org report's own bounds (FeedbackReportQueries.orgFeedbackReport), which is what
+    // lets an org total reconcile against the personal rollups under it.
+    expect(Object.keys(bounds).sort()).toEqual(['$gte', '$lte']);
+    expect(bounds.$lte).toEqual(TO);
   });
 
   it('excludes a missing or null sessionId and questId from their own dimensions only', () => {

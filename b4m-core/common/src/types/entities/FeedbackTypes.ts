@@ -199,9 +199,12 @@ export function parseFeedbackRollupBound(value: string): Date {
 /**
  * GET /api/feedback/rollup query contract. There is deliberately no `userId` key: the server
  * derives the principal from the session, so `?userId=<someone-else>` is stripped here rather
- * than trusted. The window is half-open in UTC (`$gte from`, `$lt to`); buildFeedbackRollupPipeline
- * in apps/client/server/utils/feedbackRollup.ts must keep that convention, or an organization
- * rollup and the personal rollups under it disagree on the documents sitting exactly on a bound.
+ * than trusted. The window is INCLUSIVE at both ends in UTC (`$gte from`, `$lte to`): `to` is the
+ * last instant included, so a caller tiling consecutive windows counts a row on a shared bound
+ * twice. buildFeedbackRollupPipeline (apps/client/server/utils/feedbackRollup.ts) and
+ * orgFeedbackReport (@bike4mind/database) must keep the same convention, or the two disagree on
+ * the documents sitting exactly on a bound. Agreeing on the bound is all it buys: an org total
+ * equals the personal totals under it only when those are scoped `{ userId, organizationId }`.
  */
 export const FeedbackRollupQuerySchema = z
   .object({

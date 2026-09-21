@@ -50,10 +50,12 @@ export interface FeedbackRollupPipeline {
  *
  * `scope` is the caller's authorization filter, and it is the seam an organization-wide rollup
  * would reuse with `{ organizationId }` where the personal route passes `{ userId }` - which is
- * why the window handling lives here rather than in a route. The window is HALF-OPEN in UTC
- * (`$gte from`, `$lt to`): a report written at exactly `to` belongs to the next window, and both
- * callers must keep that convention or an organization total stops equalling the sum of the
- * personal totals under it at the bounds.
+ * why the window handling lives here rather than in a route. The window is INCLUSIVE at both ends
+ * in UTC (`$gte from`, `$lte to`), matching orgFeedbackReport in @bike4mind/database's
+ * FeedbackReportQueries: `to` is the last instant counted, not the first instant of the next
+ * window. The price is that two windows sharing an instant both count the row on it - the org
+ * route rounds `to` to 23:59:59.999 so adjacent org windows never meet, and the personal client
+ * (apps/client/app/utils/feedbackRollupWindow.ts) sends `to = now` and never tiles.
  */
 export function buildFeedbackRollupPipeline(
   scope: FilterQuery<IFeedbackDocument>,
@@ -71,7 +73,7 @@ export function buildFeedbackRollupPipeline(
       {
         // $and rather than a merged object literal: a scope can carry its own $and/$or arm and a
         // spread would silently drop one side of it (same reason as the feedback list route).
-        $match: { $and: [scope, { createdAt: { $gte: from, $lt: to } }] },
+        $match: { $and: [scope, { createdAt: { $gte: from, $lte: to } }] },
       },
       {
         // Plain localField/foreignField form (no `pipeline`) - the only $lookup shape DocumentDB
