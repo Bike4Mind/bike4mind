@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type { EventMetric } from '../types';
@@ -36,19 +37,29 @@ export const useEventMetrics = (filters?: MetricsFilters) => {
     staleTime: 1000 * 60 * 1, // 1 minute for filtered data
   });
 
+  // The recache call below is a raw request, so react-query's isFetching does not cover it.
+  // Callers disable Refresh on the combined flag, which is what keeps one click to one pair of requests.
+  const [isRecaching, setIsRecaching] = useState(false);
+
   const forceRefresh = async () => {
-    // Force a server-side cache refresh
+    setIsRecaching(true);
     try {
-      await fetchEventMetrics(filters, true);
-    } catch {
-      // Swallowed here so refetch() below always runs; the query's own error state surfaces the failure.
+      // Force a server-side cache refresh
+      try {
+        await fetchEventMetrics(filters, true);
+      } catch {
+        // Swallowed here so refetch() below always runs; the query's own error state surfaces the failure.
+      }
+      // Then invalidate client query to get the new data
+      return await query.refetch();
+    } finally {
+      setIsRecaching(false);
     }
-    // Then invalidate client query to get the new data
-    return query.refetch();
   };
 
   return {
     ...query,
+    isFetching: query.isFetching || isRecaching,
     forceRefresh,
   };
 };
