@@ -175,6 +175,11 @@ export interface FeedbackCountBucket {
  * Feedback rollup: counts only, never content and never a username. The window is capped in DAYS
  * because every $facet arm groups the whole matched set in memory before its own top-N cut, so
  * the day cap is what bounds the rows those groupings accumulate over.
+ *
+ * The cap counts COVERAGE, not the gap between the bounds: every feedback window is inclusive at
+ * both ends, so a span of exactly this many days covers one instant more than that. Both sides
+ * measure it that way - the org routes read this same constant through
+ * `apps/client/server/utils/orgFeedbackWindow.ts`.
  */
 export const FEEDBACK_ROLLUP_MAX_WINDOW_DAYS = 366;
 
@@ -217,7 +222,9 @@ export const FeedbackRollupQuerySchema = z
   })
   .refine(
     query =>
-      parseFeedbackRollupBound(query.to).getTime() - parseFeedbackRollupBound(query.from).getTime() <=
+      // Strictly less than: `to` is included, so a span of exactly the cap covers the cap plus an
+      // instant. Same comparison on the org side, against the same constant.
+      parseFeedbackRollupBound(query.to).getTime() - parseFeedbackRollupBound(query.from).getTime() <
       FEEDBACK_ROLLUP_MAX_WINDOW_DAYS * ROLLUP_DAY_MS,
     {
       message: `window must not exceed ${FEEDBACK_ROLLUP_MAX_WINDOW_DAYS} days`,
