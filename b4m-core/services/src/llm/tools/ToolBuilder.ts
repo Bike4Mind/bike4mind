@@ -110,6 +110,8 @@ export interface ToolBuilderConfig {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
+  sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   logger: Logger;
@@ -747,6 +749,7 @@ export class ToolBuilder {
         fullyInlinedAttachmentIds: this.deps.fullyInlinedAttachmentIds,
         suppressLakeArms: this.deps.suppressLakeArms,
         sessionRetrievalTags: this.deps.sessionRetrievalTags,
+        sessionLakeScopeExplicit: this.deps.sessionLakeScopeExplicit,
         sessionPreauthorizedLakeIds: this.deps.sessionPreauthorizedLakeIds,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,

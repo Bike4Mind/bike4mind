@@ -169,7 +169,7 @@ describe('summarizeOptionalPathRetrieval', () => {
         turns: 3,
         retrievedTurns: 1,
         rate: 1 / 3,
-        byReason: { attached_files: 2, personal_corpus: 1 },
+        byReason: { attached_files: 2, personal_corpus: 1, no_lake_scope: 0 },
       });
       // Suppressed turns never ran forced retrieval, so they are not forced turns either.
       expect(summary).toMatchObject({ forcedTurns: 0, offeredTurns: 0, rate: null });
