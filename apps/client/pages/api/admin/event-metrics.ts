@@ -7,7 +7,7 @@ import { CounterLog, cacheRepository } from '@bike4mind/database';
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { FilterQuery } from 'mongoose';
-import { ICounterLogDocument } from '@bike4mind/common';
+import { ApiKeyScope, ICounterLogDocument } from '@bike4mind/common';
 
 // Query schema for filters - used only for type inference via z.infer<typeof ...>
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
@@ -147,8 +147,9 @@ const EVENT_METRICS_RATE_LIMIT = 30;
 
 // Chained after baseApi so auth has run and the limiter keys on req.user.id rather than the
 // client IP. It also runs ahead of the isAdmin check below, so a non-admin who empties their own
-// bucket is refused with 429 instead of 403 - both refuse, and the bucket is per principal.
-const handler = baseApi()
+// bucket is refused with 429 instead of 403 - both refuse, and the bucket is per principal. The
+// requiredScopes gate below only constrains API-key callers; browser/JWT admins are unaffected.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
   .use(rateLimit({ limit: EVENT_METRICS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-event-metrics' }))
   .get(async (req: Request<{}, {}, {}, EventMetricsQuery>, res) => {
     // Check if user has admin permissions
