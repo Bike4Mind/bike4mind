@@ -56,6 +56,12 @@ export async function unionPreauthorizedLakeAccess(
     scopedTagPrefixes.add(entry.fileTagPrefix);
   }
   return {
+    // `excludedByAccessCount` (#3055) rides through via this spread deliberately uncorrected: it
+    // is counted upstream from org-membership/public visibility, and a manage-but-not-member
+    // preauthorized lake is (by definition of "not a member") not visible on that basis - so it is
+    // not a candidate for that count and re-admitting it here has nothing to subtract. The one
+    // residual case - a preauthorized lake that is ALSO public and gate-dropped - is narrow enough
+    // not to warrant recomputing the count after every union.
     ...access,
     dataLakeTags: Array.from(dataLakeTags),
     scopedTagPrefixes: Array.from(scopedTagPrefixes),
