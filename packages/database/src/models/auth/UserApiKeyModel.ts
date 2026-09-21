@@ -207,6 +207,13 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     productName: { type: String },
     // Billing target. Default User = personal key billed to `userId`. Organization
     // routes this key's AI usage to `organizationId`'s credit pool. See IUserApiKey.
+    // Invariant (Organization iff organizationId is set) is enforced only at the
+    // sole writer, userApiKeyService/createUserApiKey - not here as a schema
+    // validator/hook, because existing tests deliberately construct the
+    // mismatched shape via this model directly to exercise the org query filters
+    // (see UserApiKeyModel.embed.test.ts); a hook would break that fixture.
+    // Bypassing the writer (a script or a direct DB write) can still produce the
+    // mismatched shape.
     billingOwnerType: {
       type: String,
       enum: [CreditHolderType.User, CreditHolderType.Organization],
