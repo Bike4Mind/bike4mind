@@ -91,6 +91,14 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
             sx={{
               display: 'flex',
               justifyContent: 'center',
+              // A fixed white plate in both schemes, like the HTML and React sandboxes.
+              // The preview used to be transparent, so an SVG drawn in light strokes for
+              // a dark canvas disappeared on a light card, and dark strokes disappeared
+              // on a dark one. An SVG is authored artwork and cannot be re-themed; giving
+              // it the canvas most artwork assumes is the only reading that never hides it.
+              backgroundColor: '#FFFFFF',
+              borderRadius: '6px',
+              p: 1,
               '& svg': {
                 maxWidth: '100%',
                 height: 'auto',
