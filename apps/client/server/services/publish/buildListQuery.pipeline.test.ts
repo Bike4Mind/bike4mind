@@ -57,6 +57,10 @@ import handler from '@pages/api/publish/artifacts';
 
 const USER = 'user-1';
 
+/** A sentinel the visibility mock returns, so the default-branch case below can assert it stays
+ *  sealed inside scope's OWN $and clause rather than flattened alongside the narrowing. */
+const VIS = { __visibility: true } as const;
+
 async function run(query: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'GET' });
   (req as unknown as { query: unknown }).query = query;
@@ -71,13 +75,22 @@ function matchStage(): Record<string, unknown> {
   return (pipeline.find(s => '$match' in s) as { $match: Record<string, unknown> }).$match;
 }
 
+/** The `[scope, narrowing]` pair from the leading $match, for the merged case - undefined if the
+ *  merge is ever loosened to a spread, which is the shape this file guards against. */
+function mergedFilter(): Array<Record<string, unknown>> | undefined {
+  return matchStage().$and as Array<Record<string, unknown>> | undefined;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   aggregate.mockResolvedValue([{ rows: [], total: [{ n: 0 }] }]);
+  buildListVisibilityFilter.mockReturnValue(VIS);
 });
 
 describe('buildListQuery in the route pipeline', () => {
   it('keeps scope and the narrowing as two distinct $and elements, never merged into one', async () => {
+    // Real buildListQuery output landing in $and[1], not the canned `{ tags: 'northwind' }`
+    // artifacts/__tests__/index.test.ts:300 mocks buildListQuery to return.
     await run({ mine: 'true', tag: 'northwind' });
 
     const match = matchStage();
@@ -97,16 +110,25 @@ describe('buildListQuery in the route pipeline', () => {
       comments: 'ownerId',
     });
 
-    const narrowing = (matchStage().$and as Array<Record<string, unknown>>)[1];
+    const merged = mergedFilter();
+    expect(merged).toBeDefined(); // fails HERE, by name, if the merge is ever loosened to a spread
+    const narrowing = (merged as Array<Record<string, unknown>>)[1];
     expect(Object.keys(narrowing)).toEqual(['$or']);
     for (const key of ['ownerId', 'deletedAt', '$and', '$nor']) {
       expect(key in narrowing).toBe(false);
     }
   });
 
-  it('passes scope through unwrapped when the caller sends no narrowing', async () => {
-    // No `$and: [scope, {}]` for the common case: buildListQuery({}).match is `{}`.
-    await run({ mine: 'true' });
-    expect(matchStage()).toEqual({ deletedAt: null, ownerId: USER });
+  it("keeps the visibility filter sealed inside scope's own $and clause, never flattened with a narrowing", async () => {
+    // The two cases above are mine-scoped, where scope is the flat { deletedAt, ownerId } literal -
+    // widening there at worst shows a caller more of their OWN artifacts. The default branch is
+    // where scope carries the real authorization ladder (buildListVisibilityFilter's output,
+    // nested under scope's own $and), and widening THERE reaches across owners - the failure the
+    // invariant exists to prevent. No `mine`, so the route takes that branch.
+    await run({ tag: 'northwind' });
+
+    expect(matchStage()).toEqual({
+      $and: [{ deletedAt: null, $and: [VIS] }, { tags: 'northwind' }],
+    });
   });
 });
