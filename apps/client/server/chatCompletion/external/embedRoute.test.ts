@@ -174,7 +174,7 @@ beforeEach(() => {
     projectId: 'proj-1',
   });
   mockExecuteCompletion.mockImplementation(async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
-    await params.onChunk(['', 'hello from the agent'], { outputTokens: 5 });
+    await params.onChunk(['hello from the agent'], { outputTokens: 5 });
   });
 });
 
@@ -712,10 +712,10 @@ describe('POST /api/embed/chat - server-side tools', () => {
     // the route must strip it so the anonymous client sees text and tokens only.
     mockExecuteCompletion.mockImplementation(
       async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
-        await params.onChunk(['', ''], {
+        await params.onChunk([''], {
           toolsUsed: [{ name: 'search_knowledge_base', arguments: { query: 'internal query' }, id: 't1' }],
         });
-        await params.onChunk(['', 'hello from the agent'], { outputTokens: 5 });
+        await params.onChunk(['hello from the agent'], { outputTokens: 5 });
       }
     );
 
@@ -727,6 +727,32 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(text).not.toContain('internal query');
     expect(text).not.toContain('tool_use');
     expect(text).not.toContain('web_search');
+  });
+
+  it('strips reasoning that spans chunks, per request', async () => {
+    // Reasoning models inline their monologue at the SAME index as the prose, wrapped
+    // in <think> sentinels that arrive on separate streaming callbacks. State is held
+    // per request, so an unterminated block cannot bleed into the next visitor.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['<think>']);
+        await params.onChunk(['the user is asking about internal pricing']);
+        await params.onChunk(['</think>']);
+        await params.onChunk(['hello from the agent'], { outputTokens: 5 });
+      }
+    );
+
+    const first = await (await post(CHAT)).text();
+    expect(first).toContain('hello from the agent');
+    expect(first).not.toContain('internal pricing');
+    expect(first).not.toContain('<think>');
+
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['hello from the agent'], { outputTokens: 5 });
+      }
+    );
+    expect(await (await post(CHAT)).text()).toContain('hello from the agent');
   });
 
   it('a missing key owner runs the completion persona-only instead of failing', async () => {

@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
-  buildPublicSSEEvent,
+  createPublicSSEEventBuilder,
   formatSSEError,
   resolveRequestId,
   serializeSSEEvent,
@@ -486,6 +486,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         ...(body.messages as IMessage[]),
       ];
 
+      const buildPublicEvent = createPublicSSEEventBuilder();
       try {
         await executeCompletion({
           userId: ctx.userId,
@@ -516,10 +517,12 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           source: 'api',
           logger,
           onChunk: async (text, info) => {
-            // Public/anonymous caller: text + usage/credits only. buildPublicSSEEvent
-            // drops server-internal metadata (tool calls, thinking blocks) that the
-            // backend reports on tool/reasoning turns. See its contract in sseEvents.ts.
-            write(serializeSSEEvent(buildPublicSSEEvent(text, info)));
+            // Public/anonymous caller: text + usage/credits only. The builder drops
+            // server-internal metadata (tool calls, thinking blocks) that the backend
+            // reports on tool/reasoning turns, and strips <think> reasoning from the
+            // text. One builder per request - it carries stripper state across chunks.
+            // See its contract in sseEvents.ts.
+            write(serializeSSEEvent(buildPublicEvent(text, info)));
           },
         });
         write(SSE_DONE_SIGNAL);
