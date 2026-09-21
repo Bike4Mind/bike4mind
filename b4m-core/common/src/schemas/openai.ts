@@ -82,6 +82,11 @@ export type ImageSizeFromSchema = z.infer<typeof ImageSizeSchema>;
 // because OpenAI chooses the render effort per request and image credits are held once, before
 // the call, with no reconciliation afterwards. On gpt-image-2 @1024x1024 that is $0.211 rather
 // than the $0.053 a mid-tier request costs. Pass an explicit tier to pay for that tier.
+//
+// OMITTING the field is not the same as 'auto': a GPT-Image generation with no quality is
+// rendered and billed at 'medium'. The tier is pinned on the way to OpenAI rather than left to
+// its auto-selection, so a bare request costs what it says and renders what it costs. Ask for
+// 'auto' if you want OpenAI to choose the effort.
 export const OPENAI_IMAGE_QUALITIES = ['standard', 'hd', 'low', 'medium', 'high', 'auto'] as const;
 export const OpenAIImageQualitySchema = z.enum(OPENAI_IMAGE_QUALITIES);
 export type OpenAIImageQuality = z.infer<typeof OpenAIImageQualitySchema>;

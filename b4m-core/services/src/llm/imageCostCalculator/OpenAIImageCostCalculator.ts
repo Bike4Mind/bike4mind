@@ -23,7 +23,14 @@ type Tier = 'low' | 'medium' | 'high';
 type KnownSize = '1024x1024' | '1024x1536' | '1536x1024';
 type PriceKey = `${Tier}_${KnownSize}`;
 
-const DEFAULT_TIER: Tier = 'medium';
+/**
+ * The tier a GPT-Image request that names no quality is billed at - and, since #3007, the
+ * tier it is also rendered at: both generation dispatch seams pin an omitted quality to this
+ * value before the request reaches OpenAI (ImageGeneration.mapQualityForModel for the
+ * generate-image route/queue, resolveImageArgs for the agent tool). Exported so the pin and
+ * the price can never be edited apart. See normalizeInput's doc comment for the policy.
+ */
+export const OMITTED_QUALITY_TIER: Tier = 'medium';
 // OpenAI picks the render effort for `quality: 'auto'` per request and never tells us which
 // tier it used, so we bill the ceiling it could have rendered. The prose counterpart of this
 // constant lives in OpenAIImageService.toGptImageQuality (utils), which cannot import it. Under-billing is unrecoverable
@@ -122,9 +129,20 @@ function normalizeModelId(modelId: string): ImageModels | null {
  * what the user pays, so an input that leaves the render effort up to OpenAI ('auto') is priced
  * at the ceiling rather than at a guess - see AUTO_TIER.
  *
+ * An OMITTED quality reaches the same dynamic OpenAI selection but is answered the other way
+ * round (#3007): rather than reprice it, the generation dispatch sites pin the forwarded
+ * quality to OMITTED_QUALITY_TIER, so the render matches the charge and no caller's bill moves.
+ * Omitting the field is the most common shape of a minimal API call and is not an opt-in the
+ * way an explicit 'auto' is, so a ~4x increase there would punish callers who never asked for
+ * high effort; pinning costs them nothing and still closes the gap. Dynamic effort stays
+ * available by asking for it - 'auto', priced at the ceiling. Keep this branch on
+ * OMITTED_QUALITY_TIER: it is what the pin forwards, so changing one without the other
+ * re-opens the mismatch in whichever direction it was moved.
+ *
  * Every other under-specified input still defaults leniently (unknown/flexible size -> 1024x1024,
- * omitted quality -> DEFAULT_TIER): throwing here would cascade into a Quest validation failure,
- * because the partial-update path in ImageGeneration.process omits the prompt field.
+ * unrecognized quality -> OMITTED_QUALITY_TIER): throwing here would cascade into a Quest
+ * validation failure, because the partial-update path in ImageGeneration.process omits the
+ * prompt field.
  */
 function normalizeInput(input: OpenAIGPTImageInput): { tier: Tier; size: KnownSize } {
   const tier: Tier = (() => {
@@ -141,7 +159,7 @@ function normalizeInput(input: OpenAIGPTImageInput): { tier: Tier; size: KnownSi
         return input.quality;
       default:
         // undefined or any unrecognized value
-        return DEFAULT_TIER;
+        return OMITTED_QUALITY_TIER;
     }
   })();
 

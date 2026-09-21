@@ -53,6 +53,12 @@ function isGptImageQuality(value: unknown): value is GptImageQuality {
  * rather than pretending to know the tier. Do not "fix" that by pinning 'auto' here without
  * repricing it there. (Named symbols are left out on purpose - services depends on utils, not
  * the reverse, so nothing in this package can import or rename-track them.)
+ *
+ * An absent quality still maps to undefined here, which drops the parameter and lets OpenAI
+ * apply its own 'auto'. On the generation path that state is no longer reachable: both
+ * dispatch sites in services pin an omitted tier to the tier they bill before calling in, so
+ * the render matches the charge. The edit path does not pin, and is priced separately.
+ * Keep this a pure mapper - the pin belongs with the code that also holds the credits.
  */
 export function toGptImageQuality(quality?: string | null): GptImageQuality | undefined {
   const mapped = quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
