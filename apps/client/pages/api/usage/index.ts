@@ -58,9 +58,9 @@ const handler = baseApi().get(async (req, res) => {
   //
   // findByOrganizationId's other consumer is the org key-management list
   // (userApiKeyService/list.ts); both rely on it returning only Organization-billed
-  // keys, since the create-time invariant in userApiKeyService/create.ts guarantees
-  // organizationId is set iff billingOwnerType is Organization - a personal key never
-  // carries an organizationId to be mismatched against here.
+  // keys, which findByOrganizationId guarantees through its own billingOwnerType
+  // conjunct - not through the create-time invariant alone, which a script or direct
+  // DB write can bypass (see UserApiKeyModel.ts and its embed test).
   const [summary, apiKeyUsage, sourceUsage, ownerKeys] = await Promise.all([
     usageEventRepository.ownerUsageSummary(ownerId, ownerType, days),
     creditTransactionRepository.apiKeyUsageForOwner(ownerId, ownerType, days),
