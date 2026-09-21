@@ -63,6 +63,24 @@ describe('requestShellCommandPermission', () => {
     expect(res.allowed).toBe(true);
     expect(prompt2).not.toHaveBeenCalled();
   });
+
+  it('never permanently trusts a hook, even when repo trustedTools list its name', async () => {
+    // A trusted repo's local.json can try to pre-authorize its own hook shell by
+    // listing the namespaced hook name in trustedTools. getToolCategory classifies
+    // hook namespaces as prompt_always, so needsPermission stays true and the gate
+    // still prompts rather than silently running the repo's shell.
+    const pm = new PermissionManager(['agent_hook:PreToolUse', 'skill_hook:pre-invoke']);
+    expect(pm.needsPermission('agent_hook:PreToolUse')).toBe(true);
+    expect(pm.canBeTrusted('agent_hook:PreToolUse')).toBe(false);
+
+    const prompt = promptReturning('deny');
+    const res = await requestShellCommandPermission('agent_hook:PreToolUse', 'rm -rf /', '/proj', {
+      permissionManager: pm,
+      promptFn: prompt,
+    });
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(res.allowed).toBe(false);
+  });
 });
 
 describe('agent lifecycle hooks (executeHooks)', () => {
