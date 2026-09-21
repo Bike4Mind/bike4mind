@@ -4,7 +4,6 @@ import type { ApiErrorCode } from '../apiErrorCodes';
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).
 import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
-import type { IChatHistoryItem } from '../types/entities/SessionTypes';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 
 /**
@@ -223,9 +222,11 @@ export const ChatQuestPollResultSchema = z.object({
   status: z.enum(['stopped', 'running', 'done']).optional(),
   // A finished turn that FAILED is `type: 'error'` carrying the failure text in
   // `reply`; anything else is a real reply.
-  type: z
-    .enum(['message', 'oob', 'error', 'system', 'voice_transcript'] satisfies IChatHistoryItem['type'][])
-    .optional(),
+  // Derived from CHAT_HISTORY_ITEM_TYPES, like ChatAckSchema's twin above:
+  // a hand-written `satisfies` list only proves the members listed are valid, not that
+  // none is missing, so a new quest type would be accepted on the wait:true body and rejected
+  // here - the two surfaces must publish one vocabulary.
+  type: z.enum(CHAT_HISTORY_ITEM_TYPES).optional(),
   // Machine-readable classifier on a `type: 'error'` quest. Values derive from
   // QUEST_ERROR_CODES so this enum can't drift from the TS union - the same
   // vocabulary the WebSocket quest payload publishes (see schemas/actions.ts).

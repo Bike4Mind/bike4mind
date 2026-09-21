@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { SimplifiedChatRequestSchema, ChatAckSchema } from './chat';
+import { SimplifiedChatRequestSchema, ChatAckSchema, ChatQuestPollResultSchema } from './chat';
+import { CHAT_HISTORY_ITEM_TYPES } from '../types/entities/SessionTypes';
 import { filterKnownTools, B4MLLMToolsList } from './llm';
 
 const baseAck = {
@@ -39,6 +40,27 @@ describe('ChatAckSchema error classifier', () => {
     const result = ChatAckSchema.safeParse({ ...baseAck, type: 'message' });
     expect(result.success).toBe(true);
     expect(result.data?.errorCode).toBeUndefined();
+  });
+
+  // The two surfaces a caller can see a completed turn on must publish ONE quest-type
+  // vocabulary: an enum accepted on one and rejected on the other forces two parsers, which is
+  // the defect this endpoint's parity work exists to remove. Asserted per surface, and against
+  // the const rather than a literal list, so adding a quest type cannot pass here while
+  // breaking one of them.
+  describe.each([
+    ['wait: true body (ChatAckSchema)', (type: string) => ChatAckSchema.safeParse({ ...baseAck, type })],
+    [
+      'polled quest (ChatQuestPollResultSchema)',
+      (type: string) => ChatQuestPollResultSchema.safeParse({ id: 'quest-1', type }),
+    ],
+  ])('quest type vocabulary on the %s', (_surface, parse) => {
+    it.each(CHAT_HISTORY_ITEM_TYPES)('accepts type: "%s"', type => {
+      expect(parse(type).success).toBe(true);
+    });
+
+    it('rejects a type outside the vocabulary', () => {
+      expect(parse('not_a_quest_type').success).toBe(false);
+    });
   });
 
   it('rejects an errorCode outside the quest-failure vocabulary (narrows API_ERROR_CODES)', () => {
