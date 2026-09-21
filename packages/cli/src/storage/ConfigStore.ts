@@ -4,7 +4,7 @@ import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
-import type { AuthTokens, CliConfig, ProjectConfig, ProjectLocalConfig } from './types';
+import type { AuthTokens, CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
 import { getDefaultApiUrl, LOCAL_DEV_URL, getEnvironmentName } from '../utils/apiUrl';
 import {
   DEFAULT_SANDBOX_CONFIG,
@@ -13,6 +13,7 @@ import {
   type SandboxMode,
 } from '../sandbox/types.js';
 import { canTrustTool } from '../config/toolSafety';
+import { PROJECT_CONTEXT_FILES } from '../utils/contextLoader';
 import { logger } from '../utils/Logger';
 
 /**
@@ -1099,6 +1100,10 @@ export class ConfigStore {
       ['.claude', 'agents'],
       ['.claude', 'skills'],
       ['.claude', 'commands'],
+      // Plain context files (CLAUDE.md etc.) are trust-gated too - they steer the
+      // agent, so a context-only repo must still trigger the trust prompt rather
+      // than silently loading (or, once gated, silently dropping) its context.
+      ...PROJECT_CONTEXT_FILES.map(name => [name]),
     ];
     return candidates.some(parts => existsSync(path.join(root, ...parts)));
   }
@@ -1208,7 +1213,7 @@ export class ConfigStore {
   /**
    * Save configuration to disk
    */
-  async save(config?: Partial<CliConfig>): Promise<void> {
+  async save(config?: GlobalConfigPatch): Promise<void> {
     await this.init();
 
     // Ensure the global snapshot exists (first save on a fresh store).
@@ -1218,16 +1223,22 @@ export class ConfigStore {
     const global = this.globalConfig!;
 
     if (config) {
-      // Structural repo-launderable fields never flow through a generic save():
-      // mcpServers / trustedTools / additionalDirectories / trustedProjects
-      // change only via their dedicated mutators (which operate on the global
-      // layer). Stripping them here means even a caller that spreads the merged
-      // effective config into save() can't re-launder repo data into global.
-      const { mcpServers, trustedTools, additionalDirectories, trustedProjects, ...rest } = config;
+      // Repo-launderable fields never flow through a generic save(): the
+      // structural sets (mcpServers / trustedTools / additionalDirectories /
+      // trustedProjects) and the security-posture fields (tools / sandbox)
+      // change ONLY via their dedicated mutators (addMcpServer, trustTool,
+      // saveSandboxConfig, trustProject, ...). Stripping them here - a runtime
+      // allowlist on top of the GlobalConfigPatch type - means even a caller
+      // that casts past the type and spreads the merged effective config can't
+      // re-launder repo data into ~/.bike4mind/config.json.
+      const { mcpServers, trustedTools, additionalDirectories, trustedProjects, tools, sandbox, ...rest } =
+        config as Partial<CliConfig>;
       void mcpServers;
       void trustedTools;
       void additionalDirectories;
       void trustedProjects;
+      void tools;
+      void sandbox;
 
       this.globalConfig = {
         ...global,
@@ -1236,10 +1247,6 @@ export class ConfigStore {
         preferences: {
           ...global.preferences,
           ...(config.preferences || {}),
-        },
-        tools: {
-          ...global.tools,
-          ...(config.tools || {}),
         },
         toolApiKeys: {
           ...global.toolApiKeys,
@@ -1300,8 +1307,20 @@ export class ConfigStore {
   /**
    * Update a specific configuration value
    */
-  async update(updates: Partial<CliConfig>): Promise<void> {
+  async update(updates: GlobalConfigPatch): Promise<void> {
     await this.save(updates);
+  }
+
+  /**
+   * Persist a sandbox config to the GLOBAL layer (the `/sandbox` handlers' path).
+   * Sandbox is excluded from the generic `save()` allowlist so it flows only
+   * through here - a merged-config save() can never launder a repo-tightened
+   * sandbox into the user's global default.
+   */
+  async saveSandboxConfig(sandbox: SandboxConfig): Promise<void> {
+    await this.load();
+    this.globalConfig!.sandbox = sandbox;
+    await this.save();
   }
 
   /**
@@ -1697,8 +1716,14 @@ export class ConfigStore {
       if (projectRoot) {
         for (const dir of this.rawProjectConfig.additionalDirectories) {
           const resolved = path.resolve(projectRoot, dir);
-          if (isWithin(projectRoot, resolved)) {
-            dirs.add(resolved);
+          // Canonicalize before the containment check: a committed symlink
+          // (e.g. `evil -> /`) passes the textual isWithin() on its logical path
+          // but escapes once resolved. safeRealpath returning null (missing /
+          // unresolvable) fails safe - the entry is dropped. The realpath'd path
+          // is what we hand downstream, so pathValidation can't re-expand it.
+          const real = await safeRealpath(resolved);
+          if (real && isWithin(projectRoot, real)) {
+            dirs.add(real);
           } else {
             logger.warn(`Ignoring project additionalDirectory outside project root: ${dir}`);
           }

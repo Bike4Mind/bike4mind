@@ -282,6 +282,31 @@ export interface CliConfig {
 }
 
 /**
+ * The fields a generic `ConfigStore.save(patch)` is allowed to write into the
+ * GLOBAL (user-owned) config layer. Excludes every repo-launderable field that
+ * flows only through a dedicated mutator - the structural sets
+ * (mcpServers/trustedTools/additionalDirectories/trustedProjects) and the
+ * security-posture fields (tools/sandbox). A caller that spreads the merged
+ * effective config into save() therefore cannot re-launder repo data into
+ * ~/.bike4mind/config.json - the excluded keys are dropped at compile time
+ * (and again at runtime in save()). defaultModel/preferences stay writable
+ * (that is what /model and /config edit); callers pass user-changed values, not
+ * the repo-merged rest. See ConfigStore.save.
+ */
+export type GlobalConfigPatch = Omit<
+  Partial<CliConfig>,
+  'mcpServers' | 'trustedTools' | 'additionalDirectories' | 'trustedProjects' | 'tools' | 'sandbox' | 'preferences'
+> & {
+  /**
+   * A patch may carry a PARTIAL preferences object; save() shallow-merges it
+   * onto the global preferences, so unspecified keys keep their global value.
+   * This lets a caller persist only the preference keys the user changed rather
+   * than the whole merged (possibly repo-influenced) preferences object.
+   */
+  preferences?: Partial<CliConfig['preferences']>;
+};
+
+/**
  * Project-level configuration (committed to git)
  * Team-wide settings shared across all developers
  */

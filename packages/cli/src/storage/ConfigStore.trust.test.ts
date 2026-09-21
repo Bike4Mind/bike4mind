@@ -81,10 +81,16 @@ describe('ConfigStore folder-trust gate', () => {
     );
   }
 
+  const savedEnv: Record<string, string | undefined> = {};
+  const MANAGED_ENV = ['B4M_NO_PROJECT_CONFIG', 'B4M_MCP_CONFIG_FILE', 'B4M_STRICT_MCP_CONFIG'];
+
   beforeEach(async () => {
-    delete process.env.B4M_NO_PROJECT_CONFIG;
-    delete process.env.B4M_MCP_CONFIG_FILE;
-    delete process.env.B4M_STRICT_MCP_CONFIG;
+    // Save + clear the env this suite mutates so it can't leak into later tests
+    // running in the same worker (restored in afterEach).
+    for (const key of MANAGED_ENV) {
+      savedEnv[key] = process.env[key];
+      delete process.env[key];
+    }
 
     originalCwd = process.cwd();
     const base = await fs.mkdtemp(path.join(tmpdir(), 'b4m-trust-'));
@@ -102,6 +108,10 @@ describe('ConfigStore folder-trust gate', () => {
 
   afterEach(async () => {
     process.chdir(originalCwd);
+    for (const key of MANAGED_ENV) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
     // base is the parent of projectDir
     await fs.rm(path.dirname(projectDir), { recursive: true, force: true }).catch(() => {});
   });
@@ -115,10 +125,14 @@ describe('ConfigStore folder-trust gate', () => {
 
     // No repo MCP servers merged (none can spawn); only the global one.
     expect(config.mcpServers.map(s => s.name)).toEqual(['glob-srv']);
-    // No repo trusted tools, no repo tool-deny, no sandbox weakening.
+    // No repo trusted tools, no repo tool-deny, no sandbox contribution at all.
+    // (mode staying 'permissions' is weaker evidence - tightenSandbox rejects a
+    // repo auto-allow regardless of trust - so assert the repo's deniedPaths,
+    // which a trusted repo may ADD, are absent while untrusted.)
     expect(config.trustedTools).toEqual([]);
     expect(config.tools.disabled).not.toContain('file_read');
     expect(config.sandbox?.mode).toBe('permissions');
+    expect(config.sandbox?.filesystem?.deniedPaths ?? []).not.toContain('/repo/denied');
     // No repo-declared additional directories.
     expect(await store.getAdditionalDirectories()).toEqual([]);
   });
@@ -190,7 +204,7 @@ describe('ConfigStore folder-trust gate', () => {
     expect(onDisk.trustedProjects).toContain(projectReal);
   });
 
-  it('a partial save (e.g. a /sandbox toggle) never launders repo preferences/defaultModel', async () => {
+  it('saveSandboxConfig persists sandbox to global without laundering repo preferences/defaultModel', async () => {
     const store = new ConfigStore(globalConfigPath);
     await store.load();
     await store.trustProject();
@@ -200,13 +214,107 @@ describe('ConfigStore folder-trust gate', () => {
     expect(merged.defaultModel).toBe('repo-evil-model');
     expect(merged.preferences.theme).toBe('light');
 
-    // ...but persisting a single field (as the /sandbox handlers do) must write
-    // ONLY that field over the global layer, never the repo-merged rest.
-    await store.save({ sandbox: { ...DEFAULT_SANDBOX_CONFIG, enabled: true, mode: 'permissions' } });
+    // ...but the /sandbox handlers persist through the dedicated mutator, which
+    // writes ONLY the sandbox field over the global layer, never the repo rest.
+    await store.saveSandboxConfig({ ...DEFAULT_SANDBOX_CONFIG, enabled: true, mode: 'auto-allow' });
 
     const onDisk = JSON.parse(await fs.readFile(globalConfigPath, 'utf-8'));
+    expect(onDisk.sandbox?.mode).toBe('auto-allow'); // the sandbox write landed
     expect(onDisk.defaultModel).toBe('claude-sonnet-4-6'); // global's, not the repo's
     expect(onDisk.preferences.theme).toBe('dark'); // global's, not the repo's
+  });
+
+  it('a merged-config save (the fixed /model path) writes the user model but no repo data', async () => {
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+    await store.trustProject();
+
+    const merged = await store.get();
+    expect(merged.defaultModel).toBe('repo-evil-model'); // repo steered the effective model
+    expect(merged.trustedTools).toContain('web_search'); // repo-contributed (trustable) tool
+
+    // The fixed /model handler persists ONLY the user's explicit model pick.
+    await store.save({ defaultModel: 'user-picked-model' });
+
+    const onDisk = JSON.parse(await fs.readFile(globalConfigPath, 'utf-8'));
+    expect(onDisk.defaultModel).toBe('user-picked-model');
+    // Repo-sourced structural + posture fields never reach the global file.
+    expect(onDisk.mcpServers.map((s: { name: string }) => s.name)).toEqual(['glob-srv']);
+    expect(onDisk.trustedTools ?? []).not.toContain('web_search');
+    expect(onDisk.tools.disabled ?? []).not.toContain('file_read');
+    expect(onDisk.tools.enabled ?? []).not.toContain('blog_publish');
+    expect(onDisk.sandbox?.mode).toBe('permissions');
+    expect(onDisk.sandbox?.filesystem?.deniedPaths ?? []).not.toContain('/repo/denied');
+    expect(onDisk.preferences.theme).toBe('dark'); // global's, not the repo's 'light'
+  });
+
+  it('a careless spread of the merged config into save() still cannot launder the posture/structural fields', async () => {
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+    await store.trustProject();
+    const merged = await store.get();
+
+    // A caller that casts past GlobalConfigPatch and spreads the whole merged
+    // effective config: the runtime allowlist in save() drops the launderable
+    // structural (mcpServers/trustedTools/additionalDirectories) and posture
+    // (tools/sandbox) fields regardless.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await store.save({ ...(merged as any) });
+
+    const onDisk = JSON.parse(await fs.readFile(globalConfigPath, 'utf-8'));
+    expect(onDisk.mcpServers.map((s: { name: string }) => s.name)).toEqual(['glob-srv']);
+    expect(onDisk.trustedTools ?? []).not.toContain('web_search');
+    expect(onDisk.tools.disabled ?? []).not.toContain('file_read');
+    expect(onDisk.tools.enabled ?? []).not.toContain('blog_publish');
+    expect(onDisk.sandbox?.mode).toBe('permissions');
+    expect(onDisk.sandbox?.filesystem?.deniedPaths ?? []).not.toContain('/repo/denied');
+  });
+
+  it('excludes an additionalDirectory that is a symlink escaping the project root', async () => {
+    // A committed symlink inside the repo pointing outside passes the textual
+    // containment check but must be rejected once realpath'd.
+    const outside = path.join(path.dirname(projectReal), 'outside-secret');
+    await fs.mkdir(outside, { recursive: true });
+    const outsideReal = await fs.realpath(outside);
+    await fs.symlink(outside, path.join(projectDir, 'sneaky'));
+    await fs.writeFile(
+      path.join(projectDir, '.bike4mind', 'config.json'),
+      JSON.stringify({ additionalDirectories: ['sub', 'sneaky'] })
+    );
+
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+    await store.trustProject();
+
+    const dirs = await store.getAdditionalDirectories();
+    expect(dirs).toContain(path.join(projectReal, 'sub')); // legit subdir still allowed
+    expect(dirs).not.toContain(outsideReal);
+    expect(dirs.some(d => d === outsideReal || d.startsWith(outsideReal + path.sep))).toBe(false);
+  });
+
+  it('treats a context-only repo (CLAUDE.md, no .bike4mind) as trust-gated so the prompt fires', async () => {
+    const base2 = await fs.mkdtemp(path.join(tmpdir(), 'b4m-ctxonly-'));
+    const ctxProj = path.join(base2, 'proj');
+    await fs.mkdir(path.join(ctxProj, '.git'), { recursive: true });
+    await fs.writeFile(path.join(ctxProj, 'CLAUDE.md'), '# repo context\n');
+    const g2 = path.join(base2, 'global', 'config.json');
+    await fs.mkdir(path.dirname(g2), { recursive: true });
+    await fs.writeFile(g2, globalConfigJson(), { mode: 0o600 });
+
+    const prevCwd = process.cwd();
+    process.chdir(ctxProj);
+    try {
+      const store = new ConfigStore(g2);
+      await store.load();
+      // A context-only repo is untrusted by default but DOES ship a trust-gated
+      // file, so the startup prompt must still fire (regression: pre-fix it did
+      // not, and buildSupportingStores then silently dropped the CLAUDE.md).
+      expect(store.isProjectTrusted()).toBe(false);
+      expect(store.projectHasB4mFiles()).toBe(true);
+    } finally {
+      process.chdir(prevCwd);
+      await fs.rm(base2, { recursive: true, force: true }).catch(() => {});
+    }
   });
 
   it('round-trips trust and untrust across store instances', async () => {

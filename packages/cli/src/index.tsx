@@ -32,7 +32,15 @@ import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/servi
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
 import { SessionStore, ConfigStore, CommandHistoryStore } from './storage';
-import type { Session, Message, CliConfig, ProjectConfig, ProjectLocalConfig, SessionHandoff } from './storage';
+import type {
+  Session,
+  Message,
+  CliConfig,
+  GlobalConfigPatch,
+  ProjectConfig,
+  ProjectLocalConfig,
+  SessionHandoff,
+} from './storage';
 import { CheckpointStore } from './storage/CheckpointStore.js';
 import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
@@ -3277,7 +3285,7 @@ function CliApp() {
         }
         // Persist ONLY the sandbox field. Spreading the merged effective config
         // would launder repo-sourced preferences/tools/defaultModel into global.
-        await state.configStore.save({ sandbox: { ...state.sandboxOrchestrator.getConfig() } });
+        await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
         console.log('Sandbox enabled (auto-allow mode)');
         break;
       }
@@ -3290,7 +3298,7 @@ function CliApp() {
         await state.sandboxOrchestrator.stopProxy();
         state.sandboxOrchestrator.setMode('disabled');
         state.permissionManager?.setSandboxState('disabled', false);
-        await state.configStore.save({ sandbox: { ...state.sandboxOrchestrator.getConfig() } });
+        await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
         console.log('Sandbox disabled');
         break;
       }
@@ -3311,7 +3319,7 @@ function CliApp() {
         }
         state.sandboxOrchestrator.setMode(modeArg);
         state.permissionManager?.setSandboxState(modeArg, state.sandboxOrchestrator.isActive());
-        await state.configStore.save({ sandbox: { ...state.sandboxOrchestrator.getConfig() } });
+        await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
         console.log(`Sandbox mode set to: ${modeArg}`);
         break;
       }
@@ -3336,13 +3344,11 @@ function CliApp() {
         }
         // Persist ONLY the sandbox field (no repo-merged config laundering).
         const currentSandboxConfig = state.sandboxOrchestrator.getConfig();
-        await state.configStore.save({
-          sandbox: {
-            ...currentSandboxConfig,
-            network: {
-              ...currentSandboxConfig.network,
-              allowedDomains: proxyMgr.getAllowedDomains(),
-            },
+        await state.configStore.saveSandboxConfig({
+          ...currentSandboxConfig,
+          network: {
+            ...currentSandboxConfig.network,
+            allowedDomains: proxyMgr.getAllowedDomains(),
           },
         });
         console.log(`Trusted ${args.length} domain(s)`);
@@ -3573,7 +3579,30 @@ function CliApp() {
    * Handle saving config from the interactive editor
    */
   const handleSaveConfig = async (updatedConfig: CliConfig, options?: { skipModelApply?: boolean }): Promise<void> => {
-    await state.configStore.save(updatedConfig);
+    // Persist ONLY the fields the /config editor owns AND that the user actually
+    // changed vs the current effective config. Unchanged fields equal the merged
+    // seed, so a repo-injected defaultModel/preference the user never touched is
+    // never laundered into the global layer. tools/sandbox/mcpServers/trustedTools
+    // are not editor-owned and never persist here (see GlobalConfigPatch).
+    const prev = state.config;
+    const patch: GlobalConfigPatch = {};
+    if (updatedConfig.defaultModel !== prev?.defaultModel) {
+      patch.defaultModel = updatedConfig.defaultModel;
+    }
+    const changedPreferences: Partial<CliConfig['preferences']> = {};
+    for (const [key, value] of Object.entries(updatedConfig.preferences)) {
+      const prevValue = (prev?.preferences as Record<string, unknown> | undefined)?.[key];
+      if (JSON.stringify(value) !== JSON.stringify(prevValue)) {
+        (changedPreferences as Record<string, unknown>)[key] = value;
+      }
+    }
+    if (Object.keys(changedPreferences).length > 0) {
+      patch.preferences = changedPreferences;
+    }
+    if (JSON.stringify(updatedConfig.features ?? {}) !== JSON.stringify(prev?.features ?? {})) {
+      patch.features = updatedConfig.features;
+    }
+    await state.configStore.save(patch);
 
     // Check if model changed
     const modelChanged = state.config?.defaultModel !== updatedConfig.defaultModel;
@@ -3722,7 +3751,12 @@ function CliApp() {
         if (!state.config) {
           throw new Error('no CLI config is loaded');
         }
-        await handleSaveConfig({ ...state.config, defaultModel: modelId }, { skipModelApply: true });
+        // Persist ONLY the model choice (an explicit user pick). Spreading the
+        // merged effective config through handleSaveConfig would launder repo
+        // preferences into the global layer. The live-session apply is handled
+        // by performModelSwitch's applyToSession (applyModelToSession) below.
+        await state.configStore.save({ defaultModel: modelId });
+        setState(prev => (prev.config ? { ...prev, config: { ...prev.config, defaultModel: modelId } } : prev));
       },
       applyToSession: applyModelToSession,
       log: message => console.log(message),
