@@ -156,7 +156,7 @@ const handler = baseApi()
       throw new ForbiddenError('Admin access required');
     }
 
-    console.log('📊 Event metrics API called');
+    console.log('Event metrics API called');
 
     try {
       const { recache, ...filters } = req.query;
@@ -169,10 +169,10 @@ const handler = baseApi()
         logger: req.logger,
       });
 
-      console.log(`✅ Returning ${metrics.length} event metrics (cached: ${!recache})`);
+      console.log(`Returning ${metrics.length} event metrics (cached: ${!recache})`);
       return res.json(metrics);
     } catch (error) {
-      console.error('❌ Error fetching event metrics:', error);
+      console.error('Error fetching event metrics:', error);
       return res.status(500).json({
         error: 'Failed to fetch event metrics',
         message: error instanceof Error ? error.message : 'Unknown error',

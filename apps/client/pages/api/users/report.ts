@@ -8,9 +8,9 @@ import { ForbiddenError } from '@server/utils/errors';
 import { ReportQueryParamsSchema } from '../../../types/api';
 
 const ONE_MINUTE_MS = 60 * 1000;
-// Lower than any other admin analytics route because nothing in the app calls this one: the only
-// callers are admin API keys and hand-driven requests (it is listed in the in-app API reference
-// and nothing under app/ fetches it). One request is one day - ReportQueryParamsSchema takes a
+// Nothing in the app calls this one: the only callers are admin API keys and hand-driven
+// requests (it is listed in the in-app API reference and nothing under app/ fetches it).
+// One request is one day - ReportQueryParamsSchema takes a
 // single `date` - and the report is uncached, joining a user onto every counter log for that
 // date, so the only multi-request pattern is a walk over consecutive dates. 5/min covers a work
 // week walked inside one minute; a longer backfill has to honor the Retry-After this returns.

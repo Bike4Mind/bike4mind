@@ -71,6 +71,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   CounterLog: { find: mockRefs.findCounterLogs },
 }));
 
+import { cacheRepository } from '@bike4mind/database';
 import handler from '@pages/api/admin/event-metrics';
 
 // Mirrors EVENT_METRICS_RATE_LIMIT in the route; the route owns the value, this is the count of
@@ -187,5 +188,9 @@ describe('GET /api/admin/event-metrics - per-principal rate limit', () => {
     // The other direction of that claim, and the half that is limiter-sensitive on its own:
     // serving the second admin neither reset nor charged the first admin's window.
     expect((await callAs(EXHAUSTED_USER))._getStatusCode()).toBe(429);
+
+    // Pinned to this route's own bucket: a route sharing another route's bucket string would
+    // still pass every assertion above while counting against the wrong counter in production.
+    expect(await cacheRepository.findByKey(`rate-limit:${EXHAUSTED_USER}:admin-event-metrics`)).toBeTruthy();
   });
 });
