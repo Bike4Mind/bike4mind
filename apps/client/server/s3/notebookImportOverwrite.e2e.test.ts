@@ -5,6 +5,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import { Quest, Session, sessionRepository } from '@bike4mind/database';
 import { notebookImportService } from '@bike4mind/services';
+import { determineSessionOperations } from '@server/events/spider';
 import { createChatHistoryWrites, createSessionWrites } from './notebookImportComplete';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
@@ -45,12 +46,13 @@ afterEach(async () => {
 });
 
 /** Seeds a notebook with `count` messages and returns it with the ids the export would carry. */
-async function seedNotebook(name: string, count: number) {
+async function seedNotebook(name: string, count: number, metadata: Record<string, unknown> = {}) {
   const session = await sessionRepository.create({
     userId: USER,
     name,
     firstCreated: new Date('2026-01-01T00:00:00Z'),
     lastUpdated: new Date('2026-01-02T00:00:00Z'),
+    ...metadata,
   } as never);
   const sessionId = String((session as { id: string }).id);
   const docs = Array.from({ length: count }, (_, i) => ({
@@ -67,7 +69,7 @@ async function seedNotebook(name: string, count: number) {
   return { sessionId, ids: docs.map(d => String(d._id)) };
 }
 
-function exportPayload(name: string, ids: string[]) {
+function exportPayload(name: string, ids: string[], metadata: Record<string, unknown> = {}) {
   return {
     exportVersion: '1.0.0',
     notebooks: [
@@ -89,6 +91,7 @@ function exportPayload(name: string, ids: string[]) {
         artifacts: [],
         tools: [],
         agents: [],
+        ...metadata,
       },
     ],
   };
@@ -107,9 +110,11 @@ function makeService() {
     toolRepository: { create: async () => null, find: async () => [], findById: async () => null },
     agentRepository: { create: async () => null },
     userRepository: { findById: async () => ({ id: USER }) },
+    adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {
       getFileContent: async () => null,
       uploadFile: async () => {},
+      deleteFile: async () => null,
       getSignedUrl: async () => null,
     },
     logger: { info: () => {}, warn: () => {}, error: () => {}, debug: () => {} },
@@ -228,5 +233,67 @@ describe('notebook import does not overwrite existing messages', () => {
 
     expect(result.errors).toEqual([]);
     expect(await Quest.countDocuments({ prompt: '' })).toBe(1);
+  });
+});
+
+/**
+ * `tags` and `taggedAt` have to move together: `spider.ts` re-tags only when `!session.taggedAt`,
+ * so a target left with a stamp but no tags is never tagged again. The overwrite payload used to
+ * carry `undefined` for a value the file lacked, and mongoose deletes every `undefined` from the
+ * `$set` - so the target's stale stamp survived a write that otherwise looked correct. This drives
+ * the real service through the real write adapters against a real mongod.
+ */
+describe('notebook import overwrite keeps tags and their stamp together', () => {
+  /** The document as the spider reads it: through the repository, as a plain object. */
+  async function reload(sessionId: string) {
+    const [stored] = await sessionRepository.find({ _id: sessionId } as never);
+    return stored as unknown as { tags?: unknown[]; taggedAt?: Date | null };
+  }
+
+  it('leaves a tagged notebook re-taggable when the file carries no tags', async () => {
+    const { sessionId, ids } = await seedNotebook('Same Name', 2, {
+      tags: [{ name: 'stale', strength: 5 }],
+      taggedAt: new Date('2026-01-02T00:00:00.000Z'),
+    });
+
+    const result = await makeService().importNotebooks(
+      USER,
+      exportPayload('Same Name', ids) as never,
+      { ...OPTIONS, conflictResolution: 'overwrite', preserveIds: true } as never
+    );
+
+    expect(result.errors).toEqual([]);
+    const after = await reload(sessionId);
+
+    // The file carries no tags, so the target's tags are gone - and the stamp has to go with them.
+    expect(after.tags).toEqual([]);
+    expect(after.taggedAt ?? null).toBeNull();
+    // Stated in the gate's own terms, because that is the consequence that matters: on its next
+    // pass the spider still sees a notebook that needs tagging.
+    expect(determineSessionOperations(after as never, ['tags']).tags).toBe(true);
+  });
+
+  it('keeps the file tags and the file stamp when the file carries both', async () => {
+    const { sessionId, ids } = await seedNotebook('Same Name', 2, {
+      tags: [{ name: 'stale', strength: 5 }],
+      taggedAt: new Date('2026-01-02T00:00:00.000Z'),
+    });
+
+    const result = await makeService().importNotebooks(
+      USER,
+      exportPayload('Same Name', ids, {
+        tags: [{ name: 'carried', strength: 9 }],
+        taggedAt: '2026-05-06T07:08:09.000Z',
+      }) as never,
+      { ...OPTIONS, conflictResolution: 'overwrite', preserveIds: true } as never
+    );
+
+    expect(result.errors).toEqual([]);
+    const after = await reload(sessionId);
+
+    expect(after.tags).toEqual([{ name: 'carried', strength: 9 }]);
+    expect(after.taggedAt?.toISOString()).toBe('2026-05-06T07:08:09.000Z');
+    // Already tagged, so the spider must NOT spend a completion on it again.
+    expect(determineSessionOperations(after as never, ['tags']).tags).toBe(false);
   });
 });

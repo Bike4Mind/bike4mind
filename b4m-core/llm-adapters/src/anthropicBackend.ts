@@ -4,7 +4,6 @@ import type {
   ContentBlock,
   RawMessageStreamEvent,
   Tool,
-  MessageParam,
 } from '@anthropic-ai/sdk/resources/messages';
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
@@ -39,6 +38,7 @@ import {
 } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
+import { toAnthropicContent } from './anthropicContent';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
 import {
   buildThinkingParams,
@@ -937,19 +937,17 @@ export class AnthropicBackend implements ICompletionBackend {
             modelInfo: currentModelInfo,
             // Passed through as-is, matching cliCompletions: the declared `number` type is a
             // claim about catalog data, not a guarantee, and resolveOutputMaxTokens absorbs
-            // an absent cap so neither call site has to invent its own fallback. See that
-            // call site for why toModelInfo's derived substitution is the actual gap.
+            // both an absent cap and a merely derived one, so neither call site has to
+            // invent its own fallback.
             modelMaxOutputTokens: currentModelInfo.max_tokens,
           })
         : (options.maxTokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS),
       messages: filteredMessages.map(m => ({
         role: m.role === 'user' ? 'user' : 'assistant',
-        // Preserve the content structure - it can be string or MessageContentObject[].
         // Per-message cache stamping happened in `cacheStampedMessages` above; the
-        // cache_control survives sanitization because it's part of the content blocks.
-        // Internal message content (string | MessageContentObject[]) is structurally
-        // the SDK's accepted content shape; widen to it at this API boundary.
-        content: m.content as unknown as MessageParam['content'],
+        // cache_control survives both sanitization and this translation because it's
+        // part of the content blocks.
+        content: toAnthropicContent(m.content, this.logger),
       })),
       // Claude 4.7 Opus does not accept temperature at all
       ...(this.omitsSamplingParams(model) ? {} : { temperature: options.temperature }),

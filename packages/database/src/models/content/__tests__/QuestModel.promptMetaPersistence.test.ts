@@ -84,6 +84,7 @@ const FULL_PROMPT_META = {
       urlContent: 5,
       toolSchemas: 6,
       userPrompt: 7,
+      lakeRetrieval: 8,
     },
     systemPromptSources: [{ fileId: 'sp-1', fileName: 'admin.md', source: 'admin', priority: 1, enabled: true }],
     dedupedSystemPrompts: ['sp-1'],

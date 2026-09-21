@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
+import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
 // The agent-tool image_generation path must run the SAME moderation gate the
 // queue-handler ImageGeneration service uses, before context.imageGenerateStorage.upload().
@@ -23,12 +24,20 @@ vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
 });
 
 const mockGeminiGenerate = vi.fn();
+const mockBflGenerate = vi.fn();
+const mockOpenAIGenerate = vi.fn();
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
     GeminiImageService: vi.fn().mockImplementation(function () {
       return { generate: mockGeminiGenerate };
+    }),
+    BFLImageService: vi.fn().mockImplementation(function () {
+      return { generate: mockBflGenerate };
+    }),
+    OpenAIImageService: vi.fn().mockImplementation(function () {
+      return { generate: mockOpenAIGenerate };
     }),
   };
 });
@@ -128,6 +137,97 @@ describe('image_generation local-image env gating (self-host only)', () => {
   });
 });
 
+describe('image_generation effective-arg precedence (tool call vs client imageConfig)', () => {
+  beforeEach(() => {
+    mockOpenAIGenerate.mockReset();
+    mockOpenAIGenerate.mockResolvedValue([PNG_DATA_URL]);
+    mockCheckImage.mockReset();
+    mockCheckImage.mockResolvedValue(undefined);
+  });
+
+  // The client always sends a fully-populated imageConfig (useSendMessage fills quality from
+  // the persisted store), so "client value || tool value" silently discarded every tier the
+  // model asked for. The tool call must win; the client value is only a fallback.
+  it('a tool-call tier overrides an always-populated client imageConfig quality', async () => {
+    const context = createFakeContext();
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    context.onStart = onStart;
+
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: 'standard',
+      size: '1024x1024',
+    });
+
+    await toolFn({ prompt: 'a red bike', quality: 'hd' });
+
+    expect(onStart).toHaveBeenCalledWith('image_generation', expect.objectContaining({ quality: 'hd' }));
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ quality: 'hd' }));
+  });
+
+  // Billing follows the dispatched args, so what onStart records and what the provider is
+  // handed must be the same resolved set - otherwise the ledger describes an image nobody made.
+  it('bills the same model, n, size and quality it dispatches', async () => {
+    const context = createFakeContext();
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    context.onStart = onStart;
+
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      n: 2,
+      quality: 'low',
+      size: '1024x1024',
+    });
+
+    await toolFn({ prompt: 'a red bike', n: 1, quality: 'high', size: '1024x1536' });
+
+    const resolved = { model: ImageModels.GPT_IMAGE_2, n: 1, quality: 'high', size: '1024x1536' };
+    expect(onStart).toHaveBeenCalledWith('image_generation', expect.objectContaining(resolved));
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining(resolved));
+  });
+
+  // #2889 taught the OpenAI layer to map standard/hd, but the schema still advertised only
+  // those two, so "generate it at low quality" could not be expressed at all.
+  //
+  // #2899 then removed 'auto': it bills at the ceiling tier because OpenAI picks the effort per
+  // request, so the model must not be able to reach for it - omitting the field is the way to
+  // defer to the user's saved preference, and that costs whatever that preference costs.
+  //
+  // Pinned exactly rather than with arrayContaining/not.toContain: a future value added to
+  // OPENAI_IMAGE_QUALITIES would reach the model unreviewed under a looser assertion.
+  it('exposes exactly the model-selectable GPT-image quality tiers in the tool schema', () => {
+    const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
+    const quality = toolSchema.parameters.properties.quality;
+    expect(quality.enum).toEqual(['standard', 'hd', 'low', 'medium', 'high']);
+  });
+
+  // #2936: the schema advertised five sizes but the calculator prices three, so four of them
+  // rendered at the asked-for size and billed at the 1024x1024 row. Offer only priceable sizes.
+  it('offers only sizes the cost calculator can price in the tool schema', () => {
+    const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
+
+    expect(toolSchema.parameters.properties.size.enum).toEqual([...PRICEABLE_IMAGE_SIZES]);
+  });
+
+  // The enum is advisory to the model, so the resolver has to hold the line too.
+  it('ignores an off-enum model size and bills what it dispatches', async () => {
+    const context = createFakeContext();
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    context.onStart = onStart;
+
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: 'high',
+      size: '1536x1024',
+    });
+
+    await toolFn({ prompt: 'a red bike', size: '1792x1024' });
+
+    expect(onStart).toHaveBeenCalledWith('image_generation', expect.objectContaining({ size: '1536x1024' }));
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ size: '1536x1024' }));
+  });
+});
+
 describe('image_generation Gemini branch parameter passthrough', () => {
   // The tool passes safety_tolerance/prompt_upsampling/seed/output_format straight through to
   // GeminiImageService.generate() - buildGenerationConfig() is the single place that refuses to
@@ -160,6 +260,127 @@ describe('image_generation Gemini branch parameter passthrough', () => {
         safety_tolerance: 1,
         output_format: 'jpeg',
       })
+    );
+  });
+});
+
+describe('image_generation BFL branch dimensions', () => {
+  // Flux Pro sizes its request from width/height, so the configured `size` preset has to reach it
+  // as dimensions or every Pro generation lands on BFLImageService's own 1024x768 default.
+  beforeEach(() => {
+    mockBflGenerate.mockReset();
+    mockBflGenerate.mockResolvedValue([]);
+  });
+
+  it('derives width/height from the configured size preset', async () => {
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+      size: '1440x810',
+    });
+
+    await toolFn({ prompt: 'a red bike' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 1440, height: 810 }));
+  });
+
+  it('derives width/height from the tool call size when imageConfig has none', async () => {
+    // resolveImageArgs only honors a model-supplied size when it is one of the
+    // cost calculator's priceable sizes (see its docstring) - '1024x1024' is the
+    // only one of those that also survives BFL_DIMENSION_BOUNDS unchanged.
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+    });
+
+    await toolFn({ prompt: 'a red bike', size: '1024x1024' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 1024, height: 1024 }));
+  });
+
+  it('lets explicitly configured width/height win over the size preset', async () => {
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+      size: '1440x810',
+      width: 800,
+      height: 600,
+    });
+
+    await toolFn({ prompt: 'a red bike' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 800, height: 600 }));
+  });
+
+  it('discards a preset BFL would reject rather than forwarding it', async () => {
+    // A size chosen for GPT Image 2 survives a switch to Flux Pro; 3840x2160 is over BFL's 1440
+    // cap, so sending it on would turn a wrong-size image into a failed generation.
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+      size: '3840x2160',
+    });
+
+    await toolFn({ prompt: 'a red bike' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith(
+      'a red bike',
+      expect.objectContaining({ width: undefined, height: undefined })
+    );
+  });
+
+  it('leaves dimensions undefined when no size or width/height is configured', async () => {
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+    });
+
+    await toolFn({ prompt: 'a red bike' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith(
+      'a red bike',
+      expect.objectContaining({ width: undefined, height: undefined })
+    );
+  });
+});
+
+describe('image_generation OpenAI model selection for transparent backgrounds', () => {
+  beforeEach(() => {
+    mockOpenAIGenerate.mockReset();
+    mockOpenAIGenerate.mockResolvedValue([]);
+  });
+
+  it('steps a default gpt-image-2 selection down to gpt-image-1.5 when transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, {});
+
+    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+  });
+
+  it('steps an explicitly-selected gpt-image-2 down to gpt-image-1.5 when transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+
+    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+  });
+
+  it('keeps the gpt-image-2 default when no transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, {});
+
+    await toolFn({ prompt: 'an inventory icon' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_2 })
     );
   });
 });

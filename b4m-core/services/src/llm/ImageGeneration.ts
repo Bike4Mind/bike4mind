@@ -36,9 +36,14 @@ import {
   isGeminiImageModel,
   isImageServeable,
   isKontextModel,
+  MAX_REFERENCE_IMAGES,
   requiresImageInput,
   insufficientCreditsError,
   getQuestErrorCode,
+  resolveImageDimensions,
+  BFL_DIMENSION_BOUNDS,
+  ImageOutputFormatSchema,
+  toNonWebpOutputFormat,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -100,11 +105,15 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   safety_tolerance: BFLSafetyToleranceSchema,
   prompt_upsampling: z.boolean().optional().prefault(false),
   seed: z.number().nullable().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional().prefault('png'),
+  output_format: ImageOutputFormatSchema.nullable().optional().prefault('png'),
   width: z.number().optional(),
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).optional(),
+  // Must be declared here as well as on GenerateImageIvokeParamsSchema: invoke() parses the
+  // queue payload through this schema, and an undeclared key is stripped before it ever
+  // reaches process() on the other side of SQS.
+  referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   /** Resolved by the API route. Defaults to 'fresh' if absent. */
   intent: PromptIntentSchema.optional(),
 });
@@ -234,8 +243,26 @@ export class ImageGenerationService {
     const now = new Date();
 
     const parsedBody = GenerateImageIvokeParamsSchema.parse(body);
-    const { sessionId, prompt, model, questId, fabFileIds, promptEnhancement, organizationId, intent, ...rest } =
-      parsedBody;
+    const {
+      sessionId,
+      prompt,
+      model: requestedModel,
+      questId,
+      fabFileIds,
+      promptEnhancement,
+      organizationId,
+      intent,
+      ...rest
+    } = parsedBody;
+    // Step a gpt-image-2 selection down to gpt-image-1.5 when transparency is requested:
+    // gpt-image-2 rejects background: 'transparent' outright, so sending it there would
+    // silently turn a valid request into an opaque image (OpenAIImageService's own backstop
+    // drops the field rather than erroring). Resolved before billing so credits/promptMeta
+    // key off the model actually used.
+    const model =
+      rest.background === 'transparent' && isGPTImage2Model(requestedModel)
+        ? ImageModels.GPT_IMAGE_1_5
+        : requestedModel;
     const session = await this.db.sessions.findById(sessionId);
     if (!session) throw new NotFoundError('Session not found');
 
@@ -256,6 +283,7 @@ export class ImageGenerationService {
         prompt_upsampling: rest.prompt_upsampling,
         seed: rest.seed,
         output_format: rest.output_format,
+        background: rest.background,
         // `null` means "unset" for seed/output_format (both nullable), and PromptMetaZodSchema
         // declares these as plain optional numbers/enums, not nullable - a persisted `null` (the
         // client's own default) fails /api/feedback's validation when a bug report posts it back.
@@ -508,6 +536,7 @@ export class ImageGenerationService {
   private async selectInputImage({
     sessionId,
     fabFileIds,
+    referenceImageFabFileIds,
     userId,
     userGroups,
     lakeAccess,
@@ -518,6 +547,7 @@ export class ImageGenerationService {
   }: {
     sessionId: string;
     fabFileIds?: string[];
+    referenceImageFabFileIds?: string[];
     userId: string;
     userGroups?: string[];
     lakeAccess?: AttachmentLakeAccess;
@@ -528,11 +558,21 @@ export class ImageGenerationService {
   }): Promise<{
     fileImage?: SelectedImage;
     imageSource: 'workbench' | 'message_history' | 'notebook_attachment';
+    referenceImages: SelectedImage[];
   }> {
     // Access-scoped: a caller-supplied fabFileId the caller cannot access is dropped here,
     // never presigned or fed to a provider (owner/share/group/global-read only).
     const fabFiles = await this.db.fabFiles.findAccessibleInIds(fabFileIds || [], { userId, userGroups }, lakeAccess);
     const workbenchImage = fabFiles.find(file => file.mimeType.startsWith('image'));
+
+    const referenceImages = await this.resolveReferenceImages({
+      referenceImageFabFileIds,
+      userId,
+      userGroups,
+      lakeAccess,
+      model,
+      logger,
+    });
 
     // An explicit workbench upload must not be fed into generation while it's held (pending
     // scan) or blocked - checked once here before any per-model getSignedUrl branch.
@@ -629,9 +669,81 @@ export class ImageGenerationService {
       imageSource,
       imageId: fileImage?.id,
       fileName: fileImage?.fileName,
+      referenceImageCount: referenceImages.length,
     });
 
-    return { fileImage, imageSource };
+    return { fileImage, imageSource, referenceImages };
+  }
+
+  /**
+   * Resolves explicit gpt-image style anchors, in the caller's order.
+   *
+   * Strict where selectInputImage's other branches are lenient: a reference the caller named
+   * but we cannot serve is a BadRequestError, not a silent drop. The lenient branches guess
+   * (carry-forward, a stray workbench attachment) so dropping one loses nothing, but these ids
+   * were asked for by name - rendering three of four anchors would bill the user for an image
+   * they did not describe, with nothing in the response to say why it looks wrong.
+   *
+   * Anchors are never carried forward from session history; only this explicit field produces
+   * them. Non-gpt-image providers get none - OpenAI's edit endpoint is the only one wired for
+   * a multi-image array here.
+   */
+  private async resolveReferenceImages({
+    referenceImageFabFileIds,
+    userId,
+    userGroups,
+    lakeAccess,
+    model,
+    logger,
+  }: {
+    referenceImageFabFileIds?: string[];
+    userId: string;
+    userGroups?: string[];
+    lakeAccess?: AttachmentLakeAccess;
+    model: string;
+    logger: Logger;
+  }): Promise<SelectedImage[]> {
+    if (!referenceImageFabFileIds?.length) {
+      return [];
+    }
+
+    if (!isGPTImageModel(model)) {
+      logger.debug('Dropping reference images for a model that cannot carry them', {
+        model,
+        requested: referenceImageFabFileIds.length,
+      });
+      return [];
+    }
+
+    // A repeated id would occupy an anchor slot and pay OpenAI's per-image input cost twice
+    // for bytes the model has already seen. First occurrence wins, so the caller's ordering
+    // survives de-duplication.
+    const uniqueIds = [...new Set(referenceImageFabFileIds)];
+
+    // Belt-and-braces: the request schemas cap this, but process() is also reachable from the
+    // queue, where a stale in-flight payload predates the cap. Counted after de-duplication,
+    // because the cap exists to bound how many images we actually pay to send.
+    if (uniqueIds.length > MAX_REFERENCE_IMAGES) {
+      throw new BadRequestError(`At most ${MAX_REFERENCE_IMAGES} reference images may be supplied`);
+    }
+
+    const files = await this.db.fabFiles.findAccessibleInIds(uniqueIds, { userId, userGroups }, lakeAccess);
+    const byId = new Map(files.filter(file => !!file.id).map(file => [file.id as string, file]));
+
+    // Mapped over the requested ids rather than over `files`, so the provider receives the
+    // anchors in the order the caller listed them.
+    return uniqueIds.map(id => {
+      const file = byId.get(id);
+      if (!file) throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
+      if (!file.mimeType.startsWith('image')) throw new BadRequestError(`Reference image ${id} is not an image`);
+      if (!isImageServeable(file)) {
+        throw new BadRequestError(`Reference image ${id} is not available (moderation pending or blocked)`);
+      }
+      // Without a storage path there is nothing to presign. An error rather than a skip, so a
+      // half-rendered set can never reach the provider through this path either.
+      if (!file.filePath) throw new BadRequestError(`Reference image ${id} has no stored file`);
+      return file;
+    });
   }
 
   public async process({ body, logger }: { body: z.infer<typeof ImageGenerationBodySchema>; logger: Logger }) {
@@ -652,11 +764,16 @@ export class ImageGenerationService {
       prompt_upsampling,
       seed,
       output_format,
+      background,
       aspect_ratio,
       fabFileIds,
+      referenceImageFabFileIds,
       organizationId,
       intent = 'fresh',
     } = ImageGenerationBodySchema.parse(body);
+
+    // BFL and Gemini reject webp; only the gpt-image branch below gets the raw value.
+    const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
 
     logger.updateMetadata({ notebookId: sessionId, questId, userId });
 
@@ -713,14 +830,22 @@ export class ImageGenerationService {
 
       // For GPT image models (except gpt-image-2 which supports flexible sizes),
       // normalize size to a valid GPT size. BFL sizes like '1440x810'
-      // can reach here if the user switched models without resetting their size selection.
-      const effectiveSize =
+      // can reach here if the user switched models without resetting their size selection,
+      // or if the transparent-background step-down above moved a gpt-image-2-only size
+      // (e.g. 2048x2048, 3840x2160) onto gpt-image-1.5.
+      const needsSizeNormalization =
         isGPTImageModel(model) &&
         !isGPTImage2Model(model) &&
         size &&
-        !(OPENAI_IMAGE_SIZES as readonly string[]).includes(size)
-          ? (OPENAI_IMAGE_SIZES[0] as string)
-          : size;
+        !(OPENAI_IMAGE_SIZES as readonly string[]).includes(size);
+      if (needsSizeNormalization) {
+        logger.debug('Normalizing image size not supported by the resolved model', {
+          resolvedModel: model,
+          requestedSize: size,
+          normalizedSize: OPENAI_IMAGE_SIZES[0],
+        });
+      }
+      const effectiveSize = needsSizeNormalization ? (OPENAI_IMAGE_SIZES[0] as string) : size;
 
       // Validate credits before proceeding
       let usageCostUsd = 0;
@@ -796,9 +921,10 @@ export class ImageGenerationService {
         statusMessage: 'Now painting...',
       });
 
-      const { fileImage, imageSource } = await this.selectInputImage({
+      const { fileImage, imageSource, referenceImages } = await this.selectInputImage({
         sessionId,
         fabFileIds,
+        referenceImageFabFileIds,
         userId,
         userGroups: user.groups ?? undefined,
         lakeAccess,
@@ -849,7 +975,7 @@ export class ImageGenerationService {
           promptLength: truncatedPrompt.length,
           n,
           aspect_ratio,
-          output_format,
+          output_format: nonWebpOutputFormat,
           safety_tolerance,
         });
 
@@ -895,14 +1021,14 @@ export class ImageGenerationService {
             model,
             n,
             aspect_ratio,
-            output_format,
+            output_format: nonWebpOutputFormat,
             safety_tolerance,
           });
           const editPromises = Array.from({ length: n }, () =>
             geminiService.edit(preparedImage, truncatedPrompt, {
               model: model as any,
               aspect_ratio,
-              output_format,
+              output_format: nonWebpOutputFormat,
               safety_tolerance,
             })
           );
@@ -960,7 +1086,7 @@ export class ImageGenerationService {
             model: model as any,
             n,
             aspect_ratio,
-            output_format,
+            output_format: nonWebpOutputFormat,
             safety_tolerance,
             // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
             // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
@@ -984,7 +1110,7 @@ export class ImageGenerationService {
           width,
           height,
           aspect_ratio,
-          output_format,
+          output_format: nonWebpOutputFormat,
           safety_tolerance,
           prompt_upsampling,
           seed,
@@ -1073,7 +1199,7 @@ export class ImageGenerationService {
             safety_tolerance,
             prompt_upsampling,
             seed,
-            output_format,
+            output_format: nonWebpOutputFormat,
             aspect_ratio,
           };
 
@@ -1104,21 +1230,20 @@ export class ImageGenerationService {
             prompt_upsampling,
             image_prompt: base64Image,
             seed,
-            output_format,
+            output_format: nonWebpOutputFormat,
             n,
           });
         } else {
           // For regular Pro models, use width and height
           images = await service.generate(truncatedPrompt, {
-            width: width || 1024,
-            height: height || 768,
+            ...resolveImageDimensions({ width, height, size: effectiveSize }, BFL_DIMENSION_BOUNDS),
             user: userId,
             model: model as any,
             safety_tolerance,
             image_prompt: base64Image,
             prompt_upsampling,
             seed,
-            output_format,
+            output_format: nonWebpOutputFormat,
             n,
           });
         }
@@ -1149,6 +1274,22 @@ export class ImageGenerationService {
           );
         }
 
+        // Always fabFile-backed (resolveReferenceImages only yields fabFiles), so they sign
+        // against fabFileStorage unconditionally - unlike the primary, which may be a
+        // generated image living in `this.storage`.
+        const referenceImageUrls = await Promise.all(
+          referenceImages.map(reference => this.fabFileStorage.getSignedUrl(reference.filePath as string))
+        );
+
+        // Style anchors with no source image is the main use case (anchors + a prompt, no
+        // subject to edit). generate() only reaches the multi-image edit endpoint when
+        // `imagePrompt` is set, so the first anchor becomes the primary and the rest trail
+        // it - to OpenAI that is the same flat `image[]` array either way, since generation
+        // sends no mask and nothing else binds to element 0.
+        if (!imageUrl && referenceImageUrls.length) {
+          imageUrl = referenceImageUrls.shift();
+        }
+
         // Prepare OpenAI parameters with proper filtering for GPT-Image-1
         const openaiParams: any = {
           model: model as any,
@@ -1165,6 +1306,14 @@ export class ImageGenerationService {
           if (mappedQuality) {
             openaiParams.quality = mappedQuality;
           }
+          // Alpha controls: gpt-image is the only family that accepts them, and
+          // `background: 'transparent'` is what produces a real cutout PNG.
+          if (background) {
+            openaiParams.background = background;
+          }
+          if (output_format) {
+            openaiParams.output_format = output_format;
+          }
         } else {
           // Other OpenAI models support these parameters
           openaiParams.quality = quality;
@@ -1173,14 +1322,20 @@ export class ImageGenerationService {
         }
 
         openaiParams.imagePrompt = imageUrl;
+        if (referenceImageUrls.length) {
+          openaiParams.referenceImages = referenceImageUrls;
+        }
 
         Logger.globalInstance.debug(`[DEBUG] OpenAI API call parameters:`, {
           model,
           hasImagePrompt: !!imageUrl,
+          referenceImageCount: referenceImageUrls.length,
           generationType: imageUrl ? 'image variation' : 'text-to-image',
           size: openaiParams.size,
           quality: openaiParams.quality,
           style: openaiParams.style,
+          background: openaiParams.background,
+          output_format: openaiParams.output_format,
           n: openaiParams.n,
         });
 

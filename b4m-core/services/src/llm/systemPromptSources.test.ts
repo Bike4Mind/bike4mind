@@ -7,6 +7,9 @@ import {
   buildTaggedContextMessages,
   filterByPromptMode,
   filterFeaturesByPromptMode,
+  LAKE_CONTENT_LAYER_NAMES,
+  LAKE_CONTENT_SOURCES,
+  lakeContentTokens,
   PROMPT_SOURCE_METADATA,
   PROMPT_SOURCE_ORDER,
   resolveForcedRetrieval,
@@ -16,6 +19,7 @@ import {
   SYSTEM_PROMPT_PRIORITY,
   toPromptDetails,
   type PromptSourceId,
+  type SystemPromptDetail,
 } from './systemPromptSources';
 
 const sys = (content: string) => ({ role: 'system' as const, content });
@@ -378,6 +382,40 @@ describe('toPromptDetails', () => {
     await expect(toPromptDetails(tagged, countChars)).resolves.toEqual([
       { source: 'hardcoded', name: 'date_time_context', tokenCount: 3, wasIncluded: true },
     ]);
+  });
+});
+
+describe('lakeContentTokens', () => {
+  const row = (name: string, tokenCount: number, wasIncluded = true): SystemPromptDetail => ({
+    source: 'session',
+    name,
+    tokenCount,
+    wasIncluded,
+  });
+
+  it('sums only the delivered lake rows, leaving every other layer out', () => {
+    const details = [
+      row('knowledge_retrieval', 30),
+      row('lake_memory', 40),
+      row('session_prompt', 100),
+      // Dropped by the budget: billing it would overstate the prompt.
+      row('knowledge_retrieval', 999, false),
+    ];
+
+    expect(lakeContentTokens(details)).toBe(70);
+  });
+
+  // The names come from PROMPT_SOURCE_METADATA rather than a second hand-written list, so a
+  // source rename cannot leave this bucket summing a name no row reports as.
+  it('derives the layer names from the source metadata', () => {
+    expect(LAKE_CONTENT_SOURCES).toEqual(['knowledgeRetrieval', 'lakeMemory']);
+    expect(LAKE_CONTENT_LAYER_NAMES).toEqual(LAKE_CONTENT_SOURCES.map(source => PROMPT_SOURCE_METADATA[source].name));
+  });
+
+  // Load-bearing distinction: a real zero must not be reachable from "the derivation failed".
+  it('returns 0 for details with no lake rows but undefined for missing details', () => {
+    expect(lakeContentTokens([row('session_prompt', 5)])).toBe(0);
+    expect(lakeContentTokens(undefined)).toBeUndefined();
   });
 });
 

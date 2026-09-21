@@ -7,6 +7,7 @@ import { SearchOptions } from '../../search';
 import { ChatModelName } from '../../models';
 import { MessageContentObject } from './MessageTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
+import type { SessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
 
 /** Pending action for Slack/Web button-based confirmation flow */
@@ -713,7 +714,7 @@ export interface ISession {
   claudeConversationId?: string;
   summary?: string;
   summaryAt?: Date;
-  summaryTrigger?: 'manual' | 'project' | 'earlyMilestone' | 'contentGrowth' | 'throttling';
+  summaryTrigger?: SessionSummaryTrigger;
   contextSummary?: string;
   contextSummaryUpToQuestId?: string; // string ObjectId — boundary; messages ≤ this are excluded from verbatim history
   contextSummaryAt?: Date;

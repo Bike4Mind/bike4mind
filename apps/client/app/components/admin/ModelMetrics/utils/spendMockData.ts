@@ -62,6 +62,14 @@ export const spendMockData: SpendData = {
       format: 'percent',
       higherIsBetter: false,
     },
+    {
+      key: 'degenerateRate',
+      label: 'Degenerate Rate',
+      value: 0.003,
+      priorValue: 0.001,
+      format: 'percent',
+      higherIsBetter: false,
+    },
   ],
   byAccount: [
     {

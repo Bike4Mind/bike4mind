@@ -5,6 +5,7 @@ import OrganizationGroups from '@client/app/components/organizations/Organizatio
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
 import OrganizationUsageSection from '@client/app/components/organizations/OrganizationUsageSection';
+import OrganizationAnalysisSection from '@client/app/components/organizations/OrganizationAnalysisSection';
 import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIntegration';
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
@@ -12,7 +13,11 @@ import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetOrganization, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import {
+  SubscriptionOwnerType,
+  isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
+} from '@client/lib/subscriptions/types';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import {
   Avatar,
@@ -40,21 +45,11 @@ import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlin
 import GitHubIcon from '@mui/icons-material/GitHub';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
+import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
+import { canViewOrgUsage, OrganizationTabs, resolveAccessibleTab } from '@client/app/routes/organizations/orgTabAccess';
 import { useParams, useSearch } from '@tanstack/react-router';
 import { FC, useMemo, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-
-enum OrganizationTabs {
-  Overview = 'overview',
-  Members = 'members',
-  Groups = 'groups',
-  Usage = 'usage',
-  Billing = 'billing',
-  Integrations = 'integrations',
-  GitHub = 'github',
-  Webhooks = 'webhooks',
-  Settings = 'settings',
-}
 
 const OrganizationPage: FC = () => {
   const { t } = useTranslation();
@@ -84,16 +79,9 @@ const OrganizationPage: FC = () => {
     return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
   }, [userPermissions]);
 
-  // Who may see the org's usage/spend dashboards. Mirrors the server gate
-  // (verifyOrgAccess): platform admins, the org owner, or the team manager -
-  // NOT every member with manage permissions, so the tab never shows to someone
-  // the API would 404.
-  const canViewUsage = useMemo(() => {
-    if (!currentUser || !organization) return false;
-    if (currentUser.isAdmin) return true;
-    if (currentUser.id === organization.userId) return true;
-    return organization.managerId === currentUser.id;
-  }, [currentUser, organization]);
+  // Gates both the Usage and the Analysis tab - see canViewOrgUsage for why it is not the
+  // permission set.
+  const canViewUsage = useMemo(() => canViewOrgUsage(currentUser, organization), [currentUser, organization]);
 
   // Who may manage group instances + membership. Mirrors assertCanManageOrgGroups
   // (organizationService/groupMembership.ts) exactly: billing owner, an appointed org admin who is
@@ -116,21 +104,10 @@ const OrganizationPage: FC = () => {
     return currentUser.isAdmin || currentUser.id === organization.userId;
   }, [currentUser, organization]);
 
-  // Redirect non-admin users if they try to access restricted tabs
+  // A ?tab= deep link can select a tab this caller never gets rendered, so the selection is sent
+  // back through the same visibility rules the TabList applies.
   useEffect(() => {
-    const managePinnedTab =
-      selectedTab === OrganizationTabs.Billing ||
-      selectedTab === OrganizationTabs.Integrations ||
-      selectedTab === OrganizationTabs.GitHub ||
-      selectedTab === OrganizationTabs.Webhooks ||
-      selectedTab === OrganizationTabs.Settings;
-    if (!canManageOrg && managePinnedTab) {
-      setSelectedTab(OrganizationTabs.Overview);
-    } else if (!canViewUsage && selectedTab === OrganizationTabs.Usage) {
-      setSelectedTab(OrganizationTabs.Overview);
-    } else if (!canManageGroups && selectedTab === OrganizationTabs.Groups) {
-      setSelectedTab(OrganizationTabs.Overview);
-    }
+    setSelectedTab(resolveAccessibleTab(selectedTab, { canManageOrg, canViewUsage, canManageGroups }));
   }, [canManageOrg, canViewUsage, canManageGroups, selectedTab]);
 
   useDocumentTitle(organization?.name, ' | Organization');
@@ -214,10 +191,16 @@ const OrganizationPage: FC = () => {
               </Tab>
             )}
             {canViewUsage && (
-              <Tab value={OrganizationTabs.Usage} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <InsightsOutlinedIcon sx={{ fontSize: 16 }} />
-                Usage
-              </Tab>
+              <>
+                <Tab value={OrganizationTabs.Usage} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <InsightsOutlinedIcon sx={{ fontSize: 16 }} />
+                  Usage
+                </Tab>
+                <Tab value={OrganizationTabs.Analysis} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <RateReviewOutlinedIcon sx={{ fontSize: 16 }} />
+                  Analysis
+                </Tab>
+              </>
             )}
             {canManageOrg && (
               <>
@@ -264,12 +247,20 @@ const OrganizationPage: FC = () => {
               </TabPanel>
             )}
             {canViewUsage && (
-              <TabPanel value={OrganizationTabs.Usage}>
-                <Typography level="title-lg" startDecorator={<InsightsOutlinedIcon />} sx={{ mb: 3 }}>
-                  Usage & Spend
-                </Typography>
-                <OrganizationUsageSection organization={organization} />
-              </TabPanel>
+              <>
+                <TabPanel value={OrganizationTabs.Usage}>
+                  <Typography level="title-lg" startDecorator={<InsightsOutlinedIcon />} sx={{ mb: 3 }}>
+                    Usage & Spend
+                  </Typography>
+                  <OrganizationUsageSection organization={organization} />
+                </TabPanel>
+                <TabPanel value={OrganizationTabs.Analysis}>
+                  <Typography level="title-lg" startDecorator={<RateReviewOutlinedIcon />} sx={{ mb: 3 }}>
+                    Feedback Analysis
+                  </Typography>
+                  <OrganizationAnalysisSection organization={organization} />
+                </TabPanel>
+              </>
             )}
             {canManageOrg && (
               <>
@@ -316,7 +307,9 @@ const OrganizationHeader: FC<{
   const { name, description } = organization;
   const initial = name.charAt(0).toUpperCase();
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
-  const hasActiveSubscription = subscriptions?.some(sub => !sub.canceledAt);
+  const subscription = pickDisplayedSubscription(subscriptions ?? []);
+  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
+  const hasActiveSubscription = !!subscription && !subscription.canceledAt && !paymentIssue;
   const { currentSeats } = useOrganizationSeats(organization.id);
   const { currentUser } = useUser();
   const canManageOrg = useMemo(() => {
@@ -363,10 +356,10 @@ const OrganizationHeader: FC<{
             <Chip
               size="sm"
               variant="soft"
-              color={hasActiveSubscription ? 'success' : 'neutral'}
+              color={paymentIssue ? 'danger' : hasActiveSubscription ? 'success' : 'neutral'}
               startDecorator={<VpnKeyOutlinedIcon sx={{ fontSize: 14 }} />}
             >
-              {hasActiveSubscription ? 'Team Plan' : 'No Active Plan'}
+              {paymentIssue ? 'Payment Issue' : hasActiveSubscription ? 'Team Plan' : 'No Active Plan'}
             </Chip>
           </Stack>
         </Stack>
@@ -380,8 +373,9 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
   const { currentSeats, maxSeats, pendingSeats, availableSeats } = useOrganizationSeats(organization.id);
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
 
-  const activeSubscription = subscriptions?.find(sub => !sub.canceledAt);
-
+  const subscription = pickDisplayedSubscription(subscriptions ?? []);
+  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
+  const activeSubscription = subscription && !subscription.canceledAt && !paymentIssue ? subscription : undefined;
   // Calculate storage usage percentage
   const storageUsed = organization.currentStorageSize || 0;
   const storageLimit = organization.storageLimit || 0;
@@ -471,8 +465,12 @@ const OrganizationOverviewSection: FC<{ organization: IOrganizationDocument }> =
                 <Typography level="body-sm" color="neutral">
                   Plan
                 </Typography>
-                <Chip size="sm" variant="soft" color={activeSubscription ? 'success' : 'neutral'}>
-                  {activeSubscription ? 'Team Plan' : 'No Active Plan'}
+                <Chip
+                  size="sm"
+                  variant="soft"
+                  color={paymentIssue ? 'danger' : activeSubscription ? 'success' : 'neutral'}
+                >
+                  {paymentIssue ? 'Payment Issue' : activeSubscription ? 'Team Plan' : 'No Active Plan'}
                 </Chip>
               </Stack>
               {activeSubscription && (

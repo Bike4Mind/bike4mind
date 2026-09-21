@@ -34,6 +34,11 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
   // A drag commits a fractional width, so round before announcing it or stepping off it:
   // otherwise aria-valuenow and the stored width drift apart for the rest of the session.
   const roundedWidth = Math.round(knowledgeViewerWidth);
+  // The announced value tracks the CHAT pane even though the stored width is the knowledge
+  // pane's, so the number rises as the separator moves right the way a slider's does. Derived
+  // by subtracting the ROUNDED width rather than rounding 100 - width, so the two panes always
+  // sum to exactly 100. The 20-80 clamp is symmetric, so valuemin/valuemax hold either way.
+  const chatPaneWidth = 100 - roundedWidth;
 
   const commitWidth = useCallback(
     (newWidth: number) => {
@@ -48,6 +53,10 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
       e.preventDefault();
 
       const container = e.currentTarget as HTMLElement;
+      // The preventDefault above also suppresses the mousedown that would have focused the
+      // handle, which would leave the arrow keys dead after a drag until the user tabbed back.
+      // This does not light the ring: the indicator is :focus-visible, which a pointer misses.
+      container.focus();
       const parent = container.parentElement;
       if (!parent) return;
 
@@ -119,11 +128,17 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
     [commitWidth, knowledgeViewerWidth, startTransition]
   );
 
-  // Arrow keys step the separator, Home/End jump to the clamps. Left/Right are named for
-  // where the separator MOVES, so they carry the same sign flip as the drag: the viewer is
-  // the right-hand pane, so moving the separator right shrinks it.
+  // Arrow keys step the separator, Home/End jump to the clamps. All four are named for where
+  // the separator MOVES, so they carry the same sign flip as the drag: the viewer is the
+  // right-hand pane, so moving the separator right shrinks it. Home is therefore the viewer's
+  // MAX (separator hard left) and End its MIN, which is also what puts Home on aria-valuemin
+  // and End on aria-valuemax, since the announced value is the chat pane's.
   const handleKeyResize = useCallback(
     (e: React.KeyboardEvent) => {
+      // Modified arrows belong to the browser, the OS or assistive tech (Alt+Left is
+      // browser-back in some configurations); stepping would also preventDefault them.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
       let newWidth: number;
 
       switch (e.key) {
@@ -134,10 +149,10 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
           newWidth = clampWidth(roundedWidth - KEY_STEP_PERCENT);
           break;
         case 'Home':
-          newWidth = MIN_WIDTH_PERCENT;
+          newWidth = MAX_WIDTH_PERCENT;
           break;
         case 'End':
-          newWidth = MAX_WIDTH_PERCENT;
+          newWidth = MIN_WIDTH_PERCENT;
           break;
         default:
           return;
@@ -146,9 +161,11 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
       // These keys would otherwise scroll whichever pane is behind the handle.
       e.preventDefault();
 
-      if (newWidth !== knowledgeViewerWidth) commitWidth(newWidth);
+      // Wrapped like the drag path's commit so the two input paths read the same. It does not
+      // defer the persisted write -- zustand runs that inside set() -- only the re-render.
+      if (newWidth !== knowledgeViewerWidth) startTransition(() => commitWidth(newWidth));
     },
-    [commitWidth, knowledgeViewerWidth, roundedWidth]
+    [commitWidth, knowledgeViewerWidth, roundedWidth, startTransition]
   );
 
   return (
@@ -158,9 +175,10 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
         // boundary itself rather than as chrome belonging to either pane. They have to be
         // exactly half the width, because SessionContainer sizes the two panes in
         // percentages that already sum to 100% and no child of that row sets flex-grow:
-        // anything the handle adds or subtracts survives as free space instead of being
-        // absorbed, and the row is row-reverse with the default justify-content, so the
-        // leftover parks on the physical left of the chat pane.
+        // anything the handle subtracts survives as free space instead of being absorbed.
+        // A positive contribution would not: the default flex-shrink: 1 absorbs overflow,
+        // which is how this broke before. The row is row-reverse with the default
+        // justify-content, so the leftover parks on the physical left of the chat pane.
         width: `${SPLITTER_WIDTH_PX}px`,
         marginX: `${-(SPLITTER_WIDTH_PX / 2)}px`,
         cursor: 'col-resize',
@@ -208,12 +226,12 @@ const ResizableSplitter: React.FC<ResizableSplitterProps> = ({ onWidthChange }) 
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize the chat and knowledge panes"
-      aria-valuenow={roundedWidth}
+      aria-valuenow={chatPaneWidth}
       aria-valuemin={MIN_WIDTH_PERCENT}
       aria-valuemax={MAX_WIDTH_PERCENT}
       // Without this a screen reader reads the value as its position in the 20-80 range
       // (a 32% split announced as "20%"), which is worse than saying nothing.
-      aria-valuetext={`Knowledge pane ${roundedWidth}%`}
+      aria-valuetext={`Chat pane ${chatPaneWidth}%`}
       tabIndex={0}
     />
   );

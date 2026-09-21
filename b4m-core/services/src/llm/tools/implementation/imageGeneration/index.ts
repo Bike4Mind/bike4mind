@@ -4,10 +4,17 @@ import {
   ApiKeyType,
   ImageModels,
   BFL_SAFETY_TOLERANCE,
+  TOOL_SELECTABLE_IMAGE_QUALITIES,
   XAI_IMAGE_MODELS,
   GenerateImageToolCall,
   isBflImageModel,
   isGeminiImageModel,
+  resolveImageDimensions,
+  BFL_DIMENSION_BOUNDS,
+  isGPTImage2Model,
+  toNonWebpOutputFormat,
+  type ImageOutputFormat,
+  type OpenAIImageBackground,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -26,6 +33,8 @@ import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
 import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
+import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
+import { resolveImageArgs } from './resolveImageArgs';
 
 async function downloadImage(url: string) {
   // Handle data URLs (base64 images) from GPT-Image-1
@@ -173,27 +182,47 @@ export const imageGenerationTool: ToolDefinition = {
         quality: toolQuality,
         size: toolSize,
         safety_tolerance: toolSafetyTolerance,
+        background: toolBackground,
+        output_format: toolOutputFormat,
       } = val as ImageGenerateParams & {
         model?: string;
         safety_tolerance?: number;
+        background?: OpenAIImageBackground;
+        output_format?: ImageOutputFormat;
       };
 
       // Use imageConfig settings as defaults, allow tool call to override
-      // Auto-upgrade gpt-image-1 to gpt-image-2 (latest model)
-      let model = imageConfig?.model || ImageModels.GPT_IMAGE_2;
-      if (model === ImageModels.GPT_IMAGE_1) {
-        model = ImageModels.GPT_IMAGE_2;
-      }
-      const n = toolN ?? imageConfig?.n ?? 1;
-      const quality = imageConfig?.quality || toolQuality;
-      const size = imageConfig?.size || toolSize;
+      const output_format = toolOutputFormat ?? imageConfig?.output_format;
+      const background = toolBackground ?? imageConfig?.background;
+
+      // imageConfig is a default, not a pin: the tool call wins for n/quality (and for size
+      // when it names a priceable one), while the model stays the client's Smart Tools selection.
+      const {
+        model: resolvedModel,
+        n,
+        size,
+        quality,
+      } = resolveImageArgs(imageConfig, {
+        n: toolN,
+        size: toolSize,
+        quality: toolQuality,
+      });
+
+      // Step any gpt-image-2 selection - default or explicit - down to gpt-image-1.5 when
+      // transparency is requested: gpt-image-2 rejects background: 'transparent' outright,
+      // so sending it there would silently turn a valid request into a 400.
+      // (OpenAIImageService.resolveGptImageOutputOptions is the last-resort backstop
+      // that strips 'transparent' if a gpt-image-2 request reaches it regardless.)
+      const wantsTransparent = background === 'transparent';
+      const model = wantsTransparent && isGPTImage2Model(resolvedModel) ? ImageModels.GPT_IMAGE_1_5 : resolvedModel;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const width = imageConfig?.width;
       const height = imageConfig?.height;
       const aspect_ratio = imageConfig?.aspect_ratio;
-      const output_format = imageConfig?.output_format;
       const prompt_upsampling = imageConfig?.prompt_upsampling;
       const seed = imageConfig?.seed;
+      // BFL and Gemini reject webp; only the OpenAI branch gets the raw value.
+      const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
 
       // Determine which service to use based on the model
       const isBFLModel = isBflImageModel(model);
@@ -254,10 +283,9 @@ export const imageGenerationTool: ToolDefinition = {
             // generate() only accepts the generation FLUX variants; in practice only those
             // reach this branch (fill/Kontext are edit models), so narrow to satisfy it.
             model: bflModel as ImageModels.FLUX_PRO | ImageModels.FLUX_PRO_1_1 | ImageModels.FLUX_PRO_ULTRA,
-            width: width ?? 1024,
-            height: height ?? 768,
+            ...resolveImageDimensions({ width, height, size }, BFL_DIMENSION_BOUNDS),
             aspect_ratio: aspect_ratio,
-            output_format: output_format ?? 'png',
+            output_format: nonWebpOutputFormat ?? 'png',
             prompt_upsampling: prompt_upsampling ?? false,
             seed: seed ?? undefined,
             user: context.userId,
@@ -306,7 +334,7 @@ export const imageGenerationTool: ToolDefinition = {
           n,
           model,
           aspect_ratio: aspect_ratio,
-          output_format: output_format ?? 'png',
+          output_format: nonWebpOutputFormat ?? 'png',
           safety_tolerance: safety_tolerance,
           // prompt_upsampling/seed are intentionally passed through here - Gemini's own adapter
           // (GeminiImageService.buildGenerationConfig()) is the single place that refuses to
@@ -336,23 +364,10 @@ export const imageGenerationTool: ToolDefinition = {
         }
         const service = new LocalImageService(selfHostBaseUrl, context.logger);
 
-        // The local backend takes discrete width/height; derive them from the
-        // size string (e.g. '512x512') when explicit dimensions aren't set.
-        let localWidth = width;
-        let localHeight = height;
-        if ((!localWidth || !localHeight) && typeof size === 'string') {
-          const [sw, sh] = size.split('x').map(Number);
-          if (sw && sh) {
-            localWidth = sw;
-            localHeight = sh;
-          }
-        }
-
         const images = await service.generate(prompt, {
           n,
           model: model.replace(/^local-image\//, ''),
-          width: localWidth,
-          height: localHeight,
+          ...resolveImageDimensions({ width, height, size }),
         });
 
         const storedImageUrls = await processAndStoreImages(images, context, model, provider);
@@ -373,6 +388,8 @@ export const imageGenerationTool: ToolDefinition = {
             model,
             user: context.userId,
             safety_tolerance,
+            background,
+            output_format,
           });
         } catch (openaiError) {
           // OpenAIImageService maps known API failures (402/401/403/429, moderation) to friendly
@@ -402,13 +419,21 @@ export const imageGenerationTool: ToolDefinition = {
           },
           size: {
             type: 'string',
-            description: 'The size of the image to generate (OpenAI only)',
-            enum: ['256x256', '512x512', '1024x1024', '1792x1024', '1024x1792'],
+            // Only sizes the cost calculator can price are offered, so the model can never
+            // pick one that bills at a different size than it renders. Omitting the field
+            // lets the user's saved panel size apply, which may be outside this set.
+            // Note this set also feeds BFL Pro's width/height (via resolveImageDimensions)
+            // when it fits BFL's supported range - it is not OpenAI-exclusive, just
+            // OpenAI-priced.
+            description:
+              "The size of the image to generate: '1024x1024' square, '1536x1024' landscape, or '1024x1536' portrait. Ignored by providers that take an aspect ratio instead (Flux Ultra, Gemini), or that cannot produce the requested dimensions. Omit this field when the user does not ask for a specific shape, so their saved preference applies.",
+            enum: [...PRICEABLE_IMAGE_SIZES],
           },
           quality: {
             type: 'string',
-            description: 'The quality of the image that will be generated (OpenAI only)',
-            enum: ['standard', 'hd'],
+            description:
+              "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
+            enum: [...TOOL_SELECTABLE_IMAGE_QUALITIES],
           },
           n: {
             type: 'number',
@@ -419,6 +444,17 @@ export const imageGenerationTool: ToolDefinition = {
             description: 'Safety tolerance level for BFL models (0 most strict, 6 least strict)',
             minimum: BFL_SAFETY_TOLERANCE.MIN,
             maximum: BFL_SAFETY_TOLERANCE.MAX,
+          },
+          background: {
+            type: 'string',
+            description:
+              'Background handling (gpt-image only). Use "transparent" when the user asks for a cutout, sprite, icon, sticker or a logo with no backdrop; it needs an alpha-capable output_format (png or webp).',
+            enum: ['transparent', 'opaque', 'auto'],
+          },
+          output_format: {
+            type: 'string',
+            description: 'Output container. "webp" is gpt-image only; other providers fall back to png.',
+            enum: ['png', 'jpeg', 'webp'],
           },
         },
         additionalProperties: false,

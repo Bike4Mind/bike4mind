@@ -173,6 +173,27 @@ export const createArtifactWrites = (session?: ClientSession) => ({
   },
 });
 
+/**
+ * Best-effort removal of every object the failed import attempt uploaded. Uploads cannot join the
+ * transaction (`getFilesStorage()` is not session-bound), so a rollback leaves the objects behind
+ * unless the caller removes them explicitly.
+ *
+ * Exported so the best-effort behaviour is directly testable. Never throws: a failed delete is the
+ * orphan that would exist anyway, and a cleanup error escaping here would replace the failure being
+ * unwound, hiding the real reason from the caller's report.
+ */
+export const discardUploadedKnowledgeFiles = async (paths: string[], logger: Logger): Promise<void> => {
+  await Promise.all(
+    paths.map(async path => {
+      try {
+        await getFilesStorage().delete(path);
+      } catch (error) {
+        logger.warn('Failed to delete uploaded knowledge file after import rollback', { path, error });
+      }
+    })
+  );
+};
+
 const processNotebookImport = async (
   userId: string,
   dataKey: string,
@@ -183,6 +204,11 @@ const processNotebookImport = async (
 ) => {
   const result = await withTransaction(async session => {
     const s3 = new S3Storage(bucket);
+    // Hoisted out of the try so the catch below can reach the paths THIS attempt uploaded. It has
+    // to be this callback's own catch and not code after `withTransaction` rejects: a transient
+    // error re-runs the whole callback against a fresh service instance, so only the attempt that
+    // actually failed knows which objects it left behind.
+    let importService: InstanceType<typeof NotebookImportService> | undefined;
 
     try {
       const [importDataBuffer, optionsBuffer] = await Promise.all([
@@ -212,12 +238,19 @@ const processNotebookImport = async (
         userRepository: {
           findById: async (id: string) => User.findById(id).session(session),
         },
+        // Read once per import, for the MaxFileSize gate on knowledge files. No `ctx` for the same
+        // reason as createSessionWrites above: transactionAsyncLocalStorage carries the session in
+        // on its own, so a cache miss here runs inside the import transaction. Safe as it stands -
+        // this is a read of a collection the import never writes, and it is near-always served from
+        // the process-wide settings cache - but a `skipCache` read or any settings WRITE added here
+        // would be joining the transaction, not standing outside it.
+        adminSettings: adminSettingsRepository,
         fileStorageService: {
           getFileContent: async (path: string) => {
             try {
               // This adapter has no live caller today (copyFileFromUrl(), the only call
-              // site that would need it, is an unimplemented stub that just returns the
-              // source URL unchanged), but it reads raw bytes from a storage path with no
+              // site that would need it, is an unimplemented stub that throws), but it
+              // reads raw bytes from a storage path with no
               // moderation check. Gate defensively so a future implementation of
               // copyFileFromUrl() can't leak a held/blocked uploaded image's bytes. No
               // FabFile match (e.g. a non-fabfile asset) falls through unaffected.
@@ -235,6 +268,12 @@ const processNotebookImport = async (
           },
           uploadFile: async (path: string, content: Buffer) => {
             await getFilesStorage().upload(content, path);
+          },
+          // Compensating action for uploadFile: the upload sits outside this transaction, so the
+          // service deletes it when the row write it belongs to fails. NOT moderation-gated like
+          // the two methods below - see the port's doc comment.
+          deleteFile: async (path: string) => {
+            await getFilesStorage().delete(path);
           },
           getSignedUrl: async (path: string, expiresIn = 3600) => {
             try {
@@ -265,7 +304,7 @@ const processNotebookImport = async (
         },
       };
 
-      const importService = new NotebookImportService(adapters);
+      importService = new NotebookImportService(adapters);
       const result = await importService.importNotebooks(userId, importData, options);
 
       // Any per-notebook failure rolls the whole import back. A failed write usually aborts the
@@ -314,6 +353,10 @@ const processNotebookImport = async (
       // async-local storage, so a status update or inbox message written here would itself fail
       // and the user would hear nothing.
       logger.error('Notebook import failed', { userId, dataKey, error });
+      // The transaction rolls back every row this attempt wrote, but the uploads it performed are
+      // outside it. Remove them before rethrowing - a delete that fails only leaves the orphan that
+      // existed before this cleanup, and must not replace the error the caller reports.
+      await discardUploadedKnowledgeFiles(importService?.getImportedKnowledgeFilePaths() ?? [], logger);
       throw error;
     } finally {
       await Promise.all([

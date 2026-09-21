@@ -1,5 +1,5 @@
 import { emailJobRepository } from '@bike4mind/database';
-import { EmailJobStatus, EmailJobOverallStatus } from '@bike4mind/common';
+import { ApiKeyScope, EmailJobOverallStatus, EmailJobStatus } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 
@@ -7,7 +7,7 @@ import { ForbiddenError, NotFoundError } from '@server/utils/errors';
  * Clone an existing email job to create a new draft
  * This allows reusing completed/cancelled campaigns
  */
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }

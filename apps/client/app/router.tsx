@@ -24,6 +24,8 @@ import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
 import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
+import { partitionPremiumRoutes } from './premiumRoutePartition';
+import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 
 // Lazy load all route components for code splitting
 const NewNotebookPage = lazy(() => import('./routes/notebooks/new'));
@@ -43,6 +45,7 @@ const NewSkillPage = lazy(() => import('./routes/skills/new'));
 const SkillDetailPage = lazy(() => import('./routes/skills/$id'));
 const EditSkillPage = lazy(() => import('./routes/skills/$id/edit'));
 const AgentExecutionHistoryPage = lazy(() => import('./routes/agent-executions'));
+const FeedbackRollupPage = lazy(() => import('./routes/feedback/rollup'));
 const MissionDossierPage = lazy(() => import('./routes/agents/$id/missions/$missionId'));
 const DeepAgentConsolePage = lazy(() => import('./routes/deep-agents'));
 const SharePage = lazy(() => import('./routes/share/$id'));
@@ -140,29 +143,42 @@ function buildPremiumGatedElement(descriptor: (typeof premiumRoutes)[number]) {
 // fetches. getParentRoute is a thunk (lazy), so referencing rootRoute/layoutRoute
 // (declared below) is safe. In the open-core fork `premiumRoutes` is empty -> both
 // arrays are empty.
-const builtStandalonePremiumRoutes = premiumRoutes
-  .filter(d => !d.appShell)
-  .map(descriptor => {
-    const gated = buildPremiumGatedElement(descriptor);
-    return createRoute({
-      getParentRoute: () => rootRoute,
-      path: descriptor.path,
-      // Standalone premium pages bypass the layoutRoute consent guard (they hang off rootRoute),
-      // so opt them in via the shared guard like the other standalone routes (issue #382).
-      beforeLoad: ({ location }) => enforceConsentRedirect(location),
-      component: () => <ProviderBundle>{gated}</ProviderBundle>,
-    });
+const premiumPartition = partitionPremiumRoutes(premiumRoutes);
+
+// Public premium routes render bare under the root route: the URL is the authorization,
+// so there is no RestrictedPage, and no ProviderBundle either, whose providers fetch a
+// signed-in user's data that a visitor with no session does not have.
+const builtPublicPremiumRoutes = premiumPartition.public.map(descriptor => {
+  const LazyComponent = lazy(descriptor.lazyImport);
+  return createRoute({
+    getParentRoute: () => rootRoute,
+    path: descriptor.path,
+    component: () => (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <LazyComponent />
+      </Suspense>
+    ),
   });
-const builtAppShellPremiumRoutes = premiumRoutes
-  .filter(d => d.appShell)
-  .map(descriptor => {
-    const gated = buildPremiumGatedElement(descriptor);
-    return createRoute({
-      getParentRoute: () => layoutRoute,
-      path: descriptor.path,
-      component: () => gated,
-    });
+});
+const builtStandalonePremiumRoutes = premiumPartition.standalone.map(descriptor => {
+  const gated = buildPremiumGatedElement(descriptor);
+  return createRoute({
+    getParentRoute: () => rootRoute,
+    path: descriptor.path,
+    // Standalone premium pages bypass the layoutRoute consent guard (they hang off rootRoute),
+    // so opt them in via the shared guard like the other standalone routes (issue #382).
+    beforeLoad: ({ location }) => enforceConsentRedirect(location),
+    component: () => <ProviderBundle>{gated}</ProviderBundle>,
   });
+});
+const builtAppShellPremiumRoutes = premiumPartition.appShell.map(descriptor => {
+  const gated = buildPremiumGatedElement(descriptor);
+  return createRoute({
+    getParentRoute: () => layoutRoute,
+    path: descriptor.path,
+    component: () => gated,
+  });
+});
 
 // Root route that wraps all other routes
 function RootComponent() {
@@ -355,6 +371,28 @@ const profileRoute = createRoute({
       section: search.section ? String(search.section) : undefined,
     };
   },
+});
+
+// Personal feedback rollup. Exported so the page reads its window with
+// `feedbackRollupRoute.useSearch()` rather than an untyped `{ strict: false }` cast.
+export const feedbackRollupRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/feedback/rollup',
+  // The default window is resolved HERE, not in the component: the bounds are part of the rollup
+  // query key, so a default recomputed per render would refetch without end, and leaving them
+  // undefined would keep a bare /feedback/rollup permanently disabled behind the hook's guard.
+  validateSearch: (search: Record<string, unknown>): { from: string; to: string } => {
+    const fallback = defaultFeedbackRollupWindow();
+    return {
+      from: typeof search.from === 'string' && search.from.length > 0 ? search.from : fallback.from,
+      to: typeof search.to === 'string' && search.to.length > 0 ? search.to : fallback.to,
+    };
+  },
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <FeedbackRollupPage />
+    </Suspense>
+  ),
 });
 
 // Profile route with dynamic ID (replaces /profile/[id].tsx)
@@ -1039,6 +1077,7 @@ const routeTree = rootRoute.addChildren([
     projectRoute,
     profileRoute,
     profileDetailRoute,
+    feedbackRollupRoute,
     subscriptionsCheckoutRoute,
     agentsRoute,
     newAgentRoute,
@@ -1079,6 +1118,7 @@ const routeTree = rootRoute.addChildren([
   activateRoute,
   adminRoute,
   ...builtStandalonePremiumRoutes,
+  ...builtPublicPremiumRoutes,
   // Slack integration routes (no layout)
   slackInstallRoute,
   slackSuccessRoute,

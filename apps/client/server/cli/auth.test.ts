@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { UnauthorizedError, ForbiddenError } from '@server/utils/errors';
 
 vi.mock('@server/utils/config', () => ({
   Config: { JWT_SECRET: 'test-secret' },
@@ -45,7 +46,7 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 }));
 
 import jwt from 'jsonwebtoken';
-import { checkRateLimit, verifyJwtToken, verifyEmbedApiKey, verifyEmbedKeyById } from './auth';
+import { checkRateLimit, verifyApiKey, verifyJwtToken, verifyEmbedApiKey, verifyEmbedKeyById } from './auth';
 import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
@@ -243,6 +244,33 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
       id: 'u1',
     });
   });
+
+  // A still-valid session JWT for a consented account must still be refused once the account is
+  // banned/disputed/suspended: ban does not bump tokenVersion, and the WS/CLI completion surfaces
+  // fall back to this primitive. Same gate verifyApiKey applies via assertOwnerAccountUsable.
+  describe('account state (ban / dispute / suspension) on the JWT/WS/CLI fallback', () => {
+    it('rejects a banned owner even with accepted policy and a current tokenVersion', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', isBanned: true }));
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('User not found or banned');
+    });
+
+    it('rejects a chargeback/dispute-pending owner', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', disputePending: true }));
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('dispute resolution');
+    });
+
+    it('rejects a content-policy-suspended owner', async () => {
+      vi.mocked(User.findById).mockResolvedValue(
+        mockUser({ aupAcceptedVersion: 'v1', moderation: { status: 'suspended' } })
+      );
+      await expect(verifyJwtToken(sign('u1'))).rejects.toThrow('suspended for repeated content-policy');
+    });
+
+    it('accepts a usable account (not banned, disputed, or suspended)', async () => {
+      vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
+      await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+    });
+  });
 });
 
 describe('verifyEmbedApiKey (embed credential-class gates)', () => {
@@ -262,6 +290,9 @@ describe('verifyEmbedApiKey (embed credential-class gates)', () => {
   beforeEach(() => {
     vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_embedkey');
     vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    // The key owner's account state is now checked on this path too.
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
   });
 
   it('returns the bound agentId and allowedOrigins on a valid org-owned embed key', async () => {
@@ -322,7 +353,11 @@ describe('verifyEmbedKeyById (session-token path re-validation)', () => {
     allowedOrigins: ['https://example.com'],
   };
 
-  beforeEach(() => vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset());
+  beforeEach(() => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset();
+    vi.mocked(User.findById).mockReset();
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+  });
 
   it('resolves an active org-owned embed key by id', async () => {
     vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue(validResult);
@@ -360,5 +395,56 @@ describe('verifyEmbedKeyById (session-token path re-validation)', () => {
       organizationId: undefined,
     });
     await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/organization-owned/);
+  });
+});
+
+describe('api-key account-state gates (mirrors apiKeyAuth)', () => {
+  const validKey = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.AI_CHAT],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_somekey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(validKey);
+    vi.mocked(User.findById).mockReset();
+  });
+
+  it('admits a key whose owner is in good standing', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false });
+    await expect(verifyApiKey({})).resolves.toMatchObject({ keyId: 'k1' });
+  });
+
+  // The thrown error class + message must stay in sync with apiKeyAuth.ts: a bare
+  // Error would flatten to a 500 (or the wrong status) on the surfaces this path backs.
+  it('refuses a banned owner with an UnauthorizedError', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: true });
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(UnauthorizedError);
+    await expect(verifyApiKey({})).rejects.toThrow(/banned/i);
+  });
+
+  it('refuses an owner with a pending payment dispute with a ForbiddenError', async () => {
+    vi.mocked(User.findById).mockResolvedValue({ id: 'u1', isBanned: false, disputePending: true });
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(verifyApiKey({})).rejects.toThrow(/dispute/i);
+  });
+
+  it('refuses a moderation-suspended owner with a ForbiddenError and the full appeal message', async () => {
+    vi.mocked(User.findById).mockResolvedValue({
+      id: 'u1',
+      isBanned: false,
+      moderation: { status: 'suspended' },
+    });
+    await expect(verifyApiKey({})).rejects.toBeInstanceOf(ForbiddenError);
+    await expect(verifyApiKey({})).rejects.toThrow(/contact support to appeal/i);
+  });
+
+  it('refuses a key whose owner no longer exists', async () => {
+    vi.mocked(User.findById).mockResolvedValue(null);
+    await expect(verifyApiKey({})).rejects.toThrow(/not found/i);
   });
 });

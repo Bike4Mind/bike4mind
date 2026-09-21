@@ -49,7 +49,13 @@ import {
 import MetadataChip from './MetaDataChips';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { ContextHelpButton } from '@client/app/components/help';
-import { ignoresUpsamplingAndSeed, withInertNote } from './inertImageSettings';
+import {
+  ASPECT_RATIO_INERT_NOTE,
+  ignoresAspectRatio,
+  ignoresUpsamplingAndSeed,
+  withInertNote,
+} from './inertImageSettings';
+import { imageSizeUpdate } from './imageSizeUpdate';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
@@ -65,6 +71,28 @@ const getDefaultEditModel = (generationModel: string): ModelName => {
   // This avoids mask requirements and provides great chat-based editing
   return ImageModels.GPT_IMAGE_2;
 };
+
+// The two quality vocabularies: GPT-Image models bill by low/medium/high tier, DALL-E by
+// standard/hd. Single source for both the Quality select's options and the validity check
+// that coerces a value carried over from the other vocabulary - they must not drift, or a
+// value the select can display would get reset (or vice versa).
+const getQualityOptions = (modelId: string): { value: OpenAIImageQuality; label: string }[] =>
+  isGPTImageModel(modelId)
+    ? [
+        { value: 'low', label: 'Low' },
+        { value: 'medium', label: 'Medium' },
+        { value: 'high', label: 'High' },
+      ]
+    : [
+        { value: 'standard', label: 'Standard' },
+        { value: 'hd', label: 'HD' },
+      ];
+
+// Close to AdvancedAIModal's reset defaults, but not identical: its handleReset still keys the
+// 'low' default off `model === GPT_IMAGE_1` alone, so it hands gpt-image-1.5/mini/2 'standard'.
+// Pre-existing divergence, and a benign one - OpenAIImageService and OpenAIImageCostCalculator
+// both map 'standard' -> 'medium' for GPT-Image - so it mis-defaults rather than breaks.
+const getDefaultQuality = (modelId: string): OpenAIImageQuality => (isGPTImageModel(modelId) ? 'low' : 'standard');
 
 const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelectionModalProps> = ({ open, onClose }) => {
   const {
@@ -253,21 +281,20 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
   };
 
-  // Default quality logic (mirrors AdvancedAISettings)
-  const getDefaultQuality = (modelId: string): OpenAIImageQuality => {
-    if (isGPTImageModel(modelId)) {
-      return 'low';
-    }
-    return 'standard';
-  };
-
-  // Ensure quality defaults appropriately when image model context changes
+  // Coerce quality only when the selected model cannot express the current value - i.e. it
+  // came from the other vocabulary (or is unset/'auto', which the select cannot display).
+  // Anything broader reverts the user's own pick: this effect re-runs on every quality
+  // change, so comparing against the default instead made the select inert and billed every
+  // GPT-Image generation at the cheapest tier. Gated on `open` because ToolsSection mounts
+  // this dialog unconditionally - ungated it would also clobber AdvancedAIModal's Quality
+  // select and overwrite the persisted value on load.
   useEffect(() => {
-    const defaultQuality = getDefaultQuality(contextImageModel);
-    if (_quality !== defaultQuality) {
-      setLLM({ quality: defaultQuality });
+    if (!open) return;
+    const validQualities = getQualityOptions(contextImageModel).map(option => option.value);
+    if (!validQualities.includes(_quality)) {
+      setLLM({ quality: getDefaultQuality(contextImageModel) });
     }
-  }, [contextImageModel, _quality, setLLM]);
+  }, [open, contextImageModel, _quality, setLLM]);
 
   const imageSettings = [
     // Temperature (generic input like AdvancedAIModal renders via imageSettings mapping here)
@@ -291,7 +318,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             label: 'Image Size',
             type: 'select' as const,
             value: _size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(contextImageModel)].defaultSize,
-            onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
+            onChange: (value: OpenAIImageSize | null) => value && setLLM(imageSizeUpdate(contextImageModel, value)),
             options: getAvailableSizes(contextImageModel).map(s => ({ value: s, label: s })),
             testId: 'image-setting-size-select',
           },
@@ -302,16 +329,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       type: 'select' as const,
       value: _quality,
       onChange: (value: OpenAIImageQuality | null) => value && setLLM({ quality: value }),
-      options: isGPTImageModel(contextImageModel)
-        ? [
-            { value: 'low', label: 'Low' },
-            { value: 'medium', label: 'Medium' },
-            { value: 'high', label: 'High' },
-          ]
-        : [
-            { value: 'standard', label: 'Standard' },
-            { value: 'hd', label: 'HD' },
-          ],
+      options: getQualityOptions(contextImageModel),
       testId: 'image-setting-quality-select',
     },
     // Style (not for GPT-Image or BFL models)
@@ -357,7 +375,13 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             inputProps: {
               type: 'number',
               placeholder: 'Auto',
-              slotProps: { input: { min: 256, max: 4096, step: 8 } },
+              slotProps: {
+                input: {
+                  min: IMAGE_SIZE_CONSTRAINTS.BFL.minWidth,
+                  max: IMAGE_SIZE_CONSTRAINTS.BFL.maxWidth,
+                  step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                },
+              },
             },
             testId: 'image-setting-width-input',
           },
@@ -369,7 +393,13 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             inputProps: {
               type: 'number',
               placeholder: 'Auto',
-              slotProps: { input: { min: 256, max: 4096, step: 8 } },
+              slotProps: {
+                input: {
+                  min: IMAGE_SIZE_CONSTRAINTS.BFL.minHeight,
+                  max: IMAGE_SIZE_CONSTRAINTS.BFL.maxHeight,
+                  step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                },
+              },
             },
             testId: 'image-setting-height-input',
           },
@@ -380,6 +410,12 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       type: 'select' as const,
       value: _aspect_ratio?.toString() ?? '',
       onChange: (value: string | null) => setLLM({ aspect_ratio: value ? value : undefined }),
+      tooltip: withInertNote(
+        'Shape of the generated image',
+        ignoresAspectRatio(contextImageModel),
+        ASPECT_RATIO_INERT_NOTE
+      ),
+      disabled: ignoresAspectRatio(contextImageModel),
       options: [
         { value: '', label: 'Auto' },
         { value: '16:9', label: '16:9' },
@@ -566,6 +602,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                         <Select
                           value={setting.value}
                           onChange={(_, newValue: any) => setting.onChange(newValue)}
+                          disabled={(setting as { disabled?: boolean }).disabled}
                           sx={commonSelectStyles}
                           slotProps={{ listbox: { sx: { zIndex: 2000 } } }}
                           data-testid={(setting as any).testId}

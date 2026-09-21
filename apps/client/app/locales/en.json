@@ -111,6 +111,7 @@
     "x_seats": "{{count}} seats",
     "active_subscription": "Active Subscription",
     "no_subscription": "No Subscription",
+    "payment_issue": "Payment Issue",
     "x_members": "{{count}} members",
     "x_credits": "{{count}} credits",
     "owner": "Owner"
@@ -319,7 +320,8 @@
   "subscriptions": {
     "title": "Subscriptions",
     "expires_on": "Expires on {{ date }}",
-    "renews_on": "Renews on {{ date }}"
+    "renews_on": "Renews on {{ date }}",
+    "payment_issue": "Payment failed - update your payment method to keep this plan."
   },
   "billing": {
     "title": "Billing"

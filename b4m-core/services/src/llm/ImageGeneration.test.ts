@@ -1,7 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ImageGenerationService } from './ImageGeneration';
 import { SUMMARIZATION_CONFIG } from './ChatCompletionFeatures';
-import { ImageModels, ModelBackend, type ISessionDocument, type ModelInfo } from '@bike4mind/common';
+import {
+  ImageModels,
+  MAX_REFERENCE_IMAGES,
+  ModelBackend,
+  type ISessionDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 
@@ -131,6 +137,7 @@ describe('ImageGenerationService.selectInputImage', () => {
       supportsImageVariation: boolean;
       intent?: 'fresh' | 'continuation';
       fabFileIds?: string[];
+      referenceImageFabFileIds?: string[];
       userId?: string;
       userGroups?: string[];
     }
@@ -139,6 +146,7 @@ describe('ImageGenerationService.selectInputImage', () => {
     (service as any).selectInputImage({
       sessionId: 's1',
       fabFileIds: args.fabFileIds ?? [],
+      referenceImageFabFileIds: args.referenceImageFabFileIds,
       userId: args.userId ?? 'u1',
       userGroups: args.userGroups,
       model: args.model,
@@ -274,6 +282,153 @@ describe('ImageGenerationService.selectInputImage', () => {
   });
 });
 
+describe('ImageGenerationService.selectInputImage reference images (#2744)', () => {
+  type FakeFile = { id: string; filePath: string; mimeType: string; moderationStatus: string };
+  const cleanImage = (id: string): FakeFile => ({
+    id,
+    filePath: `fab/${id}.png`,
+    mimeType: 'image/png',
+    moderationStatus: 'clean',
+  });
+
+  const makeService = (fabFilesById: Record<string, Partial<FakeFile>>) => {
+    const findAccessibleInIds = vi.fn(async (ids: string[]) =>
+      (ids || []).map(id => fabFilesById?.[id]).filter(Boolean)
+    );
+    const service = new ImageGenerationService({
+      db: { fabFiles: { findAccessibleInIds }, quests: { getMostRecentChatHistory: vi.fn(async () => []) } },
+    } as any);
+    return { service, findAccessibleInIds };
+  };
+
+  const select = (
+    service: ImageGenerationService,
+    args: { model: string; fabFileIds?: string[]; referenceImageFabFileIds?: string[] }
+  ) =>
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).selectInputImage({
+      sessionId: 's1',
+      fabFileIds: args.fabFileIds ?? [],
+      referenceImageFabFileIds: args.referenceImageFabFileIds,
+      userId: 'u1',
+      userGroups: ['g1'],
+      model: args.model,
+      modelInfo: { supportsImageVariation: true } as ModelInfo,
+      intent: 'fresh',
+      logger: silentLogger,
+    });
+
+  it('returns anchors in the order the caller listed them, not the repo order', async () => {
+    // The repo returns whatever Mongo hands back; order is the caller's contract because
+    // OpenAI binds a mask to element 0 and reads the rest positionally.
+    const { service } = makeService({ a: cleanImage('a'), b: cleanImage('b'), c: cleanImage('c') });
+
+    const result = await select(service, {
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImageFabFileIds: ['c', 'a', 'b'],
+    });
+
+    expect(result.referenceImages.map((f: FakeFile) => f.id)).toEqual(['c', 'a', 'b']);
+  });
+
+  it("looks anchors up as the caller, so another user's file is never presigned", async () => {
+    const { service, findAccessibleInIds } = makeService({ a: cleanImage('a') });
+
+    await select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: ['a'] });
+
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['a'], { userId: 'u1', userGroups: ['g1'] }, undefined);
+  });
+
+  it('rejects an anchor the caller cannot access rather than silently rendering fewer', async () => {
+    // Silently dropping would bill for an image the user did not describe, with nothing in
+    // the response explaining why it looks wrong.
+    const { service } = makeService({ a: cleanImage('a') });
+
+    await expect(
+      select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: ['a', 'nope'] })
+    ).rejects.toThrow(/nope/);
+  });
+
+  it('rejects an anchor that is held or blocked by moderation', async () => {
+    const { service } = makeService({ a: { ...cleanImage('a'), moderationStatus: 'blocked' } });
+
+    await expect(select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: ['a'] })).rejects.toThrow(
+      /moderation/
+    );
+  });
+
+  it('rejects a non-image anchor', async () => {
+    const { service } = makeService({ a: { ...cleanImage('a'), mimeType: 'application/pdf' } });
+
+    await expect(select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: ['a'] })).rejects.toThrow(
+      /not an image/
+    );
+  });
+
+  it('rejects more anchors than the cap, which is what bounds the unbilled input cost', async () => {
+    const { service } = makeService({});
+    const tooMany = Array.from({ length: MAX_REFERENCE_IMAGES + 1 }, (_, i) => `f${i}`);
+
+    await expect(
+      select(service, { model: ImageModels.GPT_IMAGE_2, referenceImageFabFileIds: tooMany })
+    ).rejects.toThrow(/At most/);
+  });
+
+  it('drops anchors for a non-gpt-image model instead of failing the render', async () => {
+    // Only OpenAI's edit endpoint is wired for a multi-image array; BFL/Gemini would 400.
+    const { service, findAccessibleInIds } = makeService({ a: cleanImage('a') });
+
+    const result = await select(service, {
+      model: ImageModels.FLUX_PRO_1_1,
+      referenceImageFabFileIds: ['a'],
+    });
+
+    expect(result.referenceImages).toEqual([]);
+    expect(findAccessibleInIds).not.toHaveBeenCalledWith(['a'], expect.anything(), expect.anything());
+  });
+
+  it('collapses a repeated anchor id instead of paying for the same image twice', async () => {
+    // OpenAI bills input tokens per image in the array, and a repeat teaches the model
+    // nothing new - so a duplicate is pure cost plus a wasted slot against the cap.
+    const { service, findAccessibleInIds } = makeService({ a: cleanImage('a'), b: cleanImage('b') });
+
+    const result = await select(service, {
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImageFabFileIds: ['a', 'b', 'a'],
+    });
+
+    // First occurrence wins, so de-duplication cannot reorder what the caller asked for.
+    expect(result.referenceImages.map((f: FakeFile) => f.id)).toEqual(['a', 'b']);
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['a', 'b'], expect.anything(), undefined);
+  });
+
+  it('counts the cap against unique ids, not raw array slots', async () => {
+    const { service } = makeService(
+      Object.fromEntries(Array.from({ length: MAX_REFERENCE_IMAGES }, (_, i) => [`f${i}`, cleanImage(`f${i}`)]))
+    );
+    const ids = Array.from({ length: MAX_REFERENCE_IMAGES }, (_, i) => `f${i}`);
+
+    const result = await select(service, {
+      model: ImageModels.GPT_IMAGE_2,
+      // One over the cap by raw length, exactly at it once de-duplicated.
+      referenceImageFabFileIds: [...ids, ids[0]],
+    });
+
+    expect(result.referenceImages).toHaveLength(MAX_REFERENCE_IMAGES);
+  });
+
+  it('makes no extra lookup when no anchors are requested', async () => {
+    const { service, findAccessibleInIds } = makeService({});
+
+    const result = await select(service, { model: ImageModels.GPT_IMAGE_2 });
+
+    expect(result.referenceImages).toEqual([]);
+    // One call only: the workbench lookup. An unconditional second call would add a DB
+    // roundtrip to every image generation.
+    expect(findAccessibleInIds).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
   // Regression: safety_tolerance, prompt_upsampling, seed, and output_format were undeclared on
   // GenerateImageIvokeParamsSchema, so Zod stripped them from parsedBody before `...rest` ever
@@ -341,6 +496,28 @@ describe('ImageGenerationService.invoke (image-parameter passthrough)', () => {
     const questInput = create.mock.calls[0][0];
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('seed');
     expect(questInput.promptMeta.model.parameters).not.toHaveProperty('output_format');
+  });
+
+  it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
+    const startImageGenerationProcess = vi.fn(async () => undefined);
+    const { service, create } = makeInvokeService(startImageGenerationProcess);
+
+    await service.invoke({
+      body: {
+        sessionId: 'session1',
+        prompt: 'a cutout icon',
+        model: ImageModels.GPT_IMAGE_2,
+        fabFileIds: [],
+        background: 'transparent',
+      } as any,
+      userId: 'user1',
+    });
+
+    expect(startImageGenerationProcess).toHaveBeenCalledWith(
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+    const questInput = create.mock.calls[0][0];
+    expect(questInput.promptMeta.model.name).toBe(ImageModels.GPT_IMAGE_1_5);
   });
 });
 

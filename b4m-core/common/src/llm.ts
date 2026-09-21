@@ -1,9 +1,10 @@
 import { z } from 'zod';
-import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './schemas/openai';
+import { ChatCompletionCreateInputSchema, ImageOutputFormatSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 import { BFLSafetyToleranceSchema } from './schemas/bfl';
 import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
+import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -60,11 +61,21 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
+  /**
+   * Extra gpt-image "style anchor" images, as fabFile ids. They ride alongside the primary
+   * input image (the first image-type entry in `fabFileIds`) rather than replacing it, and
+   * OpenAI receives them in this order - which matters, because a mask always applies to the
+   * first image in the array. fabFile ids rather than URLs so the existing access +
+   * moderation gates (findAccessibleInIds, isImageServeable) still apply. Ignored by every
+   * non-gpt-image provider. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
+   * why the cap is 4 and not OpenAI's 16.
+   */
+  referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
   safety_tolerance: BFLSafetyToleranceSchema,
   prompt_upsampling: z.boolean().optional(),
   seed: z.number().nullable().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
+  output_format: ImageOutputFormatSchema.nullable().optional(),
   /** Resolved by the API route's prompt resolver. Defaults to 'fresh' for first-turn or sessions with no prior image. */
   intent: PromptIntentSchema.optional(),
   promptEnhancement: z
@@ -89,7 +100,7 @@ export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySc
 export const GenerateImageToolCallSchema = OpenAIImageGenerationInput.extend({
   safety_tolerance: z.number().optional(),
   prompt_upsampling: z.boolean().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
+  output_format: ImageOutputFormatSchema.nullable().optional(),
   seed: z.number().nullable().optional(),
   editModel: z.string().optional(), // Model to use for image editing operations (separate from generation model)
 }).omit({
@@ -132,7 +143,21 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   organizationId: z.string().nullable().optional(),
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
+  /**
+   * Extra gpt-image "style anchor" images, as fabFile ids. On this endpoint `fabFileIds` is
+   * the inpainting mask, not an image input, so references need their own field: they are
+   * appended after `image` (the edit source), and OpenAI applies the mask to the first entry
+   * of that array - i.e. always to `image`, never to a reference. fabFile ids rather than URLs
+   * so the existing access + moderation gates (findAccessibleInIds, isImageServeable) still
+   * apply. Ignored by BFL and Gemini. Repeated ids collapse to one anchor. See
+   * MAX_REFERENCE_IMAGES for why the cap is 4, not 16.
+   */
+  referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   image: z.string(),
+  // OpenAIImageGenerationInput doesn't declare this; without it here, ImageEdit.ts's
+  // `...rest` spread silently strips any client-sent output_format before it ever reaches
+  // ImageEditBodySchema's own (narrower) field.
+  output_format: ImageOutputFormatSchema.nullable().optional(),
 });
 
 /**
@@ -234,10 +259,18 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * was the only switch for the offer and it also strips every authored prompt, so no caller could
    * have an arm that went unoffered AND kept the abstention licence.
    *
-   * Gates the three auto-add sites (the knowledge offer in resolveEnabledTools, the navigate_view
+   * Gates the auto-add sites (the knowledge offer in resolveEnabledTools, the navigate_view
    * auto-add, the blog/skill gate), unioned with `Boolean(promptMode)` by
    * resolveSkipAutoOffers. A force-on, not an override: `false` under a promptMode still suppresses.
    * Withholding navigate_view also drops the viewRegistry system block, which only describes it.
+   *
+   * `buildSharedTools`' `offerOnlyNamedTools` (see sharedToolBuilder.ts) reads the same union for
+   * the same reason: MCP tools merged past the `enabledTools` filter are withheld too, since the
+   * caller never named them either. Unlike the auto-add sites, this one can still be reached per
+   * tool - a caller with `session.enabledTools` (not the public `tools` field, which
+   * `filterKnownTools` strips non-native ids from before this flag is even consulted) can name one
+   * MCP tool by its namespaced `server__tool` id and keep it while every unnamed sibling is
+   * withheld.
    *
    * Withholds the OFFER, not knowledge: `session.forceKnowledgeRetrieval` is untouched, and an
    * already-attached corpus is inlined rather than deferred to the tool. An arm that must see no
