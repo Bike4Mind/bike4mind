@@ -57,6 +57,11 @@ beforeEach(() => {
   h.resetMutate.mockReset();
   h.confirmRun.mockClear();
   h.confirmRun.mockImplementation((opts: { onOk?: () => void | Promise<void> }) => opts.onOk?.());
+  // Without this, a test asserting a bare toast string can pass on a PRIOR test's stale call
+  // instead of its own - vi.mock's module-level toast object is shared across every test in
+  // this file and is otherwise never reset.
+  vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.error).mockClear();
 });
 
 describe('AdminApiKeysModal', () => {
