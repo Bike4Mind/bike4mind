@@ -243,3 +243,35 @@ export function evaluatePermissionPolicy(
   }
   return { action: policy.defaultAction, reason: `policy default (${policy.defaultAction})` };
 }
+
+/**
+ * Resolve a headless permission decision from the fixed precedence ladder:
+ *   --dangerously-skip-permissions -> allow-once (explicit blanket override)
+ *   a directory-grant request       -> deny (widening the filesystem allow-list is
+ *                                       its own decision; headless has no human to
+ *                                       grant it, so fail closed - never inherit the
+ *                                       originating tool's policy verdict)
+ *   a --permission-policy            -> its per-tool/per-risk verdict
+ *   otherwise                        -> deny (safe default, no silent auto-approve)
+ * Extracted from the headless prompt closure so the ladder is unit-testable.
+ */
+export function resolveHeadlessPermissionDecision(params: {
+  dangerouslySkipPermissions: boolean;
+  isDirectoryGrant: boolean;
+  toolName: string;
+  riskLevel: CommandRiskLevel;
+  permissionPolicy: HeadlessPermissionPolicy | null;
+}): { action: 'allow-once' | 'deny'; reason: string } {
+  const { dangerouslySkipPermissions, isDirectoryGrant, toolName, riskLevel, permissionPolicy } = params;
+  if (dangerouslySkipPermissions) {
+    return { action: 'allow-once', reason: 'dangerously-skip-permissions' };
+  }
+  if (isDirectoryGrant) {
+    return { action: 'deny', reason: 'directory access not granted in headless mode' };
+  }
+  if (permissionPolicy) {
+    const verdict = evaluatePermissionPolicy(permissionPolicy, toolName, riskLevel);
+    return { action: verdict.action === 'allow' ? 'allow-once' : 'deny', reason: verdict.reason };
+  }
+  return { action: 'deny', reason: 'no permission policy; default deny' };
+}

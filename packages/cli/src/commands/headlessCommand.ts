@@ -60,9 +60,9 @@ import {
   HEADLESS_SCHEMA_VERSION,
   createHeadlessEmitter,
   classifyToolRisk,
+  resolveHeadlessPermissionDecision,
   parseStringArray,
   parsePermissionPolicy,
-  evaluatePermissionPolicy,
   type HeadlessPermissionPolicy,
 } from './headlessProtocol.js';
 
@@ -272,21 +272,13 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
         emit({ type: 'permission_request', toolName, risk });
       }
 
-      let decision: { action: 'allow-once' | 'deny'; reason: string };
-      if (dangerouslySkipPermissions) {
-        decision = { action: 'allow-once', reason: 'dangerously-skip-permissions' };
-      } else if (kind === 'directory-grant') {
-        // Widening the filesystem allow-list is its own decision: never inherit
-        // the originating tool's policy verdict. Headless has no human to grant,
-        // so fail closed - the operator must pre-grant dirs via --add-dir (or
-        // --dangerously-skip-permissions, handled above).
-        decision = { action: 'deny', reason: 'directory access not granted in headless mode' };
-      } else if (permissionPolicy) {
-        const verdict = evaluatePermissionPolicy(permissionPolicy, toolName, risk.level);
-        decision = { action: verdict.action === 'allow' ? 'allow-once' : 'deny', reason: verdict.reason };
-      } else {
-        decision = { action: 'deny', reason: 'no permission policy; default deny' };
-      }
+      const decision = resolveHeadlessPermissionDecision({
+        dangerouslySkipPermissions,
+        isDirectoryGrant: kind === 'directory-grant',
+        toolName,
+        riskLevel: risk.level,
+        permissionPolicy,
+      });
 
       if (streaming) {
         emit({

@@ -9,6 +9,7 @@ import {
   HeadlessInputError,
   parsePermissionPolicy,
   evaluatePermissionPolicy,
+  resolveHeadlessPermissionDecision,
 } from './headlessProtocol.js';
 
 describe('headless protocol envelope', () => {
@@ -193,5 +194,58 @@ describe('evaluatePermissionPolicy', () => {
   it('falls back to defaultAction when no rule matches and no threshold applies', () => {
     const allowByDefault = parsePermissionPolicy('{"defaultAction":"allow"}');
     expect(evaluatePermissionPolicy(allowByDefault, 'x', 'high').action).toBe('allow');
+  });
+});
+
+describe('resolveHeadlessPermissionDecision directory-grant fail-closed (criterion 1)', () => {
+  const fileReadOnly = parsePermissionPolicy('{"allow":["file_read"],"defaultAction":"deny"}');
+
+  it('denies a directory-grant even when the policy would allow the underlying tool', () => {
+    // A policy that allows file_read must NOT let a follow-on directory widening
+    // ride on that verdict - headless has no human to grant scope, so it fails
+    // closed as its own distinct decision, not a second silent approval.
+    const decision = resolveHeadlessPermissionDecision({
+      dangerouslySkipPermissions: false,
+      isDirectoryGrant: true,
+      toolName: 'file_read',
+      riskLevel: 'low',
+      permissionPolicy: fileReadOnly,
+    });
+    expect(decision.action).toBe('deny');
+    expect(decision.reason).toMatch(/directory access not granted/);
+  });
+
+  it('still applies the policy verdict for a normal (non-directory-grant) tool call', () => {
+    expect(
+      resolveHeadlessPermissionDecision({
+        dangerouslySkipPermissions: false,
+        isDirectoryGrant: false,
+        toolName: 'file_read',
+        riskLevel: 'low',
+        permissionPolicy: fileReadOnly,
+      }).action
+    ).toBe('allow-once');
+  });
+
+  it('denies a directory-grant even under a permissive policy, but --dangerously-skip-permissions overrides everything', () => {
+    const allowAll = parsePermissionPolicy('{"defaultAction":"allow"}');
+    expect(
+      resolveHeadlessPermissionDecision({
+        dangerouslySkipPermissions: false,
+        isDirectoryGrant: true,
+        toolName: 'anything',
+        riskLevel: 'high',
+        permissionPolicy: allowAll,
+      }).action
+    ).toBe('deny');
+    expect(
+      resolveHeadlessPermissionDecision({
+        dangerouslySkipPermissions: true,
+        isDirectoryGrant: true,
+        toolName: 'anything',
+        riskLevel: 'high',
+        permissionPolicy: allowAll,
+      }).action
+    ).toBe('allow-once');
   });
 });
