@@ -7,7 +7,7 @@ tags: [admin, feedback, support]
 
 # Feedback
 
-The Feedback tab provides a centralized interface for reviewing, triaging, and managing user-submitted feedback. Administrators can search, filter by status and organization, update feedback status, delete entries, and export data to CSV.
+The Feedback tab provides a centralized interface for reviewing, triaging, and managing user-submitted feedback. Administrators can search, filter by subject, status and organization, update feedback status, delete entries, and export data to CSV.
 
 ## Where Feedback Comes From
 
@@ -62,6 +62,24 @@ A multi-select dropdown filters feedback by the submitting user's organization:
 - Individual organization names, taken from every report you can see
 
 Multiple organizations can be selected at the same time. The list of available organizations is not narrowed by the filter itself, so selecting one does not remove the others from the dropdown.
+
+### Subject Filter
+
+A single-select dropdown filters feedback by what the report is *about*:
+
+| Menu entry | Shows |
+|------------|-------|
+| **All Subjects** | Every report, whatever its subject. This is the default. |
+| **Conversation turn** | Reports filed against one specific answer in a conversation |
+| **Conversation** | Reports filed against a conversation as a whole, with no single answer named |
+| **Product** | Reports about the product in general, filed outside any conversation |
+| **Help** | Comments written on a help article or a help-chat answer |
+
+A report's subject is decided when it is filed, narrowest first: one that names a turn is **Conversation turn**, one that names only a session is **Conversation**, and one attached to neither is **Product**. Help-center comments are recorded as **Help** by the help surfaces themselves rather than by that rule, which is what keeps them separable from general product feedback instead of landing in the same undifferentiated queue. Use the help context chip on the row (see Where Feedback Comes From above) to tell an article comment from a help-chat one.
+
+Unlike the organization filter, only one subject can be selected at a time -- the server takes one subject or none. Select **All Subjects** to clear it.
+
+The subject filter combines with search, status and organization rather than replacing them, and the CSV export respects it along with the rest.
 
 ### Sorting
 
