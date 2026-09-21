@@ -17,6 +17,8 @@ import { SessionEvents } from '@server/utils/eventBus';
 import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
 
+// Shape stays loose (no hex check) for the reason recorded above ProjectFilesRequestSchema in
+// types/api.ts: the queries behind addSessions/removeSessions guard ids themselves.
 const sessionIdsArray = z.array(z.string().min(1));
 
 const addSessionIdsBodySchema = z.object({ sessionIds: sessionIdsArray.min(1) });

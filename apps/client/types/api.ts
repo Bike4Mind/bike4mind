@@ -88,11 +88,6 @@ export const ProjectFilesRequestSchema = z.object({
   fileIds: z.array(z.string().min(1)),
 });
 
-export const FileTagToggleRequestSchema = z.object({
-  ids: z.array(z.string().min(1)),
-  tags: z.array(z.string().min(1)),
-});
-
 export const FileTagCreateRequestSchema = z.object({
   id: z.string().min(1),
   description: z.string().optional(),
@@ -231,7 +226,6 @@ export type CreateApiKeyRequestBody = z.infer<typeof CreateApiKeyRequestSchema>;
 export type UpdateUserRequestBody = z.infer<typeof UpdateUserRequestSchema>;
 export type CreateSessionRequestBody = z.infer<typeof CreateSessionRequestSchema>;
 export type ProjectFilesRequestBody = z.infer<typeof ProjectFilesRequestSchema>;
-export type FileTagToggleRequestBody = z.infer<typeof FileTagToggleRequestSchema>;
 export type FileTagCreateRequestBody = z.infer<typeof FileTagCreateRequestSchema>;
 export type ProjectCreateRequestBody = z.infer<typeof ProjectCreateRequestSchema>;
 export type ProjectInviteRequestBody = z.infer<typeof ProjectInviteRequestSchema>;
