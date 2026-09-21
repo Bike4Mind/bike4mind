@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
 import type { ContextTelemetry, AnomaliesTelemetry } from '@bike4mind/common';
-import { formatIssueBody, type LLMAnalysis } from './telemetryAnalysis';
+import { buildAnalysisPrompt, formatIssueBody, type LLMAnalysis } from './telemetryAnalysis';
 
 function createTestTelemetry(overrides: { anomalies?: Partial<AnomaliesTelemetry> } = {}): ContextTelemetry {
   const defaultAnomalies: AnomaliesTelemetry = {
@@ -102,5 +102,39 @@ describe('formatIssueBody', () => {
     expect(body).not.toContain('@org/team');
     expect(body).not.toContain('@someone');
     expect(body).not.toContain('@another/team');
+  });
+
+  it('omits the lake row for a turn that never recorded the bucket', () => {
+    const body = formatIssueBody(createTestTelemetry(), { includeTokenBreakdown: true });
+
+    expect(body).toContain('| System Prompts |');
+    expect(body).not.toContain('Lake Retrieval');
+  });
+
+  it('reports a recorded lake volume as its own row', () => {
+    const telemetry = createTestTelemetry();
+    telemetry.contextWindow.tokensBySource!.lakeRetrieval = 250;
+
+    const body = formatIssueBody(telemetry, { includeTokenBreakdown: true });
+
+    expect(body).toContain('| Lake Retrieval | 250 | 25.0% |');
+  });
+});
+
+describe('buildAnalysisPrompt token distribution', () => {
+  it('leaves the lake line out when the bucket is unrecorded', () => {
+    const prompt = buildAnalysisPrompt(createTestTelemetry());
+
+    expect(prompt).toContain('- User Prompt: 100');
+    expect(prompt).not.toContain('Lake Retrieval');
+  });
+
+  it('includes the lake line when the bucket was recorded, zero included', () => {
+    const telemetry = createTestTelemetry();
+    telemetry.contextWindow.tokensBySource!.lakeRetrieval = 0;
+
+    const prompt = buildAnalysisPrompt(telemetry);
+
+    expect(prompt).toContain('- Lake Retrieval: 0 (0.0%)');
   });
 });

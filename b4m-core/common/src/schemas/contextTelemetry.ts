@@ -99,9 +99,12 @@ export const TokensBySourceSchema = z.object({
   urlContent: z.number(),
   toolSchemas: z.number(),
   userPrompt: z.number(),
-  // Forced data-lake retrieval content injected this turn, counted separately from the
-  // system-prompt remainder it used to be folded into. Optional so a row captured before this
-  // field existed still parses.
+  /**
+   * Lake-sourced content injected this turn (forced retrieval + the lake-memory hot card), split out
+   * of `systemPrompts`. Optional and absent means UNKNOWN, never zero - telemetry captured before
+   * this bucket existed has no value to report and must not be read as "no lake content". Mirrors
+   * PromptMetaTokensBySourceSchema in promptMeta.ts.
+   */
   lakeRetrieval: z.number().optional(),
 });
 

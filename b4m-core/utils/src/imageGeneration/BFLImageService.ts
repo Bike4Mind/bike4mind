@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import axios from 'axios';
-import { ImageModels, BFL_SAFETY_TOLERANCE, toNonWebpOutputFormat } from '@bike4mind/common';
+import { ImageModels, BFL_SAFETY_TOLERANCE, isBflUltraImageModel, toNonWebpOutputFormat } from '@bike4mind/common';
 import { redactErrorForLog } from './redactErrorForLog';
 
 export class BFLImageService extends AIImageService {
@@ -93,7 +93,7 @@ export class BFLImageService extends AIImageService {
             user,
           };
 
-          if (model.includes('ultra')) {
+          if (isBflUltraImageModel(model)) {
             // For Ultra models, use aspect_ratio
             if (aspect_ratio) {
               requestBody.aspect_ratio = aspect_ratio;

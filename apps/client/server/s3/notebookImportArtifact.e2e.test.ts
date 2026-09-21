@@ -97,6 +97,7 @@ function makeService() {
     adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
     fileStorageService: {
       uploadFile: async () => null,
+      deleteFile: async () => null,
       getFileContent: async () => null,
       getSignedUrl: async () => '',
     },

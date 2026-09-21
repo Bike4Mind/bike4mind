@@ -30,9 +30,17 @@ export type ContextBreakdownTool = {
 };
 
 export type ContextBreakdownCategories = {
-  /** Sum of the included layers, which is what the model was actually handed. */
+  /**
+   * Sum of the included layers, which is what the model was actually handed - less the included lake
+   * layers when `lakeRetrieval` is known, because those are reported there instead. A turn recorded
+   * before the bucket existed leaves the sum whole, as it was recorded.
+   */
   systemPrompt: number;
-  /** The assembler's own system-prompt total, for reconciling against `systemPrompt`. */
+  /**
+   * The assembler's own system-prompt total, for reconciling against `systemPrompt`: net of the lake
+   * bucket on a turn that recorded one, gross on a pre-change turn (where the lake bucket is unknown
+   * anyway, so nothing is being hidden).
+   */
   systemPromptBilled: number;
   toolDefinitions: number;
   attachedFiles: number;
@@ -41,14 +49,10 @@ export type ContextBreakdownCategories = {
   urlContent: number;
   userMessage: number;
   /**
-   * Forced data-lake retrieval content injected this turn (KnowledgeRetrievalFeature), counted
-   * with the same tokenizer as every other bucket and carved OUT of `systemPromptBilled` rather
-   * than folded into it - see ChatCompletionProcess's tokensBySource assembly. Distinct from
-   * `retrieval` below, which is a verdict (tags/surfaces/scope), not a token count. Zero on a turn
-   * recorded before this field existed, same as a turn that genuinely injected nothing -
-   * `tokensBySource.lakeRetrieval` being absent is not otherwise surfaced here.
+   * Lake-sourced content injected this turn (forced retrieval + the lake-memory card). Null on a turn
+   * recorded before the bucket existed - UNKNOWN, never zero.
    */
-  lakeRetrieval: number;
+  lakeRetrieval: number | null;
 };
 
 export type ContextBreakdown = {
@@ -88,7 +92,7 @@ const EMPTY_CATEGORIES: ContextBreakdownCategories = {
   memory: 0,
   urlContent: 0,
   userMessage: 0,
-  lakeRetrieval: 0,
+  lakeRetrieval: null,
 };
 
 function buildLayers(details: SystemPromptDetail[] | undefined): ContextBreakdownLayer[] {
@@ -163,9 +167,16 @@ export function buildContextBreakdown(
 
   const layers = buildLayers(context?.systemPromptDetails);
 
+  const includedLayerTokens = layers.reduce((sum, layer) => sum + (layer.wasIncluded ? layer.tokenCount : 0), 0);
+  // `undefined` is UNKNOWN, not zero: a turn recorded before the bucket existed hides its lake
+  // content inside the residual, and this must leave that turn byte-identical rather than claim none.
+  const lakeTokens = tokensBySource?.lakeRetrieval;
+
   const categories: ContextBreakdownCategories = tokensBySource
     ? {
-        systemPrompt: layers.reduce((sum, layer) => sum + (layer.wasIncluded ? layer.tokenCount : 0), 0),
+        // The lake layers are their own category when known, so they must come out of the layer sum
+        // here or the table would count those tokens twice.
+        systemPrompt: lakeTokens === undefined ? includedLayerTokens : Math.max(0, includedLayerTokens - lakeTokens),
         systemPromptBilled: tokensBySource.systemPrompts,
         toolDefinitions: tokensBySource.toolSchemas,
         attachedFiles: tokensBySource.fabFiles,
@@ -173,13 +184,11 @@ export function buildContextBreakdown(
         memory: tokensBySource.mementos,
         urlContent: tokensBySource.urlContent,
         userMessage: tokensBySource.userPrompt,
-        // Absent on a turn recorded before this bucket existed - zero reads the same as "recorded
-        // and genuinely empty" for this category, matching every other bucket's absent-tolerance.
-        lakeRetrieval: tokensBySource.lakeRetrieval ?? 0,
+        lakeRetrieval: lakeTokens ?? null,
       }
     : {
         ...EMPTY_CATEGORIES,
-        systemPrompt: layers.reduce((sum, layer) => sum + (layer.wasIncluded ? layer.tokenCount : 0), 0),
+        systemPrompt: includedLayerTokens,
       };
 
   const readTokens = tokenUsage?.cacheReadInputTokens ?? 0;

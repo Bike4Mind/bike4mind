@@ -3,7 +3,7 @@ import { styled } from '@mui/system';
 import type { ContextTelemetry } from '@bike4mind/common';
 
 /**
- * The token buckets an assembled turn is billed against, derived from the telemetry schema
+ * The eight token buckets an assembled turn is billed against, derived from the telemetry schema
  * itself so a bucket added there is a compile error here rather than a silently dropped segment -
  * shared by the admin Context Inspector and the user's own context breakdown, which must colour
  * and label the same buckets identically.
@@ -35,9 +35,6 @@ export const TOKEN_SOURCE_COLORS: Record<keyof TokenDistribution, string> = {
 };
 
 export const TokenDistributionBar = ({ tokensBySource }: { tokensBySource: TokenDistribution }) => {
-  // lakeRetrieval is optional on the schema - absent on a turn recorded before this bucket
-  // existed, which must read as "not recorded" (0 here) rather than throw on the missing key.
-  const lakeRetrieval = tokensBySource.lakeRetrieval ?? 0;
   const total =
     tokensBySource.systemPrompts +
     tokensBySource.conversationHistory +
@@ -46,7 +43,7 @@ export const TokenDistributionBar = ({ tokensBySource }: { tokensBySource: Token
     tokensBySource.urlContent +
     tokensBySource.toolSchemas +
     tokensBySource.userPrompt +
-    lakeRetrieval;
+    (tokensBySource.lakeRetrieval ?? 0);
 
   if (total === 0) return <Typography level="body-sm">No token data</Typography>;
 
@@ -58,7 +55,7 @@ export const TokenDistributionBar = ({ tokensBySource }: { tokensBySource: Token
     { key: 'urlContent', label: 'URLs', value: tokensBySource.urlContent },
     { key: 'toolSchemas', label: 'Tools', value: tokensBySource.toolSchemas },
     { key: 'userPrompt', label: 'User', value: tokensBySource.userPrompt },
-    { key: 'lakeRetrieval', label: 'Lake retrieval', value: lakeRetrieval },
+    { key: 'lakeRetrieval', label: 'Lake', value: tokensBySource.lakeRetrieval ?? 0 },
   ];
   const segments = allSegments.filter(s => s.value > 0);
 

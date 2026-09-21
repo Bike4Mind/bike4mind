@@ -1,4 +1,4 @@
-import { isGeminiImageModel } from '@bike4mind/common';
+import { isGeminiImageModel, usesDiscreteImageDimensions } from '@bike4mind/common';
 // Imported from the module rather than the `help` barrel: component tests mock the barrel.
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 
@@ -14,6 +14,18 @@ import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
  */
 export const ignoresUpsamplingAndSeed = (model?: string | null): boolean => isGeminiImageModel(model);
 
+/**
+ * A model sized by discrete width/height builds its request from those alone - `BFLImageService.generate`
+ * forwards `aspect_ratio` for Ultra only - so the Aspect Ratio control has no effect on it. Shares the
+ * predicate with `imageSizeUpdate` so the size row and this row cannot disagree about a model.
+ */
+export const ignoresAspectRatio = usesDiscreteImageDimensions;
+
+export const ASPECT_RATIO_INERT_NOTE = FIELD_TOOLTIPS.aspectRatioUnsupportedByFluxPro;
+
 /** Adds the "your model ignores this" sentence to a field tooltip when the control is inert. */
-export const withInertNote = (tooltip: string, inert: boolean): string =>
-  inert ? `${tooltip} ${FIELD_TOOLTIPS.unsupportedByGeminiImage}` : tooltip;
+export const withInertNote = (
+  tooltip: string,
+  inert: boolean,
+  note: string = FIELD_TOOLTIPS.unsupportedByGeminiImage
+): string => (inert ? `${tooltip} ${note}` : tooltip);

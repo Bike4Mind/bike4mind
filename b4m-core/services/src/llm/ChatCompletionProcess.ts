@@ -161,6 +161,7 @@ import {
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   resolveSkipAutoOffers,
+  lakeContentTokens,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
@@ -3284,34 +3285,25 @@ export class ChatCompletionProcess {
             urlContent: number;
             toolSchemas: number;
             userPrompt: number;
-            lakeRetrieval: number;
+            lakeRetrieval?: number;
           }
         | undefined;
 
       const mementoMessages = featureContextMessages['mementos'] ?? [];
-      // Forced data-lake retrieval content injected THIS turn (grounding passages + citation
-      // framing) - see KnowledgeRetrievalFeature. Counted here, before assembly, so it can be
-      // carved out of the system-prompt remainder below instead of being silently absorbed into
-      // it. This is a same-turn attribution only: once this content is persisted as part of the
-      // message list, a LATER turn's conversationHistory bucket sums it back in unattributed, the
-      // same way mementos/fabFiles/urlContent are never retroactively re-split out of history either.
-      const lakeRetrievalMessages = featureContextMessages['knowledgeRetrieval'] ?? [];
       let inputTokens = 0;
       // Whether inputTokens came from the char estimator rather than the encoder. The overflow guard
       // below reads this: an estimate is fine to bill and reserve against, but not to reject a turn on.
       let inputTokensEstimated = false;
 
       try {
-        const [totalTokens, mementoTokens, fabTokens, urlTokens, historyTokens, userPromptTokens, lakeRetrievalTokens] =
-          await Promise.all([
-            calculateTotalTokenLength(messages, tokenCalcOptions),
-            calculateTotalTokenLength(mementoMessages, tokenCalcOptions),
-            calculateTotalTokenLength(fabMessages, tokenCalcOptions),
-            calculateTotalTokenLength(urlMessages, tokenCalcOptions),
-            calculateTotalTokenLength(previousMessages, tokenCalcOptions),
-            calculateTotalTokenLength([{ role: 'user' as const, content: effectiveUserPrompt }], tokenCalcOptions),
-            calculateTotalTokenLength(lakeRetrievalMessages, tokenCalcOptions),
-          ]);
+        const [totalTokens, mementoTokens, fabTokens, urlTokens, historyTokens, userPromptTokens] = await Promise.all([
+          calculateTotalTokenLength(messages, tokenCalcOptions),
+          calculateTotalTokenLength(mementoMessages, tokenCalcOptions),
+          calculateTotalTokenLength(fabMessages, tokenCalcOptions),
+          calculateTotalTokenLength(urlMessages, tokenCalcOptions),
+          calculateTotalTokenLength(previousMessages, tokenCalcOptions),
+          calculateTotalTokenLength([{ role: 'user' as const, content: effectiveUserPrompt }], tokenCalcOptions),
+        ]);
         // Establish the input floor from the messages total FIRST. calculateTotalTokenLength
         // succeeded (we're past the await above), so this is a known-good value. Keeping it as the
         // floor before the tool-schema count means a throw in that count can only cost us the tool
@@ -3441,11 +3433,9 @@ export class ChatCompletionProcess {
         // captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
         // Derived from totalTokens, NOT inputTokens, so the tool-schema count never inflates it.
         // Uses the post-recovery effective totals so a shed turn isn't double-counted as history.
-        // lakeRetrievalTokens is subtracted here too - it ships as a system-role message
-        // (KnowledgeRetrievalFeature) and would otherwise land in this same remainder, double
-        // counting it against its own dedicated bucket below.
-        const knownSourceTokens =
-          fabTokens + effectiveHistoryTokens + mementoTokens + urlTokens + userPromptTokens + lakeRetrievalTokens;
+        // Lake content is still inside this residual HERE. It is promoted to its own bucket below,
+        // once systemPromptDetails has been derived, so what gets persisted is net of the lake layers.
+        const knownSourceTokens = fabTokens + effectiveHistoryTokens + mementoTokens + urlTokens + userPromptTokens;
         const systemPromptTokens = Math.max(0, effectiveTotalTokens - knownSourceTokens);
 
         tokensBySource = {
@@ -3456,7 +3446,6 @@ export class ChatCompletionProcess {
           urlContent: urlTokens,
           toolSchemas: toolSchemaTokens,
           userPrompt: userPromptTokens,
-          lakeRetrieval: lakeRetrievalTokens,
         };
 
         logger.info(`📊 Token breakdown by source calculated`, tokensBySource);
@@ -3563,6 +3552,23 @@ export class ChatCompletionProcess {
         // model sees the blocks rather than the order the three helpers happened to run.
         systemPromptDetails = sortDetailsByDeliveryOrder(systemPromptDetails);
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
+      }
+
+      // Promote the lake layers out of the residual. `tokensBySource.systemPrompts` above is gross -
+      // it still contains the forced-retrieval and lake-memory content - so move exactly the tokens
+      // the layer rows recorded as delivered into a bucket of their own, conserving the sum rather
+      // than counting the lake messages a second time. One counter, and a lake block the budget
+      // dropped is not billed (the rows carry `wasIncluded`). `undefined` means the details never
+      // derived, so the volume is unknown and the residual stays gross rather than claiming zero.
+      if (tokensBySource) {
+        const lakeTokens = lakeContentTokens(systemPromptDetails);
+        if (lakeTokens !== undefined) {
+          tokensBySource = {
+            ...tokensBySource,
+            systemPrompts: Math.max(0, tokensBySource.systemPrompts - lakeTokens),
+            lakeRetrieval: lakeTokens,
+          };
+        }
       }
 
       // Opt-in only, and built from the same tagged stack the breakdown above is derived from, so

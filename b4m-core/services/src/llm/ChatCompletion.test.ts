@@ -4513,11 +4513,11 @@ describe('ChatCompletionProcess', () => {
     const runWithTools = async (opts: {
       tools: any[];
       // Either one count applied to every message source, or an explicit per-source queue in
-      // calculateTotalTokenLength's call order: [messages, mementos, fab, url, history, userPrompt,
-      // lakeRetrieval]. The per-source form lets a test give systemPrompts a non-degenerate value so
-      // the "tools are not folded into the system-prompt remainder" property is actually asserted.
+      // calculateTotalTokenLength's call order: [messages, mementos, fab, url, history, userPrompt].
+      // The per-source form lets a test give systemPrompts a non-degenerate value so the
+      // "tools are not folded into the system-prompt remainder" property is actually asserted.
       messagesTokenCount?: number;
-      sourceTokenCounts?: [number, number, number, number, number, number, number];
+      sourceTokenCounts?: [number, number, number, number, number, number];
       // Full control over calculateTotalTokenLength, for the cases that need to differentiate the
       // real count from the estimateOnly one (e.g. rejecting the former and resolving the latter).
       tokenLengthImpl?: (messages: any, options: any) => Promise<number>;
@@ -4582,45 +4582,18 @@ describe('ChatCompletionProcess', () => {
     };
 
     it('folds tool-schema tokens into inputTokens without inflating the systemPrompts remainder', async () => {
-      // Per-source counts: messages 100, memento/fab/url 0, history 10, userPrompt 5, lakeRetrieval
-      // 0; tools -> 30. systemPrompts = totalTokens(100) - knownSources(0+0+0+10+5+0) = 85,
-      // independent of tools. inputTokens = totalTokens(100) + toolSchemas(30) = 130. A mutation
-      // that derived systemPrompts from inputTokens (115) or subtracted tools (55) would fail this.
+      // Per-source counts: messages 100, memento/fab/url 0, history 10, userPrompt 5; tools -> 30.
+      // systemPrompts = totalTokens(100) - knownSources(0+0+0+10+5) = 85, independent of tools.
+      // inputTokens = totalTokens(100) + toolSchemas(30) = 130. A mutation that derived
+      // systemPrompts from inputTokens (115) or subtracted tools (55) would fail this.
       const promptMeta = await runWithTools({
         tools: [probeTool, probeTool],
-        sourceTokenCounts: [100, 0, 0, 0, 10, 5, 0],
+        sourceTokenCounts: [100, 0, 0, 0, 10, 5],
         toolCountImpl: (text: any) => (typeof text === 'string' ? 30 : 7),
       });
       expect(promptMeta.context.tokensBySource.toolSchemas).toBe(30);
       expect(promptMeta.context.tokensBySource.systemPrompts).toBe(85);
-      expect(promptMeta.context.tokensBySource.lakeRetrieval).toBe(0);
       expect(promptMeta.tokenUsage.inputTokens).toBe(130);
-    });
-
-    it('carves lake-retrieval tokens out of the systemPrompts remainder instead of double counting them', async () => {
-      // Per-source counts: messages 200, memento/fab/url 0, history 10, userPrompt 5,
-      // lakeRetrieval 60. systemPrompts = totalTokens(200) - knownSources(0+0+0+10+5+60) = 125.
-      // Before this bucket existed, lakeRetrieval's 60 tokens would have landed inside
-      // systemPrompts (185) instead of its own field.
-      const promptMeta = await runWithTools({
-        tools: [],
-        sourceTokenCounts: [200, 0, 0, 0, 10, 5, 60],
-        toolCountImpl: () => 7,
-      });
-      expect(promptMeta.context.tokensBySource.lakeRetrieval).toBe(60);
-      expect(promptMeta.context.tokensBySource.systemPrompts).toBe(125);
-      // Every bucket sums back to inputTokens (no tools here, so inputTokens === totalTokens).
-      const bySource = promptMeta.context.tokensBySource;
-      expect(
-        bySource.systemPrompts +
-          bySource.conversationHistory +
-          bySource.mementos +
-          bySource.fabFiles +
-          bySource.urlContent +
-          bySource.toolSchemas +
-          bySource.userPrompt +
-          bySource.lakeRetrieval
-      ).toBe(promptMeta.tokenUsage.inputTokens);
     });
 
     it('serializes every tool as {name, description, input_schema} and joins them', async () => {
@@ -4727,6 +4700,108 @@ describe('ChatCompletionProcess', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining('Skipping the context-overflow guard: input tokens are an estimate')
       );
+    });
+  });
+
+  // The write site promotes the lake layers out of the `systemPrompts` residual into a bucket of
+  // their own. The property that matters is conservation: the bucket is rebuilt from the layer
+  // counts already computed, so the old residual still equals `systemPrompts + lakeRetrieval` -
+  // no second count, and a lake block the budget dropped bills nothing.
+  describe('lake retrieval promoted out of the system-prompt residual', () => {
+    const chunk = { role: 'system' as const, content: 'RETRIEVED-LAKE-CHUNK' };
+    const fact = { role: 'system' as const, content: 'LAKE-MEMORY-FACT' };
+
+    // Content-keyed so a message counts the same way in the six source totals and in
+    // toPromptDetails' per-source pass; that consistency is what makes conservation checkable.
+    const tokenLengthImpl = async (messages: any[]) =>
+      (messages ?? []).reduce((sum: number, message: any) => {
+        const content = typeof message?.content === 'string' ? message.content : '';
+        if (content.includes('RETRIEVED-LAKE-CHUNK')) return sum + 25;
+        if (content.includes('LAKE-MEMORY-FACT')) return sum + 40;
+        return sum + 1;
+      }, 0);
+
+    const runWithLakeSources = async (opts: { withLakes: boolean }) => {
+      mockedCalculateTotalTokenLength.mockReset().mockImplementation(tokenLengthImpl as any);
+      mockTokenizer.countTokens.mockReset().mockResolvedValue(1);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      // Return the admitted system messages BY REFERENCE, so the delivery set the write site
+      // derives from this payload actually contains them - a fixed two-message stub would report
+      // every system row as budget-excluded and the bucket would be a meaningless zero.
+      let builtMessages: IMessage[] = [];
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_prev: any, contextAndSystemMessages: any[], currentUserPromptMessages: any[]) => {
+          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages];
+          return { messages: builtMessages, messageTruncation: null } as any;
+        }
+      );
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      if (opts.withLakes) {
+        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [chunk] } as any);
+        service.features.set('lakeMemory', { getContextMessages: async () => [fact] } as any);
+      }
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const call = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.context?.tokensBySource !== undefined
+      );
+      // Re-derive the residual the way the write site does, independently of the promotion:
+      // total over the payload it counted, less the user prompt (the only known non-system source).
+      const grossResidual = (await tokenLengthImpl(builtMessages)) - 1;
+      return { promptMeta: call?.[0]?.promptMeta, grossResidual };
+    };
+
+    it('moves exactly the delivered lake layer tokens into lakeRetrieval, conserving the residual', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: true });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // 25 (forced-retrieval chunk) + 40 (lake-memory card), read off the layer rows.
+      expect(tokens.lakeRetrieval).toBe(65);
+      // The two buckets still sum to the residual the turn was billed on: nothing was lost or
+      // counted twice, which is the only way a promote-don't-remeasure change can be wrong.
+      expect(tokens.systemPrompts + tokens.lakeRetrieval).toBe(grossResidual);
+      expect(tokens.systemPrompts).toBe(grossResidual - 65);
+
+      const layer = (name: string) =>
+        promptMeta.context.systemPromptDetails.find((detail: any) => detail.name === name);
+      expect(layer('knowledge_retrieval')).toMatchObject({ tokenCount: 25, wasIncluded: true });
+      expect(layer('lake_memory')).toMatchObject({ tokenCount: 40, wasIncluded: true });
+    });
+
+    it('records a real zero when the turn carried no lake layers, leaving the residual gross', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: false });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // A real zero, not unknown: the layer derivation ran and found no lake content.
+      expect(tokens.lakeRetrieval).toBe(0);
+      // No lake rows, so nothing moved and the residual is the whole billed system-prompt total.
+      expect(tokens.systemPrompts).toBe(grossResidual);
     });
   });
 

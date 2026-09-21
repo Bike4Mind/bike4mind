@@ -109,10 +109,14 @@ const PromptMetaTokensBySourceSchema = z.object({
   urlContent: z.number(),
   toolSchemas: z.number(),
   userPrompt: z.number(),
-  // Forced data-lake retrieval content injected this turn (KnowledgeRetrievalFeature), subtracted
-  // from the system-prompt remainder rather than folded into it - see ChatCompletionProcess's
-  // tokensBySource assembly. Optional: turns recorded before this field existed carry none, and a
-  // reader must treat absence as "not recorded", not as zero.
+  /**
+   * Lake-sourced content injected this turn - forced retrieval (`knowledge_retrieval`) plus the
+   * lake-memory hot card (`lake_memory`) - moved out of the `systemPrompts` residual so the
+   * breakdown can price the lake separately. Optional, and absent means UNKNOWN, never zero: turns
+   * recorded before this field existed carry no value and none can be backfilled, because the only
+   * evidence was the residual this split had not yet made. Same absent-is-unknown rule as
+   * `retrieval.injected` below.
+   */
   lakeRetrieval: z.number().optional(),
 });
 
