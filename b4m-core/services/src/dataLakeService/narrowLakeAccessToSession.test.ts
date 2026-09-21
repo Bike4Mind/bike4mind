@@ -19,6 +19,7 @@ const access = (): ResolvedLakeAccessSet => ({
   dataLakeTagPrefixes: ['alpha:'], // OPEN bucket - registry-sourced only
   scopedTagPrefixes: ['beta:'], // owner/org-scoped bucket
   lakes: [lake('alpha', 'registry'), lake('beta', 'dynamic')] as ResolvedLakeAccessSet['lakes'],
+  excludedByAccessCount: 0,
 });
 
 describe('narrowLakeAccessToSession', () => {
@@ -33,6 +34,18 @@ describe('narrowLakeAccessToSession', () => {
 
     const complete = { ...access(), lakeViewComplete: true };
     expect(narrowLakeAccessToSession(complete, ['datalake:beta']).lakeViewComplete).toBe(true);
+  });
+
+  /**
+   * #3055: this narrowing is subtractive on the SESSION's behalf and does not change how many
+   * lakes the caller's org/tags surfaced but couldn't pass the gate for - that count was already
+   * fixed upstream, before the session even entered the picture.
+   */
+  it('carries excludedByAccessCount through a narrowing unchanged', () => {
+    const withExclusions = { ...access(), excludedByAccessCount: 3 };
+    expect(narrowLakeAccessToSession(withExclusions, ['datalake:beta']).excludedByAccessCount).toBe(3);
+    // The no-op path (session names no lake) returns the input object outright.
+    expect(narrowLakeAccessToSession(withExclusions, undefined).excludedByAccessCount).toBe(3);
   });
 
   it('keeps only the session lake, dropping the other lake from every bucket', () => {
@@ -73,12 +86,19 @@ describe('narrowLakeAccessToSession', () => {
     // Prefixes match BY VALUE (see narrowLakeAccessToSession), so a colliding prefix survives on
     // the retained lake's behalf. Subtractive still holds - nothing new is granted - but the
     // narrowing is weaker than the lake list suggests. Pinning today's behavior deliberately.
+    // Built from access() rather than a bare object literal + cast, so a future required field on
+    // ResolvedLakeAccessSet cannot slip through here uncaught the way excludedByAccessCount once
+    // did (#3055) - a cast literal satisfies the type whether or not the field is present.
     const colliding: ResolvedLakeAccessSet = {
+      ...access(),
       dataLakeTags: ['datalake:alpha', 'datalake:beta'],
       dataLakeTagPrefixes: ['alpha:'],
       scopedTagPrefixes: [],
-      lakes: [lake('alpha', 'registry'), { ...lake('beta', 'dynamic'), fileTagPrefix: 'alpha:' }],
-    } as ResolvedLakeAccessSet;
+      lakes: [
+        lake('alpha', 'registry'),
+        { ...lake('beta', 'dynamic'), fileTagPrefix: 'alpha:' },
+      ] as ResolvedLakeAccessSet['lakes'],
+    };
     const out = narrowLakeAccessToSession(colliding, ['datalake:beta']);
     expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:beta']);
     // alpha: survives because retained beta claims the same prefix value.
