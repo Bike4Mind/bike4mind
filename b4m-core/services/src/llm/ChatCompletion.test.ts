@@ -2907,6 +2907,9 @@ describe('ChatCompletionProcess', () => {
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
       retrievalTags?: string[];
+      // #3055: undefined (the default) means "not seeded here" - distinct from 0, which asserts a
+      // genuine measured zero. Mirrors excludedByAccessCount's own contract on the resolver.
+      excludedByAccessCount?: number;
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
       skipAutoOffers?: boolean;
@@ -2926,6 +2929,7 @@ describe('ChatCompletionProcess', () => {
         dataLakeTagPrefixes: [],
         scopedTagPrefixes: [],
         lakes: [],
+        ...(opts.excludedByAccessCount !== undefined ? { excludedByAccessCount: opts.excludedByAccessCount } : {}),
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
 
@@ -3310,6 +3314,34 @@ describe('ChatCompletionProcess', () => {
             retrievalTags: ['datalake:not-mine'],
           });
           expect(retrieval).toMatchObject({ mode: 'optional', lakeScope: [] });
+        });
+
+        // #3055: excludedLakes travels with the same seed as lakeScope. These pin the presence
+        // contract (RetrievalSummarySchema.excludedLakes) that a hand-rolled unit fixture cannot -
+        // this is the one real writer, and its own memo fixture used to omit the field entirely
+        // (`as any`), which let the seed's `> 0` guard ship untested against a false 0-vs-absent
+        // conflation (see promptMeta.ts's own doc on this field).
+        it('records the count explicitly, including a genuine zero', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            excludedByAccessCount: 0,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('records a nonzero count', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            excludedByAccessCount: 2,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 2, reason: 'access' } });
+        });
+
+        it('leaves excludedLakes absent - not a false zero - when the count was never measured', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+          });
+          expect(retrieval && 'excludedLakes' in retrieval).toBe(false);
         });
       });
 
