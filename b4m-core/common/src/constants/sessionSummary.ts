@@ -11,7 +11,19 @@
  * (b4m-core/services ChatCompletionFeatures) returns it as the reason it declined to summarize,
  * so it never reaches a write. It stays in the union because that return value is typed as
  * `ISessionDocument['summaryTrigger']`.
+ *
+ * 'manual' means someone asked for one notebook's summary. The admin sweep (apps/client
+ * server/events/spider.ts) summarizes every un-summarized notebook of the admin who ran it in one
+ * billed pass, so it stamps 'spider' instead: without that, one deliberate click and a whole sweep
+ * are indistinguishable when someone investigates unexpected summarization spend.
  */
-export const SESSION_SUMMARY_TRIGGERS = ['manual', 'project', 'earlyMilestone', 'contentGrowth', 'throttling'] as const;
+export const SESSION_SUMMARY_TRIGGERS = [
+  'manual',
+  'project',
+  'earlyMilestone',
+  'contentGrowth',
+  'throttling',
+  'spider',
+] as const;
 
 export type SessionSummaryTrigger = (typeof SESSION_SUMMARY_TRIGGERS)[number];
