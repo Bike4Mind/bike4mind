@@ -45,6 +45,7 @@ export * from './constants/lakeConfigAudit';
 export * from './constants/forcedRetrieval';
 export * from './constants/embeddingSpaceFloors';
 export * from './constants/lakeMemory';
+export * from './constants/sessionSummary';
 export * from './constants/knowledgeBaseSearch';
 export * from './constants/publish';
 export * from './constants/artifactElision';

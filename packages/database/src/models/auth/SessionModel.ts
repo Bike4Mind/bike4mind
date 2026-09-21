@@ -3,6 +3,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from '../content/SharableDocumentModel';
 import {
   DATA_LAKE_GROUNDING_MODES,
+  SESSION_SUMMARY_TRIGGERS,
   ISession,
   ISessionDocument,
   ISessionRepository,
@@ -76,11 +77,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     summary: { type: String, required: false },
     summaryAt: { type: Date, required: false },
     summaryModelId: { type: String, required: false },
-    summaryTrigger: {
-      type: String,
-      enum: ['manual', 'project', 'milestone', 'growth', 'throttling'],
-      required: false,
-    },
+    summaryTrigger: { type: String, enum: [...SESSION_SUMMARY_TRIGGERS], required: false },
     contextSummary: { type: String, required: false },
     contextSummaryUpToQuestId: { type: String, required: false },
     contextSummaryAt: { type: Date, required: false },
