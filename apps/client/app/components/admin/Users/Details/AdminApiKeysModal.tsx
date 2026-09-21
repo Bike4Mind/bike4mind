@@ -106,10 +106,12 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
       onOk: () => {
         setResettingKeyId(key.id);
         resetMutation.mutate(key.id, {
-          // `?? {}` guards a stale bundled client against a server response
-          // shape that predates the `lockout` field.
+          // `lockout` absent entirely means a stale bundled client is talking to a server build
+          // that predates the field - a bare success toast, not "every counter unverified".
           onSuccess: response =>
-            toast.success(`Rate limit reset for "${key.name}"${describeLockoutCause(response.lockout ?? {})}`),
+            toast.success(
+              `Rate limit reset for "${key.name}"${response.lockout ? describeLockoutCause(response.lockout) : ''}`
+            ),
           // Clear only our own row: a later reset on another row may already
           // own the spinner when this settle lands.
           onSettled: () => setResettingKeyId(prev => (prev === key.id ? null : prev)),
