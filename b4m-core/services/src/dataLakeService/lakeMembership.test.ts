@@ -320,6 +320,19 @@ describe('removeFileFromLake', () => {
       );
     });
 
+    // The losing half of two concurrent removals: both requests read the file as a member, the
+    // first pull clears the tags, and this one matches nothing. Recording off the earlier read
+    // would append a second `removed` for a single transition.
+    it('never records when the atomic pull reports no modification', async () => {
+      const adapters = makeAuditedAdapters();
+      adapters.db.fabFiles.pullTagsByFabFileId = vi.fn().mockResolvedValue(0);
+
+      await removeFileFromLake(owner, lake(), 'f1', adapters);
+
+      expect(adapters.db.fabFiles.pullTagsByFabFileId).toHaveBeenCalled();
+      expect(adapters.db.lakeMembershipChangeEvents.record).not.toHaveBeenCalled();
+    });
+
     it('never records when the member refusal throws first', async () => {
       const adapters = {
         db: {

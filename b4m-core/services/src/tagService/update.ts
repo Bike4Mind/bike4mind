@@ -15,6 +15,9 @@ import { couldMatchTagPrefixArmLoosely, loadPrefixArmCandidateLakes } from '../d
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { foldTagName, isDataLakeTagName, normalizeTagName } from './tagName';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
+import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
+import { recordMembershipTransitions } from '../dataLakeService/recordMembershipTransitions';
+import { renamedTagName, storedTagNames } from './bulkTagNames';
 
 const tagUpdateSchema = z.object({
   id: z.string(),
@@ -29,8 +32,8 @@ export type TagUpdateParams = z.infer<typeof tagUpdateSchema>;
 /** Exactly what this service hands to `tags.update` - see the note on TagUpdateAdapters. */
 type TagUpdateWrite = TagUpdateParams & { updatedAt: Date };
 
-interface TagUpdateAdapters {
-  db: {
+interface TagUpdateAdapters extends LakeMembershipAuditAdapters {
+  db: LakeMembershipAuditAdapters['db'] & {
     // `update` is spelled out rather than picked off ITagRepository, deliberately. IBaseRepository
     // declares it as a property-syntax function type, so strictFunctionTypes checks its parameter
     // contravariantly and a `Partial<IBaseTag>` one refuses the IFileTag-typed repository the
@@ -43,7 +46,10 @@ interface TagUpdateAdapters {
     };
     // computeDataLakeStats stays in this Pick even though this file never calls it directly:
     // recomputeLakeStats below forwards this same `db` object and requires it on `fabFiles`.
-    fabFiles: Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats' | 'findByUserIdAndTagName'
+    >;
     dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
     // The config-audit repos, OPTIONAL and forwarded straight to recomputeLakeStats below: a
     // prefix-arm rename or delete can flip a draft lake to active, and without these that
@@ -153,6 +159,11 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
 
   if (affectedLakes.length > 0) assertWriteScope?.();
 
+  // Read BEFORE the rewrite below: afterwards the old name is gone from the files, and with it the
+  // only way to tell which ones this request walked into or out of a lake. Confined to the
+  // prefix-candidate path, so a rename that cannot touch a lake pays no extra query.
+  const affectedFiles = affectedLakes.length > 0 ? await db.fabFiles.findByUserIdAndTagName(userId, tag.name) : [];
+
   if (renaming) {
     const colliders = (await db.tags.findAllByUserId(userId)).filter(
       t => t.id !== tag.id && foldTagName(t.name) === foldTagName(newName)
@@ -188,6 +199,30 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   };
 
   await db.tags.update(buildData);
+
+  // `newName` is necessarily defined here (affectedLakes is only ever populated on a rename); the
+  // test keeps the narrowing local rather than asserting it.
+  if (affectedLakes.length > 0 && newName !== undefined) {
+    // Per (lake, file), unlike the recompute below, which can afford to be approximate: the change
+    // log is what a reader reconstructs membership FROM, so exactly the pairs that moved get a row.
+    // Both directions are live here - renaming a tag INTO a lake's prefix is a join, out of it a
+    // leave - and a file that also carries the lake's meta-tag stays a member through either.
+    await recordMembershipTransitions(
+      { userId, isAdmin: false, auditPrincipal },
+      affectedLakes,
+      affectedFiles.map(file => {
+        const before = storedTagNames(file);
+        return {
+          fabFileId: file.id,
+          userId: file.userId,
+          beforeTagNames: before,
+          afterTagNames: renamedTagName(before, tag.name, newName),
+        };
+      }),
+      { db, logger },
+      { origin: 'person' }
+    );
+  }
 
   if (affectedLakes.length > 0) {
     // Either the OLD name mattered to a lake's prefix (a possible leave) or the NEW one does (a

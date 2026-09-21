@@ -1064,12 +1064,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             fabFileChunks: fabFileChunkRepository,
             users: userRepository,
             sessions: sessionRepository,
+            dataLakes: dataLakeRepository,
+            ...membershipAuditDb,
           },
           storage: getFilesStorage(),
           onDeleteComplete: async (_fabFile, size) => {
             reclaimedBytesByUserId.set(ownerId, (reclaimedBytesByUserId.get(ownerId) ?? 0) + size);
           },
           searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+          logger,
+          // This is the sole-lake-copy hard delete, reached only after removeFileFromLake above
+          // already unpicked it from `lake` and confirmed no other lake claims it - so this
+          // normally finds zero remaining membership. Wired anyway so a future claim this poll
+          // does not yet know about still gets a 'removed' row instead of a silent gap.
+          origin: 'connector',
         }
       );
       if (action !== 'deleted') {

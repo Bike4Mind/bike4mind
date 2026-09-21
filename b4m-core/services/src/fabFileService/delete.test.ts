@@ -47,12 +47,17 @@ describe('deleteFabFile', () => {
         findAllWithKnowledgeId: Mock;
         update: Mock;
       };
+      dataLakes?: { find: Mock; findByDatalakeTag: Mock };
+      lakeMembershipChangeEvents?: { record: Mock };
     };
     storage: {
       delete: Mock;
     };
     onDeleteComplete?: Mock;
     searchIndex?: { deleteByFabFileId: Mock };
+    origin?: 'person' | 'connector';
+    auditPrincipal?: never;
+    logger?: never;
   };
 
   beforeEach(() => {
@@ -256,6 +261,93 @@ describe('deleteFabFile', () => {
       expect(result.action).toBe('denied');
       expect(result.fabFile).toBeNull();
       expect(mockAdapter.db.fabFiles.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('lake membership removed events', () => {
+    // A soft delete never calls removeFileFromLake (it only stamps deletedAt and leaves the
+    // file's tags in place), so the 'removed' event has to be recorded by this door directly.
+    const mockLake = { id: 'lake-1', organizationId: 'org-1' } as never;
+
+    let record: Mock;
+    let find: Mock;
+    let findByDatalakeTag: Mock;
+
+    beforeEach(() => {
+      record = vi.fn().mockResolvedValue(undefined);
+      find = vi.fn().mockResolvedValue([]);
+      findByDatalakeTag = vi.fn().mockResolvedValue(null);
+      mockAdapter.db.dataLakes = { find, findByDatalakeTag };
+      mockAdapter.db.lakeMembershipChangeEvents = { record };
+    });
+
+    it('records one removed event per member lake on an owned soft delete, defaulting to origin "person"', async () => {
+      const fileWithTag = { ...mockFabFile, tags: [{ name: 'datalake:lake-1' }] };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(fileWithTag);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(fileWithTag);
+      findByDatalakeTag.mockResolvedValue(mockLake);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(record).toHaveBeenCalledTimes(1);
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake-1', fabFileId: mockFileId, action: 'removed', origin: 'person' })
+      );
+    });
+
+    it('records origin "connector" when the caller says so', async () => {
+      const fileWithTag = { ...mockFabFile, tags: [{ name: 'datalake:lake-1' }] };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(fileWithTag);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(fileWithTag);
+      findByDatalakeTag.mockResolvedValue(mockLake);
+      mockAdapter.origin = 'connector';
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: 'removed', origin: 'connector' }));
+    });
+
+    it('records nothing when the file is in no lake', async () => {
+      const fileWithNoTags = { ...mockFabFile, tags: [] };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(fileWithNoTags);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(fileWithNoTags);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('records nothing on the unshared branch', async () => {
+      const sharedFile = createMockSharedFile();
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(null);
+      mockAdapter.db.fabFiles.findById.mockResolvedValue(sharedFile);
+
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(result.action).toBe('unshared');
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('records nothing on the not_found branch', async () => {
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(null);
+      mockAdapter.db.fabFiles.findById.mockResolvedValue(null);
+
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(result.action).toBe('not_found');
+      expect(record).not.toHaveBeenCalled();
+    });
+
+    it('does not fail the delete when the lake lookup throws', async () => {
+      const fileWithTag = { ...mockFabFile, tags: [{ name: 'datalake:lake-1' }] };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(fileWithTag);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(fileWithTag);
+      findByDatalakeTag.mockRejectedValue(new Error('lake lookup exploded'));
+
+      const result = await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(result.action).toBe('deleted');
+      expect(record).not.toHaveBeenCalled();
     });
   });
 });

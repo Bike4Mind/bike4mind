@@ -1449,6 +1449,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result;
   }
 
+  async findByUserIdAndTagName(
+    userId: string,
+    tag: string
+  ): Promise<Pick<IFabFileDocument, 'id' | 'userId' | 'tags'>[]> {
+    if (!tag) return [];
+    // The SAME anchored, escaped, case-insensitive match removeTagByUserId/updateTagsByUserId run,
+    // because this read has to enumerate exactly the files those writes will touch - the bulk tag
+    // doors diff lake membership over it and would otherwise record a move that never happened.
+    const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
+    // deletedAt conjunct, unlike those writes: a soft-deleted file is already out of every lake
+    // read, so a membership event for it would double-report against the delete door's own event.
+    // Projected: the caller diffs lake membership, which reads names and the owner only, and one
+    // tag can sit on a user's whole library.
+    const result = await this.fabFileModel
+      .find({ userId, deletedAt: null, tags: { $elemMatch: { name: nameRegex } } })
+      .select('userId tags');
+    return result.map(d => d.toJSON());
+  }
+
   async removeTagByUserId(userId: string, tag: string): Promise<number> {
     if (!tag) return 0;
     // Anchored, not a substring match: unanchored, removing `test` also stripped `testing` and
@@ -3147,8 +3166,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // removals of different tags on the same file can't clobber each other. Idempotent -
     // absent names are a no-op. Exact names only, deliberately: a prefix pattern here would
     // mean building a regex from a user-chosen prefix, and an empty one matches every tag.
+    //
+    // The `tags.name` conjunct is what makes the returned count mean "a tag was removed": the
+    // schema has timestamps, so without it an unmatched $pull still rewrites updatedAt and
+    // reports modifiedCount 1. Callers that mint a durable fact from a removal (the lake
+    // membership audit trail) read this count to tell a real removal from the losing half of
+    // two concurrent removals, so an unmatched pull has to report 0.
     const result = await this.fabFileModel.updateOne(
-      { _id: fabFileId },
+      { _id: fabFileId, 'tags.name': { $in: tagNames } },
       { $pull: { tags: { name: { $in: tagNames } } } }
     );
     // A primaryTag naming a tag the file no longer carries later fails the data-lake write

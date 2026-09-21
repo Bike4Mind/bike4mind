@@ -363,6 +363,32 @@ describe('driveLakeIngest consumer', () => {
     expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 2 }));
   });
 
+  // The one membership write that does NOT go through addFileToLake: this door bakes the lake's
+  // meta-tag straight into createFabFile's initial tags, so there is no FabFile for that door to
+  // gate on and its event has to be recorded by hand here. Nothing else pins that wiring.
+  it('records an `added` event with connector origin for each newly ingested file', async () => {
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+      { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.recordLakeMembershipChange).toHaveBeenCalledTimes(2);
+    for (const fabFileId of ['ff1', 'ff2']) {
+      expect(h.recordLakeMembershipChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lake: expect.objectContaining({ id: 'lake1' }),
+          fabFileId,
+          action: 'added',
+          origin: 'connector',
+        }),
+        expect.anything()
+      );
+    }
+  });
+
   it('skips an oversized file before fetching it and counts it into skippedFiles', async () => {
     h.walkFolder.mockResolvedValue([
       { id: 'big', name: 'huge.pdf', mimeType: 'application/pdf', relativePath: 'huge.pdf', size: 200 * 1024 * 1024 },

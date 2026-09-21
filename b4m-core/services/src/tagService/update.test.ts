@@ -12,7 +12,10 @@ describe('tagService - update', () => {
   const userId = 'test-user-123';
   const existingTagId = 'existing-tag-123';
   type TagRepo = Pick<ITagRepository, 'update' | 'findByIdAndUserId' | 'findAllByUserId' | 'delete'>;
-  type FabFileRepo = Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
+  type FabFileRepo = Pick<
+    IFabFileRepository,
+    'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats' | 'findByUserIdAndTagName'
+  >;
   type DataLakeRepo = Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
   type UserRepo = { findById: (id: string) => Promise<Pick<IUserDocument, 'isAdmin'> | null> };
   let mockTagRepo: TagRepo;
@@ -56,6 +59,7 @@ describe('tagService - update', () => {
     mockFabFileRepo = {
       updateTagsByUserId: vi.fn().mockResolvedValue(0),
       dedupeTagByUserId: vi.fn().mockResolvedValue(0),
+      findByUserIdAndTagName: vi.fn().mockResolvedValue([]),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
     };
     mockDataLakeRepo = {
@@ -620,6 +624,105 @@ describe('tagService - update', () => {
       expect(audit.record).toHaveBeenCalledWith(
         expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: userId })
       );
+    });
+  });
+  /**
+   * The bulk door's own membership log - see tagService/remove.test.ts for why the stats recompute
+   * is not a substitute. A rename moves files in BOTH directions: into a lake's prefix is a join,
+   * out of it a leave, so the direction comes out of the diff rather than being assumed.
+   */
+  describe('membership change log', () => {
+    const membershipSpy = () => {
+      const record = vi.fn().mockResolvedValue({});
+      return { db: { lakeMembershipChangeEvents: { record } }, record };
+    };
+
+    const fileDoc = (id: string, tagNames: string[]) => ({
+      id,
+      userId,
+      tags: tagNames.map(name => ({ name, strength: 0.5 })),
+    });
+
+    const renaming = (audit: ReturnType<typeof membershipSpy>, oldName: string, files: unknown[], lakes = [lake()]) => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: oldName }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce(lakes);
+      (mockFabFileRepo.findByUserIdAndTagName as Mock).mockResolvedValueOnce(files);
+      return { db: { ...adapters.db, ...audit.db } };
+    };
+
+    it('records an addition when a rename moves a file INTO a lake prefix', async () => {
+      const audit = membershipSpy();
+      const withAudit = renaming(audit, 'archived', [fileDoc('file1', ['archived'])]);
+
+      await update(userId, { id: existingTagId, name: 'lk:invoices' }, withAudit);
+
+      expect(mockFabFileRepo.findByUserIdAndTagName).toHaveBeenCalledWith(userId, 'archived');
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'file1', action: 'added', origin: 'person' })
+      );
+    });
+
+    it('records a removal when a rename moves a file OUT of a lake prefix', async () => {
+      const audit = membershipSpy();
+      const withAudit = renaming(audit, 'lk:invoices', [fileDoc('file1', ['lk:invoices'])]);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ fabFileId: 'file1', action: 'removed' }));
+    });
+
+    // The meta-tag arm still holds the file after the prefix tag is renamed away, so nothing moved.
+    it('records nothing for a file that also carries the lake meta-tag', async () => {
+      const audit = membershipSpy();
+      const withAudit = renaming(audit, 'lk:invoices', [fileDoc('file1', ['lk:invoices', 'datalake:lake'])]);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('records one event per lake for a file two candidate lakes hold by the same tag', async () => {
+      const audit = membershipSpy();
+      const lakes = [lake(), lake({ id: 'lake2', datalakeTag: 'datalake:lake2' })];
+      const withAudit = renaming(audit, 'lk:invoices', [fileDoc('file1', ['lk:invoices'])], lakes);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      expect(audit.record.mock.calls.map(([event]) => event.dataLakeId)).toEqual(['lake1', 'lake2']);
+    });
+
+    // Read after the rewrite, the old name is gone and the moved files are unrecoverable.
+    it('loads the affected files BEFORE the rename rewrite runs', async () => {
+      const audit = membershipSpy();
+      const withAudit = renaming(audit, 'lk:invoices', [fileDoc('file1', ['lk:invoices'])]);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      const readOrder = (mockFabFileRepo.findByUserIdAndTagName as Mock).mock.invocationCallOrder[0];
+      const renameOrder = (mockFabFileRepo.updateTagsByUserId as Mock).mock.invocationCallOrder[0];
+      expect(readOrder).toBeLessThan(renameOrder);
+    });
+
+    it('is a silent no-op when no audit repository is wired', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      (mockFabFileRepo.findByUserIdAndTagName as Mock).mockResolvedValueOnce([fileDoc('file1', ['lk:invoices'])]);
+
+      await expect(update(userId, { id: existingTagId, name: 'archived' }, adapters)).resolves.toBeDefined();
+    });
+
+    // Neither side can reach a prefix arm, so the rename cannot move anything and must not pay for
+    // the extra read.
+    it('issues no file read when neither name matches any lake prefix', async () => {
+      const audit = membershipSpy();
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'foo' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await update(userId, { id: existingTagId, name: 'bar' }, { db: { ...adapters.db, ...audit.db } });
+
+      expect(mockFabFileRepo.findByUserIdAndTagName).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
     });
   });
 });

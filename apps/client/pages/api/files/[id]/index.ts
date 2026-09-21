@@ -254,12 +254,18 @@ const handler = baseApi()
             users: userRepository,
             sessions: sessionRepository,
             fabFileChunks: fabFileChunkRepository,
+            dataLakes: dataLakeRepository,
+            ...lakeMembershipAuditDb,
           },
           storage: getFilesStorage(),
           onDeleteComplete: async (_fabFile, size) => {
             sizeToDeduct = size;
           },
           searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+          logger: req.logger,
+          // Same reason the tag-write handler above attaches one: this route accepts a `b4m_live_`
+          // key, and the resulting 'removed' rows must name the key, not the human it acts for.
+          auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
         }
       );
 

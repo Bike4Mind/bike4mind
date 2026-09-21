@@ -59,6 +59,7 @@ export * from './admissionContract';
 export * from './lakeAdmissionGate';
 export * from './loadMembershipRepairPlan';
 export * from './recordMembershipDecision';
+export * from './recordMembershipTransitions';
 export * from './executeLakeMembershipRepair';
 export * from './removeFileFromDataLake';
 export * from './addFileToDataLake';

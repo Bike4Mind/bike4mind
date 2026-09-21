@@ -194,10 +194,17 @@ export const removeFileFromLake = async (
 
   // One atomic $pull for both signals. Two writes would leave a window - and on a crash, a
   // permanent state - where the meta-tag is gone but a prefixed tag still matches this lake.
-  await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+  const pulled = await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
   // Recorded AFTER the write lands, matching the auto-activate config event: the membership
   // change is the artifact, and it has already happened by the time this runs.
-  await recordLakeMembershipChange({ actor, lake, fabFileId: file.id, action: 'removed', origin }, { db, logger });
+  //
+  // Gated on the ATOMIC write's own count, not on the `inLake` read above, which is the mirror of
+  // `addFileToLake`'s `inserted > 0`. Two concurrent removals both read the file as a member; the
+  // first pull clears the tags and the second matches nothing, and recording off the read would
+  // append two `removed` events for one transition - a permanent claim that the file left twice.
+  if (pulled > 0) {
+    await recordLakeMembershipChange({ actor, lake, fabFileId: file.id, action: 'removed', origin }, { db, logger });
+  }
   return { contentTags };
 };
 

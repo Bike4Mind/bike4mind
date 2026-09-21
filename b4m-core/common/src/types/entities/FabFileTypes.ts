@@ -1189,6 +1189,24 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
+   * Every live file a user owns that carries one tag name. Matches the WHOLE name,
+   * case-insensitively, by the SAME anchored/escaped regex `removeTagByUserId` and
+   * `updateTagsByUserId` use - this read exists to enumerate precisely the files those writes are
+   * about to touch (the bulk tag doors diff lake membership across it), so any drift in the match
+   * would mint an event for a file that never moved, or miss one that did.
+   *
+   * Excludes soft-deleted files, UNLIKE those two writes and deliberately: a soft-deleted file is
+   * already outside every lake read, so a membership event for it would double-report against the
+   * one the delete door already recorded. `countByUserIdAndTag` carries the same conjunct for the
+   * same reason.
+   *
+   * Projected to the three fields the membership predicate reads rather than returning whole
+   * documents: one tag can sit on a user's entire library, and this runs inside a request that
+   * already holds the write. Widen it only for a caller that genuinely needs more.
+   */
+  findByUserIdAndTagName(userId: string, tag: string): Promise<Pick<IFabFileDocument, 'id' | 'userId' | 'tags'>[]>;
+
+  /**
    * Strip one tag name off every file a user owns, so deleting a tag document cannot leave the
    * name orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and
    * removes every occurrence - including a name a file carries twice.
@@ -1242,8 +1260,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Passing a user's `foo` against a stored `Foo` removes nothing and reports no error.
    * @param fabFileId - The ID of the file.
    * @param tagNames - The exact tag names to remove. Empty is a no-op.
-   * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
-   * even when no tag matched - do not read it as "a tag was removed".
+   * @returns 1 when a named tag was actually present and removed, 0 otherwise - the write is
+   * filtered on the tag being there, so an unmatched pull neither reports a modification nor
+   * moves `updatedAt`. Callers may read this as "a tag was removed"; the lake membership audit
+   * trail does, to tell a real removal from the losing half of two concurrent ones.
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
 
