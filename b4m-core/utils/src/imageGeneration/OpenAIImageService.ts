@@ -47,6 +47,12 @@ function isGptImageQuality(value: unknown): value is GptImageQuality {
  * in step with OpenAIImageCostCalculator.normalizeInput (services) and
  * ImageGeneration's mapQualityForModel, which bill against the mapped tier - if they
  * diverge, the user is charged one tier and rendered another.
+ *
+ * 'auto' is the one value deliberately forwarded unresolved: OpenAI picks the effort per
+ * request, so the services-side calculator prices it at the highest tier it could render
+ * rather than pretending to know the tier. Do not "fix" that by pinning 'auto' here without
+ * repricing it there. (Named symbols are left out on purpose - services depends on utils, not
+ * the reverse, so nothing in this package can import or rename-track them.)
  */
 export function toGptImageQuality(quality?: string | null): GptImageQuality | undefined {
   const mapped = quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
@@ -549,7 +555,8 @@ export class OpenAIImageService extends AIImageService {
         model: editModel,
         prompt: truncatePromptForLog(prompt),
         hasMask: !!maskFile,
-        n,
+        // What the caller asked for, not what renders: this path always returns one image.
+        requestedN: n,
         size,
         quality: editQuality,
         response_format,
@@ -571,7 +578,9 @@ export class OpenAIImageService extends AIImageService {
               image: imageFile,
               prompt,
               mask: maskFile,
-              n,
+              // Pinned, not forwarded from `n`: only data[0] is returned below, so asking
+              // OpenAI for more renders images we pay for and then discard.
+              n: 1,
               size: size as '1024x1024' | '1024x1536' | '1536x1024' | '256x256' | '512x512' | 'auto' | undefined,
               response_format,
               user,

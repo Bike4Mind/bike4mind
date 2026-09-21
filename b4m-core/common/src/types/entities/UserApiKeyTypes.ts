@@ -19,7 +19,7 @@ export enum ApiKeyScope {
    * Read the key owner's OWN commercial state - tier, credit balance, entitlement
    * keys - via `GET /api/v1/me`. Split from the AI scopes on purpose: a key minted
    * to generate text has no business enumerating what its owner has paid for. It
-   * authorizes a read of the caller and nothing else, so it carries the `:read`
+   * gates only `GET /api/v1/me` and adds no other reach, so it carries the `:read`
    * suffix that puts it in the New-Key modal's read-only preset.
    */
   ME_READ = 'me:read',

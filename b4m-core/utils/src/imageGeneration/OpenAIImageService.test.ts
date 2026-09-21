@@ -377,7 +377,7 @@ describe('OpenAIImageService.edit', () => {
     expect(params.background).toBe('transparent');
   });
 
-  it('leaves the dall-e-2 request shape unchanged', async () => {
+  it('leaves the dall-e-2 request shape unchanged apart from the pinned image count', async () => {
     const params = await editParams({
       model: ImageModels.DALL_E_2,
       size: '512x512',
@@ -391,7 +391,10 @@ describe('OpenAIImageService.edit', () => {
     expect(params.image).toBeInstanceOf(File);
     expect(Array.isArray(params.image)).toBe(false);
     expect(params.mask).toBeInstanceOf(File);
-    expect(params.n).toBe(2);
+    // Pinned rather than forwarded: only data[0] is returned, so a higher count would render
+    // images we pay OpenAI for and then discard. dall-e-2 is the only edit branch the SDK would
+    // have honored `n` on, and no dispatcher can reach it today (supportsImageEdit excludes it).
+    expect(params.n).toBe(1);
     expect(params.size).toBe('512x512');
     expect(params.response_format).toBe('url');
     expect(params.user).toBe('user-1');

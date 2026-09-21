@@ -172,20 +172,33 @@ export function useSendMessage({
   // `currentUser.preferences`) so optimistic writes via `updatePreferences`
   // take effect on the very next send instead of waiting for the server echo.
   const agentModeDefault = userSettings.agentModeDefault ?? 'off';
-  const { getSettingObject } = useAdminSettings();
+  const { getSettingObject, authedSettingsLoaded } = useAdminSettings();
   // Admin-level kill switch. Default to enabled so the classifier runs unless
   // an admin explicitly turns it off; matches `IntentClassifierConfigSchema`.
+  // Gated on `authedSettingsLoaded` for the same reason as the tool union
+  // below: `orchestrationDefaults` is not `publicSafe`, so before the authed
+  // fetch resolves this would read the seed's `intentClassifier.enabled: true`
+  // even for an org that explicitly disabled the classifier.
   const intentClassifierAdminEnabled =
+    authedSettingsLoaded &&
     getSettingObject<{ intentClassifier?: { enabled?: boolean } }>('orchestrationDefaults', {})?.intentClassifier
       ?.enabled !== false;
   // Union base for an agentless agent-executor dispatch. Read from admin
   // settings rather than the schema seed because a non-empty `enabledTools`
-  // payload REPLACES `profile.allowedTools` server-side - see
-  // `agentModeDefaultToolNames`. Memoized so the set identity is stable.
+  // payload REPLACES `profile.allowedTools` server-side.
+  //
+  // `authedSettingsLoaded` is load-bearing, not a nicety: `orchestrationDefaults`
+  // is not `publicSafe`, yet `mergeIntoDefaults` seeds it with the compiled-in
+  // schema default for BOTH queries. So once the public CDN artifact resolves,
+  // `getSettingObject` returns the full seed even though the authed fetch never
+  // succeeded - and for an org that narrowed `allowedTools`, unioning that seed
+  // hands back tools the admin removed. Until the authed fetch lands we do not
+  // know the org's policy, so we pass `null` and `resolveDispatchTools` sends no
+  // payload at all, leaving the server to resolve the real profile.
   const orchestrationDefaultsSetting = getSettingObject<unknown>('orchestrationDefaults', undefined);
   const agentModeDefaultTools = useMemo(
-    () => agentModeDefaultToolNames(orchestrationDefaultsSetting),
-    [orchestrationDefaultsSetting]
+    () => (authedSettingsLoaded ? agentModeDefaultToolNames(orchestrationDefaultsSetting) : null),
+    [authedSettingsLoaded, orchestrationDefaultsSetting]
   );
   const classifyIntent = useIntentClassifier();
   const liveAI = useAdvancedAISettings(state => state.liveAI);

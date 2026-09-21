@@ -48,7 +48,7 @@ const summary = (over: Partial<ISpendSummary> = {}): ISpendSummary => ({
   totals: { requests: 100, cogsUsd: 20, creditsCharged: 2000 },
   activeAccounts: 3,
   latency: { p50: 500, p95: 1500 },
-  status: { total: 100, errors: 2, timeouts: 1, refusals: 5 },
+  status: { total: 100, errors: 2, timeouts: 1, refusals: 5, degenerates: 3 },
   byModel: [{ provider: 'bedrock', model: 'opus', requests: 60, cogsUsd: 12, creditsCharged: 1200 }],
   byAccount: [{ ownerId: 'user-1', ownerType: 'User', requests: 100, cogsUsd: 20, creditsCharged: 2000 } as never],
   dailyCost: [{ day: '2026-08-01', cogsUsd: 20 }],

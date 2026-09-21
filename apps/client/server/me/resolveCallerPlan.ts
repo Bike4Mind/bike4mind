@@ -15,10 +15,10 @@ type ActiveSubscription = Pick<ISubscription, 'priceId' | 'periodEndsAt'>;
  * Project a caller's ACTIVE subscriptions onto the published `GET /api/v1/me` shape.
  *
  * Takes the rows rather than fetching them so the handler can resolve `tier` and
- * `entitlements` from one read: the two must agree about whether the caller is
- * paying, and they resolve the priceId through different tables
+ * `entitlements` from one snapshot read, rather than two reads that could race
+ * apart. They still resolve the priceId through different tables
  * (`SUBSCRIPTION_PLANS` here, `PRICE_ENTITLEMENT_ROWS` in the entitlement
- * registry).
+ * registry), so `tier: 'basic'` with no paid entitlement key is possible.
  *
  * That table split is why an unrecognized priceId still reports `other` rather
  * than `free`: the registry deliberately keeps SUPERSEDED price ids mapped so
@@ -46,7 +46,13 @@ export function resolveCallerPlan(active: readonly ActiveSubscription[]): {
 
   // Highest ladder rung wins when a caller holds several. An off-ladder plan
   // (`tier` omitted) sorts below every rung but is still paid - see MeTier.
-  const [best] = [...priced].sort((a, b) => (b.plan.tier ?? 0) - (a.plan.tier ?? 0));
+  // `findActiveUserSubscriptions` returns rows in no guaranteed order, so a tie on
+  // rung breaks by the later period end - the subscription that outlasts the rest.
+  const [best] = [...priced].sort((a, b) => {
+    const tierDiff = (b.plan.tier ?? 0) - (a.plan.tier ?? 0);
+    if (tierDiff !== 0) return tierDiff;
+    return new Date(b.subscription.periodEndsAt).getTime() - new Date(a.subscription.periodEndsAt).getTime();
+  });
 
   return {
     tier: best.plan.tier ? TIER_KEYS[best.plan.tier] : 'other',

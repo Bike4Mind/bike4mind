@@ -7,7 +7,7 @@
 
 import { getMeContract } from '@bike4mind/common';
 import { nextRouteForContract } from '@server/middlewares/defineNextRoute';
-import { getUserEntitlements } from '@server/entitlements';
+import { getUserEntitlements, toEntitlementUser } from '@server/entitlements';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { resolveCallerPlan } from '@server/me/resolveCallerPlan';
 
@@ -18,21 +18,12 @@ const handler = nextRouteForContract(getMeContract, {
 }).get(async (req, res) => {
   const { user } = req;
 
-  // One read feeds both projections, so `tier` and `entitlements` cannot disagree
-  // about whether the caller is paying (they resolve the priceId through different
-  // tables - see resolveCallerPlan).
+  // `tier` and `entitlements` are derived from one snapshot read of the caller's
+  // active subscriptions (they resolve the priceId through different tables -
+  // see resolveCallerPlan), rather than two reads that could race apart.
   const active = await subscriptionRepository.findActiveUserSubscriptions(user.id);
   const { tier, subscription } = resolveCallerPlan(active);
-  const entitlements = await getUserEntitlements(
-    {
-      id: user.id,
-      tags: user.tags,
-      isAdmin: user.isAdmin,
-      email: user.email,
-      emailVerified: user.emailVerified,
-    },
-    active
-  );
+  const entitlements = await getUserEntitlements(toEntitlementUser(user), active);
 
   // User-specific payload behind CloudFront - never cacheable, anywhere.
   res.setHeader('Cache-Control', 'private, no-store');

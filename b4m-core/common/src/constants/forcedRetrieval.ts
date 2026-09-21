@@ -74,10 +74,9 @@ export const FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT = 85;
  * admit more sections than this caps; a corpus of very short chunks could inject fewer than expected
  * regardless of budget.
  *
- * Lives here rather than beside the scan it bounds because the offline floor sweep
- * (`packages/scripts/retrieval/forcedFloorSweep.ts`) has to apply the same cap: the floors are
- * measured over the pool that survives it, so a harness using a different ceiling would measure a
- * cut the served path does not make.
+ * Lives here rather than beside the scan it bounds because an offline floor sweep has to apply the
+ * same cap: the floors are measured over the pool that survives it, so a harness using a different
+ * ceiling would measure a cut the served path does not make.
  */
 export const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
 
@@ -111,10 +110,9 @@ export const FORCED_RETRIEVAL_MAX_SCORED_CHUNKS = 256;
  * turn's own pool, where an absolute floor above the band goes dark silently.
  *
  * DEFAULT 0 (OFF), DELIBERATELY. The mechanism is scale-free but its magnitude is not yet measured:
- * picking one needs a captured production lake through
- * `packages/scripts/retrieval/forcedFloorSweep.ts`, the same prerequisite #2572 item 4b records for
- * the other two. Shipping an unmeasured live default into the always-on retrieval path is the
- * failure mode this file's other comments exist to prevent, so the gate ships inert and the sweep
- * ships able to grade it.
+ * picking one needs an offline sweep over a captured production lake, the same prerequisite the
+ * other two floors carry. Shipping an unmeasured live default into the always-on retrieval path is
+ * the failure mode this file's other comments exist to prevent, so the gate ships inert until a
+ * magnitude is measured.
  */
 export const FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT = 0;

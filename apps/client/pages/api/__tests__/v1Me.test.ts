@@ -40,7 +40,22 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@server/entitlements', () => ({ getUserEntitlements: mockEntitlements }));
+vi.mock('@server/entitlements', () => ({
+  getUserEntitlements: mockEntitlements,
+  toEntitlementUser: (user: {
+    id: string;
+    tags?: string[];
+    isAdmin?: boolean;
+    email?: string;
+    emailVerified?: boolean;
+  }) => ({
+    id: user.id,
+    tags: user.tags,
+    isAdmin: user.isAdmin,
+    email: user.email,
+    emailVerified: user.emailVerified,
+  }),
+}));
 vi.mock('@server/me/resolveCallerPlan', () => ({ resolveCallerPlan: mockResolvePlan }));
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: { findActiveUserSubscriptions: mockFindActive },
@@ -145,7 +160,7 @@ describe('GET /api/v1/me', () => {
     expect(res._getJSONData().id).toBe('u1');
   });
 
-  it('derives tier and entitlements from one subscription read, so they cannot disagree', async () => {
+  it('derives tier and entitlements from one snapshot subscription read', async () => {
     const { req, res } = get();
 
     await run(req, res);
@@ -156,6 +171,10 @@ describe('GET /api/v1/me', () => {
   });
 
   it('gates the route on me:read, so an under-scoped key never reaches the handler', async () => {
-    expect(baseApiOptions[0]).toMatchObject({ auth: true, requiredScopes: [ApiKeyScope.ME_READ] });
+    expect(baseApiOptions[0]).toMatchObject({
+      auth: true,
+      requiredScopes: [ApiKeyScope.ME_READ],
+      exemptReadsFromDailyRateLimit: true,
+    });
   });
 });

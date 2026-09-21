@@ -47,6 +47,17 @@ export interface EntitlementUser {
   emailVerified?: boolean | null;
 }
 
+/** Projects an authenticated `IUserDocument` onto the fields `getUserEntitlements` reads. */
+export function toEntitlementUser(user: IUserDocument): EntitlementUser {
+  return {
+    id: user.id,
+    tags: user.tags,
+    isAdmin: user.isAdmin,
+    email: user.email,
+    emailVerified: user.emailVerified,
+  };
+}
+
 /**
  * All entitlement keys the user currently holds (subscription- and
  * tag-derived). Does NOT apply the admin bypass - that is a gate concern
@@ -63,7 +74,7 @@ export async function getUserEntitlements(
    * The user's active subscriptions, when the caller has already loaded them - it
    * is the same query this function would run. `/api/v1/me` passes them so `tier`
    * and `entitlements` in one response are derived from one read, and therefore
-   * cannot disagree about whether the caller is paying.
+   * are derived from one snapshot read, not two reads that could race apart.
    */
   preloadedActiveSubscriptions?: readonly { priceId: string }[]
 ): Promise<EntitlementKey[]> {

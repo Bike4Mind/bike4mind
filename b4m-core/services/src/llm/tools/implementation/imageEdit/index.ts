@@ -13,6 +13,7 @@ import {
   isGPTImage2Model,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
+  IMAGES_PER_EDIT_REQUEST,
   toNonWebpOutputFormat,
   type ImageOutputFormat,
   type OpenAIImageBackground,
@@ -266,7 +267,6 @@ export const imageEditTool: ToolDefinition = {
         image: toolImage,
         prompt,
         mask: toolMask,
-        n: toolN,
         size: toolSize,
         safety_tolerance: toolSafetyTolerance,
         steps: toolSteps,
@@ -277,7 +277,6 @@ export const imageEditTool: ToolDefinition = {
         image: string; // URL or file ID
         prompt: string;
         mask?: string; // Optional URL or file ID
-        n?: number;
         size?: string;
         safety_tolerance?: number;
         steps?: number; // BFL-specific, not in imageConfig
@@ -330,7 +329,6 @@ export const imageEditTool: ToolDefinition = {
 Please select a supported edit model in your image settings modal.`;
       }
 
-      const n = toolN ?? imageConfig?.n ?? 1;
       const size = imageConfig?.size || toolSize;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const output_format = toolOutputFormat ?? imageConfig?.output_format ?? 'png';
@@ -367,7 +365,11 @@ Please select a supported edit model in your image settings modal.`;
       // Same billed-model-vs-rendered-model invariant the queue path holds in ImageEdit.ts.
       await context.onStart?.('edit_image', {
         model: editModel,
-        n,
+        // The count both credit rails bill off this payload - ToolBuilder.reserveImageCredits
+        // (classic chat) and estimateGeneratedMediaUsd (agent mode). It has to be what the edit
+        // below actually renders, which is one image however many the model asked for; billing
+        // the request's n here charged for images that were never returned.
+        n: IMAGES_PER_EDIT_REQUEST,
         size,
         quality: imageConfig?.quality,
         prompt,
@@ -514,7 +516,6 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           const editResponse = await service.edit(sourceBase64Image, prompt, {
             mask: maskBase64Image,
             model: editModel, // Use the configured edit model
-            n,
             size,
             quality: imageConfig?.quality,
             response_format: 'url',
@@ -583,10 +584,6 @@ Please check your BFL API key in settings and ensure it is configured correctly.
             type: 'string',
             description: 'The size of the edited image (OpenAI only)',
             enum: ['256x256', '512x512', '1024x1024'],
-          },
-          n: {
-            type: 'number',
-            description: 'Number of edited images to generate (OpenAI only)',
           },
           safety_tolerance: {
             type: 'number',

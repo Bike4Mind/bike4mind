@@ -100,8 +100,9 @@ describe('OpenAIImageCostCalculator', () => {
   // The Zod schema permits `quality: undefined | 'auto'` and `size: undefined | null | 'WxH'`.
   // The calculator must return a finite estimate for every combination - throwing here cascades
   // into a Quest validation failure ("prompt is required") because the partial-update path in
-  // ImageGeneration.process omits the prompt field. Cost is an estimate; we settle on the actual
-  // charge separately, so unknown inputs default to medium/1024x1024.
+  // ImageGeneration.process omits the prompt field. Unknown inputs therefore default to
+  // medium/1024x1024. `quality: 'auto'` is the exception and is covered by its own suite below:
+  // it is priced at the ceiling, not defaulted.
   describe('lenient defaulting (regression for #8621)', () => {
     const models = [
       { model: ImageModels.GPT_IMAGE_1, expectedMedium1024: 0.042 },
@@ -114,10 +115,6 @@ describe('OpenAIImageCostCalculator', () => {
       describe(model, () => {
         it('defaults undefined quality to medium pricing', () => {
           expect(calculator.getCost({ model, quality: undefined, size: '1024x1024' })).toBe(expectedMedium1024);
-        });
-
-        it('defaults "auto" quality to medium pricing', () => {
-          expect(calculator.getCost({ model, quality: 'auto', size: '1024x1024' })).toBe(expectedMedium1024);
         });
 
         it('defaults undefined size to 1024x1024', () => {
@@ -135,6 +132,49 @@ describe('OpenAIImageCostCalculator', () => {
 
         it('handles a fully omitted quality and size', () => {
           expect(calculator.getCost({ model })).toBe(expectedMedium1024);
+        });
+      });
+    }
+  });
+
+  // Regression for #2899. OpenAI resolves `quality: 'auto'` to its own render effort per request
+  // and the image-credit path holds credits exactly once, before the call, with no reconciliation
+  // afterwards - so 'auto' must be priced at the highest tier OpenAI could have rendered.
+  describe("'auto' quality is billed at the ceiling tier", () => {
+    const models = [
+      { model: ImageModels.GPT_IMAGE_1, high1024: 0.167, high1536: 0.25, medium1024: 0.042 },
+      { model: ImageModels.GPT_IMAGE_1_5, high1024: 0.133, high1536: 0.2, medium1024: 0.034 },
+      { model: ImageModels.GPT_IMAGE_1_MINI, high1024: 0.036, high1536: 0.052, medium1024: 0.011 },
+      { model: ImageModels.GPT_IMAGE_2, high1024: 0.211, high1536: 0.165, medium1024: 0.053 },
+    ] as const;
+
+    for (const { model, high1024, high1536, medium1024 } of models) {
+      describe(model, () => {
+        it('prices "auto" at the high tier, not the medium default', () => {
+          expect(calculator.getCost({ model, quality: 'auto', size: '1024x1024' })).toBe(high1024);
+        });
+
+        it('prices "auto" at the high tier for every known size', () => {
+          expect(calculator.getCost({ model, quality: 'auto', size: '1024x1536' })).toBe(high1536);
+          expect(calculator.getCost({ model, quality: 'auto', size: '1536x1024' })).toBe(high1536);
+        });
+
+        it('prices "auto" at the high tier when the size falls back to 1024x1024', () => {
+          expect(calculator.getCost({ model, quality: 'auto', size: undefined })).toBe(high1024);
+          expect(calculator.getCost({ model, quality: 'auto', size: null })).toBe(high1024);
+          expect(calculator.getCost({ model, quality: 'auto', size: '1440x810' })).toBe(high1024);
+        });
+
+        it('charges "auto" exactly what an explicit "high" costs', () => {
+          expect(calculator.getCost({ model, quality: 'auto', size: '1024x1536' })).toBe(
+            calculator.getCost({ model, quality: 'high', size: '1024x1536' })
+          );
+        });
+
+        // An omitted quality is a different case: it stays on the medium default (see #2899's
+        // scope note), so a change to one must not silently drag the other along.
+        it('leaves an omitted quality on the medium default', () => {
+          expect(calculator.getCost({ model, quality: undefined, size: '1024x1024' })).toBe(medium1024);
         });
       });
     }

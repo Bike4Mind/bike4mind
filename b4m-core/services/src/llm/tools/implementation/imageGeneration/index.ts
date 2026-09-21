@@ -4,7 +4,7 @@ import {
   ApiKeyType,
   ImageModels,
   BFL_SAFETY_TOLERANCE,
-  OPENAI_IMAGE_QUALITIES,
+  TOOL_SELECTABLE_IMAGE_QUALITIES,
   XAI_IMAGE_MODELS,
   GenerateImageToolCall,
   isBflImageModel,
@@ -31,6 +31,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
 import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
+import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { resolveImageArgs } from './resolveImageArgs';
 
 async function downloadImage(url: string) {
@@ -192,8 +193,8 @@ export const imageGenerationTool: ToolDefinition = {
       const output_format = toolOutputFormat ?? imageConfig?.output_format;
       const background = toolBackground ?? imageConfig?.background;
 
-      // imageConfig is a default, not a pin: the tool call wins for n/size/quality,
-      // while the model stays the client's Smart Tools selection.
+      // imageConfig is a default, not a pin: the tool call wins for n/quality (and for size
+      // when it names a priceable one), while the model stays the client's Smart Tools selection.
       const {
         model: resolvedModel,
         n,
@@ -430,14 +431,18 @@ export const imageGenerationTool: ToolDefinition = {
           },
           size: {
             type: 'string',
-            description: 'The size of the image to generate (OpenAI only)',
-            enum: ['256x256', '512x512', '1024x1024', '1792x1024', '1024x1792'],
+            // Only sizes the cost calculator can price are offered, so the model can never
+            // pick one that bills at a different size than it renders. Omitting the field
+            // lets the user's saved panel size apply, which may be outside this set.
+            description:
+              "The size of the image to generate (OpenAI only): '1024x1024' square, '1536x1024' landscape, or '1024x1536' portrait. Omit this field when the user does not ask for a specific shape, so their saved preference applies.",
+            enum: [...PRICEABLE_IMAGE_SIZES],
           },
           quality: {
             type: 'string',
             description:
               "The quality tier of the image to generate (OpenAI GPT-image models only). If the user states a tier (e.g. 'low', 'medium', 'high'), pass it through. Omit this field when the user does not state one, so their saved preference applies. Legacy values are accepted: 'standard' maps to 'medium' and 'hd' to 'high'.",
-            enum: [...OPENAI_IMAGE_QUALITIES],
+            enum: [...TOOL_SELECTABLE_IMAGE_QUALITIES],
           },
           n: {
             type: 'number',

@@ -74,7 +74,7 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
     value: ApiKeyScope.ME_READ,
     label: 'Account: Read',
-    description: "Read the key owner's own plan tier, credit balance, and entitlements. Reads nothing else",
+    description: "Read the key owner's own plan tier, credit balance, and entitlements; gates GET /api/v1/me only",
     endpoints: ['GET /api/v1/me'],
   },
   {
