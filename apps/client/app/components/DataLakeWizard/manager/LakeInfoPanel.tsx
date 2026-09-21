@@ -16,6 +16,8 @@ import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import PeopleOutlineIcon from '@mui/icons-material/PeopleOutline';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
+import PublishOutlinedIcon from '@mui/icons-material/PublishOutlined';
+import UnpublishedOutlinedIcon from '@mui/icons-material/UnpublishedOutlined';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
@@ -26,6 +28,8 @@ import { TREE_SCROLL_SX } from '@client/app/components/datalake/treeChrome';
 import {
   useArchiveDataLake,
   usePermanentDeleteDataLake,
+  usePromoteDataLake,
+  useDemoteDataLake,
   useUnderChunkedCount,
   useRechunkDataLake,
   useLakeConvergencePlan,
@@ -85,6 +89,8 @@ export function LakeInfoPanel({
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const archiveLake = useArchiveDataLake();
   const deleteLake = usePermanentDeleteDataLake();
+  const promoteLake = usePromoteDataLake();
+  const demoteLake = useDemoteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
   const visibility = lakeVisibilityLabel(lake);
@@ -245,6 +251,40 @@ export function LakeInfoPanel({
                   Access
                 </Button>
               </Tooltip>
+              {/* Draft is excluded from grounding until an owner or admin explicitly publishes it
+                  - adding files no longer does this as a side effect. */}
+              {lake.status === 'draft' && (
+                <Tooltip title="Publish this lake so it starts grounding answers" size="sm">
+                  <Button
+                    size="sm"
+                    variant="soft"
+                    color="success"
+                    startDecorator={<PublishOutlinedIcon sx={{ fontSize: 16 }} />}
+                    data-testid={`datalake-promote-btn-${lake.id}`}
+                    loading={promoteLake.isPending}
+                    onClick={() => promoteLake.mutate(lake.id)}
+                    sx={{ flexShrink: 0, fontSize: '13px' }}
+                  >
+                    Publish
+                  </Button>
+                </Tooltip>
+              )}
+              {lake.status === 'active' && (
+                <Tooltip title="Move back to draft - stops this lake from grounding answers" size="sm">
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="neutral"
+                    startDecorator={<UnpublishedOutlinedIcon sx={{ fontSize: 16 }} />}
+                    data-testid={`datalake-demote-btn-${lake.id}`}
+                    loading={demoteLake.isPending}
+                    onClick={() => demoteLake.mutate(lake.id)}
+                    sx={{ flexShrink: 0, fontSize: '13px' }}
+                  >
+                    Move to draft
+                  </Button>
+                </Tooltip>
+              )}
               <Tooltip title="Archive (restorable from the manager home)" size="sm">
                 <Button
                   size="sm"

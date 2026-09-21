@@ -622,7 +622,7 @@ export function useBrowsePublicDataLakes(search: string) {
   });
 }
 
-type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
+type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup' | 'promote' | 'demote';
 
 async function postLifecycle(id: string, action: LifecycleAction) {
   const response = await api.post(`/api/data-lakes/${id}/lifecycle`, { action });
@@ -679,6 +679,19 @@ export function useUnarchiveDataLake() {
 /** Recovers a soft-deleted (phase-1) data lake back to active (with dedup pass). */
 export function useRestoreDeletedDataLake() {
   return useLifecycleMutation('restore', 'Data lake restored', 'Failed to restore data lake');
+}
+
+/**
+ * Publishes a draft lake - the explicit, owner/admin-only replacement for the old implicit
+ * draft -> active flip. A draft lake is excluded from grounding until this runs.
+ */
+export function usePromoteDataLake() {
+  return useLifecycleMutation('promote', 'Data lake published', 'Failed to publish data lake');
+}
+
+/** Moves an active lake back to draft, pulling it out of grounding. Reverses promote. */
+export function useDemoteDataLake() {
+  return useLifecycleMutation('demote', 'Data lake moved back to draft', 'Failed to move data lake back to draft');
 }
 
 /** Phase 1 of permanent delete: soft-delete (recoverable). */

@@ -82,15 +82,12 @@ export const recomputeStatsForLakeTags = async (
         if (!lake) return;
         // The lake DOCUMENT, not a narrower shape: recomputeLakeStats derives the two-signal
         // membership scope from it, and a partial one silently counts the meta-tag arm alone.
-        // `actor` forwarded when the calling door had one, so a user-driven flip is attributed to
-        // the person rather than to `system`. The rung stays `system` regardless - see
-        // recomputeLakeStats: `activateIfDraft` performs no authorization check, so nothing
-        // authorized this write and naming a rung would be an invention.
-        await dataLakeService.recomputeLakeStats(
-          lake,
-          { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb }, logger },
-          actor ? { actor } : undefined
-        );
+        // No `actor` forwarded: recomputeLakeStats only ever corrects the count now -
+        // publishing a draft lake is the explicit, separately-audited `promoteDataLake` door.
+        await dataLakeService.recomputeLakeStats(lake, {
+          db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository, ...lakeConfigAuditDb },
+          logger,
+        });
       } catch (error) {
         logger.error('Error recomputing data lake stats after a file write:', { error, metaTag });
       }
