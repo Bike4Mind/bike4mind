@@ -7,6 +7,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 // The store itself stays real (only its setter is spied), so a test can drive a layout write the
 // way the KnowledgeViewer's close button does.
 import useSessionLayoutStore from '@client/app/hooks/useSessionLayout';
+// Real store (not mocked): the /new picker case below asserts against it directly, the same way
+// the deferred-creation seam (useCreateDataLakeSession) reads it back.
+import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
 import DataLakeExplorer from './DataLakeExplorer';
 
 // Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
@@ -32,7 +35,17 @@ const {
   setWorkBenchFiles: vi.fn(),
   setSessionLayout: vi.fn(),
   // Mutable so the /new (deferred creation, no session yet) case can null it per-test.
-  sessionState: { currentSessionId: 'sess-1' as string | null },
+  // `current` is the session document the lake scope now lives on: the picker reads its
+  // retrievalTags and writes them back, so the harness has to hold it reactively (same
+  // useSyncExternalStore trick as workBenchState) or nothing the picker does can be observed.
+  sessionState: {
+    currentSessionId: 'sess-1' as string | null,
+    current: { id: 'sess-1', retrievalTags: [] as string[], lakeScopeExplicit: false } as Record<
+      string,
+      unknown
+    > | null,
+    listeners: new Set<() => void>(),
+  },
   removeFileMutate: vi.fn(),
   // Every lake id the removal hook was constructed with, so tests can assert the mutation
   // is bound to the resolved lake (not a stale null) at the moment it fires.
@@ -50,7 +63,19 @@ const {
 }));
 vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
   ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
-  useSessions: () => ({ currentSessionId: sessionState.currentSessionId }),
+  useSessions: () => ({
+    currentSessionId: sessionState.currentSessionId,
+
+    currentSession: useSyncExternalStore(
+      listener => {
+        sessionState.listeners.add(listener);
+        return () => sessionState.listeners.delete(listener);
+      },
+      // Nulled together with the id: /new has neither, and a session object surviving a nulled
+      // id would make the explorer persist a scope the real app has nowhere to put.
+      () => (sessionState.currentSessionId ? sessionState.current : null)
+    ),
+  }),
   useWorkBenchActions: () => ({ setWorkBenchFiles }),
   useWorkBenchFiles: () =>
     useSyncExternalStore(
@@ -173,13 +198,25 @@ vi.mock('@client/app/components/layouts/Notebook', () => ({
 // The explorer calls useSetDataLakeMode at render (for the tree close button); its persist
 // logic is covered in useSetDataLakeMode.test. Spy so the close-wiring test below can assert
 // without needing a QueryClient.
-const { setModeSpy, toastInfo, toastError, toastSuccess } = vi.hoisted(() => ({
+const { setModeSpy, setLakeScopeSpy, toastInfo, toastError, toastSuccess } = vi.hoisted(() => ({
   setModeSpy: vi.fn(),
+  setLakeScopeSpy: vi.fn(),
   toastInfo: vi.fn(),
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
 vi.mock('@client/app/hooks/useSetDataLakeMode', () => ({ default: () => setModeSpy }));
+// Mocked for the same reason as its sibling above: the real hook reaches useUpdateSession, and
+// this harness deliberately has no QueryClient. The double also REPLAYS the real hook's
+// optimistic write onto the mocked session - without it the picker's selection would never come
+// back through currentSession, and every scope assertion below would be testing a dead control.
+vi.mock('@client/app/hooks/useSetLakeScope', () => ({
+  default: () => (lakeTags: string[]) => {
+    setLakeScopeSpy(lakeTags);
+    sessionState.current = { ...sessionState.current, retrievalTags: lakeTags, lakeScopeExplicit: lakeTags.length > 0 };
+    sessionState.listeners.forEach(listener => listener());
+  },
+}));
 vi.mock('sonner', () => ({ toast: { info: toastInfo, error: toastError, success: toastSuccess } }));
 
 // Stub the tree so we can trigger the row actions deterministically and read the highlight
@@ -266,10 +303,19 @@ const renderExplorer = (props: Partial<React.ComponentProps<typeof DataLakeExplo
     </TestWrapper>
   );
 
+// File-level, not per-describe: the lake scope lives on the session document now, so a scope one
+// test picks is the scope the next one opens with unless the session is rebuilt between them -
+// and the later describes have beforeEach blocks of their own that would not inherit a reset
+// nested inside the first one.
+beforeEach(() => {
+  sessionState.currentSessionId = 'sess-1';
+  sessionState.current = { id: 'sess-1', retrievalTags: [], lakeScopeExplicit: false };
+  usePendingLakeScope.getState().setLakeTags([]);
+});
+
 describe('DataLakeExplorer chat-first surface', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    sessionState.currentSessionId = 'sess-1';
     removeFileLakeIds.length = 0;
     mockFileOwnerId.value = 'owner-1';
     lakesState.value = [{ id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', canManage: true }];
@@ -676,6 +722,39 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
   });
 
+  // /new: no session exists yet to write the scope onto, so the choice is parked in
+  // usePendingLakeScope for the deferred creation (useCreateDataLakeSession) to pick up.
+  describe('picking a scope before the session exists (/new)', () => {
+    beforeEach(() => {
+      sessionState.currentSessionId = null;
+      sessionState.current = null;
+      // Not reset by the outer suite (other tests only assert toHaveBeenCalledWith), so clear
+      // here or this test would see calls the PRECEDING tests made against a real session.
+      setLakeScopeSpy.mockClear();
+    });
+
+    it('parks the picked lake in usePendingLakeScope instead of writing to a session', () => {
+      renderExplorer();
+
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+      expect(usePendingLakeScope.getState().lakeTags).toEqual(['datalake:lake-a']);
+      // Nothing to persist yet - useSetLakeScope no-ops without a session.
+      expect(setLakeScopeSpy).not.toHaveBeenCalled();
+    });
+
+    it('scopes the tree to the pending lake, matching what a real session would show', () => {
+      renderExplorer();
+
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+      expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('Lake A');
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea');
+    });
+  });
+
   // The picker's per-lake count is membership-based while the tree is built from prefix tags, so
   // a member with no taxonomy tag was counted and then shown nowhere. The bucket is what makes
   // that file reachable rather than merely counted (#2031).
@@ -776,6 +855,32 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
       expect(uncategorizedState.enabled.at(-1)).toBe(true);
       expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-uncategorized-files', 'loose-1');
     });
+  });
+
+  // `lakeScopeExplicit` disambiguates an EMPTY retrievalTags only (Mongoose hydrates an unset
+  // array to []), so a non-empty scope is authoritative without it. These two cover the arms the
+  // picker cannot produce itself but retrieval honours all the same.
+  it('shows a scope this surface did not set, so the picker cannot claim every lake over one', () => {
+    // How a derived scope (attaching a lake file, sessionService/update.ts) and an API-created
+    // test chat (useStartChatWithLakes) both arrive: tags set, flag absent.
+    sessionState.current = { id: 'sess-1', retrievalTags: ['datalake:lake-b'], lakeScopeExplicit: undefined };
+    renderExplorer();
+
+    expect(screen.getByTestId('datalake-lake-picker-label')).toHaveTextContent('Lake B');
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakeb');
+  });
+
+  it('calls the deliberate empty scope what it is, rather than the all-lakes scope it inverts', () => {
+    sessionState.current = { id: 'sess-1', retrievalTags: [], lakeScopeExplicit: true };
+    renderExplorer();
+
+    expect(screen.getByTestId('datalake-lake-picker-label')).toHaveTextContent('No data lakes');
+    // The strip is the escape hatch: the tree stays browsable so the user can reach a lake again,
+    // which means the tree itself cannot report this state.
+    expect(screen.getByTestId('datalake-active-scope-none')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId('datalake-active-scope-clear-btn'));
+    expect(setLakeScopeSpy).toHaveBeenCalledWith([]);
   });
 
   it('withholds Add files on a lake the caller cannot manage', () => {

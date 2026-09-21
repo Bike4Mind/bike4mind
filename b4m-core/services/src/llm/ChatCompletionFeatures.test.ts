@@ -3942,6 +3942,52 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
       });
     });
 
+    // Not a variant of the personal-corpus case above: that one keys on what the session's
+    // ATTACHMENTS are, this one on what its scope SAYS. The fixture is the discriminating pair -
+    // identical empty `retrievalTags`, differing only by the sidecar - because without the sidecar
+    // an empty scope reads as "no opinion" and forced retrieval ran against every entitled lake.
+    it('records the no-lake-scope skip without claiming retrieval ran', async () => {
+      const scopedFeature = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        true
+      );
+      const noLake = makeQuest();
+      await scopedFeature.getContextMessages(
+        noLake,
+        embeddingFactory as unknown as Parameters<typeof scopedFeature.getContextMessages>[1],
+        'what do the docs say'
+      );
+      expect(retrievalOf(noLake)).toEqual({
+        attempted: false,
+        mode: 'forced',
+        forcedSkipReason: 'no_lake_scope',
+        surfaces: [],
+        dataLakeTags: [],
+      });
+    });
+
+    it('keeps grounding when an empty scope carries no explicit marker', async () => {
+      const unmarked = new KnowledgeRetrievalFeature(
+        makeCtx() as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+        [],
+        undefined,
+        undefined,
+        undefined,
+        undefined
+      );
+      const quest = makeQuest();
+      await unmarked.getContextMessages(
+        quest,
+        embeddingFactory as unknown as Parameters<typeof unmarked.getContextMessages>[1],
+        'what do the docs say'
+      );
+      expect(retrievalOf(quest)?.forcedSkipReason).toBeUndefined();
+    });
+
     it('does not let the skip record mask a tool retrieval later in the same turn', async () => {
       // The whole point of the measurement: the model fell back to search_knowledge_base and it
       // worked. The turn must read as attempted AND still say forced retrieval was suppressed.

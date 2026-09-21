@@ -464,7 +464,7 @@ export const RetrievalSummarySchema = z.object({
    * the per-turn routing question is about, and before this it was indistinguishable from a turn
    * where forced retrieval was never configured at all.
    */
-  forcedSkipReason: z.enum(['attached_files', 'personal_corpus']).optional(),
+  forcedSkipReason: z.enum(['attached_files', 'personal_corpus', 'no_lake_scope']).optional(),
   /** Which retrieval-capable surface(s) ran this turn, e.g. 'lake-memory', 'knowledgeBaseSearch'. */
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */

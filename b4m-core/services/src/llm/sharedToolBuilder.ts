@@ -52,6 +52,8 @@ export interface ToolBuilderDeps {
   suppressLakeArms?: ToolContext['suppressLakeArms'];
   /** Session lake scope, forwarded to the tool context (see ToolContext.sessionRetrievalTags). */
   sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+  /** Lake-scope sidecar, forwarded to the tool context (see ToolContext.sessionLakeScopeExplicit). */
+  sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
   /** Pre-authorized lake ids, forwarded to the tool context (see ToolContext.sessionPreauthorizedLakeIds). */
   sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
   /**
@@ -323,6 +325,7 @@ export function buildSharedTools(
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
+    sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
   } = deps;
 
@@ -341,6 +344,7 @@ export function buildSharedTools(
       fullyInlinedAttachmentIds,
       suppressLakeArms,
       sessionRetrievalTags,
+      sessionLakeScopeExplicit,
       sessionPreauthorizedLakeIds,
       questId: callbacks.questId,
       getAbortSignal,

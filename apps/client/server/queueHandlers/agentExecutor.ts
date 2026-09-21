@@ -1561,6 +1561,10 @@ async function processExecution(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Its sidecar, and NOT optional to forward: without it an empty scope reads as "no lake
+      // opinion" and the agent searches every lake its owner can reach - the opposite of what a
+      // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
+      sessionLakeScopeExplicit: session.lakeScopeExplicit,
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,
@@ -3296,6 +3300,10 @@ async function processSubagentDispatch(
       // Narrow the knowledge tools to the lake this session is FOR, same as the chat path. Without
       // it an agent delegated from a lake-scoped session searches every lake its owner can reach.
       sessionRetrievalTags: session.retrievalTags,
+      // Its sidecar, and NOT optional to forward: without it an empty scope reads as "no lake
+      // opinion" and the agent searches every lake its owner can reach - the opposite of what a
+      // deliberate no-lake session asked for. See sessionGroundsOnNoLake.
+      sessionLakeScopeExplicit: session.lakeScopeExplicit,
       // Manage-but-not-member admission, threaded unvetted: the ownership gate above already
       // confirmed the session belongs to this run before this ToolBuilderDeps is built.
       sessionPreauthorizedLakeIds: session.preauthorizedLakeIds,

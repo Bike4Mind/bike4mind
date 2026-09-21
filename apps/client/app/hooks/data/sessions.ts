@@ -12,6 +12,7 @@ import {
   getSharedSessionsFromServer,
   updateSessionToServer,
 } from '@client/app/utils/sessionsAPICalls';
+import type { SessionUpdatePayload } from '@client/app/utils/sessionsAPICalls';
 import {
   InfiniteData,
   QueryClient,
@@ -433,7 +434,7 @@ export function useToggleFavoriteSession(sessionId: string) {
  * declares; `propagateToProjects` is a write OPTION rather than session state, and
  * controls whether new knowledgeIds also fan out to the containing projects.
  */
-export type UpdateSessionInput = Partial<ISessionDocument> & { id: string; propagateToProjects?: boolean };
+export type UpdateSessionInput = SessionUpdatePayload & { id: string; propagateToProjects?: boolean };
 
 export function useUpdateSession(callback?: { onSuccess?: (session: ISessionDocument) => void }) {
   const queryClient = useQueryClient();

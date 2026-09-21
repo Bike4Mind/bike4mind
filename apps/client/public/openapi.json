@@ -600,6 +600,16 @@
           "forceKnowledgeRetrieval": {
             "type": "boolean"
           },
+          "retrievalTags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lakeScopeExplicit": {
+            "type": "boolean",
+            "description": "True when `retrievalTags` is a deliberate choice, so an empty list means \"no lake\" rather than \"any\"."
+          },
           "lastUsedModel": {
             "type": [
               "string",
@@ -670,6 +680,16 @@
           },
           "forceKnowledgeRetrieval": {
             "type": "boolean"
+          },
+          "lakeScope": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The data lakes this session grounds on, as lake tags (the `datalakeTag` of each lake from GET /api/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. Narrowing the scope does not by itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake."
           },
           "propagateToProjects": {
             "type": "boolean",
@@ -2909,7 +2929,7 @@
       "put": {
         "operationId": "updateSession",
         "summary": "Update a session",
-        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
+        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
         "tags": [
           "Sessions"
         ],
