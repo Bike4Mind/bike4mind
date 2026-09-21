@@ -658,6 +658,46 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   /**
+   * Count-only companion to {@link findActiveByUserTagsAndEntitlements} above (#3055) - see the
+   * interface doc for the contract. `$nor: [requirementConstraint(...)]` is the complement of
+   * that helper's own `$or` (gateless OR held tag OR held entitlement): a lake matching NONE of
+   * those arms has a gate the caller does not hold, which is exactly the population this counts.
+   *
+   * Visibility is org membership OR public - deliberately narrower than `findActiveByUserTagsAndEntitlements`'s
+   * own arms (no owner bypass, no grant arm): those two arms are exactly what make a lake NOT
+   * excluded regardless of its gate, so they are subtracted here via `_id: $nin` instead of
+   * counted as visible. `createdByUserId: { $ne: userId }` mirrors that subtraction for the
+   * owner bypass without needing the caller's own lake ids first.
+   */
+  async countGateExcludedLakes(
+    userTags: string[],
+    entitlementKeys: string[],
+    organizationIds: string[] | undefined,
+    userId: string | undefined,
+    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
+  ): Promise<number> {
+    const memberOrgIds = organizationIds ?? [];
+    const visibilityArms: Record<string, unknown>[] = [{ isPublic: true }];
+    if (memberOrgIds.length > 0) visibilityArms.push({ organizationId: { $in: memberOrgIds } });
+
+    const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.countGateExcludedLakes');
+    const orgGrantedIds = usableObjectIds(
+      Object.values(opts?.orgGrantedLakes ?? {}).flat(),
+      'DataLakeModel.countGateExcludedLakes'
+    );
+    const excludedIds = Array.from(new Set([...grantedLakeIds, ...orgGrantedIds]));
+
+    const filter: Record<string, unknown> = {
+      status: 'active',
+      $or: visibilityArms,
+      $nor: [requirementConstraint(userTags, entitlementKeys)],
+      ...(userId ? { createdByUserId: { $ne: userId } } : {}),
+      ...(excludedIds.length > 0 ? { _id: { $nin: excludedIds } } : {}),
+    };
+    return this.dataLakeModel.countDocuments(filter);
+  }
+
+  /**
    * Ids of every lake this user CREATED, in any status - the candidate set for resolving which of
    * them their ownership has since moved off (see `supersededOwnLakeIdsFor`). Creator provenance is
    * immutable, so this is a stable, cheap anchor; it deliberately answers nothing about ownership by
