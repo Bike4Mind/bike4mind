@@ -339,15 +339,17 @@ export const shouldAutoHideKnowledgePane = (params: {
  * effect only re-runs on a LENGTH change, so a return to an already-cached session would leave
  * the latch permanently disarmed and its delete-all would no longer auto-collapse.
  *
- * Hence the split: `hasSessionItems` is content keyed by the current session id (workbench
- * files, message files), which can only ever be this session's and is trusted even on the
- * change render; the transient rest still waits for a session-stable render.
+ * Hence the split: `hasTrustedItems` is content that describes the CURRENT render - the
+ * session-keyed workbench/message files, plus the user/global-scoped system prompt files
+ * (which are not session-transient, so a session change cannot make them stale). That is
+ * trusted even on the change render; the transient rest still waits for a session-stable
+ * render.
  */
 export const shouldArmKnowledgePaneLatch = (params: {
   hasSelected: boolean;
-  hasSessionItems: boolean;
+  hasTrustedItems: boolean;
   sessionChanged: boolean;
-}): boolean => params.hasSelected && (params.hasSessionItems || !params.sessionChanged);
+}): boolean => params.hasSelected && (params.hasTrustedItems || !params.sessionChanged);
 
 const isMarkdownFile = (item: KnowledgeItem | undefined) => {
   if (!item || item.type !== 'file') return false;
@@ -804,11 +806,12 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     latestArtifact?.artifact.id,
   ]);
 
-  // Files keyed by currentSessionId: the workbench store is a per-session map and the
-  // message-file react-query key includes the session id, so this count can only ever describe
-  // the current session. Kept as a primitive so the auto-hide effect can depend on it without
-  // re-running on every array identity change. See shouldArmKnowledgePaneLatch.
-  const sessionItemCount = workBenchFiles.length + messageFiles.length;
+  // Content safe to trust on a session-change render: the workbench store is a per-session map
+  // and the message-file react-query key includes the session id (session-keyed), while system
+  // prompt files are user/global-scoped and cannot carry the previous session's data. Kept as a
+  // primitive so the auto-hide effect can depend on it without re-running on every array
+  // identity change. See shouldArmKnowledgePaneLatch.
+  const trustedItemCount = workBenchFiles.length + messageFiles.length + systemFiles.length;
 
   // Effect: Reset view when no selection
   useEffect(() => {
@@ -825,7 +828,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     // re-render after clicking a code block, which would otherwise race.
     const hasSelected = knowledgeItems.length > 0 || recentArtifacts.length > 0;
 
-    if (shouldArmKnowledgePaneLatch({ hasSelected, hasSessionItems: sessionItemCount > 0, sessionChanged })) {
+    if (shouldArmKnowledgePaneLatch({ hasSelected, hasTrustedItems: trustedItemCount > 0, sessionChanged })) {
       hasShownItemsRef.current = true;
     }
 
@@ -853,7 +856,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         }
       }
     }
-  }, [knowledgeItems.length, recentArtifacts.length, sessionItemCount, autoHideOnEmpty, currentSessionId]); // Also watch recentArtifacts to prevent hiding during state updates
+  }, [knowledgeItems.length, recentArtifacts.length, trustedItemCount, autoHideOnEmpty, currentSessionId]); // Also watch recentArtifacts to prevent hiding during state updates
 
   // Effect: Auto-switch tab when selectedArtifactId changes.
   useEffect(() => {

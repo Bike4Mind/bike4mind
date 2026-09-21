@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import React from 'react';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, act, cleanup, screen } from '@testing-library/react';
+import { render, act, cleanup, screen, fireEvent } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Mutable harness state, read by the hoisted module mocks below.
 const h = vi.hoisted(() => ({
   currentSessionId: 'session-A' as string | null,
   messageFiles: [] as Array<Record<string, unknown>>,
+  systemFiles: [] as Array<Record<string, unknown>>,
   setSessionLayoutCalls: [] as Array<Record<string, unknown>>,
 }));
 
@@ -27,7 +28,7 @@ vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => {
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: { id: h.currentSessionId }, currentSessionId: h.currentSessionId }),
   useWorkBenchFiles: () => [],
-  useSystemPromptFiles: () => ({ systemFiles: [] }),
+  useSystemPromptFiles: () => ({ systemFiles: h.systemFiles }),
   useWorkBenchActions: () => ({ setWorkBenchFiles: vi.fn() }),
 }));
 
@@ -95,6 +96,7 @@ describe('KnowledgeViewer auto-hide wiring', () => {
   beforeEach(() => {
     h.currentSessionId = 'session-A';
     h.messageFiles = [];
+    h.systemFiles = [];
     h.setSessionLayoutCalls = [];
     setKnowledgeViewer({ selectedTabIndex: 0, showLineNumbers: false });
     useSessionLayout.setState({
@@ -123,7 +125,7 @@ describe('KnowledgeViewer auto-hide wiring', () => {
     expect(h.setSessionLayoutCalls.some(call => call.layout === 'hide')).toBe(false);
   });
 
-  it('gives the empty-state close button an accessible name', () => {
+  it('gives the empty-state close button an accessible name and closes the pane when clicked', async () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
@@ -131,9 +133,15 @@ describe('KnowledgeViewer auto-hide wiring', () => {
       </QueryClientProvider>
     );
 
-    expect(screen.getByTestId('knowledge-viewer-empty-close').getAttribute('aria-label')).toBe(
-      'Close Knowledge Preview'
-    );
+    const close = screen.getByTestId('knowledge-viewer-empty-close');
+    expect(close.getAttribute('aria-label')).toBe('Close Knowledge Preview');
+
+    await act(async () => {
+      fireEvent.click(close);
+    });
+
+    expect(h.setSessionLayoutCalls.some(call => call.layout === 'hide')).toBe(true);
+    expect(useSessionLayout.getState().layout).toBe('hide');
   });
 
   it('keeps the pane open on a session-less page', async () => {
@@ -175,6 +183,38 @@ describe('KnowledgeViewer auto-hide wiring', () => {
 
     // Delete that session's last item. The latch armed on the change render, so the pane collapses.
     h.messageFiles = [];
+    await act(async () => {
+      rerender(ui());
+    });
+
+    expect(screen.getByTestId(EMPTY_STATE_TESTID)).toBeTruthy();
+    expect(h.setSessionLayoutCalls.some(call => call.layout === 'hide')).toBe(true);
+  });
+
+  it('still auto-collapses after a session switch when the last system file is removed', async () => {
+    // System prompt files are user/global-scoped, not session-transient: they describe the
+    // current render, so they must arm the latch even on the session-change render. Excluding
+    // them left the latch disarmed across the switch, and removing that final file left an empty
+    // pane open. recentArtifacts/previewFile stay empty here so no other effect re-arms it.
+    h.systemFiles = [textFile('system-1')];
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const ui = () => (
+      <QueryClientProvider client={client}>
+        <KnowledgeViewer />
+      </QueryClientProvider>
+    );
+    const { rerender } = render(ui());
+    expect(screen.queryByTestId(EMPTY_STATE_TESTID)).toBeNull();
+
+    // Switch sessions while the system file is visible: the latch resets, then must re-arm from it.
+    h.currentSessionId = 'session-B';
+    await act(async () => {
+      rerender(ui());
+    });
+    expect(screen.queryByTestId(EMPTY_STATE_TESTID)).toBeNull();
+
+    // Disable/delete that final file - the pane empties and must collapse.
+    h.systemFiles = [];
     await act(async () => {
       rerender(ui());
     });
