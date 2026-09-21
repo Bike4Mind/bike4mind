@@ -52,6 +52,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     useArchiveDataLake: () => ({ mutate: archiveMutate, isPending: false }),
     useUnarchiveDataLake: mutation,
     useRestoreDeletedDataLake: mutation,
+    usePromoteDataLake: mutation,
+    useDemoteDataLake: mutation,
     usePermanentDeleteDataLake: () => ({ mutate: deleteMutate, isPending: false }),
     useCleanupDataLake: () => ({ mutate: cleanupMutate, isPending: false }),
     useGetArchivedDataLakes: () => useGetArchivedDataLakes(),

@@ -49,6 +49,8 @@ export * from './redactLakeForActor';
 export * from './browsePublicDataLakes';
 export * from './archiveDataLake';
 export * from './unarchiveDataLake';
+export * from './promoteDataLake';
+export * from './demoteDataLake';
 export * from './restoreDeletedDataLake';
 export * from './deleteDataLake';
 export * from './lakeMembership';

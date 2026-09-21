@@ -274,15 +274,12 @@ export const reconcileLakeTags = async (
   if (prefixArmJoins.length > 0) assertWriteScope?.();
   // The mirror case: a write that newly satisfies a lake's prefix arm is automatic MEMBERSHIP
   // (today's accepted model for content tags - the read-side predicate grants it purely on the
-  // tag, with no permission check either). But recomputeLakeStats's activation side effect is
-  // stronger than membership: it also flips a draft lake to active (activateIfDraft), a one-way,
-  // publication-visibility change. `owner` is the FILE's owner, not the acting user - a caller
-  // merely SHARED on that file (findAccessibleById admits a read/write share) could otherwise
-  // force-publish a lake they have no relationship to. Gate the ACTIVATION on canManageLake; an
-  // unmanaged join still gets its stats corrected via statsOnlyJoins below (see commit()), rather
-  // than drifting until some other door happens to touch the same lake.
-  // Prime grants for the prefix-arm lakes (the activation gate below + the unmanaged-dropped-prefix
-  // check further down both consult them), reusing the cached meta-tag lakes.
+  // tag, with no permission check either). `joins`/`statsOnlyJoins` used to also decide whether a
+  // recompute could publish a draft lake (activateIfDraft) - that side effect is gone, so
+  // the split below is now only a bookkeeping convenience (managed vs predicate-only membership),
+  // not a gate: both arrays get the same stats recompute in commit() below.
+  // Prime grants for the prefix-arm lakes (the unmanaged-dropped-prefix check further down
+  // consults them), reusing the cached meta-tag lakes.
   await grantResolver.prime([...prefixArmJoins.map(j => j.lake), ...prefixArmCandidateLakes]);
   const statsOnlyJoins: MembershipLake[] = [];
   for (const j of prefixArmJoins) {
@@ -391,13 +388,10 @@ export const reconcileLakeTags = async (
       // for a prefix-arm join, the qualifying content tag) as part of `tagsToPersist`, and their
       // gate (where one applies) ran above, before that write. They still need stats.
       const recomputed = new Set<string>();
-      for (const lake of joins) {
-        await recomputeLakeStats(lake, { db, logger }, { actor });
+      for (const lake of [...joins, ...statsOnlyJoins]) {
+        if (recomputed.has(lake.id)) continue;
+        await recomputeLakeStats(lake, { db, logger });
         recomputed.add(lake.id);
-      }
-      // An unmanaged prefix-arm join: stats only, activation stays gated - see the comment above.
-      for (const lake of statsOnlyJoins) {
-        if (!recomputed.has(lake.id)) await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
       }
     },
   };

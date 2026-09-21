@@ -53,7 +53,9 @@ describe('recompute-stale-datalake-stats', () => {
     await migration.up();
 
     expect(logged.join('\n')).toContain('corrected "Stale": fileCount 5 -> 4, totalSizeBytes 500 -> 400');
-    expect(logged.join('\n')).toContain('corrected 1 lake(s), activated 0 lake(s); 0 failed, 1 scanned');
+    expect(logged.join('\n')).toContain(
+      'corrected 1 lake(s); 0 unpublished draft lake(s) hold files; 0 failed, 1 scanned'
+    );
   });
 
   it('does not report a lake whose recomputed stats already match', async () => {
@@ -65,7 +67,9 @@ describe('recompute-stale-datalake-stats', () => {
     await migration.up();
 
     expect(logged.join('\n')).not.toContain('corrected "Fine"');
-    expect(logged.join('\n')).toContain('corrected 0 lake(s), activated 0 lake(s); 0 failed, 1 scanned');
+    expect(logged.join('\n')).toContain(
+      'corrected 0 lake(s); 0 unpublished draft lake(s) hold files; 0 failed, 1 scanned'
+    );
   });
 
   it('treats a missing stored fileCount/totalSizeBytes as 0, not as already matching', async () => {
@@ -77,9 +81,9 @@ describe('recompute-stale-datalake-stats', () => {
     expect(logged.join('\n')).toContain('corrected "NeverStamped": fileCount 0 -> 2, totalSizeBytes 0 -> 20');
   });
 
-  it('reports activating a draft lake even when its stats already matched', async () => {
-    // The stats-delta check alone would miss this: an already-correct draft lake whose
-    // activation had been skipped shows no delta on the corrected line at all.
+  it('reports a draft lake holding files as unpublished, even when its stats already matched', async () => {
+    // The stats-delta check alone would miss this: an already-correct draft lake shows no delta
+    // on the corrected line at all, but it still needs to surface for an owner to publish.
     mockFind.mockReturnValue(
       findReturning([{ id: 'l1', name: 'Stuck', status: 'draft', fileCount: 3, totalSizeBytes: 30 }])
     );
@@ -88,29 +92,31 @@ describe('recompute-stale-datalake-stats', () => {
     await migration.up();
 
     expect(logged.join('\n')).not.toContain('corrected "Stuck"');
-    expect(logged.join('\n')).toContain('activated "Stuck" (3 file(s))');
-    expect(logged.join('\n')).toContain('corrected 0 lake(s), activated 1 lake(s); 0 failed, 1 scanned');
+    expect(logged.join('\n')).toContain('"Stuck" holds 3 file(s) but is unpublished (draft)');
+    expect(logged.join('\n')).toContain(
+      'corrected 0 lake(s); 1 unpublished draft lake(s) hold files; 0 failed, 1 scanned'
+    );
   });
 
-  it('treats a missing status as draft-eligible for activation, matching the schema default', async () => {
+  it('treats a missing status as draft-eligible for the unpublished-draft report, matching the schema default', async () => {
     mockFind.mockReturnValue(findReturning([{ id: 'l1', name: 'Legacy', fileCount: 0, totalSizeBytes: 0 }]));
     mockRecompute.mockResolvedValue({ fileCount: 2, totalSizeBytes: 20 });
 
     await migration.up();
 
-    expect(logged.join('\n')).toContain('activated "Legacy" (2 file(s))');
+    expect(logged.join('\n')).toContain('"Legacy" holds 2 file(s) but is unpublished (draft)');
   });
 
-  it('does not activate a draft lake that recomputes to zero files', async () => {
+  it('does not report a draft lake as holding files when it recomputes to zero', async () => {
     mockFind.mockReturnValue(findReturning([{ id: 'l1', name: 'Empty', status: 'draft', fileCount: 0 }]));
     mockRecompute.mockResolvedValue({ fileCount: 0, totalSizeBytes: 0 });
 
     await migration.up();
 
-    expect(logged.join('\n')).not.toContain('activated "Empty"');
+    expect(logged.join('\n')).not.toContain('"Empty" holds');
   });
 
-  it('does not activate an already-active lake gaining files', async () => {
+  it('does not report an already-active lake gaining files as an unpublished draft', async () => {
     mockFind.mockReturnValue(
       findReturning([{ id: 'l1', name: 'Active', status: 'active', fileCount: 1, totalSizeBytes: 10 }])
     );
@@ -118,8 +124,10 @@ describe('recompute-stale-datalake-stats', () => {
 
     await migration.up();
 
-    expect(logged.join('\n')).not.toContain('activated "Active"');
-    expect(logged.join('\n')).toContain('corrected 1 lake(s), activated 0 lake(s); 0 failed, 1 scanned');
+    expect(logged.join('\n')).not.toContain('"Active" holds');
+    expect(logged.join('\n')).toContain(
+      'corrected 1 lake(s); 0 unpublished draft lake(s) hold files; 0 failed, 1 scanned'
+    );
   });
 
   it('hands recomputeLakeStats the whole lake document, not a narrowed shape', async () => {
@@ -156,7 +164,9 @@ describe('recompute-stale-datalake-stats', () => {
 
     await expect(migration.up()).resolves.toBeUndefined();
 
-    expect(logged.join('\n')).toContain('corrected 0 lake(s), activated 0 lake(s); 1 failed, 2 scanned');
+    expect(logged.join('\n')).toContain(
+      'corrected 0 lake(s); 0 unpublished draft lake(s) hold files; 1 failed, 2 scanned'
+    );
     expect(logged.join('\n')).toContain('"Broken"');
   });
 

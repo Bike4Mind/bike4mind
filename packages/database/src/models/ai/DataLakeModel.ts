@@ -962,15 +962,26 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return res.matchedCount === 1;
   }
 
-  async activateIfDraft(id: string): Promise<boolean> {
-    // The status guard lives in the FILTER, not in a prior read: the membership doors that call
-    // this hand over a lake document they fetched before their own status writes, so testing the
-    // caller's copy could flip a lake that is already archiving. `null` also matches a missing
-    // field - lakes written before `status` existed have none, and they are just as invisible to
-    // the catalog as a draft.
+  async activateIfDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {
+    // The status guard lives in the FILTER, not in a prior read: `promoteDataLake` hands over a
+    // lake document it fetched a round trip earlier (the grant load runs in between), so testing
+    // its copy could flip a lake that moved to 'archiving' in the gap. `null` also matches a
+    // missing field - lakes written before `status` existed have none, and they are just as
+    // invisible to the catalog as a draft.
     const res = await this.dataLakeModel.updateOne(
       { _id: id, status: { $in: ['draft', null] } },
-      { $set: { status: 'active' } }
+      { $set: { status: 'active', ...extra } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  async demoteToDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {
+    // Mirror of activateIfDraft: guarded in the filter against the SAME caller-holds-a-stale-copy
+    // race, and admits only 'active' as a source - a lake mid-archive, mid-delete or already
+    // 'draft' is not this call's to move.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: 'active' },
+      { $set: { status: 'draft', ...extra } }
     );
     return res.modifiedCount === 1;
   }

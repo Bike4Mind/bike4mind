@@ -32,10 +32,10 @@ interface TagRemoveAdapters {
    */
   logger?: LakeConfigAuditAdapters['logger'];
   /**
-   * The resolved audit principal for an API-key caller (undefined for a session caller) - see
-   * `lakeConfigAuditPrincipal`. Rides on the actor handed to recomputeLakeStats, so a key-driven
-   * delete that flips a draft lake to active names the key rather than the human it acts for,
-   * matching every other audited config-write door (#1917).
+   * Accepted for route back-compat and otherwise unused: this used to ride on the actor
+   * handed to recomputeLakeStats' auto-activate audit row. That flip no longer happens here -
+   * publishing is now the explicit `promoteDataLake` door - so there is nothing left for this to
+   * attribute.
    */
   auditPrincipal?: LakeAuditPrincipal;
   /**
@@ -67,7 +67,7 @@ interface TagRemoveAdapters {
  * the bulk strip below does NOT do on its own is recompute the affected lakes' stats.
  */
 export const remove = async (userId: string, params: TagRemoveParams, adapters: TagRemoveAdapters) => {
-  const { db, logger, auditPrincipal, assertWriteScope } = adapters;
+  const { db, logger, assertWriteScope } = adapters;
   const { id } = secureParameters(params, tagRemoveSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -105,14 +105,7 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
     // (the aggregate re-derives the true count either way), and cheaper than re-deriving per file
     // which of these lakes actually lost a member. Independent per-lake recomputes, so run them
     // concurrently rather than one at a time.
-    // `actor` is the tag's owner: a rename/delete here is a user action, so an auto-activate it
-    // causes should not read as `system`. `isAdmin` is immaterial on this path - recomputeLakeStats
-    // forces the rung to `system` because activateIfDraft authorizes nothing.
-    await Promise.all(
-      affectedLakes.map(lake =>
-        recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false, auditPrincipal } })
-      )
-    );
+    await Promise.all(affectedLakes.map(lake => recomputeLakeStats(lake, { db, logger })));
   }
 
   return { id: tag.id, name: tag.name, filesUpdated };

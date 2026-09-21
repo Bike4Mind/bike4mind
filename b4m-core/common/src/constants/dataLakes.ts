@@ -1,4 +1,5 @@
 import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
+import type { DataLakeStatus } from '../types/entities/DataLakeTypes';
 
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
@@ -391,6 +392,13 @@ export interface DataLakeConfig {
    * this. Absent on projections that don't resolve an actor (e.g. tag-only lookups).
    */
   canManage?: boolean;
+  /**
+   * Lake lifecycle (see `DataLakeStatus`), reader-visible - it is what tells a client a lake is
+   * still `draft` and excluded from grounding, so the manager can offer Publish/Move to
+   * draft and explain why a lake with files answers nothing. Absent for a fallback (built-in)
+   * registry lake, which has no document and no lifecycle - always serving.
+   */
+  status?: DataLakeStatus;
 }
 
 /**
@@ -736,6 +744,7 @@ export function toDataLakeConfig(dl: {
   description?: string;
   isPublic?: boolean;
   lakeMemoryEnabled?: boolean;
+  status?: DataLakeStatus;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -749,6 +758,7 @@ export function toDataLakeConfig(dl: {
     description: dl.description,
     isPublic: dl.isPublic,
     lakeMemoryEnabled: dl.lakeMemoryEnabled,
+    status: dl.status,
   };
 }
 
