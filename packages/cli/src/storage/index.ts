@@ -2,6 +2,7 @@ export { SessionStore } from './SessionStore';
 export { ConfigStore } from './ConfigStore';
 export { CommandHistoryStore } from './CommandHistoryStore';
 export { CheckpointStore } from './CheckpointStore';
+export { buildGlobalConfigPatch } from './buildGlobalConfigPatch';
 export type {
   Session,
   Message,
