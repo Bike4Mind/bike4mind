@@ -105,13 +105,16 @@ export interface RateLimitUsage {
 
 export interface ResetApiKeyRateLimitResult {
   /**
-   * Usage at the moment this counter was cleared. Undefined only when
-   * clearing THIS counter itself failed entirely (both its minute and day
-   * deletes rejected) - the other counter is cleared and reported
-   * independently regardless, so a hiccup on one never hides or blocks the
-   * other. `resetApiKeyRateLimit` itself rejects if every attempted counter
-   * fails this way, so a caller that gets a result back always has at least
-   * one of `request`/`management` defined.
+   * Usage at the moment this counter was cleared. Undefined when this
+   * counter could not be fully verified - EITHER of its minute/day deletes
+   * rejected. A single rejected leg is not reported as usage 0: the window
+   * it covers was never actually read, so 0 would fabricate "not at
+   * ceiling" for a counter that might still be locked. The other counter is
+   * cleared and reported independently regardless, so a hiccup on one never
+   * hides or blocks the other; `resetApiKeyRateLimit` itself rejects only
+   * when NEITHER counter's clear made any progress at all (see its
+   * docstring), so a caller that gets a result back knows at least one
+   * underlying delete genuinely succeeded somewhere.
    */
   request?: RateLimitUsage;
   /** Present only when `alsoResetManagement` was set; same failure semantics as `request`. */
@@ -123,6 +126,17 @@ export interface ResetApiKeyRateLimitResult {
  * through instead of every failure landing in `console.warn` with no way to trace it back. */
 interface CounterLogger {
   warn: (message: string) => void;
+}
+
+/** Result of clearing one counter's minute+day pair. `usage` and `cleared` are tracked
+ * separately on purpose: a single failed leg makes `usage` unverifiable (undefined) without
+ * meaning nothing happened - the sibling leg may well have genuinely cleared. `cleared` is
+ * what `resetApiKeyRateLimit` checks to tell "nothing succeeded anywhere" (reject) apart from
+ * "something succeeded, but we can't fully vouch for the reported numbers" (return, flagged
+ * unverified). */
+interface CounterClearResult {
+  usage: RateLimitUsage | undefined;
+  cleared: boolean;
 }
 
 /**
@@ -139,10 +153,10 @@ interface CounterLogger {
  * clearing one never prevents clearing - or reporting - the other. This
  * route is the only operator override for a key locked out of its own
  * management quota, so a transient failure on one counter must never block
- * recovery of the other. But if EVERY attempted counter fails to clear
- * anything, that is not a partial degradation - the reset did nothing - so
- * this rejects instead of returning a result a caller could mistake for
- * success.
+ * recovery of the other. But if NOTHING cleared anywhere - every minute and
+ * day delete across every attempted counter failed - that is not a partial
+ * degradation, the reset did nothing, so this rejects instead of returning a
+ * result a caller could mistake for success.
  *
  * Note: embed keys additionally have per-session counters
  * (`embed-session-rate-limit:{sessionId}:minute|:day`, see ./embedSessionRateLimit)
@@ -165,31 +179,33 @@ export async function resetApiKeyRateLimit(
   const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
   const request = deleteCounterGroup(keyId, 'request', minuteKey, dayKey, logger);
 
-  let management: Promise<RateLimitUsage | undefined> = Promise.resolve(undefined);
+  let management: Promise<CounterClearResult> | undefined;
   if (options.alsoResetManagement) {
     const { minuteKey: managementMinuteKey, dayKey: managementDayKey } = buildRateLimitKeys(keyId, 'management');
     management = deleteCounterGroup(keyId, 'management', managementMinuteKey, managementDayKey, logger);
   }
 
-  const [requestUsage, managementUsage] = await Promise.all([request, management]);
+  const [requestResult, managementResult] = await Promise.all([request, management ?? Promise.resolve(undefined)]);
 
-  if (requestUsage === undefined && (!options.alsoResetManagement || managementUsage === undefined)) {
+  if (!requestResult.cleared && !(managementResult?.cleared ?? false)) {
     throw new Error(`Failed to clear any rate-limit counters for API key ${keyId} - every counter delete failed`);
   }
 
-  return { request: requestUsage, management: managementUsage };
+  return { request: requestResult.usage, management: managementResult?.usage };
 }
 
 /**
  * Delete a counter's minute+day pair atomically per key (via
  * `deleteByKeyAndReturn`) and derive its usage from what was actually
- * removed. The two deletes settle independently (`Promise.allSettled`, not
- * `Promise.all`) so one rejecting never discards the other's usage - a
- * fail-fast `Promise.all` here would throw away a successfully-cleared
- * minute counter just because the day counter's delete hiccuped. Only when
- * BOTH reject does this counter's usage read as unknown (`undefined`) rather
- * than a fabricated value; a single rejection is logged and treated as usage
- * 0 for that window, same as a missing/expired doc.
+ * removed. The two deletes settle independently (`Promise.allSettled`, not a
+ * fail-fast `Promise.all`) so a rejection on one leg can never abort the
+ * other - both are always attempted. But if EITHER leg rejects, `usage` comes
+ * back undefined rather than a value built from only the leg that succeeded:
+ * the failed leg's window was never actually read, so reporting it as 0
+ * would fabricate "not at ceiling" for a counter that might still be at its
+ * limit. `cleared` is reported separately - true as long as at least one leg
+ * didn't error - so a caller can still tell "something genuinely happened
+ * here" apart from "the reported numbers are fully trustworthy".
  */
 async function deleteCounterGroup(
   keyId: string,
@@ -197,31 +213,33 @@ async function deleteCounterGroup(
   minuteKey: string,
   dayKey: string,
   logger: CounterLogger
-): Promise<RateLimitUsage | undefined> {
+): Promise<CounterClearResult> {
   const [minuteResult, dayResult] = await Promise.allSettled([
     cacheRepository.deleteByKeyAndReturn(minuteKey),
     cacheRepository.deleteByKeyAndReturn(dayKey),
   ]);
 
+  const warn = (message: string) => {
+    try {
+      logger.warn(message);
+    } catch {
+      // A broken logger must never turn an otherwise-successful clear into a failure.
+    }
+  };
   if (minuteResult.status === 'rejected') {
-    logger.warn(
-      `[API_KEY_RATE_LIMIT] Failed to clear ${counter} minute counter for API key ${keyId}: ${minuteResult.reason}`
-    );
+    warn(`[API_KEY_RATE_LIMIT] Failed to clear ${counter} minute counter for API key ${keyId}: ${minuteResult.reason}`);
   }
   if (dayResult.status === 'rejected') {
-    logger.warn(
-      `[API_KEY_RATE_LIMIT] Failed to clear ${counter} day counter for API key ${keyId}: ${dayResult.reason}`
-    );
+    warn(`[API_KEY_RATE_LIMIT] Failed to clear ${counter} day counter for API key ${keyId}: ${dayResult.reason}`);
   }
 
-  if (minuteResult.status === 'rejected' && dayResult.status === 'rejected') {
-    return undefined;
+  const cleared = minuteResult.status === 'fulfilled' || dayResult.status === 'fulfilled';
+
+  if (minuteResult.status === 'rejected' || dayResult.status === 'rejected') {
+    return { usage: undefined, cleared };
   }
 
-  return docsToUsage(
-    minuteResult.status === 'fulfilled' ? minuteResult.value : undefined,
-    dayResult.status === 'fulfilled' ? dayResult.value : undefined
-  );
+  return { usage: docsToUsage(minuteResult.value, dayResult.value), cleared };
 }
 
 function docsToUsage(
