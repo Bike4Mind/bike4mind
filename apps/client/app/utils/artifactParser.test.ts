@@ -1,4 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { statSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   convertCodeBlocksToArtifacts as coreConvertCodeBlocksToArtifacts,
   parseArtifacts as coreParseArtifacts,
@@ -826,6 +829,15 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
  * build if the dist is out of date.
  */
 describe('parity with the core parser', () => {
+  // Mechanical version of the warning above: if src is newer than the built dist,
+  // the imports at the top of this file resolved to stale output.
+  it('core dist is not stale relative to core src', () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
+    const srcMtime = statSync(resolve(repoRoot, 'b4m-core/utils/src/artifactParser.ts')).mtimeMs;
+    const distMtime = statSync(resolve(repoRoot, 'b4m-core/utils/dist/artifactParser.mjs')).mtimeMs;
+    expect(srcMtime, 'core dist is stale - run pnpm turbo:core:build').toBeLessThanOrEqual(distMtime);
+  });
+
   const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
   const buildHtmlCall = (html: string) => JSON.stringify({ name: 'build_html', arguments: { html } });
 
