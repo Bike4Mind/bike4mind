@@ -33,7 +33,7 @@ import {
 import dynamic from 'next/dynamic';
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import TextViewer from './TextViewer';
-import MarkdownViewer from './MarkdownViewer';
+import MarkdownViewer, { UnmarkedCitedPassage } from './MarkdownViewer';
 import { citedPassageForFile } from './citedPassage';
 import DocxViewer from './DOCXViewer';
 import CSVViewer from './CSVViewer';
@@ -2335,7 +2335,12 @@ const KnowledgeContent: React.FC<{
   }
 };
 
-const FileContent = ({
+/**
+ * Exported for tests, like the pane-latch helpers above: this is the surface a citation chip
+ * actually opens, and its Mermaid branch returns before the MarkdownViewer handoff - so the branch
+ * needs to be reachable on its own rather than only through the whole viewer's provider chain.
+ */
+export const FileContent = ({
   file,
   signedUrl,
   fetching,
@@ -2573,7 +2578,17 @@ const FileContent = ({
         const mermaidMatch = content.match(/```mermaid\s*([\s\S]*?)```/);
 
         if (isMermaidDiagram || mermaidMatch) {
-          return <MermaidChart chartDefinition={mermaidMatch ? mermaidMatch[1].trim() : content} />;
+          // This branch returns BEFORE the MarkdownViewer handoff below, and it is the surface a
+          // citation chip actually opens (/opti?mode=datalake&article=<id>), so dropping the anchor
+          // here would lose the passage on the main deep-link path. A diagram has no prose blocks
+          // to mark, so it is shown as a callout rather than highlighted - same contract as
+          // MarkdownViewer's own Mermaid early returns.
+          return (
+            <>
+              {citedPassage && <UnmarkedCitedPassage passage={citedPassage} title="Cited passage" />}
+              <MermaidChart chartDefinition={mermaidMatch ? mermaidMatch[1].trim() : content} />
+            </>
+          );
         }
 
         const wrappedContent = content.includes('```mermaid') ? `\`\`\`mermaid\n${content}\n\`\`\`` : content;

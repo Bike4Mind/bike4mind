@@ -132,5 +132,9 @@ describe('citedPassageForFile', () => {
     expect(citedPassageForFile(anchor, undefined)).toBeUndefined();
     expect(citedPassageForFile(anchor, null)).toBeUndefined();
     expect(citedPassageForFile(null, undefined)).toBeUndefined();
+    // '' is the falsy case a `=== fileId` comparison would still reject but a truthiness guard is
+    // the only thing rejecting here, so it is pinned alongside the nullish pair.
+    expect(citedPassageForFile(anchor, '')).toBeUndefined();
+    expect(citedPassageForFile({ ...anchor, fileId: '' }, '')).toBeUndefined();
   });
 });

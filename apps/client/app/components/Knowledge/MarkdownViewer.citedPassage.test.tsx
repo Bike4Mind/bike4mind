@@ -135,6 +135,52 @@ describe('MarkdownViewer cited-passage anchor (#3038)', () => {
     expect(fallback).not.toHaveTextContent('no longer found in this document');
   });
 
+  describe('Mermaid documents (no prose to mark, so the passage is shown instead)', () => {
+    // Both early returns sit BEFORE the markdown render, so a deleted callout leaves the whole
+    // suite green while the reader silently loses the evidence the deep link was carrying.
+    const expectCallout = (passage: string) => {
+      const fallback = screen.getByTestId('markdown-cited-passage-fallback');
+      expect(fallback).toHaveTextContent(passage);
+      // Not "no longer found": nothing drifted, a diagram just is not markable.
+      expect(fallback).not.toHaveTextContent('no longer found in this document');
+      expect(screen.getByTestId('mermaid')).toBeInTheDocument();
+    };
+
+    it('shows the passage above a direct graph TD diagram', () => {
+      render(
+        <TestWrapper>
+          <MarkdownViewer
+            content={'graph TD\n  A[Accrual] --> B[Rollover]'}
+            citedPassage={'Holidays accrue monthly.'}
+          />
+        </TestWrapper>
+      );
+      expectCallout('Holidays accrue monthly.');
+    });
+
+    it('shows the passage above a fenced mermaid diagram', () => {
+      render(
+        <TestWrapper>
+          <MarkdownViewer
+            content={'```mermaid\ngraph TD\n  A[Accrual] --> B[Rollover]\n```'}
+            citedPassage={'Holidays accrue monthly.'}
+          />
+        </TestWrapper>
+      );
+      expectCallout('Holidays accrue monthly.');
+    });
+
+    it('renders the chart alone when there is no anchor', () => {
+      render(
+        <TestWrapper>
+          <MarkdownViewer content={'graph TD\n  A[Accrual] --> B[Rollover]'} />
+        </TestWrapper>
+      );
+      expect(screen.getByTestId('mermaid')).toBeInTheDocument();
+      expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
+    });
+  });
+
   it('marks the right blocks in a document the LaTeX promotion rewrites', () => {
     // promoteInlineLatexDollars runs before parsing, so offsets are into the PROMOTED string. A
     // document containing $...$ is where locating the passage in `content` instead would shift

@@ -17,9 +17,10 @@ interface Props {
    * first is scrolled into view. A passage that cannot be located in `content` is rendered as a
    * callout above the document instead of being dropped, so the reader still sees the evidence.
    *
-   * Only honored on the markdown render path: a `content` this viewer resolves to a single Mermaid
-   * diagram returns the chart before any of that, and has no prose to mark either way. Callers that
-   * route diagrams elsewhere (KnowledgeViewer does) never reach this prop for such a document.
+   * Marking is only possible on the markdown render path: a `content` this viewer resolves to a
+   * single Mermaid diagram returns the chart before any of that, and has no prose blocks to mark.
+   * The passage is still SHOWN in that case, as a callout above the chart - callers that route
+   * diagrams elsewhere (KnowledgeViewer does) must render UnmarkedCitedPassage themselves.
    */
   citedPassage?: string;
 }
@@ -83,7 +84,7 @@ const CopyButton = ({ text }: { text: string }) => {
  * unmarked document with no sign that the deep link failed, which is indistinguishable from a
  * citation that never had a passage. Showing the text keeps the evidence in front of them.
  */
-const UnmarkedCitedPassage = ({ passage, title }: { passage: string; title: string }) => (
+export const UnmarkedCitedPassage = ({ passage, title }: { passage: string; title: string }) => (
   <Box
     data-testid="markdown-cited-passage-fallback"
     sx={{

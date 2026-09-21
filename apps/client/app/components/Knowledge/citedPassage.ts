@@ -104,14 +104,6 @@ export function blockIntersectsPassage(
 }
 
 /**
- * The passage anchor a citation chip carries, or null when it has none (#3038).
- *
- * Both fields are required: `chunkId` without the text cannot be resolved to a location (nothing
- * reads a chunk back by id), and the text without an id has nothing for the curator surfaces to
- * key on. The file-level retrieval arms - keyword search and whole-document retrieve - deliberately
- * set neither, so a chip from those lands the reader on the whole document as before.
- */
-/**
  * The passage to mark when rendering `fileId`, or undefined when the anchor points at another file.
  *
  * The anchor is a SINGLE store slot shared by every open reading surface, so this id comparison is
@@ -127,6 +119,14 @@ export function citedPassageForFile(
   return anchor.fileId === fileId ? anchor.passage : undefined;
 }
 
+/**
+ * The passage anchor a citation chip carries, or null when it has none (#3038).
+ *
+ * Both fields are required: `chunkId` without the text cannot be resolved to a location (nothing
+ * reads a chunk back by id), and the text without an id has nothing for the curator surfaces to
+ * key on. The file-level retrieval arms - keyword search and whole-document retrieve - deliberately
+ * set neither, so a chip from those lands the reader on the whole document as before.
+ */
 export function citedPassageOf(source: CitableSource): CitedPassage | null {
   const { chunkId, fullContext } = source.metadata ?? {};
   if (typeof chunkId !== 'string' || chunkId.length === 0) return null;
