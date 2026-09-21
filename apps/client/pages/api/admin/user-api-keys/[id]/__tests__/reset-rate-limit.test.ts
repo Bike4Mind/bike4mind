@@ -168,9 +168,10 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
   });
 
   it("omits a counter's lockout entry when resetApiKeyRateLimit could not clear it, without failing the request", async () => {
-    // resetApiKeyRateLimit itself isolates per-counter failures (see
-    // apiKeyRateLimitCheck.test.ts) - this route only needs to pass that
-    // result through without treating a missing counter as an error.
+    // resetApiKeyRateLimit itself isolates per-counter failures - both the whole-counter and
+    // single-window cases (see apiKeyRateLimitCheck.test.ts) - and reports either the same way:
+    // `request` undefined. This route only needs to pass that through without treating a
+    // missing counter as an error, so one test at this layer covers both underlying cases.
     resetApiKeyRateLimit.mockResolvedValue({
       request: undefined,
       management: { minute: 1, day: 2 },
