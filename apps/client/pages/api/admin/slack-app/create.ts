@@ -130,7 +130,8 @@ const handler = baseApi().post(async (req, res) => {
     throw new BadRequestError('Unable to reach the Slack API. Please try again.');
   }
 
-  req.logger.info(slackData, 'slackData');
+  // Never log slackData wholesale: its `credentials` carry the app client/signing secrets.
+  req.logger.info('Slack manifest create response', { ok: slackData.ok, appId: slackData.app_id });
 
   if (!slackData.ok) {
     const slackError = slackData.error as string;
