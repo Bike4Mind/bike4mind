@@ -20,8 +20,9 @@ import {
   remintArtifactId,
 } from '@bike4mind/common';
 import type { ArtifactType } from '@bike4mind/common';
-import { normalizeId } from '@bike4mind/utils';
-import type { IChatHistoryItem } from '@bike4mind/common';
+import { MAX_FILE_SIZE_DEFAULT_MB } from '../fabFileService/create';
+import { checkStorageLimit, getSettingsMap, getSettingsValue, normalizeId } from '@bike4mind/utils';
+import type { IAdminSettingsRepository, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
 import type { ILogger } from '@bike4mind/observability';
 
 /** A notebook the import can address: found by name, or just created. */
@@ -56,6 +57,12 @@ export interface NotebookImportAdapters {
      */
     create: (data: Record<string, unknown> & { id?: never }) => Promise<NotebookRef>;
     find: (query: { userId: string; name: string }) => Promise<NotebookRef[]>;
+    /**
+     * `null` CLEARS the stored field; `undefined` leaves it untouched. The distinction is not
+     * stylistic: `BaseRepository.update` issues `$set`, and mongoose deletes every `undefined`
+     * value from that payload - so an explicit `null` is the only way this port can express
+     * "clear it". Every field the overwrite branch writes relies on this.
+     */
     updateById: (id: string, data: Record<string, unknown>) => Promise<unknown>;
   };
   /** Typed because the caller's implementation of these two carries the insert-never-upsert rule. */
@@ -110,10 +117,21 @@ export interface NotebookImportAdapters {
   fileStorageService: {
     uploadFile: (path: string, content: Buffer) => Promise<unknown>;
   };
-  /** Only checked for existence - the import never reads a field off the user. */
+  /**
+   * Resolved once per import: existence is checked up front, and that same document then feeds the
+   * per-user storage quota on every knowledge file (`storageLimit`/`currentStorageSize` only).
+   * Deliberately still `unknown` - narrowing happens at that one point of use, so this port does
+   * not have to promise the app's own User document matches `IUserDocument` structurally.
+   */
   userRepository: {
     findById: (id: string) => Promise<unknown>;
   };
+  /**
+   * Read once per import to resolve `MaxFileSize`. Required, not optional: this is the same admin
+   * setting the upload door (fabFileService/create.ts) gates on, and a caller that could omit it
+   * would silently admit files that door refuses.
+   */
+  adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
   logger: ILogger;
   generateId: () => string;
 }
@@ -151,6 +169,23 @@ export type NotebookImportAdaptersStayNarrowed = Expect<
   0 extends 1 & NotebookImportAdapters[keyof NotebookImportAdapters] ? false : true
 >;
 
+/**
+ * Fails typecheck if `adminSettings` is made optional again. Both tsconfigs exclude *.test.ts and
+ * every test construction casts its adapters, so without this the required-ness is enforced by the
+ * single typechecked construction in apps/client/server/s3/notebookImportComplete.ts - and a caller
+ * that omits it falls back to MAX_FILE_SIZE_DEFAULT_MB, silently admitting what the upload door
+ * refuses.
+ */
+export type NotebookImportAdminSettingsStayRequired = Expect<
+  undefined extends NotebookImportAdapters['adminSettings'] ? false : true
+>;
+
+/**
+ * One instance per import. The admission state below is per-import instance state, and
+ * `importNotebooks` resets it on entry, so sharing one instance across concurrent imports would let
+ * one run zero another run's accumulator. The live caller builds a fresh service per S3 event
+ * (apps/client/server/s3/notebookImportComplete.ts).
+ */
 export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
 
@@ -165,6 +200,19 @@ export class NotebookImportService {
 
   /** S3 keys of imported knowledge files, surfaced so the caller can scan them post-commit. */
   private importedKnowledgeFilePaths: string[] = [];
+
+  /** Bytes. Resolved once per import: nothing here reacts to a setting changed mid-import, so
+   * re-reading it per file would buy nothing. */
+  private maxFileSize = MAX_FILE_SIZE_DEFAULT_MB * 1024 * 1024;
+
+  /** The importing user, reused by the per-file storage-quota gate. */
+  private importingUser: IUserDocument | null = null;
+
+  /** Bytes admitted so far in THIS import. `currentStorageSize` on the user document is a snapshot
+   * read once - uploaded bytes are only debited later, by the S3 objectCreated event - so several
+   * files that each pass against that stale value can overshoot the quota together. Same reason as
+   * the accumulator in b4m-core/slack/src/CommandHandler.ts. */
+  private admittedBytes = 0;
 
   /**
    * The store assigns the id; anything else records a reference that resolves to nothing.
@@ -213,6 +261,19 @@ export class NotebookImportService {
       this.attachmentWarnings = [];
       this.attachmentsWritten = 0;
       this.importedKnowledgeFilePaths = [];
+      // Unchecked cast: `checkStorageLimit` defaults storageLimit/currentStorageSize with `??`, so
+      // a document missing them is admitted against 1000MB/0 rather than misread - fail-open, not
+      // safety. Both are required on IUser, so only a lean projection or an old document gets there.
+      this.importingUser = targetUser as IUserDocument;
+      this.admittedBytes = 0;
+      this.maxFileSize =
+        getSettingsValue(
+          'MaxFileSize',
+          await getSettingsMap({ adminSettings: this.adapters.adminSettings }),
+          MAX_FILE_SIZE_DEFAULT_MB
+        ) *
+        1024 *
+        1024;
 
       // Process each notebook
       for (const notebook of parsedData.notebooks) {
@@ -302,6 +363,9 @@ export class NotebookImportService {
       summary: notebook.summary,
       summaryAt: notebook.summaryAt ? new Date(notebook.summaryAt) : undefined,
       tags: notebook.tags || [],
+      // `undefined` here and not `null`: on an insert there is nothing to clear, and a `null` would
+      // claim a stamp state a never-tagged notebook never had.
+      taggedAt: notebook.taggedAt ? new Date(notebook.taggedAt) : undefined,
       isAutoNamed: notebook.isAutoNamed,
       lastUsedModel: notebook.lastUsedModel,
       ...attachmentIds,
@@ -381,13 +445,23 @@ export class NotebookImportService {
         await this.adapters.chatHistoryRepository.deleteMany({ sessionId: existingSession.id });
         await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
 
-        // Update session metadata
+        // Update session metadata. The file owns this notebook's metadata, so a value it does not
+        // carry is written as an explicit `null` rather than left out - mongoose deletes every
+        // `undefined` from the `$set`, so an omitted field silently keeps the target's old value.
+        //
+        // The stamped pair is what makes that load-bearing: `spider.ts` re-tags only when
+        // `!session.taggedAt`, so writing `tags: []` while leaving the target's `taggedAt` behind
+        // strands the notebook - tagless, and never tagged again.
         await this.adapters.sessionRepository.updateById(existingSession.id, {
           lastUpdated: new Date(notebook.lastUpdated),
-          summary: notebook.summary,
-          summaryAt: notebook.summaryAt ? new Date(notebook.summaryAt) : undefined,
-          tags: notebook.tags,
-          lastUsedModel: notebook.lastUsedModel,
+          summary: notebook.summary ?? null,
+          summaryAt: notebook.summaryAt ? new Date(notebook.summaryAt) : null,
+          tags: notebook.tags || [],
+          taggedAt: notebook.taggedAt ? new Date(notebook.taggedAt) : null,
+          // Not `?? null` like the pairs above: no gate keys off this field, so clearing a target's
+          // last-used model because an older file omits it loses information for no gain. Omitting
+          // the key means "leave it", which is what the dropped-`undefined` behaviour did anyway.
+          ...(notebook.lastUsedModel !== undefined && { lastUsedModel: notebook.lastUsedModel }),
         });
 
         return existingSession.id;
@@ -466,33 +540,71 @@ export class NotebookImportService {
         // Not branched on `preserveIds`: reusing the source id would imply this is the same document.
         const storageKeySuffix = this.adapters.generateId();
 
-        let filePath: string;
-        // Server-measured size; falls back to the client-declared value only for the
-        // reference (contentUrl) path, where we hold no bytes to measure.
-        let measuredSize = file.size;
-
-        // Handle embedded content vs. reference
-        if (file.content) {
-          // Decode base64 content and upload
-          const content = Buffer.from(file.content, 'base64');
-          measuredSize = content.byteLength;
-          filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
-          await this.adapters.fileStorageService.uploadFile(filePath, content);
-        } else if (file.contentUrl) {
-          // Copy from existing location
-          filePath = await this.copyFileFromUrl(file.contentUrl, targetUserId, storageKeySuffix);
-        } else {
+        // The export emits a listing-only entry (real size, no content, no URL) for a held or
+        // blocked image, and "neither" must be refused as that, not as oversized.
+        // A URL reference is refused for what it is, above both gates. Nothing is stored on this
+        // path, and the only size available for it is the client-declared `file.size`, so gating on
+        // it would blame the size or quota limit for what is really an unimplemented import.
+        if (!file.content && file.contentUrl) {
+          // Never returns - see copyFileFromUrl. Whoever implements it has to gate and store there
+          // and then continue past this block, not fall into the "no content" throw below.
+          await this.copyFileFromUrl(file.contentUrl, targetUserId, storageKeySuffix);
+        }
+        if (!file.content) {
           throw new Error('No content or URL provided for file');
         }
+
+        // Derived from string length alone, so nothing is allocated for a file the gates refuse -
+        // decoding first would allocate the buffer for exactly the payloads this gate exists to
+        // reject. The cost is that it counts characters that decode to nothing: line-wrapped base64
+        // (valid MIME, though our own exporter emits it unwrapped) measures ~2.6% over its decoded
+        // size and is refused that much early. Over-counting is the safe direction to refuse on but
+        // not to bill, hence the separate storedSize below.
+        const gatedSize = Buffer.byteLength(file.content, 'base64');
+
+        // `>=` and the MB-to-bytes conversion match fabFileService/create.ts. The measurement does
+        // not: that door gates on a caller-declared fileSize, this one on bytes it holds.
+        if (gatedSize >= this.maxFileSize) {
+          // Floor, not round: MaxFileSize has no `int: true`, so a 30.5MB limit would otherwise be
+          // reported as 31MB - a size this gate refuses.
+          throw new Error(`exceeds the ${Math.floor(this.maxFileSize / (1024 * 1024))}MB maximum file size`);
+        }
+
+        // Per-user quota, not checkStorageLimitForFile: no organizationId is plumbed through this
+        // path, and the org branch would be wrong anyway - organization.currentStorageSize is never
+        // incremented on upload, so uploaded bytes are debited to the user.
+        if (!this.importingUser) {
+          throw new Error('no importing user resolved, refusing to skip the storage quota check');
+        }
+        await checkStorageLimit(this.importingUser, this.admittedBytes + gatedSize);
+
+        // Decoded once, here, and reused for the write, the accounting and the row. Booking anything
+        // but the stored length breaks that: the credit reads the real object size
+        // (server/s3/objectCreated.ts) while every refund reads this row's fileSize, so an
+        // import-then-delete cycle would deduct bytes that were never stored.
+        const bytes = Buffer.from(file.content, 'base64');
+        const storedSize = bytes.byteLength;
+
+        // The first write of any kind for this file, and deliberately below both gates: an object
+        // written for a file that is then refused would sit at knowledge/<userId>/<uuid> forever -
+        // no FabFile row points at it, so nothing counts it against the quota, nothing moderates
+        // it, and the bucket lifecycle rules (infra/buckets.ts) do not cover this prefix.
+        const filePath = `knowledge/${targetUserId}/${storageKeySuffix}`;
+        await this.adapters.fileStorageService.uploadFile(filePath, bytes);
+
+        // Charged once the upload returns, so a file that fails to store cannot spend another file's
+        // headroom. Deliberately above the row write rather than below it: the bytes are in the
+        // bucket either way, so a file whose row write fails has still consumed storage and must
+        // still count against the files behind it.
+        this.admittedBytes += storedSize;
 
         // No `id`: FabFile has no such path, so the store assigns one.
         const knowledgeData = {
           userId: targetUserId,
           fileName: file.name,
           mimeType: file.mimeType,
-          // Server-measured bytes for embedded content, not the client-declared file.size, so a
-          // caller cannot understate size (measuredSize falls back to file.size only on contentUrl).
-          fileSize: measuredSize,
+          // The stored length, not the client-declared file.size and not gatedSize - see above.
+          fileSize: storedSize,
           filePath,
           type: toKnowledgeType(file.type),
           // Leave moderationStatus at the schema default ('pending'). The bytes are attacker-supplied
@@ -692,10 +804,13 @@ export class NotebookImportService {
     }
   }
 
-  private async copyFileFromUrl(_sourceUrl: string, _targetUserId: string, _newFileId: string): Promise<string> {
+  private async copyFileFromUrl(_sourceUrl: string, _targetUserId: string, _newFileId: string): Promise<never> {
     // Throws rather than returning the source URL: handing back the exporter's own storage key
     // records a file the importing user has no copy of, and counts it as imported. The caller
     // turns this into a per-file warning, so the notebook still imports.
+    // Whoever implements this: measure the fetched bytes and run both admission gates on them here,
+    // before storing anything. The caller refuses this branch before its own gates precisely because
+    // the only size it has is the client-declared one.
     throw new Error('importing a knowledge file by URL reference is not implemented');
   }
 }

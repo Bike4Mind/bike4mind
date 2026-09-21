@@ -187,6 +187,11 @@ to the status this table says. That half is review-only - see
 `401` with `provider_not_configured` for "no usable key is configured"
 (`pages/api/ai/tts.ts`), where this table says `503`.
 
+The table maps a condition to the status a **synchronous** response uses. An async
+endpoint has already answered `200` by the time the work fails, so the same condition
+arrives on the polled job resource carrying the same `errorCode` instead - see
+[section 4](#4-long-running-work).
+
 The two provider classifiers are easy to invert, so to be explicit:
 `provider_not_configured` means **we** have no usable key for that provider;
 `provider_rejected` means the provider **refused** the key we sent.
@@ -222,6 +227,30 @@ build. A narrowing is fine; a second union that merely shares the field name is 
 rule forbids, and is what the TTS provider codes were before they were folded in.
 
 Adding a classifier means adding it to `API_ERROR_CODES`, not inventing a local one.
+
+### Streaming surfaces classify in-band
+
+A streaming endpoint flushes its headers before it authenticates or prices anything, so
+once the stream is open the status is pinned at `200` and every failure past that point
+is reported as an in-band `error` event. That event is the endpoint's whole error
+surface: the status table and the envelope gate above never see it.
+
+**[gated]** A contract with `streaming: true` must publish, in its `200` event schema, a
+`type: "error"` variant carrying a required `message` string and an **optional**
+classifier (`code` or `errorCode`) whose values come from `API_ERROR_CODES` or a
+narrowing of it. The gate probes the schema with `safeParse`: it must accept
+`insufficient_credits`, accept `undefined` (an unclassified crash has no billing code to
+report), and reject a code outside the shared vocabulary. A bare `z.string()` therefore
+fails - which is the point, because an untyped classifier is what left callers
+regex-matching the prose `message` to detect mid-generation credit exhaustion.
+
+The field is `code` rather than `errorCode` on the SSE frames: they shipped that way and
+are published wire shapes, so what had to be shared was the vocabulary, not the key.
+
+The pairing a caller needs is worth stating in the contract `description`, because it
+differs per surface: `/api/chat` and `/api/embed/chat` can still refuse pre-stream with a
+classified `422`, whereas `/api/ai/v1/completions` cannot and reports even a pre-token
+refusal in-band.
 
 ### Why RFC 9457 is not the answer here
 
@@ -281,6 +310,26 @@ the payload has a hard, documented upper bound.
 Today there are three shapes for this - chat quest-polling (with an inline `wait: true`
 escape), image-generation quest-polling, and fully synchronous audio. Converging them is
 follow-up work; new endpoints use `202` + job resource.
+
+**A handoff response must also document how the work can FAIL.** Once the ACK is sent,
+no status code is left to carry the outcome: a failed turn polls back as a normal `200`
+job resource whose classifier is the only machine-readable signal, and for chat the
+failure text lands in `reply` - the same field a real answer uses. So the classifier is
+not optional documentation; a contract that publishes only the handoff invites a caller
+to consume a credit-exhaustion message as a model reply.
+
+Declare the job resource's outcome fields via `ResponseSpec.pollResult`. It publishes as a
+`<operationId><status>PollResult` component that the response points at with an
+`x-poll-result` extension rather than as a body of that status, since the body belongs to
+the poll operation. Use the same `errorCode` vocabulary as the synchronous `422`s above,
+but only for codes that actually reach the job resource - a check made before the job
+exists (a spend cap, say) surfaces as a synchronous status on its own route instead, never
+on the poll. `POST /api/chat` is the reference.
+
+`agentExecutions.contract.ts` is the exception: its poll target is itself a contract, so it
+needs no `pollResult` indirection, and its `error` field stays free prose (the stored
+reason carries infrastructure identifiers, not a documented vocabulary) rather than a
+classifier.
 
 ---
 
@@ -351,3 +400,4 @@ mistakes "CI passed" for "conventions met":
 | `emitsRateLimitHeaders` matches the handler's middleware chain | Half of this **is** now gated - the flag is rejected on any auth mode but `apiKeyOrJwt`, since `baseApi` mounts `apiKeyRateLimit` only on the api-key chain. What remains ungated is whether an `apiKeyOrJwt` handler actually mounts `baseApi`. Closing it needs the adapters to assert at runtime in non-prod, the way they already assert response schemas. |
 | Wire fields are `snake_case` | Requires walking Zod shapes, and today's schemas deliberately accept camelCase aliases, so the check would fail on arrival. Needs the alias metadata to exist first. |
 | `202` + job resource for unbounded work | Not structurally detectable - it is a design review question. |
+| An async endpoint documents its poll result's failure classifier | `pollResult` is optional on `ResponseSpec`, and whether a given operation's work can fail after the ACK lives in the processing pipeline, not the contract. |

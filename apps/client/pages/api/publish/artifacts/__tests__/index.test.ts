@@ -117,7 +117,7 @@ beforeEach(() => {
       ],
       withComments: [{ n: 1 }],
       byTag: [
-        { _id: 'ionq', n: 6 },
+        { _id: 'northwind', n: 6 },
         { _id: 'security', n: 3 },
       ],
     },
@@ -221,7 +221,7 @@ describe('GET /api/publish/artifacts — projection', () => {
         visibility: { public: 38 },
         gate: { none: 39, passphrase: 2 },
         comments: 1,
-        tag: { ionq: 6, security: 3 },
+        tag: { northwind: 6, security: 3 },
       },
     });
   });
@@ -301,10 +301,10 @@ describe('GET /api/publish/artifacts - paging', () => {
     // Mongo does not use indexes inside a $facet sub-pipeline, so the tag filter running in there
     // could never touch the { ownerId, tags, deletedAt } index it was added for. $and rather than a
     // spread, so a narrowing key can never clobber - and thereby widen - the authorization scope.
-    buildListQuery.mockReturnValue({ match: { tags: 'ionq' }, sort: { publishedAt: -1 } });
-    await run({ mine: 'true', tag: 'ionq' });
+    buildListQuery.mockReturnValue({ match: { tags: 'northwind' }, sort: { publishedAt: -1 } });
+    await run({ mine: 'true', tag: 'northwind' });
 
-    expect(mergedFilter()).toEqual([{ deletedAt: null, ownerId: USER }, { tags: 'ionq' }]);
+    expect(mergedFilter()).toEqual([{ deletedAt: null, ownerId: USER }, { tags: 'northwind' }]);
   });
 
   it('passes the scope through unwrapped when the caller is not narrowing', async () => {

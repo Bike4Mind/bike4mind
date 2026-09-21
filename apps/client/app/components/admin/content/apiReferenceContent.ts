@@ -58,7 +58,7 @@ Authorization: ApiKey b4m_live_xxxxx
 |--------|----------|-------------|
 | GET | /api/user-api-keys | List your active API keys (add \`?includeDisabled=true\` to also return revoked ones) |
 | POST | /api/api-keys/create | Create a new API key |
-| POST | /api/user-api-keys/[id]/rotate | Rotate an existing key |
+| POST | /api/user-api-keys/[id]/rotate | Rotate an existing key (an API-key caller may only rotate a key whose scopes it already holds - see Scopes below) |
 | POST | /api/user-api-keys/[id]/revoke | Revoke a key |
 | POST | /api/api-keys/[id]/set-active | Activate/deactivate a key |
 | DELETE | /api/api-keys/[id]/delete | Delete a key |
@@ -78,6 +78,10 @@ API keys can be scoped to limit access. Available scopes:
 | \`ai:generate\` | Use image/video/audio generation endpoints |
 | \`ai:chat\` | Send chat messages and use LLM endpoints |
 | \`admin:*\` | Full admin access (superuser only) |
+
+For rotate specifically, scope containment is checked literally: \`admin:*\` is not treated
+as a superset of other scopes, so an \`admin:*\`-scoped key still can't rotate a key holding
+scopes it doesn't literally list.
 
 ### Rate Limits
 
@@ -475,7 +479,7 @@ GET /api/projects
 | GET | /api/projects/[id]/files | List project files |
 | GET | /api/projects/[id]/sessions | List project sessions |
 | GET | /api/projects/[id]/members | List project members |
-| GET | /api/projects/[id]/invites | List project invites |
+| GET | /api/projects/[id]/invites | List project invites (requires share permission) |
 | GET | /api/projects/[id]/systemPrompts | List project system prompts |
 | POST | /api/projects/[id]/systemPrompts/toggle | Toggle system prompt |
 | POST | /api/projects/removeNonExistintFiles | Clean up orphan file references |
@@ -793,13 +797,17 @@ Structured multi-step plans created by the QuestMaster agent.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | /api/[type]/[id]/updateSharing | Update sharing settings |
+| POST | /api/[type]/[id]/updateSharing | Update sharing settings (requires share permission) |
 | POST | /api/[type]/[id]/revokeSharing | Revoke sharing |
 | GET | /api/[type]/[id]/invites | List invites for resource |
 | GET | /api/invites | List all invites |
-| GET | /api/invites/[id] | Get invite details |
-| POST | /api/invites/[id]/accept | Accept invite |
-| POST | /api/invites/[id]/refuse | Refuse invite |
+| GET | /api/invites/[id] | Get invite details (\`[id]\` is the invite's share token) |
+| POST | /api/invites/[id]/accept | Accept invite (\`[id]\` is the invite's share token) |
+| POST | /api/invites/[id]/refuse | Refuse or revoke invite (\`[id]\` is either key) |
+
+On the two routes above that redeem a share, \`[id]\` is the invite's **share token** - the opaque value carried by the link returned as \`link\` when the invite is created - and not the invite's database id. An invite's database id is not a credential and will not resolve on those routes. Invites created before share tokens existed still resolve by their database id until they expire.
+
+\`DELETE /api/invites/[id]\` and \`POST /api/invites/[id]/refuse\` are the exceptions and take either key: declining is authorized by your own address being on the invite, and cancelling or revoking by your share permission on the underlying document - never by holding the link. The document invite list does not return the token; the \`link\` in the create response is the only place it is handed out.
 
 ---
 
@@ -848,8 +856,8 @@ Structured multi-step plans created by the QuestMaster agent.
 | GET | /api/subscriptions | List subscriptions |
 | GET | /api/subscriptions/own | Get own subscription |
 | POST | /api/subscriptions/subscribe | Subscribe to a plan |
-| POST | /api/subscriptions/change | Change plan |
-| POST | /api/subscriptions/cancel | Cancel subscription |
+| PUT | /api/subscriptions/change | Change plan. Session (JWT) auth only - API keys are rejected, since this mutates a live subscription |
+| POST | /api/subscriptions/cancel | Cancel subscription. Session (JWT) auth only - API keys are rejected, since this can cancel outright and void open invoices |
 | GET | /api/subscriptions/stats | Subscription statistics |
 | GET | /api/subscriptions/[ownerType]/[ownerId] | Get subscription by owner |
 | GET | /api/credits/transactions | Credit transaction history |

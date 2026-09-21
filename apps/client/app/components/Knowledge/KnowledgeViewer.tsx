@@ -1542,29 +1542,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                   </IconButton>
                 </span>
               </Tooltip>
-              {knowledgeItems[selectedTabIndex]?.type !== 'file' && (
-                <Button
-                  size="sm"
-                  variant="solid"
-                  startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
-                  onClick={handleShareArtifact}
-                  data-testid="artifact-viewer-share"
-                  sx={{
-                    backgroundColor: brand[800],
-                    color: '#fff',
-                    fontWeight: 600,
-                    transition: 'transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
-                    '&:hover': {
-                      backgroundColor: brand[900],
-                      transform: 'scale(1.04)',
-                      boxShadow: '0 0 14px rgba(11, 107, 203, 0.5)',
-                    },
-                  }}
-                >
-                  Share
-                </Button>
-              )}
-              {artifactShareModal}
               {isMarkdownFile(knowledgeItems[selectedTabIndex]) ? (
                 <DownloadMenu
                   content={markdownContent || ''}
@@ -1603,6 +1580,29 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                 </Tooltip>
               )}
             </ButtonGroup>
+
+            {knowledgeItems[selectedTabIndex]?.type !== 'file' && (
+              <Button
+                size="sm"
+                variant="solid"
+                startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
+                onClick={handleShareArtifact}
+                data-testid="artifact-viewer-share"
+                sx={{
+                  backgroundColor: brand[800],
+                  color: '#fff',
+                  fontWeight: 600,
+                  // Colour alone on hover, matching the card's Share button.
+                  transition: 'background-color 0.15s ease',
+                  '&:hover': {
+                    backgroundColor: brand[900],
+                  },
+                }}
+              >
+                Share
+              </Button>
+            )}
+            {artifactShareModal}
 
             <Tooltip title="Close Knowledge Preview" disableInteractive>
               <IconButton size="sm" variant={'soft'} onClick={() => setSessionLayout({ layout: 'hide' })}>

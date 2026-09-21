@@ -94,11 +94,14 @@ const handler = baseApi({
     // A recovered timeout is `status: 'done'` carrying an error message, so a headless client
     // needs `type` to machine-distinguish it from a genuine success.
     type: quest.type,
-    // Reason for a `type: 'error'` quest, when there is a machine-readable one (credit
-    // exhaustion today) - see chatContract's 200 description. Gated on `type` (mirrors
-    // chat.ts) because `errorCode` is persisted on the quest and a retry does not clear it;
-    // an ungated read would resurface a stale code from a prior failed attempt on a quest
-    // that has since succeeded.
+    // Why the turn failed, for the `type: 'error'` cases that have one (credit exhaustion
+    // today). The WebSocket quest payload has always carried this; without it here a polling
+    // caller can only pattern-match the failure prose in `reply`. Modelled on the chat
+    // contract as sendChatMessage200PollResult.
+    //
+    // Gated on `type` (mirrors chat.ts): the field is persisted on the quest, and while the
+    // retry path now clears it (ChatCompletionInvoke), rows written before that fix still
+    // carry a code from an attempt that has since succeeded. Reading it ungated resurfaces one.
     ...(quest.type === 'error' && { errorCode: quest.errorCode }),
     sessionId: quest.sessionId,
     reply: quest.reply,

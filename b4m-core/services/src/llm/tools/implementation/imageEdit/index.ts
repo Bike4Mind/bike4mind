@@ -10,8 +10,13 @@ import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
+  isGPTImage2Model,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
+  IMAGES_PER_EDIT_REQUEST,
+  toNonWebpOutputFormat,
+  type ImageOutputFormat,
+  type OpenAIImageBackground,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -262,20 +267,22 @@ export const imageEditTool: ToolDefinition = {
         image: toolImage,
         prompt,
         mask: toolMask,
-        n: toolN,
         size: toolSize,
         safety_tolerance: toolSafetyTolerance,
         steps: toolSteps,
         guidance: toolGuidance,
+        background: toolBackground,
+        output_format: toolOutputFormat,
       } = val as {
         image: string; // URL or file ID
         prompt: string;
         mask?: string; // Optional URL or file ID
-        n?: number;
         size?: string;
         safety_tolerance?: number;
         steps?: number; // BFL-specific, not in imageConfig
         guidance?: number; // BFL-specific, not in imageConfig
+        background?: OpenAIImageBackground;
+        output_format?: ImageOutputFormat;
       };
 
       if (!toolImage) {
@@ -291,7 +298,9 @@ export const imageEditTool: ToolDefinition = {
       // NOTE: DALL-E 3 does NOT support image editing at all. Use GPT-Image models for editing.
       // @see https://platform.openai.com/docs/guides/image-generation#edit-images
 
-      // Determine edit model from imageConfig, with smart fallbacks
+      // Determine edit model from imageConfig, with smart fallbacks.
+      // `generationModel` is only the starting point for that fallback and the model
+      // recorded on a moderation incident; billing and dispatch both use `editModel`.
       const generationModel = imageConfig?.model || ImageModels.GPT_IMAGE_1_5;
       let editModel = imageConfig?.editModel as ImageModels | undefined;
 
@@ -320,11 +329,18 @@ export const imageEditTool: ToolDefinition = {
 Please select a supported edit model in your image settings modal.`;
       }
 
-      const model = generationModel; // Keep for backwards compatibility
-      const n = toolN ?? imageConfig?.n ?? 1;
       const size = imageConfig?.size || toolSize;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
-      const output_format = imageConfig?.output_format ?? 'png';
+      const output_format = toolOutputFormat ?? imageConfig?.output_format ?? 'png';
+      const background = toolBackground ?? imageConfig?.background;
+      // Step any gpt-image-2 edit model down to gpt-image-1.5 when transparency is
+      // requested: gpt-image-2 rejects background: 'transparent' outright, and the
+      // client's own default edit model is gpt-image-2, so this is reachable by default.
+      if (background === 'transparent' && isGPTImage2Model(editModel)) {
+        editModel = ImageModels.GPT_IMAGE_1_5;
+      }
+      // BFL and Gemini reject webp; only the OpenAI branch below sends the raw value.
+      const nonWebpOutputFormat = toNonWebpOutputFormat(output_format);
       const prompt_upsampling = imageConfig?.prompt_upsampling ?? false;
       const seed = imageConfig?.seed;
       // BFL-specific parameters (not in imageConfig, use defaults or tool call override)
@@ -336,12 +352,24 @@ Please select a supported edit model in your image settings modal.`;
       const isGeminiModel = isGeminiImageModel(editModel);
       // Real provider for the moderation incident audit record - more accurate
       // than a generic lookup since the branch below already knows which backend is used.
+      // NOTE: this is the EDIT provider, while the `model` recorded alongside it is
+      // `generationModel`, so an incident can pair a provider and a model from different
+      // vendors. Left as-is deliberately - which of the two an incident should name is a
+      // separate question from billing, and is not settled here.
       const provider = isBFLModel ? 'bfl' : isGeminiModel ? 'gemini' : 'openai';
 
-      // Call onStart callback for credit validation
+      // Call onStart callback for credit validation. Bills `editModel`, NOT the
+      // configured generation model: `editModel` is what the render below actually
+      // dispatches to (and what BFL/Gemini/OpenAI charges us for), and the two diverge
+      // whenever imageConfig.editModel is unset and the fallback above picks a default.
+      // Same billed-model-vs-rendered-model invariant the queue path holds in ImageEdit.ts.
       await context.onStart?.('edit_image', {
-        model,
-        n,
+        model: editModel,
+        // The count both credit rails bill off this payload - ToolBuilder.reserveImageCredits
+        // (classic chat) and estimateGeneratedMediaUsd (agent mode). It has to be what the edit
+        // below actually renders, which is one image however many the model asked for; billing
+        // the request's n here charged for images that were never returned.
+        n: IMAGES_PER_EDIT_REQUEST,
         size,
         quality: imageConfig?.quality,
         prompt,
@@ -387,13 +415,18 @@ Please select a supported edit model in your image settings modal.`;
             safety_tolerance: safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT,
             prompt_upsampling,
             seed: seed ?? undefined,
-            output_format: output_format ?? 'jpeg',
+            output_format: nonWebpOutputFormat ?? 'jpeg',
             steps,
             guidance,
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, model, provider);
+            const storedImagePath = await processAndStoreImage(
+              editResponse.dataUrl,
+              context,
+              generationModel,
+              provider
+            );
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
@@ -438,13 +471,18 @@ Please check your BFL API key in settings and ensure it is configured correctly.
         try {
           const editResponse = await service.edit(dataUrlImage, prompt, {
             aspect_ratio: imageConfig?.aspect_ratio,
-            output_format: output_format ?? 'png',
+            output_format: nonWebpOutputFormat ?? 'png',
             safety_tolerance: safety_tolerance,
             model: editModel, // Pass edit model to service
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, model, provider);
+            const storedImagePath = await processAndStoreImage(
+              editResponse.dataUrl,
+              context,
+              generationModel,
+              provider
+            );
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
@@ -478,14 +516,21 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           const editResponse = await service.edit(sourceBase64Image, prompt, {
             mask: maskBase64Image,
             model: editModel, // Use the configured edit model
-            n,
             size,
+            quality: imageConfig?.quality,
             response_format: 'url',
             user: context.userId,
+            background,
+            output_format,
           });
 
           if (editResponse.type === 'success') {
-            const storedImagePath = await processAndStoreImage(editResponse.dataUrl, context, model, provider);
+            const storedImagePath = await processAndStoreImage(
+              editResponse.dataUrl,
+              context,
+              generationModel,
+              provider
+            );
 
             return updateQuestAndReturnMarkdown(storedImagePath, context);
           }
@@ -540,10 +585,6 @@ Please check your BFL API key in settings and ensure it is configured correctly.
             description: 'The size of the edited image (OpenAI only)',
             enum: ['256x256', '512x512', '1024x1024'],
           },
-          n: {
-            type: 'number',
-            description: 'Number of edited images to generate (OpenAI only)',
-          },
           safety_tolerance: {
             type: 'number',
             description: 'Safety tolerance level for BFL models (0 most strict, 6 least strict)',
@@ -557,6 +598,17 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           guidance: {
             type: 'number',
             description: 'Guidance scale for BFL models (default: 60)',
+          },
+          background: {
+            type: 'string',
+            description:
+              'Background handling (gpt-image only). Use "transparent" when the user asks for a cutout, sprite, icon, sticker or a logo with no backdrop; it needs an alpha-capable output_format (png or webp).',
+            enum: ['transparent', 'opaque', 'auto'],
+          },
+          output_format: {
+            type: 'string',
+            description: 'Output container. "webp" is gpt-image only; other providers fall back to png.',
+            enum: ['png', 'jpeg', 'webp'],
           },
         },
         additionalProperties: false,

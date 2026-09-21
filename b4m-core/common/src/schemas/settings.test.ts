@@ -698,7 +698,7 @@ describe('forced-retrieval relevance floors are levers (#2497)', () => {
 
   it('describes the per-space floors from the table rather than restating them in prose', () => {
     // The description tells operators which floor actually applies per space, and those numbers are
-    // expected to move (35 is provisional until re-derived against a production lake). Hand-written
+    // expected to move as each space is re-measured against a production lake. Hand-written
     // prose would become a wrong number in the admin UI with nothing failing, so assert the
     // description carries every value the table holds - and would catch a new space added without it.
     const { description } = settingsMap.forcedRetrievalMinSimilarityPct;

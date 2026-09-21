@@ -6,6 +6,7 @@ import { relativeTimeFormat } from '@client/app/utils/dateUtils';
 import { getFeedbackDisplayContent } from './types';
 import { feedbackRecordQueryKey } from './queryKeys';
 import FeedbackRowLinks from './FeedbackRowLinks';
+import HelpContextChip from './HelpContextChip';
 
 interface FocusedFeedbackCardProps {
   /** The `?feedbackId=` a deep link arrived with. */
@@ -69,6 +70,7 @@ const FocusedFeedbackCard = ({ feedbackId, onDismiss }: FocusedFeedbackCardProps
                 )}
                 <Typography level="body-xs">{relativeTimeFormat(new Date(feedbackItem.createdAt))}</Typography>
               </Stack>
+              <HelpContextChip feedbackItem={feedbackItem} />
               <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
                 {getFeedbackDisplayContent(feedbackItem, 'No content')}
               </Typography>

@@ -1,5 +1,6 @@
 import type { AdminUserListItem } from '@client/app/utils/adminUserProjection';
 import { useAdminGetUserApiKeys, useAdminResetApiKeyRateLimit } from '@client/app/hooks/data/userApiKeys';
+import type { ApiKeyRateLimitResetResponse } from '@client/app/hooks/data/userApiKeys';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { ApiKeyStatus, IUserApiKeyDocument } from '@bike4mind/common';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
@@ -61,6 +62,39 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
     return STATUS_CHIP[key.status] ?? { color: 'neutral' as const, label: key.status };
   };
 
+  // Names which counter(s) actually caused the lockout - a bare "reset
+  // succeeded" leaves an admin unable to tell request vs. management. A
+  // counter entry is undefined when clearing it failed (best-effort); that
+  // reads as "could not be verified", distinct from a counter that was
+  // actually cleared and found not to be at its ceiling.
+  const describeLockoutCause = (lockout: NonNullable<ApiKeyRateLimitResetResponse['lockout']>): string => {
+    const atCeiling: string[] = [];
+    const unknown: string[] = [];
+    const note = (name: 'request' | 'management', state: typeof lockout.request) => {
+      if (state === undefined) unknown.push(name);
+      else if (state.minuteAtLimit || state.dayAtLimit) atCeiling.push(name);
+    };
+    note('request', lockout.request);
+    note('management', lockout.management);
+
+    const clauses: string[] = [];
+    if (atCeiling.length > 0) {
+      clauses.push(
+        atCeiling.length > 1
+          ? `${atCeiling.join(' and ')} counters were at their ceilings`
+          : `${atCeiling[0]} counter was at its ceiling`
+      );
+    }
+    if (unknown.length > 0) {
+      clauses.push(
+        unknown.length > 1
+          ? `${unknown.join(' and ')} counters could not be verified`
+          : `${unknown[0]} counter could not be verified`
+      );
+    }
+    return clauses.length === 0 ? '' : ` - ${clauses.join('; ')}`;
+  };
+
   const handleReset = (key: IUserApiKeyDocument) => {
     confirm({
       title: 'Reset rate limit',
@@ -69,7 +103,12 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
       onOk: () => {
         setResettingKeyId(key.id);
         resetMutation.mutate(key.id, {
-          onSuccess: () => toast.success(`Rate limit reset for "${key.name}"`),
+          // `lockout` absent entirely means a stale bundled client is talking to a server build
+          // that predates the field - a bare success toast, not "every counter unverified".
+          onSuccess: response =>
+            toast.success(
+              `Rate limit reset for "${key.name}"${response.lockout ? describeLockoutCause(response.lockout) : ''}`
+            ),
           // Clear only our own row: a later reset on another row may already
           // own the spinner when this settle lands.
           onSettled: () => setResettingKeyId(prev => (prev === key.id ? null : prev)),

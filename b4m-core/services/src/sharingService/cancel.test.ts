@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { InviteType, IUserDocument } from '@bike4mind/common';
+import { InviteType, IUserDocument, isLinkOnlyInvite } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { cancelInvite } from './cancel';
 
@@ -64,7 +64,7 @@ describe('sharingService - cancelInvite authority', () => {
     expect(db.invites.update).toHaveBeenCalled();
   });
 
-  it('cancelling one email only decrements the invite it was actually pending on', async () => {
+  it('cancelling one email only touches the invite it was actually pending on', async () => {
     const project = { id: DOC_ID, name: 'Confidential Project' };
     db.projects.shareable.findShareAccessById = vi.fn(async () => project);
     db.invites.findAllByDocumentId = vi.fn(async () => [anInvite(), aLinkInvite()]);
@@ -73,7 +73,10 @@ describe('sharingService - cancelInvite authority', () => {
 
     const targeted = result.find((invite: any) => invite.id === 'invite-1');
     const link = result.find((invite: any) => invite.id === 'invite-2');
-    expect(targeted.remaining).toBe(4);
+    // The fixture is the inflated shape: `remaining: 5` against one named recipient. Cancelling
+    // that recipient has to clamp to the surviving `pending.length`, not decrement to 4 and leave
+    // four redeemable slots on a row that now names nobody.
+    expect(targeted.remaining).toBe(0);
     expect(targeted.recipients.pending).not.toContain('victim@example.com');
     expect(link.remaining).toBe(1000);
     expect(link.recipients.pending).toEqual([]);
@@ -82,6 +85,52 @@ describe('sharingService - cancelInvite authority', () => {
     // updatedAt (and a redundant write) on every unrelated cancel for the document.
     expect(db.invites.update).toHaveBeenCalledTimes(1);
     expect(db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'invite-1' }));
+  });
+
+  it('leaves the other recipients their slots when several are named', async () => {
+    const project = { id: DOC_ID, name: 'Confidential Project' };
+    db.projects.shareable.findShareAccessById = vi.fn(async () => project);
+    db.invites.findAllByDocumentId = vi.fn(async () => [
+      {
+        id: 'invite-3',
+        documentId: DOC_ID,
+        name: 'Confidential Project',
+        remaining: 3,
+        recipients: { pending: ['a@example.com', 'b@example.com', 'c@example.com'], accepted: [], refused: [] },
+      },
+    ]);
+
+    const result = await cancel(InviteType.Project, asUser(), 'b@example.com');
+
+    // The clamp is a ceiling, not a reset: two named recipients still hold a slot each.
+    expect(result[0].remaining).toBe(2);
+    expect(result[0].recipients.pending).toEqual(['a@example.com', 'c@example.com']);
+  });
+
+  it('does not leave a cancelled named invite redeemable as a share link', async () => {
+    // The whole chain on a row minted before `isLinkOnly` existed and with `available` inflated
+    // past its recipient count, which the create body accepts verbatim. Once the only named
+    // address is cancelled the legacy inference reads the row as link-only, and link-only is
+    // exactly the shape canViewInvite and acceptInvite let any authenticated id-holder redeem.
+    // `remaining` is the only thing standing between those two facts.
+    const fabFile = { id: DOC_ID, name: 'Confidential File' };
+    db.fabFiles.findByIdAndUserId = vi.fn(async () => fabFile);
+    db.invites.findAllByDocumentId = vi.fn(async () => [
+      {
+        id: 'invite-4',
+        type: InviteType.FabFile,
+        documentId: DOC_ID,
+        name: 'Confidential File',
+        remaining: 5,
+        // isLinkOnly absent - a pre-flag row, so isLinkOnlyInvite falls through to the inference.
+        recipients: { pending: ['victim@example.com'], accepted: [], refused: [] },
+      },
+    ]);
+
+    const [invite] = await cancel(InviteType.FabFile, asUser(), 'victim@example.com');
+
+    expect(isLinkOnlyInvite(invite as any)).toBe(true);
+    expect(invite.remaining).toBe(0);
   });
 
   it('rejects a project cancel from a caller with no share access, and performs no write', async () => {

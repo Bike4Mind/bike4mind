@@ -223,22 +223,55 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
   });
 
-  it('returns errorCode for a terminal quest that stopped for a classified reason', async () => {
-    mockQuestFindById.mockResolvedValue({
-      id: 'quest-1',
-      sessionId: 'sess-1',
-      status: 'done',
-      type: 'error',
-      errorCode: 'insufficient_credits',
-      reply: {},
-      replies: [],
-      promptMeta: {},
+  describe('errorCode (why the turn failed)', () => {
+    // A credit-exhausted turn is status done with the credit copy in `reply` - the
+    // same field an answer uses - so without the classifier a polling caller can
+    // only pattern-match prose.
+    it('reports the classifier on a failed turn alongside the failure prose', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'insufficient_credits',
+        reply: "You're out of credits. This request needs about 12 credits, but only 3 are available.",
+        promptMeta: {},
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ type: 'error', errorCode: 'insufficient_credits' });
     });
-    validateWithScopes([ApiKeyScope.READ_NOTEBOOKS]);
-    const { req, res } = fire();
-    await handler(req, res);
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData().errorCode).toBe('insufficient_credits');
+
+    // ChatQuestPollResultSchema (b4m-core/common/src/schemas/chat.ts) is hand-maintained
+    // against this handler's res.json shape rather than imported by it - nothing else
+    // catches the two drifting apart, so parse the real response through it here.
+    it('parses against the published ChatQuestPollResultSchema', async () => {
+      mockQuestFindById.mockResolvedValue({
+        id: 'quest-1',
+        sessionId: 'sess-1',
+        status: 'done',
+        type: 'error',
+        errorCode: 'insufficient_credits',
+        reply: "You're out of credits. This request needs about 12 credits, but only 3 are available.",
+        promptMeta: {},
+      });
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      const { ChatQuestPollResultSchema } = await import('@bike4mind/common');
+      expect(() => ChatQuestPollResultSchema.parse(res._getJSONData())).not.toThrow();
+    });
+
+    it('omits it on a successful turn', async () => {
+      validateWithScopes([ApiKeyScope.AI_CHAT]);
+      const { req, res } = fire();
+      await handler(req, res);
+      // res.json() drops undefined properties, so `.errorCode` being undefined would
+      // pass whether the handler emits the field or not - the field's absence is the point.
+      expect('errorCode' in res._getJSONData()).toBe(false);
+    });
   });
 
   describe('attachment report (#1576 ask 1: a caller can tell whether the corpus contributed)', () => {

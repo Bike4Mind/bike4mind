@@ -20,6 +20,7 @@ import {
   REBUILD_PENDING_STALE_MS,
   UNCATEGORIZED_TAG_SUFFIX,
   type CitableFabFileFields,
+  type CitableFabFileFieldsWithTags,
 } from '@bike4mind/common';
 import mongoose, { Model, PipelineStage, Schema } from 'mongoose';
 import { getAtlasIndexForModel, getAtlasIndexStatus as getAtlasIndexStatusForModel } from '@bike4mind/fab-pipeline';
@@ -748,6 +749,33 @@ export const fabFileChunkRepository = new FabFileChunkRepository(FabFileChunk);
  */
 const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUrl: 0, fileUrl: 0 } as const;
 
+/**
+ * The citability projection, shared by the two readers that return it so their field lists cannot
+ * drift - `findCitableFieldsWithTagsByIds` is this plus `tags`, and the difference between them is
+ * meant to be exactly that one field.
+ *
+ * KNOWN GAP, pre-existing and NOT closed here. `isRetrievalExcluded` reads five fields; three of them
+ * - `chunkStallReason`, `notes`, `chunkRebuildRequestedAt` - are not projected, and all three are
+ * optional, so a row from here type-checks against that predicate and simply reads them as absent.
+ * On a `vectorizedOnly` filter that makes `stalledByConvergence` unconditionally false, so the
+ * convergence-stall exemption that arm documents as load-bearing cannot fire, and a stalled file is
+ * dropped upstream of the withhold that exists to name it.
+ *
+ * Reachable, not theoretical: `findCitableFieldsByIds` backs `createReachableSourcesResolver`
+ * (apps/client/server/memory/lakeSourceReachability.ts), which passes a session-derived filter, and
+ * `retrievalVectorizedOnly` is settable per session through the session-create schema. No in-tree
+ * path sets it by default, which is the only reason this is latent rather than live - do not read
+ * that as a guarantee.
+ *
+ * Not widened here because the fix is not free and this projection is not this change's to rewrite:
+ * `notes` is owner-authored free text and the tagless reader runs once per cited source on every chat
+ * turn that touches a lake. No caller narrows its way around the gap either - excluding
+ * `vectorizedOnly` from an options type would make it unrepresentable, and nothing does - so the live
+ * reader is the only shape it has. Widen this projection before relying on a `vectorizedOnly` verdict.
+ */
+const CITABLE_PROJECTION =
+  '_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt';
+
 /** Row cap for unbounded metadata listings. */
 const METADATA_PAGE_CAP = 500;
 
@@ -1039,10 +1067,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   async findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]> {
     const docs = await this.fabFileModel
       .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findCitableFieldsByIds') } })
-      .select('_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt')
+      .select(CITABLE_PROJECTION)
       .lean<({ _id: unknown } & Omit<CitableFabFileFields, 'id'>)[]>();
     // `.lean()` skips the `id` virtual, so map it explicitly rather than leaning on toJSON (which
     // would defeat the projection by hydrating the document first).
+    return docs.map(({ _id, ...rest }) => ({ ...rest, id: String(_id) }));
+  }
+
+  /** The citability projection plus tags - see IFabFileRepository.findCitableFieldsWithTagsByIds. */
+  async findCitableFieldsWithTagsByIds(ids: string[]): Promise<CitableFabFileFieldsWithTags[]> {
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: usableObjectIds(ids, 'FabFileModel.findCitableFieldsWithTagsByIds') } })
+      .select(`${CITABLE_PROJECTION} tags`)
+      .lean<({ _id: unknown } & Omit<CitableFabFileFieldsWithTags, 'id'>)[]>();
     return docs.map(({ _id, ...rest }) => ({ ...rest, id: String(_id) }));
   }
 
@@ -2394,6 +2431,48 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
         },
         { _id: 1, userId: 1 }
       )
+      .lean();
+    return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
+  }
+
+  /** Ceiling on one stale-space read. Far above any real lake; see the note in the docblock
+   *  below for why a lake at the cap loses nothing. */
+  private static readonly STALE_EMBEDDING_SPACE_SCAN_LIMIT = 10_000;
+
+  /**
+   * The lake's members still carrying a DIFFERENT file-level embedding space than `embeddingModel`.
+   *
+   * `$nin: [null, '', embeddingModel]` rather than `$ne` plus blank arms, for two reasons. A missing
+   * path reads as null for `$in`, so one operator covers all three blank shapes - which this
+   * deliberately leaves alone, since blank is unattributable rather than foreign. And it keeps every
+   * condition here free of a top-level `$or`: `buildDataLakeMembershipFilter`'s prefix arm IS one,
+   * so spreading it beside an `$or` of our own would silently drop the membership predicate and
+   * offer every file in the install for this lake's re-embed.
+   *
+   * `vectorizedChunkCount: {$gt: 0}` is what makes this a stale-SPACE read rather than a
+   * not-yet-embedded one: a file with no vectors has no space to leave and will be embedded in the
+   * current one unaided. It also drops a file the instant a wave resets it (the reset zeroes this
+   * count), which is what lets a caller read the count falling as progress - and is also what makes
+   * the cap below safe: a lake larger than one read re-offers its remainder on the next wave, so a
+   * capped result reads as "at least this many" rather than losing anything.
+   */
+  async findFilesOutsideEmbeddingSpaceByScope(
+    scope: DataLakeMembershipScope,
+    embeddingModel: string
+  ): Promise<{ id: string; userId: string }[]> {
+    const docs = await this.fabFileModel
+      .find(
+        {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          isChunking: { $ne: true },
+          vectorizedChunkCount: { $gt: 0 },
+          embeddingModel: { $nin: [null, '', embeddingModel] },
+        },
+        { _id: 1, userId: 1 }
+      )
+      .limit(FabFileRepository.STALE_EMBEDDING_SPACE_SCAN_LIMIT)
       .lean();
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }

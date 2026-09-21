@@ -7,7 +7,7 @@ tags: [admin, feedback, support]
 
 # Feedback
 
-The Feedback tab provides a centralized interface for reviewing, triaging, and managing user-submitted feedback. Administrators can search, filter by status and organization, update feedback status, delete entries, and export data to CSV.
+The Feedback tab provides a centralized interface for reviewing, triaging, and managing user-submitted feedback. Administrators can search, filter by subject, status and organization, update feedback status, delete entries, and export data to CSV.
 
 ## Where Feedback Comes From
 
@@ -16,8 +16,21 @@ The Feedback tab provides a centralized interface for reviewing, triaging, and m
 | Help modal | `feedback`, `cs` | The product in general |
 | Bug report modal | `bug`, `feedback`, `bugReport` | One answer, with its diagnostic snapshot attached |
 | `/feedback <message>` in the chat composer | `feedback`, `slash-command` | The conversation as a whole |
+| Help article feedback | -- | One help article, identified by its slug |
+| Help chat feedback | -- | One help-chat answer |
 
 A `/feedback` report is filed against the **session**, not a single turn. The newest turn in that session at the moment of writing is recorded separately as context, so a reader can see where the user was when they wrote it without the report being mistaken for a verdict on that one answer.
+
+Help-center comments are written by readers in the help article and help chat panels. Only the
+comment itself becomes a feedback report; what the reader *did* -- views, searches, the thumbs
+rating, the "report outdated" flag -- stays in the help event store. The comment text follows the
+same 90-day retention as every other report (see Data Retention below); the article slug and the
+"outdated" flag are copied onto the report itself and are kept permanently, so an expired report
+still says which article it was about. Each of these reports carries a **help context chip** in the
+list showing the surface it came from, the article slug where there is one, and the "outdated" flag
+if the reader set one, so it can be triaged without opening it. The thumbs verdict is the report's
+own type (Thumbs Up / Thumbs Down), so it reads and filters like any other report, and a later
+change to the thumbs follows onto it.
 
 ## Control Panel
 
@@ -49,6 +62,24 @@ A multi-select dropdown filters feedback by the submitting user's organization:
 - Individual organization names, taken from every report you can see
 
 Multiple organizations can be selected at the same time. The list of available organizations is not narrowed by the filter itself, so selecting one does not remove the others from the dropdown.
+
+### Subject Filter
+
+A single-select dropdown filters feedback by what the report is *about*:
+
+| Menu entry | Shows |
+|------------|-------|
+| **All Subjects** | Every report, whatever its subject. This is the default. |
+| **Conversation turn** | Reports filed against one specific answer in a conversation |
+| **Conversation** | Reports filed against a conversation as a whole, with no single answer named |
+| **Product** | Reports about the product in general, filed outside any conversation |
+| **Help** | Comments written on a help article or a help-chat answer |
+
+A report's subject is decided when it is filed, narrowest first: one that names a turn is **Conversation turn**, one that names only a session is **Conversation**, and one attached to neither is **Product**. Help-center comments are recorded as **Help** by the help surfaces themselves rather than by that rule, which is what keeps them separable from general product feedback instead of landing in the same undifferentiated queue. Use the help context chip on the row (see Where Feedback Comes From above) to tell an article comment from a help-chat one.
+
+Unlike the organization filter, only one subject can be selected at a time -- the server takes one subject or none. Select **All Subjects** to clear it.
+
+The subject filter combines with search, status and organization rather than replacing them, and the CSV export respects it along with the rest.
 
 ### Sorting
 
@@ -118,6 +149,7 @@ Exported columns:
 | Username | Submitting user's username |
 | Content | Feedback text, or `[content expired]` once the report is past the 90-day retention window (see Data Retention below) |
 | Organization | User's organization |
+| HelpArticle | Article slug for a help-article report; empty for every other source |
 | UpdatedAt | Last update timestamp |
 
 The Export button is disabled when there is no feedback matching the current filters.

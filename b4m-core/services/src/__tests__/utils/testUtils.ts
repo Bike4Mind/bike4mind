@@ -74,6 +74,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   findAllByIds: vi.fn(),
   findExistingIdsByIds: vi.fn(),
   findCitableFieldsByIds: vi.fn(),
+  findCitableFieldsWithTagsByIds: vi.fn(),
   findByBatchId: vi.fn(),
   claimIndexNotification: vi.fn(),
   search: vi.fn(),
@@ -124,6 +125,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   setChunkRollups: vi.fn(),
   findFileIdsWithPositiveVectorizedCount: vi.fn(),
   findChunkedFilesByScope: vi.fn(),
+  findFilesOutsideEmbeddingSpaceByScope: vi.fn(),
   findConvergencePausedFilesByScope: vi.fn(),
   resetChunkStateByIds: vi.fn(),
   markConvergencePaused: vi.fn(),
@@ -245,6 +247,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     ensureUserDetails: vi.fn(),
     updateUserDetails: vi.fn(),
     findMembershipOrgIds: vi.fn(),
+    findMemberUserIds: vi.fn(),
   });
 
 export const createMockCreditTransactionRepository = (): MockedObject<ICreditTransactionRepository> =>

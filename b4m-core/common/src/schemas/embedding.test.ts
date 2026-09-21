@@ -67,7 +67,7 @@ describe('defaultEmbeddingModelForEnv', () => {
   it('returns the cloud default on hosted with a real key, ignoring OLLAMA_BASE_URL', () => {
     process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
     process.env.OPENAI_API_KEY = 'sk-proj-0000aaaa1111bbbb2222cccc3333';
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 
   it('keeps the cloud default on a hosted stage with no cloud embedding key in the env', () => {
@@ -76,7 +76,7 @@ describe('defaultEmbeddingModelForEnv', () => {
     // (verified against the deployed vectorize subscriber on both). Branching to Bedrock here
     // would flip the platform-wide default, so reachability is decided at the embedding seam by
     // resolveEmbeddingWithKeylessFallback, where the resolved credentials are actually known.
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 
   it('is stage-neutral with no env at all, so the browser bundle agrees with the server', () => {
@@ -86,7 +86,7 @@ describe('defaultEmbeddingModelForEnv', () => {
     for (const k of ['OPENAI_API_KEY', 'VOYAGE_API_KEY', 'B4M_SELF_HOST', 'OLLAMA_BASE_URL']) {
       delete process.env[k];
     }
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 
   it('reports Bedrock reachable on cloud and unreachable on self-host', () => {
@@ -96,7 +96,7 @@ describe('defaultEmbeddingModelForEnv', () => {
     expect(hasKeylessCloudEmbedder()).toBe(true);
     process.env.B4M_SELF_HOST = 'true';
     expect(hasKeylessCloudEmbedder()).toBe(false);
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 
   it('reports Bedrock reachable from the Fargate chat container, not just from Lambda', () => {
@@ -140,25 +140,25 @@ describe('defaultEmbeddingModelForEnv', () => {
     process.env.B4M_SELF_HOST = 'true';
     process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
     process.env.OPENAI_API_KEY = 'sk-test';
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 
   it('keeps the cloud default on self-host when no Ollama URL is configured', () => {
     process.env.B4M_SELF_HOST = 'true';
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 
   it('keeps the cloud default on self-host when a VoyageAI key is set (aligned with serverConfig)', () => {
     process.env.B4M_SELF_HOST = 'true';
     process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
     process.env.VOYAGE_API_KEY = 'pa-test';
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 
   it('treats a whitespace-only Ollama URL as unconfigured (cloud default)', () => {
     process.env.B4M_SELF_HOST = 'true';
     process.env.OLLAMA_BASE_URL = '   ';
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 
   it('ignores a whitespace-only cloud key and still resolves the local embedder', () => {
@@ -191,7 +191,7 @@ describe('defaultEmbeddingModelForEnv', () => {
     process.env.B4M_SELF_HOST = 'true';
     process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
     process.env.OPENAI_API_KEY = 'sk-proj-0000aaaa1111bbbb2222cccc3333';
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 
   it('only exactly "true" enables self-host (a "1" value keeps the cloud default)', () => {
@@ -199,6 +199,6 @@ describe('defaultEmbeddingModelForEnv', () => {
     // reads as hosted and keeps the cloud default rather than reaching the local embedder.
     process.env.B4M_SELF_HOST = '1';
     process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
-    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
   });
 });

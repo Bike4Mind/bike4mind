@@ -1,5 +1,5 @@
 import { userRepository, subscriberRepository, emailPreferencesRepository } from '@bike4mind/database';
-import { EmailCategory, IEmailRecipientFilter } from '@bike4mind/common';
+import { ApiKeyScope, EmailCategory, IEmailRecipientFilter } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { randomUUID } from 'crypto';
@@ -11,7 +11,7 @@ interface PreviewRecipient {
   type: 'user' | 'subscriber' | 'direct';
 }
 
-const handler = baseApi().post(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Unauthorized. Admin access required.');
   }

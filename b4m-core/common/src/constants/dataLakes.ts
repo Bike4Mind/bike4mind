@@ -423,7 +423,9 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
    */
   requiredPassageTokenTarget?: number;
   /**
-   * Whether the requesting caller CREATED this lake (createdByUserId === caller). Server-computed
+   * Whether the requesting caller effectively OWNS this lake - `isEffectiveOwner`, not raw
+   * `createdByUserId`, so a creator whose ownership has been transferred or handed off reads
+   * `false` and the owner-grant holder it moved to reads `true`. Server-computed
    * per request. The manager list is "lakes I can reach", not "lakes I own": it also surfaces org
    * lakes, strangers' public lakes, and - for a global admin - every tenant's lakes. So the UI
    * marks a not-own lake to keep an admin from mistaking someone else's (even private) lake for
@@ -538,10 +540,11 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
   canManageSettings: boolean;
   /**
    * Whether the requesting caller may ERASE this lake's extracted memory profile - an irreversible
-   * crypto-shred. Strictly narrower than `canManage`: creator or platform admin only, with no grant
-   * or org-admin rung, mirroring `DELETE /api/memory/lake/:id` exactly. Both come from the one
-   * `canShredLakeMemory` predicate so the button and the endpoint cannot drift; rendering the erase
-   * affordance on `canManage` instead offered it to curators and org admins the endpoint then 403'd.
+   * crypto-shred. Strictly narrower than `canManage`: effective owner or platform admin only, with
+   * no curator or org-admin rung, mirroring `DELETE /api/memory/lake/:id` exactly. Both come from the
+   * one `canShredLakeMemory` predicate so the button and the endpoint cannot drift; rendering the
+   * erase affordance on `canManage` instead offered it to curators and org admins the endpoint then
+   * 403'd.
    *
    * REQUIRED for the same reason as `canRebuild` and `canManageSettings`: an absent field reads as
    * falsy and hides the affordance silently instead of failing the build at the producer that forgot

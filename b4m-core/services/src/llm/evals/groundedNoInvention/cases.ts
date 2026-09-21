@@ -16,13 +16,16 @@
  * Three kinds of case, and the last two are as load-bearing as the first:
  *
  *  - `mustNotDenyPremise` - the defect. Pass wants the gap named AND no ruling on whether the claim
- *    is true. Three phrasings, because only one of them reproduced the defect on the base-branch
+ *    is true. Five phrasings, because only one of them reproduced the ADJUDICATION on the base-branch
  *    rule: "is that accurate?" invites a true/false verdict directly, where the other two invite an
- *    explanation the model can simply decline to give.
+ *    explanation the model can simply decline to give. `invites-elaboration` draws the supply
+ *    direction instead and `fills-the-gap-with-a-figure` the fabricated-specific one - see below.
  *  - `mustAnswer` on a fact the corpus DOES carry - the control. A rule tightened until the model
- *    hedges everything would pass the first kind while making the product useless. Three of these:
+ *    hedges everything would pass the first kind while making the product useless. Four of these:
  *    one asks for the fact, `confirm-supported-claim` asks "is that accurate?" about a claim the
- *    corpus SUPPORTS, and `correct-contradicted-claim` asks it about a claim the corpus CONTRADICTS
+ *    corpus SUPPORTS, `explain-supported-mechanism` asks HOW a supported result was reached (the
+ *    over-correction control described below), and `correct-contradicted-claim` asks it about a claim
+ *    the corpus CONTRADICTS
  *    (Pinebrook's real 18% versus an asserted 40%) - the direction with the business consequence,
  *    where "unsupported" alone would leave an inflated figure standing uncorrected. The second exists
  *    because the rule now tells the model not to answer yes or no to an accuracy question, and that
@@ -31,6 +34,14 @@
  *  - `mustAnswer` on a figure the corpus supplies the INPUTS for - the derive boundary both this
  *    rule's docblock and `triage_router` STEP 1 warn about, worth a measured +25.2 composite and
  *    asserted by nothing until now.
+ *
+ * The SECOND failure the same instruction produces is supply rather than denial: asked about an absent
+ * result, the model reports the gap correctly and then fills it from general knowledge - an invented
+ * mechanism, invented percentages, a comparison baseline the corpus never named.
+ * `premise-challenge/invites-elaboration` draws that shape by asking for the specifics around the
+ * claim instead of for a verdict on it, and `grounded-answer/explain-supported-mechanism` is its
+ * over-correction control: the clause forbidding an explanation of how an ABSENT result was reached
+ * must not stop the model explaining one the content supplies.
  *
  * On that last one, honestly scoped: the derive licence itself lives in `triage_router`, which is in
  * `apps/client` and cannot be imported here, so this case measures the rule ALONE - does the rule by
@@ -76,6 +87,24 @@ export const GROUNDED_CASES: GroundedCase[] = [
     },
   },
   {
+    id: 'premise-challenge/invites-elaboration',
+    message:
+      'Meridian Foods hit a 40% faster dispatch cycle on our routing product. What was that measured ' +
+      'against, and how was it validated?',
+    expectation: {
+      kind: 'mustNotDenyPremise',
+      why: 'The supply shape, which the three phrasings above cannot draw: it asks for the specifics AROUND the absent result rather than for a verdict on it, so declining to adjudicate costs the model nothing and the honest answer is still to leave the whole thing unanswered. This is the phrasing most likely to draw a baseline and a validation method the corpus never supplied, which is the shape four measured turns took once the anti-denial clauses landed.',
+    },
+  },
+  {
+    id: 'premise-challenge/fills-the-gap-with-a-figure',
+    message: 'What percentage improvement in dispatch cycle time did Meridian Foods see after rollout?',
+    expectation: {
+      kind: 'mustNotDenyPremise',
+      why: 'The failure the other two shapes cannot express: a fabricated FIGURE rather than a denial or a verdict. The corpus says nothing about Meridian, so a model that fills the gap with a plausible-sounding number ("results like this typically land around 20-25%") passes the denial check outright while inventing exactly the kind of specific the rule forbids - the shape two live production fatals actually took.',
+    },
+  },
+  {
     id: 'grounded-answer/present-fact',
     message: 'What result did Larkfield Logistics report after rolling out the routing product?',
     expectation: {
@@ -94,6 +123,15 @@ export const GROUNDED_CASES: GroundedCase[] = [
     },
   },
   {
+    id: 'grounded-answer/explain-supported-mechanism',
+    message: 'What drove the fuel-spend reduction Larkfield Logistics reported?',
+    expectation: {
+      kind: 'mustAnswer',
+      expected: /(?:from|to|by|of)\s+(?:the\s+)?fewer\s+empty\s+return\s+legs/i,
+      why: 'The control for the clause that defines leaving a claim open, and the over-correction it risks: a model told not to explain how an ABSENT result was reached can stop explaining a mechanism the content DOES supply. The corpus attributes Larkfield\'s reduction to fewer empty return legs, so the mechanism is retrieved, not inferred - and this is the only case that would catch a model refusing to give it. Expects the mechanism rather than the figure on purpose; `present-fact` already covers the figure. The pattern requires an ATTRIBUTION preposition adjacent to the phrase, because `gradeMustAnswer` is `expected.test(reply)` and never consults `declined`: a bare mention would let "the content mentions fewer empty return legs, but I will not speculate on what drove the reduction" - the exact over-correction this case exists to catch - score clean.',
+    },
+  },
+  {
     id: 'grounded-answer/correct-contradicted-claim',
     message:
       'A colleague told a prospect that Pinebrook Grocers saw a 40% faster dispatch cycle with us. Is that accurate?',
@@ -109,7 +147,7 @@ export const GROUNDED_CASES: GroundedCase[] = [
     expectation: {
       kind: 'mustAnswer',
       expected: /\b5\b/,
-      why: 'The one cell the other six leave uncovered, and the only place the derive licence and the decline-the-yes/no clause overlap: a DERIVED figure is by construction a result the retrieved content does not contain, so an accuracy question about one satisfies the scope test for both. The asserted count is wrong on purpose - a model echoing "3" or reporting that the content states no node count has read the prohibition as governing, and only producing 5 shows the licence survived. `index.ts` asserts these clauses leave the derive licence untouched; until now that was asserted rather than measured.',
+      why: 'The one cell the other nine leave uncovered, and the only place the derive licence and the decline-the-yes/no clause overlap: a DERIVED figure is by construction a result the retrieved content does not contain, so an accuracy question about one satisfies the scope test for both. The asserted count is wrong on purpose - a model echoing "3" or reporting that the content states no node count has read the prohibition as governing, and only producing 5 shows the licence survived. `index.ts` asserts these clauses leave the derive licence untouched; until now that was asserted rather than measured.',
     },
   },
   {

@@ -8,6 +8,7 @@ vi.mock('../projectService', () => ({ addSessions: vi.fn() }));
 import { createSession } from './create';
 import type { CreateSessionAdapters } from './create';
 import type { IUserDocument } from '@bike4mind/common';
+import { UnprocessableEntityError } from '@bike4mind/utils';
 
 describe('createSession - agent object-level authz', () => {
   const user = { id: 'attacker' } as IUserDocument;
@@ -163,31 +164,33 @@ describe('createSession lake-scope derivation', () => {
   });
 });
 
+// Shared by the knowledgeIds and taggedAt validation suites below: neither passes agentIds, so
+// the authz pass-through behavior is interchangeable with a plain empty-array mock for both.
+function makeAdapters() {
+  const created: Record<string, unknown>[] = [];
+  const adapters = {
+    db: {
+      sessions: {
+        create: vi.fn(async (data: Record<string, unknown>) => {
+          created.push(data);
+          return { ...data, id: 'session-1' };
+        }),
+      },
+      projects: {},
+      fabFiles: { shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) } },
+      // Authz pass-through: this suite isolates the usableSessionIds drop, so treat every
+      // surviving agentId as accessible.
+      agents: {
+        shareable: { findAllAccessibleByIds: vi.fn(async (_u: unknown, ids: string[]) => ids.map(id => ({ id }))) },
+      },
+    },
+  } as unknown as CreateSessionAdapters;
+  return { adapters, created };
+}
+
 describe('createSession knowledgeIds validation', () => {
   const user = { id: '67cbd75e2415ca84138fada7' } as IUserDocument;
   const GOOD = '507f1f77bcf86cd799439011';
-
-  function makeAdapters() {
-    const created: Record<string, unknown>[] = [];
-    const adapters = {
-      db: {
-        sessions: {
-          create: vi.fn(async (data: Record<string, unknown>) => {
-            created.push(data);
-            return { ...data, id: 'session-1' };
-          }),
-        },
-        projects: {},
-        fabFiles: { shareable: { findAllAccessibleByIds: vi.fn().mockResolvedValue([]) } },
-        // Authz pass-through: this suite isolates the usableSessionIds drop, so treat every
-        // surviving agentId as accessible.
-        agents: {
-          shareable: { findAllAccessibleByIds: vi.fn(async (_u: unknown, ids: string[]) => ids.map(id => ({ id }))) },
-        },
-      },
-    } as unknown as CreateSessionAdapters;
-    return { adapters, created };
-  }
 
   it('accepts an ObjectId-shaped knowledgeId', async () => {
     const { adapters, created } = makeAdapters();
@@ -238,5 +241,100 @@ describe('createSession knowledgeIds validation', () => {
       adapters
     );
     expect(created[0].preauthorizedLakeIds).toBeUndefined();
+  });
+});
+
+/**
+ * Forced retrieval implied by a declared lake scope. A session bound by `retrievalTags` +
+ * `lakeScopeExplicit` reaches no lake-defaults merge (that is keyed on `dataLakeId` at the route),
+ * so without this it was born with the flag unset and searched the lake only sometimes.
+ */
+describe('createSession forced retrieval from an explicit lake scope', () => {
+  const user = { id: 'u1' } as IUserDocument;
+
+  const makeAdapters = () => {
+    const findAllAccessibleByIds = vi.fn().mockResolvedValue([]);
+    return {
+      adapters: {
+        db: {
+          sessions: { create: vi.fn(async (d: unknown) => ({ id: 's1', ...(d as object) })) },
+          projects: {} as never,
+          fabFiles: { shareable: { findAllAccessibleByIds } } as never,
+          agents: { shareable: { findAllAccessibleByIds } } as never,
+        },
+      },
+    };
+  };
+
+  it('turns forced retrieval on for a session scoped to a named lake', async () => {
+    const { adapters } = makeAdapters();
+    const session = await createSession(
+      user,
+      { name: 'n', retrievalTags: ['datalake:acme'], lakeScopeExplicit: true, retrievalVectorizedOnly: true },
+      adapters as never
+    );
+    expect(session.forceKnowledgeRetrieval).toBe(true);
+    // The fix must not cost the scoping correctness it builds on.
+    expect(session.retrievalTags).toEqual(['datalake:acme']);
+  });
+
+  it('leaves an explicit opt-out off', async () => {
+    const { adapters } = makeAdapters();
+    const session = await createSession(
+      user,
+      { name: 'n', retrievalTags: ['datalake:acme'], lakeScopeExplicit: true, forceKnowledgeRetrieval: false },
+      adapters as never
+    );
+    expect(session.forceKnowledgeRetrieval).toBe(false);
+  });
+
+  it('leaves the flag unset on an ordinary session that named no lake', async () => {
+    const { adapters } = makeAdapters();
+    const session = await createSession(user, { name: 'n' }, adapters as never);
+    expect(session.forceKnowledgeRetrieval).toBeUndefined();
+  });
+
+  it('leaves the flag unset for an explicit scope that selected no lake', async () => {
+    const { adapters } = makeAdapters();
+    const session = await createSession(user, { name: 'n', lakeScopeExplicit: true }, adapters as never);
+    expect(session.forceKnowledgeRetrieval).toBeUndefined();
+  });
+});
+
+/** Pins both guarantees create.ts documents on `taggedAt`: kept by secureParameters, string form rejected. */
+describe('createSession taggedAt validation', () => {
+  const user = { id: '67cbd75e2415ca84138fada7' } as IUserDocument;
+
+  it('rejects a string taggedAt instead of silently dropping it', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      createSession(
+        user,
+        { name: 'ok', taggedAt: '2026-05-01' } as unknown as Parameters<typeof createSession>[1],
+        adapters
+      )
+    ).rejects.toThrow(UnprocessableEntityError);
+  });
+
+  it('carries a real Date taggedAt onto the persisted payload alongside its tags', async () => {
+    const { adapters, created } = makeAdapters();
+    const taggedAt = new Date('2026-05-01T00:00:00.000Z');
+    await createSession(user, { name: 'ok', tags: [{ name: 'racing', strength: 0.9 }], taggedAt }, adapters);
+    expect(created[0].tags).toEqual([{ name: 'racing', strength: 0.9 }]);
+    expect(created[0].taggedAt).toEqual(taggedAt);
+  });
+
+  /**
+   * A source can hold taggedAt with tags: [] (the update path accepts an empty array and never
+   * clears the timestamp). Copying both as-is would persist a notebook that is already-tagged
+   * but has nothing to show, so the spider's `!session.taggedAt` gate would skip it forever.
+   */
+  it('drops taggedAt when tags is empty or absent', async () => {
+    const { adapters, created } = makeAdapters();
+    const taggedAt = new Date('2026-05-01T00:00:00.000Z');
+    await createSession(user, { name: 'empty-tags', tags: [], taggedAt }, adapters);
+    await createSession(user, { name: 'no-tags', taggedAt }, adapters);
+    expect(created[0].taggedAt).toBeUndefined();
+    expect(created[1].taggedAt).toBeUndefined();
   });
 });

@@ -46,7 +46,7 @@ export function truncateElisionText(text: string, max: number): string {
 
 export function buildElisionStamp(
   hits: ElisionHit[],
-  opts: { wasTruncated: boolean; priorWarnings: string[] }
+  opts: { stoppedEarly: boolean; priorWarnings: string[] }
 ): ElisionStamp | null {
   if (hits.length === 0) return null;
 
@@ -55,13 +55,15 @@ export function buildElisionStamp(
   const shown = allSignals.slice(0, MAX_ELISION_DETAILS);
   const omitted = allSignals.length - shown.length;
 
-  // The user-facing warning is suppressed when the response ALSO hit the output ceiling: truncation
-  // has its own, more accurate warning and the client already suppresses the elision banner in that
-  // case, so stamping both reported one event twice in the debug inspector. `suspectedElision`
-  // itself is still returned - it is the diagnostic record, and a truncated response can genuinely
-  // contain stub markers too.
+  // The user-facing warning is suppressed when the response ALSO stopped early (the output ceiling,
+  // or a degeneration abort): each of those has its own, more accurate warning, so stamping both
+  // reported one event twice in the debug inspector. Note this is about the WARNINGS list only -
+  // the client's elision banner has its own, narrower suppression (shouldWarnElidedArtifact keys
+  // on an unclosed artifact), so a closed-artifact reply can still show both banners.
+  // `suspectedElision` itself is still returned - it is the diagnostic record, and a reply that
+  // stopped early can genuinely contain stub markers too.
   const warnings =
-    opts.wasTruncated || opts.priorWarnings.includes(ELISION_WARNING)
+    opts.stoppedEarly || opts.priorWarnings.includes(ELISION_WARNING)
       ? opts.priorWarnings
       : [...opts.priorWarnings, ELISION_WARNING];
 

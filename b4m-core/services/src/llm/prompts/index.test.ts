@@ -10,6 +10,24 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(/never attach a\s+citation/);
   });
 
+  // Pins the enumeration itself (not just the "not covered" sentence that follows it) and the
+  // "already given" qualifier - without this, the enumeration could collapse to "a specific fact" and
+  // every test in this file would still pass, silently dropping the #1598 guard.
+  it('names the specific kinds of claim the enumeration covers, even when the question presents one as given', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /specific customer, organization, person, competitive win or\s+comparison, deal, price, or\s+figure/
+    );
+    expect(GROUNDED_NO_INVENTION_RULE).toContain('even if the question presents it as already given');
+  });
+
+  // The derive licence (triage_router STEP 1) depends on this rule staying scoped to facts asserted as
+  // RETRIEVED, not to arithmetic on figures the request supplies inputs for - worth +25.2 composite,
+  // and it regresses silently if this rule is ever widened to cover derived/computed figures. Negative
+  // assertion so a reword that adds "derived" or "computed" language here fails loudly instead.
+  it('does not extend to derived or computed figures - that licence lives in triage_router, not here', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).not.toMatch(/derive|derived|deriving|computed|computation/i);
+  });
+
   it('forbids fabricated absence - never deny a real offering just because retrieval missed it', () => {
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(
       /never state or imply that .*(does not exist|is not real|is not provided)/i
@@ -28,6 +46,17 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
     );
   });
 
+  // The licence to leave a claim open was itself exploitable: a reply can decline the yes/no verdict
+  // and still fill the named gap with an invented figure ("results like this typically land around
+  // 20-25%"), which the clauses above never forbid because it isn't a denial or a ruling. This binds
+  // the licence at the point it's granted rather than adding a rule elsewhere.
+  it('binds the leave-it-open licence to not answering, including not answering from general knowledge', () => {
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/leaving it open means not answering it/);
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /not\s+answering it from general knowledge, inference, or a plausible-sounding estimate/
+    );
+  });
+
   // The word list alone was measured insufficient: the model reached the same verdict as "No, it is
   // not accurate to say ...", which the list does not contain. These two pins are the clauses that
   // fixed it, and they are about the ACT rather than the vocabulary - so a reword that drops back to
@@ -40,6 +69,28 @@ describe('GROUNDED_NO_INVENTION_RULE', () => {
     );
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(/do not reach that verdict in other words/);
     expect(GROUNDED_NO_INVENTION_RULE).toMatch(/A register or approved list bounds what you may cite/);
+  });
+
+  // The anti-denial clause above was measured to produce its own over-correction: told to leave the
+  // claim open, the model stopped ruling on it and started elaborating instead. "Leave it open" is
+  // silent about what fills that space, so these pin the sentences that define the act and name the
+  // licensed alternative - the same act-not-vocabulary shape as the clauses above, for the same
+  // reason. Text only; the behaviour is measured in evals/groundedNoInvention.
+  it('defines leaving a claim open as not answering it, and names what may be offered instead', () => {
+    // Case-insensitive because the two wordings this rule merges stated the clause once each and the
+    // union states it once: the phrase sits mid-sentence ("...and leaving it open means not answering
+    // it, including not answering it from general knowledge, inference, or a plausible-sounding
+    // estimate"), so the pin is on the clause, not on its sentence-initial capital.
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(/leaving it open means not answering it/i);
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /do not explain how the asserted result was reached, what it was measured against, or what figures it involved/
+    );
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /not supply any of that from general knowledge, published results, or what is typically the case/
+    );
+    expect(GROUNDED_NO_INVENTION_RULE).toMatch(
+      /may offer instead is what the retrieved content does cover and where the claim could be confirmed/
+    );
   });
 
   // Guards the round-2 fix for the multi-turn laundering loophole: grounding is scoped to labeled
