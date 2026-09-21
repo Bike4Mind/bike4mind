@@ -1,5 +1,11 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { IChatHistoryItem, IChatHistoryItemDocument, ISessionDocument, ISessionFavoriteItem } from '@bike4mind/common';
+import {
+  IChatHistoryItem,
+  IChatHistoryItemDocument,
+  ISessionDocument,
+  ISessionFavoriteItem,
+  SessionUpdateRequest,
+} from '@bike4mind/common';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 
 export const getSessionsFromServer = async (
@@ -50,7 +56,16 @@ export const getSessionByIdFromServer = async (sessionId: string): Promise<ISess
   return response.data;
 };
 
-export const updateSessionToServer = async (sessionData: Partial<ISessionDocument>) => {
+/**
+ * The PUT /api/sessions/{id} body. `Partial<ISessionDocument>` alone cannot express the whole
+ * contract: `retrievalTags: null` (clear the lake scope, so retrieval falls back to every
+ * reachable lake) is a request-only spelling with no stored counterpart, and an intersection
+ * would narrow it straight back out - hence the swap rather than an `&`.
+ */
+export type SessionUpdatePayload = Omit<Partial<ISessionDocument>, 'retrievalTags'> &
+  Pick<SessionUpdateRequest, 'retrievalTags'>;
+
+export const updateSessionToServer = async (sessionData: SessionUpdatePayload & { id: string }) => {
   const response = await api.put(`/api/sessions/${sessionData.id}`, sessionData);
   return response.data;
 };

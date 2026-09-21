@@ -492,4 +492,87 @@ describe('updateSession - lake-scope derivation on attach', () => {
     // scope is left untouched rather than overwritten (or round-tripped).
     expect(update.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
   });
+
+  /**
+   * The caller-set scope (#3042/#3043). The stored pair is what retrieval reads
+   * (llm/resolveLakeMemoryScope), and `lakeScopeExplicit` is the ONLY thing separating "grounds
+   * on no lake" from "never chose" - so every arm below asserts BOTH halves. Asserting the tags
+   * alone would pass against a write that left a stale flag beside them and inverted the meaning
+   * of the empty case.
+   */
+  describe('caller-set lake scope', () => {
+    it('writes a named set as an explicit scope', async () => {
+      const { update, adapters } = makeAdapters({}, []);
+
+      await updateSession(
+        user,
+        { id: 'session-1', retrievalTags: ['datalake:research', 'datalake:legal'] } as never,
+        adapters as never
+      );
+
+      expect(update.mock.calls[0][0]).toMatchObject({
+        retrievalTags: ['datalake:research', 'datalake:legal'],
+        lakeScopeExplicit: true,
+      });
+    });
+
+    it('writes an empty list as an explicit EMPTY scope, not as "never chose"', async () => {
+      const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:old'], lakeScopeExplicit: true }, []);
+
+      await updateSession(user, { id: 'session-1', retrievalTags: [] } as never, adapters as never);
+
+      // Without the flag, resolveLakeMemoryScope reads [] as "no scope expressed" and grounds on
+      // EVERY entitled lake - the exact opposite of what the caller asked for.
+      expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: true });
+    });
+
+    it('clears the scope on null, so retrieval falls back to every reachable lake', async () => {
+      const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:old'], lakeScopeExplicit: true }, []);
+
+      await updateSession(user, { id: 'session-1', retrievalTags: null } as never, adapters as never);
+
+      expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
+    });
+
+    it('leaves the stored scope alone when the field is omitted', async () => {
+      const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:old'], lakeScopeExplicit: true }, []);
+
+      await updateSession(user, { id: 'session-1', name: 'renamed' } as never, adapters as never);
+
+      expect(update.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
+      expect(update.mock.calls[0][0]).not.toHaveProperty('lakeScopeExplicit');
+    });
+
+    it('lets a caller-set scope win over derivation when one write does both', async () => {
+      // The picker persists its selection and the workbench persists its files through the same
+      // PUT, so a single write carries both. Keying the derivation guard on the STORED scope
+      // alone let the derived tag overwrite the one the user had just chosen.
+      const { update, adapters } = makeAdapters({}, [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]);
+
+      await updateSession(
+        user,
+        { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], retrievalTags: ['datalake:chosen'] } as never,
+        adapters as never
+      );
+
+      expect(update.mock.calls[0][0]).toMatchObject({
+        retrievalTags: ['datalake:chosen'],
+        lakeScopeExplicit: true,
+      });
+    });
+
+    it('does not derive a scope for a write that clears one while attaching a lake file', async () => {
+      // Same collision, opposite intent: clearing must not be undone by the attach in the same
+      // write, or "use all my lakes" silently becomes "use the lake that file came from".
+      const { update, adapters } = makeAdapters({}, [{ id: LAKE_FILE_ID, tags: [{ name: 'datalake:acme' }] }]);
+
+      await updateSession(
+        user,
+        { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], retrievalTags: null } as never,
+        adapters as never
+      );
+
+      expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
+    });
+  });
 });
