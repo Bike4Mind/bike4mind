@@ -44,7 +44,12 @@ export type LakeFindingTerminalStatus = Exclude<LakeFindingStatus, 'open'>;
 export const LAKE_FINDING_DETECTORS = ['lexical', 'model'] as const;
 export type LakeFindingDetector = (typeof LAKE_FINDING_DETECTORS)[number];
 
-/** How many sources one finding may carry. Matches the detector's own EVIDENCE_MAX. */
+/**
+ * How many sources one finding may carry. Deliberately its own constant rather than an alias of the
+ * detector's `EVIDENCE_MAX`: that one bounds a report stored on the lake document, this one bounds a
+ * persisted row, and `recordLakeFindings` is the write door for producers (#3057) that build no
+ * report at all. They must not DRIFT, though, so a test pins them equal - a comment could not.
+ */
 export const LAKE_FINDING_SOURCE_MAX = 20;
 
 /** Longest resolution note a curator may leave. Mirrors the proposal decline-reason cap. */
@@ -57,7 +62,7 @@ export const LAKE_FINDING_RESOLUTION_MAX_CHARS = 500;
  * to it because this one is PERSISTED: a field added to the detector's in-memory evidence type
  * would be silently stripped by Mongoose strict mode on write, and nothing would go red. Spelling
  * it out keeps the parity a two-file question (this type and `DataLakeFindingSchema`) instead of a
- * three-file one. `assertEvidenceIsStorable` below fails the build if the shapes ever diverge.
+ * three-file one. `StorableEvidence` below fails the build if the shapes ever diverge.
  */
 export interface LakeFindingSource {
   fabFileId: string;
@@ -72,8 +77,12 @@ export interface LakeFindingSource {
  * `InconsistencyEvidence` gains a field, this keeps passing (the extra field is simply not
  * persisted, which is a decision to make deliberately); if it RENAMES or retypes one, this fails
  * here rather than at runtime as a silently empty column.
+ *
+ * A TYPE, not a function: the constraint is what does the work, so this needs no call site to fire.
+ * The previous identity function had none, which made it dead code that only looked load-bearing.
  */
-export const assertEvidenceIsStorable = (evidence: InconsistencyEvidence): LakeFindingSource => evidence;
+type AssertAssignable<Target, Source extends Target> = Source;
+export type StorableEvidence = AssertAssignable<LakeFindingSource, InconsistencyEvidence>;
 
 export interface IDataLakeFinding {
   lakeId: string;
@@ -167,7 +176,14 @@ export interface IDataLakeFindingRepository extends IBaseRepository<IDataLakeFin
    * deliberately does not have.
    */
   assignFinding(id: string, assigneeUserId: string | null): Promise<IDataLakeFindingDocument | null>;
-  /** Drop a deleted lake's findings. A finding outliving its lake is unresolvable by anyone. */
+  /**
+   * Drop a deleted lake's findings. A finding outliving its lake is unresolvable by anyone.
+   *
+   * NOT sufficient on its own for a lake teardown. The teardown hard-deletes its member FabFiles
+   * GLOBALLY, and a file can belong to two lakes at once, so a sibling lake's rows can be left
+   * quoting a destroyed document - rows this call cannot reach, because they are not this lake's.
+   * `cleanupDeletedDataLake` therefore runs `deleteForPurgedDocument` per destroyed id as well.
+   */
   deleteForLake(lakeId: string): Promise<number>;
   /**
    * Drop every finding that cites a permanently-deleted document. A RETENTION obligation, not a

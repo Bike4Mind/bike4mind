@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
 import type { LakeFindingSource, RecordLakeFindingInput } from '@bike4mind/common';
 import { dataLakeFindingRepository as repo, DataLakeFindingModel } from './DataLakeFindingModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -105,6 +105,48 @@ describe('DataLakeFindingRepository', () => {
 
     expect(await DataLakeFindingModel.countDocuments({})).toBe(1);
     expect(a.id).toBe(b.id);
+  });
+
+  it('retries the loser of an insert race instead of surfacing its 11000', async () => {
+    // The race test above only reaches the retry on an interleaving that actually collides, so it
+    // passes whether or not the catch exists. Forcing the first call to reject with 11000 pins the
+    // recovery itself: the retry must re-run the upsert and return the winner's row.
+    const created = await repo.recordDetected(input());
+    const collision = Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
+    const spy = vi.spyOn(DataLakeFindingModel, 'findOneAndUpdate');
+    spy.mockRejectedValueOnce(collision);
+
+    const recovered = await repo.recordDetected(input({ seenAt: SEEN_LATER }));
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(recovered.id).toBe(created.id);
+    expect(recovered.lastSeenAt).toEqual(SEEN_LATER);
+    spy.mockRestore();
+  });
+
+  it('rethrows a non-11000 write error unchanged rather than retrying into it', async () => {
+    // The bare code check is what keeps a real failure (a validation error, a dead connection) from
+    // being retried once and then reported as whatever the second attempt happened to do.
+    const failure = Object.assign(new Error('connection reset'), { code: 89 });
+    const spy = vi.spyOn(DataLakeFindingModel, 'findOneAndUpdate');
+    spy.mockRejectedValueOnce(failure);
+
+    await expect(repo.recordDetected(input())).rejects.toThrow('connection reset');
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockRestore();
+  });
+
+  it('never drags lastSeenAt backwards when two runs land out of order', async () => {
+    // A retried queue message or a slow run finishing after a later one delivers an OLDER seenAt to
+    // an existing row. A plain $set would move lastSeenAt back, which falsifies the two things the
+    // field is read for - the lastSeenAt > resolvedAt recurrence signal and the queue's sort - and
+    // can leave firstSeenAt after lastSeenAt.
+    await repo.recordDetected(input({ seenAt: SEEN_LATER }));
+    const stale = await repo.recordDetected(input({ seenAt: SEEN_FIRST }));
+
+    expect(stale.lastSeenAt).toEqual(SEEN_LATER);
+    expect(stale.firstSeenAt).toEqual(SEEN_LATER);
+    expect(stale.lastSeenAt.getTime()).toBeGreaterThanOrEqual(stale.firstSeenAt.getTime());
   });
 
   it('never lets a re-detection overwrite a curator decision', async () => {

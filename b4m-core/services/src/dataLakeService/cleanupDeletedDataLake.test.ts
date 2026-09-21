@@ -26,6 +26,7 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
   },
   dataLakeFindings: {
     deleteForLake: vi.fn(async () => 0),
+    deleteForPurgedDocument: vi.fn(async () => 0),
   },
   batches: {
     find: vi.fn(async () => [] as never),
@@ -160,5 +161,63 @@ describe('cleanupDeletedDataLake', () => {
     // Not just tidiness: a finding stores excerpts of the documents this sweep just hard-deleted,
     // so leaving the rows behind would keep quoting a corpus that no longer exists.
     expect(db.dataLakeFindings.deleteForLake).toHaveBeenCalledWith('lake-1');
+  });
+
+  it("sweeps each destroyed document's findings GLOBALLY, so a co-tagged lake keeps no excerpt of it", async () => {
+    const db = makeDb(['f1', 'f2']);
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    // `deleteForLake('lake-1')` above cannot reach this case. A file can carry two lakes' meta-tags
+    // - `addFileToLake` has no exclusivity check - and step 2 hard-deletes the FabFile GLOBALLY.
+    // Lake B's finding would otherwise survive quoting a 240-char excerpt of a document that no
+    // longer exists anywhere, unresolvable by anyone and never re-detectable to be rewritten.
+    expect(db.dataLakeFindings.deleteForPurgedDocument).toHaveBeenCalledWith('f1');
+    expect(db.dataLakeFindings.deleteForPurgedDocument).toHaveBeenCalledWith('f2');
+  });
+
+  it("sweeps a document's findings BEFORE its row, so an interruption cannot strand them", async () => {
+    // Once the row is gone the id is no longer resolvable by `findIdsByDataLakeTag`, so a DLQ retry
+    // could never name it again - the finding would be stranded permanently. This order fails the
+    // recoverable way instead: a finding lost early is still re-detectable from a document that
+    // still exists.
+    const db = makeDb(['f1']);
+    const order: string[] = [];
+    db.dataLakeFindings.deleteForPurgedDocument = vi.fn(async (id: string) => {
+      order.push(`findings:${id}`);
+      return 0;
+    });
+    db.fabFiles.hardDeleteOneById = vi.fn(async (id: string) => {
+      order.push(`row:${id}`);
+      return true;
+    });
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(order).toEqual(['findings:f1', 'row:f1']);
+  });
+
+  it('aborts before deleting the lake record when the findings sweep rejects', async () => {
+    // Ordering is the retry door. The lake record is what a DLQ replay re-reads to re-enter the
+    // sweep, so deleting it after a failed sweep would strand the rows permanently - nothing left
+    // would name the lake. Failing with the lake still present is the recoverable direction.
+    const db = makeDb();
+    db.dataLakeFindings.deleteForLake = vi.fn(async () => {
+      throw new Error('findings sweep failed');
+    });
+
+    await expect(cleanupDeletedDataLake(ADMIN, 'lake-1', { db })).rejects.toThrow('findings sweep failed');
+    expect(db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('still hard-deletes the files when no findings repo is wired', async () => {
+    // The port is optional (a host that never ran detection has no rows), and reaching it through
+    // `?.` must not make the file sweep itself conditional on it.
+    const db = makeDb(['f1']);
+    const { dataLakeFindings: _unwired, ...dbWithoutFindings } = db;
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db: dbWithoutFindings });
+
+    expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalledWith('f1');
   });
 });

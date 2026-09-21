@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { InconsistencyFinding } from '@bike4mind/common';
-import { LAKE_FINDING_SOURCE_MAX } from '@bike4mind/common';
+import { EVIDENCE_MAX, LAKE_FINDING_SOURCE_MAX } from '@bike4mind/common';
 import { recordLakeFindings } from './recordLakeFindings';
 
 const SEEN_AT = new Date('2026-09-21T00:00:00Z');
@@ -72,6 +72,14 @@ describe('recordLakeFindings', () => {
     expect(recordDetected.mock.calls[0][0].detector).toBe('model');
   });
 
+  it('keeps the storage cap aligned with the detector-report cap', async () => {
+    // Two constants on purpose (see LAKE_FINDING_SOURCE_MAX), but they were tied together by
+    // nothing but a comment - so raising one for its own reason would silently either truncate a
+    // report the detector meant to store whole, or persist more excerpts per row than the size
+    // measurement behind EVIDENCE_MAX allows for. This is the tie.
+    expect(LAKE_FINDING_SOURCE_MAX).toBe(EVIDENCE_MAX);
+  });
+
   it('caps stored sources regardless of what a producer supplies', async () => {
     const recordDetected = vi.fn().mockResolvedValue({});
     const oversized = finding({
@@ -87,6 +95,31 @@ describe('recordLakeFindings', () => {
     // The lexical detector already caps at its own EVIDENCE_MAX, so this is asserting the guard for
     // the producer that does NOT - a row's size must not depend on a caller having remembered it.
     expect(recordDetected.mock.calls[0][0].sources).toHaveLength(LAKE_FINDING_SOURCE_MAX);
+  });
+
+  // The boundary itself, where an off-by-one in the slice would live: MAX must pass through whole
+  // and MAX + 1 must lose exactly one. The MAX + 5 case above is comfortably past either mistake.
+  it.each([
+    [LAKE_FINDING_SOURCE_MAX - 1, LAKE_FINDING_SOURCE_MAX - 1],
+    [LAKE_FINDING_SOURCE_MAX, LAKE_FINDING_SOURCE_MAX],
+    [LAKE_FINDING_SOURCE_MAX + 1, LAKE_FINDING_SOURCE_MAX],
+  ])('stores %i sources as %i', async (supplied, expected) => {
+    const recordDetected = vi.fn().mockResolvedValue({});
+    const at = finding({
+      evidence: Array.from({ length: supplied }, (_, i) => ({
+        fabFileId: `file-${i}`,
+        fileName: `${i}.md`,
+        excerpt: 'x',
+      })),
+    });
+
+    await recordLakeFindings('lake-1', [at], { detector: 'model', seenAt: SEEN_AT }, adapters(recordDetected));
+
+    const sources = recordDetected.mock.calls[0][0].sources;
+    expect(sources).toHaveLength(expected);
+    // Truncation keeps the FIRST entries, so the detector's own ordering survives the cap.
+    expect(sources[0].fabFileId).toBe('file-0');
+    expect(sources[sources.length - 1].fabFileId).toBe(`file-${expected - 1}`);
   });
 
   it('preserves a null fileName rather than inventing one', async () => {
@@ -117,13 +150,21 @@ describe('recordLakeFindings', () => {
     // partial rather than as a clean run.
     expect(result).toEqual({ recorded: 2, failed: 1 });
     expect(recordDetected).toHaveBeenCalledTimes(3);
-    expect(deps.logger.error).toHaveBeenCalledWith('Failed to record lake finding', expect.objectContaining({ subject: 'b' }));
+    expect(deps.logger.error).toHaveBeenCalledWith(
+      'Failed to record lake finding',
+      expect.objectContaining({ subject: 'b' })
+    );
   });
 
   it('writes nothing and reports a clean run when a pass found nothing', async () => {
     const recordDetected = vi.fn().mockResolvedValue({});
 
-    const result = await recordLakeFindings('lake-1', [], { detector: 'lexical', seenAt: SEEN_AT }, adapters(recordDetected));
+    const result = await recordLakeFindings(
+      'lake-1',
+      [],
+      { detector: 'lexical', seenAt: SEEN_AT },
+      adapters(recordDetected)
+    );
 
     expect(result).toEqual({ recorded: 0, failed: 0 });
     expect(recordDetected).not.toHaveBeenCalled();

@@ -58,13 +58,13 @@ import handler from '../[findingId]';
 const lake = { id: 'lakeDoc1' };
 const existing = { id: 'f1', lakeId: 'lakeDoc1', status: 'open' };
 
-const invoke = (body: Record<string, unknown>) => {
+const invoke = (body: Record<string, unknown>, findingId = 'f1') => {
   const json = vi.fn();
   const res = { json, status: vi.fn(() => ({ json })) };
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method: 'POST', query: { id: 'lake1', findingId: 'f1' }, body, user: { id: 'curator-1' } },
+      { method: 'POST', query: { id: 'lake1', findingId }, body, user: { id: 'curator-1' } },
       res
     ),
   };
@@ -165,6 +165,43 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
 
   it('refuses a resolution note past the cap', async () => {
     await expect(invoke({ action: 'resolve', resolution: 'x'.repeat(501) }).done).rejects.toThrow();
+    expect(h.resolveFinding).not.toHaveBeenCalled();
+  });
+
+  it('reports a vanished row on the assign path as not-found, not as a success', async () => {
+    // The belongs-to-lake read proved the row existed a moment ago; a null here means it was
+    // deleted in between (a lake teardown racing a curator). Without the guard the route would
+    // answer `{ data: null }` with a 200 and the picker would render an assignment that never
+    // happened.
+    h.assignFinding.mockResolvedValue(null);
+
+    await expect(invoke({ action: 'assign', assigneeUserId: 'curator-2' }).done).rejects.toThrow(/not found/i);
+  });
+
+  it.each([
+    ['assign', { action: 'assign', assigneeUserId: 'curator-2' }],
+    ['dismiss', { action: 'dismiss' }],
+  ])("refuses ANOTHER lake's finding on the %s path too, not just resolve", async (_action, body) => {
+    // The guard sits above the action branch, so every action must inherit it. Pinned per action
+    // because a later refactor that moves the check inside the resolve branch would otherwise leave
+    // assign and dismiss as a cross-lake hole with the suite still green.
+    h.findById.mockResolvedValue({ ...existing, lakeId: 'someone-elses-lake' });
+
+    await expect(invoke(body).done).rejects.toThrow(/not found/i);
+    expect(h.assignFinding).not.toHaveBeenCalled();
+    expect(h.resolveFinding).not.toHaveBeenCalled();
+  });
+
+  it('hands a non-ObjectId findingId straight to the lookup and 404s on the null', async () => {
+    // The route does no id validation of its own - it relies on BaseRepository.findById returning
+    // null for an uncastable id. Pinned because nothing else states that dependency: a repository
+    // that let the CastError escape instead would turn a caller-supplied string into a 500, which
+    // is both a worse status and a probe oracle. Asserting the raw value reaches the lookup is what
+    // catches a "sanitizing" coercion being added above it.
+    h.findById.mockResolvedValue(null);
+
+    await expect(invoke({ action: 'resolve' }, 'not-an-object-id').done).rejects.toThrow(/not found/i);
+    expect(h.findById).toHaveBeenCalledWith('not-an-object-id');
     expect(h.resolveFinding).not.toHaveBeenCalled();
   });
 });

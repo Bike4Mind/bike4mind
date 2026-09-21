@@ -121,6 +121,14 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
     await expect(invoke({ detector: 'psychic' }).done).rejects.toThrow();
   });
 
+  it('refuses a repeated limit rather than coercing the array to a number', async () => {
+    // `?limit=10&limit=20` arrives as a string[], and `z.coerce.number()` on an array does NOT
+    // throw on its own - Number(['10']) is 10, so a single-element array would coerce silently and
+    // a two-element one lands as NaN. Pinned so the page bound stays a thing the schema decides.
+    await expect(invoke({ limit: ['10', '20'] as unknown as string }).done).rejects.toThrow();
+    expect(h.listByLake).not.toHaveBeenCalled();
+  });
+
   it('refuses a limit above the page cap', async () => {
     await expect(invoke({ limit: '500' }).done).rejects.toThrow();
   });

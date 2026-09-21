@@ -99,7 +99,20 @@ class DataLakeFindingRepository extends BaseRepository<IDataLakeFindingDocument>
         {
           // Observation only. Status, assignee and resolution are absent on purpose: a re-detection
           // must not overwrite a curator's decision, and must not reopen what they closed.
-          $set: { sources, documentCount, lastSeenAt: seenAt },
+          $set: { sources, documentCount },
+          // `$max`, not `$set`: two runs can land out of order (a retried queue message, a slow run
+          // finishing after a later one), and a plain $set would drag `lastSeenAt` BACKWARDS. That
+          // is not cosmetic - it falsifies the two things this field is read for: the
+          // `lastSeenAt > resolvedAt` recurrence signal documented on the interface, and the
+          // `lastSeenAt: -1` review-queue sort. It can also invert `firstSeenAt > lastSeenAt`.
+          // On insert $max simply sets the field, so the created row still reads seenAt.
+          //
+          // `sources`/`documentCount` stay a plain $set, deliberately: an out-of-order run then
+          // leaves an older-but-still-real observation of the SAME problem, which is a stale quote
+          // rather than a false timestamp. Conditioning them would mean adding a `lastSeenAt` term
+          // to the filter, and a filter that misses turns this upsert into an insert against the
+          // unique key - a guaranteed 11000 and a pointless retry, which is strictly worse.
+          $max: { lastSeenAt: seenAt },
           $setOnInsert: { firstSeenAt: seenAt, status: 'open' },
         },
         { upsert: true, new: true }

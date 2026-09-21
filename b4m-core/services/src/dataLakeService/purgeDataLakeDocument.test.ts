@@ -831,4 +831,30 @@ describe('purgeDataLakeDocument', () => {
     // destruction is global, so the sweep must not be scoped to the authorizing lake.
     expect(db.dataLakeFindings.deleteForPurgedDocument).toHaveBeenCalledWith('file-1');
   });
+
+  it('swallows a failing findings sweep so the owner still gets their bytes back', async () => {
+    // Past the row delete there is no retry door: the file is already gone from every surface. A
+    // throw escaping here would skip the quota refund below it, charging the owner forever for
+    // bytes this call destroyed - a worse outcome than a stranded finding, which the log records.
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    db.dataLakeFindings.deleteForPurgedDocument.mockRejectedValue(new Error('findings sweep failed'));
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const onPurged = vi.fn(async () => {});
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db,
+      storage: makeStorage(),
+      onPurged,
+      logger,
+    });
+
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 27707 }));
+    expect(receipt.documentDeleted).toBe(true);
+    // Logged rather than silent: a stranded excerpt is a retention fact someone has to be able to
+    // find, and this log line is the only trace it leaves.
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not sweep its findings'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
+  });
 });

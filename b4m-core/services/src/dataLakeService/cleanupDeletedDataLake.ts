@@ -39,10 +39,12 @@ interface CleanupDeletedDataLakeAdapters {
     dataLakeResearchConfigs?: Pick<IDataLakeResearchConfigRepository, 'deleteForLake'>;
     dataLakeResearchRuns?: Pick<IDataLakeResearchRunRepository, 'deleteForLake'>;
     /**
-     * Optional for the same reason again: the detected-findings rows (#3039) are lake-scoped, and a
-     * host that never ran detection has no rows to sweep.
+     * Optional for the same reason again: the detected-findings rows (#3039) exist only where
+     * detection has run. BOTH sweeps are needed and they are not the same sweep: `deleteForLake`
+     * drops this lake's own rows, while `deleteForPurgedDocument` drops every OTHER lake's rows
+     * that quote a document step 2 destroys globally (a file can carry two lakes' meta-tags).
      */
-    dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForLake'>;
+    dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForLake' | 'deleteForPurgedDocument'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -178,7 +180,21 @@ export const cleanupDeletedDataLake = async (
   // Chunked so a large lake doesn't fan out unbounded (Lambda timeout/memory); both writes are
   // no-ops on already-purged data, so a replay over a partially-swept lake is harmless. Chunk
   // deletion covers soft-deleted files too, since the id list is resolved before any hard delete.
+  //
+  // The findings sweep is GLOBAL (`deleteForPurgedDocument`), not lake-scoped, and it is paired
+  // here rather than batched after the loop for the same replay reason as the chunk delete. This
+  // row is about to be destroyed everywhere, but a file can carry two lakes' meta-tags - there is
+  // no exclusivity check on `addFileToLake`, and the membership filter's arms have no "no other
+  // lake's tag" conjunct - so a sibling lake's finding would otherwise be left quoting a 240-char
+  // excerpt of a document that no longer exists, unresolvable and never re-detectable. Step 4f's
+  // `deleteForLake` cannot reach it: that row belongs to the lake that is NOT being deleted.
+  //
+  // FIRST in the iteration, before the row goes. The reverse order strands the finding permanently
+  // on an interruption - once the row is gone the id is no longer resolvable by
+  // `findIdsByDataLakeTag`, so a DLQ retry can never name it again. This way an interruption only
+  // costs a finding that is still re-detectable from a document that still exists.
   await inChunks(fileIds, chunkSize, async id => {
+    await db.dataLakeFindings?.deleteForPurgedDocument(id);
     await db.fabFiles.hardDeleteOneById(id);
     await db.fabFileChunks.deleteManyByFabFileId(id);
   });
