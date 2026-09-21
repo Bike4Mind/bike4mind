@@ -256,13 +256,28 @@ export function applyQuestStatusChanges(
 
   if (changedPromptMeta && quest.promptMeta) {
     const mergedCitables = [...(quest.promptMeta.citables || []), ...(changedPromptMeta.citables || [])];
-    const seenCitableKeys = new Set<string>();
-    const dedupedCitables = mergedCitables.filter(c => {
-      const key = c.id || c.url || c.title;
-      if (!key || seenCitableKeys.has(key)) return false;
-      seenCitableKeys.add(key);
-      return true;
-    });
+    // Dedup keeps ONE entry per identity but prefers the one carrying a passage anchor: the same
+    // file can be cited by a file-level arm and a chunk-level one on the same turn, and keeping
+    // whichever merely arrived first would silently drop the chip the reader can deep-link from
+    // (#3038). The winner takes the loser's POSITION, because a citation index [N] refers to this
+    // array's order - reordering here would repoint every marker after it.
+    const hasPassageAnchor = (citable: (typeof mergedCitables)[number]): boolean =>
+      typeof citable?.metadata?.fullContext === 'string' && citable.metadata.fullContext.length > 0;
+    const citableIndexByKey = new Map<string, number>();
+    const dedupedCitables: typeof mergedCitables = [];
+    for (const citable of mergedCitables) {
+      const key = citable.id || citable.url || citable.title;
+      if (!key) continue;
+      const existingIndex = citableIndexByKey.get(key);
+      if (existingIndex === undefined) {
+        citableIndexByKey.set(key, dedupedCitables.length);
+        dedupedCitables.push(citable);
+        continue;
+      }
+      if (!hasPassageAnchor(dedupedCitables[existingIndex]) && hasPassageAnchor(citable)) {
+        dedupedCitables[existingIndex] = citable;
+      }
+    }
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);
     quest.promptMeta = materializePromptMetaSession(
