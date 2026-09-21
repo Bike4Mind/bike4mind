@@ -48,3 +48,23 @@ premium/libreoncology/src/components/marketing/HomePage\.tsx.*mailto
 # files that actually use this literal, not a bare token that would suppress the pattern on
 # any unrelated line anywhere in the scanned tree.
 (slack|cloudwatch|FeedbackTypes|alarms|feedback/index)\.ts.*nonprod_unconfigured
+
+# --- 24-hex ObjectId pattern ---
+# One canned placeholder id reused verbatim across the API contracts and the OpenAPI output
+# they generate. Its reuse across four files is what marks it as a doc example rather than a
+# real document id. Path-anchored, so the literal is not blanket-allowed tree-wide.
+(openapi\.json|(chat|tts)\.contract\.ts):[0-9]+:.*664f1c2b9a1e4d0012ab34cd
+# Hand-incremented example id in a --help usage line; not a real session.
+packages/scripts/seedContextSummary\.ts.*66a1b2c3d4e5f6a7b8c9d0e1
+# Example id inside prose that teaches an LLM tool caller what an ObjectId looks like.
+packages/cli/src/features/tavern/(TavernModule|tavernTools)\.ts.*6540b58d1f703ade3ea1e82b
+# Vendored third-party bundles, not our code and not identifiers: d3's ColorBrewer palette is
+# concatenated 6-digit CSS hex that reads as a 24-hex run, and Scalar ships an "object-id"
+# sample plus a binary literal whose digits all fall in [0-9a-f].
+apps/client/public/static/lib/d3@[0-9.x]+\.js
+apps/client/public/scalar/scalar\.standalone\.js
+# AWS X-Ray trace-id fragment in a JSDoc example log line, not a Mongo id.
+b4m-core/utils/src/slack\.ts.*Root=1-
+# The canonical MongoDB-docs example ObjectId, reused verbatim in the `getMe` contract's
+# code sample and the OpenAPI output it generates - a doc example, not a real user id.
+(openapi\.json|me\.contract\.ts):[0-9]+:.*507f1f77bcf86cd799439011

@@ -50,6 +50,9 @@ const clampPositive = (value: unknown, fallback: number): number => {
 interface DryRunBody {
   contextWindow?: number;
   maxOutputTokens?: number;
+  /** Mirrors ModelInfo.maxOutputTokensDerived: whether maxOutputTokens is toModelInfo's default
+   * substitute rather than a declared cap. Absent means declared - see models.ts. */
+  maxOutputTokensDerived?: boolean;
   requestedMaxTokens?: number;
   fileIds?: string[];
   /** Present for text models only; a media model reserves no output. */
@@ -92,6 +95,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.READ_FILES] }).post(
     const modelInfo = {
       contextWindow,
       max_tokens: maxOutputTokens || undefined,
+      maxOutputTokensDerived: body.maxOutputTokensDerived === true,
       type: body.modelType,
     } as Parameters<typeof safeInputWindow>[0];
 

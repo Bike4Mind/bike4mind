@@ -6,7 +6,7 @@ const hit = (confidence: 'high' | 'low', ...signals: string[]): ElisionHit => ({
 
 describe('buildElisionStamp', () => {
   it('returns null when nothing was detected, so promptMeta is left untouched', () => {
-    expect(buildElisionStamp([], { wasTruncated: false, priorWarnings: [] })).toBeNull();
+    expect(buildElisionStamp([], { stoppedEarly: false, priorWarnings: [] })).toBeNull();
   });
 
   it('cannot express "no longer elided" on its own - the caller must clear a stale verdict', () => {
@@ -14,12 +14,12 @@ describe('buildElisionStamp', () => {
     // indistinguishable from "never checked", so a re-completion in place would otherwise inherit a
     // verdict from an earlier pass. Unreachable today (the retry path replaces promptMeta wholesale),
     // which is exactly why it needs a test rather than a reader noticing.
-    expect(buildElisionStamp([], { wasTruncated: false, priorWarnings: [ELISION_WARNING] })).toBeNull();
+    expect(buildElisionStamp([], { stoppedEarly: false, priorWarnings: [ELISION_WARNING] })).toBeNull();
   });
 
   it('reports high confidence when ANY artifact was high', () => {
     const stamp = buildElisionStamp([hit('low', 'a'), hit('high', 'b'), hit('low', 'c')], {
-      wasTruncated: false,
+      stoppedEarly: false,
       priorWarnings: [],
     });
 
@@ -28,7 +28,7 @@ describe('buildElisionStamp', () => {
 
   it('reports low confidence only when every artifact was low', () => {
     const stamp = buildElisionStamp([hit('low', 'a'), hit('low', 'b')], {
-      wasTruncated: false,
+      stoppedEarly: false,
       priorWarnings: [],
     });
 
@@ -37,7 +37,7 @@ describe('buildElisionStamp', () => {
 
   it('counts every signal across artifacts, not just the persisted ones', () => {
     const many = Array.from({ length: MAX_ELISION_DETAILS + 5 }, (_, i) => `signal-${i}`);
-    const stamp = buildElisionStamp([hit('high', ...many)], { wasTruncated: false, priorWarnings: [] });
+    const stamp = buildElisionStamp([hit('high', ...many)], { stoppedEarly: false, priorWarnings: [] });
 
     expect(stamp?.suspectedElision.signalCount).toBe(MAX_ELISION_DETAILS + 5);
   });
@@ -45,7 +45,7 @@ describe('buildElisionStamp', () => {
   it('marks the details list when it is capped, so it cannot read as complete', () => {
     const many = Array.from({ length: MAX_ELISION_DETAILS + 5 }, (_, i) => `signal-${i}`);
     const details = buildElisionStamp([hit('high', ...many)], {
-      wasTruncated: false,
+      stoppedEarly: false,
       priorWarnings: [],
     })!.suspectedElision.details;
 
@@ -56,7 +56,7 @@ describe('buildElisionStamp', () => {
   it('adds no marker when the details fit exactly at the cap', () => {
     const exact = Array.from({ length: MAX_ELISION_DETAILS }, (_, i) => `signal-${i}`);
     const details = buildElisionStamp([hit('high', ...exact)], {
-      wasTruncated: false,
+      stoppedEarly: false,
       priorWarnings: [],
     })!.suspectedElision.details;
 
@@ -66,7 +66,7 @@ describe('buildElisionStamp', () => {
 
   it('appends the user-facing warning once, preserving earlier warnings', () => {
     const stamp = buildElisionStamp([hit('high', 'a')], {
-      wasTruncated: false,
+      stoppedEarly: false,
       priorWarnings: ['something else happened'],
     });
 
@@ -75,30 +75,31 @@ describe('buildElisionStamp', () => {
 
   it('does not append the warning twice if the block runs again for one completion', () => {
     const stamp = buildElisionStamp([hit('high', 'a')], {
-      wasTruncated: false,
+      stoppedEarly: false,
       priorWarnings: ['something else happened', ELISION_WARNING],
     });
 
     expect(stamp?.warnings.filter(w => w === ELISION_WARNING)).toHaveLength(1);
   });
 
-  it('suppresses the warning when the response also hit the output ceiling', () => {
-    // Truncation has its own, more accurate warning and the client suppresses the elision banner in
-    // that case, so stamping both reported one underlying event twice.
-    const stamp = buildElisionStamp([hit('high', 'a')], { wasTruncated: true, priorWarnings: [] });
+  it('suppresses the warning when the response also stopped early', () => {
+    // An early stop (the output ceiling, or a degeneration abort) has its own, more accurate
+    // warning and the client suppresses the elision banner in that case, so stamping both
+    // reported one underlying event twice.
+    const stamp = buildElisionStamp([hit('high', 'a')], { stoppedEarly: true, priorWarnings: [] });
 
     expect(stamp?.warnings).toEqual([]);
   });
 
-  it('still records the verdict when truncated, because it is the diagnostic record', () => {
-    const stamp = buildElisionStamp([hit('high', 'a')], { wasTruncated: true, priorWarnings: [] });
+  it('still records the verdict when the reply stopped early, because it is the diagnostic record', () => {
+    const stamp = buildElisionStamp([hit('high', 'a')], { stoppedEarly: true, priorWarnings: [] });
 
     expect(stamp?.suspectedElision).toMatchObject({ confidence: 'high', signalCount: 1 });
   });
 
   it('does not mutate the caller-supplied warnings array', () => {
     const prior = ['first'];
-    buildElisionStamp([hit('high', 'a')], { wasTruncated: false, priorWarnings: prior });
+    buildElisionStamp([hit('high', 'a')], { stoppedEarly: false, priorWarnings: prior });
 
     expect(prior).toEqual(['first']);
   });

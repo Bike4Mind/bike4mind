@@ -57,6 +57,11 @@ beforeEach(() => {
   h.resetMutate.mockReset();
   h.confirmRun.mockClear();
   h.confirmRun.mockImplementation((opts: { onOk?: () => void | Promise<void> }) => opts.onOk?.());
+  // Without this, a test asserting a bare toast string can pass on a PRIOR test's stale call
+  // instead of its own - vi.mock's module-level toast object is shared across every test in
+  // this file and is otherwise never reset.
+  vi.mocked(toast.success).mockClear();
+  vi.mocked(toast.error).mockClear();
 });
 
 describe('AdminApiKeysModal', () => {
@@ -92,14 +97,118 @@ describe('AdminApiKeysModal', () => {
     expect(h.resetMutate.mock.calls[0][0]).toBe('k1');
   });
 
-  it('shows a success toast when the reset lands', () => {
+  it('shows a bare success toast when neither counter was at its ceiling', () => {
     h.keys = [KEY];
-    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: {
+          request: { minuteAtLimit: false, dayAtLimit: false },
+          management: { minuteAtLimit: false, dayAtLimit: false },
+        },
+      })
+    );
     renderModal();
 
     fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
 
-    expect(vi.mocked(toast.success)).toHaveBeenCalled();
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Rate limit reset for "pipeline key"');
+  });
+
+  it('names the counter that caused the lockout in the success toast', () => {
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: {
+          request: { minuteAtLimit: true, dayAtLimit: false },
+          management: { minuteAtLimit: false, dayAtLimit: false },
+        },
+      })
+    );
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      'Rate limit reset for "pipeline key" - request counter was at its ceiling'
+    );
+  });
+
+  it('names the management counter alone when only it was at its ceiling', () => {
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: {
+          request: { minuteAtLimit: false, dayAtLimit: false },
+          management: { minuteAtLimit: false, dayAtLimit: true },
+        },
+      })
+    );
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      'Rate limit reset for "pipeline key" - management counter was at its ceiling'
+    );
+  });
+
+  it('flags a counter that failed to clear as unverified, distinct from one confirmed clear', () => {
+    // An undefined entry means clearing that counter itself failed - it must not read as
+    // "confirmed not at its ceiling", which would hide a clear failure behind a clean-looking
+    // toast.
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: { request: undefined, management: { minuteAtLimit: false, dayAtLimit: false } },
+      })
+    );
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      'Rate limit reset for "pipeline key" - request counter could not be verified'
+    );
+  });
+
+  it('shows a bare success toast without throwing when the response has no lockout field (deploy skew)', () => {
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({ success: true, id: 'k1' })
+    );
+    renderModal();
+
+    expect(() => fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'))).not.toThrow();
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith('Rate limit reset for "pipeline key"');
+  });
+
+  it('names both counters when both were at their ceiling', () => {
+    h.keys = [KEY];
+    h.resetMutate.mockImplementation((_id: string, opts?: { onSuccess?: (response: unknown) => void }) =>
+      opts?.onSuccess?.({
+        success: true,
+        id: 'k1',
+        lockout: {
+          request: { minuteAtLimit: false, dayAtLimit: true },
+          management: { minuteAtLimit: true, dayAtLimit: false },
+        },
+      })
+    );
+    renderModal();
+
+    fireEvent.click(screen.getByTestId('admin-api-key-reset-rate-limit-btn-k1'));
+
+    expect(vi.mocked(toast.success)).toHaveBeenCalledWith(
+      'Rate limit reset for "pipeline key" - request and management counters were at their ceilings'
+    );
   });
 
   it('does not reset when the confirmation is dismissed', () => {

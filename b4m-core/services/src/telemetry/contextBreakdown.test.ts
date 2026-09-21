@@ -34,7 +34,7 @@ const fullPromptMeta = (): PromptMeta => ({
     outcome: 'ok',
     mode: 'forced',
     surfaces: ['forced'],
-    dataLakeTags: ['ionq'],
+    dataLakeTags: ['northwind'],
     injected: { chunks: 3, chars: 900 },
   },
   offeredTools: ['search_knowledge_base', 'web_fetch'],
@@ -150,7 +150,42 @@ describe('buildContextBreakdown', () => {
       memory: 300,
       urlContent: 100,
       userMessage: 40,
+      // No bucket recorded on this turn, so the lake volume is UNKNOWN rather than zero.
+      lakeRetrieval: null,
     });
+  });
+
+  it('leaves a pre-change turn whole: unknown lake volume, layers still counted in the system sum', () => {
+    const preChange = fullPromptMeta();
+    preChange.context!.systemPromptDetails!.push(
+      { source: 'session', name: 'knowledge_retrieval', tokenCount: 300, wasIncluded: true },
+      { source: 'session', name: 'lake_memory', tokenCount: 40, wasIncluded: true }
+    );
+
+    const breakdown = buildContextBreakdown(preChange, { questId: 'quest-1' });
+
+    // Nothing recorded a lake bucket on this turn, so it reads as unknown and the lake layers stay
+    // inside the layer sum they were always part of - byte-identical to how they rendered before.
+    expect(breakdown.categories.lakeRetrieval).toBeNull();
+    expect(breakdown.categories.systemPrompt).toBe(2822 + 60 + 38 + 300 + 40);
+    expect(breakdown.categories.systemPromptBilled).toBe(4000);
+  });
+
+  it('promotes a recorded lake bucket out of the system-prompt layer sum', () => {
+    const withLake = fullPromptMeta();
+    withLake.context!.tokensBySource = { ...tokensBySource, systemPrompts: 3660, lakeRetrieval: 340 };
+    withLake.context!.systemPromptDetails!.push(
+      { source: 'session', name: 'knowledge_retrieval', tokenCount: 300, wasIncluded: true },
+      { source: 'session', name: 'lake_memory', tokenCount: 40, wasIncluded: true }
+    );
+
+    const breakdown = buildContextBreakdown(withLake, { questId: 'quest-1' });
+
+    expect(breakdown.categories.lakeRetrieval).toBe(340);
+    // The whole included-layer sum less the 340 now reported as lake: the two rows must not overlap.
+    expect(breakdown.categories.systemPrompt).toBe(2822 + 60 + 38 + 340 - 340);
+    // The residual the write site already netted the lake tokens out of.
+    expect(breakdown.categories.systemPromptBilled).toBe(3660);
   });
 
   it('counts tool invocations per name and marks tools the model was never offered', () => {
@@ -228,6 +263,7 @@ describe('buildContextBreakdown', () => {
         memory: 0,
         urlContent: 0,
         userMessage: 0,
+        lakeRetrieval: null,
       },
       layers: [],
       tools: [],
