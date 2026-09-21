@@ -40,6 +40,7 @@ export const generateTools = (
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
+    sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
     questId,
     getAbortSignal,
@@ -51,6 +52,7 @@ export const generateTools = (
     fullyInlinedAttachmentIds?: ToolContext['fullyInlinedAttachmentIds'];
     suppressLakeArms?: ToolContext['suppressLakeArms'];
     sessionRetrievalTags?: ToolContext['sessionRetrievalTags'];
+    sessionLakeScopeExplicit?: ToolContext['sessionLakeScopeExplicit'];
     sessionPreauthorizedLakeIds?: ToolContext['sessionPreauthorizedLakeIds'];
     questId?: ToolContext['questId'];
     getAbortSignal?: ToolContext['getAbortSignal'];
@@ -99,6 +101,7 @@ export const generateTools = (
     fullyInlinedAttachmentIds,
     suppressLakeArms,
     sessionRetrievalTags,
+    sessionLakeScopeExplicit,
     sessionPreauthorizedLakeIds,
     codeMinifier,
     availableModels,

@@ -168,7 +168,11 @@ import {
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
-import { narrowLakeAccessToSession, type ResolvedLakeAccessSet } from '../dataLakeService/narrowLakeAccessToSession';
+import {
+  narrowLakeAccessToSession,
+  sessionGroundsOnNoLake,
+  type ResolvedLakeAccessSet,
+} from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
@@ -2672,6 +2676,7 @@ export class ChatCompletionProcess {
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
         sessionRetrievalTags: session.retrievalTags,
+        sessionLakeScopeExplicit: session.lakeScopeExplicit,
         sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
         storage: this.storage,
@@ -2895,12 +2900,14 @@ export class ChatCompletionProcess {
         //
         // Mirrors resolveSessionLakeAccess, the one implementation every knowledge tool runs on:
         // owner-wide access narrowed to the session, and nothing at all where the corpus is
-        // personal and the lake arms are suppressed. Fail direction is inherited from
+        // personal or the session grounds on no lake. Both of those are invisible to the narrowing
+        // itself, which reads an empty scope as "no opinion". Fail direction is inherited from
         // getAccessibleDataLakeAccess, which degrades to empty access rather than throwing, so a
         // lake-resolution outage records an empty scope and the replay skips the turn.
-        const lakeScope = this.personalCorpusOnly
-          ? []
-          : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
+        const lakeScope =
+          this.personalCorpusOnly || sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
+            ? []
+            : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
@@ -6196,7 +6203,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.logger.log('  - Enabling KnowledgeRetrieval (forced) feature');
       this.features.set(
         'knowledgeRetrieval',
-        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter, preauthorizedLakeIds)
+        new KnowledgeRetrievalFeature(
+          this,
+          retrievalTags,
+          citationStyle,
+          retrievalFilter,
+          preauthorizedLakeIds,
+          lakeScopeExplicit
+        )
       );
 
       // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer

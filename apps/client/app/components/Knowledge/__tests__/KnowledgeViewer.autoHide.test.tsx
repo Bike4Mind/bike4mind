@@ -66,7 +66,14 @@ vi.mock('@client/app/components/ProfileModal/ContentPreviewModal', () => ({ defa
 vi.mock('../EditFileDialog', () => ({ default: () => null }));
 vi.mock('../DiffPreview', () => ({ default: () => null }));
 vi.mock('../TextViewer', () => ({ default: () => <div data-testid="text-viewer" /> }));
-vi.mock('../MarkdownViewer', () => ({ default: () => null }));
+vi.mock('../MarkdownViewer', () => ({
+  default: () => null,
+  // KnowledgeViewer imports this named export for its Mermaid branch; a mock without it renders
+  // `undefined` as a component the moment that branch is hit.
+  UnmarkedCitedPassage: ({ passage }: { passage: string }) => (
+    <div data-testid="markdown-cited-passage-fallback">{passage}</div>
+  ),
+}));
 vi.mock('../DOCXViewer', () => ({ default: () => null }));
 vi.mock('../CSVViewer', () => ({ default: () => null }));
 vi.mock('../JSONViewer', () => ({ default: () => null }));
@@ -221,5 +228,64 @@ describe('KnowledgeViewer auto-hide wiring', () => {
 
     expect(screen.getByTestId(EMPTY_STATE_TESTID)).toBeTruthy();
     expect(h.setSessionLayoutCalls.some(call => call.layout === 'hide')).toBe(true);
+  });
+});
+
+/**
+ * The citation anchor's lifetime is pinned on the store in useSessionLayout.citedPassage.test.ts;
+ * this pins the CALL SITE. Deleting clearSessionScopedViewerState() from the session-change effect
+ * leaves that store test green, and the reader keeps an anchor into the previous notebook's
+ * document - which can only mark the wrong text or nothing at all (#3038).
+ */
+describe('KnowledgeViewer session-scoped viewer state', () => {
+  const anchor = { fileId: 'file-a', chunkId: 'chunk-1', passage: 'Holidays accrue monthly.' };
+
+  beforeEach(() => {
+    h.currentSessionId = 'session-A';
+    h.messageFiles = [];
+    h.systemFiles = [];
+    h.setSessionLayoutCalls = [];
+    useSessionLayout.setState({ layout: 'vertical', recentArtifacts: [], previewFile: null, citedPassage: null });
+  });
+
+  afterEach(() => cleanup());
+
+  const ui = (client: QueryClient) => (
+    <QueryClientProvider client={client}>
+      <KnowledgeViewer />
+    </QueryClientProvider>
+  );
+
+  it('clears the citation anchor on a session switch, with no preview open', async () => {
+    // previewFile stays null on purpose: a chip click writes the anchor synchronously without
+    // opening a preview, which is the case a previewFile-gated clear used to miss entirely.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(ui(client));
+    await act(async () => {});
+
+    useSessionLayout.setState({ citedPassage: anchor });
+
+    h.currentSessionId = 'session-B';
+    await act(async () => {
+      rerender(ui(client));
+    });
+
+    expect(useSessionLayout.getState().citedPassage).toBeNull();
+  });
+
+  it('keeps the anchor across a re-render that is NOT a session switch', async () => {
+    // The control that makes the test above mean something: an unconditional clear would pass it
+    // while wiping the anchor on the very next render after the chip click that set it.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const { rerender } = render(ui(client));
+    await act(async () => {});
+
+    useSessionLayout.setState({ citedPassage: anchor });
+
+    await act(async () => {
+      rerender(ui(client));
+    });
+
+    expect(useSessionLayout.getState().citedPassage).toEqual(anchor);
   });
 });

@@ -354,7 +354,7 @@ export async function processSession(
       const payload = {
         sessionId: session.id,
         userId: config.userId,
-        trigger: 'manual' as const,
+        trigger: 'spider' as const,
       };
 
       if (eventPublisher) {

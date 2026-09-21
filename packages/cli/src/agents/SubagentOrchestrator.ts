@@ -342,6 +342,9 @@ export class SubagentOrchestrator {
         parentInteractionMode: effectiveInteractionMode,
         // Onward forks inherit this agent's model unless they declare their own.
         parentModel: effectiveModel,
+        // Gate the skill's lifecycle hook shell commands through permission.
+        permissionManager: this.deps.permissionManager,
+        promptFn: this.deps.showPermissionPrompt,
       });
       filteredTools.push(skillTool);
 
@@ -364,6 +367,11 @@ export class SubagentOrchestrator {
       sessionId: parentSessionId,
       agentName,
       cwd: process.cwd(),
+      // Gate each agent lifecycle hook's shell command through permission.
+      permission: {
+        permissionManager: this.deps.permissionManager,
+        promptFn: this.deps.showPermissionPrompt,
+      },
     };
 
     const hookedTools = filteredTools.map(tool => wrapToolWithHooks(tool, agentDef.hooks, hookWrapperContext));
@@ -469,7 +477,8 @@ export class SubagentOrchestrator {
         buildHookContext({
           ...hookWrapperContext,
           hookEventName: 'Stop',
-        })
+        }),
+        hookWrapperContext.permission
       );
 
       if (stopResult.decision === 'block') {

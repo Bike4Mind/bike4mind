@@ -75,9 +75,9 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
   assertWriteScope?: () => void;
   /**
    * The resolved audit principal for an API-key caller (undefined for a session caller) - see
-   * `lakeConfigAuditPrincipal`. Attached to the actor below so a toggle that auto-activates a
-   * draft lake attributes the resulting config-change row to the key, not the human it acts for,
-   * matching every other audited config-write door (#1917).
+   * `lakeConfigAuditPrincipal`. Attached to the actor below so a membership change this toggle
+   * makes attributes any resulting audit row to the key, not the human it acts for, matching
+   * every other audited config-write door (#1917).
    */
   auditPrincipal?: LakeAuditPrincipal;
 }
@@ -267,14 +267,11 @@ export const toggleTags = async (
 
   const touchedTags = new Set<string>();
   const lakesByTag = new Map<string, Promise<MembershipLake>>();
+  // Every lake this call's membership writes touched, meta-tag and prefix-arm alike - all of them
+  // need a stats recompute (see finalizePrefixArmLeaves). There is no longer a manage-gated
+  // "activation" split here: recomputeLakeStats never publishes a lake on its own, so
+  // there is nothing left to withhold from an unmanaged prefix-arm join.
   const touchedLakes = new Map<string, MembershipLake>();
-  // Membership via a prefix-arm join is automatic (the read-side predicate grants it purely on
-  // the tag, no permission check), but recomputeLakeStats's activation side effect is gated - see
-  // finalizePrefixArmLeaves. An unmanaged join lands here instead of touchedLakes, so its stats
-  // still get corrected (skipping activation) rather than drifting forever. Checked against
-  // touchedLakes before recomputing, so a lake this actor DOES manage elsewhere in the same
-  // batch isn't redundantly recomputed a second time with activation suppressed.
-  const statsOnlyLakes = new Map<string, MembershipLake>();
   // One tagger for the whole request: it memoizes the lake lookup per meta-tag, so a bulk toggle
   // into one lake costs a single extra read, not one per file.
   const applyFallbackTags = createDataLakeFallbackTagger({ db, logger });
@@ -387,8 +384,9 @@ export const toggleTags = async (
     // Touched only once the write actually lands (or hits the benign race above): both
     // addFileToLake and removeFileFromLake throw their manage-rights gate's BadRequestError
     // before any write, and that throw exits this function before reaching here - so a rejected
-    // toggle never triggers recomputeLakeStats's activateIfDraft side effect on a lake this actor
-    // cannot manage. The same treatment the prefix-arm join below already gets.
+    // meta-tag toggle never recomputes stats for a lake it did not actually move. (A prefix-arm
+    // join below needs no such gate: membership there is granted by the read-side predicate alone,
+    // and a recompute writes nothing but the counts.)
     touchedLakes.set(lake.id, lake);
   };
 
@@ -432,16 +430,11 @@ export const toggleTags = async (
         if (!(error instanceof NotFoundError)) throw error;
       }
     }
-    // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag), but
-    // recomputeLakeStats's activation side effect is stronger: it also flips a draft lake to
-    // active (activateIfDraft), a one-way, publication-visibility change. `file.userId` is the
-    // file's OWNER, not necessarily this actor - `findAllAccessibleByIds` admits a read/write
-    // share, so an unrelated sharee could otherwise force-publish a lake they have no
-    // relationship to. Gated on canManageLake; an unmanaged join still gets its stats corrected
-    // via statsOnlyLakes, just never the activation.
+    // MEMBERSHIP needs no gate here (the read-side predicate grants it purely on the tag) - and,
+    // now that a stats recompute can no longer publish a lake as a side effect, no
+    // manage-rights split is needed either. Every prefix-arm join just needs its stats corrected.
     for (const { lake } of prefixJoinsByFile.get(file.id) ?? []) {
-      if (canManageLake(lake, actor, grantResolver.get(lake.id))) touchedLakes.set(lake.id, lake);
-      else statsOnlyLakes.set(lake.id, lake);
+      touchedLakes.set(lake.id, lake);
     }
   };
 
@@ -506,10 +499,7 @@ export const toggleTags = async (
   );
 
   for (const lake of touchedLakes.values()) {
-    await recomputeLakeStats(lake, { db, logger }, { actor });
-  }
-  for (const lake of statsOnlyLakes.values()) {
-    if (!touchedLakes.has(lake.id)) await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
+    await recomputeLakeStats(lake, { db, logger });
   }
 
   // Lake meta-tags are deliberately absent from this set: they are lake membership, not entries in

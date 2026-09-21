@@ -178,7 +178,8 @@ export interface LakeAdmissionAdapters {
  * module at `resolved` below - so an enforcement-disabling flag living in it could ride a
  * `{ ...adapters }` into a door that never asked for it, invisibly and with no type error. A
  * positional options object cannot: every caller that wants it has to name it at the call site.
- * Same split as `recomputeLakeStats(lake, adapters, opts)` and its `skipActivation`.
+ * Same split as `promoteDataLake(actor, id, adapters)`: the policy the caller wants has to be
+ * named at the call site, never inherited from a spread adapters bag.
  */
 export interface LakeAdmissionOptions {
   /**

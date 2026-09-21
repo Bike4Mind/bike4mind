@@ -1,23 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted mocks
-const { mockForSystem, mockListMergedPRs, mockListCommits, mockGetFileContent, mockLogger } = vi.hoisted(() => {
-  const mockListMergedPRs = vi.fn();
-  const mockListCommits = vi.fn();
-  const mockGetFileContent = vi.fn();
-  const mockForSystem = vi.fn();
+const { mockForSystem, mockListMergedPRs, mockListCommits, mockGetFileContent, mockIsRepoAllowed, mockLogger } =
+  vi.hoisted(() => {
+    const mockListMergedPRs = vi.fn();
+    const mockListCommits = vi.fn();
+    const mockGetFileContent = vi.fn();
+    const mockIsRepoAllowed = vi.fn();
+    const mockForSystem = vi.fn();
 
-  const mockLogger: Record<string, ReturnType<typeof vi.fn>> = {
-    info: vi.fn(),
-    log: vi.fn(),
-    error: vi.fn(),
-    warn: vi.fn(),
-    debug: vi.fn(),
-    updateMetadata: vi.fn(),
-  };
+    const mockLogger: Record<string, ReturnType<typeof vi.fn>> = {
+      info: vi.fn(),
+      log: vi.fn(),
+      error: vi.fn(),
+      warn: vi.fn(),
+      debug: vi.fn(),
+      updateMetadata: vi.fn(),
+    };
 
-  return { mockForSystem, mockListMergedPRs, mockListCommits, mockGetFileContent, mockLogger };
-});
+    return { mockForSystem, mockListMergedPRs, mockListCommits, mockGetFileContent, mockIsRepoAllowed, mockLogger };
+  });
 
 vi.mock('@server/services/githubService', () => ({
   GitHubService: {
@@ -31,12 +33,14 @@ vi.mock('@bike4mind/observability', () => ({
 
 import { collectDataForDate } from './whatsNewDataCollector';
 import type { Logger } from '@bike4mind/observability';
+import { WHATS_NEW_DEFAULT_REPOSITORY, WHATS_NEW_DEFAULT_TARGET_BRANCH } from '@bike4mind/common';
 
 function makeGitHubService() {
   return {
     listMergedPullRequests: mockListMergedPRs,
     listCommits: mockListCommits,
     getFileContent: mockGetFileContent,
+    isRepositoryAllowed: mockIsRepoAllowed,
   };
 }
 
@@ -46,7 +50,7 @@ function makePR(overrides: { number: number; title: string; merged_at: string; b
     title: overrides.title,
     body: overrides.body ?? null,
     state: 'closed',
-    html_url: `https://github.com/MillionOnMars/lumina5/pull/${overrides.number}`,
+    html_url: `https://github.com/Bike4Mind/bike4mind/pull/${overrides.number}`,
     merged_at: overrides.merged_at,
     created_at: overrides.merged_at,
     updated_at: overrides.merged_at,
@@ -71,6 +75,7 @@ describe('whatsNewDataCollector', () => {
     mockListMergedPRs.mockResolvedValue([]);
     mockListCommits.mockResolvedValue([]);
     mockGetFileContent.mockResolvedValue(null);
+    mockIsRepoAllowed.mockReturnValue(true);
   });
 
   describe('collectDataForDate', () => {
@@ -81,6 +86,25 @@ describe('whatsNewDataCollector', () => {
 
       expect(result).toBeNull();
       expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('GitHubService.forSystem() returned null'));
+    });
+
+    it('throws when the configured repository is outside the connection whitelist', async () => {
+      mockIsRepoAllowed.mockReturnValue(false);
+
+      await expect(collectDataForDate('2025-03-01', mockLogger as unknown as Logger)).rejects.toThrow(
+        /not in the system GitHub connection/
+      );
+      expect(mockListMergedPRs).not.toHaveBeenCalled();
+    });
+
+    it('defaults to the canonical repository and branch', async () => {
+      await collectDataForDate('2025-03-01', mockLogger as unknown as Logger);
+
+      expect(mockIsRepoAllowed).toHaveBeenCalledWith(WHATS_NEW_DEFAULT_REPOSITORY);
+      expect(mockListMergedPRs).toHaveBeenCalledWith(
+        WHATS_NEW_DEFAULT_REPOSITORY,
+        expect.objectContaining({ base: WHATS_NEW_DEFAULT_TARGET_BRANCH })
+      );
     });
 
     it('returns empty payload with zero filteredPRCount when no PRs found', async () => {
