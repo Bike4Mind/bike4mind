@@ -40,13 +40,17 @@ vi.mock('@bike4mind/database', () => ({
   Project: { find: (...a: unknown[]) => projectFind(...a) },
 }));
 
-// buildListQuery is left REAL: mocking only buildListVisibilityFilter means the leading $match
-// this test inspects is the one the route builds from a real caller's query params, not from
-// canned values (unlike artifacts/__tests__/index.test.ts, which mocks buildListQuery to isolate
-// the route's OTHER behaviour).
+// buildListQuery is left REAL - imported directly from its own file rather than via
+// vi.importActual on the barrel, so this test's only extra import surface is buildListQuery's
+// own (buildListQuery.ts -> @bike4mind/common), not the barrel's ~20 unrelated modules
+// (renderSandboxedBundle, transpileReactArtifact, draftUploadUrl, etc.). Mocking only
+// buildListVisibilityFilter means the leading $match this test inspects is the one the route
+// builds from a real caller's query params, not from canned values (unlike
+// artifacts/__tests__/index.test.ts, which mocks buildListQuery to isolate the route's OTHER
+// behaviour).
 vi.mock('@server/services/publish', async () => {
-  const actual = await vi.importActual<typeof import('@server/services/publish')>('@server/services/publish');
-  return { ...actual, buildListVisibilityFilter: (...a: unknown[]) => buildListVisibilityFilter(...a) };
+  const { buildListQuery } = await import('./buildListQuery');
+  return { buildListQuery, buildListVisibilityFilter: (...a: unknown[]) => buildListVisibilityFilter(...a) };
 });
 
 import handler from '@pages/api/publish/artifacts';
