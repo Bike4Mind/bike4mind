@@ -74,6 +74,7 @@ import {
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   narrowLakeAccessToSession,
+  sessionGroundsOnNoLake,
   sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
@@ -1931,13 +1932,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * for the full contract. Absent/empty = no widening.
    */
   private preauthorizedLakeIds: string[];
+  /** `session.lakeScopeExplicit` - see sessionGroundsOnNoLake for why an empty scope needs it. */
+  private lakeScopeExplicit: boolean | undefined;
 
   constructor(
     chatCompletion: ChatCompletionContext,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
     retrievalFilter?: RetrievalExclusionOptions,
-    preauthorizedLakeIds?: string[]
+    preauthorizedLakeIds?: string[],
+    lakeScopeExplicit?: boolean
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -1945,6 +1949,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.citationStyle = citationStyle === 'indexed' ? 'indexed' : 'named';
     this.retrievalFilter = retrievalFilter ?? {};
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
+    this.lakeScopeExplicit = lakeScopeExplicit;
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2468,6 +2473,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     if (quest.fabFileIds && quest.fabFileIds.length > 0) {
       this.logger.log('🔒 Forced retrieval: skipped (turn has attached files)');
       this.recordForcedSkip(quest, 'attached_files');
+      return [];
+    }
+
+    // The session deliberately grounds on NO lake, so there is nothing to force retrieval against.
+    // Skipping is the whole handling: narrowing to nothing and running anyway would either search
+    // the caller's entire personal library (`restrictToDataLake` is gated on `lakeScoped`, which is
+    // false here) or, with it on, abstain through the `no_lakes` exit and stamp an outcome that
+    // reads as a broken lake rather than a chosen scope. The model can still call
+    // search_knowledge_base for the caller's own files; its lake arms are empty for the same
+    // reason (resolveSessionLakeAccess).
+    //
+    // Checked BEFORE personalCorpusOnly below: that check's remedy ("ask again without the
+    // attachment") assumes the session would otherwise ground on a lake, which is never true once
+    // the scope itself says none. A session that is both no-lake-scoped AND holds only personal
+    // attachments must record the scope as the reason, not the attachment.
+    if (sessionGroundsOnNoLake(this.retrievalTags, this.lakeScopeExplicit)) {
+      this.logger.log('\u{1F512} Forced retrieval: skipped (session is scoped to no data lake)');
+      this.recordForcedSkip(quest, 'no_lake_scope');
       return [];
     }
 
