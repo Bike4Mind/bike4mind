@@ -1,0 +1,171 @@
+import mongoose, { Model, Schema } from 'mongoose';
+import type {
+  IDataLakeFindingDocument,
+  IDataLakeFindingRepository,
+  ListLakeFindingsOptions,
+  RecordLakeFindingInput,
+  ResolveLakeFindingInput,
+} from '@bike4mind/common';
+import { INCONSISTENCY_KINDS, LAKE_FINDING_DETECTORS, LAKE_FINDING_STATUSES } from '@bike4mind/common';
+import BaseRepository from '@bike4mind/db-core';
+
+const ModelName = 'DataLakeFinding';
+
+interface IDataLakeFindingModel extends Model<IDataLakeFindingDocument> {}
+
+/**
+ * One row per machine-detected corpus problem in one lake (#3039). Replaces the single overwritable
+ * report blob on the lake document, which gave findings no identity and so no way to be triaged,
+ * assigned or resolved. See DataLakeFindingTypes.ts for the field-by-field contract, and for why
+ * nothing here may gate ingest.
+ */
+const DataLakeFindingSchema = new Schema<IDataLakeFindingDocument>(
+  {
+    lakeId: { type: String, required: true },
+    kind: { type: String, enum: INCONSISTENCY_KINDS, required: true },
+    subject: { type: String, required: true },
+    detector: { type: String, enum: LAKE_FINDING_DETECTORS, required: true },
+    // Mirrors LakeFindingSource field for field. Mongoose strict mode drops anything declared on
+    // one side only, so a field added there must be added here in the same commit or it is
+    // silently not persisted.
+    sources: {
+      type: [
+        new Schema(
+          {
+            fabFileId: { type: String, required: true },
+            fileName: { type: String, default: null },
+            excerpt: { type: String, required: true },
+          },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+    documentCount: { type: Number, required: true },
+    status: { type: String, enum: LAKE_FINDING_STATUSES, required: true, default: 'open' },
+    firstSeenAt: { type: Date, required: true },
+    lastSeenAt: { type: Date, required: true },
+    assigneeUserId: { type: String, default: null },
+    resolution: { type: String, default: null },
+    resolvedByUserId: { type: String, default: null },
+    resolvedAt: { type: Date, default: null },
+  },
+  {
+    timestamps: true,
+    versionKey: false,
+    toJSON: { virtuals: true },
+    toObject: { virtuals: true },
+  }
+);
+
+// The finding's identity. `unique` here is a data constraint, not a query hint: it IS the "one row
+// per problem" invariant this collection exists to deliver, and `recordDetected` is a single upsert
+// against exactly this key rather than a read followed by a write, so the index is what makes two
+// concurrent detection runs over one lake converge on one row instead of two.
+//
+// Unconditionally unique, unlike the proposal queue's pending-only partial index. A terminal
+// proposal must free its key so a changed source can be re-proposed; a terminal finding must NOT,
+// because re-detecting a resolved problem is the same problem recurring, not a new one. Keeping the
+// key occupied is what lets `lastSeenAt` move past `resolvedAt` and make that recurrence visible.
+DataLakeFindingSchema.index({ lakeId: 1, detector: 1, kind: 1, subject: 1 }, { unique: true });
+// The review queue: one lake's findings, most recently seen first, narrowed by status then kind.
+// Ordered so the lakeId prefix still serves a kind-only or unfiltered listing.
+DataLakeFindingSchema.index({ lakeId: 1, status: 1, kind: 1, lastSeenAt: -1 });
+
+export const DataLakeFindingModel: IDataLakeFindingModel =
+  (mongoose.models[ModelName] as IDataLakeFindingModel) ||
+  mongoose.model<IDataLakeFindingDocument, IDataLakeFindingModel>(ModelName, DataLakeFindingSchema);
+
+class DataLakeFindingRepository
+  extends BaseRepository<IDataLakeFindingDocument>
+  implements IDataLakeFindingRepository
+{
+  constructor(private findingModel: mongoose.Model<IDataLakeFindingDocument>) {
+    super(findingModel);
+  }
+
+  async recordDetected(input: RecordLakeFindingInput): Promise<IDataLakeFindingDocument> {
+    const { lakeId, kind, subject, detector, sources, documentCount, seenAt } = input;
+    // The four key fields are equality terms in the filter, so an insert derives them from it. They
+    // are deliberately not repeated in $setOnInsert, where they would be a second place to drift.
+    const key = { lakeId, detector, kind, subject };
+
+    const upsert = () =>
+      this.findingModel.findOneAndUpdate(
+        key,
+        {
+          // Observation only. Status, assignee and resolution are absent on purpose: a re-detection
+          // must not overwrite a curator's decision, and must not reopen what they closed.
+          $set: { sources, documentCount, lastSeenAt: seenAt },
+          $setOnInsert: { firstSeenAt: seenAt, status: 'open' },
+        },
+        { upsert: true, new: true }
+      );
+
+    const doc = await upsert().catch(error => {
+      // Two upserts racing the same new key: both miss on the find, both attempt the insert, and
+      // the loser gets 11000. The winner's row is the row this caller wanted, so retrying once
+      // finds it and takes the update path. A bare code check is unambiguous here - the identity
+      // index is this collection's only unique index other than `_id`.
+      if ((error as { code?: number }).code !== 11000) throw error;
+      return upsert();
+    });
+
+    // `new: true` with `upsert: true` always returns a document; this narrows the type rather than
+    // hiding a case.
+    if (!doc) throw new Error(`Failed to record finding for lake ${lakeId}`);
+    return doc.toJSON() as IDataLakeFindingDocument;
+  }
+
+  async listByLake(lakeId: string, options?: ListLakeFindingsOptions): Promise<IDataLakeFindingDocument[]> {
+    const query = this.findingModel
+      .find({
+        lakeId,
+        ...(options?.status ? { status: options.status } : {}),
+        ...(options?.kind ? { kind: options.kind } : {}),
+        ...(options?.detector ? { detector: options.detector } : {}),
+      })
+      .sort({ lastSeenAt: -1 });
+    if (options?.limit) query.limit(options.limit);
+    const docs = await query;
+    return docs.map(d => d.toJSON() as IDataLakeFindingDocument);
+  }
+
+  async resolveFinding(id: string, input: ResolveLakeFindingInput): Promise<IDataLakeFindingDocument | null> {
+    const { status, resolvedByUserId, resolvedAt, resolution } = input;
+    // `status: 'open'` in the FILTER is the double-resolve guard: the second writer of a race
+    // matches nothing and gets null. Never split into a read then a write.
+    const doc = await this.findingModel.findOneAndUpdate(
+      { _id: id, status: 'open' },
+      { $set: { status, resolvedByUserId, resolvedAt, resolution: resolution ?? null } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeFindingDocument) ?? null;
+  }
+
+  async assignFinding(id: string, assigneeUserId: string | null): Promise<IDataLakeFindingDocument | null> {
+    const doc = await this.findingModel.findOneAndUpdate(
+      { _id: id },
+      { $set: { assigneeUserId } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeFindingDocument) ?? null;
+  }
+
+  async deleteForLake(lakeId: string): Promise<number> {
+    const res = await this.findingModel.deleteMany({ lakeId });
+    return res.deletedCount ?? 0;
+  }
+
+  async deleteForPurgedDocument(fabFileId: string): Promise<number> {
+    // A single dotted condition over the `sources` array, so this needs no $elemMatch: the
+    // cross-element matching hazard only arises once two conditions have to hold on the SAME
+    // element. Unindexed and deliberately not lake-scoped - see the interface for why the blast
+    // radius is global. A purge is rare and operator-initiated, so a collection scan bounded by
+    // ~200 findings per lake is the right trade against carrying an index for it.
+    const res = await this.findingModel.deleteMany({ 'sources.fabFileId': fabFileId });
+    return res.deletedCount ?? 0;
+  }
+}
+
+export const dataLakeFindingRepository = new DataLakeFindingRepository(DataLakeFindingModel);

@@ -26,6 +26,9 @@ const makeDb = (fileOverrides: Record<string, unknown> = {}) => {
     dataLakeAccessGrants: {
       listByLake: vi.fn(async () => [] as never),
     },
+    dataLakeFindings: {
+      deleteForPurgedDocument: vi.fn(async () => 0),
+    },
     sessions: {
       findAllWithKnowledgeId: vi.fn(async () => [] as never),
       update: vi.fn(async () => ({}) as never),
@@ -816,5 +819,16 @@ describe('purgeDataLakeDocument', () => {
     const db = makeDb();
     await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() });
     expect(db.dataLakes.setStats).toHaveBeenCalledWith('lake-1', { fileCount: 4, totalSizeBytes: 900 });
+  });
+  it('sweeps findings that quote the purged document', async () => {
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() });
+
+    // A finding carries a 240-char excerpt of each source, so a row citing this document would keep
+    // quoting text this call was paid to destroy - and nothing else ever sweeps it, because a
+    // finding whose document is gone can never be re-detected. Called with the file id alone: the
+    // destruction is global, so the sweep must not be scoped to the authorizing lake.
+    expect(db.dataLakeFindings.deleteForPurgedDocument).toHaveBeenCalledWith('file-1');
   });
 });

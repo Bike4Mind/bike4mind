@@ -5,6 +5,7 @@ import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  dataLakeFindingRepository,
   fabFileRepository,
   fabFileChunkRepository,
 } from '@bike4mind/database';
@@ -106,6 +107,27 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       inconsistencyReport: stored,
       inconsistencyComputedAt: computedAt,
     });
+
+    // Also emit each finding as a durable row (#3039). Additive for now, and ordered after the blob
+    // deliberately: the blob is still what GET here and the counts on GET /health read, so until
+    // #3040 moves those readers over, a failure in this newer path must not cost the run its report.
+    // The same `computedAt` is passed as `seenAt` so a run's rows and its report agree on one
+    // instant rather than drifting by the write's latency.
+    const { failed } = await dataLakeService.recordLakeFindings(
+      lake.id,
+      stored.findings,
+      { detector: 'lexical', seenAt: computedAt },
+      { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
+    );
+    // A partially-written run must not read as a clean one. Each failure is already logged with its
+    // subject by the service; this is the one line that says the RUN was partial.
+    if (failed > 0) {
+      req.logger?.warn('Lake findings partially recorded', {
+        dataLakeId: lake.id,
+        failed,
+        total: stored.findings.length,
+      });
+    }
 
     return res.json({ ...stored, computedAt });
   });

@@ -2,6 +2,7 @@ import type {
   DataLakeDocumentPurgeReceipt,
   IAdminSettingsRepository,
   IDataLakeAccessGrantRepository,
+  IDataLakeFindingRepository,
   IDataLakeRepository,
   IFabFileChunkRepository,
   IFabFileRepository,
@@ -44,6 +45,12 @@ interface PurgeDataLakeDocumentAdapters {
      */
     lakeConfigChangeEvents?: Pick<ILakeConfigChangeEventRepository, 'record'>;
     adminSettings?: Pick<IAdminSettingsRepository, 'findBySettingNames' | 'findAll'>;
+    /**
+     * Optional, like the sweeps on `cleanupDeletedDataLake`: a host that never ran detection has no
+     * findings to sweep. Wire it at the purge door, though - a finding quotes its sources, so a row
+     * left behind keeps a 240-char excerpt of the document this call was paid to destroy.
+     */
+    dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForPurgedDocument'>;
   };
   retrievalIndex?: RetrievalIndexPort;
   /**
@@ -291,6 +298,20 @@ export const purgeDataLakeDocument = async (
       await db.fabFileChunks.deleteManyByFabFileId(file.id);
     } catch (error) {
       logger?.error('[dataLake] permanent deletion removed the row but could not delete its chunks', {
+        fabFileId: file.id,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+
+    // Detected findings quote their sources, so a row citing this document would keep a 240-char
+    // excerpt of text this call was paid to destroy - and nothing else would ever sweep it, since a
+    // finding whose document is gone can never be re-detected. Global, like the destruction itself.
+    // Caught for the same reason as the chunk sweep above: past the row delete there is no retry
+    // door, and a throw here would skip the quota refund below.
+    try {
+      await db.dataLakeFindings?.deleteForPurgedDocument(file.id);
+    } catch (error) {
+      logger?.error('[dataLake] permanent deletion removed the row but could not sweep its findings', {
         fabFileId: file.id,
         error: error instanceof Error ? error.message : 'Unknown error',
       });

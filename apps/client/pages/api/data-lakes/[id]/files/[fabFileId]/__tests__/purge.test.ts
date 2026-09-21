@@ -63,6 +63,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeAccessGrantRepository: {},
+  dataLakeFindingRepository: { deleteForPurgedDocument: vi.fn(async () => 0) },
   fabFileRepository: {},
   fabFileChunkRepository: {},
   sessionRepository: {},

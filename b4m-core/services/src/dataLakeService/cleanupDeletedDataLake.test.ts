@@ -24,6 +24,9 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
     listByLake: vi.fn(async () => [] as never),
     removeAllForLake: vi.fn(async () => {}),
   },
+  dataLakeFindings: {
+    deleteForLake: vi.fn(async () => 0),
+  },
   batches: {
     find: vi.fn(async () => [] as never),
     delete: vi.fn(async () => {}),
@@ -148,5 +151,14 @@ describe('cleanupDeletedDataLake', () => {
     ).rejects.toThrow('index down');
     expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['f1', 'f2']);
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+  });
+  it('cascade-drops the lake findings, whose excerpts would otherwise outlive their corpus', async () => {
+    const db = makeDb();
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    // Not just tidiness: a finding stores excerpts of the documents this sweep just hard-deleted,
+    // so leaving the rows behind would keep quoting a corpus that no longer exists.
+    expect(db.dataLakeFindings.deleteForLake).toHaveBeenCalledWith('lake-1');
   });
 });

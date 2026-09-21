@@ -1,5 +1,6 @@
 import type {
   IDataLakeAccessGrantRepository,
+  IDataLakeFindingRepository,
   IDataLakeProposalRepository,
   IDataLakeResearchConfigRepository,
   IDataLakeResearchRunRepository,
@@ -37,6 +38,11 @@ interface CleanupDeletedDataLakeAdapters {
      */
     dataLakeResearchConfigs?: Pick<IDataLakeResearchConfigRepository, 'deleteForLake'>;
     dataLakeResearchRuns?: Pick<IDataLakeResearchRunRepository, 'deleteForLake'>;
+    /**
+     * Optional for the same reason again: the detected-findings rows (#3039) are lake-scoped, and a
+     * host that never ran detection has no rows to sweep.
+     */
+    dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForLake'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -220,6 +226,12 @@ export const cleanupDeletedDataLake = async (
   // those went with 4c. Idempotent.
   await db.dataLakeResearchConfigs?.deleteForLake(dataLakeId);
   await db.dataLakeResearchRuns?.deleteForLake(dataLakeId);
+
+  // 4f. And the detected findings (#3039). A finding names documents that 4a already hard-deleted,
+  // so nobody could act on it, and its excerpts would outlive the corpus they were quoted from -
+  // the one consequence here that is a data-retention question rather than a tidiness one.
+  // Idempotent.
+  await db.dataLakeFindings?.deleteForLake(dataLakeId);
 
   // 5. Delete the lake record last, so a mid-sweep failure leaves it recoverable/re-runnable.
   await db.dataLakes.delete(dataLakeId);
