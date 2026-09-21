@@ -1,7 +1,4 @@
 import { describe, it, expect } from 'vitest';
-import { statSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import {
   convertCodeBlocksToArtifacts as coreConvertCodeBlocksToArtifacts,
   parseArtifacts as coreParseArtifacts,
@@ -824,18 +821,20 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
  * The core side of this comparison (coreConvertCodeBlocksToArtifacts / coreParseArtifacts)
  * resolves through @bike4mind/utils' package exports to b4m-core/utils/dist, not source.
  * `pnpm turbo:core:build` rebuilds that dist after any core change; CI is safe because
- * turbo's test task depends on ^build, but running this file alone via
- * `pnpm --filter @bike4mind/client test artifactParser` silently validates a stale core
- * build if the dist is out of date.
+ * turbo's test task depends on ^build, and the first case below fails loudly when a local
+ * run would otherwise validate a stale core build.
  */
 describe('parity with the core parser', () => {
-  // Mechanical version of the warning above: if src is newer than the built dist,
-  // the imports at the top of this file resolved to stale output.
-  it('core dist is not stale relative to core src', () => {
-    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
-    const srcMtime = statSync(resolve(repoRoot, 'b4m-core/utils/src/artifactParser.ts')).mtimeMs;
-    const distMtime = statSync(resolve(repoRoot, 'b4m-core/utils/dist/artifactParser.mjs')).mtimeMs;
-    expect(srcMtime, 'core dist is stale - run pnpm turbo:core:build').toBeLessThanOrEqual(distMtime);
+  // Pins a behavior this branch changed in core (extractHTMLTitle strips a literal double
+  // quote from the title, not just the toolCallJsonToArtifact call site), so a stale dist
+  // fails on content. An mtime comparison cannot do this job: mtime moves on a branch
+  // switch, content does not, and turbo then skips the rebuild its own message asks for.
+  it('core dist reflects this branch, not a stale build', () => {
+    const doc = '<!DOCTYPE html>\n<html><head><title>Say "Hi"</title></head><body>Hi</body></html>';
+    const result = coreConvertCodeBlocksToArtifacts(doc);
+    expect(result, 'core dist is stale - run pnpm turbo:core:build (or --force if that reports FULL TURBO)').toContain(
+      'title="Say Hi"'
+    );
   });
 
   const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
