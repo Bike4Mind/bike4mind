@@ -6,11 +6,11 @@ import { acceptInvite } from './accept';
 describe('sharingService - acceptInvite (Organization)', () => {
   const userId = 'user-123';
   const organizationId = 'org-456';
-  const inviteId = 'invite-789';
+  const inviteId = '65a1f77bcf86cd7994390789';
 
   let mockAdapters: {
     db: {
-      invites: { findById: Mock; update: Mock };
+      invites: { findById: Mock; findByToken: Mock; update: Mock };
       sessions: { findById: Mock; update: Mock; findAllByIds: Mock };
       projects: { findById: Mock; update: Mock };
       fabFiles: { findById: Mock; update: Mock; findAllByIds: Mock };
@@ -51,7 +51,7 @@ describe('sharingService - acceptInvite (Organization)', () => {
     vi.clearAllMocks();
     mockAdapters = {
       db: {
-        invites: { findById: vi.fn(), update: vi.fn() },
+        invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
         sessions: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
         projects: { findById: vi.fn(), update: vi.fn() },
         fabFiles: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
@@ -181,11 +181,11 @@ describe('sharingService - acceptInvite (Group)', () => {
   const userId = 'user-123';
   const groupId = 'group-456';
   const organizationId = 'org-789';
-  const inviteId = 'invite-999';
+  const inviteId = '65a1f77bcf86cd7994390999';
 
   let mockAdapters: {
     db: {
-      invites: { findById: Mock; update: Mock };
+      invites: { findById: Mock; findByToken: Mock; update: Mock };
       sessions: { findById: Mock; update: Mock; findAllByIds: Mock };
       projects: { findById: Mock; update: Mock };
       fabFiles: { findById: Mock; update: Mock; findAllByIds: Mock };
@@ -232,7 +232,7 @@ describe('sharingService - acceptInvite (Group)', () => {
     vi.clearAllMocks();
     mockAdapters = {
       db: {
-        invites: { findById: vi.fn(), update: vi.fn() },
+        invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
         sessions: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
         projects: { findById: vi.fn(), update: vi.fn() },
         fabFiles: { findById: vi.fn(), update: vi.fn(), findAllByIds: vi.fn() },
@@ -309,7 +309,7 @@ describe('sharingService - acceptInvite (Group)', () => {
 describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
   const userId = 'user-1';
   const fileId = 'file-1';
-  const inviteId = 'invite-1';
+  const inviteId = '65a1f77bcf86cd7994390001';
 
   const makeUser = (email: string) => ({ id: userId, email, username: 'u' });
 
@@ -325,7 +325,7 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
 
   const makeAdapters = () => ({
     db: {
-      invites: { findById: vi.fn(), update: vi.fn() },
+      invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
       fabFiles: { findById: vi.fn(async () => ({ id: fileId, users: [] })), update: vi.fn() },
       sessions: { findById: vi.fn(), update: vi.fn() },
       projects: { findById: vi.fn(), update: vi.fn() },
@@ -423,7 +423,7 @@ describe('sharingService - acceptInvite (FabFile recipient membership)', () => {
 describe('sharingService - acceptInvite (expiry)', () => {
   const userId = 'user-1';
   const fileId = 'file-1';
-  const inviteId = 'invite-1';
+  const inviteId = '65a1f77bcf86cd7994390001';
 
   const makeUser = () => ({ id: userId, email: 'a@x.com', username: 'a' });
 
@@ -440,7 +440,7 @@ describe('sharingService - acceptInvite (expiry)', () => {
 
   const makeAdapters = () => ({
     db: {
-      invites: { findById: vi.fn(), update: vi.fn() },
+      invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
       fabFiles: { findById: vi.fn(async () => ({ id: fileId, users: [] })), update: vi.fn() },
       sessions: { findById: vi.fn(), update: vi.fn() },
       projects: { findById: vi.fn(), update: vi.fn() },
@@ -491,7 +491,7 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
   const userId = 'user-1';
   const inviterId = 'inviter-1';
   const sessionId = 'session-1';
-  const inviteId = 'invite-1';
+  const inviteId = '65a1f77bcf86cd7994390001';
 
   const makeUser = () => ({ id: userId, email: 'accepter@x.com', username: 'accepter' });
 
@@ -515,7 +515,7 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
 
   const makeAdapters = () => ({
     db: {
-      invites: { findById: vi.fn(), update: vi.fn() },
+      invites: { findById: vi.fn(), findByToken: vi.fn(async () => null), update: vi.fn() },
       fabFiles: { findById: vi.fn(), update: vi.fn() },
       sessions: { findById: vi.fn(), update: vi.fn() },
       projects: { findById: vi.fn(), update: vi.fn() },
@@ -633,5 +633,79 @@ describe('sharingService - acceptInvite (Session knowledgeId propagation)', () =
 
     expect(adapters.db.fabFiles.update).toHaveBeenCalledTimes(1);
     expect(adapters.db.fabFiles.update).toHaveBeenCalledWith(expect.objectContaining({ id: 'file-owned' }));
+  });
+});
+
+/**
+ * Accept is reached from two surfaces holding different keys. The inbox lists invites through
+ * `findAllByPendingUserIdOrEmail`, whose projection carries no token, so it can only address them by
+ * `_id`; the share page passes whatever the URL carries, which since the token cutover is the token.
+ * Closing the id door for every tokenized invite would 404 every inbox accept.
+ */
+describe('sharingService - acceptInvite (addressing)', () => {
+  const TOKEN = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
+  const ID = '65a1f77bcf86cd7994390001';
+  const fileId = 'file-1';
+
+  const tokenizedNamedInvite = () => ({
+    id: ID,
+    token: TOKEN,
+    type: InviteType.FabFile,
+    documentId: fileId,
+    isLinkOnly: false,
+    permissions: [Permission.read],
+    remaining: 1,
+    accepted: 0,
+    recipients: { pending: ['me@example.com'], refused: [], accepted: [] },
+  });
+
+  const makeAdapters = () => ({
+    db: {
+      invites: { findById: vi.fn(async () => null), findByToken: vi.fn(async () => null), update: vi.fn() },
+      fabFiles: { findById: vi.fn(async () => ({ id: fileId, users: [] })), update: vi.fn() },
+      sessions: { findById: vi.fn(), update: vi.fn() },
+      projects: { findById: vi.fn(), update: vi.fn() },
+      groups: { findById: vi.fn() },
+      organization: { findById: vi.fn(), update: vi.fn(), ensureUserDetails: vi.fn() },
+      users: {
+        findById: vi.fn(async () => ({ id: 'user-1', email: 'me@example.com', username: 'u' })),
+        update: vi.fn(),
+      },
+    },
+  });
+
+  it('accepts a tokenized named invite by token, as the emailed link addresses it', async () => {
+    const adapters = makeAdapters();
+    adapters.db.invites.findByToken = vi.fn(async () => tokenizedNamedInvite()) as never;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await acceptInvite('user-1', { id: TOKEN }, adapters as any);
+
+    expect(adapters.db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ accepted: 1, remaining: 0 }));
+  });
+
+  it('accepts that same invite by id, as the inbox addresses it', async () => {
+    const adapters = makeAdapters();
+    adapters.db.invites.findById = vi.fn(async () => tokenizedNamedInvite()) as never;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await acceptInvite('user-1', { id: ID }, adapters as any);
+
+    expect(adapters.db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ accepted: 1, remaining: 0 }));
+  });
+
+  // The finding stays closed where it applies: a link invite names nobody, so the key is the whole
+  // authorization and its id must not resolve.
+  it('still refuses a tokenized LINK invite addressed by its id', async () => {
+    const adapters = makeAdapters();
+    adapters.db.invites.findById = vi.fn(async () => ({
+      ...tokenizedNamedInvite(),
+      isLinkOnly: true,
+      recipients: { pending: [], refused: [], accepted: [] },
+    })) as never;
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await expect(acceptInvite('user-1', { id: ID }, adapters as any)).rejects.toThrow(/invite not found/i);
+    expect(adapters.db.invites.update).not.toHaveBeenCalled();
   });
 });

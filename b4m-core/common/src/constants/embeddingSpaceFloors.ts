@@ -15,7 +15,7 @@ import { OpenAIEmbeddingModel } from '../schemas/embedding';
  *   - ABOVE the band: every candidate is rejected and retrieval goes dark while every log line
  *     still reads "no relevant content found". Measured, not hypothesised - ada-002's shipped 0.75
  *     sits above the whole of `text-embedding-3-small`'s 0.2293-0.5588 band and empties 30 of 30
- *     probe queries (`packages/scripts/retrieval/MODEL-COMPARISON.md`).
+ *     probe queries.
  *   - BELOW the band: the gate rejects nothing while reading like a quality filter. The same 75 on
  *     a production lake whose band sat at 0.8025-0.9140 never once bound.
  * Same setting, same model, opposite failures on two corpora. `MEMENTO_MIN_SIMILARITY`'s header
@@ -67,17 +67,40 @@ export function cosineFloorPctForSpace(table: CosineFloorPctByEmbeddingSpace, sp
  * default any more.
  *
  * ada-002 at 75 is the value production shipped and the only one with a production-lake history
- * behind it. 3-small at 35 is PROVISIONAL: measured on the `system-help` lake (51 articles, 452
- * chunks, 30 probe queries), which the harness itself flags as the wrong regime - median chunk 638
- * chars against a production reference of 2182. Right shape, unproven magnitude:
+ * behind it. 3-small at 58 is MEASURED, on a live 520-file / 21,327-chunk capture of the
+ * `opti-knowledge` lake (1536 dims, 2026-09-18), swept against 30 positives authored from that
+ * corpus's own passages plus screened negatives - so recall and false-positive rate come out of ONE
+ * corpus snapshot rather than two. The negatives were screened by reading the served chunk TEXT,
+ * which reclassified 44 of 89 as answerable; the two right-hand columns are that screen's two
+ * defensible readings, counting a PARTIAL answer as answerable or as a false positive.
  *
- *      floors     accepted/q   emptied   recall   precision
- *      0:35            6.8       4/30     70.0%       53.5%
- *      85:35           3.3       4/30     62.0%       71.7%   <- with the relative floor at its default
- *      85:75 (old)     0.0      30/30      0.0%         n/a   <- the blackout this table prevents
+ *      floor   recall   positives emptied   FP (45 strict neg)   FP (61 partial-as-neg)
+ *      85:49   100.0%           0                 71.1%                  78.7%
+ *      85:53   100.0%           0                 64.4%                  73.8%
+ *      85:55    96.7%           1                 60.0%                  68.9%
+ *      85:58    93.3%           2                 42.2%                  52.5%
+ *      85:61    86.7%           4                 22.2%                  36.1%
+ *      85:64    76.7%           7                 13.3%                  19.7%
+ *      85:75    20.0%          24                  0.0%                   0.0%
  *
- * Re-derive against a captured PRODUCTION lake before trusting the magnitude - that is issue #2572
- * item 4b, and `packages/scripts/retrieval/forcedFloorSweep.ts` is the tool for it.
+ * WHY 58 RATHER THAN THE SEPARATION OPTIMUM, WHICH IS 61-64. Recall here is measured on positives
+ * authored FROM corpus passages, so each supporting document is the easiest possible match for its
+ * own question, and this recall is an UPPER BOUND on recall against a real user's phrasing. The
+ * false-positive rate, measured on screened negatives, carries no matching optimism. An optimistic
+ * recall beside an honest false-positive rate biases the optimum HIGH, so the shipped floor is the
+ * low end of the bracket rather than its peak.
+ *
+ * WHAT THE PREVIOUS 49 GOT WRONG, and it was not the magnitude. 49 emptied ZERO positives - it was
+ * not buying recall protection, it simply was not cutting - while 71-79% of screened true negatives
+ * still got something served. The entire range 0-53 costs no recall on this corpus, which the
+ * 35-file capture 49 was fitted to could not show: its decoy column rested on 6 negatives.
+ *
+ * Recall above is of the ACCEPTED set, so it answers "did the floor cut the supporting document",
+ * which is the floor's own question, and is NOT a claim the model saw it - the char budget and the
+ * 256-chunk candidate pool cap are separate narrowings downstream of this gate.
+ *
+ * ada-002's 75 applied in this space would be an outage in all but name: 20% recall, 24 of 30
+ * positives emptied outright. That is the per-space case above restated as a measurement.
  *
  * 3-large is deliberately absent despite having a measured band (0.2104-0.5197): the choice between
  * it and 3-small is recorded as NOT SETTLED, and guessing a floor for a space nobody has run the
@@ -87,28 +110,10 @@ export function cosineFloorPctForSpace(table: CosineFloorPctByEmbeddingSpace, sp
  */
 export const FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE = {
   [OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002]: 75,
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL]: 35,
+  [OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL]: 58,
 } as const satisfies CosineFloorPctByEmbeddingSpace;
 
-/**
- * Topicality floors for the V1 memento corpus, by embedding space.
- *
- * Separate from the file table above because the two corpora are different populations, not
- * different sizes of one: a memento is a single short sentence and a chunk is a passage of a
- * document, so their score distributions differ even inside one vector space. Sharing a table would
- * be the same category error as reusing `MEMENTO_MIN_SIMILARITY` on files, which the measurement
- * rejects outright.
- *
- * V1 mementos embed with whatever `defaultEmbeddingModel` names - unlike V2, which pins
- * `MEMENTO_EMBEDDING_MODEL` precisely so memory can migrate independently - which is what puts this
- * legacy path in the blast radius of a setting change it has no say in.
- *
- * Only ada-002 has a number, and it is the 0.75 both V1 call sites hardcoded rather than anything
- * measured. No other space has been measured for this corpus at all, so every other one resolves to
- * absent and the callers fall back to ranking alone. That is a real loss of precision and it is
- * still the right default: V1's floor is the whole reason it stays quiet on an off-topic question,
- * but a floor above the band does not keep it quiet, it makes memory vanish.
- */
-export const MEMENTO_V1_MIN_SIMILARITY_PCT_BY_SPACE = {
-  [OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002]: 75,
-} as const satisfies CosineFloorPctByEmbeddingSpace;
+// The per-space V1 memento floor table this file used to keep alongside the one above was retired
+// when V1 mementos moved to a compile-time embedding pin: the floor is now a single literal,
+// MEMENTO_MIN_SIMILARITY (schemas/embedding.ts), the same way V2's always was. See
+// getRelevantMementos.ts for the current call site.

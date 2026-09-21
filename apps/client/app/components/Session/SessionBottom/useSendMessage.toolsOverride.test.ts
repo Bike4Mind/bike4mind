@@ -29,6 +29,27 @@ describe('useSendMessage - briefcase toolsOverride on the orchestration path (#9
     expect(source).toMatch(/getSettingObject<unknown>\('orchestrationDefaults', undefined\)/);
   });
 
+  it('withholds the union base until the AUTHED settings fetch has landed', () => {
+    // `mergeIntoDefaults` seeds `orchestrationDefaults` with the compiled-in
+    // schema default for the public CDN query too, so without this gate the
+    // full seed ships whenever the authed fetch failed - re-broadening a
+    // narrowed org toolbelt. Guarding the wiring, since the behavior itself
+    // lives in the provider.
+    expect(source).toMatch(
+      /authedSettingsLoaded\s*\?\s*agentModeDefaultToolNames\(orchestrationDefaultsSetting\)\s*:\s*null/
+    );
+    expect(source).toMatch(/const \{ getSettingObject, authedSettingsLoaded \} = useAdminSettings\(\);/);
+  });
+
+  it('withholds the intent-classifier admin gate until the AUTHED settings fetch has landed', () => {
+    // Same `mergeIntoDefaults` seed leak as the tool union above, one call site
+    // over: `orchestrationDefaults` seeds `intentClassifier.enabled: true`
+    // before the authed fetch resolves, so an org that explicitly disabled the
+    // classifier would still have it running during that window without this
+    // gate.
+    expect(source).toMatch(/const intentClassifierAdminEnabled =\s*authedSettingsLoaded\s*&&\s*getSettingObject/);
+  });
+
   it('assigns enabledTools inside the agent-executor branch and passes it to agentExecution.start', () => {
     const branchIdx = source.indexOf("routeTarget === 'agent_executor'");
     const enabledToolsIdx = source.indexOf('const enabledTools =');

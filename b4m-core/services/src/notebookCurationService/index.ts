@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import {
+  BadRequestError,
   CurationOptions,
   CurationProgress,
   CurationResult,
@@ -10,9 +11,9 @@ import {
   IFabFileRepository,
   ICreditTransactionRepository,
   IUserRepository,
+  IAdminSettingsRepository,
   ISessionDocument,
   IChatHistoryItem,
-  IUserDocument,
 } from '@bike4mind/common';
 import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
 import type { CurationMessage } from './artifactExtractor';
@@ -37,6 +38,11 @@ export interface NotebookCurationAdapters {
   fileStorageService: CreateFabFileAdapters['storage'];
   creditTransactionRepository: ICreditTransactionRepository;
   userRepository: IUserRepository;
+  /**
+   * Required, not optional: backs the MaxFileSize check createFabFile runs on the write below.
+   * Optional would let a caller silently admit a file the direct upload door refuses.
+   */
+  adminSettingsRepository: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
   logger: Logger;
   llmService?: LLMContext; // Optional: Required for executive summary generation (Option 2)
   llmModelId?: string; // Optional: Model ID to use for LLM operations (e.g., 'gpt-4o-mini', 'claude-3-5-sonnet-bedrock')
@@ -287,7 +293,12 @@ export class NotebookCurationService {
       } catch (error) {
         this.adapters.logger.error('Failed to store curated file', { sessionId, userId, error });
         Logger.globalInstance.error('Failed to store curated file', error);
-        throw new NotebookCurationError('Failed to store curated file', 'STORAGE_FAILED');
+        // An admission gate refusal (MaxFileSize / storage quota) names its reason and cannot
+        // succeed on retry; every other storage failure keeps the generic, retryable wording.
+        if (error instanceof BadRequestError) {
+          throw new NotebookCurationError(error.message, 'ADMISSION_REFUSED', error);
+        }
+        throw new NotebookCurationError('Failed to store curated file', 'STORAGE_FAILED', error);
       }
 
       // Stage 6: Update session metadata (store the content hash so an unchanged
@@ -362,6 +373,7 @@ export class NotebookCurationService {
         return {
           success: false,
           error: error.message,
+          retryable: error.code !== 'ADMISSION_REFUSED',
         };
       }
 
@@ -585,16 +597,15 @@ export class NotebookCurationService {
         {
           db: {
             fabFiles: this.adapters.fabFileRepository,
-            adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
-            // Minimal stub - curation never populates users. createFabFile only guards that the
-            // user is non-null, then passes it to the storage-limit check (checkStorageLimitForFile),
-            // which reads storageLimit/currentStorageSize - both undefined on this stub, so they fall
-            // back to defaults and the limit check effectively no-ops for curated notebooks (default 1GB).
-            users: { findById: async (id: string) => ({ id }) as unknown as IUserDocument },
-            // Minimal stub, same reasoning as `users` above: the tag here is always the literal
-            // 'curated-notebook', never a lake meta-tag or a registry prefix, so neither this gate
-            // nor the fallback tagger's overlap check can ever actually fire and a real lookup
-            // would be dead weight.
+            // Real repositories: MaxFileSize and the per-user storage quota are enforced here,
+            // the same per-file gating shape pages/api/files/generate-presigned-url.ts uses
+            // (as opposed to the batch-total/running-total shape the batch and drive-ingest
+            // doors use).
+            adminSettings: this.adapters.adminSettingsRepository,
+            users: this.adapters.userRepository,
+            // Minimal stub: the tag here is always the literal 'curated-notebook', never a lake
+            // meta-tag or a registry prefix, so neither this gate nor the fallback tagger's
+            // overlap check can ever actually fire, and a real lookup would be dead weight.
             dataLakes: { findByDatalakeTag: async () => null, find: async () => [] },
           },
           storage: this.adapters.fileStorageService,
@@ -621,6 +632,9 @@ export class NotebookCurationService {
         format,
         error,
       });
+      // Preserve a BadRequestError's identity (and its specific reason) so the caller can
+      // tell an admission gate refusal apart from a genuinely unknown storage failure.
+      if (error instanceof BadRequestError) throw error;
       throw new Error(
         `Failed to create curated notebook file: ${error instanceof Error ? error.message : 'Unknown error'}`
       );

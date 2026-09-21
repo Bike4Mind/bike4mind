@@ -149,7 +149,7 @@ beforeEach(() => {
 
 describe('finalize - publish-time tag write', () => {
   it('writes normalized tags when the draft supplies them', async () => {
-    expect((await finalizeWith({ tags: ['IonQ', 'Weekly'] })).tags).toEqual(['ionq', 'weekly']);
+    expect((await finalizeWith({ tags: ['NorthWind', 'Weekly'] })).tags).toEqual(['northwind', 'weekly']);
   });
 
   it('writes nothing when the field is absent', async () => {
@@ -172,14 +172,14 @@ describe('finalize - publish-time tag write', () => {
   it('normalizes identically at publish time and at PATCH time', async () => {
     // Two doors onto one field: a tag typed in the UI and a tag sent by the CLI must land the same,
     // or one label ends up stored two ways depending on how it arrived.
-    const written = await finalizeWith({ tags: ['  IonQ ', 'ionq', 'Security   Review', ''] });
-    expect(written.tags).toEqual(['ionq', 'security review']);
+    const written = await finalizeWith({ tags: ['  NorthWind ', 'northwind', 'Security   Review', ''] });
+    expect(written.tags).toEqual(['northwind', 'security review']);
   });
 });
 
 describe('upload-url - tags carried on the draft', () => {
   it('carries normalized tags so finalize can write them in the same publish call', async () => {
-    expect((await draftFrom({ tags: ['IonQ', 'Weekly'] })).tags).toEqual(['ionq', 'weekly']);
+    expect((await draftFrom({ tags: ['NorthWind', 'Weekly'] })).tags).toEqual(['northwind', 'weekly']);
   });
 
   it('carries no tags key when the caller omits the field', async () => {

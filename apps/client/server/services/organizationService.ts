@@ -5,7 +5,12 @@ import {
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
 } from '@client/lib/subscriptions/constants';
-import { ISubscription, SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import {
+  ISubscription,
+  SubscriptionOwnerType,
+  SubscriptionSource,
+  resolveSubscriptionSource,
+} from '@client/lib/subscriptions/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 
 /**
@@ -21,17 +26,10 @@ export async function countPendingOrganizationInvites(orgId: string): Promise<nu
 
 /**
  * Resolve `source` defensively for rows that may pre-date the source-field
- * migration. Mongoose schema defaults only fire on insert, not on read of
- * pre-existing documents, so a Subscription written before the schema change
- * comes back with `source === undefined`. Treat unknown legacy rows as Stripe-
- * managed (the historical default) UNLESS the row carries the synthetic
- * `admin_granted_*` subscriptionId pattern from the legacy grant endpoint.
+ * migration. Re-exported from `@client/lib/subscriptions/types` so the
+ * repository can use it without importing this service.
  */
-export function resolveSubscriptionSource(sub: Pick<ISubscription, 'source' | 'subscriptionId'>): SubscriptionSource {
-  if (sub.source) return sub.source;
-  if (sub.subscriptionId?.startsWith('admin_granted_')) return SubscriptionSource.AdminGrant;
-  return SubscriptionSource.Stripe;
-}
+export { resolveSubscriptionSource };
 
 /**
  * Deterministically pick the single Subscription that should be mutated by a

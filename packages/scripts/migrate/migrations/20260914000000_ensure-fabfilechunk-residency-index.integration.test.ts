@@ -18,6 +18,9 @@ let server: Awaited<ReturnType<typeof createMongoServer>>;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  // Settle autoIndex before any test drops an index: an unawaited background build recreates what
+  // beforeEach dropped, at random, under runner contention. See createMongoServer's autoIndex note.
+  await FabFileChunk.init();
 });
 
 afterAll(async () => {

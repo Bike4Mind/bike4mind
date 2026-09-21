@@ -40,7 +40,12 @@ import {
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
+import {
+  ToolBuilder,
+  applyQuestStatusChanges,
+  type BuildToolPromptArgs,
+  type BuildToolsArgs,
+} from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -3800,6 +3805,144 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // MCP tools are merged into buildSharedTools' outgoing list AFTER its native `enabledTools`
+  // filter, so `offerOnlyNamedTools`/`sessionDisabledTools` are the only levers that reach them -
+  // and sharedToolBuilder.mcpNarrowing.test.ts only exercises buildSharedTools directly. It cannot
+  // prove ChatCompletionProcess actually passes these options on a real turn; deleting the four
+  // lines that wire them at this call site would leave that suite green.
+  describe('MCP narrowing options threaded into buildTools', () => {
+    const runWithOptions = async (opts: {
+      promptMode?: 'raw' | 'grounded' | 'surface';
+      skipAutoOffers?: boolean;
+      disabledTools?: string[];
+      connectedMcpTools?: boolean;
+      /** Have the buildTools stub apply `sessionDisabledTools`, the way buildSharedTools does. */
+      deniedFromBuild?: boolean;
+    }) => {
+      const previousDisabledTools = mockSession.disabledTools;
+      mockSession.disabledTools = opts.disabledTools;
+      const mcpTools = ['notion__search', 'notion__create_page'].map(name => ({
+        name,
+        toolFn: vi.fn(),
+        toolSchema: { name, description: name, parameters: { type: 'object', properties: {} } },
+        _isMcpTool: true,
+      }));
+      const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockResolvedValue({
+        mcpToolsByServer: opts.connectedMcpTools ? { notion: mcpTools } : {},
+        serverAgentConfig: {},
+      });
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockImplementation(options => {
+        if (!opts.connectedMcpTools) return [];
+        // Stands in for the real narrowing this spy replaces: buildSharedTools subtracts
+        // `sessionDisabledTools` by namespaced name (sharedToolBuilder.ts) before returning.
+        const denied = new Set(options.sessionDisabledTools ?? []);
+        const survived = opts.deniedFromBuild ? mcpTools.filter(tool => !denied.has(tool.name)) : mcpTools;
+        return options.offerOnlyNamedTools ? survived.slice(0, 1) : survived;
+      });
+      buildToolsSpy.mockClear();
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = {
+        ...startQuestParams,
+        ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
+        ...(opts.skipAutoOffers ? { skipAutoOffers: true } : {}),
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        return {
+          passedOptions: buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined,
+          toolPromptOptions: buildToolPromptSpy.mock.calls[0]?.[0] as BuildToolPromptArgs | undefined,
+        };
+      } finally {
+        // In a finally because these three spies live on ToolBuilder.prototype and
+        // `mockSession` is shared: a throw here used to leak both into every later test in the
+        // file, where the symptom is an unrelated failure far from the cause.
+        buildMcpToolsSpy.mockRestore();
+        buildToolsSpy.mockRestore();
+        buildToolPromptSpy.mockRestore();
+        mockSession.disabledTools = previousDisabledTools;
+      }
+    };
+
+    it('passes offerOnlyNamedTools: true on a promptMode turn', async () => {
+      const { passedOptions } = await runWithOptions({ promptMode: 'raw' });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
+    });
+
+    it('passes offerOnlyNamedTools: true on an explicit skipAutoOffers turn', async () => {
+      const { passedOptions } = await runWithOptions({ skipAutoOffers: true });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
+    });
+
+    // The default web payload (no promptMode, no skipAutoOffers) must keep reaching MCP tools -
+    // this is the regression sharedToolBuilder.mcpNarrowing.test.ts guards from the pure-function
+    // side; this pins that ChatCompletionProcess never flips the flag on for an ordinary turn.
+    it('passes offerOnlyNamedTools: false on a default turn', async () => {
+      const { passedOptions } = await runWithOptions({});
+      expect(passedOptions?.offerOnlyNamedTools).toBe(false);
+    });
+
+    it('threads session.disabledTools through as sessionDisabledTools', async () => {
+      const { passedOptions } = await runWithOptions({ disabledTools: ['notion__notion_search'] });
+      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__notion_search']);
+    });
+
+    it('passes only offered MCP tools into the tool prompt after narrowing', async () => {
+      const { toolPromptOptions } = await runWithOptions({ skipAutoOffers: true, connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+
+    it('passes every offered MCP tool into the tool prompt on a default turn', async () => {
+      const { toolPromptOptions } = await runWithOptions({ connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual([
+        'notion__search',
+        'notion__create_page',
+      ]);
+    });
+
+    // The intersection is against what SURVIVED the build, so it has to hold for the denylist too
+    // and not just for offerOnlyNamedTools - both narrow the same list, and the two cases above
+    // would stay green if the filter were re-derived from the flag instead of the built tools.
+    it('keeps a session-denied MCP tool out of the tool prompt', async () => {
+      const { toolPromptOptions } = await runWithOptions({
+        connectedMcpTools: true,
+        disabledTools: ['notion__create_page'],
+        deniedFromBuild: true,
+      });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+  });
+
   // SkillsFeature computes a catalog + expanded `/skill-name` body, but the drop (#1344) was in the
   // ASSEMBLY: the `skills` key was never spread into contextAndSystemMessages, so the model never saw
   // it. A unit test on getContextMessages passes without the spread, so this asserts against the
@@ -4557,6 +4700,108 @@ describe('ChatCompletionProcess', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining('Skipping the context-overflow guard: input tokens are an estimate')
       );
+    });
+  });
+
+  // The write site promotes the lake layers out of the `systemPrompts` residual into a bucket of
+  // their own. The property that matters is conservation: the bucket is rebuilt from the layer
+  // counts already computed, so the old residual still equals `systemPrompts + lakeRetrieval` -
+  // no second count, and a lake block the budget dropped bills nothing.
+  describe('lake retrieval promoted out of the system-prompt residual', () => {
+    const chunk = { role: 'system' as const, content: 'RETRIEVED-LAKE-CHUNK' };
+    const fact = { role: 'system' as const, content: 'LAKE-MEMORY-FACT' };
+
+    // Content-keyed so a message counts the same way in the six source totals and in
+    // toPromptDetails' per-source pass; that consistency is what makes conservation checkable.
+    const tokenLengthImpl = async (messages: any[]) =>
+      (messages ?? []).reduce((sum: number, message: any) => {
+        const content = typeof message?.content === 'string' ? message.content : '';
+        if (content.includes('RETRIEVED-LAKE-CHUNK')) return sum + 25;
+        if (content.includes('LAKE-MEMORY-FACT')) return sum + 40;
+        return sum + 1;
+      }, 0);
+
+    const runWithLakeSources = async (opts: { withLakes: boolean }) => {
+      mockedCalculateTotalTokenLength.mockReset().mockImplementation(tokenLengthImpl as any);
+      mockTokenizer.countTokens.mockReset().mockResolvedValue(1);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      // Return the admitted system messages BY REFERENCE, so the delivery set the write site
+      // derives from this payload actually contains them - a fixed two-message stub would report
+      // every system row as budget-excluded and the bucket would be a meaningless zero.
+      let builtMessages: IMessage[] = [];
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_prev: any, contextAndSystemMessages: any[], currentUserPromptMessages: any[]) => {
+          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages];
+          return { messages: builtMessages, messageTruncation: null } as any;
+        }
+      );
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      if (opts.withLakes) {
+        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [chunk] } as any);
+        service.features.set('lakeMemory', { getContextMessages: async () => [fact] } as any);
+      }
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const call = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.context?.tokensBySource !== undefined
+      );
+      // Re-derive the residual the way the write site does, independently of the promotion:
+      // total over the payload it counted, less the user prompt (the only known non-system source).
+      const grossResidual = (await tokenLengthImpl(builtMessages)) - 1;
+      return { promptMeta: call?.[0]?.promptMeta, grossResidual };
+    };
+
+    it('moves exactly the delivered lake layer tokens into lakeRetrieval, conserving the residual', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: true });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // 25 (forced-retrieval chunk) + 40 (lake-memory card), read off the layer rows.
+      expect(tokens.lakeRetrieval).toBe(65);
+      // The two buckets still sum to the residual the turn was billed on: nothing was lost or
+      // counted twice, which is the only way a promote-don't-remeasure change can be wrong.
+      expect(tokens.systemPrompts + tokens.lakeRetrieval).toBe(grossResidual);
+      expect(tokens.systemPrompts).toBe(grossResidual - 65);
+
+      const layer = (name: string) =>
+        promptMeta.context.systemPromptDetails.find((detail: any) => detail.name === name);
+      expect(layer('knowledge_retrieval')).toMatchObject({ tokenCount: 25, wasIncluded: true });
+      expect(layer('lake_memory')).toMatchObject({ tokenCount: 40, wasIncluded: true });
+    });
+
+    it('records a real zero when the turn carried no lake layers, leaving the residual gross', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: false });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // A real zero, not unknown: the layer derivation ran and found no lake content.
+      expect(tokens.lakeRetrieval).toBe(0);
+      // No lake rows, so nothing moved and the residual is the whole billed system-prompt total.
+      expect(tokens.systemPrompts).toBe(grossResidual);
     });
   });
 

@@ -112,6 +112,22 @@ describe('useLLMSettingsAssembly › resolveTools', () => {
     expect(toastInfo).not.toHaveBeenCalled();
   });
 
+  it('skipAutoOffers skips the recommender entirely in Smart mode - only the picked tools ride', () => {
+    llmState.toolMode = 'smart';
+    llmState.tools = ['web_search'] as B4MLLMTools[];
+
+    const result = render().current.resolveTools({
+      prompt: 'search my documents for the Q3 report',
+      supportsTools: true,
+      skipAutoOffers: true,
+    });
+
+    expect(result).toEqual({ effectiveTools: ['web_search'], refused: false });
+    expect(recommendToolsMock).not.toHaveBeenCalled();
+    expect(mergeToolsMock).not.toHaveBeenCalled();
+    expect(toastInfo).not.toHaveBeenCalled();
+  });
+
   it('Fast mode strips all tools', () => {
     llmState.toolMode = 'fast';
     llmState.tools = ['web_search'] as B4MLLMTools[];

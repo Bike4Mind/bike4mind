@@ -25,6 +25,14 @@ const createFabFileByUrlSchema = z.object({
 
 type CreateFabFileByUrlParameters = z.infer<typeof createFabFileByUrlSchema>;
 
+/**
+ * See the `contentHash` computation below for why this exists. Set well clear of the boilerplate
+ * remnants a chrome-pruning rollback can leave behind (measured up to ~29 characters against real
+ * link-directory pages) - a false collision between two unrelated pages is worse than a genuine
+ * short page missing dedup.
+ */
+const MIN_CONTENT_LENGTH_FOR_DEDUP = 100;
+
 type CreateFabFileByUrlAdapters = {
   db: {
     fabFiles: {
@@ -108,9 +116,20 @@ export const createFabFileByUrl = async (
   // PDF (see `ingest.ts`'s `urlContent = body` arm). Either way, identical input deterministically
   // produces identical `textContent`, so this still satisfies "byte-identical fetched bodies are
   // duplicates" without widening `fetchAndParseURL`'s own contract.
-  const contentHash = computeContentHash(textContent);
+  //
+  // For HTML extraction specifically, skipped below `MIN_CONTENT_LENGTH_FOR_DEDUP`: `ingest.ts`'s
+  // chrome-pruning rollback trusts a prune once as little as ~20 characters of the page's own text
+  // survive it, so a link-directory-style page can legitimately extract down to nothing but a short
+  // boilerplate remnant (a copyright line, a "Further reading." label). Two UNRELATED pages that both
+  // reduce to the same short remnant would otherwise hash identically and the second would be rejected
+  // outright as a duplicate of the first - turning silent content thinning into a hard, user-visible
+  // failure. A short extraction not being deduped is a safe miss (the file is still created); hashing
+  // it anyway is not, so this is deliberately conservative. PDFs (`textContent` is a `Buffer`) are
+  // unaffected - the chrome-pruning floor above only applies to the HTML extraction path.
+  const isThinHtmlExtraction = typeof textContent === 'string' && textContent.length < MIN_CONTENT_LENGTH_FOR_DEDUP;
+  const contentHash = isThinHtmlExtraction ? undefined : computeContentHash(textContent);
 
-  if (checkDuplicate) {
+  if (contentHash && checkDuplicate) {
     const existing = await checkDuplicate(contentHash);
     if (existing) throw new DuplicateFabFileError(existing, title);
   }

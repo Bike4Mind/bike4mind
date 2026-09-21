@@ -32,6 +32,10 @@ function makeAdapters(overrides: Record<string, any> = {}) {
     fileStorageService: {},
     creditTransactionRepository: {},
     userRepository: {},
+    adminSettingsRepository: {
+      findAll: vi.fn().mockResolvedValue([]),
+      findBySettingNames: vi.fn().mockResolvedValue([]),
+    },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     // no llmService: reaching the exec-summary generator would throw, which lets
     // us prove whether the cache short-circuited (success) or fell through (error).

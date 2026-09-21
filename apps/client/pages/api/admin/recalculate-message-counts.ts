@@ -18,13 +18,12 @@ type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'emb
  * usage. Typed against the operation union so a renamed member fails the build rather than
  * silently costing nothing.
  *
- * Only the `summarize` leg actually narrows today. `taggedAt` is set by sessionTagging.ts but is
- * NOT a declared path on the Session schema, so mongoose strict mode drops it from every write
- * and it is absent on every document - which makes `{ taggedAt: null }` below match the whole
- * collection. The `tags` leg therefore prices the full notebook count. That is the accurate
- * number, because the same missing field makes `spider.ts:98` re-tag every notebook too, so the
- * gate and the work still agree; it just is not the narrowing the code below reads like. Fixing
- * the schema is its own change with its own blast radius (it would stop the spider re-tagging).
+ * Both legs narrow. `taggedAt` did not until it was declared on the Session schema: strict mode
+ * had been dropping it from every write, so `{ taggedAt: null }` below matched the whole
+ * collection and the `tags` leg priced the full notebook count. That was still the accurate
+ * number, because the same missing field made `spider.ts` re-tag every notebook too. Both moved
+ * together when the path landed, so the pre-flight and the gate stay in agreement: the `tags` leg
+ * now prices only the untagged notebooks the spider will actually act on.
  */
 const SPENDING_SPIDER_OPERATIONS = {
   summarize: 'summaryAt',
@@ -83,7 +82,7 @@ const handler = baseApi().post(
         // already-groomed notebook per operation, so pricing a re-run at notebooks x operations
         // would refuse an 800-notebook account 1600 credits for the five notebooks left to do.
         // Deduped because the requested list is caller-supplied and a repeat would double-count.
-        // See SPENDING_SPIDER_OPERATIONS: `summarize` narrows, `tags` does not yet.
+        // See SPENDING_SPIDER_OPERATIONS: both legs narrow against a persisted timestamp.
         const ungroomedCounts = await Promise.all(
           Array.from(new Set(requestedOperations))
             .filter(isSpendingSpiderOperation)

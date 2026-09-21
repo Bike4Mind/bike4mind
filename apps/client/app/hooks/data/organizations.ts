@@ -13,6 +13,7 @@ import { useGetOrganizationUsers, useGetPendingOrganizationUsers } from './user'
 import { useMemo } from 'react';
 import { getErrorMessage } from '@client/app/utils/error';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 
 /**
  * Hook to search organizations with pagination and filtering
@@ -292,6 +293,8 @@ export function useRemoveMemberFromOrganization() {
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', variables.organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
+      // Removing a member may hand their lakes to a successor, changing ownership-derived flags.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       toast.success('Member removed successfully');
     },
     onError: (error: unknown) => {
@@ -313,6 +316,8 @@ export function useLeaveOrganization() {
       return organization;
     },
     onSuccess: () => {
+      // Leaving may hand this member's lakes to a successor and removes their own lake access.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       toast.success('Left organization successfully');
     },
     onError: (error: unknown) => {

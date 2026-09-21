@@ -13,6 +13,7 @@ export default defineConfig({
     'src/models/billing/index.ts',
     'src/models/ai/index.ts',
     'src/models/infra/index.ts',
+    'src/models/hearth/index.ts',
   ],
   format: ['esm'],
   dts: true,
