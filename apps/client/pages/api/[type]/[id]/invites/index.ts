@@ -1,4 +1,5 @@
 import { InviteEvents, InviteType, Permission } from '@bike4mind/common';
+import { omitInviteToken } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -15,7 +16,8 @@ import {
   inviteRepository,
   Organization,
 } from '@bike4mind/database';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@server/utils/objectId';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -80,11 +82,14 @@ const handler = baseApi()
       if (!id) {
         return res.status(400).json({ message: 'Invalid get invite request' });
       }
-
       const inviteType = resolveInviteType(type);
       if (!inviteType) {
         return res.status(400).json({ message: 'Invalid type' });
       }
+      // An id that is not an ObjectId names no document, so this route answers the 404 itself
+      // rather than letting the lookup cast and raise a CastError. After the type check, so a
+      // bad type still reports the bad type.
+      if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
 
       // Share-scoped: the service authorizes via the document's share access
       // (owner, a users[]-with-share grant, or a groups[]-with-share grant),
@@ -103,7 +108,10 @@ const handler = baseApi()
           },
         }
       );
-      return res.json(shares);
+      // Sharer-facing, and the bearer token has no consumer here: the create response is what hands
+      // back a link. Leaving it in would put a redeemable secret in a list any share-authorized
+      // caller can re-read at will.
+      return res.json(shares.map(omitInviteToken));
     })
   )
   /**
@@ -116,9 +124,9 @@ const handler = baseApi()
       if (!urlPathType || !id) {
         return res.status(400).json({ message: 'Invalid invite request' });
       }
-
       const inviteType = resolveInviteType(urlPathType);
       if (!inviteType) throw new BadRequestError('Invalid type');
+      if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {
@@ -196,7 +204,7 @@ const handler = baseApi()
       // Send email notifications to recipients
       const pendingRecipients = created.recipients?.pending || [];
       if (pendingRecipients.length > 0) {
-        const inviteLink = generateInviteLink(created.id);
+        const inviteLink = generateInviteLink(created);
         const documentName = await getDocumentName(inviteType, id);
         const typeName = getTypeName(inviteType);
         const brand = process.env.APP_NAME || '';
@@ -217,7 +225,7 @@ const handler = baseApi()
         });
       }
 
-      return res.json({ ...created, link: generateInviteLink(created.id) });
+      return res.json({ ...omitInviteToken(created), link: generateInviteLink(created) });
     })
   )
   /**
@@ -235,6 +243,7 @@ const handler = baseApi()
       if (!id) throw new BadRequestError('Invalid cancel invite request');
       const inviteType = resolveInviteType(type);
       if (!inviteType) throw new BadRequestError('Invalid cancel invite request');
+      if (!isValidObjectId(id)) throw new NotFoundError('Document not found');
       const { email } = (req.body ?? {}) as { email?: string };
 
       const invites = await sharingService.cancelInvite(
@@ -266,8 +275,14 @@ const handler = baseApi()
     })
   );
 
-export const generateInviteLink = (id: string) => {
-  return `${process.env.APP_URL}/share/${id}`;
+/**
+ * The share URL. Addressed by the invite's bearer TOKEN, never its `_id`: the id is only partially
+ * random and is disclosed by every surface that lists invites, so using it as the link secret let
+ * anyone who saw one guess its neighbours. Falls back to the id for a legacy tokenless invite, which
+ * `resolveRedeemableInvite` still admits until it expires.
+ */
+export const generateInviteLink = (invite: { id: string; token?: string }) => {
+  return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
 };
 
 // Helper to get document name for email

@@ -21,7 +21,7 @@ import {
   MenuItem,
 } from '@mui/joy';
 
-import { FeedbackStatus } from '@bike4mind/common';
+import { FeedbackStatus, FEEDBACK_SUBJECTS } from '@bike4mind/common';
 
 import ConfirmActionModal from '@client/app/components/ConfirmActionModal';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -45,7 +45,14 @@ import { useNavigate, useSearch } from '@tanstack/react-router';
 import { FEEDBACK_ID_PARAM } from '@bike4mind/common';
 import FocusedFeedbackCard from './FocusedFeedbackCard';
 import FeedbackRowLinks from './FeedbackRowLinks';
-import { FEEDBACK_PAGE_SIZE_OPTIONS } from './constants';
+import HelpContextChip from './HelpContextChip';
+import {
+  FEEDBACK_PAGE_SIZE_OPTIONS,
+  FEEDBACK_SUBJECT_ANY,
+  FEEDBACK_SUBJECT_LABELS,
+  FeedbackSubjectOption,
+  toSubjectFilter,
+} from './constants';
 
 const FeedbackTab: React.FC = () => {
   const isMobile = useIsMobile();
@@ -54,8 +61,15 @@ const FeedbackTab: React.FC = () => {
   // a local array any more.
   const { currentPage, handlePageChange, itemsPerPage, handleItemsPerPageChange, resetPage } = useFeedbackPagination();
 
-  const { filters, setSearchTerm, setStatusFilters, setSelectedOrganizations, toggleSortDirection, filterParams } =
-    useFeedbackFilters(resetPage);
+  const {
+    filters,
+    setSearchTerm,
+    setStatusFilters,
+    setSelectedOrganizations,
+    setSubject,
+    toggleSortDirection,
+    filterParams,
+  } = useFeedbackFilters(resetPage);
 
   const {
     feedback: currentFeedback,
@@ -112,6 +126,7 @@ const FeedbackTab: React.FC = () => {
       Status: feedbackItem.status,
       Username: feedbackItem.username,
       Content: getFeedbackDisplayContent(feedbackItem, ''),
+      HelpArticle: feedbackItem.helpContext?.slug ?? '',
       Organization: feedbackItem.organization,
       UpdatedAt: feedbackItem.updatedAt,
     }));
@@ -236,6 +251,31 @@ const FeedbackTab: React.FC = () => {
                           size="sm"
                         />
                       ))}
+
+                      {/* Single-select, because GET /api/feedback takes one subject or none -
+                          a checkbox group here would promise a multi-select the server cannot serve. */}
+                      <Select<FeedbackSubjectOption>
+                        value={filters.subject ?? FEEDBACK_SUBJECT_ANY}
+                        onChange={(_, newValue) => setSubject(toSubjectFilter(newValue))}
+                        size="sm"
+                        sx={{ minWidth: 170 }}
+                        // The combobox has no visible label of its own (it sits inline with the
+                        // status checkboxes rather than under a heading like the org dropdown), and
+                        // Joy drops a top-level aria-label - only the button slot reaches the DOM.
+                        slotProps={{
+                          button: {
+                            'aria-label': 'Filter by subject',
+                            'data-testid': 'feedback-subject-filter-select',
+                          },
+                        }}
+                      >
+                        <Option value={FEEDBACK_SUBJECT_ANY}>All Subjects</Option>
+                        {FEEDBACK_SUBJECTS.map(subject => (
+                          <Option key={subject} value={subject}>
+                            {FEEDBACK_SUBJECT_LABELS[subject]}
+                          </Option>
+                        ))}
+                      </Select>
                     </Stack>
 
                     <Stack direction="row" spacing={1} alignItems="center">
@@ -423,6 +463,7 @@ const FeedbackTab: React.FC = () => {
                           )}
                         </Stack>
                         {/* Content */}
+                        <HelpContextChip feedbackItem={feedbackItem} />
                         {feedbackItem.contentTruncated && (
                           <Chip size="sm" color="warning" variant="soft" data-testid="feedback-content-truncated-badge">
                             Truncated
@@ -524,6 +565,7 @@ const FeedbackTab: React.FC = () => {
                           </Stack>
                         </Grid>
                         <Grid xs={5.5}>
+                          <HelpContextChip feedbackItem={feedbackItem} />
                           {feedbackItem.contentTruncated && (
                             <Chip
                               size="sm"

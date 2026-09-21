@@ -250,7 +250,9 @@ async function executeRun(
   } as Omit<IModelDiscoveryRunDocument, 'id' | 'createdAt' | 'updatedAt'>);
   const runId = run.id;
 
-  const credentials = await adapters.resolveCredentials();
+  // A manual run is how an admin checks a key they just saved, so it reads admin
+  // settings fresh; scheduled and startup runs keep the cached map.
+  const credentials = await adapters.resolveCredentials({ skipCache: options.trigger === 'manual' });
   const history = await recentRunHistory(adapters, startedAt);
   const minInterval = options.minSourceIntervalMs ?? DEFAULT_MIN_SOURCE_INTERVAL_MS;
 
@@ -424,7 +426,7 @@ async function executeRun(
         `${merged.pricesAppended}/${merged.plannedPriceRows} price rows landed`
     );
   }
-  const status = runStatus(attempts.length, succeededCount, deadlineHit || writesLost);
+  const status = runStatus(attempts.length, succeededCount, deadlineHit || writesLost, skippedSources);
   const summary = summarizeDiff(merged.diff);
   const added = [...new Set(summary.added)];
   const promoted = [...new Set(summary.promoted)];
@@ -441,6 +443,10 @@ async function executeRun(
     status,
     finishedAt,
     sources: sourceReports,
+    // Uncapped like `sources` it sits beside: at most one entry per configured
+    // source, partitioned disjointly from the attempts, so it is bounded by
+    // construction.
+    skippedSources,
     joinCoverage: merged.joinCoverage,
     unmatchedIds: merged.unmatchedIds,
     changes: {
@@ -462,8 +468,9 @@ async function executeRun(
     },
     passes: passes.length,
     droppedRecords: merged.droppedRecords.slice(0, MAX_PERSISTED_DROPPED_RECORDS),
-    // The detail behind the counts above, every array bounded. Without it the
-    // admin reads a flag count with no way to learn which models or why.
+    // The detail behind the counts above, each array below capped at
+    // MAX_PERSISTED_RUN_DETAIL. Without it the admin reads a flag count with no
+    // way to learn which models or why.
     priceFlags: merged.priceFlags.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceRows: plannedPrices.slice(0, MAX_PERSISTED_RUN_DETAIL),
     priceOverrides: merged.priceOverrides.slice(0, MAX_PERSISTED_RUN_DETAIL),
@@ -1283,25 +1290,64 @@ async function recentRunHistory(adapters: ModelDiscoveryAdapters, startedAt: Dat
  * 'ok' when nothing FAILED: every source attempted came back and the run was not
  * cut short. A skip is not a failure - a self-host install skips bedrock on
  * every run for want of an IAM role, and a source skipped as recently-fetched is
- * fresh data by definition - so skips may not degrade the run. They used to, and
- * the cost was structural: lastSuccessfulRun is findOne({status:'ok'}), so a
- * deployment that always skips something never had one, the startup staleness
- * gate never tripped, and every container boot re-ran a full fan-out. A run with
- * nothing but skips is 'ok' too, with an empty `sources` list and the skip
- * counts in the summary line to tell it apart from a full one.
+ * fresh data by definition - so a skip beside a successful attempt may not
+ * degrade the run. Skips used to degrade it unconditionally, and the cost was
+ * structural: lastSuccessfulRun is findOne({status:'ok'}), so a deployment that
+ * always skips something never had one, the startup staleness gate never
+ * tripped, and every container boot re-ran a full fan-out.
+ *
+ * Attempting nothing is the exception. Nothing failed, but nothing was
+ * refreshed either, so the run may not claim the success that advances
+ * lastSuccessfulRun - a deployment with no source configured would otherwise
+ * report an unbroken string of successes while the catalog never moved. The
+ * exception's own exception is 'recently-fetched', which is derived from a
+ * successful fetch inside the interval: that data IS fresh, and degrading the
+ * run that stood aside for it would degrade every stage sharing a cadence.
+ *
+ * It reports 'partial' and not a fourth status because 'partial' already
+ * carries exactly this contract - commits what it verified, does not advance
+ * lastSuccessfulRun - and every reader already handles it. Not 'failed',
+ * because RunFailures has to keep meaning "the sources are broken" for the
+ * consecutive-failure alarm; RunPartial is the counter that moves, and a
+ * "Last success" that stops advancing on the admin card is the operator-facing
+ * signal. The startup leg (apps/client/server/modelDiscovery/startupLeg.ts)
+ * then re-runs on every boot for a deployment configured with nothing: no
+ * provider egress, but still a lease, a run document and a full read of the
+ * rows and prices in force.
  */
-function runStatus(attempted: number, succeeded: number, deadlineHit: boolean): 'ok' | 'partial' | 'failed' {
+function runStatus(
+  attempted: number,
+  succeeded: number,
+  deadlineHit: boolean,
+  skipped: ReadonlyArray<{ reason: SourceSkipReason }>
+): 'ok' | 'partial' | 'failed' {
   if (attempted > 0 && succeeded === 0) return 'failed';
-  if (succeeded < attempted || deadlineHit) return 'partial';
+  const refreshedNothing = attempted === 0 && !skipped.some(skip => skip.reason === 'recently-fetched');
+  if (refreshedNothing || succeeded < attempted || deadlineHit) return 'partial';
   return 'ok';
 }
 
-/** Skip counts for the summary line: "ok with nothing attempted" has to be readable. */
-function describeSkips(skipped: ReadonlyArray<{ reason: SourceSkipReason }>): string {
+/** Keeps the summary line bounded when a wide source registry skips everything. */
+const MAX_LOGGED_SKIP_NAMES_PER_REASON = 5;
+
+/**
+ * Skips for the summary line: "ok with nothing attempted" has to be readable,
+ * and a bare count leaves the reader unable to say which source went missing.
+ */
+function describeSkips(skipped: ReadonlyArray<{ name: string; reason: SourceSkipReason }>): string {
   if (skipped.length === 0) return '0';
-  const byReason = new Map<SourceSkipReason, number>();
-  for (const { reason } of skipped) byReason.set(reason, (byReason.get(reason) ?? 0) + 1);
-  return `${skipped.length}(${[...byReason].map(([reason, count]) => `${reason}:${count}`).join(',')})`;
+  const byReason = new Map<SourceSkipReason, string[]>();
+  for (const { name, reason } of skipped) {
+    const names = byReason.get(reason);
+    if (names) names.push(name);
+    else byReason.set(reason, [name]);
+  }
+  const groups = [...byReason].map(([reason, names]) => {
+    const shown = names.slice(0, MAX_LOGGED_SKIP_NAMES_PER_REASON).join('+');
+    const overflow = names.length - MAX_LOGGED_SKIP_NAMES_PER_REASON;
+    return `${reason}:${overflow > 0 ? `${shown}+${overflow}more` : shown}`;
+  });
+  return `${skipped.length}(${groups.join(',')})`;
 }
 
 function computeJoinCoverage(

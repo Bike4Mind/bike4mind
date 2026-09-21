@@ -20,6 +20,7 @@ import type { Logger } from '@bike4mind/observability';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
 import { lakeMembershipsFrom, warnIfManyLakeMemberships } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
+import { membershipOrgIdsForTurn } from '../../../../dataLakeService/membershipOrgIdsForTurn';
 import {
   defangRetrievedContent,
   documentDateClause,
@@ -89,8 +90,14 @@ interface SkipNotice {
  * `maxChunkChars` comes from resolveSearchBudgets, which derives it from the chunk-size policy. It is
  * not a constant here on purpose: a serve cap set independently of the chunk size WILL disagree with
  * it, and the disagreement is invisible - every full-size passage arrives pre-truncated and the model
- * answers from a fraction of what the lake stores. Clipping now only fires on chunks larger than the
- * current policy would produce (legacy content from a coarser chunker), and says so when it does.
+ * answers from a fraction of what the lake stores. Clipping fires on chunks larger than that policy
+ * would produce (legacy content from a coarser chunker), and says so when it does.
+ *
+ * "That policy" is the caller's rung floored at the platform value (#2803), not the policy of each
+ * passage's own OWNER, so the guarantee is not quite absolute: an owner who pinned their chunk target
+ * above both still has their in-policy chunks clipped here. Per-file resolution is what would close
+ * it - see `resolveServeTarget`. The notice below names one number because this budget is one number;
+ * that is the coupling to revisit first if per-file ever lands.
  *
  * `bounding` (#1955) is set when a token budget stopped short of returning every ranked passage -
  * distinct from `scan.truncated` (how much of the CORPUS was searched) and `skipNotice` (whether what
@@ -395,7 +402,9 @@ async function emitSemanticCitables(
   corpusLabel: string,
   maxChunkChars: number,
   skipNotice?: SkipNotice | null,
-  dataLakeTags: string[] = []
+  dataLakeTags: string[] = [],
+  /** Undefined when attribution was inconclusive - see the schema field's own doc. */
+  dataLakeTagsWithCandidates?: string[]
 ): Promise<void> {
   // Citables - dedup to one chip per file (multiple chunks can match the same article)
   const seenFile = new Set<string>();
@@ -445,6 +454,7 @@ async function emitSemanticCitables(
           outcome: 'ok',
           surfaces: ['knowledgeBaseSearch'],
           dataLakeTags,
+          ...(dataLakeTagsWithCandidates ? { dataLakeTagsWithCandidates } : {}),
           injected: {
             chunks: ranked.length,
             chars: injectedChars,
@@ -698,7 +708,21 @@ async function trySemanticKbSearch(
     });
     const ranked = bound.kept;
 
-    await emitSemanticCitables(context, ranked, 'the data lake', budgets.maxChunkChars, skipNotice, dataLakeTags);
+    // Only the lakes that actually put files in scope, so the stamped telemetry is checkable
+    // rather than a restatement of what was requested. Omitted when nothing attributed at all -
+    // that is "inconclusive", not "no lake contributed".
+    // `scan?.` for the same reason `alternateModelsEmbedded ?? []` above needs a fallback: a test
+    // double built from a partial result object carries no scan block.
+    const lakesWithCandidates = dataLakeTags.filter(tag => !!search.scan?.filesByLake?.[tag]);
+    await emitSemanticCitables(
+      context,
+      ranked,
+      'the data lake',
+      budgets.maxChunkChars,
+      skipNotice,
+      dataLakeTags,
+      lakesWithCandidates.length > 0 ? lakesWithCandidates : undefined
+    );
     context.logger.log(
       `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)}${budgets.kbResultTokenBudget > 0 ? `, ${bound.tokensUsed} tokens` : ''}${bound.budgetBound ? ', budget-bound' : ''})`
     );
@@ -903,12 +927,33 @@ const KB_SEARCH_CANDIDATE_FLOOR = 6;
  * `budgetsPromise` cache below) on the CALLER's org/owner scope (#1955 item 4) - a knowledge-base
  * search spans a mixed multi-lake corpus plus the caller's own/shared files, so there is no single
  * lake for a narrower rung to key on (see `scopeForCaller`'s own doc comment).
+ *
+ * `user.organizationId` is a selected-org display pointer, not proof of membership (#1674) - a
+ * stale pointer left over from #2607's still-pending migration must not let a former member read
+ * that org's budget ceiling. Verified via the same per-turn `membershipOrgIdsForTurn` memo the
+ * data-lake resolvers already share, so this costs nothing extra when either has already run this
+ * turn. A pointer that isn't in the caller's membership set falls back to personal scope (#2769).
+ *
+ * The membership read is wrapped, not left to propagate: unlike `scopeForCaller`'s pure predecessor,
+ * this now has an external failure mode, and a transient org-repo outage must not fail the whole
+ * search over a budget ceiling that's tolerable to get wrong (see `scopeForCaller`'s own doc
+ * comment) - it degrades to personal scope instead, same direction as a genuinely stale pointer.
  */
 async function resolveKbBudgets(context: ToolContext): Promise<ResolvedSearchBudgets> {
+  const pointerOrgId = normalizeId(context.user.organizationId);
+  let membershipOrgIds: string[] = [];
+  if (pointerOrgId) {
+    try {
+      membershipOrgIds = await membershipOrgIdsForTurn(context, context.userId, context.db.organizations);
+    } catch (err) {
+      context.logger.warn('[search_knowledge_base] failed to resolve org membership; using personal scope', err);
+    }
+  }
+  const verifiedOrgId = pointerOrgId && membershipOrgIds.includes(pointerOrgId) ? pointerOrgId : undefined;
   return resolveSearchBudgets(
     { adminSettings: context.db.adminSettings, scopedSettings: context.db.scopedSettings },
     context.logger,
-    scopeForCaller({ userId: context.userId, organizationId: context.user.organizationId })
+    scopeForCaller({ userId: context.userId, organizationId: verifiedOrgId })
   );
 }
 

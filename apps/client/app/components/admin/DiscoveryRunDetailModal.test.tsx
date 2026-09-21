@@ -75,7 +75,7 @@ const RUN = {
   droppedRecords: [],
 };
 
-type Run = typeof RUN;
+type Run = typeof RUN & { skippedSources?: Array<{ name: string; reason: string }> };
 const runWith = (over: Partial<Run>): Run => ({ ...RUN, ...over });
 
 const renderModal = (runId: string | null = 'run-1', onClose = vi.fn()) =>
@@ -172,6 +172,80 @@ describe('DiscoveryRunDetailModal', () => {
     expect(screen.queryByTestId('discovery-run-catalog-table')).not.toBeInTheDocument();
     expect(screen.queryByTestId('discovery-run-skips-toggle')).not.toBeInTheDocument();
     expect(screen.queryByTestId('discovery-run-operator-conflicts')).not.toBeInTheDocument();
+  });
+
+  it('reads a skipped source as skipped rather than as a failure', async () => {
+    mockGet.mockResolvedValue({
+      data: { run: runWith({ skippedSources: [{ name: 'xai', reason: 'not-configured' }] }) },
+    });
+    renderModal();
+
+    const table = await screen.findByTestId('discovery-run-sources-table');
+    // A skip reason is not an error; the column both row kinds share is named for
+    // what it holds, or the header re-states the misreading the chip removed.
+    expect([...table.querySelectorAll('thead th')].map(cell => cell.textContent)).toEqual([
+      'Source',
+      'Outcome',
+      'ms',
+      'HTTP',
+      'Records',
+      'Detail',
+    ]);
+    expect(screen.getByTestId('discovery-run-source-row-models.dev')).toHaveTextContent('ok');
+    expect(screen.getByTestId('discovery-run-source-row-litellm')).toHaveTextContent('failed');
+
+    const skipped = screen.getByTestId('discovery-run-skipped-row-xai');
+    expect(skipped).toHaveTextContent('skipped');
+    // Appending these rows under the old ok/failed chip painted every skipped
+    // source red, which is the misreading this row exists to remove. Joy's colour
+    // is a stable semantic class, unlike the hashed styling classes around it.
+    const chip = skipped.querySelector('.MuiChip-root');
+    expect(chip).toHaveClass('MuiChip-colorNeutral');
+    expect(chip).not.toHaveClass('MuiChip-colorDanger');
+    expect(screen.getByTestId('discovery-run-source-row-litellm').querySelector('.MuiChip-root')).toHaveClass(
+      'MuiChip-colorDanger'
+    );
+    expect(skipped).toHaveTextContent('not-configured');
+  });
+
+  it('renders the sources table for a run that attempted nothing at all', async () => {
+    mockGet.mockResolvedValue({
+      data: {
+        run: runWith({
+          sources: [],
+          skippedSources: [
+            { name: 'openai', reason: 'egress-disabled' },
+            { name: 'models.dev', reason: 'egress-disabled' },
+          ],
+        }),
+      },
+    });
+    renderModal();
+
+    // Status is 'ok' with zero attempts, so keying the table off run.sources hid
+    // the whole table on the run that most needs explaining.
+    expect(await screen.findByTestId('discovery-run-sources-table')).toBeInTheDocument();
+    expect(screen.getByTestId('discovery-run-skipped-row-openai')).toHaveTextContent('egress-disabled');
+    expect(screen.getByTestId('discovery-run-skipped-row-models.dev')).toBeInTheDocument();
+  });
+
+  it('renders a run that skipped nothing, sent as [] or missing altogether', async () => {
+    mockGet.mockResolvedValue({ data: { run: runWith({ skippedSources: [] }) } });
+    const { unmount } = renderModal();
+
+    expect(await screen.findByTestId('discovery-run-sources-table')).toBeInTheDocument();
+    expect(screen.queryByTestId('discovery-run-skipped-row-xai')).not.toBeInTheDocument();
+    unmount();
+
+    // [] is what the route sends; a missing array only reaches the component from
+    // a payload cached before the field existed.
+    mockGet.mockResolvedValue({ data: { run: RUN } });
+    renderModal();
+
+    expect(await screen.findByTestId('discovery-run-sources-table')).toBeInTheDocument();
+    expect(screen.getByTestId('discovery-run-source-row-models.dev')).toBeInTheDocument();
+    expect(screen.getByTestId('discovery-run-source-row-litellm')).toBeInTheDocument();
+    expect(screen.queryByTestId('discovery-run-skipped-row-xai')).not.toBeInTheDocument();
   });
 
   it('names the mirror a provider price was written over', async () => {

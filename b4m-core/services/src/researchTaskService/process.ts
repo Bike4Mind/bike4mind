@@ -29,7 +29,9 @@ import {
   IResearchTaskScrape,
   IResearchDataRepository,
 } from '@bike4mind/common';
-import { fabFilesService, tagService, taskSchedulerService } from '..';
+import * as fabFilesService from '../fabFileService';
+import * as tagService from '../tagService';
+import * as taskSchedulerService from '../taskSchedulerService';
 import { htmlToMarkdown } from '../lib/turndown';
 import { getLinksFromHtml } from '../lib/cheerio';
 import pLimit from 'p-limit';
@@ -37,7 +39,7 @@ import { FunctionQueueRunner } from '@bike4mind/utils';
 import { findOrUpdateExistingResearchData, createSendStatusUpdate } from './utils';
 import { performDeepResearch } from '../llm/tools/implementation/deepResearch';
 import { CreateFabFileAdapters } from '../fabFileService';
-import { ToolContext } from '../llm/tools/base/types';
+import type { ToolContext } from '../llm/tools/base/types';
 import { getEffectiveLLMApiKeys } from '../apiKeyService';
 
 type ResearchTaskProcessParameters = { id: string };
@@ -62,7 +64,14 @@ interface ResearchTaskProcessAdapters {
     // 'find' is forwarded straight to createFabFile, for its fallback tagger's prefix-overlap check.
     dataLakes: Pick<
       IDataLakeRepository,
-      'findByDatalakeTag' | 'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById' | 'find'
+      | 'findByDatalakeTag'
+      | 'findActiveByUserTags'
+      | 'findActiveByUserTagsAndEntitlements'
+      | 'findById'
+      | 'find'
+      // Anchors the ownership-supersession read that narrows the retrieval creator arm - see
+      // the identical pick on ToolContext (llm/tools/base/types.ts) and ChatCompletionFeatures.
+      | 'findIdsCreatedBy'
     >;
     // Required: this whole `db` object is passed through to ToolContext.db below, whose
     // `organizations` field is itself required (#1674 - the data-lake retrieval resolver reads

@@ -1,4 +1,4 @@
-import { FeedbackModel, FeedbackTextModel, User } from '@bike4mind/database';
+import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
 import {
   classifyStage,
   FEEDBACK_LIST_DEFAULT_LIMIT,
@@ -6,10 +6,8 @@ import {
   FEEDBACK_SUBJECTS,
   FeedbackEvents,
   FeedbackStatus,
-  IOrganizationDocument,
   Permission,
   PromptMetaZodSchema,
-  feedbackContentExpiresAt,
   redactFunctionCallsForViewer,
   truncateFeedbackContent,
 } from '@bike4mind/common';
@@ -26,9 +24,13 @@ import { adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
+import { NotFoundError } from '@server/utils/errors';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config } from '@server/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
+import { resolveFeedbackOrganization } from '@server/utils/feedbackOrganization';
+import { saveFeedbackOrRollbackText, writeFeedbackText } from '@server/utils/feedbackText';
+import { buildFeedbackDeepLinks, FEEDBACK_LINK_LABELS, type FeedbackDeepLinks } from '@server/utils/feedbackDeepLinks';
 import {
   recordFeedbackDeliverySuccess,
   recordFeedbackDeliveryFailure,
@@ -64,6 +66,7 @@ export const FEEDBACK_LIST_FIELDS = [
   'organizationId',
   'type',
   'subject',
+  'helpContext',
   'sessionId',
   'questId',
   'createdAt',
@@ -97,6 +100,11 @@ const ListFeedbackQuerySchema = z.object({
   // Capped: the value reaches a Mongo regex, so an unbounded pattern is a CPU sink even escaped.
   search: z.string().min(1).max(200).optional(),
   sort: z.enum(['asc', 'desc']).prefault('desc'),
+  // Opt-in because the facet is a `distinct` over the caller's WHOLE accessible set, which for an
+  // admin is the unindexed full collection - and every caller but the admin org-filter menu throws
+  // the result away (the paged list, the CSV export loop, the per-session "Reported" read).
+  // An explicit enum rather than z.coerce.boolean(), which reads the string "false" as true.
+  includeOrganizations: z.enum(['true', 'false']).optional(),
 });
 
 /** `qs.parse` hands back a lone value or an array depending on how many times a key repeats. */
@@ -118,6 +126,7 @@ const CreateFeedbackRequestSchema = z.object({
   // it survives onto the saved document.
   questId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
+  contextQuestId: z.string().min(1).optional(),
 });
 
 // Trim each address and drop blanks so 'a@x.com, b@x.com' doesn't leave a leading space on every
@@ -141,6 +150,32 @@ type FeedbackEmailRoute =
 // bracketed substring would hide information from the staff reading it.
 function sanitizeForEmail(value: string): string {
   return sanitizeHtml(value, { allowedTags: [], allowedAttributes: {}, disallowedTagsMode: 'escape' });
+}
+
+/**
+ * `href` lives in a double-quoted attribute, which sanitizeForEmail does not cover: it is a
+ * text-node sanitizer (allowedTags: []), documented to neutralize markup rather than to make a
+ * string safe inside an attribute. The deep-link builders percent-encode every id they
+ * interpolate, so this is defense in depth for the day one of them stops.
+ */
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/**
+ * The email's counterpart to renderLinksLine in feedbackMessage.ts - same two targets, and the
+ * labels come from the same constant, so a report triaged from the inbox and one triaged from
+ * Slack lead to the same places by the same names.
+ * Empty string when there is nothing to link to, which collapses the row out of the template.
+ */
+function renderFeedbackLinksHtml(links: FeedbackDeepLinks | null): string {
+  if (!links) return '';
+  const anchors = [`<a href="${escapeHtmlAttribute(links.record)}">${FEEDBACK_LINK_LABELS.record}</a>`];
+  if (links.conversation) {
+    const label = links.conversationIsTurn ? FEEDBACK_LINK_LABELS.turn : FEEDBACK_LINK_LABELS.session;
+    anchors.push(`<a href="${escapeHtmlAttribute(links.conversation)}">${label}</a>`);
+  }
+  return `<p><strong>Links:</strong> ${anchors.join(' - ')}</p>`;
 }
 
 /**
@@ -176,8 +211,11 @@ export function resolveFeedbackEmailRoute(
 
 const handler = baseApi()
   .get(async (req, res) => {
+    // Invariant check, not a reachable auth path - the auth middleware attaches an ability
+    // unconditionally. Typed so errorHandler does not default it to a 500 that pages an operator
+    // for our own bug; 404 rather than 403 to match the siblings in this directory.
     if (!req.ability) {
-      throw new Error('Ability not found');
+      throw new NotFoundError('Ability not found');
     }
 
     const query = ListFeedbackQuerySchema.parse(qs.parse(req.query as Record<string, string>));
@@ -234,8 +272,9 @@ const handler = baseApi()
       FeedbackModel.countDocuments(filter),
       // Facet options come from the caller's whole accessible set, NOT from `filter` - otherwise
       // selecting an organization would prune every other option out of the dropdown that
-      // selected it.
-      FeedbackModel.distinct('organization', readable),
+      // selected it. Which is also why it is opt-in: `readable` is `{}` for an admin, so this is a
+      // full-collection scan on an unindexed field and must not ride along on unrelated reads.
+      query.includeOrganizations === 'true' ? FeedbackModel.distinct('organization', readable) : undefined,
     ]);
 
     return res.json({
@@ -243,9 +282,13 @@ const handler = baseApi()
       total,
       page: query.page,
       limit: query.limit,
-      organizations: organizationFacet
-        .filter((name): name is string => typeof name === 'string' && name.length > 0)
-        .sort((a, b) => a.localeCompare(b)),
+      // Omitted rather than [] when not requested: an empty array is indistinguishable from "no
+      // organizations have any feedback", which would empty the filter menu.
+      ...(organizationFacet && {
+        organizations: organizationFacet
+          .filter((name): name is string => typeof name === 'string' && name.length > 0)
+          .sort((a, b) => a.localeCompare(b)),
+      }),
     });
   })
   .post(async (req, res) => {
@@ -255,40 +298,22 @@ const handler = baseApi()
       console.log('Authenticated');
     }
 
-    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId } = newFeedbackData;
+    const { userId, content, tags, username, userEmail, promptMeta, type, questId, sessionId, contextQuestId } =
+      newFeedbackData;
 
     // The org lookup must key off the resolved identity too, not the raw body userEmail -- otherwise
     // two authenticated submissions from the same account can be stamped with different organizations
     // depending on whatever email string the client happened to send.
-    const existingUser = authenticated
-      ? await User.findById(req.user.id).populate('organizationId')
-      : await User.findOne({ email: userEmail }).populate('organizationId');
+    const { organization, organizationId } = await resolveFeedbackOrganization(
+      authenticated ? { userId: req.user.id } : { email: userEmail }
+    );
 
-    const organizationDoc = existingUser?.organizationId as unknown as IOrganizationDocument | undefined;
-    const organization = organizationDoc?.name || 'Unknown';
-
-    // Text-first (mirrors LakeAccessEventModel.record()): a FeedbackText write failure just
-    // leaves contentStored false rather than failing the submission, but a Feedback save failure
-    // after a successful text write must not leave an orphaned, unattributable text row behind.
     const feedbackId = new mongoose.Types.ObjectId();
     // Computed once, outside the write, so the response below can echo the same truncated string
     // that was (or would have been) persisted, not the raw untruncated request body.
     const { content: truncatedContent, contentTruncated } = truncateFeedbackContent(content);
-    const writeFeedbackText = async (): Promise<boolean> => {
-      if (content.trim().length === 0) return false;
-      try {
-        await FeedbackTextModel.create({
-          _id: feedbackId,
-          content: truncatedContent,
-          contentTruncated,
-          expiresAt: feedbackContentExpiresAt(new Date()),
-        });
-        return true;
-      } catch (error) {
-        req.logger.error('Failed to write FeedbackText sibling', error);
-        return false;
-      }
-    };
+    // Decided on the raw body, not the truncated string - see writeFeedbackText's contract.
+    const hasContent = content.trim().length > 0;
 
     // organizationId/questId/sessionId become authorization keys for downstream scoped readers,
     // so they are derived server-side here rather than trusted from the request body - see
@@ -298,14 +323,17 @@ const handler = baseApi()
     const [feedbackContext, contentStored] = await Promise.all([
       resolveFeedbackContext({
         authenticatedUserId: authenticated ? req.user.id : undefined,
-        organizationId: organizationDoc?.id ?? null,
+        organizationId,
         claims: {
           questId: questId ?? promptMeta?.questId,
           sessionId: sessionId ?? promptMeta?.session?.id,
+          contextQuestId,
         },
         logger: req.logger,
       }),
-      writeFeedbackText(),
+      hasContent
+        ? writeFeedbackText({ feedbackId, content: truncatedContent, contentTruncated, logger: req.logger })
+        : Promise.resolve(false),
     ]);
 
     const newFeedback = new FeedbackModel({
@@ -320,20 +348,12 @@ const handler = baseApi()
       type,
       sessionId: feedbackContext.sessionId,
       questId: feedbackContext.questId,
+      contextQuestId: feedbackContext.contextQuestId,
       organizationId: feedbackContext.organizationId,
       subject: feedbackContext.subject,
       contentStored,
     });
-    try {
-      await newFeedback.save();
-    } catch (error) {
-      if (contentStored) {
-        await FeedbackTextModel.deleteOne({ _id: feedbackId }).catch(cleanupError => {
-          req.logger.warn('Failed to delete orphaned FeedbackText sibling after a failed save', cleanupError);
-        });
-      }
-      throw error;
-    }
+    await saveFeedbackOrRollbackText({ feedback: newFeedback, contentStored, logger: req.logger });
 
     const stageClass = classifyStage(Config.STAGE);
 
@@ -400,6 +420,20 @@ const handler = baseApi()
       ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
       : promptMeta;
 
+    // Built once for both channels so a link in Slack and the same link in the email can never
+    // disagree. Null on a deploy with no APP_URL: both channels then render no link section
+    // rather than an unfollowable relative path, and the notification still goes out.
+    const deepLinks = buildFeedbackDeepLinks({
+      feedbackId: newFeedback.id,
+      sessionId: newFeedback.sessionId,
+      questId: newFeedback.questId,
+    });
+    if (!deepLinks) {
+      Logger.warn('[feedback] APP_URL is unset - delivering the notification without deep links', {
+        feedbackId: newFeedback.id,
+      });
+    }
+
     // Send feedback to Slack if enabled. postFeedbackToSlack records its own
     // success/failure/skip metrics and reports its own outcome; the 'disabled' skip is
     // recorded here since it never even calls into postFeedbackToSlack. Collected below (with the
@@ -411,15 +445,16 @@ const handler = baseApi()
     let slack: FeedbackChannelDelivery;
     if (getSettingsValue('EnableFeedBackToSlack', settings)) {
       console.log('Sending feedback to Slack is enabled');
-      slack = await postFeedbackToSlack(
-        type || 'CS',
+      slack = await postFeedbackToSlack({
+        type: type || 'CS',
         organization,
-        newFeedback.username,
-        newFeedback.userEmail ?? '',
-        newFeedback.userId,
-        truncatedContent,
-        promptMetaForExternalEgress
-      );
+        username: newFeedback.username,
+        userEmail: newFeedback.userEmail ?? '',
+        userId: newFeedback.userId,
+        content: truncatedContent,
+        promptMeta: promptMetaForExternalEgress,
+        links: deepLinks,
+      });
     } else {
       slack = { outcome: 'skipped', reason: 'disabled' };
       disabledChannelMetrics.push(
@@ -560,6 +595,7 @@ const handler = baseApi()
                       <p><strong>From:</strong> ${sanitizedUsername} (ID: ${sanitizedUserId})</p>
                       <p><strong>Email:</strong> ${sanitizedUserEmail}</p>
                       ${sanitizedType ? `<p><strong>Type:</strong> ${sanitizedType}</p>` : ''}
+                      ${renderFeedbackLinksHtml(deepLinks)}
                     </div>
                     <p><strong>Message:</strong></p>
                     <p>${sanitizedContent}</p>

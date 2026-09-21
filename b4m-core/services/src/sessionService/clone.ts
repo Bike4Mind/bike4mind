@@ -53,9 +53,10 @@ export const cloneSession = async (
   const buildCloneSession = {
     name: `Cloned ${session.name}`,
     knowledgeIds: session.knowledgeIds,
-    tags: session.tags ? session.tags : [],
+    tags: session.tags ?? [],
     summary: session.summary,
     summaryAt: session.summaryAt,
+    taggedAt: session.taggedAt,
     clonedSourceId: session.id,
     // Carried from the source, not re-derived: the owner's scope is already correct and explicit,
     // and re-deriving here would go through the OWNERSHIP arm alone (no resolveLakeAccess is threaded
@@ -78,11 +79,19 @@ export const cloneSession = async (
     // retrievalTags reads as "already lake-scoped") and no way to clear either from the UI.
     // Same owner-only gate: a non-owner falls back to derivation, which the explicit marker would
     // otherwise suppress, leaving them with neither a copied scope nor a derived one.
-    ...(isOwner ? { retrievalTags: session.retrievalTags, lakeScopeExplicit: session.lakeScopeExplicit } : {}),
+    // forceKnowledgeRetrieval rides with the scope so a persisted opt-out (`false`) survives:
+    // createSession reads an explicit lake scope as forced retrieval, and omitting it would turn
+    // that opt-out back ON here. An ABSENT flag is deliberately left to that implication rather
+    // than pinned to `false`, so a copy of a lake session predating it picks up the corrected
+    // behavior; the copy then forces retrieval where its source does not.
+    ...(isOwner
+      ? {
+          retrievalTags: session.retrievalTags,
+          lakeScopeExplicit: session.lakeScopeExplicit,
+          forceKnowledgeRetrieval: session.forceKnowledgeRetrieval,
+        }
+      : {}),
   };
-  if (session.summary) buildCloneSession.summary = session.summary;
-  if (session.summaryAt) buildCloneSession.summaryAt = session.summaryAt;
-
   // Forward the WHOLE adapters object, not just `db`: `resolveLakeAccess` and `logger` live on
   // CreateSessionAdapters and clone previously dropped them here, so a non-owner's derivation ran
   // with no lake arm and - crucially - no intersection, persisting a tag for a lake they may not
@@ -93,7 +102,12 @@ export const cloneSession = async (
 
   // Clone all messages from the session
   await Promise.all(
-    messagesToClone.map(async ({ id, promptMeta, ...messageData }) => {
+    messagesToClone.map(async ({ id, promptMeta, correctsQuestId, ...messageData }) => {
+      // `correctsQuestId` names a quest in the SOURCE session, so it is dropped rather than copied:
+      // a copied chain link would dereference across the session boundary, and the access that
+      // authorized this copy is not rechecked when the pointer is later read. Remap it through an
+      // old-id to new-id table if preserving copied correction chains is ever wanted. Paired with
+      // the session re-check in resolveCorrectionContext (llm/buildCorrectionContext.ts).
       await db.chatHistories.create({
         ...messageData,
         // The clone is a NEW session owned by the caller, so promptMeta.session must name it -

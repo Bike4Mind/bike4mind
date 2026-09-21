@@ -1,5 +1,17 @@
 # @bike4mind/resource
 
+## 0.7.1
+
+### Patch Changes
+
+- [#2957](https://github.com/Bike4Mind/bike4mind/pull/2957) [`7aab21b`](https://github.com/Bike4Mind/bike4mind/commit/7aab21bf76b84a1572904dcd684154f725962b3e) Thanks [@onoya](https://github.com/onoya)! - declare APP_URL so CSRF-protected routes stop returning 403
+
+## 0.7.0
+
+### Minor Changes
+
+- [#2762](https://github.com/Bike4Mind/bike4mind/pull/2762) [`adc900a`](https://github.com/Bike4Mind/bike4mind/commit/adc900ab152e00d3324bc228ac73c98a5cb5e2ef) Thanks [@maconard](https://github.com/maconard)! - add DeepSeek as a first-party provider and close Moonshot gaps
+
 ## 0.6.0
 
 ### Minor Changes

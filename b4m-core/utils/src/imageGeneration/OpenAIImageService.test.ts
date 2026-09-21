@@ -27,7 +27,13 @@ vi.mock('./imageProcessorUtils', () => ({
   downloadImageAsBuffer: vi.fn(),
 }));
 
-import { buildModerationBlockedError, isSupportedEditSize, OpenAIImageService } from './OpenAIImageService';
+import {
+  buildModerationBlockedError,
+  isSupportedEditSize,
+  OpenAIImageService,
+  resolveGptImageOutputOptions,
+} from './OpenAIImageService';
+import { downloadImageAsBuffer } from './imageProcessorUtils';
 
 // The helper only reads `code`, `status`, and `requestID` off the error, so a
 // minimal object cast to the APIError instance type is sufficient and avoids
@@ -91,6 +97,129 @@ describe('buildModerationBlockedError', () => {
   it('returns null for non-400 errors (e.g. rate limits, server errors)', () => {
     expect(buildModerationBlockedError(makeApiError({ status: 429, code: 'rate_limit_exceeded' }))).toBeNull();
     expect(buildModerationBlockedError(makeApiError({ status: 500 }))).toBeNull();
+  });
+});
+
+describe('resolveGptImageOutputOptions', () => {
+  it('forwards a transparent background so gpt-image returns a real alpha channel', () => {
+    const warnings: string[] = [];
+
+    expect(resolveGptImageOutputOptions('transparent', 'png', warnings)).toEqual({
+      background: 'transparent',
+      output_format: 'png',
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it('promotes jpeg to png for a transparent request, which OpenAI would otherwise reject', () => {
+    const warnings: string[] = [];
+
+    expect(resolveGptImageOutputOptions('transparent', 'jpeg', warnings)).toEqual({
+      background: 'transparent',
+      output_format: 'png',
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('png');
+  });
+
+  it('leaves webp alone - it carries alpha', () => {
+    const warnings: string[] = [];
+
+    expect(resolveGptImageOutputOptions('transparent', 'webp', warnings)).toEqual({
+      background: 'transparent',
+      output_format: 'webp',
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it('keeps jpeg when the background is not transparent', () => {
+    expect(resolveGptImageOutputOptions('opaque', 'jpeg', [])).toEqual({
+      background: 'opaque',
+      output_format: 'jpeg',
+    });
+  });
+
+  it('omits unset fields so OpenAI applies its own defaults', () => {
+    expect(resolveGptImageOutputOptions(undefined, undefined, [])).toEqual({});
+    expect(resolveGptImageOutputOptions(null, null, [])).toEqual({});
+  });
+
+  it('drops a transparent background for gpt-image-2, which rejects it outright', () => {
+    const warnings: string[] = [];
+
+    expect(resolveGptImageOutputOptions('transparent', 'png', warnings, 'gpt-image-2')).toEqual({
+      output_format: 'png',
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('gpt-image-2');
+  });
+
+  it('keeps a transparent background for gpt-image-1.5, which supports it', () => {
+    const warnings: string[] = [];
+
+    expect(resolveGptImageOutputOptions('transparent', 'png', warnings, 'gpt-image-1.5')).toEqual({
+      background: 'transparent',
+      output_format: 'png',
+    });
+    expect(warnings).toEqual([]);
+  });
+});
+
+describe('OpenAIImageService.generate output controls', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    imagesGenerate.mockResolvedValue({ created: 0, output_format: 'png', data: [{ b64_json: 'QUJD' }] });
+  });
+
+  const service = () => new OpenAIImageService('test-key', new Logger());
+
+  it('sends background and output_format to gpt-image so a cutout PNG is possible', async () => {
+    // gpt-image-2 rejects background: 'transparent', so this must use gpt-image-1.
+    await service().generate('an inventory icon', {
+      model: ImageModels.GPT_IMAGE_1,
+      background: 'transparent',
+      output_format: 'png',
+    });
+
+    expect(imagesGenerate).toHaveBeenCalledTimes(1);
+    expect(imagesGenerate.mock.calls[0][0]).toMatchObject({ background: 'transparent', output_format: 'png' });
+  });
+
+  it('drops a transparent background for an explicitly-selected gpt-image-2, which would 400', async () => {
+    await service().generate('an inventory icon', {
+      model: ImageModels.GPT_IMAGE_2,
+      background: 'transparent',
+      output_format: 'png',
+    });
+
+    const sent = imagesGenerate.mock.calls[0][0];
+    expect(sent.background).toBeUndefined();
+    expect(sent.output_format).toBe('png');
+  });
+
+  it('drops both for a legacy (non gpt-image) model, which would reject them', async () => {
+    imagesGenerate.mockResolvedValue({ created: 0, data: [{ url: 'https://example.test/i.png' }] });
+
+    await service().generate('an inventory icon', {
+      model: ImageModels.DALL_E_2,
+      background: 'transparent',
+      output_format: 'webp',
+    });
+
+    const sent = imagesGenerate.mock.calls[0][0];
+    expect(sent.background).toBeUndefined();
+    expect(sent.output_format).toBeUndefined();
+  });
+
+  it('labels the data URL with the format the response reports, not always png', async () => {
+    imagesGenerate.mockResolvedValue({ created: 0, output_format: 'webp', data: [{ b64_json: 'QUJD' }] });
+
+    const [image] = await service().generate('an inventory icon', {
+      model: ImageModels.GPT_IMAGE_2,
+      output_format: 'webp',
+    });
+
+    expect(image).toBe('data:image/webp;base64,QUJD');
   });
 });
 
@@ -213,7 +342,42 @@ describe('OpenAIImageService.edit', () => {
     expect(params).not.toHaveProperty('mask');
   });
 
-  it('leaves the dall-e-2 request shape unchanged', async () => {
+  it('forwards quality to a gpt-image model, which callers have already billed for', async () => {
+    // ImageEdit.ts and the chat edit_image tool both price the requested tier before
+    // calling here, so dropping it charges for a tier OpenAI was never asked to render.
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2, quality: 'high' });
+
+    expect(params.quality).toBe('high');
+  });
+
+  it.each([
+    ['standard', 'medium'],
+    ['hd', 'high'],
+  ])("maps the legacy '%s' tier to '%s' on the edit endpoint", async (requested, expected) => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2, quality: requested as 'standard' | 'hd' });
+
+    expect(params.quality).toBe(expected);
+  });
+
+  it('omits quality entirely when none is requested', async () => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2 });
+
+    expect(params).not.toHaveProperty('quality');
+  });
+
+  it('drops a transparent background for gpt-image-2 on the edit endpoint, which would 400', async () => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2, background: 'transparent' });
+
+    expect(params).not.toHaveProperty('background');
+  });
+
+  it('keeps a transparent background for gpt-image-1.5 on the edit endpoint', async () => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' });
+
+    expect(params.background).toBe('transparent');
+  });
+
+  it('leaves the dall-e-2 request shape unchanged apart from the pinned image count', async () => {
     const params = await editParams({
       model: ImageModels.DALL_E_2,
       size: '512x512',
@@ -227,7 +391,10 @@ describe('OpenAIImageService.edit', () => {
     expect(params.image).toBeInstanceOf(File);
     expect(Array.isArray(params.image)).toBe(false);
     expect(params.mask).toBeInstanceOf(File);
-    expect(params.n).toBe(2);
+    // Pinned rather than forwarded: only data[0] is returned, so a higher count would render
+    // images we pay OpenAI for and then discard. dall-e-2 is the only edit branch the SDK would
+    // have honored `n` on, and no dispatcher can reach it today (supportsImageEdit excludes it).
+    expect(params.n).toBe(1);
     expect(params.size).toBe('512x512');
     expect(params.response_format).toBe('url');
     expect(params.user).toBe('user-1');
@@ -268,5 +435,130 @@ describe('OpenAIImageService.generate gpt-image-2 sizing', () => {
     const params = await generateParams({ model: ImageModels.GPT_IMAGE_2 });
 
     expect(params.size).toBe('auto');
+  });
+});
+
+describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () => {
+  beforeEach(() => {
+    imagesGenerate.mockReset();
+    imagesEdit.mockReset();
+    vi.mocked(downloadImageAsBuffer).mockReset();
+  });
+
+  /** Runs generate() against the mocked SDK and returns the params it sent. */
+  async function generateParams(options: Record<string, unknown>): Promise<Record<string, unknown>> {
+    imagesGenerate.mockResolvedValue({ data: [{ b64_json: 'R0VO' }] });
+    await makeService().generate('a bicycle', options);
+    return imagesGenerate.mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it.each(['low', 'medium', 'high', 'auto'] as const)(
+    "forwards a '%s' quality value to the OpenAI generate call instead of stripping it",
+    async quality => {
+      // ImageGeneration.ts's validateUserCredits bills this exact tier before reaching
+      // here - if it's stripped, the user pays for a quality they never receive.
+      const params = await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality });
+
+      expect(params.quality).toBe(quality);
+    }
+  );
+
+  it('drops an out-of-enum quality value rather than sending an invalid enum to OpenAI', async () => {
+    const params = await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'ultra' });
+
+    expect(params).not.toHaveProperty('quality');
+  });
+
+  it.each([
+    ['standard', 'medium'],
+    ['hd', 'high'],
+  ])("maps the legacy '%s' tier to '%s' rather than dropping it", async (requested, expected) => {
+    // The cost calculator bills 'standard'/'hd' as medium/high, so mapping (not dropping)
+    // is what keeps the charge and the render on the same tier.
+    const params = await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality: requested });
+
+    expect(params.quality).toBe(expected);
+  });
+
+  /** Runs the image-to-image branch of generate() and returns the params sent to images.edit. */
+  async function imageToImageParams(options: Record<string, unknown>): Promise<Record<string, unknown>> {
+    vi.mocked(downloadImageAsBuffer).mockResolvedValue(Buffer.from('fake-source-image'));
+    imagesEdit.mockResolvedValue({ data: [{ b64_json: 'RURJVA==' }] });
+    await makeService().generate('a bicycle', { imagePrompt: 'https://example.com/source.png', ...options });
+    expect(imagesEdit).toHaveBeenCalledTimes(1);
+    return imagesEdit.mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it('forwards quality on the image-to-image (edit-endpoint) branch too', async () => {
+    // generate() routes imagePrompt requests through images.edit for GPT-Image models;
+    // validateUserCredits bills the same mapped tier for this branch, so it must not
+    // silently drop quality the way the text-to-image branch used to.
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'high' });
+
+    expect(params.quality).toBe('high');
+  });
+
+  it('forwards n on the image-to-image branch, since credits are charged per image', async () => {
+    // validateUserCredits charges usdCost * n up front; requesting 3 and sending none
+    // bills for three images and returns one.
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, n: 3 });
+
+    expect(params.n).toBe(3);
+  });
+
+  it('forwards the normalized size on the image-to-image branch', async () => {
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, size: '1536x1024' });
+
+    expect(params.size).toBe('1536x1024');
+  });
+
+  it("maps the legacy 'hd' tier to 'high' on the image-to-image branch too", async () => {
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'hd' });
+
+    expect(params.quality).toBe('high');
+  });
+
+  it('drops an out-of-enum quality value on the image-to-image branch rather than sending it', async () => {
+    const params = await imageToImageParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'ultra' });
+
+    expect(params).not.toHaveProperty('quality');
+  });
+
+  it('forwards background and output_format on the image-to-image branch too', async () => {
+    const params = await imageToImageParams({
+      model: ImageModels.GPT_IMAGE_1_5,
+      background: 'transparent',
+      output_format: 'png',
+    });
+
+    expect(params.background).toBe('transparent');
+    expect(params.output_format).toBe('png');
+  });
+
+  it('logs a warning when a quality value is dropped, so the drop is observable', async () => {
+    const debugSpy = vi.spyOn(Logger.globalInstance, 'debug');
+
+    await generateParams({ model: ImageModels.GPT_IMAGE_1_5, quality: 'ultra' });
+
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining('parameter adjustments'),
+      expect.arrayContaining([expect.stringContaining("Quality parameter ('ultra')")])
+    );
+    debugSpy.mockRestore();
+  });
+
+  it('returns every generated image, not just the first, when OpenAI returns more than one', async () => {
+    imagesEdit.mockResolvedValue({
+      data: [{ b64_json: 'aW1hZ2Ux' }, { b64_json: 'aW1hZ2Uy' }, { b64_json: 'aW1hZ2Uz' }],
+    });
+    vi.mocked(downloadImageAsBuffer).mockResolvedValue(Buffer.from('fake-source-image'));
+
+    const images = await makeService().generate('a bicycle', {
+      model: ImageModels.GPT_IMAGE_1_5,
+      imagePrompt: 'https://example.com/source.png',
+      n: 3,
+    });
+
+    expect(images).toHaveLength(3);
   });
 });

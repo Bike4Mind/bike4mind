@@ -23,6 +23,10 @@ let server: Awaited<ReturnType<typeof createMongoServer>>;
 beforeAll(async () => {
   server = await createMongoServer();
   await mongoose.connect(server.getUri());
+  // Settle autoIndex before beforeEach's dropDatabase: an unawaited background build can restore
+  // the keyset compound that the "refuses to drop" cases need absent. See createMongoServer's
+  // autoIndex note.
+  await FabFileChunk.init();
 });
 
 afterAll(async () => {
@@ -41,12 +45,18 @@ describe('drop-legacy-fabfilechunk-indexes migration (real DB)', () => {
     await FabFileChunk.collection.createIndex({ fabFileId: 1 });
 
     const before = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
-    expect(before).toEqual(['_id_', '_id_1_fabFileId_1', 'fabFileId_1', 'fabFileId_1__id_1']);
+    expect(before).toEqual([
+      '_id_',
+      '_id_1_fabFileId_1',
+      'fabFileId_1',
+      'fabFileId_1__id_1',
+      'fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1',
+    ]);
 
     await migration.up();
 
     const after = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
-    expect(after).toEqual(['_id_', 'fabFileId_1__id_1']);
+    expect(after).toEqual(['_id_', 'fabFileId_1__id_1', 'fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1']);
   });
 
   it('refuses to drop when the keyset compound is missing', async () => {
@@ -70,8 +80,8 @@ describe('drop-legacy-fabfilechunk-indexes migration (real DB)', () => {
     await migration.up();
 
     const after = (await FabFileChunk.collection.indexes()).map(index => index.name).sort();
-    expect(after).toEqual(['_id_', 'fabFileId_1__id_1']);
-  }); // Same real-index-build cost as the happy-path test above; same 30s bump.
+    expect(after).toEqual(['_id_', 'fabFileId_1__id_1', 'fabFileId_1_embeddingModel_1_retrievalIndexConfirmedModel_1']);
+  });
 
   it('refuses to drop when the keyset compound is hidden (present but unusable)', async () => {
     await FabFileChunk.collection.createIndex({ fabFileId: 1, _id: 1 }, { hidden: true });

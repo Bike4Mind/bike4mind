@@ -14,6 +14,7 @@ import {
   IUsageEventRepository,
   IUserApiKeyRepository,
   IUserRepository,
+  normalizeMultimodalMessages,
   type CompletionSource,
 } from '@bike4mind/common';
 import {
@@ -37,7 +38,9 @@ import {
 import { Logger } from '@bike4mind/observability';
 import { getEffectiveLLMApiKeys } from './apiKeyService';
 import { subtractCredits, isMemberCreditCapExceeded, MEMBER_CREDIT_CAP_MESSAGE } from './creditService';
+import { isCurrentOrgMember } from './organizationService/orgAuthority';
 import { InsufficientCreditsError } from './llm/ChatCompletionProcess';
+import { buildEarlyStopStamp } from './llm/earlyStopStamp';
 
 export interface CompletionParams {
   userId: string;
@@ -178,8 +181,12 @@ export function resolveOpenAiBareModelAlias(modelId: string): string {
  * Used by Next.js API route, Lambda function, and available for 3rd party integrations
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
-  const { userId, messages, options, db, logger, onChunk, apiKeyInfo } = params;
+  const { userId, options, db, logger, onChunk, apiKeyInfo } = params;
   const model = resolveOpenAiBareModelAlias(params.model);
+  // Callers write multimodal parts in whichever dialect their SDK speaks and the wire
+  // schema accepts any of them (z.array(z.any())). Canonicalize once, here, so the
+  // token estimate below and every backend translator read the same shape.
+  const messages = normalizeMultimodalMessages(params.messages);
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
 
@@ -203,6 +210,30 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     organization = await db.organizations.findById(params.billingOrganizationId);
     if (!organization) {
       throw new Error(`[CLI_CREDITS] Billing organization ${params.billingOrganizationId} not found`);
+    }
+
+    // The billing target is stamped on the API key at MINT time and never revisited, so a key whose
+    // minting user has since left (or been removed from) the org kept drawing on that org's shared
+    // credit pool indefinitely. Re-verify membership at USE time, against the roster just fetched -
+    // no extra query.
+    //
+    // Fail closed rather than falling back to personal billing: the caller asked to spend the org's
+    // credits, and quietly spending their own instead would be a surprising charge they never
+    // authorized. An explicit error tells them to re-mint the key.
+    //
+    // The platform-admin arm lives HERE, not in the predicate: `isCurrentOrgMember` reports roster
+    // attachment, not authority, and must stay that way so the two ideas cannot be conflated. But a
+    // platform admin mints org-billed keys on a customer org's behalf as a normal support action -
+    // pages/api/user-api-keys/index.ts admits them explicitly - and is never on that org's roster,
+    // so without this arm such a key would fail on its very first call, not merely after someone
+    // left. Only queried on the refusal path, so the happy path keeps its no-extra-query property.
+    if (!isCurrentOrgMember(organization, userId)) {
+      const actor = await db.users.findById(userId);
+      if (!actor?.isAdmin) {
+        throw new Error(
+          `[CLI_CREDITS] User ${userId} is no longer a member of billing organization ${organization.id}`
+        );
+      }
     }
   }
   const billToOrg = organization !== null;
@@ -249,10 +280,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         // `number`, but that is only a claim about catalog data, and a row that omits it
         // reaches here for real (the embed route's own integration fixture did). No `??`
         // here on purpose - resolveOutputMaxTokens absorbs an absent cap itself, so the
-        // two call sites cannot drift on what an unknown cap means. The remaining hole is
-        // upstream: toModelInfo substitutes a *derived* 4096 that then clamps an adaptive
-        // model as though the row had declared it, which has to be closed there where
-        // declared and derived are still tellable apart.
+        // two call sites cannot drift on what an unknown cap means. A cap toModelInfo
+        // merely derived is absorbed there too, via modelInfo.maxOutputTokensDerived.
         modelMaxOutputTokens: modelInfo.max_tokens,
       })
     : (options?.maxTokens ?? DEFAULT_OUTPUT_MAX_TOKENS);
@@ -557,7 +586,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         cacheWriteTokens: finalCacheCreationTokens,
         costUsd: finalUsdCost,
         creditsCharged,
-        status: 'ok',
+        // Same refund key the web chat path records: a stream aborted as degenerate is
+        // priced normally (the provider tokens were spent) but must not read as a clean,
+        // fully-valued success. See buildEarlyStopStamp.
+        status: buildEarlyStopStamp(finalStopReason)?.usageEventStatus ?? 'ok',
         latencyMs: Date.now() - completionStartTime,
       })
       .catch(err => logger?.warn?.('Failed to record usage event', err));

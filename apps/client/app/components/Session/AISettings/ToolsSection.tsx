@@ -30,6 +30,7 @@ import {
   TableChart as ExcelIcon,
   ShowChart as FinanceIcon,
   Close as CloseIcon,
+  PlaylistAddCheck as OnlyPickedToolsIcon,
 } from '@mui/icons-material';
 import { Box, Grid, Input, Tooltip, Typography, IconButton } from '@mui/joy';
 import type { BoxProps } from '@mui/joy';
@@ -56,6 +57,7 @@ import {
 } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
 import { useConfig } from '@client/app/hooks/data/settings';
+import { AGENT_ONLY_MCP_SERVERS } from '@client/app/components/common/ToolIndicators';
 
 /**
  * Tooltip shown when a tool is disabled because its required API key/config is
@@ -217,10 +219,6 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelP
   </Box>
 );
 
-// MCP servers reachable only through agent delegation, not plain chat. Must stay in
-// sync with the built-in agents that claim them via exclusiveMcpServers:
-// GithubManagerAgent ('github') and ProjectManagerAgent ('atlassian').
-const AGENT_ONLY_MCP_SERVERS = ['github', 'atlassian'];
 const AGENT_ONLY_MCP_NOTE = 'Agent mode only - mention an @agent to use it in chat';
 
 // Tools rendered under the "Fun & Novelty" section. They count toward that section's
@@ -279,6 +277,7 @@ const ToolsSection = ({
   const isAgentsEnabled = useLLM(state => state.isAgentsEnabled);
   const isLatticeEnabled = useLLM(state => state.isLatticeEnabled);
   const researchMode = useLLM(state => state.researchMode);
+  const skipAutoOffers = useLLM(state => state.skipAutoOffers);
   const enabledMcpServers = useLLM(state => state.enabledMcpServers);
   const { setState: setLLM } = useLLM;
   const { settings: userSettings, updatePreferences } = useUserSettings();
@@ -1396,6 +1395,29 @@ const ToolsSection = ({
                   checked={displayTools.includes('recharts')}
                 />
               </Box>
+            </ToolContainer>
+          </Grid>
+          {/* Suppresses auto-added tools (server offers + the Smart-mode recommender) - not a
+              tool itself, so no toolId: there is nothing here to pin or gate. */}
+          <Grid xs={12} className="tool-item tool-item-skip-auto-offers">
+            <ToolContainer sx={toolContainerSx}>
+              <Box
+                className="tool-content"
+                sx={{ display: 'flex', alignItems: 'center', gap: '16px', flex: 1, minWidth: 0 }}
+              >
+                <OnlyPickedToolsIcon
+                  sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                />
+                <ToolLabel
+                  name="Only tools I pick"
+                  description="Stops the assistant adding tools on its own - file search, app navigation, blog drafting - and withholds every tool from your connected integrations above, which you pick per server rather than per tool. Turn this off for a turn that needs one. Saves ~800-1,950 tokens, more with an integration connected."
+                />
+              </Box>
+              <SquareSlideToggle
+                data-testid="tools-skip-auto-offers-toggle"
+                onChange={e => setLLM({ skipAutoOffers: e.target.checked })}
+                checked={skipAutoOffers}
+              />
             </ToolContainer>
           </Grid>
         </Box>

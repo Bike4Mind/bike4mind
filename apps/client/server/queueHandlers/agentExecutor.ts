@@ -53,12 +53,19 @@ import {
   processFabFilesServer,
   attachedContentExtractionBudget,
   safeInputWindow,
+  DEFAULT_OUTPUT_MAX_TOKENS,
 } from '@bike4mind/utils';
 import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { EmbeddingFactory, resolveEmbeddingWithKeylessFallback } from '@bike4mind/fab-pipeline';
 import { defaultEmbeddingModelForEnv, isSupportedEmbeddingModel } from '@bike4mind/common';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
-import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
+import {
+  getLlmByModel,
+  getAvailableModels,
+  resolveDeprecatedModelId,
+  resolveOutputMaxTokens,
+  type ApiKeyTable,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
@@ -91,9 +98,9 @@ import {
   type ChildExecutionStatus,
   type ToolBuilderDeps,
   type ToolBuilderCallbacks,
-} from '@bike4mind/services';
+} from '@bike4mind/services/llm';
 import { creditService, apiKeyService, estimateGeneratedMediaUsd } from '@bike4mind/services';
-import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services';
+import { mergeRetrievalSummary, type RetrievalSummary } from '@bike4mind/services/llm';
 import { createAttachmentLakeAccess } from './agentExecutor.attachmentLakeAccess';
 // Lattice launch-gate. `resolveLatticeTools` owns the `enableLattice` flag
 // resolution and the Lattice tool contribution (names + `externalTools`
@@ -122,7 +129,7 @@ import {
   onDagNodeTerminal,
 } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
-import type { DagHandoffSignal } from '@bike4mind/services';
+import type { DagHandoffSignal } from '@bike4mind/services/llm';
 import type { ModelInfo } from '@bike4mind/common';
 // `buildFirstIterationQuery` lives in its own module so it can be
 // unit-tested without dragging in this file's server-only dependency graph
@@ -692,7 +699,13 @@ const AGENT_SYSTEM_PROMPT_RESERVE = 4000;
  * leave the run behaving exactly as it did before, not kill the turn.
  */
 async function materializeAttachmentsForRun(args: {
-  execution: { userId: string; query: string; messageFileIds?: string[]; sessionFabFileIds?: string[] };
+  execution: {
+    userId: string;
+    query: string;
+    messageFileIds?: string[];
+    sessionFabFileIds?: string[];
+    maxTokens?: number;
+  };
   sessionKnowledgeIds: string[];
   scope: Record<string, unknown>;
   lakeAccess: AttachmentLakeAccess;
@@ -760,8 +773,19 @@ async function materializeAttachmentsForRun(args: {
     }
     const embeddingFactory = new EmbeddingFactory(embeddingConfig);
 
+    // Reserve against the budget the turn will actually send, not the model's raw cap - a
+    // derived cap on a reasoning model resolves to a much larger value (see
+    // resolveOutputMaxTokens), and reserving the smaller raw cap here while the turn sends the
+    // resolved one understates the output reserve and overstates how much attachment content the
+    // input window can actually hold.
+    const resolvedMaxTokens = resolveOutputMaxTokens({
+      requested: execution.maxTokens,
+      fallback: DEFAULT_OUTPUT_MAX_TOKENS,
+      modelInfo,
+      modelMaxOutputTokens: modelInfo.max_tokens,
+    });
     const budget = attachedContentExtractionBudget(
-      safeInputWindow(modelInfo, modelInfo.max_tokens),
+      safeInputWindow(modelInfo, resolvedMaxTokens),
       AGENT_SYSTEM_PROMPT_RESERVE
     );
 
@@ -1807,6 +1831,15 @@ async function processExecution(
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       enabledTools: resolvedToolNames,
+      // applySessionToolPolicy above subtracts these from the NATIVE names only; MCP tools are
+      // merged inside buildSharedTools after that filter, so the denylist has to travel with them
+      // to reach a `server__tool` id. The chat path gets this from its own post-build pass.
+      //
+      // The profile's own denials ride along for the same reason: applySessionToolPolicy applies
+      // them to `toolNames`, which MCP tools never pass through, so a profile that denies
+      // `atlassian__jira_create_issue` could not reach it either. Both sets are pure subtraction,
+      // so unioning them cannot widen what this agent is offered.
+      sessionDisabledTools: [...(session.disabledTools ?? []), ...(orchestrationProfile?.deniedTools ?? [])],
       externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,
@@ -2046,6 +2079,7 @@ async function processExecution(
         totalOutputTokens: number;
         totalCacheReadTokens: number;
         totalCacheWriteTokens: number;
+        finishReason?: string;
       },
       counters: BillingCounters
     ) => {
@@ -3382,6 +3416,9 @@ async function processSubagentDispatch(
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       getAbortSignal: () => abortController.signal,
       config: subagentToolConfig,
+      // This site passes no `enabledTools`, so the denylist is the only thing standing between a
+      // session-forbidden MCP tool and a dispatched subagent.
+      sessionDisabledTools: session.disabledTools,
       mcpToolsByServer,
       // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
       // tools are excluded from the return), and that return is passed as the

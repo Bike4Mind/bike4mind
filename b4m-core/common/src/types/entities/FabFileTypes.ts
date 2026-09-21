@@ -90,8 +90,24 @@ export interface IFabFileChunk {
    *
    * Written just BEFORE the OpenSearch write, not after: the write is fail-open, and a removal for
    * an index that holds nothing is a harmless no-op, whereas a missed one orphans documents.
+   *
+   * Because it is written before, it OVER-claims: set on a chunk whose index write then threw.
+   * Retrieval needs the opposite bias, which is what `retrievalIndexConfirmedModel` below is for.
    */
   retrievalIndexModel?: string;
+  /**
+   * The retrieval index this chunk's document is CONFIRMED to be resident in, written only after
+   * the index write for it came back successful (and survived indexChunks' per-batch rollback).
+   *
+   * The read-side counterpart to `retrievalIndexModel`, and necessarily a separate field: removal
+   * needs an over-approximation (miss one and documents are orphaned forever), retrieval needs an
+   * under-approximation (claim one that is not there and the file silently contributes nothing).
+   * One field cannot be written both before and after the same call.
+   *
+   * Absent on every chunk whose file predates self-host OpenSearch being enabled - there is no
+   * backfill (see SELF_HOST.md), so those files are ANN-ineligible and stay on the scan path.
+   */
+  retrievalIndexConfirmedModel?: string;
 }
 
 /**
@@ -291,7 +307,15 @@ export interface IFabFile {
 
   /** Whether this FabFile is currently being vectorized. */
   isVectorizing?: boolean;
-  /** Whether this FabFile has completed vectorization. */
+  /**
+   * NOT a completion marker, despite the name: every chunk write sets it (see
+   * fabFileService/vectorize.ts and FabFileModel.advanceVectorizeProgress), so a file one chunk
+   * into a fifty-chunk batch already reads true. `vectorized: true` + `isVectorizing: false` is
+   * also what chunking leaves behind at count 0 - see FabFileModel's advanceVectorizeProgress
+   * comment, which names the consequence: the terminal marker is `chunkEmbeddingModelStampedAt`,
+   * not this field. Read that one to mean "finished"; read this one as "has at least one
+   * vectorized chunk".
+   */
   vectorized?: boolean;
   /**
    * The embedding model used to generate the vectors, as a FILE-level claim about the whole corpus.
@@ -363,6 +387,23 @@ export interface IFabFile {
    * write bumps). Only meaningful while `moderationStatus === 'scanning'`.
    */
   moderationClaimedAt?: Date;
+
+  /**
+   * How many moderation scan attempts have been made on this row and failed without reaching a
+   * terminal verdict - incremented by the rescue sweep's stale-claim reclaim and by a transient
+   * release. The rescue sweep orders its selection by this ascending, so a never-attempted
+   * stranded row always wins a bounded window over a cluster of repeatedly-failing siblings
+   * (see server/s3/moderationRescueSweep.ts). Absent on a row that has never failed.
+   */
+  moderationAttempts?: number;
+
+  /**
+   * When the last failed moderation attempt released this row back to `pending`. The rescue sweep
+   * backs off on it, so a row whose scan just failed transiently (AccessDenied, a Rekognition
+   * 5xx/throttle, a storage 503) is not re-selected at full cap on the very next run. Absent until
+   * an attempt fails, and a missing value is always eligible.
+   */
+  moderationLastAttemptAt?: Date;
 
   /**
    * Error message for the file.
@@ -541,6 +582,43 @@ export interface IFabFileChunkRepository extends IBaseRepository<IFabFileChunkDo
    * a two-model lake doubles its removal traffic and most of it matches nothing.
    */
   retrievalIndexModelsByFabFileIds(fabFileIds: string[]): Promise<Record<string, string[]>>;
+  /** Record `retrievalIndexConfirmedModel` on chunks whose index write has come back successful. */
+  confirmRetrievalIndexed(chunkIds: string[], model: string): Promise<void>;
+  /**
+   * Clear a stale `retrievalIndexConfirmedModel` for the given chunks under `model`. Needed
+   * because a redelivered vectorize message can hit `indexChunks`' own per-batch rollback, which
+   * deletes an OpenSearch document a PRIOR delivery already confirmed - without this, that chunk
+   * would keep claiming residency for a document that no longer exists. Called with exactly the
+   * chunks a delivery dispatched but did NOT get back as indexed.
+   */
+  clearRetrievalIndexConfirmed(chunkIds: string[], model: string): Promise<void>;
+  /**
+   * Clear `retrievalIndexConfirmedModel` for every chunk of the given files, under ANY model.
+   * Called after a best-effort or strict index removal (archive, delete) actually drops the
+   * files' documents from the external index - without this, a file's confirmed-resident stamp
+   * survives the removal and `annResidentFabFileIds` keeps reporting it resident for documents
+   * that are gone. Unlike `clearRetrievalIndexConfirmed`, this is keyed on the FILE, not on the
+   * chunks a specific vectorize delivery dispatched, and clears every model at once because index
+   * removal drops the file's documents wherever they were ever indexed.
+   */
+  clearRetrievalIndexConfirmedByFabFileIds(fabFileIds: string[]): Promise<void>;
+  /**
+   * The subset of `fabFileIds` whose chunks are confirmed RESIDENT in `model`'s external retrieval
+   * index: every chunk EMBEDDED under that model carries a matching `retrievalIndexConfirmedModel`.
+   *
+   * All-or-nothing per file, and deliberately so - a file half of whose chunks are missing from
+   * the index would serve half its content with no error anywhere, which is the failure this
+   * answers. Files with no chunk embedded under `model` at all (they predate the feature, or were
+   * never embedded with it) are simply absent.
+   *
+   * Denominator is `embeddingModel`, NOT `retrievalIndexModel`, despite the latter being the
+   * smaller indexable field: `retrievalIndexModel` is only written when the self-host flag was
+   * ALREADY on at write time, so a file straddling a rolling enable has chunks with neither field -
+   * invisible to that count, and falsely reported fully resident. `embeddingModel` is stamped
+   * unconditionally in the same transaction for every embeddable chunk (fabFileVectorize.ts), so it
+   * cannot be skipped by the flag and is the true set this model was asked to cover.
+   */
+  annResidentFabFileIds(fabFileIds: string[], model: string): Promise<string[]>;
   bulkInsert(chunks: Omit<IFabFileChunkDocument, 'id'>[]): Promise<IFabFileChunkDocument[]>;
   findByFabFileId(fabFileId: string): Promise<IFabFileChunkDocument[]>;
   /**
@@ -818,6 +896,18 @@ export type CitableFabFileFields = Pick<
 > &
   Partial<Pick<IFabFileDocument, 'createdAt'>>;
 
+/**
+ * The citability projection plus `tags`, for a reader that must decide reachability AND identify
+ * which lake document a file is - the embedding-comparison capture joins its corpus to ground truth
+ * by a tag on the file, so it cannot answer with the scalars alone.
+ *
+ * Deliberately NOT folded into `CitableFabFileFields`. `tags` is the array of arbitrary objects that
+ * projection exists to leave behind, and its caller is the lake-memory recall path, which reads a row
+ * per cited source on every chat turn that touches a lake. Widening it to serve a script that runs
+ * once per capture would move that cost onto the hot path.
+ */
+export type CitableFabFileFieldsWithTags = CitableFabFileFields & Pick<IFabFileDocument, 'tags'>;
+
 export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   shareable: IShareableStaticMethods<IFabFileDocument>;
   getAccessibleFiles: (
@@ -946,6 +1036,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   findExistingIdsByIds(ids: string[]): Promise<string[]>;
   /** Just the projected lake-memory fields - the citability predicate's, plus the date - see `CitableFabFileFields`. */
   findCitableFieldsByIds(ids: string[]): Promise<CitableFabFileFields[]>;
+  /** The same projection plus `tags`, for a caller that also needs lake identity - see `CitableFabFileFieldsWithTags`. */
+  findCitableFieldsWithTagsByIds(ids: string[]): Promise<CitableFabFileFieldsWithTags[]>;
 
   /** Find every non-deleted file belonging to a data-lake ingest batch (source for the post-upload taxonomy analysis job). */
   findByBatchId(batchId: string): Promise<IFabFileDocument[]>;
@@ -1275,6 +1367,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   markUploaded(fabFileId: string): Promise<void>;
   markFailedIfNotAlready(fabFileId: string, errorMessage: string): Promise<boolean>;
   /**
+   * Unconditional counterpart to markFailedIfNotAlready, for a PERMANENT verdict that outranks
+   * whatever error the file already carries. Returns the error it replaced (null if there was
+   * none) so the caller can log the text this write destroys.
+   */
+  supersedeFailureError(fabFileId: string, errorMessage: string): Promise<string | null>;
+  /**
    * Guarded partial-progress write for the multi-message vectorize fan-out: applies only if the
    * stored count is not already higher and the file has not been stamped terminal, so a stale
    * rollup can never regress a count or reopen `isVectorizing` on a settled file. Returns true
@@ -1497,6 +1595,29 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * already claimed and in-flight (isChunking) so a concurrent wave can't re-select them.
    */
   findChunkedFilesByScope(scope: DataLakeMembershipScope): Promise<{ id: string; userId: string }[]>;
+  /**
+   * The lake's members PROVEN to sit in a foreign embedding space: file label present, non-empty,
+   * and different from `embeddingModel`. Same {id, userId} shape and same in-flight exclusion as
+   * `findChunkedFilesByScope`, so the two feed the same rebuild wave.
+   *
+   * Keys on the FILE label because that is what the retrieval majority vote withholds on, so this
+   * returns exactly the population being withheld. The label is DERIVED from the chunks
+   * (stampChunkEmbeddingModel), which makes it a summary rather than an independent fact - a
+   * re-embed is therefore verified against the passages, never against this.
+   *
+   * A BLANK label is deliberately NOT selected. Blank is unattributable, not foreign: the vectors
+   * may already be current, and `null` is written ON PURPOSE for a file whose chunks span two
+   * spaces. Re-deriving those belongs to a label-repair pass; selecting them here would
+   * re-embed files that need none while still hiding the ones that do.
+   *
+   * Bounded to files that HAVE vectors, which has a second effect worth relying on: a file drops
+   * out of this set the moment a wave resets it, so a falling count is progress - and a zero means
+   * "none still labelled foreign", NOT "the re-embed finished".
+   */
+  findFilesOutsideEmbeddingSpaceByScope(
+    scope: DataLakeMembershipScope,
+    embeddingModel: string
+  ): Promise<{ id: string; userId: string }[]>;
   /**
    * The lake's files whose passages a HALTED convergence wave deleted, as {id, userId}. Chunkless
    * with no error, so they match neither `findChunkedFilesByScope` (needs chunked:true) nor

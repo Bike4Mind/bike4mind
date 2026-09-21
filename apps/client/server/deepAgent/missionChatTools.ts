@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '@bike4mind/services';
+import type { ToolDefinition } from '@bike4mind/services/llm';
 import { Logger } from '@bike4mind/observability';
 import { enrollMissionForAgent, findAgentsByName, formatMissionStatusReport, listMissionsForAgent } from './missions';
 import { MongoDeepAgentStore } from './store';

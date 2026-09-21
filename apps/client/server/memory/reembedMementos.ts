@@ -27,7 +27,8 @@ import { getSettingsByNames } from '@bike4mind/utils';
  * lost. This restores it.
  *
  * Idempotent: an already-current memento is skipped, so re-running costs nothing and a partial run
- * can simply be resumed. Embeds one memento at a time, tolerating a per-memento failure, because a
+ * can simply be resumed - which is what makes `opts.limit` safe: stopping early leaves the rest
+ * stale, and the next call picks them up with no cursor to carry. Embeds one memento at a time, tolerating a per-memento failure, because a
  * single provider error should not abandon a batch that is otherwise succeeding.
  */
 /** The embedding service for the memento vector space, with the user's effective keys. */
@@ -52,8 +53,16 @@ async function createMementoEmbeddingService(userId: string) {
 
 export async function reembedMementosForUser(
   userId: string,
-  opts: { dryRun?: boolean } = {}
-): Promise<{ total: number; alreadyCurrent: number; reembedded: number; failed: number; skippedEmpty: number }> {
+  opts: { dryRun?: boolean; limit?: number } = {}
+): Promise<{
+  total: number;
+  alreadyCurrent: number;
+  reembedded: number;
+  failed: number;
+  skippedEmpty: number;
+  stoppedAtLimit: boolean;
+  errors: string[];
+}> {
   const mementos = await Memento.find({ userId }).select('summary embedding embeddingModel');
 
   const stale = mementos.filter(m => !mementoEmbeddingIsCurrent(m));
@@ -63,13 +72,27 @@ export async function reembedMementosForUser(
     reembedded: 0,
     failed: 0,
     skippedEmpty: 0,
+    stoppedAtLimit: false,
+    errors: [] as string[],
   };
 
   if (stale.length === 0 || opts.dryRun) return stats;
 
   const embeddingService = await createMementoEmbeddingService(userId);
 
+  const limit = opts.limit ?? Infinity;
+
   for (const memento of stale) {
+    // Spend the budget on PROVIDER CALLS, not on mementos examined: the blank-summary skip below
+    // costs nothing, so letting it consume the allowance would let a user holding many of them burn
+    // a whole request without repairing anything. `stoppedAtLimit` is reported rather than inferred
+    // from `reembedded + failed === limit`, which cannot tell a page that stopped early from one
+    // that happened to finish exactly on the boundary.
+    if (stats.reembedded + stats.failed >= limit) {
+      stats.stoppedAtLimit = true;
+      break;
+    }
+
     // The summary is what V1 embedded and what recall matches against; re-embedding anything else
     // would quietly change what the vector MEANS, not just which space it lives in.
     if (!memento.summary?.trim()) {
@@ -87,13 +110,13 @@ export async function reembedMementosForUser(
       stats.reembedded += 1;
     } catch (err) {
       // Leave it stale rather than half-written: it stays excluded from vector search, which is the
-      // safe state, and the next run retries it.
+      // safe state, and the next run retries it. Recorded in errors (mirroring
+      // migrateLedgerVectorsForUser's own errors: string[]) so the caller can surface WHICH memento
+      // needs attention instead of only a count.
       stats.failed += 1;
-      console.error(
-        `[reembedMementos] user ${userId} memento ${String(memento._id)} failed: ${
-          err instanceof Error ? err.message : String(err)
-        }`
-      );
+      const message = `memento ${String(memento._id)}: ${err instanceof Error ? err.message : String(err)}`;
+      stats.errors.push(message);
+      console.error(`[reembedMementos] user ${userId} ${message}`);
     }
   }
 

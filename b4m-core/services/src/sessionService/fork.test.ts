@@ -56,6 +56,29 @@ describe('forkSession', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
   });
 
+  /**
+   * `taggedAt` is the companion timestamp of `tags`, same as `summaryAt` is of `summary`. A fork
+   * that arrives without it looks untagged, so the spider re-tags it and overwrites the copied tags.
+   */
+  it('carries the source session taggedAt onto the fork', async () => {
+    const { db } = makeAdapters();
+    const taggedAt = new Date('2026-01-01T00:00:00.000Z');
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [{ name: 'racing', strength: 0.9 }],
+      taggedAt,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ taggedAt, tags: [{ name: 'racing', strength: 0.9 }] })
+    );
+  });
+
   it('forks messages up to the fork point when the message belongs to the session', async () => {
     const { db, created } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
@@ -69,6 +92,23 @@ describe('forkSession', () => {
     expect(newSession).toEqual({ id: 'fork-1' });
     // the copied message drops its old id and is rebound to the new session
     expect(created).toEqual([{ sessionId: 'fork-1', prompt: 'earlier' }]);
+  });
+
+  // A correction link names a quest in the SOURCE session, so a copied one would dereference across
+  // the session boundary - and the access that authorized this fork is never rechecked when the
+  // pointer is later read. Same strip in clone.ts and snip.ts; read side re-checks in
+  // resolveCorrectionContext (llm/buildCorrectionContext.ts).
+  it('drops correctsQuestId rather than copying a link into the new session', async () => {
+    const { db, created } = makeAdapters();
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+    db.chatHistories.findAllBySessionIdAndLessThanOrEqualToTimestamp.mockResolvedValueOnce([
+      { id: 'm0', sessionId: 'session-1', prompt: 'a correction', correctsQuestId: 'quest-in-source-session' },
+    ]);
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(created[0]).not.toHaveProperty('correctsQuestId');
+    expect(created[0]).toEqual({ sessionId: 'fork-1', prompt: 'a correction' });
   });
 
   // Prod 500: "Quest validation failed: promptMeta.session.userId: Path `session.userId` is

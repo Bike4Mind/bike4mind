@@ -11,7 +11,8 @@ import {
 import { usdToCredits, getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { apiKeyService, resolveOpenAiBareModelAlias } from '@bike4mind/services';
+import { apiKeyService } from '@bike4mind/services';
+import { resolveOpenAiBareModelAlias } from '@bike4mind/services/cliCompletions';
 import { z } from 'zod';
 import type { CompletionRequestSchema } from '@bike4mind/common';
 

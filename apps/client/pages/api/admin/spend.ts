@@ -31,7 +31,7 @@ const QuerySchema = z
     userFilter: z.string().optional(),
     modelFilter: z.string().optional(),
     // Accepted for parity with the shared ModelMetrics filter bar but not applied:
-    // UsageEvent statuses (ok|error|timeout|refusal) do not map to the quest statuses
+    // UsageEvent statuses (ok|error|timeout|refusal|degenerate) do not map to the quest statuses
     // this filter offers, and filtering here would distort the error/refusal KPIs.
     statusFilter: z.string().optional(),
     // Busts the server's 12h cache entry so a Refresh returns live data. Only the
@@ -98,6 +98,11 @@ const errorRate = (s: ISpendSummary): number =>
   s.status.total > 0 ? (s.status.errors + s.status.timeouts) / s.status.total : 0;
 
 const refusalRate = (s: ISpendSummary): number => (s.status.total > 0 ? s.status.refusals / s.status.total : 0);
+
+// Streams we aborted ourselves because the output degenerated into repetition. Its own rate
+// rather than folded into errorRate: the call returned content and billed normally, so it is
+// a quality signal (and a refund candidate), not a failure.
+const degenerateRate = (s: ISpendSummary): number => (s.status.total > 0 ? s.status.degenerates / s.status.total : 0);
 
 function buildKpis(current: ISpendSummary, prior: ISpendSummary): SpendKpi[] {
   return [
@@ -175,6 +180,14 @@ function buildKpis(current: ISpendSummary, prior: ISpendSummary): SpendKpi[] {
       format: 'percent',
       higherIsBetter: false,
     },
+    {
+      key: 'degenerateRate',
+      label: 'Degenerate Rate',
+      value: degenerateRate(current),
+      priorValue: degenerateRate(prior),
+      format: 'percent',
+      higherIsBetter: false,
+    },
   ];
 }
 
@@ -206,6 +219,9 @@ async function resolveAccountRows(current: ISpendSummary): Promise<SpendByAccoun
   });
 }
 
+// Cached for 12h under a key that carries PAYLOAD_VERSIONS.spend
+// (server/utils/cacheKeys.ts). Change the shape or the values this projects and
+// bump that entry, or deployed instances keep serving the old projection.
 async function buildSpendData(query: Omit<SpendQuery, 'recache'>): Promise<SpendServerPayload> {
   const { current, prior } = resolveWindows(query.dateFrom, query.dateTo);
   const baseFilters = { userId: query.userFilter || undefined, model: query.modelFilter || undefined };

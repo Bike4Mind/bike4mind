@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { FeedbackStatus } from '@bike4mind/common';
+import { FeedbackStatus, FeedbackSubject } from '@bike4mind/common';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { FeedbackFilters, FeedbackListFilterParams, UseFeedbackFiltersReturn } from '../types';
 
@@ -25,6 +25,8 @@ export const useFeedbackFilters = (onFilterChange: () => void): UseFeedbackFilte
     [FeedbackStatus.Closed]: false,
   });
   const [selectedOrganizations, setSelectedOrganizationsState] = useState<string[]>([]);
+  // Undefined by default: every subject, which is the queue operators have always been shown.
+  const [subject, setSubjectState] = useState<FeedbackSubject | undefined>(undefined);
   const [sortAscending, setSortAscending] = useState(false);
 
   const setSearchTerm = useCallback(
@@ -51,12 +53,20 @@ export const useFeedbackFilters = (onFilterChange: () => void): UseFeedbackFilte
     [onFilterChange]
   );
 
+  const setSubject = useCallback(
+    (next: FeedbackSubject | undefined) => {
+      setSubjectState(next);
+      onFilterChange();
+    },
+    [onFilterChange]
+  );
+
   const toggleSortDirection = useCallback(() => {
     setSortAscending(previous => !previous);
     onFilterChange();
   }, [onFilterChange]);
 
-  const filters: FeedbackFilters = { searchTerm, statusFilters, selectedOrganizations, sortAscending };
+  const filters: FeedbackFilters = { searchTerm, statusFilters, selectedOrganizations, subject, sortAscending };
 
   const filterParams = useMemo<FeedbackListFilterParams>(() => {
     const statuses = Object.values(FeedbackStatus).filter(status => statusFilters[status]);
@@ -65,16 +75,19 @@ export const useFeedbackFilters = (onFilterChange: () => void): UseFeedbackFilte
       // and `status` absent is the server's "any status".
       ...(statuses.length > 0 ? { status: statuses } : {}),
       ...(selectedOrganizations.length > 0 ? { organization: selectedOrganizations } : {}),
+      // Single-valued, unlike status/organization: the endpoint takes one subject or none.
+      ...(subject ? { subject } : {}),
       ...(debouncedSearchTerm.trim() ? { search: debouncedSearchTerm.trim() } : {}),
       sort: sortAscending ? 'asc' : 'desc',
     };
-  }, [statusFilters, selectedOrganizations, debouncedSearchTerm, sortAscending]);
+  }, [statusFilters, selectedOrganizations, subject, debouncedSearchTerm, sortAscending]);
 
   return {
     filters,
     setSearchTerm,
     setStatusFilters,
     setSelectedOrganizations,
+    setSubject,
     toggleSortDirection,
     filterParams,
   };

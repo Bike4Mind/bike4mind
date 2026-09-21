@@ -3,6 +3,11 @@ import { useGetSettingsValue, useConfig } from '@client/app/hooks/data/settings'
 import { useGetSubscriptionPlans } from '@client/app/hooks/data/stripe';
 import { useGetSubscriptions } from '@client/app/hooks/data/subscriptions';
 import {
+  isCancellableSubscriptionStatus,
+  isDelinquentSubscriptionStatus,
+  pickSubscriptionByPrice,
+} from '@client/lib/subscriptions/types';
+import {
   SubscriptionPlanInterval,
   UserSubscriptionTier,
   SubscriptionPlanDetail,
@@ -71,8 +76,10 @@ const SubscriptionModalContent = () => {
   const subscriptions = useGetSubscriptions({ enabled: true });
   const plans = useGetSubscriptionPlans();
   const activePlans = useMemo(() => (plans.data ?? []).filter(plan => plan.active), [plans.data]);
-  const activeSubscriptions = useMemo(
-    () => (subscriptions.data ?? []).filter(sub => sub.status === 'active'),
+  // Non-terminal, not just active: a past_due subscription is still the user's
+  // current plan, and its card has to offer Cancel rather than a second checkout.
+  const cancellableSubscriptions = useMemo(
+    () => (subscriptions.data ?? []).filter(sub => isCancellableSubscriptionStatus(sub.status)),
     [subscriptions.data]
   );
   const openCreateTeamModal = useCreateTeamModal(state => state.open);
@@ -209,7 +216,9 @@ const SubscriptionModalContent = () => {
         {activeTab === SubscriptionModalTabs.Personal && (
           <>
             {availablePlans.map(plan => {
-              const isCurrentPlan = activeSubscriptions.find(sub => sub.priceId === plan.priceId);
+              // Active-first per price: a stale delinquent row at this price must not
+              // mark the plan the user is actually paying for as payment-failed.
+              const isCurrentPlan = pickSubscriptionByPrice(cancellableSubscriptions, plan.priceId);
               return (
                 <PlanCard
                   key={plan.priceId}
@@ -221,9 +230,12 @@ const SubscriptionModalContent = () => {
                   features={plan.features}
                   isPopular={plan.name === 'Professional'}
                   isCurrentPlan={!!isCurrentPlan}
+                  hasPaymentIssue={!!isCurrentPlan && isDelinquentSubscriptionStatus(isCurrentPlan.status)}
                   currentPlanDetails={isCurrentPlan}
                   priceId={plan.priceId}
-                  actionButton={<SubscribeButton priceId={plan.priceId} activeSubscriptions={activeSubscriptions} />}
+                  actionButton={
+                    <SubscribeButton priceId={plan.priceId} cancellableSubscriptions={cancellableSubscriptions} />
+                  }
                 />
               );
             })}

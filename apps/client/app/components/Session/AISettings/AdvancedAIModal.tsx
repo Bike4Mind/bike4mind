@@ -146,7 +146,7 @@ const commonInputStyles = (_mode: string) => ({
   // state, which Temperature uses on fixed-temperature models and which must not look clickable.
   '&:not(.Mui-disabled):hover': {
     backgroundColor: 'primary.softHoverBg',
-    borderColor: 'primary.main',
+    borderColor: 'primary.plainColor',
   },
 });
 
@@ -538,7 +538,7 @@ const ResetButton: React.FC<{
           borderColor: 'var(--joy-palette-border-light)',
           '&:hover': {
             backgroundColor: 'primary.softHoverBg',
-            borderColor: 'primary.main',
+            borderColor: 'primary.plainColor',
           },
         }}
       >
@@ -701,7 +701,13 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   // the input remainder negative). Show the default that selecting it would apply instead - that
   // is genuinely what you get, since buildModelSelectionPatch recomputes it on every switch.
   const outputTokens = readOnly ? computeDefaultMaxTokens(modelInfo) : (max_tokens ?? 4096);
-  const outputCeiling = modelInfo.max_tokens ?? 16384;
+  // A derived ceiling states nothing about the model (see computeDefaultMaxTokens), so the
+  // slider's range must not fall back below the default it just rendered above - that would
+  // put the read-out outside its own track and snap the budget back down on the first drag.
+  const outputCeiling =
+    modelInfo.maxOutputTokensDerived === true
+      ? Math.max(modelInfo.max_tokens ?? 0, computeDefaultMaxTokens(modelInfo))
+      : (modelInfo.max_tokens ?? 16384);
   const contextWindow = modelInfo.contextWindow ?? 0;
   const inputTokens = Math.max(0, contextWindow - outputTokens);
   // A slider needs a range to be worth drawing. Four Llama models in the catalog advertise exactly
@@ -736,7 +742,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
             label: 'Stream',
             control: (
               <Checkbox
-                checkedIcon={<CheckIcon sx={{ color: 'success.main' }} />}
+                checkedIcon={<CheckIcon sx={{ color: 'success.plainColor' }} />}
                 checked={stream}
                 onChange={() => setStream(!stream)}
                 disabled={voiceOver}
@@ -1079,11 +1085,11 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       // The filled bar carries the value, so it goes inert with everything else -
                       // primary blue on a dimmed row still read as the one live control.
                       '& .MuiSlider-track': {
-                        backgroundColor: readOnly ? 'text.tertiary' : 'primary.main',
+                        backgroundColor: readOnly ? 'text.tertiary' : 'primary.solidBg',
                       },
                       // No handle while previewing: there is nothing to drag, and a handle reads as
                       // grabbable however it is coloured. The filled bar still shows the value.
-                      '& .MuiSlider-thumb': readOnly ? { display: 'none' } : { backgroundColor: 'primary.main' },
+                      '& .MuiSlider-thumb': readOnly ? { display: 'none' } : { backgroundColor: 'primary.solidBg' },
                     }}
                   />
                 </Box>

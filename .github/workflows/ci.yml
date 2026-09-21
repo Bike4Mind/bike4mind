@@ -90,16 +90,6 @@ jobs:
       - name: Check user $lookup field projections
         run: node scripts/check-user-lookup-projection.mjs
 
-      # Also runs in `help-docs` below, and it has to live in both: this job is gated on
-      # `deployable`, that one on `docs-changed`, and the two shapes miss each other. An
-      # artifacts-only change (the generated JSON under apps/client/app/generated/, which
-      # no docs-path matches) is deployable-but-not-docs, so `help-docs` skips and the
-      # index-vs-embeddings invariant would go unguarded - it is pre-commit otherwise, and
-      # --no-verify walks past that. A docs-only change is the reverse: this job skips.
-      # Cheap enough to run twice on a code+docs PR, and cheaper than a job on every PR.
-      - name: Check help artifacts agree
-        run: sh .husky/check-help-content.sh
-
       # Resolve what "added" means for the two ASCII checks below.
       #
       # `pull_request.base.sha` is the base-branch head recorded when the PR was opened -
@@ -845,13 +835,24 @@ jobs:
   # and go quiet on exactly the changes it exists to guard. Hence the explicit `if` that
   # keeps the `docs-changed` gate and tolerates core-build having been skipped, plus the
   # artifact download with a local build as fallback.
+  #
+  # `!cancelled()` rather than `always()`: both lift the implicit `success()` on `needs` (which
+  # is what lets a skipped core-build through), but `always()` also survives run cancellation,
+  # and `cancel-in-progress` is on for PRs. A second push would cancel the run and this job
+  # would still claim a runner for a full install + core build + vitest on a superseded SHA -
+  # costly where runner slots are the queue bottleneck (see the concurrency note at the top).
+  # `needs.core-build.result != 'failure'` rather than an allowlist of success/skipped: a
+  # core-build that ends `cancelled` (runner loss) is not a build failure, and the allowlist
+  # form skipped this job on it while ci-complete only reddens on the literal `failure` - so
+  # the help guards could go missing on a green docs PR. The fallback build covers that case.
+  # Keep the block scalar: a bare `if: !cancelled() && ...` is a YAML tag indicator, not text.
   help-docs:
     name: Help Docs Guards
     needs: [changes, core-build]
     if: |
-      always() &&
+      !cancelled() &&
       needs.changes.outputs.docs-changed == 'true' &&
-      (needs.core-build.result == 'success' || needs.core-build.result == 'skipped')
+      needs.core-build.result != 'failure'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     permissions:
@@ -907,12 +908,13 @@ jobs:
         env:
           CI: true
 
-      # The index-vs-embeddings half of this script reads the two committed artifacts
-      # and ignores the staging area, so it works unchanged in CI. It was pre-commit
-      # only, which `--no-verify` bypasses; this is the first time the Help AI chat's
-      # "every indexed article has a vector" invariant is enforced anywhere else.
-      - name: Check help artifacts agree
-        run: sh .husky/check-help-content.sh
+      # Smoke check, not a fixture: no suite above reads the generated file, they all compare
+      # docs-site against source. What it adds over build-help-index.test.ts (which uses a
+      # fixture loader) is the write path over the REAL corpus, which nothing commits any more.
+      # Runs after the suites so a generator break cannot mask their more informative output.
+      # Keyless - the vectors need a credential and are a deploy-time step, not built here.
+      - name: Generate the help index
+        run: pnpm --filter @bike4mind/scripts help:build-index
 
   # verify-docs-build removed: the Docusaurus scaffolding (docs-site/package.json,
   # lockfile, config) is not tracked in this repo, so the build can never succeed

@@ -55,6 +55,8 @@ Attach files to provide context for your conversation:
 - Images: PNG, JPG, GIF, WebP
 - Code files: Most programming languages
 
+File type is determined by the filename's extension - an unrecognized or date-style extension (for example `2026.09.07`) is refused even if the upload claims a supported type.
+
 ### Image Input
 
 Upload images for AI analysis:

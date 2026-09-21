@@ -5,6 +5,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { FeedbackEvents } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { toRedactedFeedback } from '@server/utils/redactedFeedback';
+import { isValidObjectId } from '@server/utils/objectId';
 
 const handler = baseApi().delete(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -13,8 +14,9 @@ const handler = baseApi().delete(
     const id = req.query.id;
     if (!id) throw new BadRequestError('Invalid ID');
 
+    // Matches read.ts/update.ts in this directory; see the note in ../index.ts.
     if (!req.ability) {
-      throw new Error('Ability not found');
+      throw new NotFoundError('Ability not found');
     }
 
     // Read before deleting so the ownership condition can be evaluated. Authorizing by class
@@ -22,7 +24,7 @@ const handler = baseApi().delete(
     // condition, so a by-class check would let any logged-in user hard-delete any reporter's
     // record. A reporter retracting their own report and an admin deleting any report are the
     // same route; the ability rules are what separate them.
-    const feedback = await FeedbackModel.findById(id);
+    const feedback = isValidObjectId(id) ? await FeedbackModel.findById(id) : null;
     if (!feedback) throw new NotFoundError('Feedback not found');
 
     // Same NotFoundError as above: a probe must not be able to distinguish "not yours" from

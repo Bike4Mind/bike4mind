@@ -158,6 +158,31 @@ export async function getModel(
 }
 
 /**
+ * Get a model the caller may MUTATE, or null when they may not.
+ *
+ * Ownership only, and deliberately NARROWER than `getModel`. `getModel` is the READ gate and admits
+ * same-org members by design (a model carries its creator's `organizationId`), but read access is
+ * not write access - and every mutator took its authorization from it, so a colleague could rename,
+ * re-value, re-rule or delete a model they did not create. Callers that only read keep using `getModel`: `listModels`,
+ * `searchModels`, `hydrateModel` (computes derived values and stamps `lastComputedAt`), and
+ * `duplicateModel` (reads one model and creates a NEW one owned by the caller).
+ *
+ * Lattice models carry no share/grant field, so the creator is the only principal that can hold
+ * write authority today. If an explicit write grant is ever added, this is the one place to admit
+ * it - keeping the check here rather than inlined in six mutators is what makes that a one-line
+ * change instead of a six-site audit.
+ */
+async function getModelForWrite(
+  user: LatticeModelUser,
+  modelId: string,
+  deps: LatticeModelServiceDeps
+): Promise<ILatticeModel | null> {
+  const model = await getModel(user, modelId, deps);
+  if (!model) return null;
+  return model.userId === user.id ? model : null;
+}
+
+/**
  * List models for a user
  */
 export async function listModels(
@@ -213,7 +238,7 @@ export async function updateModel(
   deps: LatticeModelServiceDeps
 ): Promise<ILatticeModel | null> {
   // First get the model to check authorization
-  const existing = await getModel(user, modelId, deps);
+  const existing = await getModelForWrite(user, modelId, deps);
   if (!existing) {
     return null;
   }
@@ -246,7 +271,7 @@ export async function deleteModel(
   deps: LatticeModelServiceDeps
 ): Promise<boolean> {
   // First get the model to check authorization
-  const existing = await getModel(user, modelId, deps);
+  const existing = await getModelForWrite(user, modelId, deps);
   if (!existing) {
     return false;
   }
@@ -264,7 +289,7 @@ export async function addEntity(
   entity: Omit<ILatticeEntity, 'createdAt' | 'updatedAt'>,
   deps: LatticeModelServiceDeps
 ): Promise<ILatticeModel | null> {
-  const model = await getModel(user, modelId, deps);
+  const model = await getModelForWrite(user, modelId, deps);
   if (!model) {
     return null;
   }
@@ -318,7 +343,7 @@ export async function setValue(
   value: PrimitiveValue,
   deps: LatticeModelServiceDeps
 ): Promise<ILatticeModel | null> {
-  const model = await getModel(user, modelId, deps);
+  const model = await getModelForWrite(user, modelId, deps);
   if (!model) {
     return null;
   }
@@ -406,7 +431,7 @@ export async function addRule(
   rule: Omit<ILatticeRule, 'createdAt' | 'updatedAt'>,
   deps: LatticeModelServiceDeps
 ): Promise<ILatticeModel | null> {
-  const model = await getModel(user, modelId, deps);
+  const model = await getModelForWrite(user, modelId, deps);
   if (!model) {
     return null;
   }
@@ -457,6 +482,11 @@ export async function hydrateModel(
   deps: LatticeModelServiceDeps,
   options?: { scenarioId?: string }
 ): Promise<HydrationResult> {
+  // getModel, not getModelForWrite: hydration COMPUTES and returns derived values for a model the
+  // caller can read (POST /api/lattice/models/[id]/hydrate is how the UI renders them). Its only
+  // write is the `lastComputedAt` freshness stamp below, which is derived bookkeeping, not user
+  // content - narrowing this to the owner would blank the computed view for same-org colleagues
+  // who can already read the model.
   const model = await getModel(user, modelId, deps);
   if (!model) {
     throw new Error('Model not found');

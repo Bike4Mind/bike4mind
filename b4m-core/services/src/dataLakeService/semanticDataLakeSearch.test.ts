@@ -2382,6 +2382,7 @@ describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
     process.env.B4M_SELF_HOST = 'true';
     process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
     process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+    process.env.B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY = 'true';
   };
 
   afterEach(() => {
@@ -2516,15 +2517,16 @@ describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
   });
 
   /**
-   * The Atlas saturation rule deliberately does NOT apply here.
+   * No residency port wired: the saturation rule deliberately does NOT apply.
    *
    * Atlas's argument for it is that mongot indexes the chunk collection itself, so a stamped file's
    * content is in the index by construction. Self-host has no such guarantee: the documents live in
    * a separate cluster fed by a fail-open dual-write, files predating the feature were never indexed
-   * and have no backfill, and the readiness stamp knows nothing about any of it. Absence-keyed
-   * rescue is the only thing covering that here, so it stays - at the cost of the topK/fileCount
-   * ceiling on this path. Without a saturating fixture the existing zero-hit test above cannot see
-   * the difference, which is why this one supplies a full topK of hits from the indexed file.
+   * and have no backfill, and the readiness stamp knows nothing about any of it. Without
+   * `annResidentFabFileIds` to confirm residency, absence-keyed rescue is the only thing covering
+   * that, so it stays - at the cost of the topK/fileCount ceiling on this path. Without a saturating
+   * fixture the existing zero-hit test above cannot see the difference, which is why this one
+   * supplies a full topK of hits from the indexed file.
    */
   it('rescans a stamped-but-unindexed file even when knnSearch saturated its limit', async () => {
     enableSelfHostOpenSearch();
@@ -2545,6 +2547,165 @@ describe('semanticDataLakeSearch self-host OpenSearch cutover', () => {
     expect(result.scan.chunksScanned).toBe(3);
     expect(result.scan.annFilesQueried).toBe(1);
     expect(result.results.map(r => r.fileId)).toContain('never-dual-written');
+  });
+
+  describe('confirmed index residency', () => {
+    const residencyPort = (residentIds: string[]) => vi.fn(async () => residentIds);
+
+    it('keeps a stamped file that is not resident in the index off the ANN path entirely', async () => {
+      enableSelfHostOpenSearch();
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('indexed'), annFile('never-dual-written')],
+        scanChunks: chunkRows('never-dual-written', 3),
+        annHits: [{ id: 'indexed-c0', fabFileId: 'indexed', text: 'ann hit', score: 0.95 }],
+      });
+      const annResidentFabFileIds = residencyPort(['indexed']);
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, annResidentFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      // The un-indexed file never costs a round trip to a cluster that cannot answer for it...
+      expect(knnSearch).toHaveBeenCalledWith(['indexed'], expect.anything(), PRIMARY_MODEL, expect.anything());
+      // ...and is still findable, on the scan path.
+      expect(result.scan.chunksScanned).toBe(3);
+      expect(result.results.map(r => r.fileId)).toContain('never-dual-written');
+    });
+
+    /** The ceiling this whole signal exists to lift: with residency confirmed, absence is rank, not a hole. */
+    it('does not rescan an unranked resident file when knnSearch saturated its limit', async () => {
+      enableSelfHostOpenSearch();
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('covered'), annFile('unranked')],
+        scanChunks: chunkRows('unranked', 3),
+        annHits: [
+          { id: 'covered-c0', fabFileId: 'covered', text: 'ann hit', score: 0.95 },
+          { id: 'covered-c1', fabFileId: 'covered', text: 'ann hit', score: 0.94 },
+        ],
+      });
+      const annResidentFabFileIds = residencyPort(['covered', 'unranked']);
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, topK: 2 }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, annResidentFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      expect(result.scan.chunksScanned).toBe(0);
+      expect(findVectorsByFabFileIds).not.toHaveBeenCalled();
+      expect(result.scan.annFilesQueried).toBe(2);
+      expect(result.scan.annUnrankedFilesLeftOffScan).toBe(1);
+    });
+
+    it('still rescues a resident file the under-saturated query returned nothing for', async () => {
+      enableSelfHostOpenSearch();
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('covered'), annFile('silent')],
+        scanChunks: chunkRows('silent', 2),
+        annHits: [{ id: 'covered-c0', fabFileId: 'covered', text: 'ann hit', score: 0.95 }],
+      });
+      const annResidentFabFileIds = residencyPort(['covered', 'silent']);
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, topK: 5 }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, annResidentFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      expect(result.scan.chunksScanned).toBe(2);
+      expect(result.results.map(r => r.fileId)).toContain('silent');
+    });
+
+    it('reports no-index-resident-files when every stamped file is missing from the index', async () => {
+      enableSelfHostOpenSearch();
+      const logger = makeLogger();
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('never-dual-written')],
+        scanChunks: chunkRows('never-dual-written', 2),
+      });
+      const annResidentFabFileIds = residencyPort([]);
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, logger: logger as never }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, annResidentFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      expect(knnSearch).not.toHaveBeenCalled();
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('ANN served nothing'),
+        expect.objectContaining({ reason: 'no-index-resident-files', backend: 'opensearch' })
+      );
+    });
+
+    it('degrades to the absence-keyed rebucket when the residency lookup itself fails', async () => {
+      enableSelfHostOpenSearch();
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('indexed'), annFile('never-dual-written')],
+        scanChunks: chunkRows('never-dual-written', 3),
+        annHits: [
+          { id: 'indexed-c0', fabFileId: 'indexed', text: 'ann hit', score: 0.95 },
+          { id: 'indexed-c1', fabFileId: 'indexed', text: 'ann hit', score: 0.94 },
+        ],
+      });
+      const annResidentFabFileIds = vi.fn(async () => {
+        throw new Error('mongo unavailable');
+      });
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true, topK: 2 }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, annResidentFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      // Both files were queried (no residency to narrow with), and the saturated result no longer
+      // earns the rule - so the unranked one is rescued by absence, exactly as before residency.
+      expect(knnSearch).toHaveBeenCalledWith(
+        ['indexed', 'never-dual-written'],
+        expect.anything(),
+        PRIMARY_MODEL,
+        expect.anything()
+      );
+      expect(result.scan.chunksScanned).toBe(3);
+      expect(result.results.map(r => r.fileId)).toContain('never-dual-written');
+    });
+
+    it('never consults the residency port on an Atlas-backed deployment', async () => {
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('f1')],
+        scanChunks: chunkRows('f1', 1),
+      });
+      const annResidentFabFileIds = residencyPort(['f1']);
+
+      await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, annResidentFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      expect(annResidentFabFileIds).not.toHaveBeenCalled();
+    });
+
+    // Existing self-host deployments enabled OpenSearch before `retrievalIndexConfirmedModel`
+    // existed, so their whole corpus is genuinely resident in the index but carries no confirm
+    // stamp. Requiring residency by default would revert that corpus to scan-only on upgrade with
+    // no route back short of a re-chunk - so the requirement stays off until explicitly opted in.
+    it('skips the residency gate entirely when the require-residency flag is off, even with the port wired', async () => {
+      process.env.B4M_SELF_HOST = 'true';
+      process.env.B4M_SELF_HOST_OPENSEARCH = 'true';
+      process.env.OPENSEARCH_ENDPOINT = 'localhost:9200';
+      // Deliberately NOT setting B4M_SELF_HOST_OPENSEARCH_REQUIRE_RESIDENCY.
+      const { search, findVectorsByFabFileIds, knnSearch } = openSearchAdapters({
+        files: [annFile('legacy-indexed')],
+        annHits: [{ id: 'legacy-indexed-c0', fabFileId: 'legacy-indexed', text: 'ann hit', score: 0.95 }],
+      });
+      const annResidentFabFileIds = residencyPort([]);
+
+      const result = await semanticDataLakeSearch({ ...baseParams(), vectorSearchEnabled: true }, {
+        db: { fabfiles: { search }, fabfilechunks: { findVectorsByFabFileIds, annResidentFabFileIds } },
+        vectorIndex: { knnSearch },
+      } as never);
+
+      expect(annResidentFabFileIds).not.toHaveBeenCalled();
+      expect(result.scan.annFilesQueried).toBe(1);
+      expect(result.results.map(r => r.fileId)).toEqual(['legacy-indexed']);
+    });
   });
 
   it('never calls knnSearch on an Atlas-backed deployment even if a vectorIndex adapter is (mistakenly) provided', async () => {
@@ -2800,6 +2961,126 @@ describe('comparedNoPassages', () => {
 
   it('is false once an ann index returned a hit, even with nothing scored on the scan path', () => {
     expect(comparedNoPassages({ chunksScored: 0, scan: scanOf({ annHits: 1 }) })).toBe(false);
+  });
+});
+
+/**
+ * A session scoped to several lakes used to retrieve from only the first of them: fabfiles.search
+ * returns one global `fileName asc` sort over the union, and the chunk budget is spent
+ * sequentially down that order, so a lake sorting late was never reached. Adding it to a session
+ * left retrieval byte-identical while telemetry still reported it as searched.
+ */
+describe('semanticDataLakeSearch multi-lake budget fairness', () => {
+  const lakeFile = (id: string, lake: string) => ({
+    id,
+    fileName: `${id}.pdf`,
+    tags: [{ name: `datalake:${lake}` }],
+  });
+
+  // Filename-sorted exactly as the DB would return it: both large lakes ahead of the small one.
+  const corpus = [
+    lakeFile('a1', 'a'),
+    lakeFile('a2', 'a'),
+    lakeFile('a3', 'a'),
+    lakeFile('b1', 'b'),
+    lakeFile('b2', 'b'),
+    lakeFile('b3', 'b'),
+    lakeFile('c1', 'c'),
+  ];
+  const allChunks = corpus.flatMap(f => chunkRows(f.id, 2));
+  // A budget that covers the first three groups and no more. Group ITERATION order is what decides
+  // which lakes are reached (see the chunk walk's `break groups`), so this is the configuration the
+  // ticket describes: before the interleave the three groups were a1, a2, a3 and lake C was never
+  // queried at all.
+  const budgets = { fileGroupSize: 1, maxChunks: 6 };
+
+  const run = (tags: string[], files = corpus) =>
+    semanticDataLakeSearch({ ...baseParams(), dataLakeTags: tags, budgets }, {
+      db: {
+        fabfiles: { search: skipAwareFilesAdapter(files) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(allChunks) },
+      },
+    } as never);
+
+  it('spends the chunk budget across all three lakes instead of exhausting it on the first', async () => {
+    const findVectors = pagingChunkMock(allChunks);
+    await semanticDataLakeSearch(
+      { ...baseParams(), dataLakeTags: ['datalake:a', 'datalake:b', 'datalake:c'], budgets },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter(corpus) },
+          fabfilechunks: { findVectorsByFabFileIds: findVectors },
+        },
+      } as never
+    );
+    // The groups the budget actually paid for: one file per lake, not the first three of lake A.
+    expect(findVectors.mock.calls.map(c => c[0]).flat()).toEqual(['a1', 'b1', 'c1']);
+  });
+
+  it('interleaves the scoped order so a larger group also carries every lake', async () => {
+    const findVectors = pagingChunkMock(allChunks);
+    await semanticDataLakeSearch(
+      {
+        ...baseParams(),
+        dataLakeTags: ['datalake:a', 'datalake:b', 'datalake:c'],
+        budgets: { fileGroupSize: 3, maxChunks: 100 },
+      },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter(corpus) },
+          fabfilechunks: { findVectorsByFabFileIds: findVectors },
+        },
+      } as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['a1', 'b1', 'c1']);
+  });
+
+  it('adding a lake changes the retrieved passage set', async () => {
+    const twoLakes = corpus.filter(f => f.id !== 'c1');
+    const ab = await run(['datalake:a', 'datalake:b'], twoLakes);
+    const abc = await run(['datalake:a', 'datalake:b', 'datalake:c']);
+
+    // The ticket's repro: these used to be byte-identical.
+    expect(abc.results.map(r => r.fileId)).not.toEqual(ab.results.map(r => r.fileId));
+    expect(abc.results.some(r => r.fileId === 'c1')).toBe(true);
+    expect(ab.results.some(r => r.fileId === 'c1')).toBe(false);
+  });
+
+  it('reports which lakes actually contributed files, so telemetry and reality agree', async () => {
+    const result = await run(['datalake:a', 'datalake:b', 'datalake:c']);
+    expect(result.scan.filesByLake).toEqual({ 'datalake:a': 3, 'datalake:b': 3, 'datalake:c': 1 });
+  });
+
+  it('names a scoped lake that contributed nothing rather than reporting it as searched', async () => {
+    const logger = makeLogger();
+    await semanticDataLakeSearch(
+      { ...baseParams(), dataLakeTags: ['datalake:a', 'datalake:empty'], logger: logger as never, budgets },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter(corpus.filter(f => f.id.startsWith('a'))) },
+          fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(allChunks) },
+        },
+      } as never
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[semanticSearch] scoped lakes contributed no files',
+      expect.objectContaining({ emptyLakes: ['datalake:empty'] })
+    );
+  });
+
+  it('a single-lake session is unchanged - no interleave to apply', async () => {
+    const onlyA = corpus.filter(f => f.id.startsWith('a'));
+    const findVectors = pagingChunkMock(allChunks);
+    await semanticDataLakeSearch(
+      { ...baseParams(), dataLakeTags: ['datalake:a'], budgets: { fileGroupSize: 3, maxChunks: 100 } },
+      {
+        db: {
+          fabfiles: { search: skipAwareFilesAdapter(onlyA) },
+          fabfilechunks: { findVectorsByFabFileIds: findVectors },
+        },
+      } as never
+    );
+    expect(findVectors.mock.calls[0][0]).toEqual(['a1', 'a2', 'a3']);
   });
 });
 

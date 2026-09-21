@@ -22,6 +22,7 @@ import {
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT,
 } from '../constants/forcedRetrieval';
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
@@ -45,11 +46,11 @@ import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/Sc
 
 /**
  * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
- * text-embedding-ada-002, 35 for text-embedding-3-small").
+ * text-embedding-ada-002, 58 for text-embedding-3-small").
  *
- * Rendered rather than written out in prose because these numbers are expected to move - 35 is
- * provisional until it is re-derived against a production lake - and a description that restates
- * the table is a wrong number shown to operators the moment it drifts, with nothing failing.
+ * Rendered rather than written out in prose because these numbers move as each space is re-measured
+ * against a production lake, and a description that restates the table is a wrong number shown to
+ * operators the moment it drifts, with nothing failing.
  */
 const forcedRetrievalFloorsBySpaceSummary = Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)
   .map(([space, pct]) => `${pct} for ${space}`)
@@ -407,6 +408,7 @@ export const SettingKeySchema = z.enum([
   'kbSearchMinRelevancePct',
   'forcedRetrievalRelativeFloorPct',
   'forcedRetrievalMinSimilarityPct',
+  'forcedRetrievalSpreadFloorPct',
 
   // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
   'dataLakeEmbeddingSpendEnabled',
@@ -960,7 +962,16 @@ function makeNumberSetting(config: { defaultValue?: number; min?: number; max?: 
   return {
     ...config,
     type: 'number' as const,
-    schema: numberSchema.prefault(config.defaultValue ?? 0),
+    // A cleared field submits '', which z.coerce.number() reads as a schema-valid 0, silently
+    // defeating the undefined-only prefault; rewriting it (and a raw null) to undefined first
+    // restores the default. Only whitespace/null is rewritten, so a real 0 (AutoNameNotebook's
+    // "0 = disable") still passes through. prefault must stay INSIDE the preprocess: it
+    // substitutes only on the raw value it receives, so chaining it outside would feed the
+    // rewritten undefined into z.coerce.number() and fail with a NaN instead of defaulting.
+    schema: z.preprocess(
+      val => (val === null || (typeof val === 'string' && val.trim() === '') ? undefined : val),
+      numberSchema.prefault(config.defaultValue ?? 0)
+    ),
   };
 }
 
@@ -1572,7 +1583,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'lakeMemoryRecallK', order: 8 },
       { key: 'forcedRetrievalRelativeFloorPct', order: 9 },
       { key: 'forcedRetrievalMinSimilarityPct', order: 10 },
-      { key: 'dataLakeSearchMaxChunksPerFile', order: 11 },
+      { key: 'forcedRetrievalSpreadFloorPct', order: 11 },
+      { key: 'dataLakeSearchMaxChunksPerFile', order: 12 },
     ],
   },
   DATA_LAKE_COST: {
@@ -3532,7 +3544,7 @@ export const settingsMap = {
       'scoring ones admitted, would land in the passages that path discards.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
-    order: 11,
+    order: 12,
     // Organization/Owner only, no Lake rung - same reason as dataLakeSearchMaxFiles/MaxChunks
     // (#2624). The cap is enforced at a merge whose pool spans EVERY lake the caller can reach in
     // one pass, so there is no single lakeId for a narrower rung to key on and a Lake-scoped
@@ -3726,10 +3738,37 @@ export const settingsMap = {
       'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
       'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
       'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
-      'embedding model; the sweep tool is packages/scripts/retrieval/forcedFloorSweep.ts.',
+      'embedding model.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,
+    // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  forcedRetrievalSpreadFloorPct: makeNumberSetting({
+    key: 'forcedRetrievalSpreadFloorPct',
+    name: 'Forced Retrieval Spread Floor (%)',
+    defaultValue: FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT,
+    min: 0,
+    max: 100,
+    int: true,
+    description:
+      'How far below the best-scoring passage of the SAME turn a chunk may score and still be ' +
+      "injected, as a percent of the gap between that best score and a typical one (this turn's " +
+      'median). 0 (the default) disables it. This is the only one of the three floors whose cut ' +
+      'depends on the QUESTION rather than on where the score band sits: a question one document ' +
+      'answers sharply leaves its answer far above the median and admits few passages, while a ' +
+      'broad question leaves many passages bunched near the top and admits many. The other two ' +
+      'floors cannot tell those turns apart, which is why retrieved volume otherwise tracks the ' +
+      'character budget instead of the question. Because it is measured in units of the band ' +
+      'rather than against a fixed cosine, the same value means the same thing in every embedding ' +
+      'space and does not need re-tuning when the embedding model changes. Lower is stricter (10 ' +
+      'keeps only passages within a tenth of the way down to the median); 100 cuts at the median ' +
+      'itself. It can never empty a turn - the best passage always clears its own cutoff. Ships ' +
+      'off because no magnitude has been measured yet; measure one offline before turning it on.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 11,
     // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
@@ -4758,6 +4797,64 @@ export const settingsMap = {
 };
 
 export type SettingValue<K extends SettingKey> = z.infer<(typeof settingsMap)[K]['schema']>;
+
+/**
+ * Every setting the data-lake SEARCH budget merge resolves, in one list. The forced-retrieval merge
+ * is a separate read with its own list ({@link FORCED_RETRIEVAL_SETTING_KEYS}), which this does not
+ * cover; the Lake-rung guard loops both.
+ *
+ * `resolveSearchBudgets` (b4m-core/services) reads exactly these on both its scoped and its platform
+ * path, and the guard in settings.test.ts loops this same list to assert none of them declares a
+ * Lake rung: one search is handed every lake the caller can reach as a single tag array (#2624), so
+ * a Lake-scoped override has no lakeId to key on and resolves to nothing an operator can observe.
+ * Shared rather than enumerated twice because that guard is only as good as its key list - against a
+ * hand-written one, #2465 declared a new budget key WITH a Lake rung, merged textually clean, and
+ * was caught in review rather than by CI.
+ *
+ * Declaring a key here is what makes it resolvable: the scoped path's return type is mapped over
+ * this list, so a budget read without being declared here fails to compile.
+ *
+ * `DefaultChunkSize` is not a scan budget and is listed so that ONE derivation serves both paths -
+ * the serve budget is DERIVED from the chunk policy, and omitting it here would make the scoped path
+ * serve a different budget than the platform path for the same lake, which is the disagreement
+ * `resolveSearchBudgets` exists to remove.
+ *
+ * `DefaultChunkSize` is also the one key here a caller rung may only RAISE, never lower (#2803). This
+ * read resolves on the CALLER's scope, but the key's declared subject is the FILE OWNER ("Resolves at
+ * file-OWNER altitude", its own definition above), and a search spans other owners' files - so a
+ * caller-side override that LOWERED the serve budget would truncate in-policy content it does not
+ * own. `resolveServeTarget` (services/dataLakeService/resolveSearchBudgets.ts) floors the resolved
+ * value at the platform one for that reason; it stays listed here because the raise direction is
+ * still wanted, and because dropping it would give the two paths different budgets for the same lake.
+ */
+export const SEARCH_BUDGET_SETTING_KEYS = [
+  'dataLakeSearchMaxFiles',
+  'dataLakeSearchMaxChunks',
+  'DefaultChunkSize',
+  'kbSearchDefaultResults',
+  'kbSearchResultTokenBudget',
+  'kbSearchMinRelevancePct',
+  'dataLakeSearchMaxChunksPerFile',
+] as const satisfies readonly SettingKey[];
+
+/**
+ * Every setting the forced-retrieval merge resolves, in one list - the sibling of
+ * {@link SEARCH_BUDGET_SETTING_KEYS} for the other read that resolves settings for one retrieval
+ * turn. `readForcedRetrievalSettings` (ChatCompletionFeatures.ts, b4m-core/services) resolves these
+ * through `resolveScopedSettingValues`, and the guard in settings.test.ts loops this list to assert
+ * none of them declares a Lake rung: one turn scans an uncapped SET of lakes into a single pool, so
+ * no single lake can key a narrower rung (#2572).
+ *
+ * Lives here rather than beside that read so the guard can reach it - `common` cannot import from
+ * `services`. A test fixture that enumerated these keys itself would keep passing on coded defaults
+ * if another were added, which is the one way those tests could go quiet without failing.
+ */
+export const FORCED_RETRIEVAL_SETTING_KEYS = [
+  'forcedRetrievalCharBudget',
+  'forcedRetrievalRelativeFloorPct',
+  'forcedRetrievalMinSimilarityPct',
+  'forcedRetrievalSpreadFloorPct',
+] as const satisfies readonly SettingKey[];
 
 // ============================================================================
 // Public settings projection - the security boundary for the unauthenticated

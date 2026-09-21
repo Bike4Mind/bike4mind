@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { z } from 'zod';
+import { ApiKeyScope } from '@bike4mind/common';
 
 const { mockUserFindById, mockAdminUpdateUser, mockUpdateUser, mockCount } = vi.hoisted(() => ({
   mockUserFindById: vi.fn(),
@@ -40,8 +41,17 @@ vi.mock('@bike4mind/services', () => ({
   userService: {
     adminUpdateUser: (...a: unknown[]) => mockAdminUpdateUser(...a),
     updateUser: (...a: unknown[]) => mockUpdateUser(...a),
-    adminUpdateUserSchema: z.object({}).passthrough(),
-    updateUserSchema: z.object({}).passthrough(),
+    // Both stand-ins are real allowlists (not passthrough) so the discarded-field
+    // detection under test actually exercises Zod's strip-unknown-keys behavior.
+    adminUpdateUserSchema: z.object({
+      id: z.string(),
+      name: z.string().optional(),
+      isAdmin: z.boolean().optional(),
+      tags: z.array(z.string()).nullable().optional(),
+      currentCredits: z.number().optional(),
+      creditReason: z.string().optional(),
+    }),
+    updateUserSchema: z.object({ name: z.string().optional(), role: z.string().optional() }),
   },
 }));
 
@@ -49,7 +59,16 @@ vi.mock('@bike4mind/database', () => ({
   User: {
     findById: (...a: unknown[]) => {
       const result = mockUserFindById(...a);
-      return { select: () => ({ lean: () => Promise.resolve(result) }) };
+      // Mirrors Mongoose's Query: chainable via .select()/.lean(), but also
+      // directly awaitable (the handler awaits User.findById(userId) bare in
+      // its post-update refetch), so `then` needs to resolve to the same result.
+      const query = {
+        select: () => query,
+        lean: () => Promise.resolve(result),
+        then: (onFulfilled: (v: unknown) => unknown, onRejected?: (e: unknown) => unknown) =>
+          Promise.resolve(result).then(onFulfilled, onRejected),
+      };
+      return query;
     },
   },
   userRepository: { count: (...a: unknown[]) => mockCount(...a) },
@@ -66,13 +85,16 @@ const run = ({
   user,
   userId = 'u1',
   body = {},
+  apiKeyInfo,
 }: {
   user?: unknown;
   userId?: string;
   body?: Record<string, unknown>;
+  apiKeyInfo?: unknown;
 } = {}) => {
   const { req, res } = createMocks({ method: 'PUT', query: { id: userId }, body });
   if (user) (req as Record<string, unknown>).user = user;
+  if (apiKeyInfo) (req as Record<string, unknown>).apiKeyInfo = apiKeyInfo;
   (req as Record<string, unknown>).logger = { updateMetadata: vi.fn() };
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
@@ -80,7 +102,10 @@ const run = ({
 const ADMIN = { id: 'admin1', isAdmin: true };
 
 beforeEach(() => {
-  mockUserFindById.mockReset();
+  // Default: a plain truthy user doc, standing in for whatever findById was called
+  // for (the lockout check, the post-update refetch, or both). Individual tests
+  // override this with mockReturnValue when the returned shape matters.
+  mockUserFindById.mockReset().mockReturnValue({ id: 'u1', name: 'Existing Name' });
   mockAdminUpdateUser.mockReset().mockResolvedValue(undefined);
   mockUpdateUser.mockReset().mockResolvedValue(undefined);
   mockCount.mockReset().mockResolvedValue(2);
@@ -140,5 +165,191 @@ describe('PUT /api/users/:id/update - lockout guard', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockCount).not.toHaveBeenCalled();
     expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - admin branch requires the admin scope', () => {
+  // The route cannot declare `requiredScopes`: it is also every ordinary user's own
+  // profile update. So the gate sits on the admin branch, which writes credits,
+  // roles and email.
+  it('403s an api-key caller without admin:* on the admin branch', async () => {
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'someone-else',
+      body: { currentCredits: 999999 },
+      apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.AI_CHAT] },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(mockAdminUpdateUser).not.toHaveBeenCalled();
+  });
+
+  it('admits an api-key caller that holds admin:*', async () => {
+    const { promise } = run({
+      user: ADMIN,
+      userId: 'someone-else',
+      body: { currentCredits: 10 },
+      apiKeyInfo: { keyId: 'k1', scopes: [ApiKeyScope.ADMIN] },
+    });
+    await promise;
+
+    expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+
+  it('leaves JWT admins alone - no apiKeyInfo means no scope gate', async () => {
+    const { promise } = run({ user: ADMIN, userId: 'someone-else', body: { currentCredits: 10 } });
+    await promise;
+
+    expect(mockAdminUpdateUser).toHaveBeenCalled();
+  });
+});
+
+describe('PUT /api/users/:id/update - admin unknown-field discard', () => {
+  it('reports unknown fields instead of silently dropping them', async () => {
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'other-user',
+      // `adminNote` is the real misnaming that shipped once (see useUpdateUserCredits):
+      // the intended field is `creditReason`, so the admin's reason went nowhere.
+      body: { currentCredits: 500, adminNote: 'comped', nickname: 'Bob' },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toEqual(expect.arrayContaining(['adminNote', 'nickname']));
+    expect(json.ignoredFields).toHaveLength(2);
+
+    const [, calledBody] = mockAdminUpdateUser.mock.calls[0];
+    expect(calledBody).toEqual({ id: 'other-user', currentCredits: 500 });
+  });
+
+  it('omits ignoredFields entirely when every submitted key is allowed', async () => {
+    const { res, promise } = run({
+      user: ADMIN,
+      userId: 'other-user',
+      body: { currentCredits: 500, creditReason: 'comped' },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toBeUndefined();
+  });
+
+  it('does not count the route-param id as an ignored field when the body also carries one', async () => {
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { id: 'spoofed', name: 'New Name' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toBeUndefined();
+    // The route param still wins over the body's id.
+    const [, calledBody] = mockAdminUpdateUser.mock.calls[0];
+    expect(calledBody).toEqual({ id: 'other-user', name: 'New Name' });
+  });
+
+  it('returns a null body, not a bare { ignoredFields } object, when the user row is gone by the refetch', async () => {
+    mockUserFindById.mockReturnValue(null);
+    const { res, promise } = run({ user: ADMIN, userId: 'other-user', body: { name: 'New Name', adminNote: 'x' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toBeNull();
+  });
+});
+
+describe('PUT /api/users/:id/update - self-service admin-only field discard', () => {
+  const SELF = { id: 'u1', isAdmin: false };
+
+  it('reports discarded admin-only fields instead of silently dropping them', async () => {
+    const { res, promise } = run({
+      user: SELF,
+      userId: SELF.id,
+      body: { name: 'New Name', creditDelta: 500, tags: ['vip'], isAdmin: true },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toEqual(expect.arrayContaining(['creditDelta', 'tags', 'isAdmin']));
+    expect(json.ignoredFields).toHaveLength(3);
+
+    // The privileged fields never reach the service layer.
+    expect(mockUpdateUser).toHaveBeenCalledWith(
+      SELF.id,
+      expect.not.objectContaining({ creditDelta: 500, tags: ['vip'], isAdmin: true }),
+      expect.anything()
+    );
+    const [, calledBody] = mockUpdateUser.mock.calls[0];
+    expect(calledBody).toEqual({ name: 'New Name' });
+  });
+
+  it('omits ignoredFields entirely when every submitted key is allowed', async () => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: { name: 'New Name' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const json = res._getJSONData();
+    expect(json.ignoredFields).toBeUndefined();
+    expect(mockUpdateUser).toHaveBeenCalledWith(SELF.id, { name: 'New Name' }, expect.anything());
+  });
+
+  it('reports an empty-body update with no admin-only fields sent as having none ignored', async () => {
+    const { res, promise } = run({ user: SELF, userId: SELF.id, body: {} });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().ignoredFields).toBeUndefined();
+  });
+
+  it('returns a null body, not a bare { ignoredFields } object, when the user row is gone by the refetch', async () => {
+    mockUserFindById.mockReturnValue(null);
+    const { res, promise } = run({
+      user: SELF,
+      userId: SELF.id,
+      body: { name: 'New Name', isAdmin: true },
+    });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toBeNull();
+  });
+});
+
+describe('PUT /api/users/:id/update - real allowlist binds the ignoredFields guarantee', () => {
+  it('does not list creditDelta, tags, or isAdmin in the real self-service allowlist', async () => {
+    // Bypasses the module-level @bike4mind/services mock (which stands in a
+    // two-key schema for the handler tests above) to load the actual schema
+    // that ships in production. If any of these three fields were ever added
+    // to it, this assertion would fail before the protection in issue #2838
+    // silently disappeared.
+    const { userService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+    const allowedKeys = new Set(Object.keys(userService.updateUserSchema.shape));
+
+    expect(allowedKeys.has('creditDelta')).toBe(false);
+    expect(allowedKeys.has('tags')).toBe(false);
+    expect(allowedKeys.has('isAdmin')).toBe(false);
+
+    // Reproduces update.ts's own ignoredFields computation against the real
+    // allowlist, so this test breaks the same way the handler would if one of
+    // these fields were ever added to updateUserSchema.
+    const submitted = { name: 'New Name', creditDelta: 500, tags: ['vip'], isAdmin: true };
+    const ignoredFields = Object.keys(submitted).filter(key => !allowedKeys.has(key));
+    expect(ignoredFields).toEqual(expect.arrayContaining(['creditDelta', 'tags', 'isAdmin']));
+    expect(ignoredFields).toHaveLength(3);
+  });
+
+  it('strips unknown keys from the real admin allowlist, so the handler has something to report', async () => {
+    const { userService } = await vi.importActual<typeof import('@bike4mind/services')>('@bike4mind/services');
+    const allowedKeys = new Set(Object.keys(userService.adminUpdateUserSchema.shape));
+
+    // The credit-adjustment reason is `creditReason`; `adminNote` is the name that
+    // was mistakenly sent once and dropped. If the schema ever gained a passthrough
+    // or a catch-all, this would stop holding and the handler would report nothing.
+    expect(allowedKeys.has('creditReason')).toBe(true);
+    expect(allowedKeys.has('adminNote')).toBe(false);
+
+    const parsed = userService.adminUpdateUserSchema.parse({ id: 'u1', currentCredits: 500, adminNote: 'comped' });
+    expect(parsed).not.toHaveProperty('adminNote');
   });
 });

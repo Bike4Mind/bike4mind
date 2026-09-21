@@ -169,7 +169,7 @@ describe('IntegrationAuditLogger', () => {
   describe('IP and user-agent extraction', () => {
     it('should extract the public client IP from x-forwarded-for header', async () => {
       const req = {
-        headers: { 'x-forwarded-for': '203.0.113.7, 10.0.0.2', 'user-agent': 'Test' },
+        headers: { 'x-forwarded-for': '8.8.8.8, 10.0.0.2', 'user-agent': 'Test' },
         socket: { remoteAddress: '127.0.0.1' },
       };
 
@@ -178,7 +178,7 @@ describe('IntegrationAuditLogger', () => {
 
       await vi.waitFor(() => expect(mockCreateLog).toHaveBeenCalled());
 
-      expect(mockCreateLog).toHaveBeenCalledWith(expect.objectContaining({ sourceIp: '203.0.113.7' }));
+      expect(mockCreateLog).toHaveBeenCalledWith(expect.objectContaining({ sourceIp: '8.8.8.8' }));
     });
 
     it('should ignore a spoofed private leftmost x-forwarded-for and fall back to the socket', async () => {

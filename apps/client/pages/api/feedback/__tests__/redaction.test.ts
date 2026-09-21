@@ -164,7 +164,7 @@ describe('POST /api/feedback - redacts tool output before third-party egress', (
     await mockRefs.postHandler!(req, res);
 
     expect(mockPostFeedbackToSlack).toHaveBeenCalled();
-    const slackPromptMetaArg = mockPostFeedbackToSlack.mock.calls[0][6];
+    const slackPromptMetaArg = mockPostFeedbackToSlack.mock.calls[0][0].promptMeta;
     expect(JSON.stringify(slackPromptMetaArg)).not.toContain('PRIVATE TOOL OUTPUT');
     expect(JSON.stringify(slackPromptMetaArg)).toContain('web_search');
   });

@@ -44,6 +44,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@bike4mind/services', () => ({
   notebookImportService: { NotebookImportService: class {} },
+}));
+vi.mock('@bike4mind/services/llm', () => ({
   moderateImageOrThrow: vi.fn(),
 }));
 vi.mock('@bike4mind/common', () => ({ InboxType: { COMMON: 'common' }, isImageServeable: () => true }));

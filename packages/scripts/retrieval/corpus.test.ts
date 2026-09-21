@@ -3,7 +3,14 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { loadHelpArticles } from '../help/loadHelpArticles';
-import { NEGATIVES, NEVER_SUPPORTING, POSITIVES, PROBE_QUESTIONS, REFERENCED_SLUGS } from './corpus';
+import {
+  NEGATIVES,
+  NEVER_SUPPORTING,
+  parseProbeQuestions,
+  POSITIVES,
+  PROBE_QUESTIONS,
+  REFERENCED_SLUGS,
+} from './corpus';
 
 /**
  * CI gate on the probe's ground truth, validated against the REAL help corpus rather than a fixture.
@@ -12,6 +19,16 @@ import { NEGATIVES, NEVER_SUPPORTING, POSITIVES, PROBE_QUESTIONS, REFERENCED_SLU
  * into one no article carries, every question citing it loses recall it should have had, and the
  * sweep concludes a budget setting is worse than it is. Retrieval would not have changed at all.
  */
+// The index is generated and no longer committed, so this leg does not run in CI: no test shard
+// runs help:build-index. It is a local-after-a-build check only. runIf rather than an early
+// return so a skipped run REPORTS as skipped - an early return reports as a pass, which reads as
+// coverage that did not happen. Kept rather than deleted because it is the one assertion that
+// reads the ingest's own view of the corpus.
+const INDEX_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../../apps/client/app/generated/help-index.json'
+);
+
 describe('probe ground truth', () => {
   it('references only slugs that exist as PUBLIC help articles', async () => {
     // Public is the operative filter: `ingest-help-datalake.ts` ingests accessLevel === 'public'
@@ -27,20 +44,12 @@ describe('probe ground truth', () => {
     ).toEqual([]);
   });
 
-  it('references only slugs the help-lake ingest will actually create', () => {
+  it.runIf(existsSync(INDEX_PATH))('references only slugs the help-lake ingest will actually create', () => {
     // loadHelpArticles reads docs-site; the ingest reads the GENERATED index. They are normally in
     // step, but the index is what determines what ends up in the lake, so the ground truth has to
     // hold against that source specifically - a slug present in docs but absent from the index is
     // an article the probe can never retrieve.
-    const indexPath = path.resolve(
-      path.dirname(fileURLToPath(import.meta.url)),
-      '../../../apps/client/app/generated/help-index.json'
-    );
-    // Generated, so a fresh checkout may not have it yet. Absent is not a failure - the docs-site
-    // assertion above still covers the ground truth; this one adds the ingest's own view when built.
-    if (!existsSync(indexPath)) return;
-
-    const entries = JSON.parse(readFileSync(indexPath, 'utf-8')).entries as {
+    const entries = JSON.parse(readFileSync(INDEX_PATH, 'utf-8')).entries as {
       slug: string;
       accessLevel: string;
     }[];
@@ -84,5 +93,32 @@ describe('probe ground truth', () => {
 
   it('partitions cleanly into positives and negatives', () => {
     expect(POSITIVES.length + NEGATIVES.length).toBe(PROBE_QUESTIONS.length);
+  });
+});
+
+describe('parseProbeQuestions', () => {
+  const one = { id: 'q1', question: 'what drives the monthly charge?', supporting: ['file-a'] };
+
+  it('accepts a well-formed external set and keeps an empty supporting array as a negative', () => {
+    const parsed = parseProbeQuestions([one, { id: 'n1', question: 'unrelated?', supporting: [] }], 'set.json');
+    expect(parsed).toHaveLength(2);
+    expect(parsed[1].supporting).toEqual([]);
+  });
+
+  it('names the file and the entry index on a schema failure', () => {
+    expect(() => parseProbeQuestions([one, { id: 'q2', question: 'no supporting key' }], 'set.json')).toThrow(
+      /set\.json" entry 1: supporting/
+    );
+  });
+
+  it('rejects a duplicate id rather than silently dropping one question', () => {
+    // resolveQueries and assertSameQuerySet both key on the id, so a duplicate shrinks the scored
+    // set - and an arm scored on fewer questions reads as a better model.
+    expect(() => parseProbeQuestions([one, { ...one, question: 'different text' }], 'set.json')).toThrow(/q1/);
+  });
+
+  it('rejects a non-array and an empty set', () => {
+    expect(() => parseProbeQuestions({ questions: [one] }, 'set.json')).toThrow(/JSON array/);
+    expect(() => parseProbeQuestions([], 'set.json')).toThrow(/empty/);
   });
 });

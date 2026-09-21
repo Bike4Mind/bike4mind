@@ -1,6 +1,6 @@
 import { TooManyRequestsError } from '@bike4mind/utils';
 import { RequestHandler } from 'express';
-import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
+import { checkApiKeyRateLimit, type RateLimitCounter } from '@server/utils/apiKeyRateLimitCheck';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -15,6 +15,12 @@ export interface ApiKeyRateLimitOptions {
    * (an expensive GET keeps its daily cap unless a route explicitly opts in).
    */
   exemptReadsFromDailyLimit?: boolean;
+  /**
+   * Which counter to charge this route's API-key requests to. Defaults to
+   * 'request' (the key's configured quota). 'management' is for key-admin
+   * routes that must stay reachable with an exhausted key.
+   */
+  counter?: RateLimitCounter;
 }
 
 /** RFC 7231 safe methods: no state change, so cheap to serve and safe to exempt. */
@@ -67,7 +73,7 @@ export const apiKeyRateLimit =
           endpoint: req.originalUrl || req.url,
           method: req.method,
         },
-        { meterDailyLimit }
+        { meterDailyLimit, counter: options.counter }
       );
 
       // Add rate limit headers to response

@@ -32,6 +32,8 @@ export type LLMCommandArgs = {
   promptFileIds: string[];
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   questId?: string;
+  /** Correct-and-retry target: the quest whose answer the user says was wrong. */
+  correctsQuestId?: string;
   enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableArtifacts?: boolean;
@@ -43,6 +45,8 @@ export type LLMCommandArgs = {
   organizationId?: string | null;
   questMaster?: LLMApiRequestBody['questMaster'];
   researchMode?: LLMApiRequestBody['researchMode'];
+  /** Suppresses the server's own tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
+  skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
   imageConfig?: GenerateImageToolCall;
   audioConfig?: AudioGenerationToolCall;
   deepResearchConfig?: {
@@ -108,6 +112,7 @@ export async function handleLLMCommand(
       dashboardParams,
       promptFileIds,
       questId,
+      correctsQuestId,
       enableQuestMaster,
       queryClient,
       tools,
@@ -117,6 +122,7 @@ export async function handleLLMCommand(
       enableAgents,
       questMaster,
       researchMode,
+      skipAutoOffers,
       imageConfig,
       audioConfig,
       deepResearchConfig,
@@ -166,9 +172,14 @@ export async function handleLLMCommand(
       modelConfigurations: _omitModelConfigurations,
       deepResearchConfig: _omitDeepResearchConfig,
       researchMode: _omitResearchMode,
+      skipAutoOffers: _omitSkipAutoOffers,
       imageConfig: _omitImageConfig,
       audioConfig: _omitAudioConfig,
       agentMode: _omitAgentMode,
+      // Both are sent as top-level request fields above; without these they would also ride
+      // `params`, which is the same duplication every other field in this list exists to avoid.
+      questId: _omitQuestId,
+      correctsQuestId: _omitCorrectsQuestId,
       ...payload
     } = args;
 
@@ -209,6 +220,7 @@ export async function handleLLMCommand(
 
       const requestPayload: LLMApiRequestBody = {
         questId,
+        ...(correctsQuestId ? { correctsQuestId } : {}),
         sessionId: currentSession?.id,
         historyCount,
         clientSubmittedAt: clientPromptSentTime,
@@ -231,6 +243,7 @@ export async function handleLLMCommand(
         organizationId,
         ...(questMaster ? { questMaster } : {}),
         ...(researchMode ? { researchMode } : {}),
+        ...(skipAutoOffers ? { skipAutoOffers: true } : {}),
         // Include mcpServers if it's an array (even empty - means user disabled all)
         ...(Array.isArray(mcpServers) ? { mcpServers } : {}),
         ...(deepResearchConfig ? { deepResearchConfig } : {}),

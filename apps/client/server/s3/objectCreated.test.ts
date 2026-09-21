@@ -37,7 +37,7 @@ vi.mock('@bike4mind/database', () => ({
   User: { findById: h.userFindById },
   withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
 }));
-vi.mock('@bike4mind/services', () => ({ moderateImageOrThrow: vi.fn() }));
+vi.mock('@bike4mind/services/llm', () => ({ moderateImageOrThrow: vi.fn() }));
 vi.mock('@bike4mind/common', () => ({ isAudioMimeType: () => false }));
 vi.mock('@bike4mind/utils', () => ({ getSettingsMap: vi.fn(async () => ({})), getSettingsValue: () => true }));
 vi.mock('@bike4mind/utils/imageModeration', () => ({ RekognitionImageModerationService: class {} }));
@@ -74,7 +74,7 @@ const metadata = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
-  h.updateOne.mockResolvedValue({ modifiedCount: 1 });
+  h.updateOne.mockResolvedValue({ modifiedCount: 1, matchedCount: 1 });
   h.findOneAndUpdate.mockResolvedValue({ id: 'ff1' });
   h.moderateUploadedFile.mockResolvedValue({ moderationStatus: 'clean' });
   h.userFindById.mockReturnValue({ session: () => ({ id: 'u1', currentStorageSize: 1, save: vi.fn() }) });
@@ -187,7 +187,7 @@ describe('objectCreated - upload status is recorded independently of post-proces
     );
   });
 
-  it('marks the file complete on the happy path and leaves the moderation verdict on the record', async () => {
+  it('marks the file complete on the happy path and writes the moderation verdict', async () => {
     await run();
 
     expect(h.updateOne).toHaveBeenCalledWith(
@@ -195,15 +195,78 @@ describe('objectCreated - upload status is recorded independently of post-proces
       { $set: { status: 'complete' } }
     );
     expect(file.status).toBe('complete');
-    expect(file.moderationStatus).toBe('clean');
+    // The verdict goes out as its own claim-guarded write, not through the document save (which
+    // cannot be conditioned on the claim) - see the guard tests below.
+    expect(h.updateOne).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: 'ff1', moderationStatus: 'scanning' }),
+      expect.objectContaining({ $set: { moderationStatus: 'clean' } }),
+      expect.anything()
+    );
     expect(file.save).toHaveBeenCalled();
   });
 
-  it('skips the write when a redelivered event finds the file already complete', async () => {
+  it('skips the status write when a redelivered event finds the file already complete', async () => {
     file.status = 'complete';
 
     await run();
 
-    expect(h.updateOne).not.toHaveBeenCalled();
+    expect(h.updateOne).not.toHaveBeenCalledWith(
+      { _id: 'ff1', status: { $ne: 'complete' } },
+      { $set: { status: 'complete' } }
+    );
+  });
+});
+
+describe('objectCreated - moderation claim identity', () => {
+  let file: ReturnType<typeof metadata> & { status?: string; moderationStatus?: string };
+
+  beforeEach(() => {
+    file = metadata({ status: 'pending', moderationStatus: 'pending' });
+    h.findOne.mockResolvedValue(file);
+    h.findOneAndUpdate.mockResolvedValue({ ...file, moderationStatus: 'scanning' });
+  });
+
+  it('stamps moderationClaimedAt on the claim so the rescue sweep can reclaim by claim age', async () => {
+    // Without the stamp this door - the ordinary hosted-upload path - rides the sweep's legacy
+    // updatedAt fallback, which any unrelated write to the row resets. moderationClaimedAt exists
+    // precisely to replace that.
+    await run();
+
+    expect(h.findOneAndUpdate).toHaveBeenCalledWith(
+      { _id: 'ff1', moderationStatus: { $in: ['pending', null] } },
+      { $set: { moderationStatus: 'scanning', moderationClaimedAt: expect.any(Date) } },
+      { new: true }
+    );
+  });
+
+  it('guards the verdict write on the exact claim stamp, and clears it', async () => {
+    await run();
+
+    const claimStamp = h.findOneAndUpdate.mock.calls[0][1].$set.moderationClaimedAt;
+    expect(h.updateOne).toHaveBeenCalledWith(
+      { _id: 'ff1', moderationStatus: 'scanning', moderationClaimedAt: claimStamp },
+      { $set: { moderationStatus: 'clean' }, $unset: { moderationClaimedAt: 1 } },
+      { session: undefined }
+    );
+  });
+
+  it('discards its verdict and reports pending when the claim was superseded mid-scan', async () => {
+    // The rescue sweep returned this stale 'scanning' row to 'pending' while the scan ran, and a
+    // successor re-claimed it. An unguarded write here would clobber the successor's verdict -
+    // including un-quarantining a file it had just confirmed 'blocked'. The client is told
+    // 'pending' (not yet servable, keep waiting); the successor reports the real verdict.
+    h.moderateUploadedFile.mockResolvedValue({ moderationStatus: 'blocked', blockReason: 'explicit' });
+    h.updateOne.mockImplementation(async (filter: Record<string, unknown>) =>
+      'moderationClaimedAt' in filter ? { matchedCount: 0, modifiedCount: 0 } : { matchedCount: 1, modifiedCount: 1 }
+    );
+
+    await run();
+
+    expect(h.sendToClient).toHaveBeenCalledWith(
+      'u1',
+      'wss://test',
+      expect.objectContaining({ action: 'image_moderation_status', moderationStatus: 'pending' })
+    );
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('superseded'));
   });
 });

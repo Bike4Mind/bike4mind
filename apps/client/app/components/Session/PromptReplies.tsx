@@ -56,7 +56,6 @@ import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
 import CitableSources from './CitableSources';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
 import AttachmentNotices from './AttachmentNotices';
@@ -761,7 +760,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
   if (isConfirmed || isCancelled) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'background.level1' }}>
-        <Typography level="body-sm" sx={{ color: result?.success ? 'success.main' : 'danger.main' }}>
+        <Typography level="body-sm" sx={{ color: result?.success ? 'success.plainColor' : 'danger.plainColor' }}>
           {result?.message || (isConfirmed ? 'Action completed' : 'Action cancelled')}
         </Typography>
         {result?.url && (
@@ -778,7 +777,7 @@ const PendingActionButtons: FC<PendingActionButtonsProps> = ({ pendingAction, me
   if (isExpired) {
     return (
       <Box sx={{ mt: 2, p: 1.5, borderRadius: 'sm', bgcolor: 'warning.softBg' }}>
-        <Typography level="body-sm" sx={{ color: 'warning.main' }}>
+        <Typography level="body-sm" sx={{ color: 'warning.plainColor' }}>
           This confirmation has expired. Please request the action again.
         </Typography>
       </Box>
@@ -1024,7 +1023,7 @@ const AttachmentDownloadButtons: FC<AttachmentDownloadButtonsProps> = ({ attachm
                   {!isDeleted && att.author && ` • by ${att.author}`}
                 </Typography>
                 {errors[att.id] && (
-                  <Typography level="body-xs" sx={{ color: 'danger.main' }}>
+                  <Typography level="body-xs" sx={{ color: 'danger.plainColor' }}>
                     {errors[att.id]}
                   </Typography>
                 )}
@@ -1121,7 +1120,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   notebookContent,
 }) => {
   const { currentSessionId } = useSessions();
-  const isMobile = useIsMobile();
   const [isEditMode, setIsEditMode] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
@@ -1525,13 +1523,20 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                   }}
                 >
                   <Typography
-                    variant="soft"
-                    level={isMobile ? 'body-sm' : 'body-md'}
+                    // plain, not soft: the reply body is unframed, and Joy's soft
+                    // variant would paint its own background once the explicit one
+                    // below is gone. The user's prompt keeps its bubble.
+                    variant="plain"
+                    level="body-md"
                     component="div"
                     sx={{
                       margin: 0,
-                      padding: 2,
-                      backgroundColor: 'chatbox.replyBg',
+                      // No padding at all: with the frame gone there is no edge to hold off,
+                      // and every side of it stacked on top of a gap that was already
+                      // doing the job. The column's own gaps now carry the spacing, and
+                      // framed children (code, artifact cards) keep their own padding.
+                      padding: 0,
+                      backgroundColor: 'transparent',
                       borderRadius: '8px',
                       color: 'text.primary',
                       // Not a horizontal scroll container: wide children (tables,

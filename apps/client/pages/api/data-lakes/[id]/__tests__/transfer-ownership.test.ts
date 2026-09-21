@@ -6,6 +6,9 @@ const h = vi.hoisted(() => ({
   transferLakeOwnership: vi.fn(),
   listLakeOwnershipCandidates: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
+  // Records what ran inside the transaction callback, so the ordering assertions below are about
+  // the real boundary rather than about the mock having been imported.
+  inTransaction: [] as string[],
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the sibling endpoint tests).
@@ -30,6 +33,14 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: async (fn: () => unknown) => {
+    h.inTransaction.push('enter');
+    try {
+      return await fn();
+    } finally {
+      h.inTransaction.push('exit');
+    }
+  },
   dataLakeRepository: {},
   // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
   // omitted because the mock replaces the whole module: a missing export is an import-time
@@ -169,5 +180,28 @@ describe('GET /api/data-lakes/[id]/transfer-ownership', () => {
     const { res, json } = makeRes();
     await call(getReq({ id: 'lake1' }), res);
     expect(json).toHaveBeenCalledWith({ data: { scope: 'organization', candidates: [] } });
+  });
+
+  // The gate has to be INSIDE the transaction, not merely before the writes. `transferLakeOwnership`
+  // decides from the grants this gate reads and then writes them, and a departure
+  // (`lapseDepartedMemberLakeAccess`) can commit in between - at which point the demotion loop would
+  // upsert the departed member back to `curator` with `expiresAt: null` over the row the departure
+  // just expired, leaving two owners. Both paths transactional turns that into a write conflict
+  // Mongo retries; a retry is only worth anything if it RE-READS, which is what this pins.
+  it('reads the grants and writes them inside one transaction', async () => {
+    h.inTransaction.length = 0;
+    h.assertLakeAccessWithGrants.mockImplementation(async () => {
+      h.inTransaction.push('gate');
+      return { lake: LAKE, grants: GRANTS };
+    });
+    h.transferLakeOwnership.mockImplementation(async () => {
+      h.inTransaction.push('transfer');
+      return { newOwnerUserId: 'u9', demotedUserIds: [] };
+    });
+
+    const { res } = makeRes();
+    await call(req({ id: 'lake1' }, { newOwnerUserId: 'u9' }), res);
+
+    expect(h.inTransaction).toEqual(['enter', 'gate', 'transfer', 'exit']);
   });
 });

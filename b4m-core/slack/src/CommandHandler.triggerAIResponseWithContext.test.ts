@@ -19,7 +19,7 @@ const { getSlackDeps, getSlackDb, invoke, findQuestById } = vi.hoisted(() => ({
   findQuestById: vi.fn(),
 }));
 vi.mock('./di/registry', () => ({ getSlackDeps, getSlackDb, configureSlackPackage: vi.fn() }));
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services/llm', () => ({
   ChatCompletionInvoke: function MockChatCompletionInvoke() {
     return { invoke, db: { quests: { findById: findQuestById } } };
   },

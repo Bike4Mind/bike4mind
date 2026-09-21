@@ -5,173 +5,23 @@
  * requests to internal/private networks, cloud metadata endpoints,
  * and other sensitive destinations.
  *
- * Used by webhook delivery and test endpoints.
+ * Used by webhook delivery, blog integration, and external-image fetching.
+ *
+ * `isPrivateIP` and `isPrivateOrInternalHostname` are re-exported from `@bike4mind/fab-pipeline`
+ * rather than reimplemented here - this file used to carry its own per-hextet IPv6 prefix list that
+ * drifted out of sync with the hardened one there (#1969). The fetch-call-site helpers below
+ * (assertUrlAllowed, safeFetch) add what fab-pipeline's node-http/https agents cannot provide for
+ * the global fetch() these routes use: an https-only assert and a redirect-revalidating fetch.
  */
 
+import { isPrivateIP, isPrivateOrInternalHostname } from '@bike4mind/fab-pipeline';
 import dns from 'dns';
 import { promisify } from 'util';
 
 const dnsResolve4 = promisify(dns.resolve4);
 const dnsResolve6 = promisify(dns.resolve6);
 
-/**
- * Check if an IPv4 address is in a private/internal range.
- */
-function isPrivateIPv4(ip: string): boolean {
-  const ipv4Match = ip.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-  if (!ipv4Match) return false;
-
-  const [, a, b, c] = ipv4Match.map(Number);
-
-  // 10.0.0.0/8 - Private network
-  if (a === 10) return true;
-
-  // 172.16.0.0/12 - Private network
-  if (a === 172 && b >= 16 && b <= 31) return true;
-
-  // 192.168.0.0/16 - Private network
-  if (a === 192 && b === 168) return true;
-
-  // 127.0.0.0/8 - Loopback
-  if (a === 127) return true;
-
-  // 169.254.0.0/16 - Link-local (includes AWS metadata)
-  if (a === 169 && b === 254) return true;
-
-  // 0.0.0.0/8 - Current network
-  if (a === 0) return true;
-
-  // 100.64.0.0/10 - Shared address space (carrier-grade NAT)
-  if (a === 100 && b >= 64 && b <= 127) return true;
-
-  // 192.0.0.0/24 - IETF Protocol Assignments
-  if (a === 192 && b === 0 && c === 0) return true;
-
-  // 192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24 - Documentation
-  if ((a === 192 && b === 0 && c === 2) || (a === 198 && b === 51 && c === 100) || (a === 203 && b === 0 && c === 113))
-    return true;
-
-  // 198.18.0.0/15 - RFC 2544 benchmarking
-  if (a === 198 && (b === 18 || b === 19)) return true;
-
-  // 224.0.0.0/4 - Multicast
-  if (a >= 224 && a <= 239) return true;
-
-  // 240.0.0.0/4 - Reserved
-  if (a >= 240) return true;
-
-  return false;
-}
-
-/**
- * Check if an IPv6 address is in a private/internal range.
- */
-function isPrivateIPv6(ip: string): boolean {
-  const normalized = ip.toLowerCase();
-
-  // ::1 - Loopback
-  if (normalized === '::1' || normalized === '0:0:0:0:0:0:0:1') return true;
-
-  // :: - Unspecified address
-  if (normalized === '::' || normalized === '0:0:0:0:0:0:0:0') return true;
-
-  // fe80::/10 - Link-local
-  if (
-    normalized.startsWith('fe8') ||
-    normalized.startsWith('fe9') ||
-    normalized.startsWith('fea') ||
-    normalized.startsWith('feb')
-  )
-    return true;
-
-  // fc00::/7 - Unique local addresses (ULA) - includes fc00::/8 and fd00::/8
-  if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
-
-  // ff00::/8 - Multicast
-  if (normalized.startsWith('ff')) return true;
-
-  // ::ffff:0:0/96 - IPv4-mapped IPv6 addresses (check the embedded IPv4)
-  const ipv4MappedMatch = normalized.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (ipv4MappedMatch) {
-    return isPrivateIPv4(ipv4MappedMatch[1]);
-  }
-
-  // 2001:db8::/32 - Documentation
-  if (normalized.startsWith('2001:db8:') || normalized.startsWith('2001:0db8:')) return true;
-
-  // 100::/64 - Discard prefix
-  if (normalized.startsWith('100::') || normalized.startsWith('0100::')) return true;
-
-  // 64:ff9b::/96 - IPv4/IPv6 translation (could embed private IPv4)
-  // For safety, block this prefix entirely
-  if (normalized.startsWith('64:ff9b:') || normalized.startsWith('0064:ff9b:')) return true;
-
-  return false;
-}
-
-/**
- * Check if an IP address (IPv4 or IPv6) is in a private/internal range.
- */
-export function isPrivateIP(ip: string): boolean {
-  // Check if it's IPv4
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(ip)) {
-    return isPrivateIPv4(ip);
-  }
-
-  // Assume IPv6
-  return isPrivateIPv6(ip);
-}
-
-/**
- * Check if a hostname is known to be private/internal.
- * This catches obvious cases before DNS resolution.
- */
-export function isPrivateOrInternalHostname(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-
-  // Block localhost variations
-  if (
-    normalized === 'localhost' ||
-    normalized === '127.0.0.1' ||
-    normalized === '::1' ||
-    normalized === '0.0.0.0' ||
-    normalized.endsWith('.localhost') ||
-    normalized.endsWith('.local')
-  ) {
-    return true;
-  }
-
-  // Block AWS metadata endpoint
-  if (
-    normalized === '169.254.169.254' ||
-    normalized === 'instance-data' ||
-    normalized === 'metadata.google.internal' ||
-    normalized === 'metadata.internal'
-  ) {
-    return true;
-  }
-
-  // Block Kubernetes internal DNS
-  if (
-    normalized.endsWith('.cluster.local') ||
-    normalized.endsWith('.svc.cluster.local') ||
-    normalized.endsWith('.pod.cluster.local')
-  ) {
-    return true;
-  }
-
-  // Check if it's an IP address in private ranges
-  if (/^(\d{1,3}\.){3}\d{1,3}$/.test(normalized)) {
-    return isPrivateIPv4(normalized);
-  }
-
-  // Check if it's an IPv6 address
-  if (normalized.includes(':')) {
-    return isPrivateIPv6(normalized);
-  }
-
-  return false;
-}
+export { isPrivateIP, isPrivateOrInternalHostname };
 
 /**
  * Validate a URL for webhook delivery.
@@ -280,4 +130,82 @@ export function validateTargetUrlSync(url: string): { valid: boolean; error?: st
   } catch {
     return { valid: false, error: 'Invalid URL format' };
   }
+}
+
+/** Thrown by {@link safeFetch} when a target, or its redirect target, is unsafe to fetch. */
+export class SsrfError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SsrfError';
+  }
+}
+
+/**
+ * Assert a caller/user-influenced URL is safe to fetch server-side, or throw SsrfError.
+ * https-only, then defers to validateTargetUrl, which blocks private/internal hostnames AND resolves
+ * DNS and rejects if any resolved IP is private - so a public NAME that resolves to a private address
+ * (e.g. 127.0.0.1.nip.io) is caught, not just literal IPs. DNS resolution is I/O, hence async. For
+ * fetch call sites use {@link safeFetch}, which also re-checks a redirect hop.
+ *
+ * @throws SsrfError with a human-readable reason if the URL is not allowed.
+ */
+export async function assertUrlAllowed(url: string): Promise<void> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new SsrfError('not a valid URL');
+  }
+  if (parsed.protocol !== 'https:') {
+    throw new SsrfError('only https URLs are allowed');
+  }
+  const { valid, error } = await validateTargetUrl(url);
+  if (!valid) {
+    throw new SsrfError(error ?? 'points to a private or internal network');
+  }
+}
+
+/**
+ * Fetch a caller/user-influenced URL with SSRF protection on BOTH the initial host and a single
+ * redirect hop. A plain fetch defaults to redirect:'follow', so a guard on the initial URL alone is
+ * bypassed by a public host that 3xx-redirects to an internal one. This validates up front
+ * (assertUrlAllowed, DNS-resolving), fetches with redirect:'manual', re-validates the Location the
+ * same way, and follows at most one hop with redirect:'error'. Callers keep their own
+ * timeout/size/content-type handling via `init` and the returned Response.
+ *
+ * TOCTOU residual: validateTargetUrl resolves DNS here, but global fetch() (undici) resolves the name
+ * again at connect time and cannot install fab-pipeline's connect-time ssrfSafeLookup, which is built
+ * for the node-http/axios agents. So for a user-supplied host whose authoritative DNS an attacker
+ * controls, this leaves a blind connect oracle rather than an internal read - and what keeps it a
+ * blind oracle is that every safeFetch caller bounds the bytes an upstream response can return:
+ * blog/publish.ts, blog/presign-image-upload.ts, blog-integration/index.ts, and external-image.ts
+ * (the riskiest - an open admin-supplied URL streamed up to a 10MB cap). Same residual the repo
+ * already accepts for its other fetch()-based SSRF guards.
+ *
+ * @throws SsrfError if the target or its redirect target is unsafe.
+ */
+export async function safeFetch(url: string, init: RequestInit = {}): Promise<Response> {
+  await assertUrlAllowed(url);
+
+  const response = await fetch(url, { ...init, redirect: 'manual' });
+  const isRedirect = response.status >= 300 && response.status < 400;
+  if (!isRedirect) {
+    return response;
+  }
+
+  const location = response.headers.get('location');
+  if (!location) {
+    throw new SsrfError('redirect without a Location header');
+  }
+  const target = new URL(location, url).toString();
+  try {
+    await assertUrlAllowed(target);
+  } catch (e) {
+    if (e instanceof SsrfError) {
+      throw new SsrfError(`blocked redirect: ${e.message}`);
+    }
+    throw e;
+  }
+  // One extra hop only: redirect:'error' rejects any further redirect from the target.
+  return fetch(target, { ...init, redirect: 'error' });
 }

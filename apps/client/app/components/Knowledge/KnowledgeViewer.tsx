@@ -16,6 +16,7 @@ import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import {
   Box,
+  Button,
   Stack,
   Typography,
   Tabs,
@@ -84,6 +85,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
+import { brand } from '@client/app/utils/themes/colors';
 import JSONViewer from './JSONViewer';
 import { api } from '@client/app/contexts/ApiContext';
 import { useQueryClient } from '@tanstack/react-query';
@@ -1540,16 +1542,6 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                   </IconButton>
                 </span>
               </Tooltip>
-              {knowledgeItems[selectedTabIndex]?.type !== 'file' && (
-                <Tooltip title="Publish to public link" disableInteractive>
-                  <span>
-                    <IconButton size="sm" onClick={handleShareArtifact} data-testid="artifact-viewer-share">
-                      <ShareIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </span>
-                </Tooltip>
-              )}
-              {artifactShareModal}
               {isMarkdownFile(knowledgeItems[selectedTabIndex]) ? (
                 <DownloadMenu
                   content={markdownContent || ''}
@@ -1588,6 +1580,29 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                 </Tooltip>
               )}
             </ButtonGroup>
+
+            {knowledgeItems[selectedTabIndex]?.type !== 'file' && (
+              <Button
+                size="sm"
+                variant="solid"
+                startDecorator={<ShareIcon sx={{ fontSize: 16 }} />}
+                onClick={handleShareArtifact}
+                data-testid="artifact-viewer-share"
+                sx={{
+                  backgroundColor: brand[800],
+                  color: '#fff',
+                  fontWeight: 600,
+                  // Colour alone on hover, matching the card's Share button.
+                  transition: 'background-color 0.15s ease',
+                  '&:hover': {
+                    backgroundColor: brand[900],
+                  },
+                }}
+              >
+                Share
+              </Button>
+            )}
+            {artifactShareModal}
 
             <Tooltip title="Close Knowledge Preview" disableInteractive>
               <IconButton size="sm" variant={'soft'} onClick={() => setSessionLayout({ layout: 'hide' })}>

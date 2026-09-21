@@ -86,6 +86,10 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     contextSummaryAt: { type: Date, required: false },
     contextSummaryModelId: { type: String, required: false },
     tags: { type: [TagSchema], required: false },
+    // Pairs with `tags` the way `summaryAt` pairs with `summary`. The schema is strict, so WITHOUT
+    // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
+    // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
+    taggedAt: { type: Date, required: false },
     clonedSourceId: { type: String, required: false },
     forkedSourceId: { type: String, required: false },
     isAutoNamed: { type: Boolean, required: false },
@@ -329,6 +333,9 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
     return query;
   }
   async findByIdAndUserId(id: string, userId: string) {
+    // A non-ObjectId id can never address a row - report no such row, not a CastError the
+    // calling route cannot attribute. Same contract as `BaseRepository.findById`.
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     return this.sessionModel.findOne({ _id: id, userId });
   }
   async findRecentlyUpdatedByUserId(userId: string, ctx: mongoose.mongo.ClientSession | null = null) {

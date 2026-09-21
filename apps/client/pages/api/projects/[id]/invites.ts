@@ -1,10 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { inviteRepository, projectRepository } from '@bike4mind/database';
 import { projectService } from '@bike4mind/services';
+import { omitInviteToken } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { sharingService } from '@bike4mind/services';
 import { InviteEvents, InviteType, ProjectEvents, Permission } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
+import { isValidObjectId } from '@server/utils/objectId';
+import { NotFoundError } from '@server/utils/errors';
 import {
   withTransaction,
   userRepository,
@@ -40,7 +43,9 @@ const handler = baseApi()
       ability: req.ability,
     });
 
-    return res.json(result);
+    // Same reason as the sibling document list: the token is a redeemable secret with no consumer
+    // on this surface.
+    return res.json({ ...result, data: result.data.map(omitInviteToken) });
   })
   .post(
     asyncHandler<{}, unknown, z.infer<typeof createInviteBodySchema>>(async (req, res) => {
@@ -48,6 +53,9 @@ const handler = baseApi()
       if (!id || typeof id !== 'string') {
         return res.status(400).json({ message: 'Invalid project ID' });
       }
+      // An id that is not an ObjectId names no project, so this route answers the 404 itself
+      // rather than letting the lookup cast and raise a CastError.
+      if (!isValidObjectId(id)) throw new NotFoundError('Project not found');
 
       const { expiresAt, ...restBody } = createInviteBodySchema.parse(req.body);
       const created = await withTransaction(() => {
@@ -99,11 +107,12 @@ const handler = baseApi()
         );
       }
 
-      const generateInviteLink = (inviteId: string) => {
-        return `${process.env.APP_URL}/share/${inviteId}`;
+      // Token, not `_id` - see generateInviteLink in pages/api/[type]/[id]/invites/index.ts for why.
+      const generateInviteLink = (invite: { id: string; token?: string }) => {
+        return `${process.env.APP_URL}/share/${invite.token ?? invite.id}`;
       };
 
-      return res.json({ ...created, link: generateInviteLink(created.id) });
+      return res.json({ ...omitInviteToken(created), link: generateInviteLink(created) });
     })
   );
 

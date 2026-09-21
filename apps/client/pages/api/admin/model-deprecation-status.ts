@@ -11,7 +11,8 @@ import {
   getExpiringModels,
   resolveCatalogRecords,
 } from '@bike4mind/llm-adapters';
-import { builtInAgentModelReferences, modelDiscoveryService } from '@bike4mind/services';
+import { modelDiscoveryService } from '@bike4mind/services';
+import { builtInAgentModelReferences } from '@bike4mind/services/llm';
 import { toPerMTokRate, type IModelPrice, type PerMTokRate } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 

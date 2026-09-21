@@ -28,7 +28,11 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const cancelInviteById = vi.hoisted(() => vi.fn());
-vi.mock('@bike4mind/services', () => ({ sharingService: { cancelInviteById } }));
+const authorizeByInviteType = vi.hoisted(() => vi.fn());
+const resolveRedeemableInvite = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/services', () => ({
+  sharingService: { cancelInviteById, authorizeByInviteType, resolveRedeemableInvite },
+}));
 vi.mock('@bike4mind/database', () => ({
   Invite: { findById: vi.fn() },
   inviteRepository: {},
@@ -45,24 +49,28 @@ vi.mock('@server/managers/inviteManager', async importOriginal => {
   return { ...actual, getInviteDetails };
 });
 
-import { Invite } from '@bike4mind/database';
 import '@pages/api/invites/[id]/index';
+
+// GET no longer resolves the invite itself - it hands the raw key to resolveRedeemableInvite,
+// which decides whether a token or a legacy id addresses anything. Both shapes appear below.
+const VALID_INVITE_ID = '507f1f77bcf86cd799439011';
+const INVITE_TOKEN = 'wVvJ0hEr1sKq7nQ9YpB2fL4dXz8TcMuGaSiN3ROZjkw';
 
 describe('DELETE /api/invites/[id]', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('delegates to cancelInviteById with the invite id and returns the result', async () => {
-    cancelInviteById.mockResolvedValue({ id: 'inv-1', remaining: 0 });
-    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'inv-1' } });
+    cancelInviteById.mockResolvedValue({ id: '507f1f77bcf86cd799439021', remaining: 0 });
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: '507f1f77bcf86cd799439021' } });
     (req as any).user = { id: 'u1' };
     await mockRefs.deleteHandler!(req, res);
 
     expect(cancelInviteById).toHaveBeenCalledWith(
       req.user,
-      { id: 'inv-1' },
+      { id: '507f1f77bcf86cd799439021' },
       expect.objectContaining({ db: expect.any(Object) })
     );
-    expect(res._getJSONData()).toEqual({ id: 'inv-1', remaining: 0 });
+    expect(res._getJSONData()).toEqual({ id: '507f1f77bcf86cd799439021', remaining: 0 });
   });
 
   it('returns 400 when id is missing', async () => {
@@ -78,15 +86,20 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("keeps only the caller's own recipient entry, dropping co-invitees", async () => {
-    (Invite.findById as any).mockResolvedValue({ id: 'inv-1' });
-    getInviteDetails.mockResolvedValue({
+    resolveRedeemableInvite.mockResolvedValue({
       id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['me@x.com'], accepted: [], refused: [] },
+    });
+    getInviteDetails.mockResolvedValue({
+      id: '507f1f77bcf86cd799439021',
       type: 'FabFile',
       name: 'Doc',
       username: 'inviter',
       recipients: { pending: ['me@x.com', 'other@x.com'], accepted: ['third@x.com'], refused: [] },
     });
-    const { req, res } = createMocks({ method: 'GET', query: { id: 'inv-1' } });
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
     (req as any).user = { id: 'u1', email: 'me@x.com' };
     await mockRefs.getHandler!(req, res);
 
@@ -95,5 +108,87 @@ describe('GET /api/invites/[id] - recipient email strip', () => {
     expect(body.recipients.pending).toEqual(['me@x.com']);
     expect(JSON.stringify(body)).not.toContain('other@x.com');
     expect(JSON.stringify(body)).not.toContain('third@x.com');
+  });
+});
+
+/**
+ * The GET handler previously returned any invite's document name, owner username,
+ * permissions and message to ANY authenticated caller holding the id. It must now gate
+ * on the same population accept/refuse redeem for: a named recipient, or a caller with
+ * share authority on the underlying document.
+ */
+describe('GET /api/invites/[id] - authorization gate', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  // 404, not 400: an unresolvable key gets the same answer as a valid-but-unauthorized one, so the
+  // status does not tell a caller which invites exist.
+  it('returns 404 for a key the resolver does not admit', async () => {
+    resolveRedeemableInvite.mockResolvedValue(null);
+    const { req, res } = createMocks({ method: 'GET', query: { id: 'not-an-object-id' } });
+    (req as any).user = { id: 'u1', email: 'a@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
+  // The route must not pre-judge the key's shape: a share link now carries a token, and narrowing
+  // to ObjectIds here would 404 every new invite before the resolver ever saw it.
+  it('passes a token through to the resolver untouched', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      isLinkOnly: true,
+      remaining: 1,
+      recipients: { pending: [], accepted: [], refused: [] },
+    });
+    getInviteDetails.mockResolvedValue({ id: 'inv-1', type: 'FabFile' });
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: INVITE_TOKEN } });
+    (req as any).user = { id: 'u1', email: 'a@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(resolveRedeemableInvite).toHaveBeenCalledWith(INVITE_TOKEN, expect.objectContaining({ db: expect.any(Object) }));
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('returns 404 (not 403) for a caller who is neither a recipient nor share-authorized', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+    authorizeByInviteType.mockRejectedValue(new Error('Unauthorized'));
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
+    (req as any).user = { id: 'u1', email: 'stranger@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(getInviteDetails).not.toHaveBeenCalled();
+  });
+
+  it('allows a caller with share authority on the underlying document even when not a named recipient', async () => {
+    resolveRedeemableInvite.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      documentId: 'doc-1',
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+    authorizeByInviteType.mockResolvedValue(undefined);
+    getInviteDetails.mockResolvedValue({
+      id: 'inv-1',
+      type: 'FabFile',
+      recipients: { pending: ['other@x.com'], accepted: [], refused: [] },
+    });
+
+    const { req, res } = createMocks({ method: 'GET', query: { id: VALID_INVITE_ID } });
+    (req as any).user = { id: 'owner-1', email: 'owner@x.com' };
+    await mockRefs.getHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(getInviteDetails).toHaveBeenCalled();
   });
 });

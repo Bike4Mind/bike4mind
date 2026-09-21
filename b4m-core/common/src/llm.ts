@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ChatCompletionCreateInputSchema, OpenAIImageGenerationInput } from './schemas/openai';
+import { ChatCompletionCreateInputSchema, ImageOutputFormatSchema, OpenAIImageGenerationInput } from './schemas/openai';
 import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 import { BFLSafetyToleranceSchema } from './schemas/bfl';
@@ -64,7 +64,7 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   safety_tolerance: BFLSafetyToleranceSchema,
   prompt_upsampling: z.boolean().optional(),
   seed: z.number().nullable().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
+  output_format: ImageOutputFormatSchema.nullable().optional(),
   /** Resolved by the API route's prompt resolver. Defaults to 'fresh' for first-turn or sessions with no prior image. */
   intent: PromptIntentSchema.optional(),
   promptEnhancement: z
@@ -89,7 +89,7 @@ export type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySc
 export const GenerateImageToolCallSchema = OpenAIImageGenerationInput.extend({
   safety_tolerance: z.number().optional(),
   prompt_upsampling: z.boolean().optional(),
-  output_format: z.enum(['jpeg', 'png']).nullable().optional(),
+  output_format: ImageOutputFormatSchema.nullable().optional(),
   seed: z.number().nullable().optional(),
   editModel: z.string().optional(), // Model to use for image editing operations (separate from generation model)
 }).omit({
@@ -133,6 +133,10 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
   image: z.string(),
+  // OpenAIImageGenerationInput doesn't declare this; without it here, ImageEdit.ts's
+  // `...rest` spread silently strips any client-sent output_format before it ever reaches
+  // ImageEditBodySchema's own (narrower) field.
+  output_format: ImageOutputFormatSchema.nullable().optional(),
 });
 
 /**
@@ -198,6 +202,13 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   message: z.string(),
   messageFileIds: z.array(z.string()).prefault([]),
   questId: z.string().optional(),
+  /**
+   * Correct-and-retry: the quest whose answer the user says was wrong. Produces a NEW quest
+   * carrying the user's correction, rather than overwriting the flagged one the way `questId`
+   * (retry) does - the original answer has to survive for the evaluation-pair export to read it.
+   * Validated server-side against the resolved session before it is persisted.
+   */
+  correctsQuestId: z.string().optional(),
   /** Extra context messages to include in the conversation from external sources */
   extraContextMessages: z
     .array(
@@ -227,10 +238,18 @@ export const ChatCompletionInvokeParamsSchema = z.object({
    * was the only switch for the offer and it also strips every authored prompt, so no caller could
    * have an arm that went unoffered AND kept the abstention licence.
    *
-   * Gates the three auto-add sites (the knowledge offer in resolveEnabledTools, the navigate_view
+   * Gates the auto-add sites (the knowledge offer in resolveEnabledTools, the navigate_view
    * auto-add, the blog/skill gate), unioned with `Boolean(promptMode)` by
    * resolveSkipAutoOffers. A force-on, not an override: `false` under a promptMode still suppresses.
    * Withholding navigate_view also drops the viewRegistry system block, which only describes it.
+   *
+   * `buildSharedTools`' `offerOnlyNamedTools` (see sharedToolBuilder.ts) reads the same union for
+   * the same reason: MCP tools merged past the `enabledTools` filter are withheld too, since the
+   * caller never named them either. Unlike the auto-add sites, this one can still be reached per
+   * tool - a caller with `session.enabledTools` (not the public `tools` field, which
+   * `filterKnownTools` strips non-native ids from before this flag is even consulted) can name one
+   * MCP tool by its namespaced `server__tool` id and keep it while every unnamed sibling is
+   * withheld.
    *
    * Withholds the OFFER, not knowledge: `session.forceKnowledgeRetrieval` is untouched, and an
    * already-attached corpus is inlined rather than deferred to the tool. An arm that must see no

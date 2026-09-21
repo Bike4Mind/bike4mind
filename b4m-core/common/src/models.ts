@@ -272,14 +272,15 @@ export enum ChatModels {
   KIMI_K2_5_BEDROCK = 'moonshotai.kimi-k2.5',
   KIMI_K2_THINKING_BEDROCK = 'moonshot.kimi-k2-thinking',
 
-  // DeepSeek direct from api.deepseek.com. Does not collide with the
-  // Bedrock-served DEEPSEEK_R1_BEDROCK / DEEPSEEK_V3_1 above or the Ollama
-  // DEEPSEEK_R1: those are other people's copies on other backends, with their
-  // own limits and their own prices.
+  // DeepSeek direct from api.deepseek.com, the only two ids it still serves.
+  // Neither collides with the Bedrock-served DEEPSEEK_R1_BEDROCK / DEEPSEEK_V3_1
+  // above or the Ollama DEEPSEEK_R1: those are other people's copies on other
+  // backends, with their own limits and their own prices.
   //
   // The vendor's legacy aliases deepseek-v4-flash and deepseek-v4-flash-vision-exp
   // route to deepseek-flash and are deliberately not separate members.
   DEEPSEEK_FLASH = 'deepseek-flash',
+  DEEPSEEK_V4_PRO = 'deepseek-v4-pro',
 }
 export const CHAT_MODELS = Object.values(ChatModels);
 export const supportedChatModels = z.enum(ChatModels);
@@ -438,14 +439,15 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.KIMI_K2_7_CODE_HIGHSPEED,
   ChatModels.KIMI_K2_6,
   ChatModels.KIMI_K2_5,
-  // DeepSeek reasons by default, and its docs state temperature,
+  // DeepSeek reasons by default on both ids, and its docs state temperature,
   // presence_penalty and frequency_penalty are unsupported in thinking mode.
   // Unlike Kimi these are silent no-ops rather than a 400, which is the worse
   // failure: the knob moves, the answer does not. Listed here so the picker
-  // stops offering it. Thinking CAN be turned off on this id, and a caller who
+  // stops offering it. Thinking CAN be turned off on either id, and a caller who
   // does so gets the group back - see deepseekSamplingParams, which gates on the
   // turn's resolved thinking state rather than on membership here.
   ChatModels.DEEPSEEK_FLASH,
+  ChatModels.DEEPSEEK_V4_PRO,
 ]);
 
 /**
@@ -548,6 +550,15 @@ export type ModelInfo = {
    * generated response.
    */
   max_tokens: number;
+  /**
+   * True when `max_tokens` above was DERIVED (toModelInfo's default for a record that
+   * declares no cap), not stated by the source. Absent means declared, so every ModelInfo
+   * built outside toModelInfo - the adapter tables, which hardcode a real cap - is correct
+   * by omission. Sizing rules must not treat a derived cap as the model's real ceiling:
+   * see resolveOutputMaxTokens, where clamping an adaptive model to the derived 4096
+   * starves its visible answer.
+   */
+  maxOutputTokensDerived?: boolean;
   can_stream?: boolean;
   /**
    * Whether the model supports the thinking feature.

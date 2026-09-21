@@ -107,6 +107,10 @@ export interface ToolContext {
       // The models a corpus was ACTUALLY embedded with (describe_knowledge_base). Optional like
       // the rest of this repo: absent, that tool reports the platform default alone and says so.
       | 'distinctRetrievalIndexModelsByFabFileIds'
+      // Kept a superset match with ChatCompletionFeatures.ts's DatabaseAdapters.fabfilechunks
+      // (which feeds this via ToolBuilder), so a future literal here cannot silently drop the
+      // method semanticDataLakeSearch's residency gate depends on with no type error.
+      | 'annResidentFabFileIds'
     >;
     users?: Pick<IUserRepository, 'findById'>;
     projects?: IProjectRepository;
@@ -114,7 +118,15 @@ export interface ToolContext {
     // fallback tagger's prefix-overlap check.
     dataLakes?: Pick<
       IDataLakeRepository,
-      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById' | 'find'
+      | 'findActiveByUserTags'
+      | 'findActiveByUserTagsAndEntitlements'
+      | 'findByDatalakeTag'
+      | 'findById'
+      | 'find'
+      // Required, not optional, and that is the point: it is the anchor for the ownership-supersession
+      // read that narrows the retrieval creator arm, so every host that can retrieve has to wire it
+      // rather than silently degrade to bare creator provenance.
+      | 'findIdsCreatedBy'
     >;
     /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see

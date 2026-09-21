@@ -54,6 +54,10 @@ const ACTION_LABEL: Record<LakeConfigChangeAction, string> = {
   'auto-activate': 'Activated automatically',
   'grant-access': 'Access granted',
   'revoke-access': 'Access revoked',
+  // Says WHY ownership moved, not just that it did: nobody requested this one, so wording that
+  // matched 'Ownership transferred' would read as a deliberate handover an owner could go looking
+  // for in vain.
+  'membership-succession': 'Ownership passed on (creator left the org)',
 };
 
 /**

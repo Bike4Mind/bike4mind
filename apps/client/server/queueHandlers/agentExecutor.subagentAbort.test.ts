@@ -85,6 +85,12 @@ vi.mock('@bike4mind/services', async () => {
     ...actual,
     // Namespace re-export can't be spied in ESM, so replace it wholesale (keeping its other members).
     apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({}) },
+  };
+});
+vi.mock('@bike4mind/services/llm', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/services/llm')>('@bike4mind/services/llm');
+  return {
+    ...actual,
     resolveToolAvailability: vi.fn().mockResolvedValue({}),
     buildSharedTools: vi.fn().mockReturnValue([]),
     ServerAgentStore: class {

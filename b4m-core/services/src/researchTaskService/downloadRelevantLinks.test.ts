@@ -4,16 +4,12 @@ import { NotFoundError, UnprocessableEntityError } from '@bike4mind/utils';
 import { ResearchTaskType, ResearchTaskStatus, KnowledgeType } from '@bike4mind/common';
 import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
-import { fabFilesService } from '..';
+import * as fabFilesService from '../fabFileService';
 import { findOrUpdateExistingResearchData, prepareTagsForResearchTask, createSendStatusUpdate } from './utils';
 
 vi.mock('axios');
 vi.mock('file-type');
-vi.mock('..', () => ({
-  fabFilesService: {
-    createFabFile: vi.fn(),
-  },
-}));
+vi.mock('../fabFileService', () => ({ createFabFile: vi.fn() }));
 vi.mock('./utils', () => ({
   findOrUpdateExistingResearchData: vi.fn(),
   prepareTagsForResearchTask: vi.fn(),

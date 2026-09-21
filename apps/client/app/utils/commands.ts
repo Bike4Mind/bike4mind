@@ -21,6 +21,8 @@ type CommandArgs = CommandArgExtra & ImageGenerationCommandArgs & ImageEditComma
 
 export type CommandArgExtra = {
   userId: string;
+  username?: string;
+  userEmail?: string;
   command: string;
   params: string;
   currentSession: ISessionDocument | null;
@@ -30,6 +32,9 @@ export type CommandArgExtra = {
   dashboardParams?: LLMApiRequestBody['dashboardParams'];
   promptFileIds?: string[];
   questId?: string; // If we want to retry a quest response we pass the questId
+  // Correct-and-retry target. Distinct from `questId`: that re-runs a quest in place, this
+  // sends a new turn carrying the user's correction and links it to the answer it corrects.
+  correctsQuestId?: string;
   enableQuestMaster?: boolean;
   enableMementos?: boolean;
   enableArtifacts?: boolean;
@@ -40,6 +45,8 @@ export type CommandArgExtra = {
   projectId?: string;
   organizationId?: string | null;
   researchMode?: LLMApiRequestBody['researchMode'];
+  /** Suppresses the server-side tool auto-offers for this turn. See LLMContext.skipAutoOffers. */
+  skipAutoOffers?: LLMApiRequestBody['skipAutoOffers'];
   deepResearchConfig?: {
     maxDepth?: number;
     duration?: number;
@@ -59,7 +66,7 @@ export type CommandArgExtra = {
 };
 
 export type CommandKey =
-  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent';
+  '/llm' | '/roll' | '/key' | '/models' | '/gen_image' | '/gen_video' | '/edit_image' | '/create_agent' | '/feedback';
 
 export type CommandHandlers = {
   [key in CommandKey]?: (args: any) => Promise<void | { session: ISessionDocument; quest: IChatHistoryItemDocument }>;
@@ -98,6 +105,7 @@ export const extractCommandAndParams = (
   // Check if input starts with a known command - if so, don't modify it
   const knownCommands = [
     '/create_agent',
+    '/feedback',
     '/llm',
     '/roll',
     '/key',

@@ -4,7 +4,6 @@ import type {
   ContentBlock,
   RawMessageStreamEvent,
   Tool,
-  MessageParam,
 } from '@anthropic-ai/sdk/resources/messages';
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
@@ -39,6 +38,7 @@ import {
 } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
+import { toAnthropicContent } from './anthropicContent';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
 import {
   buildThinkingParams,
@@ -47,7 +47,7 @@ import {
   type ThinkingConfig,
 } from './thinkingParams';
 import { DispatchModel } from './dispatchModel';
-import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
+import { acquireSlot, type SlotRelease } from './_anthropicSemaphore';
 import {
   createDegenerateStreamGuard,
   DEGENERATE_STREAM_STOP_REASON,
@@ -937,19 +937,17 @@ export class AnthropicBackend implements ICompletionBackend {
             modelInfo: currentModelInfo,
             // Passed through as-is, matching cliCompletions: the declared `number` type is a
             // claim about catalog data, not a guarantee, and resolveOutputMaxTokens absorbs
-            // an absent cap so neither call site has to invent its own fallback. See that
-            // call site for why toModelInfo's derived substitution is the actual gap.
+            // both an absent cap and a merely derived one, so neither call site has to
+            // invent its own fallback.
             modelMaxOutputTokens: currentModelInfo.max_tokens,
           })
         : (options.maxTokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS),
       messages: filteredMessages.map(m => ({
         role: m.role === 'user' ? 'user' : 'assistant',
-        // Preserve the content structure - it can be string or MessageContentObject[].
         // Per-message cache stamping happened in `cacheStampedMessages` above; the
-        // cache_control survives sanitization because it's part of the content blocks.
-        // Internal message content (string | MessageContentObject[]) is structurally
-        // the SDK's accepted content shape; widen to it at this API boundary.
-        content: m.content as unknown as MessageParam['content'],
+        // cache_control survives both sanitization and this translation because it's
+        // part of the content blocks.
+        content: toAnthropicContent(m.content, this.logger),
       })),
       // Claude 4.7 Opus does not accept temperature at all
       ...(this.omitsSamplingParams(model) ? {} : { temperature: options.temperature }),
@@ -1183,11 +1181,16 @@ export class AnthropicBackend implements ICompletionBackend {
           let degenerateVerdict: DegenerateStreamVerdict | undefined;
 
           (async () => {
-            // Acquire semaphore slot before the API call. Released in the finally
-            // block below after the stream is fully consumed (or on any error),
-            // so the slot accurately reflects the real Anthropic connection lifetime.
-            await acquireSlot();
+            // Acquire a semaphore slot before the API call, released in the finally
+            // below once the stream is fully consumed (or on any error), so the slot
+            // reflects the real Anthropic connection lifetime. Scheduled fairly per
+            // tenant (keyed on the hashed end-user id) and abortable: the acquire lives
+            // INSIDE the try so an abort while waiting for a slot flows through the same
+            // benign-abort handling as an abort during the call, and a waiter that
+            // aborts leaves the queue instead of consuming a slot it can no longer use.
+            let release: SlotRelease | undefined;
             try {
+              release = await acquireSlot({ tenantKey: this._endUserId, signal: combinedSignal });
               // Diagnostic logging: Capture payload size to help debug hanging issues
               const payloadForSize = { ...apiParams, stream: true };
               const payloadSizeBytes = Buffer.byteLength(JSON.stringify(payloadForSize), 'utf8');
@@ -1697,7 +1700,7 @@ export class AnthropicBackend implements ICompletionBackend {
                 reject(error);
               }
             } finally {
-              releaseSlot();
+              release?.();
             }
           })();
         });
@@ -1954,12 +1957,14 @@ export class AnthropicBackend implements ICompletionBackend {
         }
       } else {
         // Non-streaming path
-        // Acquire semaphore slot for the API call. For non-streaming, the full
-        // response body is received when the call resolves, so we release
-        // immediately after.
-        await acquireSlot();
+        // Acquire a semaphore slot for the API call (scheduled fairly per tenant,
+        // abortable while waiting). Non-streaming receives the full body on resolve,
+        // so the slot releases immediately after. Acquire lives inside the try so an
+        // abort while waiting propagates to generateResponse's outer abort handling.
         let response;
+        let release: SlotRelease | undefined;
         try {
+          release = await acquireSlot({ tenantKey: this._endUserId, signal: options.abortSignal });
           // Wrap with retry for transient network errors (TLS abort, fetch terminated)
           response = await withRetry(
             () =>
@@ -1978,7 +1983,7 @@ export class AnthropicBackend implements ICompletionBackend {
             }
           ).then(r => r.result);
         } finally {
-          releaseSlot();
+          release?.();
         }
         const streamedText: string[] = [];
 

@@ -80,6 +80,9 @@ function getProcessPickupTime(quest: IChatHistoryItemDocument): number | undefin
   return new Date(processingTimeLog.timestamp).getTime() - quest.createdAt.getTime();
 }
 
+// Cached for 12h under a key that carries PAYLOAD_VERSIONS.modelMetrics
+// (server/utils/cacheKeys.ts). Change the shape or the values this projects and
+// bump that entry, or deployed instances keep serving the old projection.
 async function fetchModelMetrics(filters: ModelMetricsFilters): Promise<ModelMetricResponse[]> {
   const { dateFrom, dateTo, userFilter, modelFilter, statusFilter } = filters;
 

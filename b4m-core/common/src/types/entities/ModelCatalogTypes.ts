@@ -326,6 +326,9 @@ export const MODEL_INFO_FIELD_GROUP_OF: Record<
 
   contextWindow: 'limits',
   max_tokens: 'limits',
+  // Rides with the cap it describes: a row owning {limits} must replace both, or an
+  // overlay would leave the previous source's derived/declared verdict on a new cap.
+  maxOutputTokensDerived: 'limits',
 
   can_think: 'reasoning',
   thinkingStyle: 'reasoning',
@@ -732,6 +735,17 @@ export const DiscoveryPriceSkip = z.object({
   reason: z.string(),
 });
 
+/**
+ * A configured source the run never attempted, and why. Produced by
+ * `skipReasonFor` in runModelDiscovery (services/modelDiscoveryService); the
+ * reason stays a plain string rather than that module's SourceSkipReason union
+ * so a new reason needs no schema or UI change.
+ */
+export const DiscoverySkippedSource = z.object({
+  name: z.string().min(1),
+  reason: z.string(),
+});
+
 export const DiscoveryLifecycleTransition = z.object({
   modelId: z.string().min(1),
   /** Absent when no row in force carried a lifecycle for this model. */
@@ -782,6 +796,7 @@ export type IDiscoveryPriceFlag = z.infer<typeof DiscoveryPriceFlag>;
 export type IDiscoveryPlannedPriceRow = z.infer<typeof DiscoveryPlannedPriceRow>;
 export type IDiscoveryPriceOverride = z.infer<typeof DiscoveryPriceOverride>;
 export type IDiscoveryPriceSkip = z.infer<typeof DiscoveryPriceSkip>;
+export type IDiscoverySkippedSource = z.infer<typeof DiscoverySkippedSource>;
 export type IDiscoveryLifecycleTransition = z.infer<typeof DiscoveryLifecycleTransition>;
 export type IDiscoveryCatalogDiffEntry = z.infer<typeof DiscoveryCatalogDiffEntry>;
 export type IDiscoveryRunDetailTotals = z.infer<typeof DiscoveryRunDetailTotals>;
@@ -803,6 +818,8 @@ export const ModelDiscoveryRun = z.object({
    */
   mode: z.enum(DISCOVERY_RUN_MODES).optional(),
   sources: z.array(DiscoverySourceReport).optional(),
+  /** Configured sources this run never attempted; disjoint from `sources`. */
+  skippedSources: z.array(DiscoverySkippedSource).optional(),
   joinCoverage: z.array(DiscoveryJoinCoverage).optional(),
   /** Ids no aggregator matched: a work item, not a log line. */
   unmatchedIds: z.array(z.string()).optional(),

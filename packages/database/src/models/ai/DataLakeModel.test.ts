@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import type { AccessContext, DataLakeStatus, IDataLake } from '@bike4mind/common';
+import type { AccessContext, BatchFileStatus, DataLakeStatus, IDataLake } from '@bike4mind/common';
 import { lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { dataLakeRepository, dataLakeBatchRepository, DataLakeModel } from './DataLakeModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -271,6 +271,43 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
   });
 });
 
+describe('DataLakeRepository.findIdsCreatedBy', () => {
+  setupMongoTest();
+
+  it('returns the ids of every lake the user created, in any status, and nothing else', async () => {
+    // Any status on purpose: it is the candidate set for the owner-arm exclusion, and the archived,
+    // deleted and transitional views each query a different one.
+    const active = await dataLakeRepository.create(baseLake({ slug: 'active', createdByUserId: 'alice' }));
+    const archived = await dataLakeRepository.create(
+      baseLake({ slug: 'archived', createdByUserId: 'alice', status: 'archived' })
+    );
+    await dataLakeRepository.create(baseLake({ slug: 'bobs', createdByUserId: 'bob' }));
+
+    expect((await dataLakeRepository.findIdsCreatedBy('alice')).sort()).toEqual([active.id, archived.id].sort());
+    expect(await dataLakeRepository.findIdsCreatedBy('nobody')).toEqual([]);
+  });
+
+  it('returns plain id strings, comparable to the ids the rest of the service layer passes around', async () => {
+    // The exclusion set is compared against `lake.id` (a string) in the service layer and cast back
+    // to `_id` in the query, so an ObjectId leaking out here would break the first and not the second.
+    const lake = await dataLakeRepository.create(baseLake({ slug: 'mine', createdByUserId: 'alice' }));
+    const ids = await dataLakeRepository.findIdsCreatedBy('alice');
+
+    expect(ids).toEqual([lake.id]);
+    expect(typeof ids[0]).toBe('string');
+  });
+
+  it('never treats a blank caller id as a creator', async () => {
+    // Inserted past the model, because `createdByUserId` is `required` and so rejects '' today. A
+    // row like this is what a legacy write or a repair script leaves behind, and without the guard
+    // `{ createdByUserId: '' }` is a perfectly good query that hands every one of them to a caller
+    // who has no id at all.
+    await DataLakeModel.collection.insertOne({ ...baseLake({ slug: 'orphan' }), createdByUserId: '' });
+
+    expect(await dataLakeRepository.findIdsCreatedBy('')).toEqual([]);
+  });
+});
+
 describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/management path)', () => {
   setupMongoTest();
 
@@ -304,6 +341,60 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
     expect(
       (await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }), { grantedLakeIds: [lake.id] })).map(l => l.slug)
     ).toEqual(['transferred']);
+  });
+
+  it('the owner arm stops at creator provenance once ownership has moved off the creator', async () => {
+    // Alice creates an org lake, then leaves orgA. The departure
+    // hand-off mints an owner grant for a successor and lapses hers, so she is no longer the
+    // EFFECTIVE owner (resolveEffectiveOwnerIds) - but `createdByUserId` never changes, which is
+    // what kept the row in her list after the by-id gate had started refusing her.
+    const lake = await dataLakeRepository.create(
+      baseLake({ slug: 'handed-on', createdByUserId: 'alice', organizationId: 'orgA' })
+    );
+    const departedAlice = ctx({ userId: 'alice', organizationIds: [] });
+
+    // The bug, pinned: with no exclusion set the bare provenance arm still hands her the row, so a
+    // caller that forgets to resolve one gets the old behavior rather than a silent pass.
+    expect((await dataLakeRepository.findAccessible(departedAlice)).map(l => l.slug)).toEqual(['handed-on']);
+
+    expect(await dataLakeRepository.findAccessible(departedAlice, { supersededOwnLakeIds: [lake.id] })).toEqual([]);
+  });
+
+  it('supersession narrows the owner arm alone - every other claim on the same lake survives it', async () => {
+    const lake = await dataLakeRepository.create(
+      baseLake({ slug: 'handed-on', createdByUserId: 'alice', organizationId: 'orgA' })
+    );
+
+    // Demoted, not evicted: `transferLakeOwnership` leaves the prior owner a curator grant, and a
+    // curator must keep seeing the lake. The grant arm is an $or sibling, so the exclusion on the
+    // owner arm cannot reach it.
+    expect(
+      (
+        await dataLakeRepository.findAccessible(ctx({ userId: 'alice' }), {
+          supersededOwnLakeIds: [lake.id],
+          grantedLakeIds: [lake.id],
+        })
+      ).map(l => l.slug)
+    ).toEqual(['handed-on']);
+
+    // Still in the org: the org arm carries her, exactly as it carries any other orgA member.
+    expect(
+      (
+        await dataLakeRepository.findAccessible(ctx({ userId: 'alice', organizationIds: ['orgA'] }), {
+          supersededOwnLakeIds: [lake.id],
+        })
+      ).map(l => l.slug)
+    ).toEqual(['handed-on']);
+
+    // And it narrows nobody else: the exclusion is ANDed onto `createdByUserId`, so an id in the
+    // set that the caller did not create is inert rather than a hole punched in their access.
+    expect(
+      (
+        await dataLakeRepository.findAccessible(ctx({ userId: 'bob', organizationIds: ['orgA'] }), {
+          supersededOwnLakeIds: [lake.id],
+        })
+      ).map(l => l.slug)
+    ).toEqual(['handed-on']);
   });
 
   it('the ORG-grant arm lifts the gate only inside the GRANTING org, for a caller in both orgs', async () => {
@@ -1589,6 +1680,109 @@ describe('DataLakeBatchRepository.revertFileFailure - the exit from failed', () 
       errorPrefix: PREFIX,
     });
     expect(updated?.failedFiles).toBe(0);
+  });
+});
+
+// What this write must NOT touch is the point of it, and a mocked caller can only assert the call.
+// `failureCounted` is the per-entry attribution revertFileFailure hands the counters back by, and
+// the 'failed' scope is what keeps a superseding verdict from stamping an error onto an entry that
+// carries no charge - both live inside the query, so only a real server can show them holding.
+describe('DataLakeBatchRepository.supersedeFileError - error text and nothing else', () => {
+  setupMongoTest();
+
+  const PREFIX = 'Could not hand off for vector indexing';
+
+  const batchWithEntry = async (status: BatchFileStatus, error?: string) => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 1 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [{ fabFileId: 'ff1', fileName: 'a.pdf', status, error }]);
+    return batch;
+  };
+
+  it('rewrites the error on a failed entry', async () => {
+    const batch = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ff1', `${PREFIX}: Reprocess it`);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBe(`${PREFIX}: Reprocess it`);
+    expect(fresh?.files[0].status).toBe('failed');
+  });
+
+  // The counters were charged against the OUTGOING failure, and this flag is how revertFileFailure
+  // knows they were. updateFileStatus would restamp it false, which makes the revert decline and
+  // reintroduces the double charge from the other side - so this write must leave it where it is.
+  it('leaves the failureCounted attribution untouched', async () => {
+    const batch = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+    await dataLakeBatchRepository.markFailureCounted(batch.id, 'ff1', true);
+
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ff1', `${PREFIX}: Reprocess it`);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].failureCounted).toBe(true);
+  });
+
+  // Drop `status: 'failed'` from the filter and this entry gets an error string contradicting its
+  // own status - a completed file rendered as failed, with no failure to revert it.
+  it('refuses to stamp an entry that is not failed', async () => {
+    const batch = await batchWithEntry('complete');
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ff1', `${PREFIX}: Reprocess it`);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBeUndefined();
+    expect(fresh?.files[0].status).toBe('complete');
+  });
+
+  // The $elemMatch is what makes the two conditions describe ONE entry. Split them across dotted
+  // paths (`'files.fabFileId'` + `'files.status'`) and Mongo satisfies them from DIFFERENT elements:
+  // the batch below matches because ffB exists and ffA is failed, and the positional `files.$` then
+  // binds to the wrong entry - stamping ffB's refusal reason onto ffA, a file that failed for its
+  // own reason and whose counters are attributed to it. A single-entry case cannot show this, which
+  // is why the no-op case above passes under both forms.
+  it('does not satisfy its two conditions from two different entries', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 2 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [
+      { fabFileId: 'ffA', fileName: 'a.pdf', status: 'failed', error: 'Chunking failed: corrupt PDF' },
+      { fabFileId: 'ffB', fileName: 'b.pdf', status: 'complete' },
+    ]);
+
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ffB', `${PREFIX}: Reprocess it`);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBe('Chunking failed: corrupt PDF'); // ffA keeps its own reason
+    expect(fresh?.files[1].error).toBeUndefined(); // ffB was never eligible
+  });
+
+  it('stamps the right entry when the batch carries several', async () => {
+    const batch = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', totalFiles: 2 } as never);
+    await dataLakeBatchRepository.appendFiles(batch.id, [
+      { fabFileId: 'ffA', fileName: 'a.pdf', status: 'complete' },
+      { fabFileId: 'ffB', fileName: 'b.pdf', status: 'failed', error: 'Chunking failed: corrupt PDF' },
+    ]);
+
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ffB', `${PREFIX}: Reprocess it`);
+
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBeUndefined();
+    expect(fresh?.files[1].error).toBe(`${PREFIX}: Reprocess it`);
+  });
+
+  it('is a no-op for a fabFileId this batch does not carry', async () => {
+    const batch = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+    await dataLakeBatchRepository.supersedeFileError(batch.id, 'ff-other', `${PREFIX}: Reprocess it`);
+    const fresh = await dataLakeBatchRepository.findById(batch.id);
+    expect(fresh?.files[0].error).toBe('Chunking failed: corrupt PDF');
+  });
+
+  // The `_id: batchId` conjunct, which none of the cases above reach: every one of them varies the
+  // entry WITHIN one batch, so dropping the batch scope leaves them all green. The same fabFileId
+  // in two batches is the ordinary shape here - re-running a lake appends a fresh manifest over the
+  // same files - and unscoped, updateOne stamps whichever batch it reaches first, landing one
+  // batch's refusal reason on another batch's entry.
+  it('does not stamp an identically-shaped entry in another batch', async () => {
+    const other = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+    const target = await batchWithEntry('failed', 'Chunking failed: corrupt PDF');
+
+    await dataLakeBatchRepository.supersedeFileError(target.id, 'ff1', `${PREFIX}: Reprocess it`);
+
+    expect((await dataLakeBatchRepository.findById(target.id))?.files[0].error).toBe(`${PREFIX}: Reprocess it`);
+    expect((await dataLakeBatchRepository.findById(other.id))?.files[0].error).toBe('Chunking failed: corrupt PDF');
   });
 });
 

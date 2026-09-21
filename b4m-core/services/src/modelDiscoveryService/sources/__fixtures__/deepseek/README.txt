@@ -1,10 +1,9 @@
-CONSTRUCTED, not captured: GET /models needs a live DeepSeek key and none was
-available. The field set (id/object/owned_by, nothing else) comes from the
-vendor's own API reference (api-docs.deepseek.com, read 2026-09-13), which
-documents no context window, capability flag or pricing on this endpoint.
-deepseek-flash is the id that reference states; deepseek-chat and
-deepseek-reasoner, the prior generation, were hard-retired 2026-07-24 and are
-deliberately absent from models.json.
+Captured from a live GET /models on 2026-09-14. The vendor returns only
+id/object/owned_by on this endpoint - no context window, capability flag or
+pricing. deepseek-flash and deepseek-v4-pro are the two ids in the listing;
+deepseek-chat and deepseek-reasoner, the prior generation, no longer appear in
+it, though POST /chat/completions still accepts both and nothing in this build
+routes to either.
 
 unknown-namespace.json pins the same fail-closed behavior kimi's does: a
 modality marker wins over the one deepseek- namespace, and a non-'model'

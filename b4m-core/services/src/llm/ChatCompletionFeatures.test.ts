@@ -7,7 +7,6 @@ import {
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
   LakeMemoryFeature,
-  FORCED_RETRIEVAL_SETTING_KEYS,
 } from './ChatCompletionFeatures';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
@@ -15,6 +14,7 @@ import {
   UNLIMITED_HISTORY_COUNT,
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SETTING_KEYS,
   LAKE_RECALL_K_DEFAULT,
   SettingScopeLevel,
 } from '@bike4mind/common';
@@ -1072,7 +1072,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   });
 
   it('grades a text-embedding-3-small corpus against its own floor, not the ada-002 default', async () => {
-    // 0.707 cosine clears 3-small's 35% floor but sits under the 75% ada-002 default - if the
+    // 0.707 cosine clears 3-small's 58% floor but sits under the 75% ada-002 default - if the
     // absolute floor were still hardcoded, this chunk would be rejected and the turn would abstain.
     const ctx = makeCtx({
       files: [
@@ -1094,7 +1094,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       files: [
         { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-large', vectorizedChunkCount: 1 },
       ],
-      // cosine([1,4],[1,0]) = 1/sqrt(17) = 0.243 - well under both the 75% default and 3-small's 35%.
+      // cosine([1,4],[1,0]) = 1/sqrt(17) = 0.243 - well under both the 75% default and 3-small's 58%.
       rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'weakly related content', vector: [1, 4] }],
     });
     const { content } = await run(ctx);
@@ -1110,9 +1110,9 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   });
 
   it('an operator-configured absolute floor is honored verbatim, not replaced by the by-space table', async () => {
-    // 3-small's table entry is 35%, which this chunk's 0.707 cosine clears easily. But the operator
+    // 3-small's table entry is 58%, which this chunk's 0.707 cosine clears easily. But the operator
     // explicitly dialed the setting to 90%, and that value must win outright - substituting the
-    // table's 35% here would silently discard a value someone deliberately tuned.
+    // table's 58% here would silently discard a value someone deliberately tuned.
     const ctx = makeCtx({
       files: [
         { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },
@@ -2352,7 +2352,9 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       user: { id: 'u1', organizationId: opts.scoped ? 'org1' : undefined, tags: [], groups: [] },
       db: {
-        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        // #2769: readForcedRetrievalSettings now verifies organizationId against membership before
+        // trusting it - a verified member of 'org1' whenever the fixture claims that pointer.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(opts.scoped ? ['org1'] : []) },
         fabfiles: {
           search: vi
             .fn()
@@ -2481,6 +2483,19 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
     expect(bodyLen(content)).toBe(9_000);
   });
 
+  it('falls back to the platform value, without throwing, when the membership lookup itself fails (#2769)', async () => {
+    // A transient org-repo outage must not fail the whole turn over a budget that's tolerable to
+    // get wrong - it degrades exactly like a non-member: the org override must not apply.
+    const ctx = makeCtx({
+      getSettingsValue: platformBudgetOnly('2000'),
+      chunkText: 'z'.repeat(30_000),
+      scoped: { orgOverride: '9000' },
+    });
+    ctx.db.organizations.findMembershipOrgIds = vi.fn().mockRejectedValue(new Error('org repo unavailable'));
+    const content = await run(ctx);
+    expect(bodyLen(content)).toBe(2_000);
+  });
+
   it('falls through to the platform value when the overlay holds no override (#2572)', async () => {
     // The common case on a scoped-overlay host: an org with nothing overridden must not lose the
     // platform value, which is what a resolver bug that treated "no override" as "unset" would do.
@@ -2527,7 +2542,9 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as unknown as Logger,
       user: { id: 'u1', organizationId: 'org1', tags: [], groups: [] },
       db: {
-        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        // #2769: readForcedRetrievalSettings now verifies organizationId against membership before
+        // trusting it - every fixture here claims 'org1', so a verified member of it.
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
         fabfiles: {
           search: vi
             .fn()
@@ -2602,6 +2619,79 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     // 85% of 1.0, so the 0.80 and 0.76 tail is dropped while the head is kept.
     const { injected } = await run(makeCtx({ scores: [1.0, 0.9, 0.8, 0.76] }));
     expect(injected).toEqual([0, 1]);
+  });
+
+  it('leaves the spread floor off by default, so the shipped behavior is the two floors alone', async () => {
+    // The mechanism ships inert: no magnitude has been measured for it yet, and an unmeasured
+    // default on the always-on retrieval path is the failure the floor constants warn about.
+    const { injected } = await run(makeCtx({ scores: [0.914, 0.9, 0.85, 0.8025] }));
+    expect(injected).toEqual([0, 1, 2, 3]);
+  });
+
+  it('cuts on the spread floor where the other two admit the whole collapsed band', async () => {
+    // THE case this ticket is about. All four scores clear the 0.75 absolute floor, and 85% of the
+    // 0.914 top is 0.777 - below the whole band - so both shipped floors admit everything and the
+    // char budget is the only thing that could stop. The median of the four is 0.875, so the span
+    // is 0.039 and a 50% spread floor cuts at 0.8945, keeping the two leaders.
+    const { injected } = await run(
+      makeCtx({ scores: [0.914, 0.9, 0.85, 0.8025], platform: { forcedRetrievalSpreadFloorPct: '50' } })
+    );
+    expect(injected).toEqual([0, 1]);
+  });
+
+  it('admits a different count for a different score shape at one spread floor', async () => {
+    // The acceptance criterion in one assertion: same floors, same corpus size, different question.
+    // A question whose answer stands out admits one passage; a question the corpus answers
+    // diffusely admits three. Neither of the other two floors can produce this - both are functions
+    // of the top score alone, so at a fixed setting they cut the same fraction of any band.
+    //
+    // The other two floors are turned off here so the difference cannot be attributed to them, and
+    // both fixtures carry the same three low scores: a real scan reaches mostly-irrelevant chunks,
+    // which is what puts the median below the hits rather than among them.
+    const floorsOff = {
+      forcedRetrievalMinSimilarityPct: '20',
+      forcedRetrievalRelativeFloorPct: '0',
+      forcedRetrievalSpreadFloorPct: '50',
+    };
+    // Median 0.285, span 0.629, cutoff 0.5995: the standout alone.
+    const sharp = await run(makeCtx({ scores: [0.914, 0.3, 0.29, 0.28, 0.27, 0.26], platform: floorsOff }));
+    expect(sharp.injected).toEqual([0]);
+
+    // The settings cache is process-wide and keyed per scope, so the second run would otherwise
+    // resolve the first run's map - see the low-band test below for the same hazard.
+    invalidateSettingsCache();
+    invalidateScopedSettingsCache();
+
+    // Median 0.58, span 0.334, cutoff 0.747: the whole near-equal cluster survives together.
+    const diffuse = await run(makeCtx({ scores: [0.914, 0.9, 0.88, 0.28, 0.27, 0.26], platform: floorsOff }));
+    expect(diffuse.injected).toEqual([0, 1, 2]);
+  });
+
+  it('never starves a turn at any spread floor, because the cutoff cannot exceed the top score', async () => {
+    // The bound that lets this gate be applied without adding an empty-handed exit, and the reason
+    // it is safe at a value nobody has measured: its worst case is one passage, never none.
+    for (const pct of ['1', '50', '100']) {
+      invalidateSettingsCache();
+      invalidateScopedSettingsCache();
+      const { injected } = await run(
+        makeCtx({ scores: [0.914, 0.9, 0.85, 0.8025], platform: { forcedRetrievalSpreadFloorPct: pct } })
+      );
+      expect(injected.length).toBeGreaterThanOrEqual(1);
+      expect(injected[0]).toBe(0);
+    }
+  });
+
+  it('records the spread floor own effect and the background it measured against', async () => {
+    // `post - postSpread` has to be the spread floor and nothing else, and `backgroundScore` has to
+    // be recorded even where the floor is off - that distribution is what a value is chosen from.
+    const { quest } = await run(
+      makeCtx({ scores: [0.914, 0.9, 0.85, 0.8025], platform: { forcedRetrievalSpreadFloorPct: '50' } })
+    );
+    const injected = quest.promptMeta?.retrieval?.injected;
+    expect(injected?.preRelativeFloorCandidates).toBe(4);
+    expect(injected?.postRelativeFloorCandidates).toBe(4);
+    expect(injected?.postSpreadFloorCandidates).toBe(2);
+    expect(injected?.backgroundScore).toBeCloseTo(0.875, 5);
   });
 
   it('changes nothing at its shipped default on the band this issue was measured against', async () => {
@@ -2748,6 +2838,26 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
     });
     const { injected } = await run(ctx);
     // Degrades to FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT rather than to "no floor" or a throw.
+    expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
+    expect(injected).toEqual([0, 1]);
+  });
+
+  it('reads a whitespace-only relative floor as unset rather than as a floor of 0', async () => {
+    // An admin who clears the field can leave '   ' behind, and `Number('   ')` is 0 - the
+    // DISABLED value for this floor - so without the trim in `nonNegativeIntOr` a cleared row
+    // removes the floor instead of restoring the default, keeping all four passages rather than the
+    // two that clear 85.
+    //
+    // `withScopedOverlay: false` is load-bearing, not incidental: this pins the PLATFORM read path,
+    // the only one the trim can defend. On the scoped path `z.coerce.number()` has already turned
+    // '   ' into the number 0 before the helper sees it, so no string-level fix reaches that case.
+    const { injected } = await run(
+      makeCtx({
+        scores: [1.0, 0.9, 0.8, 0.76],
+        platform: { forcedRetrievalRelativeFloorPct: '   ' },
+        withScopedOverlay: false,
+      })
+    );
     expect(FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT).toBe(85);
     expect(injected).toEqual([0, 1]);
   });
@@ -3694,13 +3804,16 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // A recorded zero, not an unknown: the scan ran to completion, so nothing was injected and
     // that is a fact. `topScore` must be ABSENT - it is still the -1 sentinel here, and persisting
     // it would read as a real (terrible) similarity rather than as no comparison at all.
-    // Both candidate counts are 0 too - nothing was ever scored, so nothing entered the pool, and
-    // a relative floor over an empty pool leaves it empty.
+    // All three candidate counts are 0 too - nothing was ever scored, so nothing entered the pool,
+    // and a per-turn floor over an empty pool leaves it empty. `backgroundScore` is absent for the
+    // same reason as `topScore`: no score was computed, so there is no distribution to take a
+    // median of, and a 0 there would read as a measured background.
     expect(retrieval?.injected).toEqual({
       chunks: 0,
       chars: 0,
       preRelativeFloorCandidates: 0,
       postRelativeFloorCandidates: 0,
+      postSpreadFloorCandidates: 0,
     });
   });
 
@@ -3715,15 +3828,19 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // THE case this field exists for: 'ok' alone made a fully-starved turn byte-identical to one
     // that injected its whole budget. `topScore: 0` is the diagnostic - the best candidate was
     // compared and scored 0, i.e. it missed the floor rather than never being looked at.
-    // Both counts 0 - the score missed the ABSOLUTE floor, so it never reached the ranked pool at
-    // all and the relative floor never got a candidate to trim. This is the exit whose comment
+    // All counts 0 - the score missed the ABSOLUTE floor, so it never reached the ranked pool at
+    // all and neither per-turn floor got a candidate to trim. This is the exit whose comment
     // used to claim it was the trimmed-pool case; a zero pre-count is what proves it is not.
+    // `backgroundScore` IS present, unlike the not_indexed case above: a chunk was compared and
+    // scored, so the median of the scored set exists even though nothing survived the floor.
     expect(retrieval?.injected).toEqual({
       chunks: 0,
       chars: 0,
       topScore: 0,
       preRelativeFloorCandidates: 0,
       postRelativeFloorCandidates: 0,
+      postSpreadFloorCandidates: 0,
+      backgroundScore: 0,
     });
     // Still abstains to the user; 'ok' describes the retrieval, not the answer.
     expect(messages[0]?.content).toContain('does not cover this');
@@ -3740,14 +3857,17 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
     // The other half of the pair: a grounded turn reports the volume it grounded on. `chars` is
     // the chunk text only ('text fileA'), never the heading, so it is comparable to the knowledge
     // tools' number. Query and chunk vectors are identical here, hence a topScore of 1.
-    // Both counts 1 - the single candidate cleared both floors, so nothing was trimmed and the
-    // pre-count, post-count and `chunks` all agree.
+    // All counts 1 - the single candidate cleared every floor, so nothing was trimmed and the
+    // pre-counts, post-counts and `chunks` all agree. `backgroundScore` is 1 for the same reason
+    // `topScore` is: one chunk was scored, and the median of a single score is that score.
     expect(retrieval?.injected).toEqual({
       chunks: 1,
       chars: 'text fileA'.length,
       topScore: 1,
       preRelativeFloorCandidates: 1,
       postRelativeFloorCandidates: 1,
+      postSpreadFloorCandidates: 1,
+      backgroundScore: 1,
     });
     expect(messages[0]?.content).toContain('### A.pdf (ID: fileA)');
   });

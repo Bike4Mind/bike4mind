@@ -573,7 +573,20 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     entitlementKeys: string[],
     organizationIds?: string[] | null,
     userId?: string | null,
-    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
+       * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via
+       * `supersededOwnLakeIdsForTurn`, the same seam `grantedLakeIds` uses, because the answer
+       * lives in the grant collection. It narrows ONLY that arm - a superseded creator who still
+       * holds a grant, the lake's tag, or its entitlement keeps reaching it through the arm that
+       * actually authorizes them. Absent leaves the arm at bare creator provenance, which
+       * over-matches once ownership has moved.
+       */
+      supersededOwnLakeIds?: string[];
+    }
   ): Promise<IDataLakeDocument[]>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
@@ -596,8 +609,23 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       includePublic?: boolean;
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the OWNER arm: ones the caller created but no longer effectively owns
+       * (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via `supersededOwnLakeIdsFor`, the
+       * same seam `grantedLakeIds` uses, because the answer lives in the grant collection. Absent
+       * leaves the arm at bare creator provenance, which over-matches once ownership has moved -
+       * every list caller should pass it.
+       */
+      supersededOwnLakeIds?: string[];
     }
   ): Promise<IDataLakeDocument[]>;
+
+  /**
+   * Ids of every lake the given user CREATED, in any status. The candidate set `supersededOwnLakeIdsFor`
+   * joins against the grant collection to decide which of them ownership has moved off; creator
+   * provenance alone answers nothing about ownership, which is why this returns bare ids.
+   */
+  findIdsCreatedBy(userId: string): Promise<string[]>;
   /**
    * The discover/browse catalog: active, PUBLIC lakes the given caller can actually reach.
    * Deliberately PER-CALLER, not one catalog for everyone: it applies the same gate as
@@ -619,6 +647,16 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       offset?: number;
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the CREATOR arm: ones the caller created but no longer effectively
+       * owns (`resolveEffectiveOwnerIds`). Pre-resolved by the caller via
+       * `supersededOwnLakeIdsForTurn`, the same seam `grantedLakeIds` uses, because the answer
+       * lives in the grant collection. It narrows ONLY that arm - a superseded creator who still
+       * holds a grant, the lake's tag, or its entitlement keeps reaching it through the arm that
+       * actually authorizes them. Absent leaves the arm at bare creator provenance, which
+       * over-matches once ownership has moved.
+       */
+      supersededOwnLakeIds?: string[];
     }
   ): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
@@ -939,6 +977,13 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    * default is the safe one.
    */
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
+  /**
+   * Replace the error text on an already-'failed' manifest entry and nothing else, so an entry
+   * stays in step with a FabFile whose error a permanent verdict has superseded. Not
+   * updateFileStatus: that would restamp `failureCounted: false` and strip the outgoing failure's
+   * charge attribution, which revertFileFailure needs to hand those counters back.
+   */
+  supersedeFileError(batchId: string, fabFileId: string, error: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
    * created (presigned-URL issuance) so the manifest is populated incrementally.

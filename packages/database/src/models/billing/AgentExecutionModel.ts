@@ -654,6 +654,7 @@ const AgentExecutionSchema = new mongoose.Schema(
           height: { type: Number },
           aspect_ratio: { type: String },
           output_format: { type: String },
+          background: { type: String },
           prompt_upsampling: { type: Boolean },
           seed: { type: Number },
           safety_tolerance: { type: Number },

@@ -81,8 +81,8 @@ export async function authorizeSupportRead(req: SupportReadRequest): Promise<Sup
 
   const { id, supportCase } = SupportReadQuerySchema.parse(req.query);
 
-  // An id that isn't an ObjectId would make findById throw a CastError (500);
-  // treat it as "no such session" instead.
+  // An id that isn't an ObjectId names no session, so answer for it here rather than relying on
+  // the lookup layer's own screen - this route's 404 is the documented answer.
   if (!isValidObjectId(id)) {
     throw new NotFoundError('Session not found');
   }

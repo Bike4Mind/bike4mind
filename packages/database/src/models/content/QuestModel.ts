@@ -5,11 +5,41 @@ import {
   IChatHistoryItemDocument,
   PromptMeta,
   IAttachmentDelivery,
+  MessageContentObject,
 } from '@bike4mind/common';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
 
 export interface IChatHistoryItemModel extends Model<IChatHistoryItemDocument> {}
+
+/**
+ * One corrected turn as the correction-chain walk reads it. Structurally the `CorrectedTurn` shape
+ * in @bike4mind/services' buildCorrectionContext.ts plus identity - the two must stay assignable,
+ * which is what lets the service take this repository as a plain reader and stay DB-free.
+ */
+export type CorrectionLinkView = {
+  id: string;
+  sessionId: string;
+  correctsQuestId?: string | null;
+  prompt?: string;
+  reply?: string | null;
+  replies?: string[];
+  structuredReplies?: Array<{ role?: string; content?: MessageContentObject[] } | null | undefined> | null;
+  timestamp?: Date;
+};
+
+// Single source of truth for the CorrectionLinkView projection - shared by
+// findCorrectionLinksBySessionId and findCorrectionTurnsByIds so the two reads cannot drift apart.
+const CORRECTION_LINK_PROJECTION = {
+  _id: 1,
+  sessionId: 1,
+  correctsQuestId: 1,
+  prompt: 1,
+  reply: 1,
+  replies: 1,
+  structuredReplies: 1,
+  timestamp: 1,
+} as const;
 
 // PromptMetaSchema must cover every path in PromptMetaZodSchema (@bike4mind/common), minus a
 // short deliberate exclusion list. Mongoose runs strict, so an undeclared subpath is dropped in
@@ -69,6 +99,8 @@ const InjectedVolumeSchema = subSchema({
   topScore: { type: Number, required: false },
   preRelativeFloorCandidates: { type: Number, required: false },
   postRelativeFloorCandidates: { type: Number, required: false },
+  postSpreadFloorCandidates: { type: Number, required: false },
+  backgroundScore: { type: Number, required: false },
 });
 
 // Written by the offline answerability replay, not by the turn - see the field's comment in
@@ -101,6 +133,9 @@ const RetrievalSummarySchema = subSchema({
   forcedSkipReason: { type: String, required: false },
   surfaces: [{ type: String, required: false }],
   dataLakeTags: [{ type: String, required: false }],
+  // The subset of dataLakeTags that actually contributed files - see the Zod field's doc for why
+  // absent means "attribution inconclusive", not "no lake contributed".
+  dataLakeTagsWithCandidates: [{ type: String, required: false }],
   // default: undefined for the same auto-vivification reason as dataLakeTags above - and here it
   // also preserves the presence contract the offline replay depends on: absence means the turn's
   // scope was never recorded, which a materialized empty array would report as "no lake in scope".
@@ -252,6 +287,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         prompt_upsampling: { type: Boolean, required: false },
         seed: { type: Number, required: false },
         output_format: { type: String, required: false },
+        background: { type: String, required: false },
         response_format: { type: String, required: false },
         seconds: { type: Number, required: false },
         model: { type: String, required: false },
@@ -489,6 +525,11 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     // AgentExecution doc so the chat-history disclosure can lazy-load the
     // iteration trace on demand.
     agentExecutionId: { type: String, required: false },
+    // Set when this turn corrects an earlier one (correct-and-retry). Points at the PREVIOUS
+    // attempt, so the chain walks backwards through every retry. Must stay in sync with
+    // `IChatHistoryItem.correctsQuestId` - a field declared only on the type is dropped on write
+    // by Mongoose strict mode, with no error.
+    correctsQuestId: { type: String, required: false },
     // Provenance of the routing decision that produced this quest.
     // Drives the `AutoRouteBadge` rendering above auto-routed responses
     // (classifier- or rule-based complexity-routed).
@@ -711,10 +752,60 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
   }
 
   async findBySessionIdAndId(sessionId: string, id: string) {
+    // A non-ObjectId id can never address a row - report no such row, not a CastError the
+    // calling route cannot attribute. Same contract as `BaseRepository.findById`.
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
     const result = await this.model.findOne({ sessionId, _id: id });
     if (!result) return null;
     const doc = result.toJSON();
     return { ...doc } as IChatHistoryItemDocument;
+  }
+
+  /**
+   * The live corrected turns of one session, oldest first: the quests that point at an earlier
+   * attempt through `correctsQuestId`, soft-deleted ones excluded. `limit` caps the export the
+   * route serves; omitted, the whole session comes back.
+   *
+   * The `sessionId_correctsQuestId` index serves the match, not the sort: `correctsQuestId` is a
+   * range bound ahead of `timestamp`, so the sort runs in memory over the corrected turns of one
+   * session, which is what the index keeps small.
+   *
+   * Projected to the prose the eval-pair walk quotes (`buildCorrectionPairs` in
+   * @bike4mind/services). promptMeta, toolResults and images are left out on purpose: this feeds
+   * an export of verbatim prompts and answers, so widen the projection only together with the
+   * consumer's redaction decision.
+   */
+  async findCorrectionLinksBySessionId(sessionId: string, limit?: number): Promise<CorrectionLinkView[]> {
+    // limit: 0 means "return nothing" to the caller, but Mongo's .limit(0) means "no limit" -
+    // so it must be short-circuited before the query runs rather than passed through.
+    if (limit === 0) return [];
+    const query = this.model
+      .find({ sessionId, correctsQuestId: { $nin: [null, ''] }, deletedAt: null }, CORRECTION_LINK_PROJECTION)
+      // Stable oldest-first: the walk emits one pair per hop in the order the corrections happened,
+      // and turns can share a millisecond.
+      .sort({ timestamp: 1, _id: 1 })
+      .lean<Array<Omit<CorrectionLinkView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    const docs = await ((limit ?? 0) > 0 ? query.limit(limit as number) : query);
+    return docs.map(({ _id, ...rest }) => ({ ...rest, id: _id.toString() }));
+  }
+
+  /**
+   * Batched, session-scoped read of specific corrected turns by id - the chain-root lookup a
+   * correction-pairs walk needs for each hop, sharing CORRECTION_LINK_PROJECTION with
+   * findCorrectionLinksBySessionId so the two cannot drift apart. Soft-deleted rows are excluded.
+   * An empty/undefined `ids` and any id that is not a valid ObjectId are both skipped rather than
+   * letting a cast throw on caller-controlled input.
+   */
+  async findCorrectionTurnsByIds(sessionId: string, ids: string[]): Promise<CorrectionLinkView[]> {
+    const objectIds = (ids ?? [])
+      .filter(id => mongoose.isObjectIdOrHexString(id))
+      .map(id => new mongoose.Types.ObjectId(id));
+    if (objectIds.length === 0) return [];
+
+    const docs = await this.model
+      .find({ sessionId, _id: { $in: objectIds }, deletedAt: null }, CORRECTION_LINK_PROJECTION)
+      .lean<Array<Omit<CorrectionLinkView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
+    return docs.map(({ _id, ...rest }) => ({ ...rest, id: _id.toString() }));
   }
 
   async findAllBySessionId(sessionId: string) {
@@ -1093,6 +1184,11 @@ function initializeQuestModel() {
     // completion. Sparse because most Quests are chat_completion and
     // lack the field - a dense index would waste space on nulls.
     ChatHistoryItemSchema.index({ agentExecutionId: 1 }, { name: 'agentExecutionId', sparse: true });
+
+    // Serves the correction-chain walk (findCorrectionLinksBySessionId): the corrected turns of one
+    // session, matched on { sessionId, correctsQuestId: { $ne: null } }. Dense on purpose - sparse
+    // keys off the leading field, which every quest has, so it would index the collection anyway.
+    ChatHistoryItemSchema.index({ sessionId: 1, correctsQuestId: 1 }, { name: 'sessionId_correctsQuestId' });
 
     // Serves findStaleRunning (questTimeoutSweep cron). No existing index has a
     // usable `status` prefix - `id_status` is `{_id: 1, status: 1}` - so without

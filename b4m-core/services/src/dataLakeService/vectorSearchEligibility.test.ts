@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   isVectorSearchReady,
+  partitionByIndexResidency,
   partitionByVectorSearchReadiness,
   VECTOR_SEARCH_READY_LAG_MS,
 } from './vectorSearchEligibility';
@@ -54,5 +55,23 @@ describe('partitionByVectorSearchReadiness', () => {
 
   it('returns empty groups for an empty input', () => {
     expect(partitionByVectorSearchReadiness([], NOW)).toEqual({ annReady: [], scanOnly: [] });
+  });
+});
+
+describe('partitionByIndexResidency', () => {
+  it('splits on membership, preserving input order in each side', () => {
+    const files = [{ id: 'a' }, { id: 'b' }, { id: 'c' }, { id: 'd' }];
+
+    const { resident, absent } = partitionByIndexResidency(files, new Set(['c', 'a']));
+
+    expect(resident.map(f => f.id)).toEqual(['a', 'c']);
+    expect(absent.map(f => f.id)).toEqual(['b', 'd']);
+  });
+
+  it('treats an empty resident set as everything absent - a stamped file the index never got', () => {
+    const { resident, absent } = partitionByIndexResidency([{ id: 'a' }], new Set());
+
+    expect(resident).toEqual([]);
+    expect(absent.map(f => f.id)).toEqual(['a']);
   });
 });

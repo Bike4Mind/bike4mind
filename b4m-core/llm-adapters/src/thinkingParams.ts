@@ -1,4 +1,10 @@
-import { ChatModels, NO_TEMPERATURE_MODELS, REASONING_SUPPORTED_MODELS, type ModelInfo } from '@bike4mind/common';
+import {
+  ChatModels,
+  CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  NO_TEMPERATURE_MODELS,
+  REASONING_SUPPORTED_MODELS,
+  type ModelInfo,
+} from '@bike4mind/common';
 
 /**
  * Thinking parameter shapes for the Anthropic Messages API.
@@ -39,19 +45,25 @@ export const THINKING_ANSWER_HEADROOM_TOKENS = 1000;
  * resolves to that entire cap, which is the only value leaving room for an answer
  * after a long trace.
  *
- * DeepSeek Flash misses every clause for its own set of reasons: no
+ * Bedrock DeepSeek R1 is the same shape: its monologue is inlined into `content`
+ * (see bedrockBackend/deepseek.ts), it matches no shape check, and its 32K cap
+ * becomes the floor for the same reason.
+ *
+ * DeepSeek Flash and V4 Pro miss every clause for their own set of reasons: no
  * `thinkingStyle` (that field is Anthropic's), absent from the OpenAI-only
  * REASONING_SUPPORTED_MODELS, and DEEPSEEK_PROFILE declares plain `max_tokens`
  * rather than `max_completion_tokens` because that is the parameter DeepSeek
- * takes. It reasons on every turn by default at effort 'high', spends those
- * tokens inside `max_tokens`, and a 4096 budget against a 393K cap is consumed
- * by the monologue alone: the turn comes back `finish_reason: 'length'` with no
- * content and deepseekBackend throws.
+ * takes. Both reason on every turn by default at effort 'high', spend those
+ * tokens inside `max_tokens`, and a 4096 budget against their multi-hundred-K
+ * caps is consumed by the monologue alone: the turn comes back
+ * `finish_reason: 'length'` with no content and deepseekBackend throws.
  */
 const REASONS_WITHIN_OUTPUT_BUDGET_IDS: ReadonlySet<string> = new Set<string>([
   ChatModels.KIMI_K2_THINKING_BEDROCK,
   ChatModels.KIMI_K2_5_BEDROCK,
+  ChatModels.DEEPSEEK_R1_BEDROCK,
   ChatModels.DEEPSEEK_FLASH,
+  ChatModels.DEEPSEEK_V4_PRO,
 ]);
 
 /**
@@ -89,7 +101,11 @@ export function reasonsWithinOutputBudget(modelInfo: ModelInfo): boolean {
  *
  * Models that reason inside the output budget default to
  * ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, clamped to their own cap: a small default can
- * be consumed entirely by reasoning, leaving an empty visible reply.
+ * be consumed entirely by reasoning, leaving an empty visible reply. "Their own cap"
+ * means a DECLARED one - a cap toModelInfo derived is only a default, and clamping
+ * such a model to it reproduces that same starvation, so derivedOutputCeiling stands
+ * in for it. Every path that has a usable cap ends in a clamp against it; a model with
+ * no usable cap at all (line 138) is a different, deliberate exception - see its comment.
  */
 export function resolveOutputMaxTokens({
   requested,
@@ -102,23 +118,51 @@ export function resolveOutputMaxTokens({
   fallback: number;
   modelInfo: ModelInfo;
   /**
-   * The model's own output cap, which clamps the resolved budget. Typed optional
-   * deliberately: `ModelInfo.max_tokens` is declared `number`, but that is a claim about
-   * catalog data rather than a guarantee about it - a row assembled anywhere other than
-   * toModelInfo can omit it. Callers must be able to pass what they actually have.
+   * The model's own output cap, which clamps the resolved budget. Expected to be
+   * `modelInfo.max_tokens`, since `modelInfo.maxOutputTokensDerived` is what says whether
+   * this value was declared. Typed optional deliberately: `ModelInfo.max_tokens` is declared
+   * `number`, but that is a claim about catalog data rather than a guarantee about it - a row
+   * assembled anywhere other than toModelInfo can omit it. Callers must be able to pass what
+   * they actually have.
    */
   modelMaxOutputTokens: number | undefined;
 }): number {
+  const reasonsWithinBudget = reasonsWithinOutputBudget(modelInfo);
   const preferred =
-    usableTokenCount(requested) ??
-    (reasonsWithinOutputBudget(modelInfo) ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
+    usableTokenCount(requested) ?? (reasonsWithinBudget ? ADAPTIVE_THINKING_MAX_TOKENS_FLOOR : fallback);
   const cap = usableTokenCount(modelMaxOutputTokens);
   // An unusable cap must not clamp. `Math.min(n, undefined)` is NaN, and this result sizes
   // a credit reservation downstream, so the resolver has to be total or a malformed catalog
   // row puts NaN on a money path. Substituting `fallback` instead would be a sizing decision
   // wearing a safety hat: it would silently shrink an explicit request and re-pin a
   // reasons-within-the-budget model to 4096, which is the starvation this function prevents.
-  return cap === undefined ? preferred : Math.min(preferred, cap);
+  if (cap === undefined) return preferred;
+  // A DERIVED cap (toModelInfo's substitute for a row that declares none) states nothing about
+  // the model, so for a model that reasons inside its output budget it must not be the ceiling:
+  // min(64000, 4096) is exactly the starvation above, arrived at from a default rather than from
+  // data. It is replaced by a ceiling this build can defend, never simply removed.
+  if (modelInfo.maxOutputTokensDerived === true && reasonsWithinBudget) {
+    return Math.min(preferred, derivedOutputCeiling(modelInfo, cap));
+  }
+  return Math.min(preferred, cap);
+}
+
+/**
+ * The ceiling to use in place of a derived cap. Two bounds, whichever is larger:
+ *
+ * - the derived cap itself, so this can only ever raise a budget, never shrink one; and
+ * - the adaptive floor, bounded by half the context window after the safety buffer - the same
+ *   split catalogWrite applies to a window that cannot fund the default output reserve.
+ *
+ * The window share is what keeps this honest: contextWindow is the INPUT+output budget, so handing
+ * the whole of it to output would make every non-empty prompt exceed the window and 400 the turn.
+ * Half of it leaves the prompt at least as much room as the answer.
+ */
+function derivedOutputCeiling(modelInfo: ModelInfo, derivedCap: number): number {
+  const window = usableTokenCount(modelInfo.contextWindow);
+  if (window === undefined) return derivedCap;
+  const windowShare = Math.floor((window - CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS) / 2);
+  return Math.max(derivedCap, Math.min(ADAPTIVE_THINKING_MAX_TOKENS_FLOOR, windowShare));
 }
 
 /**
@@ -126,7 +170,7 @@ export function resolveOutputMaxTokens({
  * only trustworthy when finite and positive - a zero or negative cap would clamp the budget
  * to an unsendable value just as surely as NaN poisons it.
  */
-function usableTokenCount(value: number | undefined): number | undefined {
+export function usableTokenCount(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { ContextTelemetrySchema, SystemPromptDetailSchema } from './contextTelemetry';
+import { PROMPT_META_MODEL_TYPES } from '../modelCatalog';
 
 /**
  * A Date that also accepts its own JSON form. promptMeta makes a round trip through the client:
@@ -31,6 +32,7 @@ const PromptMetaModelParametersSchema = z.object({
   prompt_upsampling: z.boolean().optional(), // BFL prompt upsampling
   seed: z.number().optional(),
   output_format: z.string().optional(), // Output format (jpeg/png)
+  background: z.string().optional(), // Background handling (transparent/opaque/auto), gpt-image only
   response_format: z.string().optional(), // Response format (url/b64_json)
 
   // Video generation parameters (Sora)
@@ -43,7 +45,7 @@ const PromptMetaModelSchema = z.object({
   // or other public sources
   name: z.string(),
   parameters: PromptMetaModelParametersSchema.optional(),
-  type: z.enum(['text', 'image', 'video']).optional(),
+  type: z.enum(PROMPT_META_MODEL_TYPES).optional(),
   backend: z.string().optional(),
   contextWindow: z.number().optional(),
   maxTokens: z.number().optional(),
@@ -459,6 +461,18 @@ export const RetrievalSummarySchema = z.object({
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
   dataLakeTags: z.array(z.string()),
   /**
+   * The subset of `dataLakeTags` that actually put files into the ranked scope. `dataLakeTags`
+   * alone says which lakes were REQUESTED, which read as "searched" while a lake could contribute
+   * nothing - the retrieval budget used to be spent in file order and starved whichever lake
+   * sorted last.
+   *
+   * Optional because attribution is best-effort: a file matched by a lake's prefix/membership arm
+   * can carry no reversible `datalake:` tag (see attributeAccessedLakes), and the producer omits
+   * this rather than reporting an inconclusive scope as "no lake contributed". Absent means
+   * unknown, NOT none.
+   */
+  dataLakeTagsWithCandidates: z.array(z.string()).optional(),
+  /**
    * The lake scope the turn's retrieval surfaces WOULD have searched, resolved at the seed site
    * whether or not any of them ran: the caller's accessible lakes narrowed to the session
    * (narrowLakeAccessToSession), or empty where the corpus is personal and the lake arms are
@@ -545,16 +559,25 @@ export const RetrievalSummarySchema = z.object({
    * not "what reached the model": `ranked.length` and `scored.length` in KnowledgeRetrievalFeature
    * - the candidates left after the absolute similarity floor, and after the relative floor
    * trims them. `chunks` is what survived the char budget on top of that, so the three
-   * numbers bracket two independent trimmers:
+   * numbers bracket three independent trimmers:
    *
-   *   pre -> [relative floor] -> post -> [char budget] -> chunks
+   *   pre -> [relative floor] -> post -> [spread floor] -> postSpread -> [char budget] -> chunks
    *
    * They exist so a low `chunks` is diagnosable - a small corpus and a floor that trimmed a large
-   * pool end in the same `chunks`. `pre - post` is the floor's own effect and nothing else;
+   * pool end in the same `chunks`. `pre - post` is the relative floor's own effect and nothing
+   * else, and `post - postSpread` the spread floor's;
    * `pre - chunks` is NOT, because the budget trims the same walk. Both optional: only forced
    * retrieval computes a ranked pool, a surface without one (lake memory, the knowledge tools)
-   * never writes either, and absence must not read as zero candidates. SUMMED like `chunks`, with
-   * the same absent-is-not-zero handling as `topScore`.
+   * never writes any of them, and absence must not read as zero candidates. SUMMED like `chunks`,
+   * with the same absent-is-not-zero handling as `topScore`.
+   *
+   * `backgroundScore` is the median of every score the turn compared, and `postSpreadFloorCandidates`
+   * what is left once the spread floor cuts against it. Recorded even while that floor is OFF (its
+   * shipped default), in which case `postSpread` equals `post` and the pair degenerates to a
+   * diagnostic: `topScore - backgroundScore` is the turn's signal spread, and the distribution of
+   * that quantity over production traffic is what a value for `forcedRetrievalSpreadFloorPct` has to
+   * be chosen from. NOT comparable across embedding spaces as an absolute number, for the same
+   * reason `topScore` is not; the RATIO of the two floors' cuts is.
    *
    * COMPARE THE PAIR ONLY TO ITSELF, never to `chunks`, unless `surfaces` is forced retrieval
    * alone. `chunks` and `chars` sum across ALL surfaces while this pair is forced-only, so a mixed
@@ -578,6 +601,8 @@ export const RetrievalSummarySchema = z.object({
       topScore: z.number().optional(),
       preRelativeFloorCandidates: z.number().optional(),
       postRelativeFloorCandidates: z.number().optional(),
+      postSpreadFloorCandidates: z.number().optional(),
+      backgroundScore: z.number().optional(),
     })
     .optional(),
   /**

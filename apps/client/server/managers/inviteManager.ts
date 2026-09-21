@@ -1,5 +1,25 @@
-import { IFabFile, IGroup, IInviteDocument, IOrganization, ISession, InviteType } from '@bike4mind/common';
-import { FabFile, Group, Organization, Session, User } from '@bike4mind/database';
+import {
+  IFabFile,
+  IGroup,
+  IInviteDocument,
+  IOrganization,
+  ISession,
+  InviteType,
+  IUserDocument,
+  isLinkOnlyInvite,
+} from '@bike4mind/common';
+import {
+  FabFile,
+  Group,
+  Organization,
+  Session,
+  User,
+  fabFileRepository,
+  sessionRepository,
+  projectRepository,
+  organizationRepository,
+} from '@bike4mind/database';
+import { sharingService } from '@bike4mind/services';
 
 export const getInviteDetails = async (invite: IInviteDocument, includeUser?: boolean) => {
   const inviteWithDetails = invite;
@@ -48,6 +68,42 @@ export const getInviteDetails = async (invite: IInviteDocument, includeUser?: bo
 };
 
 /**
+ * Gates a single-invite GET to the same population accept/refuse already redeem for:
+ * a named recipient (pending or already accepted), or a caller with share authority on
+ * the underlying document (the cancelInviteById/authorizeByInviteType check). Anyone
+ * else must be turned into a 404 by the caller -- a 403 would confirm the id exists.
+ */
+export async function canViewInvite(user: IUserDocument, invite: IInviteDocument): Promise<boolean> {
+  const email = user.email?.toLowerCase();
+  const named = [...(invite.recipients?.pending ?? []), ...(invite.recipients?.accepted ?? [])];
+  if (email && named.some(recipient => recipient.toLowerCase() === email)) {
+    return true;
+  }
+
+  // A link invite names nobody, so the recipient arm can never match and the share arm never will
+  // either - the person following the link is the one being granted access, not someone who
+  // already holds it. Gating it out would 404 the /share/$id landing page and leave acceptInvite's
+  // link path unreachable. Redeemability is the gate here, matching what accept already enforces.
+  if (isLinkOnlyInvite(invite)) {
+    const expired = !!invite.expiresAt && new Date(invite.expiresAt).getTime() < Date.now();
+    return invite.remaining > 0 && !expired;
+  }
+
+  try {
+    await sharingService.authorizeByInviteType(user, invite.type, invite.documentId, {
+      fabFiles: fabFileRepository,
+      sessions: sessionRepository,
+      projects: projectRepository,
+      organizations: organizationRepository,
+      groups: Group,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Invitee-facing serialization for an invite. Keeps the `recipients` shape -- the
  * inbox UI checks `recipients.pending.includes(myEmail)` to flag invites addressed
  * to the caller -- but strips every OTHER recipient's email from the pending/
@@ -73,5 +129,25 @@ export function filterInviteRecipientsToSelf<T>(invite: T, userEmail?: string | 
       refused: keepSelf(recipients.refused),
     };
   }
+  // The bearer token never travels in an invitee-facing body. Whoever legitimately reaches one of
+  // these routes already holds it (it is the key they addressed the request with), so echoing it
+  // buys nothing and would hand a redeemable secret to any future caller of this serializer.
+  delete plain.token;
+  return plain;
+}
+
+/**
+ * Sharer-facing serialization: drops the bearer token and nothing else.
+ *
+ * The create response carries a ready-made `link` that already contains the token, and the
+ * document invite list has no consumer for it at all, so the bare field is a redeemable secret
+ * sitting in a body for no one. Keeping it out means a share link can only be obtained from the
+ * response that mints it, rather than re-read later from a cached list. Normalizes a Mongoose doc
+ * via toJSON first, like its invitee-facing counterpart.
+ */
+export function omitInviteToken<T>(invite: T): Record<string, unknown> {
+  const raw = invite as unknown as { toJSON?: () => Record<string, unknown> } & Record<string, unknown>;
+  const plain: Record<string, unknown> = typeof raw.toJSON === 'function' ? raw.toJSON() : { ...raw };
+  delete plain.token;
   return plain;
 }
