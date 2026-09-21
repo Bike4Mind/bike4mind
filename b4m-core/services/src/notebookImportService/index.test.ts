@@ -32,6 +32,23 @@ const NOTEBOOK = {
 
 const PAYLOAD = { exportVersion: '1.0.0', notebooks: [NOTEBOOK] };
 
+const KNOWLEDGE_FILE = {
+  id: 'exported-knowledge-id',
+  name: 'notes.txt',
+  mimeType: 'text/plain',
+  size: 5,
+  content: Buffer.from('hello').toString('base64'),
+};
+const ARTIFACT = {
+  id: 'artifact_recharts_Q3-Revenue_1700000000000_0',
+  name: 'My Chart',
+  type: 'recharts',
+  content: 'chart body',
+  createdAt: '2026-01-01T00:00:00.000Z',
+};
+const TOOL = { id: 'exported-tool-id', name: 'Tool One', createdAt: '2026-01-01T00:00:00.000Z' };
+const AGENT = { id: 'exported-agent-id', name: 'Agent One', createdAt: '2026-01-01T00:00:00.000Z' };
+
 /** Small, so the over-sized fixtures stay cheap to build rather than real 30MB buffers. */
 const MAX_FILE_SIZE_MB = 1;
 
@@ -44,10 +61,14 @@ beforeEach(() => {
   invalidateSettingsCache();
 });
 
-function makeAdapters(existingSessions: unknown[] = [], user: Record<string, unknown> = { id: 'user-1' }) {
+function makeAdapters(
+  existingSessions: unknown[] = [],
+  user: Record<string, unknown> = { id: 'user-1' },
+  sessionRepositoryOverride?: NotebookImportAdapters['sessionRepository']
+) {
   const bulkCreate = vi.fn().mockResolvedValue(undefined);
   const adapters = {
-    sessionRepository: {
+    sessionRepository: sessionRepositoryOverride ?? {
       find: vi.fn().mockResolvedValue(existingSessions),
       create: vi.fn(async (data: { id: string }) => ({ ...data, id: 'new-session-id' })),
       updateById: vi.fn(),
@@ -96,7 +117,14 @@ async function runImport(opts: Record<string, unknown>, { existing = [] as unkno
 }
 
 /** The conflict-resolution branches only run when a session already exists. */
-const EXISTING = { id: 'existing-session-id', userId: 'existing-owner' };
+const EXISTING = {
+  id: 'existing-session-id',
+  userId: 'existing-owner',
+  knowledgeIds: [] as string[],
+  artifactIds: [] as string[],
+  toolIds: [] as string[],
+  agentIds: [] as string[],
+};
 
 describe('notebook import: chat history', () => {
   it('carries no id when ids are not preserved, so the store assigns one', async () => {
@@ -154,8 +182,8 @@ const withAttachments = {
   notebooks: [
     {
       ...NOTEBOOK,
-      tools: [{ id: 'exported-tool-id', name: 'Tool One', createdAt: '2026-01-01T00:00:00.000Z' }],
-      agents: [{ id: 'exported-agent-id', name: 'Agent One', createdAt: '2026-01-01T00:00:00.000Z' }],
+      tools: [TOOL],
+      agents: [AGENT],
     },
   ],
 };
@@ -893,5 +921,461 @@ describe('notebook import: a knowledge file whose row write fails leaves no obje
     ]);
 
     expect(result.warnings?.[0]).toContain('knowledge[1]');
+  });
+});
+
+/**
+ * Before the fix, `handleExistingSession` returned from the overwrite and merge branches above the
+ * attachment-import block in `importNotebook`, so an existing notebook could never gain attachments
+ * through either resolution - they imported cleanly only on the create path.
+ */
+describe('notebook import: overwrite and merge attach files to the existing session', () => {
+  const payloadWithAllAttachments = {
+    exportVersion: '1.0.0',
+    notebooks: [{ ...NOTEBOOK, knowledge: [KNOWLEDGE_FILE], artifacts: [ARTIFACT], tools: [TOOL], agents: [AGENT] }],
+  };
+
+  const ALL_ATTACHMENTS = { importKnowledge: true, importArtifacts: true, importTools: true, importAgents: true };
+
+  function makeAttachmentAdapters(existingSessions: unknown[] = [EXISTING]) {
+    const { adapters } = makeAdapters(existingSessions);
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-knowledge-id' });
+    (adapters.createArtifact as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-artifact-id' });
+    (adapters.toolRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-tool-id' });
+    (adapters.agentRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-agent-id' });
+    return adapters;
+  }
+
+  it.each(['overwrite', 'merge'])(
+    'imports all four attachment kinds and stamps the artifact with the existing session id, resolution=%s',
+    async resolution => {
+      const adapters = makeAttachmentAdapters();
+
+      const result = await new NotebookImportService(adapters).importNotebooks(
+        'user-1',
+        payloadWithAllAttachments as never,
+        { ...OPTIONS, conflictResolution: resolution, ...ALL_ATTACHMENTS } as never
+      );
+
+      expect(result.importedAttachments).toBe(4);
+      expect(result.warnings).toEqual([]);
+      expect(result.errors).toEqual([]);
+      // Stamped with the EXISTING session id, so the artifact is reachable in the viewer -
+      // true on both resolutions, since both write attachments onto the target rather than a
+      // freshly created session.
+      expect(adapters.createArtifact).toHaveBeenCalledWith(expect.objectContaining({ sessionId: EXISTING.id }));
+    }
+  );
+
+  it.each(['overwrite', 'merge'])(
+    'keeps the target pre-existing attachment ids and unions in the new ones, in one write, resolution=%s',
+    async resolution => {
+      const existingWithAttachments = {
+        ...EXISTING,
+        knowledgeIds: ['old-knowledge-id'],
+        artifactIds: ['old-artifact-id'],
+        toolIds: ['old-tool-id'],
+        agentIds: ['old-agent-id'],
+      };
+      const adapters = makeAttachmentAdapters([existingWithAttachments]);
+
+      await new NotebookImportService(adapters).importNotebooks(
+        'user-1',
+        payloadWithAllAttachments as never,
+        { ...OPTIONS, conflictResolution: resolution, ...ALL_ATTACHMENTS } as never
+      );
+
+      const updateById = adapters.sessionRepository.updateById as ReturnType<typeof vi.fn>;
+      // One write per notebook: the fold happens in memory, not as a second read-then-write round trip.
+      expect(updateById).toHaveBeenCalledTimes(1);
+      const [, update] = updateById.mock.calls[0];
+      expect(update.knowledgeIds).toEqual(['old-knowledge-id', 'store-knowledge-id']);
+      expect(update.artifactIds).toEqual(['old-artifact-id', 'store-artifact-id']);
+      expect(update.toolIds).toEqual(['old-tool-id', 'store-tool-id']);
+      expect(update.agentIds).toEqual(['old-agent-id', 'store-agent-id']);
+    }
+  );
+});
+
+/**
+ * A name-aware fake session store: `find` filters by name and `create` pushes into the same
+ * array, so a later `find` in this run sees a session an earlier notebook in it just wrote - which
+ * is what proves the per-run claim routes a second same-named notebook to create rather than
+ * reusing the first one. The flat `mockResolvedValue` the other describes use returns the same
+ * array regardless of what `create` does, so it cannot exercise that; and on the `rename` path
+ * specifically, a `find` that matches every name makes `generateUniqueName` loop forever and kills
+ * the vitest worker, so any fixture exercising `rename` needs this too.
+ */
+function makeSessionStore(initial: Array<Record<string, unknown>>) {
+  const sessions = initial.map(s => ({ ...s }));
+  let counter = 0;
+  return {
+    sessionRepository: {
+      find: vi.fn(async (query: { userId: string; name: string }) =>
+        sessions.filter(s => s.userId === query.userId && s.name === query.name)
+      ),
+      create: vi.fn(async (data: Record<string, unknown>) => {
+        const created = { ...data, id: `created-session-${counter++}` };
+        sessions.push(created);
+        return created;
+      }),
+      updateById: vi.fn(async (id: string, data: Record<string, unknown>) => {
+        const target = sessions.find(s => s.id === id);
+        if (target) Object.assign(target, data);
+        return target;
+      }),
+    } as unknown as NotebookImportAdapters['sessionRepository'],
+  };
+}
+
+/**
+ * Before the fix, `findExistingSession` matched on `{userId, name}` alone and returned
+ * `existingSessions[0]` with no bookkeeping across notebooks in the same run, so two same-named
+ * incoming notebooks resolved to the same target and the second silently overwrote the first.
+ */
+describe('notebook import: per-run claims keep two same-named notebooks distinct', () => {
+  it('overwrites the first "Dup", renames the second past it, and both keep their tools', async () => {
+    const { sessionRepository } = makeSessionStore([
+      {
+        id: 'existing-dup-id',
+        userId: 'user-1',
+        name: 'Dup',
+        knowledgeIds: [],
+        artifactIds: [],
+        toolIds: [],
+        agentIds: [],
+      },
+    ]);
+    const { adapters } = makeAdapters([], { id: 'user-1' }, sessionRepository);
+    (adapters.toolRepository.create as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ id: 'tool-a' })
+      .mockResolvedValueOnce({ id: 'tool-b' });
+
+    const dupNotebook = (toolId: string) => ({
+      ...NOTEBOOK,
+      name: 'Dup',
+      tools: [{ id: toolId, name: 'A Tool', createdAt: '2026-01-01T00:00:00.000Z' }],
+    });
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [dupNotebook('exported-tool-a'), dupNotebook('exported-tool-b')],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      { ...OPTIONS, conflictResolution: 'overwrite', importTools: true } as never
+    );
+
+    expect(result.newNotebookIds).toHaveLength(2);
+    expect(result.newNotebookIds![0]).not.toBe(result.newNotebookIds![1]);
+    expect(result.newNotebookIds).toContain('existing-dup-id');
+    expect(result.importedAttachments).toBe(2);
+
+    // The second "Dup" could not overwrite the first - this run already claimed it - so it must
+    // land under a unique name (the same uniquifier `rename` uses) with a warning naming both.
+    const secondCreate = (sessionRepository.create as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(secondCreate.name).toBe('Dup (1)');
+    expect(result.warnings).toEqual([expect.stringMatching(/Dup.*Dup \(1\)/)]);
+  });
+});
+
+/** `skip` writes nothing, so it must never claim - a later same-named notebook has to see, and
+ * skip against, the same target rather than falling through to create. */
+describe('notebook import: skip is unaffected by per-run claims', () => {
+  it('skips both same-named incoming notebooks against one existing target', async () => {
+    const { adapters } = makeAdapters([EXISTING]);
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [NOTEBOOK, { ...NOTEBOOK, id: 'notebook-2' }],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      { ...OPTIONS, conflictResolution: 'skip' } as never
+    );
+
+    expect(result.skippedNotebooks).toBe(2);
+    expect(result.importedNotebooks).toBe(0);
+    expect(adapters.sessionRepository.create).not.toHaveBeenCalled();
+    expect(adapters.sessionRepository.updateById).not.toHaveBeenCalled();
+  });
+
+  it('creates the first of two same-named notebooks and skips the second when nothing pre-exists', async () => {
+    // Guards the create-path half of the claim rule: if `skip` ever claimed the session it just
+    // created, the second notebook's lookup would filter that row out as claimed and fall through
+    // to create a duplicate-named twin instead of skipping against it, as `main` does.
+    const { sessionRepository } = makeSessionStore([]);
+    const { adapters } = makeAdapters([], { id: 'user-1' }, sessionRepository);
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [NOTEBOOK, { ...NOTEBOOK, id: 'notebook-2' }],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      { ...OPTIONS, conflictResolution: 'skip' } as never
+    );
+
+    expect(result.importedNotebooks).toBe(1);
+    expect(result.skippedNotebooks).toBe(1);
+    expect(sessionRepository.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('notebook import: rename attaches to the new notebook, not the original', () => {
+  it('gives the renamed notebook its own attachments and leaves the original untouched', async () => {
+    const { sessionRepository } = makeSessionStore([
+      {
+        id: 'existing-session-id',
+        userId: 'user-1',
+        name: 'Notebook One',
+        knowledgeIds: [],
+        artifactIds: [],
+        toolIds: ['old-tool-id'],
+        agentIds: [],
+      },
+    ]);
+    const { adapters } = makeAdapters([], { id: 'user-1' }, sessionRepository);
+    (adapters.toolRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-tool-id' });
+
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [{ ...NOTEBOOK, tools: [TOOL] }],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      { ...OPTIONS, conflictResolution: 'rename', importTools: true } as never
+    );
+
+    expect(result.importedNotebooks).toBe(1);
+    const renamedId = result.newNotebookIds![0];
+    expect(renamedId).not.toBe('existing-session-id');
+
+    const updateById = sessionRepository.updateById as ReturnType<typeof vi.fn>;
+    expect(updateById).toHaveBeenCalledWith(renamedId, expect.objectContaining({ toolIds: ['store-tool-id'] }));
+    expect(updateById).not.toHaveBeenCalledWith('existing-session-id', expect.anything());
+  });
+});
+
+describe('notebook import: overwrite handles an id collision as a warning, not a fatal error', () => {
+  it('unions the ids that landed and keeps the pre-existing ones, when preserveIds collides', async () => {
+    const existingWithAttachments = {
+      ...EXISTING,
+      artifactIds: ['old-artifact-id'],
+      toolIds: ['old-tool-id'],
+    };
+    const { adapters } = makeAdapters([existingWithAttachments]);
+    (adapters.artifactIdTaken as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (adapters.toolRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-tool-id' });
+
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [{ ...NOTEBOOK, artifacts: [ARTIFACT], tools: [TOOL] }],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      {
+        ...OPTIONS,
+        conflictResolution: 'overwrite',
+        preserveIds: true,
+        importArtifacts: true,
+        importTools: true,
+      } as never
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings?.join(' ')).toContain('already exists');
+    const updateById = adapters.sessionRepository.updateById as ReturnType<typeof vi.fn>;
+    const [, update] = updateById.mock.calls[0];
+    // The collision loses only the artifact that collided - the target's pre-existing artifact id
+    // survives, and the tool that succeeded alongside it still lands.
+    expect(update.artifactIds).toEqual(['old-artifact-id']);
+    expect(update.toolIds).toEqual(['old-tool-id', 'store-tool-id']);
+  });
+});
+
+describe('notebook import: overwrite carries a partial attachment failure into one union write', () => {
+  it('unions only the attachments that succeeded and still surfaces the failure as a warning', async () => {
+    const existingWithAttachments = { ...EXISTING, knowledgeIds: ['old-knowledge-id'] };
+    const { adapters } = makeAdapters([existingWithAttachments]);
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-knowledge-id' });
+    (adapters.toolRepository.create as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('store unavailable'));
+
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [{ ...NOTEBOOK, knowledge: [KNOWLEDGE_FILE], tools: [TOOL] }],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      { ...OPTIONS, conflictResolution: 'overwrite', importKnowledge: true, importTools: true } as never
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings?.join(' ')).toContain('store unavailable');
+    const updateById = adapters.sessionRepository.updateById as ReturnType<typeof vi.fn>;
+    expect(updateById).toHaveBeenCalledTimes(1);
+    const [, update] = updateById.mock.calls[0];
+    expect(update.knowledgeIds).toEqual(['old-knowledge-id', 'store-knowledge-id']);
+    expect(update.toolIds).toEqual([]);
+  });
+});
+
+describe('notebook import: overwrite gates knowledge files the same way create does', () => {
+  it('warns on an over-sized knowledge file and still lands the rest of the attachments', async () => {
+    const { adapters } = makeAdapters([EXISTING]);
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-knowledge-id' });
+    (adapters.toolRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-tool-id' });
+
+    const oversized = {
+      id: 'exported-big',
+      name: 'big.pdf',
+      mimeType: 'application/pdf',
+      size: MAX_FILE_SIZE_MB * 1024 * 1024,
+      content: Buffer.alloc(MAX_FILE_SIZE_MB * 1024 * 1024).toString('base64'),
+    };
+
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [{ ...NOTEBOOK, knowledge: [oversized], tools: [TOOL] }],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      { ...OPTIONS, conflictResolution: 'overwrite', importKnowledge: true, importTools: true } as never
+    );
+
+    expect(result.errors).toEqual([]);
+    expect(result.warnings).toEqual([expect.stringMatching(/big\.pdf.*maximum file size/)]);
+    const updateById = adapters.sessionRepository.updateById as ReturnType<typeof vi.fn>;
+    const [, update] = updateById.mock.calls[0];
+    expect(update.knowledgeIds).toEqual([]);
+    expect(update.toolIds).toEqual(['store-tool-id']);
+  });
+});
+
+describe('notebook import: a renamed notebook claims its new session', () => {
+  it('falls a later notebook exported under that generated name through to its own rename, with a warning', async () => {
+    const { sessionRepository } = makeSessionStore([
+      {
+        id: 'existing-dup-id',
+        userId: 'user-1',
+        name: 'Dup',
+        knowledgeIds: [],
+        artifactIds: [],
+        toolIds: [],
+        agentIds: [],
+      },
+    ]);
+    const { adapters } = makeAdapters([], { id: 'user-1' }, sessionRepository);
+
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [
+        { ...NOTEBOOK, name: 'Dup' },
+        { ...NOTEBOOK, id: 'notebook-2', name: 'Dup (1)' },
+      ],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      { ...OPTIONS, conflictResolution: 'rename' } as never
+    );
+
+    expect(result.importedNotebooks).toBe(2);
+    // The first notebook renames past the existing "Dup" into a fresh "Dup (1)" session. That
+    // session must be claimed - if it were not, the second notebook (exported under that literal
+    // name) would resolve to it as an unclaimed match and rename past it silently, instead of
+    // hitting the claimed-session fallback and warning about it.
+    expect(result.warnings).toEqual([expect.stringMatching(/Dup \(1\).*Dup \(1\) \(1\)/)]);
+  });
+});
+
+describe('notebook import: the claimed-name notice survives truncation', () => {
+  it('puts the claimed-name notice first, ahead of an earlier attachment warning', async () => {
+    const { sessionRepository } = makeSessionStore([]);
+    const { adapters } = makeAdapters([], { id: 'user-1' }, sessionRepository);
+
+    const oversized = {
+      id: 'exported-big',
+      name: 'big.pdf',
+      mimeType: 'application/pdf',
+      size: MAX_FILE_SIZE_MB * 1024 * 1024,
+      content: Buffer.alloc(MAX_FILE_SIZE_MB * 1024 * 1024).toString('base64'),
+    };
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [
+        { ...NOTEBOOK, name: 'Name', knowledge: [oversized] },
+        { ...NOTEBOOK, id: 'notebook-2', name: 'Name' },
+      ],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      { ...OPTIONS, conflictResolution: 'overwrite', importKnowledge: true } as never
+    );
+
+    // The attachment warning is pushed first, while the first notebook is still being processed -
+    // the claimed-name notice for the second notebook only exists once the second notebook runs.
+    // It is still the one the user must act on, so it has to sit ahead of it: the caller truncates
+    // to 5 (notebookImportComplete.ts), and five attachment warnings would otherwise push it out.
+    expect(result.warnings).toEqual([
+      expect.stringMatching(/Could not reuse the notebook named "Name"/),
+      expect.stringMatching(/big\.pdf.*maximum file size/),
+    ]);
+  });
+});
+
+describe("notebook import: generateUniqueName reuses this run's highest suffix as a starting hint", () => {
+  it('renames the second and third of three same-named notebooks in a bounded number of queries', async () => {
+    const { sessionRepository } = makeSessionStore([
+      {
+        id: 'existing-dup-id',
+        userId: 'user-1',
+        name: 'Dup',
+        knowledgeIds: [],
+        artifactIds: [],
+        toolIds: [],
+        agentIds: [],
+      },
+    ]);
+    const { adapters } = makeAdapters([], { id: 'user-1' }, sessionRepository);
+
+    const dupNotebook = (id: string) => ({ ...NOTEBOOK, id, name: 'Dup' });
+    const payload = {
+      exportVersion: '1.0.0',
+      notebooks: [dupNotebook('notebook-1'), dupNotebook('notebook-2'), dupNotebook('notebook-3')],
+    };
+
+    const result = await new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      payload as never,
+      { ...OPTIONS, conflictResolution: 'overwrite' } as never
+    );
+
+    expect(result.importedNotebooks).toBe(3);
+    const createdNames = (sessionRepository.create as ReturnType<typeof vi.fn>).mock.calls.map(
+      call => (call[0] as { name: string }).name
+    );
+    expect(createdNames).toEqual(['Dup (1)', 'Dup (2)']);
+
+    // Restarting the probe from 1 for every notebook is the O(N^2) regression this guards against:
+    // with the per-run hint, the third notebook probes only "Dup (2)" instead of re-probing
+    // "Dup (1)" first. One findExistingSession call per notebook (3) plus one generateUniqueName
+    // probe each for the second and third notebook (2) is the bound - a regression to
+    // restart-from-1 costs at least one more.
+    expect(sessionRepository.find).toHaveBeenCalledTimes(5);
   });
 });
