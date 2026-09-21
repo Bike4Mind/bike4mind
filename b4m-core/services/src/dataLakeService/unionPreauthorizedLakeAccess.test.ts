@@ -84,6 +84,16 @@ describe('unionPreauthorizedLakeAccess', () => {
     expect(out).toEqual(access());
   });
 
+  // #3055: the union rebuilds via `...access`, so excludedByAccessCount rides through
+  // uncorrected - pins that it actually does, since a future rewrite that stops spreading (or
+  // starts recomputing) would change this silently otherwise.
+  it('carries excludedByAccessCount through the union unchanged', async () => {
+    const withExclusions = { ...access(), excludedByAccessCount: 2 };
+    const out = await unionPreauthorizedLakeAccess(withExclusions, undefined, ACTOR, deps({ findById: vi.fn() }));
+
+    expect(out.excludedByAccessCount).toBe(2);
+  });
+
   it('drops a pre-authorized id that no longer resolves to an active lake', async () => {
     const findById = vi.fn().mockResolvedValue(managedLake({ status: 'archived' }));
     const out = await unionPreauthorizedLakeAccess(access(), ['managed'], ACTOR, deps({ findById }));
