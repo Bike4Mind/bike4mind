@@ -958,11 +958,19 @@ export class ConfigStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
           // Global config doesn't exist, use defaults
-          globalConfig = { ...DEFAULT_CONFIG };
+          // structuredClone, not a spread: a shallow spread would share
+          // DEFAULT_CONFIG's mutable arrays (trustedTools/trustedProjects/...),
+          // so a later trustTool()/trustProject() would mutate the module
+          // singleton and leak into the next default config.
+          globalConfig = structuredClone(DEFAULT_CONFIG);
         } else if (error instanceof z.ZodError) {
           console.error('Global config validation error:', error.issues);
           console.error('Using default configuration');
-          globalConfig = { ...DEFAULT_CONFIG };
+          // structuredClone, not a spread: a shallow spread would share
+          // DEFAULT_CONFIG's mutable arrays (trustedTools/trustedProjects/...),
+          // so a later trustTool()/trustProject() would mutate the module
+          // singleton and leak into the next default config.
+          globalConfig = structuredClone(DEFAULT_CONFIG);
         } else {
           throw error;
         }
@@ -1113,10 +1121,10 @@ export class ConfigStore {
    * root to the global `trustedProjects` and, when it's the current root, loads
    * its repo layers and re-merges so they take effect for this session.
    */
-  async trustProject(root?: string): Promise<void> {
+  async trustProject(root?: string): Promise<boolean> {
     await this.load();
     const target = root ? await safeRealpath(root) : this.projectRealPath;
-    if (!target) return;
+    if (!target) return false;
 
     const g = this.globalConfig!;
     if (!g.trustedProjects) g.trustedProjects = [];
@@ -1130,6 +1138,7 @@ export class ConfigStore {
     }
 
     await this.save();
+    return true;
   }
 
   /**
@@ -1213,7 +1222,7 @@ export class ConfigStore {
   /**
    * Save configuration to disk
    */
-  async save(config?: GlobalConfigPatch): Promise<void> {
+  async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
     await this.init();
 
     // Ensure the global snapshot exists (first save on a fresh store).
@@ -1223,14 +1232,17 @@ export class ConfigStore {
     const global = this.globalConfig!;
 
     if (config) {
-      // Repo-launderable fields never flow through a generic save(): the
-      // structural sets (mcpServers / trustedTools / additionalDirectories /
-      // trustedProjects) and the security-posture fields (tools / sandbox)
-      // change ONLY via their dedicated mutators (addMcpServer, trustTool,
-      // saveSandboxConfig, trustProject, ...). Stripping them here - a runtime
-      // allowlist on top of the GlobalConfigPatch type - means even a caller
-      // that casts past the type and spreads the merged effective config can't
-      // re-launder repo data into ~/.bike4mind/config.json.
+      // The security-critical, repo-launderable fields never flow through a
+      // generic save(): the structural sets (mcpServers / trustedTools /
+      // additionalDirectories / trustedProjects) and the security-posture fields
+      // (tools / sandbox) change ONLY via their dedicated mutators (addMcpServer,
+      // trustTool, saveSandboxConfig, trustProject, ...). Stripping them here - a
+      // runtime allowlist on top of the GlobalConfigPatch type - means even a
+      // caller that casts past the type and spreads the merged effective config
+      // can't re-launder THOSE fields into ~/.bike4mind/config.json. It does NOT
+      // guard defaultModel / preferences / toolApiKeys, which stay writable (that
+      // is what /model and /config edit): callers must pass user-changed values,
+      // not the merged rest - see buildGlobalConfigPatch.
       const { mcpServers, trustedTools, additionalDirectories, trustedProjects, tools, sandbox, ...rest } =
         config as Partial<CliConfig>;
       void mcpServers;
@@ -1256,16 +1268,15 @@ export class ConfigStore {
         // this caller changed vs its load-time snapshot, so a concurrent writer
         // (e.g. `b4m plugin add` in another process) isn't clobbered - including
         // conflicting edits, not just brand-new keys.
-        features: this.mergeFeatures(
-          await this.readDiskFeatures(),
-          global.features,
-          config.features ?? global.features
-        ),
+        features: opts?.clearFeatures
+          ? {}
+          : this.mergeFeatures(await this.readDiskFeatures(), global.features, config.features ?? global.features),
       };
     } else {
       // No-arg save persists the global layer a mutator just changed in place;
-      // refresh features from disk so a concurrent writer isn't reverted.
-      this.globalConfig = { ...global, features: await this.readDiskFeatures() };
+      // refresh features from disk so a concurrent writer isn't reverted - unless
+      // this is a reset, which intentionally wipes the feature map.
+      this.globalConfig = { ...global, features: opts?.clearFeatures ? {} : await this.readDiskFeatures() };
     }
 
     try {
@@ -1288,12 +1299,16 @@ export class ConfigStore {
    * Reset configuration to defaults
    */
   async reset(): Promise<CliConfig> {
-    this.globalConfig = { ...DEFAULT_CONFIG, userId: uuidv4() };
+    // structuredClone so reset never shares DEFAULT_CONFIG's mutable arrays.
+    this.globalConfig = { ...structuredClone(DEFAULT_CONFIG), userId: uuidv4() };
     this.projectTrusted = false;
     this.rawProjectConfig = null;
     this.rawProjectLocalConfig = null;
     this.rawMcpJsonServers = null;
-    await this.save();
+    // clearFeatures: a reset must wipe the on-disk feature map too, not inherit it
+    // via save()'s concurrent-writer disk-merge (reached e.g. from load()'s
+    // corrupt-config recovery path).
+    await this.save(undefined, { clearFeatures: true });
     return this.config!;
   }
 

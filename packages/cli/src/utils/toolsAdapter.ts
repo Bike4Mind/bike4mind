@@ -541,8 +541,14 @@ async function generateToolPreview(
 
 /**
  * Persist an "allow-always" trust decision to project-local or global config.
+ *
+ * Only writes the repo's project-local layer when the folder is TRUSTED. An
+ * untrusted root never re-reads those layers (computeMerged gates on trust), so
+ * persisting there would silently lose the decision on the next launch AND drop a
+ * .bike4mind/local.json into a repo the user just declined to trust. Untrusted
+ * (the default) falls back to the global layer, which is always honored.
  */
-async function persistToolTrust(
+export async function persistToolTrust(
   toolName: string,
   permissionManager: PermissionManager,
   configStore: any // any: ConfigStore has dynamic shape, no shared interface
@@ -551,7 +557,7 @@ async function persistToolTrust(
   if (!canTrust) return;
 
   const projectDir = configStore.getProjectConfigDir();
-  if (projectDir) {
+  if (projectDir && configStore.isProjectTrusted()) {
     try {
       await configStore.initProjectConfig();
       const existingLocal = (await configStore.loadRawProjectLocalConfig()) || {};
@@ -559,13 +565,12 @@ async function persistToolTrust(
         ...existingLocal,
         trustedTools: [...(existingLocal.trustedTools || []), toolName],
       });
+      return;
     } catch {
-      // Fall back to global if local fails
-      await configStore.trustTool(toolName);
+      // Fall back to global if local persistence fails.
     }
-  } else {
-    await configStore.trustTool(toolName);
   }
+  await configStore.trustTool(toolName);
 }
 
 /**

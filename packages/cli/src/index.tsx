@@ -31,16 +31,8 @@ import type { PermissionResponse, EnvChoice, FolderTrustChoice } from './compone
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
-import { SessionStore, ConfigStore, CommandHistoryStore } from './storage';
-import type {
-  Session,
-  Message,
-  CliConfig,
-  GlobalConfigPatch,
-  ProjectConfig,
-  ProjectLocalConfig,
-  SessionHandoff,
-} from './storage';
+import { SessionStore, ConfigStore, CommandHistoryStore, buildGlobalConfigPatch } from './storage';
+import type { Session, Message, CliConfig, ProjectConfig, ProjectLocalConfig, SessionHandoff } from './storage';
 import { CheckpointStore } from './storage/CheckpointStore.js';
 import { ImageStore } from './storage/ImageStore.js';
 import { CustomCommandStore } from './storage/CustomCommandStore.js';
@@ -2371,7 +2363,11 @@ function CliApp() {
         // /trust folder - trust the current project root (folder-trust gate).
         if (args[0] === 'folder') {
           const root = state.configStore.getProjectRealPath() ?? process.cwd();
-          await state.configStore.trustProject();
+          const trusted = await state.configStore.trustProject();
+          if (!trusted) {
+            console.log('\n⚠️  No project folder to trust here (no resolvable project root).\n');
+            return;
+          }
           state.customCommandStore.setProjectTrusted(true);
           await state.customCommandStore.reloadCommands().catch(() => {});
           console.log(`\n✅ Trusted project folder: ${root}`);
@@ -2427,6 +2423,14 @@ function CliApp() {
                 console.log('❌ No project found. Use "global" to save to ~/.bike4mind/config.json');
                 return;
               }
+              // An untrusted root never re-reads its repo layers, so a project-local
+              // write would silently not apply and would drop a file into a repo the
+              // user declined to trust. Refuse and point at the honored paths.
+              if (!state.configStore.isProjectTrusted()) {
+                console.log('❌ This folder is not trusted, so a project-local trust would not take effect.');
+                console.log(`   Run /trust folder first, or choose "global" to trust '${toolToTrust}' everywhere.`);
+                return;
+              }
 
               try {
                 // Auto-create .bike4mind directory if needed
@@ -2452,6 +2456,14 @@ function CliApp() {
             case 'project': {
               if (!projectDir) {
                 console.log('❌ No project found. Use "global" to save to ~/.bike4mind/config.json');
+                return;
+              }
+              // Worse than local: this writes committable TEAM config into a repo
+              // the user declined to trust, and it would not apply this session
+              // either. Refuse until the folder is trusted.
+              if (!state.configStore.isProjectTrusted()) {
+                console.log('❌ This folder is not trusted, so a team-project trust would not take effect.');
+                console.log(`   Run /trust folder first, or choose "global" to trust '${toolToTrust}' everywhere.`);
                 return;
               }
 
@@ -3000,6 +3012,12 @@ function CliApp() {
 
         if (projectDir) {
           console.log(`Project Directory: ${projectDir}/.bike4mind/`);
+          if (!state.configStore.isProjectTrusted()) {
+            // The layers below are read straight off disk, but an untrusted root
+            // contributes nothing to the merged config - flag it so this doesn't
+            // read as the live configuration.
+            console.log('⚠️  Folder not trusted - team/local config below is NOT applied. Run /trust folder.');
+          }
           console.log('');
 
           const projectConfig = await state.configStore.loadRawProjectConfig();
@@ -3580,28 +3598,12 @@ function CliApp() {
    */
   const handleSaveConfig = async (updatedConfig: CliConfig, options?: { skipModelApply?: boolean }): Promise<void> => {
     // Persist ONLY the fields the /config editor owns AND that the user actually
-    // changed vs the current effective config. Unchanged fields equal the merged
-    // seed, so a repo-injected defaultModel/preference the user never touched is
-    // never laundered into the global layer. tools/sandbox/mcpServers/trustedTools
-    // are not editor-owned and never persist here (see GlobalConfigPatch).
-    const prev = state.config;
-    const patch: GlobalConfigPatch = {};
-    if (updatedConfig.defaultModel !== prev?.defaultModel) {
-      patch.defaultModel = updatedConfig.defaultModel;
-    }
-    const changedPreferences: Partial<CliConfig['preferences']> = {};
-    for (const [key, value] of Object.entries(updatedConfig.preferences)) {
-      const prevValue = (prev?.preferences as Record<string, unknown> | undefined)?.[key];
-      if (JSON.stringify(value) !== JSON.stringify(prevValue)) {
-        (changedPreferences as Record<string, unknown>)[key] = value;
-      }
-    }
-    if (Object.keys(changedPreferences).length > 0) {
-      patch.preferences = changedPreferences;
-    }
-    if (JSON.stringify(updatedConfig.features ?? {}) !== JSON.stringify(prev?.features ?? {})) {
-      patch.features = updatedConfig.features;
-    }
+    // changed vs the current effective config, via buildGlobalConfigPatch (pure +
+    // unit-tested). Unchanged fields equal the merged seed, so a repo-injected
+    // defaultModel/preference the user never touched is never laundered into the
+    // global layer. tools/sandbox/mcpServers/trustedTools are not editor-owned and
+    // never persist here (see GlobalConfigPatch).
+    const patch = buildGlobalConfigPatch(state.config, updatedConfig);
     await state.configStore.save(patch);
 
     // Check if model changed
