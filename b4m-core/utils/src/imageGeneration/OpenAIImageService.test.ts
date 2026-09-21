@@ -562,3 +562,85 @@ describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () 
     expect(images).toHaveLength(3);
   });
 });
+
+describe('OpenAIImageService reference images (#2744)', () => {
+  const REF_A = `data:image/png;base64,${Buffer.from('anchor-a').toString('base64')}`;
+  const REF_B = `data:image/png;base64,${Buffer.from('anchor-b').toString('base64')}`;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    imagesEdit.mockResolvedValue({ created: 0, output_format: 'png', data: [{ b64_json: 'RURJVA==' }] });
+    // Every source routed through toImageFile lands here. Decoding data URLs the way the
+    // real helper does is what lets the ordering assertion below tell the anchors apart.
+    vi.mocked(downloadImageAsBuffer).mockImplementation(async (source: string) =>
+      source.startsWith('data:image/') ? Buffer.from(source.split(',')[1], 'base64') : Buffer.from('primary')
+    );
+  });
+
+  it('appends anchors after the edit source so a mask still binds to the source', async () => {
+    const params = await editParams({
+      model: ImageModels.GPT_IMAGE_2,
+      mask: PNG_DATA_URL,
+      referenceImages: [REF_A, REF_B],
+    });
+
+    const images = params.image as File[];
+    expect(images).toHaveLength(3);
+    // OpenAI applies the mask to element 0; the edit source has to be that element.
+    expect(images[0].name).toBe('image.png');
+    expect(images.slice(1).map(file => file.name)).toEqual(['reference-1.png', 'reference-2.png']);
+    expect(params.mask).toBeInstanceOf(File);
+  });
+
+  it('preserves the caller-supplied anchor order', async () => {
+    const params = await editParams({
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImages: [REF_A, REF_B],
+    });
+
+    const bytes = await Promise.all((params.image as File[]).slice(1).map(file => file.text()));
+    expect(bytes).toEqual(['anchor-a', 'anchor-b']);
+  });
+
+  it('drops anchors for dall-e-2, whose edit endpoint takes a single image', async () => {
+    const params = await editParams({
+      model: ImageModels.DALL_E_2,
+      referenceImages: [REF_A, REF_B],
+    });
+
+    expect(params.image).toBeInstanceOf(File);
+    expect(Array.isArray(params.image)).toBe(false);
+  });
+
+  it('sends no anchor key when none are supplied', async () => {
+    const params = await editParams({ model: ImageModels.GPT_IMAGE_2 });
+
+    expect(params.image).toHaveLength(1);
+  });
+
+  it('forwards anchors through the image-to-image generate path', async () => {
+    await new OpenAIImageService('test-key', new Logger(), 'image-processor-lambda').generate('an inventory icon', {
+      model: ImageModels.GPT_IMAGE_2,
+      imagePrompt: 'https://example.test/primary.png',
+      referenceImages: [REF_A, REF_B],
+    });
+
+    expect(imagesEdit).toHaveBeenCalledTimes(1);
+    const images = imagesEdit.mock.calls[0][0].image as File[];
+    expect(images).toHaveLength(3);
+    expect(images[0].name).toBe('image.png');
+  });
+
+  it('never leaks referenceImages into the text-to-image params the SDK validates', async () => {
+    imagesGenerate.mockResolvedValue({ created: 0, output_format: 'png', data: [{ b64_json: 'QUJD' }] });
+
+    await new OpenAIImageService('test-key', new Logger(), 'image-processor-lambda').generate('an inventory icon', {
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImages: [REF_A],
+    });
+
+    // No primary image means the text-to-image endpoint, which would 400 on an unknown key.
+    expect(imagesGenerate).toHaveBeenCalledTimes(1);
+    expect(imagesGenerate.mock.calls[0][0]).not.toHaveProperty('referenceImages');
+  });
+});

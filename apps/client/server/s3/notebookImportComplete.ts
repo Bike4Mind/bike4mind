@@ -51,7 +51,13 @@ export const createSessionWrites = () => ({
   // keeps that boundary in one visible place instead of widening either side.
   create: async (data: Record<string, unknown>) =>
     sessionRepository.create(data as Parameters<typeof sessionRepository.create>[0]),
-  find: async (query: Record<string, unknown>) => sessionRepository.find(query),
+  // `ISession`'s four attachment-id arrays are typed optional, but SessionModel.ts declares them
+  // as Mongoose array paths, so a real document always carries them, hydrated to `[]`. Cast to the
+  // port's own `find` return type instead of respelling it, so the two cannot drift apart.
+  find: async (query: Record<string, unknown>) =>
+    sessionRepository.find(query) as unknown as ReturnType<
+      notebookImportService.NotebookImportAdapters['sessionRepository']['find']
+    >,
   // `update` identifies the row by `id` and throws without it - `_id` here silently made every
   // overwrite and merge import fail.
   updateById: async (id: string, data: Record<string, unknown>) => sessionRepository.update({ id, ...data }),
@@ -173,6 +179,27 @@ export const createArtifactWrites = (session?: ClientSession) => ({
   },
 });
 
+/**
+ * Best-effort removal of every object the failed import attempt uploaded. Uploads cannot join the
+ * transaction (`getFilesStorage()` is not session-bound), so a rollback leaves the objects behind
+ * unless the caller removes them explicitly.
+ *
+ * Exported so the best-effort behaviour is directly testable. Never throws: a failed delete is the
+ * orphan that would exist anyway, and a cleanup error escaping here would replace the failure being
+ * unwound, hiding the real reason from the caller's report.
+ */
+export const discardUploadedKnowledgeFiles = async (paths: string[], logger: Logger): Promise<void> => {
+  await Promise.all(
+    paths.map(async path => {
+      try {
+        await getFilesStorage().delete(path);
+      } catch (error) {
+        logger.warn('Failed to delete uploaded knowledge file after import rollback', { path, error });
+      }
+    })
+  );
+};
+
 const processNotebookImport = async (
   userId: string,
   dataKey: string,
@@ -183,6 +210,11 @@ const processNotebookImport = async (
 ) => {
   const result = await withTransaction(async session => {
     const s3 = new S3Storage(bucket);
+    // Hoisted out of the try so the catch below can reach the paths THIS attempt uploaded. It has
+    // to be this callback's own catch and not code after `withTransaction` rejects: a transient
+    // error re-runs the whole callback against a fresh service instance, so only the attempt that
+    // actually failed knows which objects it left behind.
+    let importService: InstanceType<typeof NotebookImportService> | undefined;
 
     try {
       const [importDataBuffer, optionsBuffer] = await Promise.all([
@@ -243,6 +275,12 @@ const processNotebookImport = async (
           uploadFile: async (path: string, content: Buffer) => {
             await getFilesStorage().upload(content, path);
           },
+          // Compensating action for uploadFile: the upload sits outside this transaction, so the
+          // service deletes it when the row write it belongs to fails. NOT moderation-gated like
+          // the two methods below - see the port's doc comment.
+          deleteFile: async (path: string) => {
+            await getFilesStorage().delete(path);
+          },
           getSignedUrl: async (path: string, expiresIn = 3600) => {
             try {
               // Same dead-today, defensive gate as getFileContent above: mirrors
@@ -272,7 +310,7 @@ const processNotebookImport = async (
         },
       };
 
-      const importService = new NotebookImportService(adapters);
+      importService = new NotebookImportService(adapters);
       const result = await importService.importNotebooks(userId, importData, options);
 
       // Any per-notebook failure rolls the whole import back. A failed write usually aborts the
@@ -302,7 +340,7 @@ const processNotebookImport = async (
         // type degraded says so itself, and calling that "could not be imported" contradicts the
         // record. Each message states its own outcome.
         const more = warnings.length > shown.length ? `; and ${warnings.length - shown.length} more` : '';
-        parts.push(`${warnings.length} attachment issue(s): ${shown.join('; ')}${more}.`);
+        parts.push(`${warnings.length} import issue(s): ${shown.join('; ')}${more}.`);
       }
 
       await inboxRepository.createInboxMessage({
@@ -321,6 +359,10 @@ const processNotebookImport = async (
       // async-local storage, so a status update or inbox message written here would itself fail
       // and the user would hear nothing.
       logger.error('Notebook import failed', { userId, dataKey, error });
+      // The transaction rolls back every row this attempt wrote, but the uploads it performed are
+      // outside it. Remove them before rethrowing - a delete that fails only leaves the orphan that
+      // existed before this cleanup, and must not replace the error the caller reports.
+      await discardUploadedKnowledgeFiles(importService?.getImportedKnowledgeFilePaths() ?? [], logger);
       throw error;
     } finally {
       await Promise.all([

@@ -1,0 +1,37 @@
+diff --git a/dist/index.js b/dist/index.js
+index 0dc02480d1fe83d0b52696863480404e35f038d2..d3f8cfa8246da95157d110c9333bf7534d515536 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -63,7 +63,6 @@ var logger = /*#__PURE__*/Object.freeze({
+ });
+ 
+ let esbuildWasm = null;
+-let esbuildNative = null;
+ const logSerwistResult = (filePath, buildResult)=>{
+     const { count, size, warnings } = buildResult;
+     const hasWarnings = warnings && warnings.length > 0;
+@@ -138,11 +137,19 @@ const createSerwistRoute = (options)=>{
+             }
+         };
+         let esbuild;
+-        if (config.useNativeEsbuild) {
+-            log("info", "Using esbuild to bundle the service worker.");
+-            if (!esbuildNative) esbuildNative = import('esbuild');
+-            esbuild = await esbuildNative;
+-        } else {
++        {
++            // The useNativeEsbuild branch is patched out because its `import('esbuild')` is a
++            // STATIC reference: this route is compiled into the Next server function, so that one
++            // specifier put @esbuild/<platform>'s 10.9 MB native binary into the deployment
++            // package regardless of which branch actually ran. Neither an outputFileTracingExcludes
++            // glob nor a Turbopack resolveAlias removes the binary - both were measured - so the
++            // specifier itself has to go. See the esbuild-wasm entry in
++            // apps/client/next.config.mjs serverExternalPackages.
++            //
++            // useNativeEsbuild defaults to win32 and is false on every deployed platform, so no
++            // deploy changes. A Windows contributor loses the native path upstream gave them and
++            // builds the worker with wasm - slower, same worker. The option stays in the zod
++            // schema and the types and is now inert: setting it does nothing.
+             log("info", "Using esbuild-wasm to bundle the service worker.");
+             if (!esbuildWasm) esbuildWasm = import('esbuild-wasm');
+             esbuild = await esbuildWasm;

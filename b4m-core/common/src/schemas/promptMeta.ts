@@ -109,6 +109,15 @@ const PromptMetaTokensBySourceSchema = z.object({
   urlContent: z.number(),
   toolSchemas: z.number(),
   userPrompt: z.number(),
+  /**
+   * Lake-sourced content injected this turn - forced retrieval (`knowledge_retrieval`) plus the
+   * lake-memory hot card (`lake_memory`) - moved out of the `systemPrompts` residual so the
+   * breakdown can price the lake separately. Optional, and absent means UNKNOWN, never zero: turns
+   * recorded before this field existed carry no value and none can be backfilled, because the only
+   * evidence was the residual this split had not yet made. Same absent-is-unknown rule as
+   * `retrieval.injected` below.
+   */
+  lakeRetrieval: z.number().optional(),
 });
 
 const PromptMetaContextSchema = z.object({
@@ -455,7 +464,7 @@ export const RetrievalSummarySchema = z.object({
    * the per-turn routing question is about, and before this it was indistinguishable from a turn
    * where forced retrieval was never configured at all.
    */
-  forcedSkipReason: z.enum(['attached_files', 'personal_corpus']).optional(),
+  forcedSkipReason: z.enum(['attached_files', 'personal_corpus', 'no_lake_scope']).optional(),
   /** Which retrieval-capable surface(s) ran this turn, e.g. 'lake-memory', 'knowledgeBaseSearch'. */
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */

@@ -280,8 +280,15 @@ describe('Spider - processSession', () => {
 
       expect(deps.sessionRepository.populateMessageCounts).toHaveBeenCalledWith([session]);
       expect(deps.publishCuration).toHaveBeenCalled();
-      expect(deps.publishSummarize).toHaveBeenCalled();
       expect(deps.publishTag).toHaveBeenCalled();
+
+      // 'manual' means someone asked for this one notebook's summary, so a bulk sweep must not
+      // claim it - telling the two apart is the whole point of the stamped trigger.
+      expect(deps.publishSummarize).toHaveBeenCalledWith({
+        sessionId: session.id,
+        userId: config.userId,
+        trigger: 'spider',
+      });
     });
 
     it('should skip already-processed operations', async () => {
@@ -497,6 +504,17 @@ describe('Spider - processAllSessions', () => {
     expect(stats.notebooksCurated).toBe(0);
     expect(stats.notebooksSummarized).toBe(0);
     expect(stats.notebooksTagged).toBe(0);
+  });
+
+  it('should stamp queued summarizations with the spider trigger', async () => {
+    const sessions = [createMockSession({ name: 'Test Notebook' })];
+    const config = createJobConfig({ totalNotebooks: 1, operations: ['summarize'] });
+
+    const promise = processAllSessions(sessions, config, deps);
+    await vi.runAllTimersAsync();
+    await promise;
+
+    expect(deps.publishSummarize).toHaveBeenCalledWith(expect.objectContaining({ trigger: 'spider' }));
   });
 
   it('should work with dry-run mode', async () => {

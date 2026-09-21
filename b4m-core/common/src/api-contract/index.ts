@@ -8,4 +8,5 @@ export { createCompletionContract } from './contracts/completions.contract';
 export { synthesizeSpeechContract } from './contracts/tts.contract';
 export { generateMusicContract } from './contracts/music.contract';
 export { generateSoundEffectContract } from './contracts/soundEffects.contract';
+export { getMeContract } from './contracts/me.contract';
 export { CONTRACTS } from './contracts';

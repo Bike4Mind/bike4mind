@@ -2833,6 +2833,31 @@ describe('DataLakeRepository.activateIfDraft', () => {
   });
 });
 
+describe('DataLakeRepository.demoteToDraft', () => {
+  setupMongoTest();
+
+  it('flips an active lake back to draft, and only the first call does it', async () => {
+    const created = await dataLakeRepository.create(baseLake({ slug: 'fresh', status: 'active' }));
+
+    expect(await dataLakeRepository.demoteToDraft(created.id)).toBe(true);
+    expect((await dataLakeRepository.findById(created.id))?.status).toBe('draft');
+    expect(await dataLakeRepository.demoteToDraft(created.id)).toBe(false);
+  });
+
+  it('leaves every other status untouched', async () => {
+    for (const status of ['draft', 'archiving', 'archived', 'restoring', 'deleting', 'deleted'] as const) {
+      const created = await dataLakeRepository.create(baseLake({ slug: `lake-${status}`, status }));
+
+      expect(await dataLakeRepository.demoteToDraft(created.id)).toBe(false);
+      expect((await dataLakeRepository.findById(created.id))?.status).toBe(status);
+    }
+  });
+
+  it('reports false for an id that matches no lake', async () => {
+    expect(await dataLakeRepository.demoteToDraft(new mongoose.Types.ObjectId().toString())).toBe(false);
+  });
+});
+
 describe('DataLakeRepository teardown stamp', () => {
   setupMongoTest();
 

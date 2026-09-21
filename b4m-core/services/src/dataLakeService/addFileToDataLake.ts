@@ -237,6 +237,6 @@ export const addFileToDataLake = async (
   // consuming on success would make a concurrent double-restore fail closed for any actor who
   // cannot cold-add, which is the exact persona this door exists to serve.
 
-  const stats = await recomputeLakeStats(lake, { db, logger }, { actor });
+  const stats = await recomputeLakeStats(lake, { db, logger });
   return { success: true, ...stats };
 };

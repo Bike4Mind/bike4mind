@@ -7,6 +7,8 @@ const h = vi.hoisted(() => ({
   deleteDataLake: vi.fn(),
   unarchiveDataLake: vi.fn(),
   restoreDeletedDataLake: vi.fn(),
+  promoteDataLake: vi.fn(),
+  demoteDataLake: vi.fn(),
   cleanupDeletedDataLake: vi.fn(),
   acceptDataLakePurge: vi.fn(),
   releasePurgingToDeleted: vi.fn(),
@@ -46,6 +48,8 @@ vi.mock('@bike4mind/services', () => ({
     deleteDataLake: h.deleteDataLake,
     unarchiveDataLake: h.unarchiveDataLake,
     restoreDeletedDataLake: h.restoreDeletedDataLake,
+    promoteDataLake: h.promoteDataLake,
+    demoteDataLake: h.demoteDataLake,
     cleanupDeletedDataLake: h.cleanupDeletedDataLake,
     acceptDataLakePurge: h.acceptDataLakePurge,
     canManageLake: h.canManageLake,
@@ -223,6 +227,8 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     h.deleteDataLake.mockResolvedValue({ id: 'lake1', status: 'deleted' });
     h.unarchiveDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
     h.restoreDeletedDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+    h.promoteDataLake.mockResolvedValue({ id: 'lake1', status: 'active' });
+    h.demoteDataLake.mockResolvedValue({ id: 'lake1', status: 'draft' });
   });
 
   // The audit repos are wired through one shared helper (lakeConfigAuditDb) precisely so the four
@@ -235,6 +241,8 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     ['unarchive', 'unarchiveDataLake'],
     ['restore', 'restoreDeletedDataLake'],
     ['delete', 'deleteDataLake'],
+    ['promote', 'promoteDataLake'],
+    ['demote', 'demoteDataLake'],
   ])('%s wires the config-audit repositories into the service', async (action, serviceName) => {
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);

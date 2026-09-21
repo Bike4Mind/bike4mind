@@ -143,8 +143,6 @@ export const removeFileFromDataLake = async (
     });
   }
 
-  // `actor` threaded so the draft -> active flip a removal can trigger names the person who
-  // removed the file rather than `system`. The rung stays `system` - nothing authorized the flip.
-  const stats = await recomputeLakeStats(lake, { db, logger }, { actor });
+  const stats = await recomputeLakeStats(lake, { db, logger });
   return { success: true, ...stats, restoreTokenMinted };
 };

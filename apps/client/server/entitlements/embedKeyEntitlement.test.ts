@@ -107,6 +107,14 @@ describe('embedKeyOwnerHasEntitlement', () => {
       );
     });
 
+    it('normalizes a thrown Error to its message (a raw Error serializes as {} in a log payload)', async () => {
+      organizationRepository.findById.mockRejectedValue(new Error('db down'));
+
+      await expect(embedKeyOwnerHasEntitlement(orgKeyRef, KEY, 'key-1')).resolves.toBe(false);
+
+      expect(warn).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({ error: 'db down' }));
+    });
+
     it('reports the resolved org owner when the failure is downstream of the org lookup', async () => {
       organizationRepository.findById.mockResolvedValue({ id: 'org-1', userId: 'owner-9' });
       getUserEntitlements.mockRejectedValue(new Error('db down'));

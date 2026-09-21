@@ -216,54 +216,15 @@ describe('toggleTags - data lake meta-tags', () => {
     });
   });
 
-  it('activates a draft lake the toggle just added a file to (#1342)', async () => {
-    // The door the bug was reported through. It never wrote status itself - only batch creation
-    // did - so a lake filled this way stayed draft and never reached Discover or retrieval.
+  // Adding a file to a draft lake no longer publishes it as a side effect - the toggle
+  // still corrects the lake's stats, but status is untouched until an explicit promote.
+  it("corrects a draft lake's stats without publishing it", async () => {
     const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
 
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    expect(adapters.db.dataLakes.activateIfDraft).toHaveBeenCalledWith('lake1');
-  });
-
-  // #1964: the one remaining door that could emit an `auto-activate` config-change row without
-  // ever attaching an `auditPrincipal` - the four config-write routes (#1917) and the other
-  // recompute callers (#2124) already do. Mutation-verified: deleting the `auditPrincipal` line
-  // from the actor at toggleTags.ts's actor construction turns the first case red (the fallback
-  // derives `principalKind: 'user'` from `actor.userId` instead).
-  describe('auto-activate audit principal (#1964)', () => {
-    it('names the API key, not the human, when a key-driven toggle activates a draft lake', async () => {
-      const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
-      adapters.db.dataLakes.activateIfDraft = vi.fn().mockResolvedValue(true);
-
-      await run(
-        adapters,
-        { ids: ['f1'], tags: ['datalake:lake'] },
-        { auditPrincipal: { principalKind: 'apiKey', principalId: 'key-abc', onBehalfOfUserId: 'owner' } }
-      );
-
-      expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'auto-activate',
-          principalKind: 'apiKey',
-          principalId: 'key-abc',
-          onBehalfOfUserId: 'owner',
-        })
-      );
-    });
-
-    it('still names the session user with no onBehalfOfUserId when no key is involved', async () => {
-      const adapters = makeAdapters([file('f1')], lake({ status: 'draft' }));
-      adapters.db.dataLakes.activateIfDraft = vi.fn().mockResolvedValue(true);
-
-      await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
-
-      expect(adapters.db.lakeConfigChangeEvents.record).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: 'owner' })
-      );
-      const [event] = adapters.db.lakeConfigChangeEvents.record.mock.calls[0];
-      expect('onBehalfOfUserId' in event).toBe(false);
-    });
+    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', expect.anything());
+    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
   });
 
   it('recomputes a lake once for the whole batch, not once per file', async () => {

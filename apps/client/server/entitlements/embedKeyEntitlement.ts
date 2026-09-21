@@ -64,7 +64,9 @@ export async function embedKeyOwnerHasEntitlement(
       // The org billing owner once resolved; still the minter if the org lookup
       // itself threw, which is what makes it worth logging separately.
       ownerUserId,
-      error,
+      // Normalized: a raw Error passed to a structured log payload serializes
+      // as `{}` (message and stack are non-enumerable own properties, so JSON.stringify drops them).
+      error: error instanceof Error ? error.message : String(error),
     });
     return false;
   }

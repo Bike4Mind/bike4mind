@@ -22,7 +22,7 @@ import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { disableDriveConnectionForLake, enableDriveConnectionForLake } from '@server/integrations/google/drive/common';
 
 const LifecycleInput = z.object({
-  action: z.enum(['archive', 'unarchive', 'restore', 'delete', 'cleanup']),
+  action: z.enum(['archive', 'unarchive', 'restore', 'delete', 'cleanup', 'promote', 'demote']),
 });
 
 /**
@@ -100,6 +100,28 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           },
           enableDriveConnection: async ({ dataLakeId }) => {
             await enableDriveConnectionForLake(dataLakeId);
+          },
+          logger: req.logger,
+        });
+        return res.json(result);
+      }
+      case 'promote': {
+        const result = await dataLakeService.promoteDataLake(actor, lake.id, {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
+          },
+          logger: req.logger,
+        });
+        return res.json(result);
+      }
+      case 'demote': {
+        const result = await dataLakeService.demoteDataLake(actor, lake.id, {
+          db: {
+            dataLakes: dataLakeRepository,
+            dataLakeAccessGrants: dataLakeAccessGrantRepository,
+            ...lakeConfigAuditDb,
           },
           logger: req.logger,
         });
