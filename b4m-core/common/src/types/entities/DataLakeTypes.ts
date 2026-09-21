@@ -424,6 +424,14 @@ export interface IDataLake {
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
   /**
+   * Last time the scheduled lake health sweep graded this lake (`lakeHealthSweep`), stamped
+   * whether the grading succeeded or failed. Doubles as the sweep's fairness key: it scans
+   * `status: 'active'` lakes oldest-checked-first (null/never-checked sorts first), so a fleet
+   * larger than one run's cap drains across runs instead of the same prefix by `_id` being
+   * regraded forever while the tail is never reached. Not touched by anything else.
+   */
+  lastHealthCheckedAt?: Date | null;
+  /**
    * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
    * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
    * what keeps a file the creator deleted independently - before OR during the deleted window -
@@ -806,6 +814,12 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   setLakeMemoryCursor(id: string, cursor: string | null): Promise<void>;
   /** Advance the cursor only while the purge fence still matches `fenceAt`; false means it moved. */
   setLakeMemoryCursorIfFenceUnmoved(id: string, cursor: string | null, fenceAt: Date | null): Promise<boolean>;
+  /**
+   * Stamp `lastHealthCheckedAt` for the lake health sweep's staleness ordering - see the field's
+   * own doc comment. Called for every lake the sweep ATTEMPTS, success or failure, so a lake that
+   * keeps failing does not sort first forever and starve the rest of the fleet.
+   */
+  markHealthChecked(id: string, at: Date): Promise<void>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────

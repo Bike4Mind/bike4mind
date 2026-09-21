@@ -119,6 +119,10 @@ const DataLakeSchema = new mongoose.Schema(
     // Lifetime embedding spend, integer micro-USD - see IDataLake.embeddingSpendMicroUsd.
     embeddingSpendMicroUsd: { type: Number, default: 0 },
     lastSyncAt: { type: Date },
+    // Lake health sweep's staleness-ordering key - see IDataLake.lastHealthCheckedAt. Default null
+    // so a never-checked lake sorts first (see the compound index below), same convention as
+    // lastPolledAt on OrgGoogleDriveConnectionModel.
+    lastHealthCheckedAt: { type: Date, default: null },
     // Teardown batch key (see IDataLake.filesDeletedAt): the exact stamp phase-1 delete wrote on
     // the lake's member files, matched by equality on restore. Set only through
     // claimFilesDeletedAt, never a plain update - a stamp written past the claim can name a batch
@@ -169,6 +173,9 @@ DataLakeSchema.index({ organizationId: 1, slug: 1 }, { unique: true });
 // and fail to build. Org-scope collisions stay app-level only: tagPrefixCollision.ts's
 // creator-OR-org scope rule is an OR, which no single Mongo unique index key can express.
 DataLakeSchema.index({ createdByUserId: 1, fileTagPrefix: 1 }, { unique: true });
+// Serves the lake health sweep's staleness-ordered scan (status: 'active', sorted oldest-checked
+// first) - mirrors OrgGoogleDriveConnectionModel's { enabled: 1, status: 1, lastPolledAt: 1 }.
+DataLakeSchema.index({ status: 1, lastHealthCheckedAt: 1 });
 
 export const DataLakeModel =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
@@ -1067,6 +1074,10 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       lakeMemoryPurgedAt?: Date | null;
     } | null;
     return { exists: !!doc, purgedAt: doc?.lakeMemoryPurgedAt ?? null };
+  }
+
+  async markHealthChecked(id: string, at: Date): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $set: { lastHealthCheckedAt: at } });
   }
 }
 

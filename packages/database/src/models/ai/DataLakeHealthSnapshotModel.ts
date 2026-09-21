@@ -6,6 +6,17 @@ import BaseRepository from '@bike4mind/db-core';
 const ModelName = 'DataLakeHealthSnapshot';
 
 /**
+ * How long a trend point is kept. The sweep writes one row per active lake per day forever, so
+ * without a TTL this collection only grows - same reason LakeAccessEventModel and
+ * DataLakeSpendNotificationModel carry one. A year of daily points is well past any window a
+ * "is this lake degrading" question is asked over.
+ */
+export const DATA_LAKE_HEALTH_SNAPSHOT_RETENTION_DAYS = 365;
+
+/** A quarter of daily points - enough to read a trend, bounded for a caller that names no limit. */
+const DEFAULT_TREND_LIMIT = 90;
+
+/**
  * One row per (lake, day): the scheduled sweep's persisted trend of `computeLakeHealth`'s
  * output, so a degrading lake is visible without anyone asking. Deliberately a SUMMARY, not the
  * full `LakeHealthApiResponse` - `affectedMembers`/`membership`/`duplicateMembers.groups` carry
@@ -38,6 +49,8 @@ export interface IDataLakeHealthSnapshotDocument extends IMongoDocument {
   lakeMemoryState: LakeMemoryState;
   /** Null means detection has never run for this lake - see `LakeHealthApiResponse.inconsistency`. */
   inconsistencyFindingCount: number | null;
+  /** TTL sweep anchor; derived from `computedAt`, never supplied by the caller. */
+  expiresAt: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,6 +86,7 @@ const DataLakeHealthSnapshotSchema = new Schema<IDataLakeHealthSnapshotDocument>
     duplicateGroupCount: { type: Number, required: true },
     lakeMemoryState: { type: String, required: true },
     inconsistencyFindingCount: { type: Number, default: null },
+    expiresAt: { type: Date, required: true, immutable: true },
   },
   { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } }
 );
@@ -80,6 +94,7 @@ const DataLakeHealthSnapshotSchema = new Schema<IDataLakeHealthSnapshotDocument>
 // The idempotency key (lakeId, snapshotDate) doubles as the trend query's own access path: it is
 // already sorted by snapshotDate within a lake, so getTrend needs no second index.
 DataLakeHealthSnapshotSchema.index({ lakeId: 1, snapshotDate: 1 }, { unique: true });
+DataLakeHealthSnapshotSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
 export const DataLakeHealthSnapshotModel: IDataLakeHealthSnapshotModel =
   (mongoose.models[ModelName] as IDataLakeHealthSnapshotModel) ||
@@ -98,19 +113,25 @@ class DataLakeHealthSnapshotRepository extends BaseRepository<IDataLakeHealthSna
    * manual run) overwrites that day's row with the fresher computation instead of adding a
    * duplicate - the trend gains a new point once per day per lake, never more.
    */
-  async upsertSnapshot(input: Omit<IDataLakeHealthSnapshotDocument, 'id' | 'createdAt' | 'updatedAt'>): Promise<void> {
+  async upsertSnapshot(
+    input: Omit<IDataLakeHealthSnapshotDocument, 'id' | 'createdAt' | 'updatedAt' | 'expiresAt'>
+  ): Promise<void> {
+    const expiresAt = new Date(
+      input.computedAt.getTime() + DATA_LAKE_HEALTH_SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60 * 1000
+    );
     await this.snapshotModel.findOneAndUpdate(
       { lakeId: input.lakeId, snapshotDate: input.snapshotDate },
-      { $set: input },
+      { $set: { ...input, expiresAt } },
       { upsert: true, setDefaultsOnInsert: true }
     );
   }
 
-  /** Newest first. Not read by anything shipped in this change; exists so the persisted trend is
-   * actually queryable rather than write-only. */
+  /** Newest first, bounded by default (a lake's history is one row per day and only TTL-capped, so
+   * an unbounded read grows with the lake's age). Not read by anything shipped in this change;
+   * exists so the persisted trend is actually queryable rather than write-only. */
   async getTrend(lakeId: string, opts?: { limit?: number }): Promise<IDataLakeHealthSnapshotDocument[]> {
     const query = this.snapshotModel.find({ lakeId }).sort({ snapshotDate: -1 });
-    if (opts?.limit) query.limit(opts.limit);
+    query.limit(opts?.limit ?? DEFAULT_TREND_LIMIT);
     const docs = await query;
     return docs.map(d => d.toJSON() as unknown as IDataLakeHealthSnapshotDocument);
   }

@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockFind = vi.fn();
+const mockMarkHealthChecked = vi.fn();
 const mockUpsertSnapshot = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
-  dataLakeRepository: { find: (...args: unknown[]) => mockFind(...args) },
+  dataLakeRepository: {
+    find: (...args: unknown[]) => mockFind(...args),
+    markHealthChecked: (...args: unknown[]) => mockMarkHealthChecked(...args),
+  },
   fabFileRepository: {},
   adminSettingsRepository: {},
   scopedSettingsRepository: {},
@@ -55,6 +59,7 @@ const lake = (overrides: Record<string, unknown> = {}) => ({
   status: 'active',
   datalakeTag: 'tag-1',
   organizationId: null,
+  lastHealthCheckedAt: null,
   ...overrides,
 });
 
@@ -87,6 +92,7 @@ describe('lakeHealthSweep cron', () => {
     mockFind.mockResolvedValue([]);
     mockComputeLakeHealth.mockResolvedValue(healthResult());
     mockUpsertSnapshot.mockResolvedValue(undefined);
+    mockMarkHealthChecked.mockResolvedValue(undefined);
   });
 
   it('reports zero scanned when there are no active lakes', async () => {
@@ -101,7 +107,13 @@ describe('lakeHealthSweep cron', () => {
     expect(filter.status).toBe('active');
   });
 
-  it('computes and persists health for each active lake', async () => {
+  it('sorts the scan by staleness (oldest/never-checked lastHealthCheckedAt first), not by _id', async () => {
+    await handler();
+    const [, options] = mockFind.mock.calls[0];
+    expect(options.sort).toEqual({ lastHealthCheckedAt: 1, _id: 1 });
+  });
+
+  it('computes and persists health for each active lake, then stamps it as checked', async () => {
     mockFind.mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
 
     const result = await handler();
@@ -115,6 +127,8 @@ describe('lakeHealthSweep cron', () => {
       servesRetrieval: true,
       reachableShare: 0.9,
     });
+    expect(mockMarkHealthChecked).toHaveBeenCalledTimes(1);
+    expect(mockMarkHealthChecked).toHaveBeenCalledWith('lake-1', expect.any(Date));
   });
 
   it('isolates a per-lake failure so the rest of the run still completes', async () => {
@@ -127,19 +141,40 @@ describe('lakeHealthSweep cron', () => {
     expect(mockUpsertSnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it('paginates by cursor across multiple pages until a short page ends the scan', async () => {
+  it('stamps lastHealthCheckedAt even for a lake whose grading failed, so it rotates to the back next run', async () => {
+    mockFind.mockResolvedValueOnce([lake({ id: 'lake-fail' })]).mockResolvedValueOnce([]);
+    mockComputeLakeHealth.mockRejectedValueOnce(new Error('boom'));
+
+    const result = await handler();
+
+    expect(result.failed).toBe(1);
+    // A lake stuck failing forever must still lose its "never checked" priority - otherwise it
+    // (and everything capped behind it) starves, which is the exact fairness bug being fixed.
+    expect(mockMarkHealthChecked).toHaveBeenCalledWith('lake-fail', expect.any(Date));
+  });
+
+  it('paginates by a staleness+id keyset across multiple pages until a short page ends the scan', async () => {
     // PAGE_SIZE is 100: a full first page implies "there may be more", so only a page shorter
     // than what was asked for ends the scan.
-    const firstPage = Array.from({ length: 100 }, (_, i) => lake({ id: `lake-${i + 1}` }));
-    mockFind.mockResolvedValueOnce(firstPage).mockResolvedValueOnce([lake({ id: 'lake-101' })]);
+    const checkedAt = new Date('2024-01-01T00:00:00Z');
+    const firstPage = Array.from({ length: 100 }, (_, i) =>
+      lake({ id: `lake-${i + 1}`, lastHealthCheckedAt: checkedAt })
+    );
+    mockFind
+      .mockResolvedValueOnce(firstPage)
+      .mockResolvedValueOnce([lake({ id: 'lake-101', lastHealthCheckedAt: null })]);
 
     const result = await handler();
 
     expect(result.scanned).toBe(101);
     expect(mockFind).toHaveBeenCalledTimes(2);
-    // Second page's cursor is the last id of the first page.
+    // Second page's keyset cursor is (lastHealthCheckedAt, _id) of the first page's last row, not
+    // just `_id` - the scan order is staleness, so the cursor has to track that field too.
     const [secondFilter] = mockFind.mock.calls[1];
-    expect(secondFilter._id).toEqual({ $gt: 'lake-100' });
+    expect(secondFilter.$or).toEqual([
+      { lastHealthCheckedAt: { $gt: checkedAt } },
+      { lastHealthCheckedAt: checkedAt, _id: { $gt: 'lake-100' } },
+    ]);
   });
 
   it('emits the run metric even when the scan itself throws', async () => {

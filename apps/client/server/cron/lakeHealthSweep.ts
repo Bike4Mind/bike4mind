@@ -14,11 +14,18 @@
  * nothing, so grading either on a schedule would buy nothing but the cost this sweep exists to
  * bound.
  *
- * Cost/blast radius: cursor-paginated by `_id` (PAGE_SIZE, no `skip()`), a hard per-run cap
- * (MAX_LAKES_PER_RUN - the remainder is picked up on the next scheduled run, never blocking this
- * one), and bounded fan-out (CONCURRENCY) for the per-lake computation, mirroring
- * dataLakeBatchReconcile's rescue sweeps. Each lake is wrapped in its own try/catch so one slow or
- * failing lake costs only itself, never the rest of the run.
+ * Cost/blast radius: keyset-paginated (PAGE_SIZE, no `skip()`), a hard per-run cap
+ * (MAX_LAKES_PER_RUN - see the constant), and bounded fan-out (CONCURRENCY) for the per-lake
+ * computation, mirroring dataLakeBatchReconcile's rescue sweeps. Each lake is wrapped in its own
+ * try/catch so one slow or failing lake costs only itself, never the rest of the run.
+ *
+ * Fairness: the scan is STALENESS-ORDERED, not `_id`-ordered - oldest-`lastHealthCheckedAt`-first,
+ * null (never checked) first of all - and every lake this run ATTEMPTS (success or failure) gets
+ * `lastHealthCheckedAt` stamped to `computedAt`. So a fleet bigger than one run's cap does not
+ * regrade the same prefix forever: whichever lakes were graded sort to the back next run, and the
+ * previously-uncapped tail sorts to the front. No persisted cursor needed - the ordering itself
+ * self-drains, and a run that dies mid-page loses nothing but that page's progress (see
+ * `IDataLake.lastHealthCheckedAt`).
  *
  * Idempotency: `dataLakeHealthSnapshotRepository.upsertSnapshot` upserts on (lakeId, the UTC
  * calendar day), so a retried or re-run sweep overwrites that day's row instead of accumulating
@@ -49,13 +56,17 @@ const logger = new Logger({ metadata: { service: 'lakeHealthSweep' } });
 
 const CLOUDWATCH_NAMESPACE = 'Lumina5/DataLakes';
 
-/** Per-page scan size, cursor-paginated by `_id` so no page requires a `skip()`. */
+/** Per-page scan size, keyset-paginated so no page requires a `skip()`. */
 const PAGE_SIZE = 100;
 
 /**
- * Hard cap on lakes graded in one run. Passed explicitly (rather than left unbounded) so a
- * runaway lake count cannot blow the Lambda timeout; a capped run is detectable via the
- * `truncated` result/log and picks up where it left off on the next scheduled run.
+ * Hard cap on lakes graded in one run, so a runaway lake count cannot blow the Lambda timeout.
+ *
+ * Unlike dataLakeBatchReconcile's MAX_PER_RUN, a graded lake stays active - the candidate set is
+ * not smaller next run just because this run touched it. What makes THIS cap self-drain instead is
+ * the staleness ordering: hitting it only ever defers the lakes whose `lastHealthCheckedAt` is
+ * newest, which is exactly the set this run just brought up to date, so they are the last lakes
+ * due again. A fleet bigger than the cap gets fully covered over ceil(activeCount / cap) runs.
  */
 const MAX_LAKES_PER_RUN = 2000;
 
@@ -76,12 +87,21 @@ const SNAPSHOT_FIELDS = {
   createdByUserId: 1,
   organizationId: 1,
   requiredPassageTokenTarget: 1,
-  inconsistencyReport: 1,
+  // Subpaths, never the whole report: `storedInconsistency` reads only these scalars and never
+  // `findings`, and DataLakeRepository.find projects `inconsistencyReport` away by default
+  // (LIST_PROJECTION_FIELDS) precisely so that array does not ride along on a fleet-wide scan.
+  'inconsistencyReport.sampled': 1,
+  'inconsistencyReport.memberSampled': 1,
+  'inconsistencyReport.memberCount': 1,
+  'inconsistencyReport.truncated': 1,
+  'inconsistencyReport.countsByKind': 1,
   inconsistencyComputedAt: 1,
   lakeMemoryEnabled: 1,
   lakeMemoryExtractionAt: 1,
   lakeMemoryCursor: 1,
   lastSyncAt: 1,
+  // Read back so the staleness-ordered scan can build the next page's keyset cursor from it.
+  lastHealthCheckedAt: 1,
 } as const;
 
 type SweepLake = Pick<
@@ -99,6 +119,7 @@ type SweepLake = Pick<
   | 'lakeMemoryExtractionAt'
   | 'lakeMemoryCursor'
   | 'lastSyncAt'
+  | 'lastHealthCheckedAt'
 >;
 
 function utcDateString(d: Date): string {
@@ -156,23 +177,38 @@ export async function handler() {
 
   let scanned = 0;
   let failed = 0;
-  let cursor: string | null = null;
+  // Keyset cursor on the sort key itself (lastHealthCheckedAt, _id), not just `_id` - the scan
+  // order is staleness, not insertion order, so the cursor has to be too. Null cursor = first page.
+  let cursor: { lastHealthCheckedAt: Date | null; id: string } | null = null;
+  // Set only when a page came back FULL and the cap is what stopped the loop - `scanned >= cap`
+  // alone cannot tell "cap hit with lakes left over" from "the last lake was the 2000th".
+  let truncated = false;
 
   while (scanned < MAX_LAKES_PER_RUN) {
     const pageLimit = Math.min(PAGE_SIZE, MAX_LAKES_PER_RUN - scanned);
     const filter: Record<string, unknown> = { status: 'active' };
-    if (cursor) filter._id = { $gt: cursor };
+    if (cursor) {
+      // Standard two-field keyset "greater than (a, b)": either the staleness key moved past the
+      // cursor's, or it's tied and `_id` breaks the tie. `$gt: null` matches only documents with a
+      // real (non-null) value - see BSON comparison order - which is exactly "past every
+      // never-checked lake" when the cursor itself was one of them.
+      filter.$or = [
+        { lastHealthCheckedAt: { $gt: cursor.lastHealthCheckedAt } },
+        { lastHealthCheckedAt: cursor.lastHealthCheckedAt, _id: { $gt: cursor.id } },
+      ];
+    }
 
     // Sequential pages are the point: each page's cursor depends on the previous one, and paging
     // exists to avoid holding every active lake in memory at once.
     const lakes = (await dataLakeRepository.find(filter, {
-      sort: { _id: 1 },
+      sort: { lastHealthCheckedAt: 1, _id: 1 },
       limit: pageLimit,
       ...SNAPSHOT_FIELDS,
     })) as unknown as SweepLake[];
 
     if (lakes.length === 0) break;
-    cursor = lakes[lakes.length - 1].id;
+    const last = lakes[lakes.length - 1];
+    cursor = { lastHealthCheckedAt: last.lastHealthCheckedAt ?? null, id: last.id };
     scanned += lakes.length;
 
     for (let i = 0; i < lakes.length; i += CONCURRENCY) {
@@ -187,6 +223,14 @@ export async function handler() {
             failed += 1;
             logger.error('[LakeHealthSweep] Failed to compute/persist health for lake', { lakeId: lake.id, err });
           }
+          // Stamped regardless of outcome, and OUTSIDE the try/catch above - a lake that keeps
+          // failing must still sort to the back next run, or it (and whatever else got capped
+          // behind it) would starve forever. Its own failure is not allowed to crash the sweep.
+          try {
+            await dataLakeRepository.markHealthChecked(lake.id, computedAt);
+          } catch (err) {
+            logger.error('[LakeHealthSweep] Failed to stamp lastHealthCheckedAt for lake', { lakeId: lake.id, err });
+          }
         })
       );
     }
@@ -194,11 +238,11 @@ export async function handler() {
     // Keep paging until a page comes back short of what was asked for - a full page always
     // implies "there may be more", so this only stops on a genuinely final (or empty) page.
     if (lakes.length < pageLimit) break;
+    truncated = scanned >= MAX_LAKES_PER_RUN;
   }
 
-  const truncated = scanned >= MAX_LAKES_PER_RUN;
   if (truncated) {
-    logger.warn('[LakeHealthSweep] Hit the per-run lake cap; remaining active lakes will be picked up next run', {
+    logger.warn('[LakeHealthSweep] Hit the per-run lake cap; the staler remainder is picked up next run', {
       limit: MAX_LAKES_PER_RUN,
     });
   }
