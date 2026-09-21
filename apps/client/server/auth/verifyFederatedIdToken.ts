@@ -146,7 +146,7 @@ export async function verifyFederatedIdToken(
   // every live client is on `sub`. Retire this whole branch (and extractB4mUserId) once
   // enforcement is on everywhere.
   if (process.env.OAUTH_AI_TOKEN_REQUIRE_SUB === 'true') {
-    throw new CognitoIdTokenError(
+    throw new FederatedIdTokenError(
       "Federated client must present a B4M-issued ID token (subjectSource='sub'); the self-asserted identities path is no longer accepted"
     );
   }

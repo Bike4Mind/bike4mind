@@ -174,7 +174,7 @@ describe('verifyFederatedIdToken - B4M-issued ID token (subjectSource: sub)', ()
   });
 });
 
-describe('verifyCognitoIdToken - staged subjectSource=sub requirement (OAUTH_AI_TOKEN_REQUIRE_SUB)', () => {
+describe('verifyFederatedIdToken - staged subjectSource=sub requirement (OAUTH_AI_TOKEN_REQUIRE_SUB)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreate.mockImplementation(() => ({ verify: mockVerify }));
@@ -191,7 +191,7 @@ describe('verifyCognitoIdToken - staged subjectSource=sub requirement (OAUTH_AI_
       token_use: 'id',
       identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
     });
-    await expect(verifyCognitoIdToken('tok', IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it('grace mode (flag unset) still resolves an identities-source client but logs a would-reject', async () => {
@@ -201,7 +201,7 @@ describe('verifyCognitoIdToken - staged subjectSource=sub requirement (OAUTH_AI_
       identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
     });
 
-    const result = await verifyCognitoIdToken('tok', IDP);
+    const result = await verifyFederatedIdToken('tok', IDP);
 
     expect(result.b4mUserId).toBe('b4m-user-123');
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
@@ -212,7 +212,7 @@ describe('verifyCognitoIdToken - staged subjectSource=sub requirement (OAUTH_AI_
     process.env.OAUTH_AI_TOKEN_REQUIRE_SUB = 'true';
     mockVerify.mockResolvedValue({ sub: 'b4m-user-777' });
 
-    const result = await verifyCognitoIdToken('tok', B4M_IDP);
+    const result = await verifyFederatedIdToken('tok', B4M_IDP);
     expect(result.b4mUserId).toBe('b4m-user-777');
   });
 });
