@@ -56,7 +56,7 @@ const ContentTransformPreviewCard: React.FC<ContentTransformPreviewCardProps> = 
           // every other card a reply produces. surface2 rather than background.level1,
           // which this theme never defines - it used to resolve to a Joy default that
           // matched nothing else in the transcript.
-          backgroundColor: 'background.surface2',
+          backgroundColor: theme.palette.reading.cardBase,
           backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
           borderRadius: '8px',
           position: 'relative',

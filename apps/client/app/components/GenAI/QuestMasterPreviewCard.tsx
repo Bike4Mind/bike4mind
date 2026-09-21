@@ -51,7 +51,9 @@ const QuestMasterPreviewCard: React.FC<QuestMasterPreviewCardProps> = memo(({ on
       <Card
         variant="outlined"
         sx={theme => ({
-          backgroundColor: 'background.level1',
+          // background.level1 is not defined by this theme, so this card used to sit on a
+          // Joy default that matched no other card in the transcript.
+          backgroundColor: theme.palette.reading.cardBase,
           // Same card recipe as the artifact cards and fenced code blocks: the fill
           // stays the theme's own surface, with a brand-blue veil falling across it.
           backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,

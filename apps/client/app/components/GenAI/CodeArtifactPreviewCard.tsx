@@ -141,7 +141,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       sx={theme => ({
         // Matches ArtifactPreviewCard: the sidebar/header surface, not Joy's undefined
         // background.level1 default.
-        backgroundColor: 'background.surface2',
+        backgroundColor: theme.palette.reading.cardBase,
         // The same veil ArtifactPreviewCard and a fenced code block carry, so a code
         // card sits in the same family as every other artifact rather than reading as
         // a flat panel. backgroundImage, not a background shorthand, so the fill above

@@ -270,9 +270,9 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
       variant="outlined"
       data-testid={`${testIdPrefix}-artifact-card`}
       sx={theme => ({
-        // surface2 is the sidebar/header surface. Joy's background.level1 default is not
-        // defined by this theme, so the cards would otherwise sit on an unpicked color.
-        backgroundColor: 'background.surface2',
+        // reading.cardBase, not a chrome surface: a card's fill is its own decision, and
+        // light needs a neutral one so the veil below is the only colour on it.
+        backgroundColor: theme.palette.reading.cardBase,
         // Same card recipe as a fenced code block (markdown/syntaxTheme.ts): the
         // fill stays the theme's own surface and a brand-blue veil falls across
         // it, so every framed thing a reply produces is one family. backgroundImage
