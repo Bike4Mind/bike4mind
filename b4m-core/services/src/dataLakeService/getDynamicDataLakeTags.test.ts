@@ -27,13 +27,20 @@ const dbLake = (overrides: Partial<IDataLakeDocument> & Pick<IDataLakeDocument, 
 // `organizationIds` stands in for the caller's membership set (what `db.organizations.
 // findMembershipOrgIds` would resolve) - default empty (member of nothing) unless a test
 // needs an org lake to resolve.
+// countGateExcludedLakes is a SEPARATE count-only query (#3055) - unrelated to the
+// findActiveByUserTagsAndEntitlements candidate set most tests below exercise, so it defaults to
+// 0 here and is overridden explicitly by the tests that care about it (see the "excluded lake
+// count" describe block).
 const ctx = (
   lakes: IDataLakeDocument[],
   over: Partial<DataLakeAccessContext> = {},
   organizationIds: string[] = []
 ): DataLakeAccessContext => ({
   db: {
-    dataLakes: { findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes) } as never,
+    dataLakes: {
+      findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue(lakes),
+      countGateExcludedLakes: vi.fn().mockResolvedValue(0),
+    } as never,
     organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(organizationIds) },
   },
   user: { tags: [] },
@@ -342,6 +349,71 @@ describe('getDynamicDataLakeAccess — entitlement-aware lake resolution', () =>
     // Asserts the re-add outcome, not what was handed to the query - a raw === against the
     // uncoerced context value would compare an object to a string and silently drop the lake.
     expect(res.dataLakeTags).toEqual(['datalake:mine']);
+  });
+});
+
+// #3055: excludedByAccessCount comes from a SEPARATE count-only query (countGateExcludedLakes),
+// not from anything findActiveByUserTagsAndEntitlements returns - that candidate set already has
+// the gate enforced datastore-side (see the file's own requirementConstraint), so it cannot see
+// the population this count exists to measure. These tests exercise the resolver's wiring of
+// that query, not the query's own filter logic (that lives in DataLakeModel.test.ts).
+describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => {
+  it('passes the count-only query result through unchanged, including a genuine zero', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(3);
+    const res = await getDynamicDataLakeAccess(
+      ctx([], {
+        db: {
+          dataLakes: { countGateExcludedLakes } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        },
+      })
+    );
+    expect(res.excludedByAccessCount).toBe(3);
+  });
+
+  it('reports 0 explicitly - distinct from "not measured" - when nothing was excluded', async () => {
+    const res = await getDynamicDataLakeAccess(ctx([], { user: { tags: [] } }));
+    expect(res.excludedByAccessCount).toBe(0);
+  });
+
+  it('degrades to undefined (unknown), never a false 0, when the count query fails', async () => {
+    const countGateExcludedLakes = vi.fn().mockRejectedValue(new Error('boom'));
+    const logger = { warn: vi.fn() } as never;
+    const res = await getDynamicDataLakeAccess({
+      db: {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes,
+        } as never,
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      },
+      user: { tags: [] },
+      logger,
+    });
+    expect(res.excludedByAccessCount).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('threads the caller identity and grant reach into the count query', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(0);
+    await getDynamicDataLakeAccess({
+      db: {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes,
+        } as never,
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
+      },
+      user: { id: 'u1', tags: ['x'] },
+      entitlementKeys: ['k:pro'],
+    });
+    expect(countGateExcludedLakes).toHaveBeenCalledWith(
+      ['x'],
+      ['k:pro'],
+      ['org1'],
+      'u1',
+      expect.objectContaining({ grantedLakeIds: [], orgGrantedLakes: {} })
+    );
   });
 });
 
