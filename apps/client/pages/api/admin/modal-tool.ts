@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { Logger } from '@bike4mind/observability';
+import { ApiKeyScope } from '@bike4mind/common';
 import { createModal, listModals, updateModal, deleteModal } from '@client/server/tools/modalOperations';
 
 const logger = new Logger({ metadata: { service: 'admin-modal-tool' } });
@@ -20,7 +21,7 @@ const requestSchema = z.object({
 /**
  * API endpoint that processes natural language modal requests
  */
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req: any, res: any) => {
     // Silently fail for non-admin users
     if (!req.ability?.can('manage', 'Modal')) {

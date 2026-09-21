@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { fabFileRepository } from '@bike4mind/database';
 import {
   AdminSupportAccessAction,
+  ApiKeyScope,
   IAdminSupportFileSummary,
   IAdminSupportSession,
   IAdminSupportSessionResponse,
@@ -114,7 +115,7 @@ const toSupportSession = (session: ISessionDocument): IAdminSupportSession => ({
   curatedAt: session.curatedAt,
 });
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   const ctx = await authorizeSupportRead(req);
 
   const knowledgeIds = ctx.session.knowledgeIds ?? [];
