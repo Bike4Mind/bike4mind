@@ -39,7 +39,12 @@ interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters, LakeMembers
     LakeMembershipAuditAdapters['db'] & {
       fabFiles: Pick<
         IFabFileRepository,
-        'shareable' | 'findById' | 'pullTagsByFabFileId' | 'pushTagsByFabFileId' | 'computeDataLakeStats'
+        | 'shareable'
+        | 'findById'
+        | 'pullTagsByFabFileId'
+        | 'pushTagsByFabFileId'
+        | 'pushTagReturningPriorState'
+        | 'computeDataLakeStats'
       >;
       fileTags: Pick<IFileTagRepository, 'touchLastActivityBy'>;
       dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;

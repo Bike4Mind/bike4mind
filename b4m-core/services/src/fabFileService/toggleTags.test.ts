@@ -59,6 +59,15 @@ const makeAdapters = (files: ReturnType<typeof file>[], lakeDoc: IDataLakeDocume
           doc.tags.push(...toAdd.map(name => ({ name, strength })));
           return toAdd.length;
         }),
+        // Same store mutation as the push above, returning the PRE-IMAGE instead of a count - the
+        // membership door reads it to tell a real join from filling in a missing meta-tag.
+        pushTagReturningPriorState: vi.fn(async (id: string, name: string, strength = 0) => {
+          const doc = store.get(id);
+          if (!doc || doc.tags.some(t => t.name === name)) return null;
+          const prior = { userId: doc.userId, tags: [...doc.tags] };
+          doc.tags.push({ name, strength });
+          return prior;
+        }),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 3, totalSizeBytes: 99, totalChunkedChars: 0 }),
       },
       fileTags: { touchLastActivityBy: vi.fn() },
@@ -186,7 +195,7 @@ describe('toggleTags - data lake meta-tags', () => {
 
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
   });
 
   it('recomputes the lake stats in both directions', async () => {
@@ -296,7 +305,7 @@ describe('toggleTags - data lake meta-tags', () => {
 
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
   });
 
@@ -358,7 +367,7 @@ describe('toggleTags - data lake meta-tags', () => {
     await run(adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
     // The caller asked to toggle the meta-tag, and the file does not carry it.
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
   });
 
   it('still recomputes stats and surfaces the error when one file of a batch fails', async () => {
@@ -404,7 +413,7 @@ describe('toggleTags - meta-tag join file-ownership conjunct', () => {
 
     await runAs('admin', adapters, { ids: ['f1'], tags: ['datalake:lake'] });
 
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
   });
 
   it('refuses a platform admin joining an unrelated third party file', async () => {

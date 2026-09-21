@@ -11,6 +11,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { lakeMembershipScope } from './lakeMembershipScope';
 import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 
 /**
@@ -48,7 +49,7 @@ interface RemoveMembershipAdapters extends LakeMembershipAuditAdapters {
 
 interface AddMembershipAdapters extends LakeMembershipAuditAdapters {
   db: LakeMembershipAuditAdapters['db'] & {
-    fabFiles: Pick<IFabFileRepository, 'pushTagsByFabFileId'>;
+    fabFiles: Pick<IFabFileRepository, 'pushTagReturningPriorState'>;
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
@@ -233,11 +234,18 @@ export const addFileToLake = async (
   }
   assertLakeWritable(lake);
 
-  const inserted = await db.fabFiles.pushTagsByFabFileId(fabFileId, [lake.datalakeTag], DATALAKE_TAG_STRENGTH);
-  // Idempotent by construction (`pushTagsByFabFileId` filters an already-present name out of its
-  // update), so a no-op re-add of an existing member records nothing - matching
-  // `recordLakeConfigChange`'s own "no real change, no row" rule.
-  if (inserted > 0) {
+  const priorState = await db.fabFiles.pushTagReturningPriorState(fabFileId, lake.datalakeTag, DATALAKE_TAG_STRENGTH);
+  // Idempotent by construction (the push is filtered on the name being absent), so a no-op re-add
+  // of an existing member records nothing - matching `recordLakeConfigChange`'s own "no real
+  // change, no row" rule.
+  //
+  // The event is gated on MEMBERSHIP, not on the insert: stamping the meta-tag is not the same
+  // fact as joining the lake. A creator-owned file carrying a tag under `fileTagPrefix` already
+  // matches through the prefix arm, so filling in its missing meta-tag changes nothing a reader
+  // of this log cares about, and a row for it would claim a transition that never happened. The
+  // pre-image is the document the WINNING write saw, so the answer cannot be raced - which a
+  // separate read of the file, or the insert count alone, both would be.
+  if (priorState && !satisfiesMembershipScope(lakeMembershipScope(lake), priorState)) {
     await recordLakeMembershipChange({ actor, lake, fabFileId, action: 'added', origin }, { db, logger });
   }
 };

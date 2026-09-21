@@ -4,9 +4,9 @@ import { lakeMembershipChangeEventRepository } from '@bike4mind/database';
  * The audit half of every lake MEMBERSHIP-write service's `db` adapters, mirroring
  * `lakeConfigAuditDb` and for the identical reason: one place to spread from, so no route that
  * drives a membership-write service (`addFileToDataLake`, `removeFileFromDataLake`, `toggleTags`,
- * `reconcileLakeTags`, `executeLakeMembershipRepair`) can drift into wiring the write but not the
- * audit, which would be invisible - the services treat the repository as optional and silently
- * record nothing when it is absent (see `LakeMembershipAuditAdapters`).
+ * `reconcileLakeTags`, `executeLakeMembershipRepair`, `restoreDeletedDataLake`) can drift into
+ * wiring the write but not the audit, which would be invisible - the services treat the repository
+ * as optional and silently record nothing when it is absent (see `LakeMembershipAuditAdapters`).
  *
  * Spread it into a service's `db`, e.g.
  *   db: { dataLakes: dataLakeRepository, ...lakeMembershipAuditDb }

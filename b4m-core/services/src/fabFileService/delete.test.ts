@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { UnauthorizedError } from '@bike4mind/utils';
 import { deleteFabFile } from './delete';
-import { IFabFileDocument } from '@bike4mind/common';
+import { DATA_LAKES, IFabFileDocument } from '@bike4mind/common';
 
 describe('deleteFabFile', () => {
   const mockUserId = 'user-123';
@@ -315,6 +315,22 @@ describe('deleteFabFile', () => {
       await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
 
       expect(record).not.toHaveBeenCalled();
+    });
+
+    // A registry lake has no document, so findMemberLakesForFile (which resolves DB lakes for
+    // chunk policy) cannot return one - but its open prefix arm is real membership, and this
+    // delete costs the file that membership.
+    it('records a removal from a static registry lake the DB lookup cannot resolve', async () => {
+      const registryTag = `${DATA_LAKES[0].fileTagPrefix}handbook`;
+      const fileWithTag = { ...mockFabFile, tags: [{ name: registryTag }] };
+      mockAdapter.db.fabFiles.findByIdAndUserId.mockResolvedValue(fileWithTag);
+      mockAdapter.db.fabFiles.update.mockResolvedValue(fileWithTag);
+
+      await deleteFabFile(mockUserId, { id: mockFileId }, mockAdapter);
+
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: DATA_LAKES[0].id, fabFileId: mockFileId, action: 'removed' })
+      );
     });
 
     it('records nothing on the unshared branch', async () => {

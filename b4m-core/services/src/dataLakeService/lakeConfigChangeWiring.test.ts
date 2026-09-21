@@ -569,7 +569,7 @@ describe('lifecycle services', () => {
       findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
       unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
       deleteManyInIds: vi.fn().mockResolvedValue(0),
     },
   });

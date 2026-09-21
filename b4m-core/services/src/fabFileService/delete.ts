@@ -11,7 +11,10 @@ import {
 import { secureParameters, UnauthorizedError } from '@bike4mind/utils';
 import { z } from 'zod';
 import { findMemberLakesForFile } from '../dataLakeService/chunkPolicyConflict';
+import { satisfiesMembershipScope, type MembershipLake } from '../dataLakeService/lakeMembership';
+import { registryMembershipScope } from '../dataLakeService/lakeMembershipScope';
 import type { ManageActor } from '../dataLakeService/manageRule';
+import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
 import {
   recordLakeMembershipChange,
   type LakeMembershipAuditAdapters,
@@ -104,16 +107,22 @@ export const deleteFabFile = async (
     // file's own tags, which a soft delete leaves untouched - only `dataLakes` and the audit repo
     // gate this; a caller that wires neither records nothing.
     //
-    // Undelete restores these same tags with no matching `added` event recorded anywhere - a known
-    // gap left for a future PR, not addressed here.
+    // The lake-level restore door (`restoreDeletedDataLake`) records the matching `added` for a
+    // file it revives, so the two sides of a lake teardown/restore cycle stay consistent.
     if (db.dataLakes && db.lakeMembershipChangeEvents) {
-      const memberLakes = await findMemberLakesForFile(ownedFile, db.dataLakes).catch(err => {
+      const memberLakes: MembershipLake[] = await findMemberLakesForFile(ownedFile, db.dataLakes).catch(err => {
         Logger.globalInstance.error('[deleteFabFile] failed to resolve member lakes for removed event', {
           fileId: ownedFile.id,
           err,
         });
         return [];
       });
+      // `findMemberLakesForFile` resolves DB-backed lakes only - it exists for chunk policy, which a
+      // document-less registry lake cannot declare. A file under a registry lake's open prefix arm
+      // is still a member of it, and this delete still costs it that membership.
+      memberLakes.push(
+        ...registryCandidateLakes().filter(lake => satisfiesMembershipScope(registryMembershipScope(lake), ownedFile))
+      );
       const actor: ManageActor = { userId, isAdmin: false, auditPrincipal };
       await Promise.all(
         memberLakes.map(lake =>

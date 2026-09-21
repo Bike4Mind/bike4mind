@@ -24,7 +24,11 @@ interface AddFileToDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembers
       dataLakes: Pick<IDataLakeRepository, 'findById' | 'findByDatalakeTag' | 'find' | 'setStats' | 'activateIfDraft'>;
       fabFiles: Pick<
         IFabFileRepository,
-        'findById' | 'pushTagsByFabFileId' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
+        | 'findById'
+        | 'pushTagsByFabFileId'
+        | 'pushTagReturningPriorState'
+        | 'pullTagsByFabFileId'
+        | 'computeDataLakeStats'
       >;
       // REQUIRED, unlike `AddMembershipAdapters` (lakeMembership.ts) which leaves it optional for
       // high-fan-in file-creation paths. Optional here degrades to `[]` (loadActiveLakeGrants), so a
@@ -162,7 +166,7 @@ export const addFileToDataLake = async (
   // policy tightened, from a button labelled "Undo".
   await assertLakeAdmission([lake], [member], { db, logger }, { forceReportOnly: isRestore });
 
-  // Idempotent (pushTagsByFabFileId), so a double-click or a retry converges.
+  // Idempotent (the meta-tag push is filtered on absence), so a double-click or a retry converges.
   await addFileToLake(actor, lake, fabFileId, { db, logger });
 
   if (isRestore && liveRemoval) {

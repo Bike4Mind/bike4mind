@@ -20,7 +20,10 @@ const owner = { userId: 'owner', isAdmin: false };
 const fallbackLake = lake({ id: DATA_LAKES[0].id, datalakeTag: DATA_LAKES[0].datalakeTag });
 
 describe('addFileToLake', () => {
-  const makeAdapters = () => ({ db: { fabFiles: { pushTagsByFabFileId: vi.fn().mockResolvedValue(1) } } });
+  // The pre-image the winning push saw: a stranger to the lake, so the write is a real join.
+  const makeAdapters = (prior: unknown = { userId: 'owner', tags: [] }) => ({
+    db: { fabFiles: { pushTagReturningPriorState: vi.fn().mockResolvedValue(prior) } },
+  });
 
   it('stamps the canonical meta-tag at the shared membership strength', async () => {
     const adapters = makeAdapters();
@@ -29,7 +32,7 @@ describe('addFileToLake', () => {
 
     // The tag comes off the lake document, so a mixed-case meta-tag in a request body cannot
     // create a second membership tag that no read arm matches.
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalledWith('f1', ['datalake:lake'], 1);
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalledWith('f1', 'datalake:lake', 1);
     expect(DATALAKE_TAG_STRENGTH).toBe(1);
   });
 
@@ -38,7 +41,7 @@ describe('addFileToLake', () => {
 
     await addFileToLake({ userId: 'root', isAdmin: true }, lake(), 'f1', adapters);
 
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).toHaveBeenCalled();
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalled();
   });
 
   it('refuses a caller who cannot manage the lake', async () => {
@@ -47,7 +50,7 @@ describe('addFileToLake', () => {
     await expect(addFileToLake({ userId: 'stranger', isAdmin: false }, lake(), 'f1', adapters)).rejects.toThrow(
       /do not have permission to add files/i
     );
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).not.toHaveBeenCalled();
   });
 
   it('refuses a built-in fallback lake, which has no document to hold membership', async () => {
@@ -56,13 +59,13 @@ describe('addFileToLake', () => {
     await expect(addFileToLake({ userId: 'root', isAdmin: true }, fallbackLake, 'f1', adapters)).rejects.toThrow(
       /built into the platform and is read-only/i
     );
-    expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
+    expect(adapters.db.fabFiles.pushTagReturningPriorState).not.toHaveBeenCalled();
   });
 
-  describe('membership event (#3052)', () => {
-    const makeAuditedAdapters = (inserted = 1) => ({
+  describe('membership event', () => {
+    const makeAuditedAdapters = (prior: unknown = { userId: 'owner', tags: [] }) => ({
       db: {
-        fabFiles: { pushTagsByFabFileId: vi.fn().mockResolvedValue(inserted) },
+        fabFiles: { pushTagReturningPriorState: vi.fn().mockResolvedValue(prior) },
         lakeMembershipChangeEvents: { record: vi.fn().mockResolvedValue({}) },
       },
     });
@@ -88,11 +91,36 @@ describe('addFileToLake', () => {
     });
 
     it('records nothing for a no-op re-add of an existing member', async () => {
-      const adapters = makeAuditedAdapters(0);
+      // Null pre-image: the filtered push matched nothing, so the meta-tag was already there.
+      const adapters = makeAuditedAdapters(null);
 
       await addFileToLake(owner, lake(), 'f1', adapters);
 
       expect(adapters.db.lakeMembershipChangeEvents.record).not.toHaveBeenCalled();
+    });
+
+    it('records nothing when the file was already a member through the prefix arm', async () => {
+      // A creator-owned file carrying a tag under the lake's fileTagPrefix already matches the
+      // read path's prefix arm. Stamping in its missing meta-tag is not a join, so a row for it
+      // would claim a transition that never happened.
+      const adapters = makeAuditedAdapters({ userId: 'owner', tags: [{ name: 'lk:q1', strength: 0 }] });
+
+      await addFileToLake(owner, lake(), 'f1', adapters);
+
+      expect(adapters.db.fabFiles.pushTagReturningPriorState).toHaveBeenCalled();
+      expect(adapters.db.lakeMembershipChangeEvents.record).not.toHaveBeenCalled();
+    });
+
+    it('records the join when the same prefix tag sits on a file the lake creator does not own', async () => {
+      // The prefix arm is anchored to the LAKE'S CREATOR owning the file, so a stranger's file
+      // carrying `lk:q1` is not a member through it - this really is a join.
+      const adapters = makeAuditedAdapters({ userId: 'someone-else', tags: [{ name: 'lk:q1', strength: 0 }] });
+
+      await addFileToLake(owner, lake(), 'f1', adapters);
+
+      expect(adapters.db.lakeMembershipChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'added' })
+      );
     });
   });
 });

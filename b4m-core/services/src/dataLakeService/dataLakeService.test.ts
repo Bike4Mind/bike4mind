@@ -2988,7 +2988,7 @@ describe('restoreDeletedDataLake - deleted→active with dedup', () => {
       findDeletedByDataLakeTag: vi.fn().mockResolvedValue(deleted),
       // a live file with hash h1 exists -> d1 is a dup and must be excluded from un-delete.
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([{ id: 'live1', contentHash: 'h1' }]),
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(1),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue(['r1']),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
     };
     const dataLakes = {
@@ -3010,6 +3010,67 @@ describe('restoreDeletedDataLake - deleted→active with dedup', () => {
     expect(result.skippedDuplicates).toBe(1);
     expect(result.restoredCount).toBe(1);
   });
+
+  // The delete door logs a `removed` for every file a lake teardown sweeps up, so without this a
+  // reader replaying the log has the restored files still gone.
+  it('records one membership `added` per file the undelete actually revived', async () => {
+    const record = vi.fn().mockResolvedValue({});
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn().mockResolvedValue([
+        { id: 'd1', contentHash: 'h1' },
+        { id: 'd2', contentHash: 'h2' },
+      ]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      // Only d2 moved - d1 is the row a concurrently re-entering restore had already flipped.
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue(['d2']),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
+    };
+
+    await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles, lakeMembershipChangeEvents: { record } },
+    });
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'd2', action: 'added', origin: 'person' })
+    );
+  });
+
+  it('does not fail the restore when the membership audit write throws', async () => {
+    const record = vi.fn().mockRejectedValue(new Error('audit exploded'));
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'd1', contentHash: 'h1' }]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue(['d1']),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
+    };
+
+    const result = await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles, lakeMembershipChangeEvents: { record } },
+    });
+
+    expect(result.restoredCount).toBe(1);
+  });
 });
 
 describe('restoreDeletedDataLake - Drive connection re-enable', () => {
@@ -3017,7 +3078,7 @@ describe('restoreDeletedDataLake - Drive connection re-enable', () => {
     const fabFiles = {
       findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
     };
     const dataLakes = {
@@ -3049,7 +3110,7 @@ describe('restoreDeletedDataLake - Drive connection re-enable', () => {
     const fabFiles = {
       findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
     };
     let settled = false;
@@ -3698,7 +3759,7 @@ describe('teardown stamp bookkeeping', () => {
       fabFiles: {
         findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
         findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
-        undeleteByDataLakeTag: vi.fn().mockResolvedValue(2),
+        undeleteByDataLakeTag: vi.fn().mockResolvedValue(['r1', 'r2']),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 20, totalChunkedChars: 0 }),
       },
     },
@@ -5280,7 +5341,7 @@ describe('terminal lifecycle settles are conditional on the claimed transitional
       fabFiles: {
         findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
         findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
-        undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+        undeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
       },
     };
