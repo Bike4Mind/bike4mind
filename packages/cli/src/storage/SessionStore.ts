@@ -69,6 +69,10 @@ export class SessionStore {
       const data = await fs.readFile(filePath, 'utf-8');
       const session = JSON.parse(data) as Session;
 
+      // Reconcile the id to the validated one we loaded by, not the JSON's own -
+      // a tampered file's `id` field otherwise flows unchecked into Logger/save sinks.
+      session.id = id;
+
       // Backward compatibility: Add IDs to messages that don't have them
       session.messages = session.messages.map(msg => {
         if (!msg.id) {

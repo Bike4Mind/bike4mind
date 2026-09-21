@@ -9,6 +9,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { SessionStore } from './SessionStore';
 import { promises as fs } from 'fs';
+import { homedir } from 'os';
 import { createMockSession } from '../test-utils/mocks';
 
 // Mock the fs module
@@ -32,7 +33,10 @@ describe('SessionStore', () => {
   const mockBasePath = '/test-sessions';
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks (not clearAllMocks) so a mockResolvedValue set in one test does
+    // not bleed into the next; re-establish homedir, which reset also clears.
+    vi.resetAllMocks();
+    vi.mocked(homedir).mockReturnValue('/mock-home');
     sessionStore = new SessionStore(mockBasePath);
   });
 
