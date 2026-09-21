@@ -341,18 +341,19 @@ export class ImageEditService {
       return [];
     }
 
-    if (referenceImageFabFileIds.length > MAX_REFERENCE_IMAGES) {
+    // A repeated id would occupy an anchor slot and pay OpenAI's per-image input cost twice
+    // for bytes the model has already seen. First occurrence wins, so the caller's ordering
+    // survives de-duplication. Counted after de-duplication, because the cap exists to bound
+    // how many images we actually pay to send.
+    const uniqueIds = [...new Set(referenceImageFabFileIds)];
+    if (uniqueIds.length > MAX_REFERENCE_IMAGES) {
       throw new BadRequestError(`At most ${MAX_REFERENCE_IMAGES} reference images may be supplied`);
     }
 
-    const files = await this.db.fabFiles.findAccessibleInIds(
-      referenceImageFabFileIds,
-      { userId, userGroups },
-      lakeAccess
-    );
+    const files = await this.db.fabFiles.findAccessibleInIds(uniqueIds, { userId, userGroups }, lakeAccess);
     const byId = new Map(files.filter(file => !!file.id).map(file => [file.id as string, file]));
 
-    return referenceImageFabFileIds.map(id => {
+    return uniqueIds.map(id => {
       const file = byId.get(id);
       if (!file) throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
       if (!file.mimeType.startsWith('image')) throw new BadRequestError(`Reference image ${id} is not an image`);
@@ -541,7 +542,15 @@ export class ImageEditService {
       // Owner-wide lake access, mirroring ImageGenerationService: a lake-only anchor the
       // workbench admitted must still resolve. Absent resolver degrades to
       // owner/share/global-read only - never widens, never fails the run.
-      const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
+      //
+      // Resolved only when anchors were actually requested. Unlike ImageGenerationService,
+      // which needs lake arms for the primary-image lookup on every run, this path uses them
+      // for anchors alone - so an unconditional call would add a lake-membership roundtrip to
+      // every edit, including the mask-only mainline that had none before this feature.
+      const lakeAccess =
+        referenceImageFabFileIds?.length && this.resolveLakeAccess
+          ? await this.resolveLakeAccess(user, logger)
+          : undefined;
       const referenceImages = await this.resolveReferenceImages({
         referenceImageFabFileIds,
         userId,

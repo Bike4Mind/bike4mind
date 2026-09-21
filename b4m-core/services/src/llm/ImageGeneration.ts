@@ -713,22 +713,24 @@ export class ImageGenerationService {
       return [];
     }
 
+    // A repeated id would occupy an anchor slot and pay OpenAI's per-image input cost twice
+    // for bytes the model has already seen. First occurrence wins, so the caller's ordering
+    // survives de-duplication.
+    const uniqueIds = [...new Set(referenceImageFabFileIds)];
+
     // Belt-and-braces: the request schemas cap this, but process() is also reachable from the
-    // queue, where a stale in-flight payload predates the cap.
-    if (referenceImageFabFileIds.length > MAX_REFERENCE_IMAGES) {
+    // queue, where a stale in-flight payload predates the cap. Counted after de-duplication,
+    // because the cap exists to bound how many images we actually pay to send.
+    if (uniqueIds.length > MAX_REFERENCE_IMAGES) {
       throw new BadRequestError(`At most ${MAX_REFERENCE_IMAGES} reference images may be supplied`);
     }
 
-    const files = await this.db.fabFiles.findAccessibleInIds(
-      referenceImageFabFileIds,
-      { userId, userGroups },
-      lakeAccess
-    );
+    const files = await this.db.fabFiles.findAccessibleInIds(uniqueIds, { userId, userGroups }, lakeAccess);
     const byId = new Map(files.filter(file => !!file.id).map(file => [file.id as string, file]));
 
     // Mapped over the requested ids rather than over `files`, so the provider receives the
     // anchors in the order the caller listed them.
-    return referenceImageFabFileIds.map(id => {
+    return uniqueIds.map(id => {
       const file = byId.get(id);
       if (!file) throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
       if (!file.mimeType.startsWith('image')) throw new BadRequestError(`Reference image ${id} is not an image`);

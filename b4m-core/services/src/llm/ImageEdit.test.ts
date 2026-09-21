@@ -304,6 +304,7 @@ describe('ImageEditService.process reference images (#2744)', () => {
   ) => {
     const accessible = opts.accessible ?? { a: cleanImage('a'), b: cleanImage('b') };
     const findAccessibleInIds = vi.fn(async (ids: string[]) => (ids || []).map(id => accessible[id]).filter(Boolean));
+    const resolveLakeAccess = vi.fn(async () => ({}) as never);
     const quest = {
       id: 'quest1',
       sessionId: 'session1',
@@ -331,6 +332,7 @@ describe('ImageEditService.process reference images (#2744)', () => {
       logEvent: vi.fn(),
       storage: {} as never,
       fabFileStorage: { getSignedUrl: vi.fn(async (path: string) => `https://example.invalid/${path}`) } as never,
+      resolveLakeAccess,
     } as never);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (service as any).tokenizer = {
@@ -350,7 +352,7 @@ describe('ImageEditService.process reference images (#2744)', () => {
       } as never,
       logger: silentLogger,
     });
-    return { quest, findAccessibleInIds };
+    return { quest, findAccessibleInIds, resolveLakeAccess };
   };
 
   beforeEach(() => {
@@ -375,7 +377,9 @@ describe('ImageEditService.process reference images (#2744)', () => {
     // not inherit that, or naming an id would read any user's file.
     const { findAccessibleInIds } = await run({ referenceImageFabFileIds: ['a'] });
 
-    expect(findAccessibleInIds).toHaveBeenCalledWith(['a'], { userId: 'user1', userGroups: undefined }, undefined);
+    // Third arg is the resolved lake access, which must reach the lookup too - a lake-only
+    // anchor the workbench admitted has to resolve here or it would 400 as inaccessible.
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['a'], { userId: 'user1', userGroups: undefined }, {});
   });
 
   it('fails the quest when an anchor is not accessible, rather than rendering fewer', async () => {
@@ -397,6 +401,26 @@ describe('ImageEditService.process reference images (#2744)', () => {
     await run({});
 
     expect(editSpy.mock.calls[0][2].referenceImages).toEqual([]);
+  });
+
+  it('collapses a repeated anchor id instead of paying for the same image twice', async () => {
+    await run({ referenceImageFabFileIds: ['a', 'b', 'a'] });
+
+    // First occurrence wins, so de-duplication cannot reorder what the caller asked for.
+    expect(editSpy.mock.calls[0][2].referenceImages).toEqual([
+      'https://example.invalid/fab/a.png',
+      'https://example.invalid/fab/b.png',
+    ]);
+  });
+
+  it('resolves lake access only when anchors were actually requested', async () => {
+    // The mask-only edit is the mainline and had no lake roundtrip before this feature;
+    // anchors are the only thing on this path that needs the lake arms.
+    const withoutAnchors = await run({});
+    expect(withoutAnchors.resolveLakeAccess).not.toHaveBeenCalled();
+
+    const withAnchors = await run({ referenceImageFabFileIds: ['a'] });
+    expect(withAnchors.resolveLakeAccess).toHaveBeenCalledTimes(1);
   });
 });
 

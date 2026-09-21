@@ -387,6 +387,36 @@ describe('ImageGenerationService.selectInputImage reference images (#2744)', () 
     expect(findAccessibleInIds).not.toHaveBeenCalledWith(['a'], expect.anything(), expect.anything());
   });
 
+  it('collapses a repeated anchor id instead of paying for the same image twice', async () => {
+    // OpenAI bills input tokens per image in the array, and a repeat teaches the model
+    // nothing new - so a duplicate is pure cost plus a wasted slot against the cap.
+    const { service, findAccessibleInIds } = makeService({ a: cleanImage('a'), b: cleanImage('b') });
+
+    const result = await select(service, {
+      model: ImageModels.GPT_IMAGE_2,
+      referenceImageFabFileIds: ['a', 'b', 'a'],
+    });
+
+    // First occurrence wins, so de-duplication cannot reorder what the caller asked for.
+    expect(result.referenceImages.map((f: FakeFile) => f.id)).toEqual(['a', 'b']);
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['a', 'b'], expect.anything(), undefined);
+  });
+
+  it('counts the cap against unique ids, not raw array slots', async () => {
+    const { service } = makeService(
+      Object.fromEntries(Array.from({ length: MAX_REFERENCE_IMAGES }, (_, i) => [`f${i}`, cleanImage(`f${i}`)]))
+    );
+    const ids = Array.from({ length: MAX_REFERENCE_IMAGES }, (_, i) => `f${i}`);
+
+    const result = await select(service, {
+      model: ImageModels.GPT_IMAGE_2,
+      // One over the cap by raw length, exactly at it once de-duplicated.
+      referenceImageFabFileIds: [...ids, ids[0]],
+    });
+
+    expect(result.referenceImages).toHaveLength(MAX_REFERENCE_IMAGES);
+  });
+
   it('makes no extra lookup when no anchors are requested', async () => {
     const { service, findAccessibleInIds } = makeService({});
 

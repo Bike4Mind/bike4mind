@@ -67,7 +67,8 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
    * OpenAI receives them in this order - which matters, because a mask always applies to the
    * first image in the array. fabFile ids rather than URLs so the existing access +
    * moderation gates (findAccessibleInIds, isImageServeable) still apply. Ignored by every
-   * non-gpt-image provider. See MAX_REFERENCE_IMAGES for why the cap is 4 and not OpenAI's 16.
+   * non-gpt-image provider. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
+   * why the cap is 4 and not OpenAI's 16.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
@@ -148,7 +149,8 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
    * appended after `image` (the edit source), and OpenAI applies the mask to the first entry
    * of that array - i.e. always to `image`, never to a reference. fabFile ids rather than URLs
    * so the existing access + moderation gates (findAccessibleInIds, isImageServeable) still
-   * apply. Ignored by BFL and Gemini. See MAX_REFERENCE_IMAGES for why the cap is 4, not 16.
+   * apply. Ignored by BFL and Gemini. Repeated ids collapse to one anchor. See
+   * MAX_REFERENCE_IMAGES for why the cap is 4, not 16.
    */
   referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   image: z.string(),
