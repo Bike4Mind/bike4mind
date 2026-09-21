@@ -705,6 +705,42 @@ export const RetrievalSummarySchema = z.object({
    * carry nothing, and no backfill is possible - a past turn's grant rows have moved on.
    */
   grantedLakeIdsUsed: z.array(z.string()).optional(),
+  /**
+   * How many lakes were excluded from this turn's scope because the caller lacks the access to
+   * search them, and why (#3055). Resolved at the seed alongside `lakeScope`, from a dedicated
+   * count-only query (see excludedByAccessCount on getDynamicDataLakeAccess - NOT derived from
+   * the candidate set `lakeScope` comes from, which already has the gate enforced datastore-side
+   * and so cannot see this population).
+   *
+   * ABSENT MEANS NOT RECORDED, never "nothing was excluded" - a turn with nothing excluded records
+   * `count: 0` explicitly. Three distinct causes collapse into this one absent state and are not
+   * distinguishable from it: a turn predating this field, a turn whose `retrieval` was written
+   * only by a tool arm rather than by the seed, and the count-only query itself failing or not
+   * being wired on this host (mirrors `lakeViewComplete`'s contract on the access resolver: a
+   * failure must report unknown, never a false zero).
+   *
+   * COUNT AND REASON ONLY, DELIBERATELY. Never a lake id, name, or tag: the caller may not be
+   * permitted to know a given excluded lake exists at all, and this field must stay safe to show
+   * them regardless of which specific lake(s) it is counting. `reason` is a closed enum, not free
+   * text - prose could leak a lake's identity through phrasing - so a future exclusion cause (e.g.
+   * an archived or quota-limited lake) adds an enum value here rather than a description.
+   *
+   * 'access' is the only reason today: the caller's org membership or the lake's public listing
+   * surfaced it as a candidate (they could see it exists) but they hold neither its own
+   * gate/entitlement nor an ownership or grant exception for it. Counted BEFORE the
+   * preauthorized-admission union (unionPreauthorizedLakeAccess), so a session-preauthorized lake
+   * that was gate-dropped can in principle be counted here and still appear in `lakeScope` - narrow
+   * in practice, since a manage-but-not-member lake is rarely also org-visible or public to begin
+   * with.
+   */
+  excludedLakes: z
+    .object({
+      // Not negative by construction (a `countDocuments` result, never a subtraction of two set
+      // sizes) rather than by any relationship between two derived lists.
+      count: z.number().int().nonnegative(),
+      reason: z.enum(['access']),
+    })
+    .optional(),
 });
 
 /**
