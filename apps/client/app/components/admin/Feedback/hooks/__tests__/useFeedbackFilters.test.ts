@@ -106,6 +106,73 @@ describe('useFeedbackFilters', () => {
     expect(result.current.filterParams).not.toHaveProperty('organization');
   });
 
+  /**
+   * The gap this filter closed: GET /api/feedback has always accepted `subject`, and the console
+   * never sent one - so the server-side filter was unreachable and every subject landed in one
+   * queue. These pin that the control reaches the query.
+   */
+  describe('subject', () => {
+    it('sends no subject by default, so every subject is listed', () => {
+      const { result } = setup();
+
+      expect(result.current.filters.subject).toBeUndefined();
+      expect(result.current.filterParams).not.toHaveProperty('subject');
+    });
+
+    it('sends the selected subject', () => {
+      const { result } = setup();
+
+      act(() => {
+        result.current.setSubject('turn');
+      });
+
+      expect(result.current.filters.subject).toBe('turn');
+      expect(result.current.filterParams.subject).toBe('turn');
+    });
+
+    // Single-valued on the wire: picking a second subject replaces the first rather than adding
+    // to it, because the endpoint's `subject` is one enum value and not an array.
+    it('replaces the previous subject rather than accumulating', () => {
+      const { result } = setup();
+
+      act(() => {
+        result.current.setSubject('turn');
+      });
+      act(() => {
+        result.current.setSubject('product');
+      });
+
+      expect(result.current.filterParams.subject).toBe('product');
+    });
+
+    it('omits subject again when cleared back to all', () => {
+      const { result } = setup();
+
+      act(() => {
+        result.current.setSubject('session');
+      });
+      act(() => {
+        result.current.setSubject(undefined);
+      });
+
+      expect(result.current.filterParams).not.toHaveProperty('subject');
+    });
+
+    it('leaves the other filters alone', () => {
+      const { result } = setup();
+
+      act(() => {
+        result.current.setSubject('session');
+      });
+
+      expect(result.current.filterParams).toEqual({
+        status: [FeedbackStatus.New],
+        subject: 'session',
+        sort: 'desc',
+      });
+    });
+  });
+
   it('flips the sort direction without touching the other filters', () => {
     const { result } = setup();
 
@@ -124,9 +191,10 @@ describe('useFeedbackFilters', () => {
     act(() => result.current.setSearchTerm('a'));
     act(() => result.current.setStatusFilters(previous => previous));
     act(() => result.current.setSelectedOrganizations(['acme']));
+    act(() => result.current.setSubject('turn'));
     act(() => result.current.toggleSortDirection());
 
-    expect(onFilterChange).toHaveBeenCalledTimes(4);
+    expect(onFilterChange).toHaveBeenCalledTimes(5);
   });
 
   describe('search', () => {

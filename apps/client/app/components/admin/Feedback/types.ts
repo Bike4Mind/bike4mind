@@ -27,6 +27,8 @@ export interface FeedbackFilters {
   searchTerm: string;
   statusFilters: Record<FeedbackStatus, boolean>;
   selectedOrganizations: string[];
+  /** Undefined is every subject: the server reads an absent `subject` as no filter at all. */
+  subject?: FeedbackSubject;
   sortAscending: boolean;
 }
 
@@ -34,10 +36,11 @@ export interface FeedbackFilters {
  * The filter half of the server query, as GET /api/feedback understands it. Kept separate from
  * page/limit so a CSV export can reuse the same filters while paging independently.
  *
- * `sessionId`/`questId`/`userId`/`organizationId`/`subject` mirror the same query params the admin
- * triage table doesn't use today but the endpoint has always accepted (see ListFeedbackQuerySchema)
- * - added for the session-scoped "Reported" annotation read (hooks/data/feedback.ts), which is a
- * second consumer of this same contract rather than a reason to fork a parallel params type.
+ * `sessionId`/`questId`/`userId`/`organizationId` mirror query params the admin triage table does
+ * not use but the endpoint has always accepted (see ListFeedbackQuerySchema) - added for the
+ * session-scoped "Reported" annotation read (hooks/data/feedback.ts), which is a second consumer
+ * of this same contract rather than a reason to fork a parallel params type. `subject` started out
+ * in that group and is now also the triage table's own subject filter.
  */
 export interface FeedbackListFilterParams {
   userId?: string;
@@ -81,6 +84,8 @@ export interface UseFeedbackFiltersReturn {
   setSearchTerm: (term: string) => void;
   setStatusFilters: React.Dispatch<React.SetStateAction<Record<FeedbackStatus, boolean>>>;
   setSelectedOrganizations: (orgs: string[]) => void;
+  /** Undefined clears the filter back to every subject. */
+  setSubject: (subject: FeedbackSubject | undefined) => void;
   toggleSortDirection: () => void;
   /** Debounced, server-ready filter query. Feeds both the list and the CSV export. */
   filterParams: FeedbackListFilterParams;
