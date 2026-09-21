@@ -155,6 +155,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             fabFiles: fabFileRepository,
             fabFileChunks: fabFileChunkRepository,
             ...lakeConfigAuditDb,
+            // The teardown's soft delete takes every member file out of every lake read, which is
+            // a membership departure - the restore door records the matching rejoins.
+            ...lakeMembershipAuditDb,
           },
           retrievalIndex: retrievalIndex(),
           disableDriveConnection: async ({ dataLakeId }) => {

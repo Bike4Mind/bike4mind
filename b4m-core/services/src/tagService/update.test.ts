@@ -645,6 +645,34 @@ describe('tagService - update', () => {
       expect(audit.record.mock.calls.map(([event]) => event.dataLakeId)).toEqual(['lake1', 'lake2']);
     });
 
+    // The rewrite has already landed on the first file when the second claim is attempted, so a
+    // transition buffered until the loop returns is lost - and unreconstructable, the old name is
+    // gone off the file that did move.
+    it('records the first claim even when the next claim throws', async () => {
+      const audit = membershipSpy();
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      let call = 0;
+      mockFabFileRepo.claimTagRewriteByUserId = vi.fn(async () => {
+        call += 1;
+        if (call === 1) return fileDoc('file1', ['lk:invoices']);
+        throw new Error('mongo down');
+      });
+
+      await expect(
+        update(
+          userId,
+          { id: existingTagId, name: 'archived' },
+          { db: { ...adapters.db, fabFiles: mockFabFileRepo, ...audit.db } }
+        )
+      ).rejects.toThrow('mongo down');
+
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'file1', action: 'removed' })
+      );
+    });
+
     // Claimed after the bulk rewrite, the old name is gone and the moved files are unrecoverable.
     it('claims the affected files BEFORE the bulk rename rewrite runs', async () => {
       const audit = membershipSpy();

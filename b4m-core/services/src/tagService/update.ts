@@ -169,10 +169,27 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   // this request's own write produced - `updateTagsByUserId` reports an aggregate count, from which
   // two concurrent renames would each synthesize the same per-file events. Confined to the
   // prefix-candidate path, so a rename that cannot touch a lake pays no extra query.
-  const claimed =
-    auditedLakes.length > 0 && newName !== undefined
-      ? await claimBulkTagRewrite(userId, tag.name, newName, { db })
-      : [];
+  //
+  // Each claim's membership row is recorded through `onClaimed`, inside the loop, rather than from
+  // the returned array afterwards: the rewrite has already landed on that file, so a later claim
+  // throwing must not take the fact down with it - nothing can reconstruct it once the source tag
+  // is gone. Per (lake, file), unlike the recompute further down which can afford to be
+  // approximate. Both directions are live here - renaming a tag INTO a lake's prefix is a join,
+  // out of it a leave - and a file that also carries the lake's meta-tag stays a member through
+  // either.
+  if (auditedLakes.length > 0 && newName !== undefined) {
+    await claimBulkTagRewrite(userId, tag.name, newName, {
+      db,
+      onClaimed: file =>
+        recordMembershipTransitions(
+          { userId, isAdmin: false, auditPrincipal },
+          auditedLakes,
+          [file],
+          { db, logger },
+          { origin: 'person' }
+        ),
+    });
+  }
 
   if (renaming) {
     const colliders = (await db.tags.findAllByUserId(userId)).filter(
@@ -211,20 +228,6 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   };
 
   await db.tags.update(buildData);
-
-  if (auditedLakes.length > 0) {
-    // Per (lake, file), unlike the recompute below, which can afford to be approximate: the change
-    // log is what a reader reconstructs membership FROM, so exactly the pairs that moved get a row.
-    // Both directions are live here - renaming a tag INTO a lake's prefix is a join, out of it a
-    // leave - and a file that also carries the lake's meta-tag stays a member through either.
-    await recordMembershipTransitions(
-      { userId, isAdmin: false, auditPrincipal },
-      auditedLakes,
-      claimed,
-      { db, logger },
-      { origin: 'person' }
-    );
-  }
 
   if (affectedLakes.length > 0) {
     // Either the OLD name mattered to a lake's prefix (a possible leave) or the NEW one does (a

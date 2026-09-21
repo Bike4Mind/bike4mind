@@ -4,6 +4,13 @@ import { renamedTagName, storedTagNames, withoutTagName } from './bulkTagNames';
 
 interface ClaimAdapters {
   db: { fabFiles: Pick<IFabFileRepository, 'claimTagRewriteByUserId'> };
+  /**
+   * Hands off one file's transition as soon as its own claim has landed, before the next claim is
+   * attempted. Buffering them all until the loop returns loses every fact already written if a
+   * later claim throws, and a retry cannot reconstruct them - the source tag is gone off the files
+   * this call already rewrote.
+   */
+  onClaimed?: (file: MembershipTransitionFile) => Promise<void>;
 }
 
 /**
@@ -21,12 +28,16 @@ interface ClaimAdapters {
  * real work rather than to the user's library. The caller still runs the plain bulk write afterwards:
  * it is idempotent over what was claimed here and remains the only thing that reaches soft-deleted
  * files and the `primaryTag` field.
+ *
+ * Every claim is durably accounted for through `onClaimed` before the next one is attempted, so a
+ * mid-loop failure leaves the files it already rewrote with their facts recorded. The returned
+ * array is the same set, for callers that need the count.
  */
 export const claimBulkTagRewrite = async (
   userId: string,
   tag: string,
   newTag: string | null,
-  { db }: ClaimAdapters
+  { db, onClaimed }: ClaimAdapters
 ): Promise<MembershipTransitionFile[]> => {
   const claimed: MembershipTransitionFile[] = [];
   const claimedIds: string[] = [];
@@ -36,12 +47,14 @@ export const claimBulkTagRewrite = async (
     if (!prior) break;
     claimedIds.push(prior.id);
     const beforeTagNames = storedTagNames(prior);
-    claimed.push({
+    const file: MembershipTransitionFile = {
       fabFileId: prior.id,
       userId: prior.userId,
       beforeTagNames,
       afterTagNames: newTag ? renamedTagName(beforeTagNames, tag, newTag) : withoutTagName(beforeTagNames, tag),
-    });
+    };
+    claimed.push(file);
+    await onClaimed?.(file);
   }
   return claimed;
 };

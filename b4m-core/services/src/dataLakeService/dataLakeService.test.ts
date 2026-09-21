@@ -3658,6 +3658,119 @@ describe('deleteDataLake - phase 1 retrieval-index removal', () => {
   });
 });
 
+/**
+ * The teardown's own half of the membership log. The restore door records an `added` per revived
+ * file; without these rows a reader replaying the log sees those files rejoin a lake they are
+ * never recorded as having left.
+ */
+describe('deleteDataLake - membership change log', () => {
+  const makeAdapters = (sweptIds: string[]) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        update: vi
+          .fn()
+          .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue(sweptIds),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue(sweptIds),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('records one `removed` per file the teardown itself soft-deleted', async () => {
+    const record = vi.fn().mockResolvedValue({});
+    const adapters = makeAdapters(['f1', 'f2']);
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, lakeMembershipChangeEvents: { record } },
+    });
+
+    expect(record).toHaveBeenCalledTimes(2);
+    for (const fabFileId of ['f1', 'f2']) {
+      expect(record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake1', fabFileId, action: 'removed', origin: 'person' })
+      );
+    }
+  });
+
+  // A re-run after a crashed teardown, and a file some other door deleted first, both surface as
+  // an id the sweep did not stamp. Claiming one would mint a second permanent departure.
+  it('records nothing for a file the sweep did not flip', async () => {
+    const record = vi.fn().mockResolvedValue({});
+    const adapters = makeAdapters([]);
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, lakeMembershipChangeEvents: { record } },
+    });
+
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('completes the teardown when the membership audit write throws', async () => {
+    const record = vi.fn().mockRejectedValue(new Error('audit exploded'));
+    const adapters = makeAdapters(['f1']);
+
+    await expect(
+      deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        ...adapters,
+        db: { ...adapters.db, lakeMembershipChangeEvents: { record } },
+      })
+    ).resolves.toMatchObject({ status: 'deleted' });
+  });
+
+  // The pair the log has to be able to answer: a lake torn down and then restored leaves a
+  // `removed` and an `added` for the same file, in that order.
+  it('pairs the teardown removal with the restore addition for the same file', async () => {
+    const record = vi.fn().mockResolvedValue({});
+    const adapters = makeAdapters(['f1']);
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, lakeMembershipChangeEvents: { record } },
+    });
+
+    const fabFiles = {
+      findDeletedByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'f1', contentHash: 'h1' }]),
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue(['f1']),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      activateIfDraft: vi.fn(),
+      claimRestoring: vi.fn().mockResolvedValue(true),
+    };
+    await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles, lakeMembershipChangeEvents: { record } },
+    });
+
+    expect(record.mock.calls.map(([event]) => [event.fabFileId, event.action])).toEqual([
+      ['f1', 'removed'],
+      ['f1', 'added'],
+    ]);
+  });
+});
+
 describe('deleteDataLake - Drive connection disable', () => {
   const makeAdapters = () => ({
     db: {

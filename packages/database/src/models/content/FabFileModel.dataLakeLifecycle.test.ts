@@ -1182,6 +1182,32 @@ describe('FabFile data lake lifecycle membership', () => {
       expect(restored).toContain(rows.metaTagged._id.toString());
     });
 
+    // The teardown door mints one permanent membership `removed` per id this returns, so an id it
+    // did not stamp itself would double-report a departure another delete door already recorded.
+    // The window is between the enumeration and the write, which is why it takes an injection to
+    // reach: a plain pre-existing soft delete is already excluded by the enumeration itself.
+    it('omits a row another door claimed between the read and the write', async () => {
+      const stamp = new Date('2026-07-01T00:00:00.000Z');
+      const rows = await seedLakeRows();
+      const updateMany = FabFile.updateMany.bind(FabFile);
+      const spy = vi.spyOn(FabFile, 'updateMany').mockImplementation((async (
+        filter: unknown,
+        update: unknown,
+        options?: unknown
+      ) => {
+        spy.mockRestore();
+        await FabFile.updateOne(
+          { _id: rows.prefixOwned._id },
+          { $set: { deletedAt: new Date('2026-06-30T00:00:00.000Z') } }
+        );
+        return updateMany(filter as never, update as never, options as never);
+      }) as never);
+
+      const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
+
+      expect(flipped).toEqual([rows.metaTagged._id.toString()]);
+    });
+
     it('finds soft-deleted members for the restore dedup pass', async () => {
       await seedLakeRows();
       await fabFileRepository.softDeleteByDataLakeTag(scope);

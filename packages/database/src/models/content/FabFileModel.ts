@@ -3028,10 +3028,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // `deletedAt: null` is re-asserted in the UPDATE, not just the read above, so this is write-once
     // the way archiveByDataLakeTag already is. Without it the read-modify-write is racy: two sweeps
     // overlapping in time both select the same rows, and the loser's stamp overwrites the winner's.
-    // Harmless while both carry the same stamp, unrecoverable the moment they do not - and the
-    // return stays the ids this call selected, which is what the index removal and its re-run want.
+    // Harmless while both carry the same stamp, unrecoverable the moment they do not.
     await this.fabFileModel.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { deletedAt: at } });
-    return ids;
+    // Read back by exact stamp equality rather than returning the selected ids: `updateMany` gives
+    // no per-row outcome, and a row another door soft-deleted between the read and the write above
+    // carries that door's stamp instead. The caller mints one permanent membership row per id it is
+    // handed, so an id this call did not actually flip would become a second `removed` for a
+    // departure something else already recorded. Includes deleted rows - these all are now.
+    const flipped = await this.fabFileModel
+      .find({ _id: { $in: ids }, deletedAt: at }, { _id: 1 })
+      .setOptions({ includeDeleted: true });
+    return flipped.map(d => d._id.toString());
   }
 
   async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {

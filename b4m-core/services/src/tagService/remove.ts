@@ -107,7 +107,27 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
   // own write produced - a snapshot read plus `removeTagByUserId` reports an aggregate count, from
   // which two concurrent deletes would each synthesize the same per-file events. Confined to the
   // prefix-candidate path so the common plain-tag delete pays nothing extra.
-  const claimed = auditedLakes.length > 0 ? await claimBulkTagRewrite(userId, tag.name, null, { db }) : [];
+  // Each claim's membership row is recorded through `onClaimed`, inside the loop, rather than from
+  // the returned array afterwards: the rewrite has already landed on that file, so a later claim
+  // throwing must not take the fact down with it - nothing can reconstruct it once the source tag
+  // is gone. Per (lake, file) rather than per lake: the stats recompute below can afford to be
+  // approximate, but the change log is what a reader reconstructs membership FROM. Only leaves are
+  // reachable here (a delete can only cost a file a signal), but the direction is derived from the
+  // flip anyway - a file that also carries the lake's meta-tag stays a member and emits nothing.
+  const claimed =
+    auditedLakes.length > 0
+      ? await claimBulkTagRewrite(userId, tag.name, null, {
+          db,
+          onClaimed: file =>
+            recordMembershipTransitions(
+              { userId, isAdmin: false, auditPrincipal },
+              auditedLakes,
+              [file],
+              { db, logger },
+              { origin: 'person' }
+            ),
+        })
+      : [];
 
   // Files first, tag document second. This order converges under retry: if the delete below fails,
   // the document still names the tag, so re-running the same request finds the stragglers. The
@@ -117,21 +137,6 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
   const filesUpdated = claimed.length + (await db.fabFiles.removeTagByUserId(userId, tag.name));
 
   await db.tags.delete(tag.id);
-
-  if (auditedLakes.length > 0) {
-    // Per (lake, file) rather than per lake: the stats recompute below can afford to be
-    // approximate, but the change log is what a reader reconstructs membership FROM, so a row
-    // must exist for exactly the pairs that moved. Only leaves are reachable here (a delete can
-    // only cost a file a signal), but the direction is derived from the flip anyway - a file that
-    // also carries the lake's meta-tag stays a member and must emit nothing.
-    await recordMembershipTransitions(
-      { userId, isAdmin: false, auditPrincipal },
-      auditedLakes,
-      claimed,
-      { db, logger },
-      { origin: 'person' }
-    );
-  }
 
   if (affectedLakes.length > 0) {
     // Recomputes even for a lake where a surviving sibling tag kept some files members - harmless

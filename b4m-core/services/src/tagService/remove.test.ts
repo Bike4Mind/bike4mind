@@ -424,6 +424,30 @@ describe('tagService - remove', () => {
       expect(audit.record).not.toHaveBeenCalled();
     });
 
+    // Each claim's rewrite has already landed when the next one is attempted, so a fact buffered
+    // until the loop returns is a fact lost the moment a later claim fails - and nothing can
+    // reconstruct it afterwards, the source tag is gone off the file that did move.
+    it('records the first claim even when the next claim throws', async () => {
+      const audit = membershipSpy();
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      let call = 0;
+      mockFabFileRepo.claimTagRewriteByUserId = vi.fn(async () => {
+        call += 1;
+        if (call === 1) return fileDoc('file1', ['lk:invoices']);
+        throw new Error('mongo down');
+      });
+
+      await expect(
+        remove(userId, { id: existingTagId }, { db: { ...adapters.db, fabFiles: mockFabFileRepo, ...audit.db } })
+      ).rejects.toThrow('mongo down');
+
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'file1', action: 'removed' })
+      );
+    });
+
     // A registry lake has no document, so the owner-anchored candidate query cannot reach it -
     // but its open prefix arm is real membership and losing the tag is a real leave.
     it('records a leave from a static registry lake the candidate query cannot return', async () => {

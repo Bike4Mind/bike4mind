@@ -1813,7 +1813,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
     stampedAt?: Date,
     archiveStampToClear?: Date
   ): Promise<string[]>;
-  /** Soft-delete (phase 1) all member files, stamped `at`. Returns affected file ids. */
+  /**
+   * Soft-delete (phase 1) all member files, stamped `at`.
+   *
+   * Returns the ids this call itself stamped, matched back by stamp equality - not the ids it
+   * selected. A row another delete door claimed in between carries a different stamp and is left
+   * out, so the teardown records one membership departure per file it genuinely took out of the
+   * lake rather than one per file it hoped to.
+   */
   softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<string[]>;
   /**
    * Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent.
