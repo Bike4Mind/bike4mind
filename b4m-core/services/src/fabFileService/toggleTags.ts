@@ -384,7 +384,9 @@ export const toggleTags = async (
     // Touched only once the write actually lands (or hits the benign race above): both
     // addFileToLake and removeFileFromLake throw their manage-rights gate's BadRequestError
     // before any write, and that throw exits this function before reaching here - so a rejected
-    // toggle never recomputes stats for a lake this actor cannot manage either.
+    // meta-tag toggle never recomputes stats for a lake it did not actually move. (A prefix-arm
+    // join below needs no such gate: membership there is granted by the read-side predicate alone,
+    // and a recompute writes nothing but the counts.)
     touchedLakes.set(lake.id, lake);
   };
 

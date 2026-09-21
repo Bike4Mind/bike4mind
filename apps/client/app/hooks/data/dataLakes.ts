@@ -1081,11 +1081,9 @@ export function invalidateLakeFileMembershipQueries(
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.membershipDuplicates(dataLakeId) });
   // A membership change can move the lake's under-chunked count, so refresh the rebuild badge.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
-  // A membership write can reach activateIfDraft's draft -> active flip (see
-  // removeFileFromDataLake / addFileToDataLake), which records a `system`-principal
-  // config-history row. Inert today because these hooks fire from the file wizard, where the
-  // History observer is unmounted - invalidated anyway for the same reason the lifecycle hook
-  // does it: the cost is nothing, and reasoning about which paths qualify is what rots.
+  // A membership write records no config-history row of its own any more (publishing moved to
+  // the explicit promote door), but it is invalidated anyway for the same reason the lifecycle
+  // hook does it: the cost is nothing, and reasoning about which paths qualify is what rots.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
   // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
   // files only, so a membership change scoped to a prefix-only file moves rows without

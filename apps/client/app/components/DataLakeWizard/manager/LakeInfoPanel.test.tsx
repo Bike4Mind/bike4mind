@@ -466,6 +466,19 @@ describe('LakeInfoPanel - publish/draft', () => {
     expect(demoteMutate).toHaveBeenCalledWith('lake-1');
   });
 
+  // A lake written before `status` existed carries none, and retrieval's `status: 'active'`
+  // pre-filter excludes it exactly like a draft. promoteDataLake accepts it (activateIfDraft
+  // matches `$in: ['draft', null]`), so the panel has to offer the door or that lake can never
+  // be published from the UI at all.
+  it('offers Publish for a legacy lake that carries no status', async () => {
+    const user = userEvent.setup();
+    renderPanel({ ...baseLake, status: undefined } as ManagerLake);
+
+    expect(screen.queryByTestId('datalake-demote-btn-lake-1')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('datalake-promote-btn-lake-1'));
+    expect(promoteMutate).toHaveBeenCalledWith('lake-1');
+  });
+
   it('offers neither button for a lake in a lifecycle state other than draft/active', () => {
     renderPanel({ ...baseLake, status: 'archived' } as ManagerLake);
 

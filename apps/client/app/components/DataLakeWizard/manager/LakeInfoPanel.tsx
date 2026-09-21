@@ -252,8 +252,11 @@ export function LakeInfoPanel({
                 </Button>
               </Tooltip>
               {/* Draft is excluded from grounding until an owner or admin explicitly publishes it
-                  - adding files no longer does this as a side effect. */}
-              {lake.status === 'draft' && (
+                  - adding files no longer does this as a side effect. An ABSENT status counts as
+                  draft here, matching promoteDataLake and activateIfDraft's `$in: ['draft', null]`:
+                  a lake written before the field existed is just as invisible to retrieval, so it
+                  must still get the affordance. */}
+              {(!lake.status || lake.status === 'draft') && (
                 <Tooltip title="Publish this lake so it starts grounding answers" size="sm">
                   <Button
                     size="sm"
