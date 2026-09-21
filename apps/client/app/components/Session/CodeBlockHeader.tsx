@@ -2,36 +2,22 @@ import React from 'react';
 import { Box, Typography } from '@mui/joy';
 import { CopyCodeButton } from './CopyCodeButton';
 
+export { CODE_SURFACE_STYLE } from '../common/HighlightedCode';
+
 /**
  * A fenced code block: a framed panel whose header carries the language on the left and the
  * copy control on the right, with the highlighted code beneath.
  *
- * The frame normally lives on the `pre` itself (markdown/syntaxTheme.ts paints the border,
- * radius and brand veil there). It moves here so the header sits INSIDE the panel rather
- * than floating above it - pass `CODE_BLOCK_INNER_STYLE` to the highlighter so the `pre`
- * gives up the frame it would otherwise draw a second time.
+ * The frame would otherwise be drawn by the `pre` itself (markdown/syntaxTheme.ts paints a
+ * border, radius and brand veil there); CODE_SURFACE_STYLE clears it so the frame is drawn
+ * once, here, with the header INSIDE it rather than floating above it.
+ *
+ * Only a standalone fence gets this. Code inside an artifact card or a viewer Code tab
+ * renders as a bare HighlightedCode, because it already sits in a frame with a title and
+ * actions of its own.
  *
  * Shared so a reply block and a prompt block cannot drift apart.
  */
-
-/**
- * The block renders through a real `pre` (`PreTag="pre"`), not a div: observatory.css skins
- * INLINE code via `:not(pre) > code`, adding a border and padding, and as a div that skin
- * matched here and drew a thin outline around every line of every code block.
- *
- * The code tag keeps the rest of `syntaxTheme` untouched - including the reading mono face.
- * Its own fill is the same `reading.surface` this panel carries, so it cannot be seen; an
- * earlier attempt to clear it replaced the theme's code styles wholesale and took the font
- * with them.
- */
-export const CODE_BLOCK_INNER_STYLE = {
-  margin: 0,
-  border: 'none',
-  borderRadius: '6px',
-  background: 'var(--joy-palette-reading-surface, #13181C)',
-  padding: '12px',
-} as const;
-
 export const CodeBlockHeader: React.FC<{ code: string; language?: string; children: React.ReactNode }> = ({
   code,
   language,

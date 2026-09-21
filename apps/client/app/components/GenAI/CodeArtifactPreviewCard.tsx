@@ -1,3 +1,4 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
@@ -5,8 +6,6 @@ import {
   ContentCopyOutlined as CopyIcon,
   SaveOutlined as SaveIcon,
 } from '@mui/icons-material';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
@@ -277,17 +276,10 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
                 mt: 2,
                 borderRadius: 'sm',
                 position: 'relative',
-                '& pre': { margin: '0 !important', borderRadius: '4px' },
+                '& pre': { margin: '0 !important' },
               }}
             >
-              <SyntaxHighlighter
-                style={oneDark}
-                language={data.language || 'text'}
-                customStyle={{ margin: 0, fontSize: '14px', lineHeight: 1.4, padding: '8px' }}
-                wrapLongLines
-              >
-                {visibleCode}
-              </SyntaxHighlighter>
+              <HighlightedCode code={visibleCode} language={data.language || 'text'} wrapLongLines />
               {/* Fade over the last rows, so the cut reads as "continues" rather than
                   as the end of the file. Non-interactive so it can't eat a text selection. */}
               {needsTruncation && !showFullBody && (
@@ -299,8 +291,10 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
                     bottom: 0,
                     height: '48px',
                     pointerEvents: 'none',
-                    borderRadius: '0 0 4px 4px',
-                    background: `linear-gradient(180deg, transparent, ${oneDark['pre[class*="language-"]']?.background ?? 'rgba(0,0,0,0.6)'})`,
+                    borderRadius: '0 0 6px 6px',
+                    // Fades to the surface the code actually sits on, so the cut is
+                    // invisible; it used to fade to oneDark's fill and left a seam.
+                    background: 'linear-gradient(180deg, transparent, var(--joy-palette-reading-surface, #13181C))',
                   }}
                 />
               )}

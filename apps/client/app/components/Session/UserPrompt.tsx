@@ -1,9 +1,8 @@
 import { UserPromptProps } from './types/UserPromptTypes';
-import CodeBlockHeader, { CODE_BLOCK_INNER_STYLE } from './CodeBlockHeader';
+import CodeBlockHeader from './CodeBlockHeader';
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import { Box, IconButton, Typography, Tooltip } from '@mui/joy';
 import ReactMarkdown, { ExtraProps } from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ErrorBoundary from '../common/ErrorBoundary';
 import ImageContainer from './ImageContainer';
 import { GetFileIcon } from '@client/app/utils/fabFileUtils';
@@ -154,9 +153,7 @@ const PromptContent: FC<{
 
       return !inline ? (
         <CodeBlockHeader code={children!.toString()} language={language}>
-          <SyntaxHighlighter style={oneDark} customStyle={CODE_BLOCK_INNER_STYLE} language={language} PreTag="pre">
-            {String(children).replace(/\n$/, '')}
-          </SyntaxHighlighter>
+          <HighlightedCode code={String(children).replace(/\n$/, '')} language={language} />
         </CodeBlockHeader>
       ) : (
         <Box
@@ -176,9 +173,9 @@ const PromptContent: FC<{
   };
 
   return isCode ? (
-    <SyntaxHighlighter style={oneDark} language={language}>
-      {content}
-    </SyntaxHighlighter>
+    <CodeBlockHeader code={content} language={language}>
+      <HighlightedCode code={content} language={language} />
+    </CodeBlockHeader>
   ) : (
     <ReactMarkdown
       remarkPlugins={[remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}

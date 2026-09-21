@@ -22,8 +22,6 @@ export const CopyCodeButton: React.FC<CopyCodeButtonProps> = ({ code }) => {
         color="neutral"
         size="sm"
         aria-label="Copy code to clipboard"
-        // The same recipe every artifact card's actions use, so a copy button is a copy
-        // button wherever a reply puts one.
         // The same recipe every artifact card action uses, so a copy button is a copy
         // button wherever a reply puts one.
         sx={theme => ({ ...actionButtonSx(theme), flexShrink: 0 })}

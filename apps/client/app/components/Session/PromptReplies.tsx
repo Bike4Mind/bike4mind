@@ -4,10 +4,7 @@ import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
 import React, { FC, useCallback, useState, useRef, useEffect, ReactNode, useMemo, ComponentProps } from 'react';
 import ReactMarkdown, { ExtraProps } from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
-import { useTheme } from '@mui/joy/styles';
 import { createMarkdownComponents } from './markdown/markdownComponents';
-import { getMarkdownSyntaxTheme, type PrismStyle } from './markdown/syntaxTheme';
 import './markdown/observatory.css';
 import { useMessageEditMode } from '@client/app/hooks/useMessageEditMode';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
@@ -19,7 +16,8 @@ import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
 import QuoteActions from './QuoteActions';
 import { link } from './MarkdownLink';
 import { PromptReplyProps, ReplyContainerProps } from './types/UserPromptTypes';
-import CodeBlockHeader, { CODE_BLOCK_INNER_STYLE } from './CodeBlockHeader';
+import CodeBlockHeader from './CodeBlockHeader';
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import ThoughtBubbles from './ThoughtBubbles';
 import CodeArtifactPreviewCard from '../GenAI/CodeArtifactPreviewCard';
 import ContentTransformPreviewCard from '../GenAI/ContentTransformPreviewCard';
@@ -96,7 +94,7 @@ function simpleHash(str: string): string {
 // Prism theme is closed over rather than read from a hook here, because the
 // caller already resolves the color scheme and this function deliberately
 // stays a plain render helper.
-const createCodeComponent = (syntaxTheme: PrismStyle) => {
+const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
@@ -382,16 +380,7 @@ const createCodeComponent = (syntaxTheme: PrismStyle) => {
     if (inline || lineCount <= 10) {
       return !inline ? (
         <CodeBlockHeader code={codeContent} language={language}>
-          <SyntaxHighlighter
-            // @ts-ignore - ignoring style prop type issue
-            style={syntaxTheme}
-            customStyle={CODE_BLOCK_INNER_STYLE}
-            language={language}
-            PreTag="pre"
-            {...props}
-          >
-            {codeContent}
-          </SyntaxHighlighter>
+          <HighlightedCode code={codeContent} language={language} />
         </CodeBlockHeader>
       ) : (
         // Bare <code>: observatory.css owns the inline-code skin, and a hardcoded
@@ -1208,10 +1197,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // as a bare semantic tag and is styled by observatory.css.
   const markdownComponents = useMemo(() => createMarkdownComponents({ highlightText }), [highlightText]);
 
-  // palette.mode rather than useColorScheme(), which can report 'system'.
-  const replyTheme = useTheme();
-  const syntaxTheme = useMemo(() => getMarkdownSyntaxTheme(replyTheme.palette.mode), [replyTheme.palette.mode]);
-  const codeComponent = useMemo(() => createCodeComponent(syntaxTheme), [syntaxTheme]);
+  const codeComponent = useMemo(() => createCodeComponent(), []);
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1473,7 +1459,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {showSyntaxHighlight ? (
         <>
-          <SyntaxHighlighter style={syntaxTheme}>{processedContent || cleanReply}</SyntaxHighlighter>
+          <HighlightedCode code={processedContent || cleanReply} />
           {/* Repeated rather than hoisted above the branch: the suggestions read as part of
               the reply, so they follow whichever body this view rendered. Edit mode is the
               one body they are deliberately left out of. */}

@@ -1,7 +1,6 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Box, Typography, Alert, CircularProgress, Stack, Tabs, TabPanel } from '@mui/joy';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { type HtmlArtifact } from '@bike4mind/common';
 import { validateArtifactContent } from '@client/app/utils/artifactParser';
@@ -217,14 +216,7 @@ const HtmlArtifactViewer: React.FC<HtmlArtifactViewerProps> = ({ artifact, onErr
         <TabPanel value="code" sx={{ flex: 1, minHeight: 0, p: 0, overflow: 'auto' }}>
           {/* The artifact's own markup, not the sanitized copy the iframe runs: the reader
               wants what the model wrote, not what the sandbox allowed through. */}
-          <SyntaxHighlighter
-            language="html"
-            style={oneDark}
-            customStyle={{ margin: 0, fontSize: '14px', lineHeight: 1.5, minHeight: '100%' }}
-            wrapLongLines
-          >
-            {artifact.content}
-          </SyntaxHighlighter>
+          <HighlightedCode code={artifact.content} language="html" customStyle={{ minHeight: '100%' }} wrapLongLines />
         </TabPanel>
       </Tabs>
     </Box>
