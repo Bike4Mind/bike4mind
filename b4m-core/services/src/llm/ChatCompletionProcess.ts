@@ -161,6 +161,7 @@ import {
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   resolveSkipAutoOffers,
+  lakeContentTokens,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
@@ -3284,6 +3285,7 @@ export class ChatCompletionProcess {
             urlContent: number;
             toolSchemas: number;
             userPrompt: number;
+            lakeRetrieval?: number;
           }
         | undefined;
 
@@ -3431,6 +3433,8 @@ export class ChatCompletionProcess {
         // captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
         // Derived from totalTokens, NOT inputTokens, so the tool-schema count never inflates it.
         // Uses the post-recovery effective totals so a shed turn isn't double-counted as history.
+        // Lake content is still inside this residual HERE. It is promoted to its own bucket below,
+        // once systemPromptDetails has been derived, so what gets persisted is net of the lake layers.
         const knownSourceTokens = fabTokens + effectiveHistoryTokens + mementoTokens + urlTokens + userPromptTokens;
         const systemPromptTokens = Math.max(0, effectiveTotalTokens - knownSourceTokens);
 
@@ -3548,6 +3552,23 @@ export class ChatCompletionProcess {
         // model sees the blocks rather than the order the three helpers happened to run.
         systemPromptDetails = sortDetailsByDeliveryOrder(systemPromptDetails);
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
+      }
+
+      // Promote the lake layers out of the residual. `tokensBySource.systemPrompts` above is gross -
+      // it still contains the forced-retrieval and lake-memory content - so move exactly the tokens
+      // the layer rows recorded as delivered into a bucket of their own, conserving the sum rather
+      // than counting the lake messages a second time. One counter, and a lake block the budget
+      // dropped is not billed (the rows carry `wasIncluded`). `undefined` means the details never
+      // derived, so the volume is unknown and the residual stays gross rather than claiming zero.
+      if (tokensBySource) {
+        const lakeTokens = lakeContentTokens(systemPromptDetails);
+        if (lakeTokens !== undefined) {
+          tokensBySource = {
+            ...tokensBySource,
+            systemPrompts: Math.max(0, tokensBySource.systemPrompts - lakeTokens),
+            lakeRetrieval: lakeTokens,
+          };
+        }
       }
 
       // Opt-in only, and built from the same tagged stack the breakdown above is derived from, so

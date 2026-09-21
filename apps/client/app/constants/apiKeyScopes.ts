@@ -72,6 +72,12 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     endpoints: ['POST /api/projects', 'PUT /api/projects/:id'],
   },
   {
+    value: ApiKeyScope.ME_READ,
+    label: 'Account: Read',
+    description: "Read the key owner's own plan tier, credit balance, and entitlements; gates GET /api/v1/me only",
+    endpoints: ['GET /api/v1/me'],
+  },
+  {
     value: ApiKeyScope.MARKETING_REPORTS_READ,
     label: 'Marketing Reports: Read',
     description: 'Read published marketing reports',
