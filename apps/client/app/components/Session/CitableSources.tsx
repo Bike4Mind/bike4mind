@@ -118,6 +118,7 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
       component={renderAsButton ? 'button' : source.url ? 'a' : 'div'}
       type={renderAsButton ? 'button' : undefined}
       href={!renderAsButton ? source.url : undefined}
+      data-testid="citable-source-chip"
       onClick={handleClick}
       target={!renderAsButton && source.url ? '_blank' : undefined}
       rel={!renderAsButton && source.url ? 'noopener noreferrer' : undefined}

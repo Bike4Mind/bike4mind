@@ -9,7 +9,19 @@
  */
 
 import type { CitableSource } from '@bike4mind/common';
-import type { CitedPassage } from '@client/app/hooks/useSessionLayout';
+
+/**
+ * The passage anchor a citation chip carries. Declared HERE rather than in the zustand store that
+ * holds it: this module is the React-free primitive the store, the viewer and the curator surfaces
+ * all depend on, so the type has to point the same way the code does.
+ */
+export type CitedPassage = {
+  /** Guards against a stale anchor marking a DIFFERENT document the reader opens next. */
+  fileId: string;
+  chunkId: string;
+  /** The text as SERVED - trimmed, clipped, defanged - not the stored chunk. */
+  passage: string;
+};
 
 /** The clip marker `servedPassageText` appends; never present in the document itself. */
 const CLIP_MARKER = '\u2026';
@@ -99,6 +111,22 @@ export function blockIntersectsPassage(
  * key on. The file-level retrieval arms - keyword search and whole-document retrieve - deliberately
  * set neither, so a chip from those lands the reader on the whole document as before.
  */
+/**
+ * The passage to mark when rendering `fileId`, or undefined when the anchor points at another file.
+ *
+ * The anchor is a SINGLE store slot shared by every open reading surface, so this id comparison is
+ * the only thing stopping a citation into one document from marking whatever text happens to
+ * collide in another. Both surfaces (KnowledgeViewer, DataLakeArticlePanel) go through here rather
+ * than re-deriving it, so the guard cannot hold on one and be forgotten on the other.
+ */
+export function citedPassageForFile(
+  anchor: CitedPassage | null | undefined,
+  fileId: string | null | undefined
+): string | undefined {
+  if (!anchor || !fileId) return undefined;
+  return anchor.fileId === fileId ? anchor.passage : undefined;
+}
+
 export function citedPassageOf(source: CitableSource): CitedPassage | null {
   const { chunkId, fullContext } = source.metadata ?? {};
   if (typeof chunkId !== 'string' || chunkId.length === 0) return null;

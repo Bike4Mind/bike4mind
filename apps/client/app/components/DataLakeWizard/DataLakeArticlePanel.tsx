@@ -8,6 +8,7 @@ import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import { useReprocessFabFile, type DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
+import { citedPassageForFile } from '@client/app/components/Knowledge/citedPassage';
 import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
@@ -72,7 +73,7 @@ export default function DataLakeArticlePanel({
   // usually absent. Honoring it when the ids DO match means opening the cited document here marks
   // the same passage the chat viewer would - one primitive, both read surfaces (#3038).
   const citedAnchor = useSessionLayout(s => s.citedPassage);
-  const citedPassage = citedAnchor?.fileId === readableFile?.id ? citedAnchor?.passage : undefined;
+  const citedPassage = citedPassageForFile(citedAnchor, readableFile?.id);
 
   if (!file) {
     return (

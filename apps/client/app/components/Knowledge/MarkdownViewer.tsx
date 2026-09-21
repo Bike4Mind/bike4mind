@@ -146,13 +146,31 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
   // Check if the content is a Mermaid diagram wrapped in code blocks
   const mermaidMatch = content.match(/```mermaid\s*([\s\S]*?)```/);
 
+  // A diagram has no prose blocks to mark, but the prop's contract is that the reader always gets
+  // to SEE the cited passage - so these two early returns still render the callout rather than
+  // dropping the anchor silently. Titled as a plain passage, not "no longer found": nothing drifted,
+  // this document just is not markable.
+  const mermaidCitedFallback = citedPassage ? (
+    <UnmarkedCitedPassage passage={citedPassage} title="Cited passage" />
+  ) : null;
+
   if (isMermaidDiagram) {
-    return <MermaidChart className="markdown-viewer-mermaid" chartDefinition={content} />;
+    return (
+      <>
+        {mermaidCitedFallback}
+        <MermaidChart className="markdown-viewer-mermaid" chartDefinition={content} />
+      </>
+    );
   }
 
   if (mermaidMatch) {
     const chartContent = mermaidMatch[1].trim();
-    return <MermaidChart className="markdown-viewer-mermaid" chartDefinition={chartContent} />;
+    return (
+      <>
+        {mermaidCitedFallback}
+        <MermaidChart className="markdown-viewer-mermaid" chartDefinition={chartContent} />
+      </>
+    );
   }
 
   return (

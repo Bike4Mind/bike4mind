@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { locateCitedPassage, blockIntersectsPassage, citedPassageOf } from './citedPassage';
+import { locateCitedPassage, blockIntersectsPassage, citedPassageOf, citedPassageForFile } from './citedPassage';
 
 const DOC = [
   '# Leave policy',
@@ -101,5 +101,36 @@ describe('citedPassageOf', () => {
 
   it('returns null for a blank passage rather than anchoring on nothing', () => {
     expect(citedPassageOf(chip({ chunkId: 'c1', fullContext: '   ' }))).toBeNull();
+  });
+});
+
+/**
+ * The id guard is the ONLY thing standing between a single shared anchor slot and a citation into
+ * one document marking colliding text in another, and it is invisible in both viewers it runs in -
+ * so it is asserted here rather than only through a render.
+ */
+describe('citedPassageForFile', () => {
+  const anchor = { fileId: 'file-a', chunkId: 'chunk-1', passage: 'Holidays accrue monthly.' };
+
+  it('returns the passage when the anchor is for this file', () => {
+    expect(citedPassageForFile(anchor, 'file-a')).toBe('Holidays accrue monthly.');
+  });
+
+  it('returns undefined when the anchor points at a DIFFERENT file', () => {
+    // The failure this prevents: opening file B while an anchor for A is live would mark whatever
+    // text in B happens to match A's passage, with no signal to the reader that it is wrong.
+    expect(citedPassageForFile(anchor, 'file-b')).toBeUndefined();
+  });
+
+  it('returns undefined when there is no anchor', () => {
+    expect(citedPassageForFile(null, 'file-a')).toBeUndefined();
+    expect(citedPassageForFile(undefined, 'file-a')).toBeUndefined();
+  });
+
+  it('returns undefined when there is no file to render', () => {
+    // Both absent must not compare equal as undefined === undefined and leak the anchor through.
+    expect(citedPassageForFile(anchor, undefined)).toBeUndefined();
+    expect(citedPassageForFile(anchor, null)).toBeUndefined();
+    expect(citedPassageForFile(null, undefined)).toBeUndefined();
   });
 });

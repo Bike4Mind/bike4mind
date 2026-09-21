@@ -34,6 +34,7 @@ import dynamic from 'next/dynamic';
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import TextViewer from './TextViewer';
 import MarkdownViewer from './MarkdownViewer';
+import { citedPassageForFile } from './citedPassage';
 import DocxViewer from './DOCXViewer';
 import CSVViewer from './CSVViewer';
 import QuestMasterReply from '../GenAI/QuestMasterReply';
@@ -50,7 +51,11 @@ import SendIcon from '@mui/icons-material/Send';
 import { ExpandMore, ExtensionOff, Splitscreen, FormatListNumbered } from '@mui/icons-material';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { create } from 'zustand';
-import { setSessionLayout, clearRecentArtifacts } from '@client/app/hooks/useSessionLayout';
+import {
+  setSessionLayout,
+  clearRecentArtifacts,
+  clearSessionScopedViewerState,
+} from '@client/app/hooks/useSessionLayout';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -879,12 +884,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       clearRecentArtifacts();
       // The data-lake View preview is just as session-transient: leaving it set would surface a
       // stale "just looking" tab inside a different notebook's viewer.
-      if (useSessionLayout.getState().previewFile) {
-        // The citation anchor is scoped to that preview and must go with it: a notebook switch
-        // leaves the same file reachable through the workbench, where a stale anchor would mark
-        // a passage nothing in this session cited.
-        setSessionLayout({ previewFile: null, citedPassage: null });
-      }
+      clearSessionScopedViewerState();
       prevSessionIdRef.current = currentSessionId;
     }
   }, [currentSessionId]);
@@ -2355,7 +2355,7 @@ const FileContent = ({
   // single store slot shared by every open tab, so without the id guard a citation into one
   // document would mark whatever text happens to collide in the others.
   const citedAnchor = useSessionLayout(s => s.citedPassage);
-  const citedPassage = citedAnchor?.fileId === file?.id ? citedAnchor?.passage : undefined;
+  const citedPassage = citedPassageForFile(citedAnchor, file?.id);
 
   // The signed URL takes a while to be ready; wait for it before showing content.
   useEffect(() => {

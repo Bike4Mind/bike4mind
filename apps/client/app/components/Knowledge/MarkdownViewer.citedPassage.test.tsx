@@ -60,15 +60,31 @@ describe('MarkdownViewer cited-passage anchor (#3038)', () => {
   });
 
   it('scrolls the first marked block into view', () => {
-    renderDoc('Unused days roll over once.');
+    const { container } = renderDoc('Unused days roll over once.');
     expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    // WHICH element was scrolled is the assertion that matters: a call count alone passes just as
+    // happily if the viewer scrolls the container, or the wrong one of several marked blocks.
+    const marked = container.querySelector('[data-cited]');
+    expect(scrollIntoView.mock.instances[0]).toBe(marked);
+    expect((scrollIntoView.mock.instances[0] as Element).textContent).toBe('Unused days roll over once.');
+  });
+
+  it('scrolls to the FIRST marked block when the passage spans several', () => {
+    const { container } = renderDoc('Holidays accrue monthly.\n\nUnused days roll over once.');
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+    expect(scrollIntoView.mock.instances[0]).toBe(container.querySelector('[data-cited]'));
+    expect((scrollIntoView.mock.instances[0] as Element).textContent).toBe('Holidays accrue monthly.');
   });
 
   it('shows the passage as a callout when it is not in this document, and marks nothing', () => {
     // A re-chunk or an edit since the turn. Silently rendering a plain document would be
     // indistinguishable from a citation that never carried a passage, so the evidence is shown.
     const { container } = renderDoc('Parental leave is twelve weeks.');
-    expect(screen.getByTestId('markdown-cited-passage-fallback')).toHaveTextContent('Parental leave is twelve weeks.');
+    const fallback = screen.getByTestId('markdown-cited-passage-fallback');
+    expect(fallback).toHaveTextContent('Parental leave is twelve weeks.');
+    // The title is the only thing telling the reader WHY there is no highlight. "Not found" means
+    // the document drifted; the other case (located, nothing rendered carries it) must not say so.
+    expect(fallback).toHaveTextContent('no longer found in this document');
     expect(container.querySelectorAll('[data-cited]')).toHaveLength(0);
     expect(scrollIntoView).not.toHaveBeenCalled();
   });
@@ -111,6 +127,34 @@ describe('MarkdownViewer cited-passage anchor (#3038)', () => {
         <MarkdownViewer content={table} citedPassage={'| Holidays | twelve |'} />
       </TestWrapper>
     );
-    expect(screen.getByTestId('markdown-cited-passage-fallback')).toBeInTheDocument();
+    const fallback = screen.getByTestId('markdown-cited-passage-fallback');
+    expect(fallback).toBeInTheDocument();
+    // The OTHER title. The passage WAS located, so claiming it is gone from the document would be
+    // wrong - this is the pair that makes the two fallback paths distinguishable to a reader.
+    expect(fallback).toHaveTextContent('Cited passage');
+    expect(fallback).not.toHaveTextContent('no longer found in this document');
+  });
+
+  it('marks the right blocks in a document the LaTeX promotion rewrites', () => {
+    // promoteInlineLatexDollars runs before parsing, so offsets are into the PROMOTED string. A
+    // document containing $...$ is where locating the passage in `content` instead would shift
+    // every offset by what the transform inserted and mark a neighbouring block.
+    const doc = [
+      'Holidays accrue monthly.',
+      '',
+      'The accrual rate is $r = 1.5$ days.',
+      '',
+      'Sabbaticals are separate.',
+    ].join('\n');
+    const { container } = render(
+      <TestWrapper>
+        <MarkdownViewer content={doc} citedPassage={'The accrual rate is $r = 1.5$ days.'} />
+      </TestWrapper>
+    );
+
+    const marked = Array.from(container.querySelectorAll('[data-cited]'));
+    expect(marked).toHaveLength(1);
+    expect(marked[0].textContent).toContain('The accrual rate is');
+    expect(screen.queryByTestId('markdown-cited-passage-fallback')).toBeNull();
   });
 });

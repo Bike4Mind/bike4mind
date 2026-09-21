@@ -73,13 +73,12 @@ export interface PendingMessageFile {
  * a passage does not belong in a query string and there is no endpoint that resolves `chunkId`
  * back to its text; a shared or reloaded link therefore lands on the whole document, as it does
  * today. `chunkId` is carried for the curator surfaces that key on it, not used by the viewer.
+ *
+ * The shape itself is declared on the React-free primitive (components/Knowledge/citedPassage) and
+ * re-exported here for the existing importers: the store depends on the primitive, not the reverse.
  */
-export interface CitedPassage {
-  /** Guards against a stale anchor marking a DIFFERENT document the reader opens next. */
-  fileId: string;
-  chunkId: string;
-  passage: string;
-}
+import type { CitedPassage } from '@client/app/components/Knowledge/citedPassage';
+export type { CitedPassage };
 
 interface SessionLayoutControlState {
   layout: DefaultLayoutType;
@@ -205,6 +204,22 @@ export const addArtifactToRecent = (artifact: ArtifactData): ArtifactData[] => {
   }
 
   return updated;
+};
+
+/**
+ * Drop the viewer state that belongs to the session being left: the data-lake View preview and the
+ * citation anchor scoped to it.
+ *
+ * The anchor is checked INDEPENDENTLY of the preview - a chip click writes it synchronously
+ * (CitableSources), so it can be set with no preview open and would otherwise survive into the next
+ * notebook, where the same file is still reachable through the workbench and a stale anchor would
+ * mark a passage nothing in that session cited. No-ops when neither is set, so a session switch in
+ * the common case does not touch the store at all.
+ */
+export const clearSessionScopedViewerState = (): void => {
+  const { previewFile, citedPassage } = useSessionLayout.getState();
+  if (!previewFile && !citedPassage) return;
+  setSessionLayout({ previewFile: null, citedPassage: null });
 };
 
 export const setSessionLayout = (

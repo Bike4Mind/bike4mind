@@ -108,6 +108,7 @@ import {
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
 import { buildRetrievalConflictNote, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
+import { clipToCodePointBoundary } from './tools/implementation/knowledgeBaseSearch/tokenBudget';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
 import {
@@ -2940,7 +2941,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // `used` counts and overshoot the char budget. Slicing the defanged string keeps `used`
         // equal to what is actually injected.
         const defanged = defangRetrievedContent(candidate.text);
-        const text = defanged.length > remaining ? defanged.slice(0, remaining) : defanged;
+        // Code-point safe, matching the search arm's own clip: a raw slice can land between the
+        // halves of a surrogate pair and emit a lone surrogate into both the injected prompt and
+        // the citable's fullContext, which then fails to match the document when the viewer
+        // locates it. Never returns MORE than `remaining`, so the budget accounting below holds.
+        const text = defanged.length > remaining ? clipToCodePointBoundary(defanged, remaining) : defanged;
         const name = file?.fileName || candidate.fabFileId;
         // Distinct-file first-appearance order IS the citation index order: the
         // citables emitted below follow sourceFileIds, so [N] -> citables[N-1].
