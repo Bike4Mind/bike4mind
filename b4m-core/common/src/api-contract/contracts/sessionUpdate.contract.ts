@@ -22,9 +22,9 @@ export const sessionUpdateContract = defineEndpoint({
     'Updates a session (called a "notebook" in the product UI): its name, attached knowledge ' +
     'files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` ' +
     'together to enable grounded retrieval for `POST /api/chat` against this session - retrieval ' +
-    'is gated by these session fields, not by the chat request. `retrievalTags` narrows that ' +
-    'retrieval to a chosen set of data lakes; leave it out and retrieval reaches every lake you ' +
-    'can access. Authenticate with an API key ' +
+    'is gated by these session fields, not by the chat request. `lakeScope` narrows that ' +
+    'retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or ' +
+    'send `null` to clear it so retrieval reaches every lake you can access. Authenticate with an API key ' +
     '(`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every ' +
     'member of every project containing this session by default (see `propagateToProjects`), ' +
     'and that sharing cannot be undone through the UI.',

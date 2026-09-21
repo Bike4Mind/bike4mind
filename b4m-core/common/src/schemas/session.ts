@@ -32,20 +32,24 @@ export const SessionUpdateRequestSchema = z.object({
   // Data Lake mode toggles this on an existing session. surface is intentionally left out
   // (and unchanged) so the chat stays in the main sidebar list. See datalake-in-chat-mode design.
   forceKnowledgeRetrieval: z.boolean().optional(),
-  // The active lake set. Tri-state on ONE field rather than exposing the stored
-  // `lakeScopeExplicit` sidecar: a caller who sent `[]` and forgot the flag would get the exact
-  // OPPOSITE of what they asked for (every lake instead of none), which is not a contract to hand
-  // anyone. updateSession derives the sidecar from which of the three arms this is.
+  // The active lake set. Named `lakeScope`, deliberately NOT `retrievalTags` (the stored field
+  // this writes to) - a caller that echoes a whole session document back (a rename PUTs the
+  // stored session as-is) then carries a `retrievalTags: []` Mongoose hydrates onto every session
+  // that never touched this, and a same-named request field would read that echo as "ground on no
+  // lake" for every such write. Naming the request field something the stored document does not
+  // have makes that echo unspellable: `{ ...session, name }` has no `lakeScope` key to strip, so
+  // the parse (a plain z.object) silently drops it, exactly as it always dropped an unknown key.
   //
-  // Deliberately unlike `lastUsedModel` above, where null means "leave unchanged": that field
-  // carries a legacy accommodation for callers echoing a whole session back, and there is no
-  // other way to spell "clear the scope" here, since `[]` already means "ground on nothing".
+  // Tri-state on ONE field rather than exposing the stored `lakeScopeExplicit` sidecar: a caller
+  // who sent `[]` and forgot the flag would get the exact OPPOSITE of what they asked for (every
+  // lake instead of none), which is not a contract to hand anyone. updateSession derives the
+  // sidecar from which of the three arms this is.
   //
   // Not access-checked at this boundary on purpose - resolveLakeMemoryScope intersects these
   // against the caller's entitled tags at retrieval time, so an unreachable tag narrows the
   // scope rather than widening it, and rejecting it here would break the ordinary case of a
   // caller echoing back a scope it has since lost one lake of.
-  retrievalTags: z
+  lakeScope: z
     .array(z.string())
     .nullable()
     .optional()

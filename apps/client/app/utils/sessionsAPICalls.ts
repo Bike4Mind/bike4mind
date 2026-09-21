@@ -57,13 +57,14 @@ export const getSessionByIdFromServer = async (sessionId: string): Promise<ISess
 };
 
 /**
- * The PUT /api/sessions/{id} body. `Partial<ISessionDocument>` alone cannot express the whole
- * contract: `retrievalTags: null` (clear the lake scope, so retrieval falls back to every
- * reachable lake) is a request-only spelling with no stored counterpart, and an intersection
- * would narrow it straight back out - hence the swap rather than an `&`.
+ * The PUT /api/sessions/{id} body. `lakeScope` (tri-state: a list, `[]` for no lake, `null` to
+ * clear) is the request-only spelling of the stored `retrievalTags`/`lakeScopeExplicit` pair, and
+ * deliberately has no field of that name on `ISessionDocument` - a caller that spreads a whole
+ * cached session into this payload (a rename PUTs the session back as-is) then has no `lakeScope`
+ * key to accidentally carry, so the server's parse drops it rather than reading the echoed
+ * `retrievalTags: []` Mongoose hydrates onto every session as a deliberate "ground on no lake".
  */
-export type SessionUpdatePayload = Omit<Partial<ISessionDocument>, 'retrievalTags'> &
-  Pick<SessionUpdateRequest, 'retrievalTags'>;
+export type SessionUpdatePayload = Partial<ISessionDocument> & Pick<SessionUpdateRequest, 'lakeScope'>;
 
 export const updateSessionToServer = async (sessionData: SessionUpdatePayload & { id: string }) => {
   const response = await api.put(`/api/sessions/${sessionData.id}`, sessionData);

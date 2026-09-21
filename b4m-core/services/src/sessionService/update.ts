@@ -12,6 +12,7 @@ import {
   SessionUpdateRequestSchema,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
+import { sessionGroundsOnNoLake } from '../dataLakeService/narrowLakeAccessToSession';
 import { deriveRetrievalTagsFromFiles, type DeriveRetrievalTagsAdapters } from './deriveRetrievalTags';
 import { secureParameters } from '@bike4mind/utils';
 import { BaseStorage, getCachedSignedUrl } from '@bike4mind/utils';
@@ -70,12 +71,12 @@ export const updateSession = async (
     lastUsedModel,
     forceKnowledgeRetrieval,
     propagateToProjects,
-    retrievalTags,
+    lakeScope,
   } = secureParameters(parameters, updateSessionParamtersSchema);
 
   // Whether this request SPEAKS about the lake scope at all - `[]` and `null` are both statements,
   // so presence has to be tested rather than truthiness.
-  const lakeScopeRequested = retrievalTags !== undefined;
+  const lakeScopeRequested = lakeScope !== undefined;
 
   // Dropped, not rejected - a rename PUTs the whole session, so see usableSessionIds.
   const knowledgeIds = rawIds && usableSessionIds(rawIds, 'knowledge', adapters.logger ?? Logger.globalInstance);
@@ -132,7 +133,7 @@ export const updateSession = async (
     addedFileIds.length > 0 &&
     !lakeScopeRequested &&
     !session.retrievalTags?.length &&
-    !session.lakeScopeExplicit
+    !sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
   ) {
     const derived = await deriveRetrievalTagsFromFiles(user, knowledgeIds, {
       db: { fabFiles: db.fabFiles },
@@ -155,8 +156,8 @@ export const updateSession = async (
   // fresh list inverts the meaning of an empty one. `null` is the caller's way to spell the
   // second state, since `[]` is already spoken for by the first (see SessionUpdateRequestSchema).
   if (lakeScopeRequested) {
-    update.retrievalTags = retrievalTags ?? [];
-    update.lakeScopeExplicit = retrievalTags !== null;
+    update.retrievalTags = lakeScope ?? [];
+    update.lakeScopeExplicit = lakeScope !== null;
   }
   update.lastUpdated = new Date();
 

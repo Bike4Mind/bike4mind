@@ -33,7 +33,7 @@ describe('useSetLakeScope', () => {
     // overwrite the server's - re-adding removed files and fanning them out to projects - from
     // what the user experienced as ticking a checkbox.
     expect(updateSession).toHaveBeenCalledWith(
-      { id: 's1', retrievalTags: ['datalake:research', 'datalake:legal'] },
+      { id: 's1', lakeScope: ['datalake:research', 'datalake:legal'] },
       expect.objectContaining({ onError: expect.any(Function) })
     );
   });
@@ -45,7 +45,7 @@ describe('useSetLakeScope', () => {
     act(() => result.current([]));
 
     expect(updateSession).toHaveBeenCalledWith(
-      { id: 's1', retrievalTags: null },
+      { id: 's1', lakeScope: null },
       expect.objectContaining({ onError: expect.any(Function) })
     );
   });

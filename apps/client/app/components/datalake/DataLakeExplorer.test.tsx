@@ -7,6 +7,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
 // The store itself stays real (only its setter is spied), so a test can drive a layout write the
 // way the KnowledgeViewer's close button does.
 import useSessionLayoutStore from '@client/app/hooks/useSessionLayout';
+// Real store (not mocked): the /new picker case below asserts against it directly, the same way
+// the deferred-creation seam (useCreateDataLakeSession) reads it back.
+import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
 import DataLakeExplorer from './DataLakeExplorer';
 
 // Browsing the tree must not mutate the chat on its own: writes come only from the row actions,
@@ -307,6 +310,7 @@ const renderExplorer = (props: Partial<React.ComponentProps<typeof DataLakeExplo
 beforeEach(() => {
   sessionState.currentSessionId = 'sess-1';
   sessionState.current = { id: 'sess-1', retrievalTags: [], lakeScopeExplicit: false };
+  usePendingLakeScope.getState().setLakeTags([]);
 });
 
 describe('DataLakeExplorer chat-first surface', () => {
@@ -716,6 +720,39 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('All data lakes');
     expect(screen.queryByTestId('datalake-selected-lake-header')).not.toBeInTheDocument();
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
+  });
+
+  // /new: no session exists yet to write the scope onto, so the choice is parked in
+  // usePendingLakeScope for the deferred creation (useCreateDataLakeSession) to pick up.
+  describe('picking a scope before the session exists (/new)', () => {
+    beforeEach(() => {
+      sessionState.currentSessionId = null;
+      sessionState.current = null;
+      // Not reset by the outer suite (other tests only assert toHaveBeenCalledWith), so clear
+      // here or this test would see calls the PRECEDING tests made against a real session.
+      setLakeScopeSpy.mockClear();
+    });
+
+    it('parks the picked lake in usePendingLakeScope instead of writing to a session', () => {
+      renderExplorer();
+
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+      expect(usePendingLakeScope.getState().lakeTags).toEqual(['datalake:lake-a']);
+      // Nothing to persist yet - useSetLakeScope no-ops without a session.
+      expect(setLakeScopeSpy).not.toHaveBeenCalled();
+    });
+
+    it('scopes the tree to the pending lake, matching what a real session would show', () => {
+      renderExplorer();
+
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+      fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-1'));
+
+      expect(screen.getByTestId('datalake-lake-picker-btn')).toHaveTextContent('Lake A');
+      expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea');
+    });
   });
 
   // The picker's per-lake count is membership-based while the tree is built from prefix tags, so

@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { toast } from 'sonner';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useUpdateSession } from '@client/app/hooks/data/sessions';
@@ -18,23 +19,29 @@ import { useUpdateSession } from '@client/app/hooks/data/sessions';
  * Like useSetDataLakeMode: optimistic on the cached session, sends ONLY the changed field (a
  * whole-session echo would let a stale knowledgeIds overwrite another actor's removal), and rolls
  * back on failure so the picker never claims a scope the server refused.
+ *
+ * Wrapped in useCallback (matching useSetDataLakeMode) so the identity passed to a caller's own
+ * memoized dep array (e.g. DataLakeExplorer's handleSelectLakes) is stable across renders.
  */
 export default function useSetLakeScope() {
   const { currentSession, setCurrentSession } = useSessions();
   const { mutate: updateSession } = useUpdateSession();
 
-  return (lakeTags: string[]) => {
-    if (!currentSession) return;
-    const explicit = lakeTags.length > 0;
-    setCurrentSession({ ...currentSession, retrievalTags: lakeTags, lakeScopeExplicit: explicit });
-    updateSession(
-      { id: currentSession.id, retrievalTags: explicit ? lakeTags : null },
-      {
-        onError: () => {
-          setCurrentSession(currentSession);
-          toast.error('Could not update which data lakes this chat uses - please try again.');
-        },
-      }
-    );
-  };
+  return useCallback(
+    (lakeTags: string[]) => {
+      if (!currentSession) return;
+      const explicit = lakeTags.length > 0;
+      setCurrentSession({ ...currentSession, retrievalTags: lakeTags, lakeScopeExplicit: explicit });
+      updateSession(
+        { id: currentSession.id, lakeScope: explicit ? lakeTags : null },
+        {
+          onError: () => {
+            setCurrentSession(currentSession);
+            toast.error('Could not update which data lakes this chat uses - please try again.');
+          },
+        }
+      );
+    },
+    [currentSession, setCurrentSession, updateSession]
+  );
 }

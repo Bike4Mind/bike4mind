@@ -2476,6 +2476,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       return [];
     }
 
+    // The session deliberately grounds on NO lake, so there is nothing to force retrieval against.
+    // Skipping is the whole handling: narrowing to nothing and running anyway would either search
+    // the caller's entire personal library (`restrictToDataLake` is gated on `lakeScoped`, which is
+    // false here) or, with it on, abstain through the `no_lakes` exit and stamp an outcome that
+    // reads as a broken lake rather than a chosen scope. The model can still call
+    // search_knowledge_base for the caller's own files; its lake arms are empty for the same
+    // reason (resolveSessionLakeAccess).
+    //
+    // Checked BEFORE personalCorpusOnly below: that check's remedy ("ask again without the
+    // attachment") assumes the session would otherwise ground on a lake, which is never true once
+    // the scope itself says none. A session that is both no-lake-scoped AND holds only personal
+    // attachments must record the scope as the reason, not the attachment.
+    if (sessionGroundsOnNoLake(this.retrievalTags, this.lakeScopeExplicit)) {
+      this.logger.log('\u{1F512} Forced retrieval: skipped (session is scoped to no data lake)');
+      this.recordForcedSkip(quest, 'no_lake_scope');
+      return [];
+    }
+
     // Same rule as the per-turn skip above, at SESSION altitude: when everything attached to this
     // notebook is a personal file rather than lake content, the question is about those documents
     // and grounding against every reachable lake is what put an unrelated product's documents into
@@ -2487,19 +2505,6 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     if (this.chatCompletion.personalCorpusOnly) {
       this.logger.log('🔒 Forced retrieval: skipped (session corpus is personal files, not lake content)');
       this.recordForcedSkip(quest, 'personal_corpus');
-      return [];
-    }
-
-    // The session deliberately grounds on NO lake, so there is nothing to force retrieval against.
-    // Skipping is the whole handling: narrowing to nothing and running anyway would either search
-    // the caller's entire personal library (`restrictToDataLake` is gated on `lakeScoped`, which is
-    // false here) or, with it on, abstain through the `no_lakes` exit and stamp an outcome that
-    // reads as a broken lake rather than a chosen scope. The model can still call
-    // search_knowledge_base for the caller's own files; its lake arms are empty for the same
-    // reason (resolveSessionLakeAccess).
-    if (sessionGroundsOnNoLake(this.retrievalTags, this.lakeScopeExplicit)) {
-      this.logger.log('\u{1F512} Forced retrieval: skipped (session is scoped to no data lake)');
-      this.recordForcedSkip(quest, 'no_lake_scope');
       return [];
     }
 

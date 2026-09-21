@@ -506,7 +506,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
       await updateSession(
         user,
-        { id: 'session-1', retrievalTags: ['datalake:research', 'datalake:legal'] } as never,
+        { id: 'session-1', lakeScope: ['datalake:research', 'datalake:legal'] } as never,
         adapters as never
       );
 
@@ -519,7 +519,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
     it('writes an empty list as an explicit EMPTY scope, not as "never chose"', async () => {
       const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:old'], lakeScopeExplicit: true }, []);
 
-      await updateSession(user, { id: 'session-1', retrievalTags: [] } as never, adapters as never);
+      await updateSession(user, { id: 'session-1', lakeScope: [] } as never, adapters as never);
 
       // Without the flag, resolveLakeMemoryScope reads [] as "no scope expressed" and grounds on
       // EVERY entitled lake - the exact opposite of what the caller asked for.
@@ -529,7 +529,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
     it('clears the scope on null, so retrieval falls back to every reachable lake', async () => {
       const { update, adapters } = makeAdapters({ retrievalTags: ['datalake:old'], lakeScopeExplicit: true }, []);
 
-      await updateSession(user, { id: 'session-1', retrievalTags: null } as never, adapters as never);
+      await updateSession(user, { id: 'session-1', lakeScope: null } as never, adapters as never);
 
       expect(update.mock.calls[0][0]).toMatchObject({ retrievalTags: [], lakeScopeExplicit: false });
     });
@@ -543,6 +543,29 @@ describe('updateSession - lake-scope derivation on attach', () => {
       expect(update.mock.calls[0][0]).not.toHaveProperty('lakeScopeExplicit');
     });
 
+    /**
+     * The regression both PR reviews called out: a rename/tag/attach PUTs the whole cached
+     * session back (`{ ...session, name }`), and Mongoose hydrates an unset `retrievalTags` to
+     * `[]` - so the echoed request carries `retrievalTags: []` too. Before the request field was
+     * renamed to `lakeScope`, `secureParameters` read that echo as a deliberate "ground on no
+     * lake" and silently blinded the session's retrieval on every such write. `lakeScope` has no
+     * stored counterpart of that name, so the echoed `retrievalTags` is simply dropped.
+     */
+    it('ignores an echoed retrievalTags from a whole-session PUT (rename/tag/attach)', async () => {
+      const { update, adapters } = makeAdapters({}, []);
+
+      await updateSession(
+        user,
+        // Exactly the shape RenameInput/TagModal/AttachFileButton send: the whole cached session
+        // (Mongoose-hydrated `retrievalTags: []`, no `lakeScopeExplicit`) plus one changed field.
+        { id: 'session-1', name: 'Renamed', retrievalTags: [] } as never,
+        adapters as never
+      );
+
+      expect(update.mock.calls[0][0]).not.toHaveProperty('retrievalTags');
+      expect(update.mock.calls[0][0]).not.toHaveProperty('lakeScopeExplicit');
+    });
+
     it('lets a caller-set scope win over derivation when one write does both', async () => {
       // The picker persists its selection and the workbench persists its files through the same
       // PUT, so a single write carries both. Keying the derivation guard on the STORED scope
@@ -551,7 +574,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
       await updateSession(
         user,
-        { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], retrievalTags: ['datalake:chosen'] } as never,
+        { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], lakeScope: ['datalake:chosen'] } as never,
         adapters as never
       );
 
@@ -568,7 +591,7 @@ describe('updateSession - lake-scope derivation on attach', () => {
 
       await updateSession(
         user,
-        { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], retrievalTags: null } as never,
+        { id: 'session-1', knowledgeIds: [LAKE_FILE_ID], lakeScope: null } as never,
         adapters as never
       );
 
