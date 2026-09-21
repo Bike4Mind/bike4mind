@@ -94,5 +94,6 @@ export * from './attributeAccessedLakes';
 export * from './recordLakeAccessEvent';
 export * from './assembleLakeConfigHistory';
 export * from './canonicalSourceKey';
+export * from './recordLakeFindings';
 export * from './proposeDataLakeContent';
 export * from './reviewDataLakeProposal';

@@ -26,6 +26,9 @@ const makeDb = (fileOverrides: Record<string, unknown> = {}) => {
     dataLakeAccessGrants: {
       listByLake: vi.fn(async () => [] as never),
     },
+    dataLakeFindings: {
+      deleteForPurgedDocument: vi.fn(async () => 0),
+    },
     sessions: {
       findAllWithKnowledgeId: vi.fn(async () => [] as never),
       update: vi.fn(async () => ({}) as never),
@@ -816,5 +819,64 @@ describe('purgeDataLakeDocument', () => {
     const db = makeDb();
     await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() });
     expect(db.dataLakes.setStats).toHaveBeenCalledWith('lake-1', { fileCount: 4, totalSizeBytes: 900 });
+  });
+  it('sweeps findings that quote the purged document', async () => {
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+
+    await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', { db, storage: makeStorage() });
+
+    // A finding carries a 240-char excerpt of each source, so a row citing this document would keep
+    // quoting text this call was paid to destroy - and nothing else ever sweeps it, because a
+    // finding whose document is gone can never be re-detected. Called with the file id alone: the
+    // destruction is global, so the sweep must not be scoped to the authorizing lake.
+    expect(db.dataLakeFindings.deleteForPurgedDocument).toHaveBeenCalledWith('file-1');
+  });
+
+  it('swallows a failing findings sweep so the owner still gets their bytes back', async () => {
+    // Past the row delete there is no retry door: the file is already gone from every surface. A
+    // throw escaping here would skip the quota refund below it, charging the owner forever for
+    // bytes this call destroyed - a worse outcome than a stranded finding, which the log records.
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    db.dataLakeFindings.deleteForPurgedDocument.mockRejectedValue(new Error('findings sweep failed'));
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const onPurged = vi.fn(async () => {});
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db,
+      storage: makeStorage(),
+      onPurged,
+      logger,
+    });
+
+    expect(onPurged).toHaveBeenCalledWith(expect.objectContaining({ fileSize: 27707 }));
+    expect(receipt.documentDeleted).toBe(true);
+    // Logged rather than silent: a stranded excerpt is a retention fact someone has to be able to
+    // find, and this log line is the only trace it leaves.
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining('could not sweep its findings'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
+  });
+
+  it('warns when it destroys a document with no findings repo wired, rather than going quiet', async () => {
+    // The port is optional, and `?.` makes an unwired host destroy documents with no sweep, no
+    // error and no symptom - indistinguishable from a document that never carried a finding. The
+    // warning is the only thing separating "nothing to sweep" from "this door was never wired".
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    const { dataLakeFindings: _unwired, ...dbWithoutFindings } = db;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db: dbWithoutFindings,
+      storage: makeStorage(),
+      logger,
+    });
+
+    // The destruction itself must not become conditional on the port.
+    expect(receipt.documentDeleted).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no findings repo wired'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
   });
 });
