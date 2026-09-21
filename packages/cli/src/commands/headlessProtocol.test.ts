@@ -63,9 +63,9 @@ describe('headless protocol envelope', () => {
 });
 
 describe('classifyToolRisk', () => {
-  it('classifies a shell tool from its command text (benign -> low)', () => {
+  it('classifies a shell tool from its command text (no dangerous pattern -> unclassified)', () => {
     const risk = classifyToolRisk('bash_execute', { command: 'ls -la' }, 'prompt_always');
-    expect(risk.level).toBe('low');
+    expect(risk.level).toBe('unclassified');
   });
 
   it('classifies a destructive shell command as high', () => {
@@ -181,6 +181,13 @@ describe('evaluatePermissionPolicy', () => {
   it('auto-allows within the risk threshold and denies above it', () => {
     expect(evaluatePermissionPolicy(policy, 'other_tool', 'low').action).toBe('allow');
     expect(evaluatePermissionPolicy(policy, 'other_tool', 'medium').action).toBe('deny');
+  });
+
+  it('denies an unclassified command under maxAutoAllowRisk:low (only provable no-ops auto-allow)', () => {
+    // `python3 x.py` etc. classify as unclassified, which ranks above low, so a
+    // low threshold no longer silently auto-approves arbitrary commands.
+    expect(evaluatePermissionPolicy(policy, 'bash_execute_like', 'unclassified').action).toBe('deny');
+    expect(evaluatePermissionPolicy(policy, 'bash_execute_like', 'low').action).toBe('allow');
   });
 
   it('falls back to defaultAction when no rule matches and no threshold applies', () => {

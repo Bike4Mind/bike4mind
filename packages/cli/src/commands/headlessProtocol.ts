@@ -167,7 +167,10 @@ export interface HeadlessPermissionPolicy {
 
 export const HEADLESS_PERMISSION_POLICY_KEYS = ['allow', 'deny', 'maxAutoAllowRisk', 'defaultAction'] as const;
 
-const RISK_RANK: Record<CommandRiskLevel, number> = { low: 0, medium: 1, high: 2 };
+// `unclassified` ranks above `low` so `maxAutoAllowRisk: low` auto-allows only
+// provable no-ops (empty/comment), never an unrecognized command. `unclassified`
+// itself is not an accepted policy value (see parsePermissionPolicy).
+const RISK_RANK: Record<CommandRiskLevel, number> = { low: 0, unclassified: 1, medium: 2, high: 3 };
 
 function readOptionalStringArray(value: unknown, label: string): string[] {
   if (value === undefined) return [];
