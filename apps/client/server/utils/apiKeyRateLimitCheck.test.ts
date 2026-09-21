@@ -628,18 +628,33 @@ describe('apiKeyRateLimitCheck', () => {
       expect(result.request).toBeUndefined();
     });
 
-    it('does not treat a single-leg failure as total failure when the sibling leg genuinely cleared', async () => {
-      // The one attempted counter's usage is unverifiable (see above), but the minute delete
-      // DID succeed - that must not read as "nothing cleared anywhere" and reject the whole
-      // reset. Only a group where NEITHER leg succeeded should ever trip that guard.
+    it('does not treat a single-leg failure as total failure when the sibling leg genuinely removed a document', async () => {
+      // The one attempted counter's usage is unverifiable (see above), but the minute delete DID
+      // remove a real document - that is genuine progress and must not read as "nothing cleared
+      // anywhere".
       const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId);
       vi.mocked(cacheRepository.deleteByKeyAndReturn).mockImplementation(async key => {
-        if (key === minuteKey) return null;
+        if (key === minuteKey) return { result: { count: 4 }, expiresAt: future(MINUTE_MS) } as never;
         if (key === dayKey) throw new Error('cache unavailable');
         return null;
       });
 
       await expect(resetApiKeyRateLimit(mockKeyId)).resolves.toEqual({ request: undefined, management: undefined });
+    });
+
+    it('treats a fulfilled-null sibling next to a rejection as no progress, and rejects the whole reset', async () => {
+      // A fulfilled `null` means "no document existed" - it proves nothing about whether the
+      // REJECTED leg's document existed and was at its ceiling. Before this fix, a rejected
+      // minute delete next to a null-fulfilled day delete still read as "cleared", so a reset
+      // that removed nothing could report 200 success.
+      const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId);
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockImplementation(async key => {
+        if (key === minuteKey) throw new Error('cache unavailable');
+        if (key === dayKey) return null;
+        return null;
+      });
+
+      await expect(resetApiKeyRateLimit(mockKeyId)).rejects.toThrow(/failed to clear any rate-limit counters/i);
     });
   });
 
