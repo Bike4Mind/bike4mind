@@ -328,6 +328,27 @@ export const shouldAutoHideKnowledgePane = (params: {
   autoHideOnEmpty: boolean;
 }): boolean => params.autoHideOnEmpty && params.isEmpty && params.hasShownItems;
 
+/**
+ * Whether this render's content may arm the "has shown items" latch.
+ *
+ * `hasSelected` is the pane's own non-empty signal. On the render where `currentSessionId`
+ * flips, the previous session's transient sources (recentArtifacts, previewFile) are still in
+ * hand for one commit - they are cleared a commit later - so they must not arm the latch for
+ * the new session. But rejecting ALL content on that render also throws away the new session's
+ * own cached items: react-query hands a warm session's file list back synchronously, and the
+ * effect only re-runs on a LENGTH change, so a return to an already-cached session would leave
+ * the latch permanently disarmed and its delete-all would no longer auto-collapse.
+ *
+ * Hence the split: `hasSessionItems` is content keyed by the current session id (workbench
+ * files, message files), which can only ever be this session's and is trusted even on the
+ * change render; the transient rest still waits for a session-stable render.
+ */
+export const shouldArmKnowledgePaneLatch = (params: {
+  hasSelected: boolean;
+  hasSessionItems: boolean;
+  sessionChanged: boolean;
+}): boolean => params.hasSelected && (params.hasSessionItems || !params.sessionChanged);
+
 const isMarkdownFile = (item: KnowledgeItem | undefined) => {
   if (!item || item.type !== 'file') return false;
   const mime = item.content.mimeType;
@@ -783,6 +804,12 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     latestArtifact?.artifact.id,
   ]);
 
+  // Files keyed by currentSessionId: the workbench store is a per-session map and the
+  // message-file react-query key includes the session id, so this count can only ever describe
+  // the current session. Kept as a primitive so the auto-hide effect can depend on it without
+  // re-running on every array identity change. See shouldArmKnowledgePaneLatch.
+  const sessionItemCount = workBenchFiles.length + messageFiles.length;
+
   // Effect: Reset view when no selection
   useEffect(() => {
     // On a session change, drop the "has shown items" latch so the previous session's items -
@@ -798,9 +825,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     // re-render after clicking a code block, which would otherwise race.
     const hasSelected = knowledgeItems.length > 0 || recentArtifacts.length > 0;
 
-    // Latch only for the session we are already tracking, so a stale pre-switch list cannot
-    // arm the latch for the new session.
-    if (hasSelected && !sessionChanged) {
+    if (shouldArmKnowledgePaneLatch({ hasSelected, hasSessionItems: sessionItemCount > 0, sessionChanged })) {
       hasShownItemsRef.current = true;
     }
 
@@ -828,7 +853,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         }
       }
     }
-  }, [knowledgeItems.length, recentArtifacts.length, autoHideOnEmpty, currentSessionId]); // Also watch recentArtifacts to prevent hiding during state updates
+  }, [knowledgeItems.length, recentArtifacts.length, sessionItemCount, autoHideOnEmpty, currentSessionId]); // Also watch recentArtifacts to prevent hiding during state updates
 
   // Effect: Auto-switch tab when selectedArtifactId changes.
   useEffect(() => {
@@ -1385,6 +1410,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
               variant="soft"
               onClick={() => setSessionLayout({ layout: 'hide' })}
               data-testid="knowledge-viewer-empty-close"
+              aria-label="Close Knowledge Preview"
             >
               <CloseIcon sx={{ fontSize: 16 }} />
             </IconButton>
