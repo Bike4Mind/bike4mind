@@ -62,6 +62,18 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
   'delete',
   'restore',
   /**
+   * draft -> active, requested on purpose by an owner or admin through `promoteDataLake` - the
+   * only door onto `activateIfDraft`. Replaces the old implicit flip: `auto-activate`
+   * below is kept for reading events recorded before this existed, but nothing emits it anymore.
+   */
+  'promote',
+  /**
+   * The reverse of `promote`: active -> draft, through `demoteDataLake`. Pulls the lake out of
+   * grounding (checked live on `status === 'active'` at retrieval time, never cached), so this
+   * takes effect on the lake's next lookup rather than needing its own settle window.
+   */
+  'demote',
+  /**
    * The phase-2 hard delete, recorded when the purge is ACCEPTED rather than when the sweep
    * finishes (#1744). Deliberately NOT folded into `delete`: that verb is the recoverable phase-1
    * soft delete, and an audit trail that cannot distinguish the reversible request from the
@@ -73,11 +85,12 @@ export const LAKE_CONFIG_CHANGE_ACTIONS = [
    */
   'purge',
   /**
-   * The draft -> active flip driven by `activateIfDraft` (a tag edit, a file toggle, a batch
-   * completion). Always records under the `system` RUNG, whoever triggered it: nothing authorized
-   * it, because `activateIfDraft` runs no authorization check at all. The PRINCIPAL is a different
-   * question - the tag doors know their operator and name them, while the batch doors do not and
-   * record `system` for that too.
+   * HISTORICAL ONLY: the old implicit draft -> active flip that used to run as a side
+   * effect of a tag edit, a file toggle or a batch completion, always under the `system` rung
+   * because nothing authorized it. No code path emits this anymore - `recomputeLakeStats` no
+   * longer activates a draft lake on its own, and the deliberate replacement (`promote`) is
+   * recorded under the rung that actually authorized it. Kept in the enum so a reader of an
+   * existing event history can still resolve a historical row's action.
    */
   'auto-activate',
   /**
