@@ -20,11 +20,14 @@ type FolderTrustItem = {
  * trusted. Until trusted, those files are inert - no config merge, no MCP spawn,
  * no agent/skill/command load. "Trust this folder" persists the decision; "Not
  * now" keeps the project untrusted for this session (re-prompts next launch).
+ *
+ * "Not now" is listed first so it is the preselected default: Enter-through on a
+ * freshly cloned repo must not grant trust.
  */
 export function FolderTrustPrompt({ projectRoot, onSelect }: FolderTrustPromptProps) {
   const items: FolderTrustItem[] = [
-    { label: 'Trust this folder - load its config, agents, skills and MCP servers', value: 'trust' },
     { label: 'Not now - keep repo config inert this session', value: 'not-now' },
+    { label: 'Trust this folder - load its config, agents, skills and MCP servers', value: 'trust' },
   ];
 
   return (

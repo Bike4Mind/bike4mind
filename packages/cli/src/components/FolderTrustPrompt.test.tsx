@@ -19,16 +19,17 @@ describe('FolderTrustPrompt', () => {
     expect(frame).toContain('Not now');
   });
 
-  it('selects trust when Enter is pressed on the default (first) item', async () => {
+  it('selects not-now when Enter is pressed on the default (first) item', async () => {
+    // The safe default: Enter-through on a fresh clone must not grant trust.
     const onSelect = vi.fn();
     const { stdin } = render(<FolderTrustPrompt projectRoot="/r" onSelect={onSelect} />);
     await tick();
     stdin.write(ENTER);
     await tick();
-    expect(onSelect).toHaveBeenCalledWith('trust');
+    expect(onSelect).toHaveBeenCalledWith('not-now');
   });
 
-  it('selects not-now after moving down then pressing Enter', async () => {
+  it('selects trust after moving down then pressing Enter', async () => {
     const onSelect = vi.fn();
     const { stdin } = render(<FolderTrustPrompt projectRoot="/r" onSelect={onSelect} />);
     await tick();
@@ -36,6 +37,6 @@ describe('FolderTrustPrompt', () => {
     await tick();
     stdin.write(ENTER);
     await tick();
-    expect(onSelect).toHaveBeenCalledWith('not-now');
+    expect(onSelect).toHaveBeenCalledWith('trust');
   });
 });
