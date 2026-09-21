@@ -1,21 +1,28 @@
 /**
- * Call-site test for the project-command containment wiring: CustomCommandStore
- * must pass its projectRoot to findMarkdownFiles for `project` sources, so a
- * symlinked skill whose target escapes the checkout is not loaded. Drop the
- * containmentRoot arg in loadCommandsFromDirectory and this test fails.
+ * Load-time security tests for project (untrusted-clone) command files:
+ *  - containment: CustomCommandStore passes its projectRoot to findMarkdownFiles
+ *    for `project` sources, so a symlinked skill escaping the checkout is not
+ *    loaded (drop the containmentRoot arg in loadCommandsFromDirectory -> fails).
+ *  - reserved names: a project file may not claim a built-in or feature command
+ *    name, or it would shadow that command at dispatch (drop the gate in
+ *    loadCommandFile -> fails).
+ *
+ * Hermetic: os.homedir is mocked to an empty temp dir so a machine-local command
+ * cannot leak into these assertions.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
-import { tmpdir } from 'os';
+import os from 'os';
 import { CustomCommandStore } from './CustomCommandStore.js';
 
 let projectRoot: string;
 let outside: string;
+let fakeHome: string;
 
 async function mkTmp(prefix: string): Promise<string> {
-  const dir = path.join(tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const dir = path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   await fs.mkdir(dir, { recursive: true });
   return dir;
 }
@@ -23,10 +30,13 @@ async function mkTmp(prefix: string): Promise<string> {
 beforeEach(async () => {
   projectRoot = await mkTmp('b4m-cmdstore-proj');
   outside = await mkTmp('b4m-cmdstore-outside');
+  fakeHome = await mkTmp('b4m-cmdstore-home');
+  vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
 });
 
 afterEach(async () => {
-  for (const d of [projectRoot, outside]) {
+  vi.restoreAllMocks();
+  for (const d of [projectRoot, outside, fakeHome]) {
     await fs.rm(d, { recursive: true, force: true }).catch(() => {});
   }
 });
@@ -45,5 +55,23 @@ describe('CustomCommandStore project-command containment', () => {
 
     expect(store.getCommand('ok')?.source).toBe('project');
     expect(store.getCommand('escape')).toBeUndefined();
+  });
+
+  it('does not load a project file that claims a reserved name (built-in or feature)', async () => {
+    const cmdDir = path.join(projectRoot, '.claude', 'commands');
+    await fs.mkdir(cmdDir, { recursive: true });
+
+    // Names a hostile clone might plant to hijack dispatch: a built-in and a feature command.
+    await fs.writeFile(path.join(cmdDir, 'help.md'), '# help\n\nhijacked', 'utf-8');
+    await fs.writeFile(path.join(cmdDir, 'tavern.md'), '# tavern\n\nhijacked', 'utf-8');
+    // A non-reserved project command still loads.
+    await fs.writeFile(path.join(cmdDir, 'deploy.md'), '# deploy\n\nlegit', 'utf-8');
+
+    const store = new CustomCommandStore(projectRoot);
+    await store.loadCommands();
+
+    expect(store.getCommand('help')).toBeUndefined();
+    expect(store.getCommand('tavern')).toBeUndefined();
+    expect(store.getCommand('deploy')?.source).toBe('project');
   });
 });

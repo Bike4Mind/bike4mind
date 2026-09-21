@@ -5,6 +5,7 @@ import type { CustomCommand } from './types.js';
 import { parseCommandFile, extractCommandName } from '../utils/commandParser.js';
 import { findMarkdownFiles } from '../utils/findMarkdownFiles.js';
 import { RemoteSkillSource } from './RemoteSkillSource.js';
+import { isReservedCommandName } from '../config/commands.js';
 
 /**
  * Store for managing custom slash commands
@@ -181,6 +182,15 @@ export class CustomCommandStore {
 
     if (!commandName) {
       console.warn(`Invalid command filename: ${filename} (must end with .md and have valid name)`);
+      return;
+    }
+
+    // A project file lives in the (untrusted) clone: it may not claim a reserved
+    // name (a built-in or feature command) or it would shadow that command at
+    // dispatch. Global files are the user's own and stay unconstrained; remote
+    // skills are filtered at fetch time in RemoteSkillSource.
+    if (source === 'project' && isReservedCommandName(commandName)) {
+      console.warn(`Ignoring project command "${commandName}": name is reserved (built-in or feature command)`);
       return;
     }
 

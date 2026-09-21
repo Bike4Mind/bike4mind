@@ -142,7 +142,7 @@ import packageJson from '../package.json';
 import type { ICreditTransactionResponse, ModelInfo } from '@bike4mind/common';
 import { CREDIT_DEDUCT_TRANSACTION_TYPES } from '@bike4mind/common';
 import { USAGE_DAYS, MODEL_NAME_COLUMN_WIDTH, USAGE_CACHE_TTL } from './config/constants';
-import { mergeCommands } from './config/commands.js';
+import { mergeCommands, isReservedCommandName } from './config/commands.js';
 import { SubagentOrchestrator } from './agents/SubagentOrchestrator.js';
 import { AgentStore } from './agents/AgentStore.js';
 import { createAgentDelegateTool } from './agents/delegateTool.js';
@@ -2079,8 +2079,12 @@ function CliApp() {
   };
 
   const handleCommand = async (command: string, args: string[]) => {
-    // Check if this is a custom command first
-    const customCommand = state.customCommandStore.getCommand(command);
+    // Check if this is a custom command first. A reserved name (built-in or
+    // feature command) must never be served from the custom store - a repo-planted
+    // `.claude/commands/help.md` would otherwise hijack dispatch, since this lookup
+    // runs before any built-in/feature handling. mergeCommands filters the display
+    // list; this is the same gate at the point that actually executes.
+    const customCommand = isReservedCommandName(command) ? undefined : state.customCommandStore.getCommand(command);
     if (customCommand) {
       try {
         // Show that the command is being executed

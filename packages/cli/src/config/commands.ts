@@ -281,7 +281,8 @@ export function isBuiltInCommand(name: string): boolean {
  * yet a remote/custom skill that shadows one would hijack the feature. Kept as a
  * static list because RemoteSkillSource filters at fetch time, before any registry
  * is built. MUST STAY IN SYNC with the feature modules' getCommands() (tavern,
- * hearth); a drift guard lives in RemoteSkillSource.test.ts.
+ * hearth); a drift guard in commands.test.ts derives the names from those modules
+ * and fails if this list drifts.
  */
 export const RESERVED_FEATURE_COMMANDS: readonly string[] = ['tavern', 'quest', 'hearth'];
 
