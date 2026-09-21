@@ -40,7 +40,9 @@ API Configuration:
 Tool Permissions:
   /trust <tool-name> - Trust a tool (won't ask permission again)
   /untrust <tool-name> - Remove tool from trusted list
-  /trusted - List all trusted tools
+  /trust folder - Trust this project (load its repo config, agents, skills, MCP)
+  /untrust folder - Revoke trust for this project (repo config goes inert)
+  /trusted - Show folder-trust status and list all trusted tools
 
 Project Configuration:
   /project-config - Show merged project configuration
@@ -113,8 +115,21 @@ const apiInfo: CommandHandler = {
 const trusted: CommandHandler = {
   name: 'trusted',
   run: (_args, ctx) => {
+    // Folder-trust status first (the coarse gate), then per-tool trust.
+    const projectRoot = ctx.configStore.getProjectRealPath();
+    console.log('\n📁 Folder Trust:\n');
+    if (!projectRoot) {
+      console.log('  No project root discovered.');
+    } else {
+      const isTrusted = ctx.configStore.isProjectTrusted();
+      console.log(`  ${isTrusted ? '✅ Trusted' : '⛔ Not trusted'}: ${projectRoot}`);
+      if (!isTrusted) {
+        console.log('  Repo config/agents/skills/MCP stay inert. Trust with /trust folder.');
+      }
+    }
+
     if (!ctx.permissionManager) {
-      console.log('Permission manager not initialized');
+      console.log('\nPermission manager not initialized\n');
       return;
     }
     const trustedTools = ctx.permissionManager.getTrustedTools();

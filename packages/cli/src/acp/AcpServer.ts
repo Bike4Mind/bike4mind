@@ -597,6 +597,7 @@ export class AcpServer {
       backgroundManager,
       historyStore,
       sessionId: stackSessionId,
+      permissionManager,
     });
 
     const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
@@ -644,8 +645,9 @@ export class AcpServer {
     backgroundManager: BackgroundAgentManager;
     historyStore: AgentHistoryStore;
     sessionId: string;
+    permissionManager: PermissionManager;
   }): ICompletionOptionTools[] {
-    const { config, orchestrator, agentStore, backgroundManager, historyStore, sessionId } = input;
+    const { config, orchestrator, agentStore, backgroundManager, historyStore, sessionId, permissionManager } = input;
     const tools: ICompletionOptionTools[] = [
       createAgentDelegateTool(orchestrator, agentStore, sessionId, backgroundManager),
       ...createBackgroundAgentTools(backgroundManager),
@@ -656,7 +658,14 @@ export class AcpServer {
     ];
     if (config.preferences.enableSkillTool !== false) {
       tools.push(
-        createSkillTool({ customCommandStore: this.customCommandStore, subagentOrchestrator: orchestrator, sessionId })
+        createSkillTool({
+          customCommandStore: this.customCommandStore,
+          subagentOrchestrator: orchestrator,
+          sessionId,
+          // Gate skill lifecycle hook shell commands through permission.
+          permissionManager,
+          promptFn: this.promptFn,
+        })
       );
     }
     if (config.preferences.enableCoordinatorMode === true) {
@@ -666,6 +675,8 @@ export class AcpServer {
   }
 
   private async loadCustomCommands(): Promise<void> {
+    // Project skills load only for a trusted project root (folder-trust gate).
+    this.customCommandStore.setProjectTrusted(this.configStore.isProjectTrusted());
     try {
       await this.customCommandStore.loadCommands();
     } catch {

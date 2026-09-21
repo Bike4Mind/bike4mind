@@ -9,6 +9,7 @@ import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import { generateCliTools, loadContextFiles, type AgentContext, type PermissionManager } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
 import { AgentStore } from '../agents/AgentStore.js';
+import { buildProjectAgentStore, loadProjectContext } from './projectStores.js';
 import { SubagentOrchestrator, type SubagentUsageCallback } from '../agents/SubagentOrchestrator.js';
 import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
 import { AgentHistoryStore } from '../agents/AgentHistoryStore.js';
@@ -119,15 +120,19 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
   // Supports both Claude Code convention (.claude/agents/) and B4M convention (.bike4mind/agents/)
   // Global dirs: ~/.claude/agents/, ~/.bike4mind/agents/
   // Project dirs: .claude/agents/, .bike4mind/agents/
+  // Folder-trust gate: an untrusted project contributes no agents and no context
+  // file. (MCP is already gated - config.mcpServers is global-only when the
+  // project is untrusted, so no repo server reaches the manager to spawn.)
   const mcpManager = new McpManager(config);
   const builtinAgentsDir = new URL('../agents/defaults/', import.meta.url).pathname;
-  const agentProjectDir = configStore.getProjectConfigDir();
-  const agentStore = new AgentStore(builtinAgentsDir, agentProjectDir || process.cwd());
+  // Folder-trust gate (shared with the headless path via projectStores): an
+  // untrusted project contributes no agents/skills and no context file.
+  const agentStore = buildProjectAgentStore(builtinAgentsDir, configStore);
 
   const [, , contextResult] = await Promise.all([
     mcpManager.initialize(),
     agentStore.loadAgents(),
-    loadContextFiles(agentProjectDir),
+    loadProjectContext(configStore),
   ]);
 
   const mcpTools = mcpManager.getTools();

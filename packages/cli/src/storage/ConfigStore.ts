@@ -4,9 +4,16 @@ import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
-import type { AuthTokens, CliConfig, ProjectConfig, ProjectLocalConfig } from './types';
+import type { AuthTokens, CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
 import { getDefaultApiUrl, LOCAL_DEV_URL, getEnvironmentName } from '../utils/apiUrl';
-import { DEFAULT_SANDBOX_CONFIG, type PartialSandboxConfig, type SandboxConfig } from '../sandbox/types.js';
+import {
+  DEFAULT_SANDBOX_CONFIG,
+  type PartialSandboxConfig,
+  type SandboxConfig,
+  type SandboxMode,
+} from '../sandbox/types.js';
+import { canTrustTool } from '../config/toolSafety';
+import { PROJECT_CONTEXT_FILES } from '../utils/contextLoader';
 import { logger } from '../utils/Logger';
 
 /**
@@ -298,6 +305,7 @@ const CliConfigSchema = z.object({
     .optional()
     .prefault({}),
   trustedTools: z.array(z.string()).optional().prefault([]),
+  trustedProjects: z.array(z.string()).optional().prefault([]),
   sandbox: SandboxConfigSchema.optional(),
   additionalDirectories: z.array(z.string()).optional().prefault([]),
   fallbackModels: z.array(z.string()).optional(),
@@ -422,6 +430,7 @@ const DEFAULT_CONFIG: CliConfig = {
     config: {},
   },
   trustedTools: [], // No tools trusted by default
+  trustedProjects: [], // No project roots trusted by default (folder-trust gate)
   additionalDirectories: [], // No additional directories by default
 };
 
@@ -449,6 +458,20 @@ function findProjectConfigDir(startDir: string = process.cwd()): string | null {
 
   // No git repo found, use current working directory as fallback
   return process.cwd();
+}
+
+/**
+ * Canonicalize a path via realpath, returning null if it doesn't exist or can't
+ * be resolved. Used so a symlinked or relative project root is compared against
+ * the trust set by its real location, and a resolve failure fails safe
+ * (untrusted) rather than crashing the launch.
+ */
+async function safeRealpath(p: string): Promise<string | null> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -597,37 +620,114 @@ function mergeMcpServers(...serverArrays: (NormalizedMcpServer[] | undefined)[])
   return Array.from(serverMap.values());
 }
 
-/**
- * Deep-merge sandbox configs. Later values override earlier ones.
- * Arrays (allowedReadPaths, deniedPaths, excludedCommands) are replaced, not concatenated.
- */
-function mergeSandboxConfig(
-  base: SandboxConfig | undefined,
-  override: PartialSandboxConfig | undefined
-): SandboxConfig {
-  const resolved = base ?? DEFAULT_SANDBOX_CONFIG;
-  if (!override) return resolved;
+/** Sandbox modes ordered from weakest to strongest posture. */
+const SANDBOX_MODE_RANK: Record<SandboxMode, number> = { disabled: 0, 'auto-allow': 1, permissions: 2 };
 
-  return {
-    enabled: override.enabled ?? resolved.enabled,
-    mode: override.mode ?? resolved.mode,
-    filesystem: {
-      ...resolved.filesystem,
-      ...(override.filesystem ?? {}),
-    },
-    network: {
-      ...resolved.network,
-      ...(override.network ?? {}),
-    },
-    excludedCommands: override.excludedCommands ?? resolved.excludedCommands,
-    allowUnsandboxedCommands: override.allowUnsandboxedCommands ?? resolved.allowUnsandboxedCommands,
-    platform: override.platform ?? resolved.platform,
-  };
+function intersectStrings(a: string[], b: string[]): string[] {
+  const set = new Set(a);
+  return b.filter(x => set.has(x));
+}
+
+function unionStrings(a: string[], b: string[]): string[] {
+  return Array.from(new Set([...a, ...b]));
+}
+
+/** True when `target` is `root` itself or nested under it (no `..` escape). */
+function isWithin(root: string, target: string): boolean {
+  const rel = path.relative(root, target);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
 /**
- * Merge configs with priority: global -> project -> local
- * Each layer overrides the previous one
+ * Merge a repo-sourced sandbox override onto the user's base posture so it can
+ * only ever TIGHTEN it, never loosen it. A repo layer may enable the sandbox,
+ * raise the mode (disabled < auto-allow < permissions) but never select
+ * auto-allow itself, add denied paths, narrow read paths / domains / excluded
+ * commands, turn the network filter on, and force allowUnsandboxedCommands off.
+ * Every loosening value is ignored with a warning. `platform` is ignored.
+ */
+function tightenSandbox(base: SandboxConfig | undefined, repo: PartialSandboxConfig | undefined): SandboxConfig {
+  const b = base ?? DEFAULT_SANDBOX_CONFIG;
+  if (!repo) return b;
+  const warn = (what: string) => logger.warn(`Ignoring repo sandbox override that would loosen posture: ${what}`);
+
+  const result: SandboxConfig = {
+    ...b,
+    filesystem: { ...b.filesystem },
+    network: { ...b.network },
+  };
+
+  if (repo.enabled === true) result.enabled = true;
+  else if (repo.enabled === false && b.enabled) warn('sandbox.enabled=false');
+
+  if (repo.mode !== undefined) {
+    if (repo.mode === 'auto-allow') warn('sandbox.mode=auto-allow');
+    else if (SANDBOX_MODE_RANK[repo.mode] >= SANDBOX_MODE_RANK[b.mode]) result.mode = repo.mode;
+    else warn(`sandbox.mode=${repo.mode} weaker than ${b.mode}`);
+  }
+
+  if (repo.filesystem) {
+    const fsr = repo.filesystem;
+    if (fsr.deniedPaths) result.filesystem.deniedPaths = unionStrings(result.filesystem.deniedPaths, fsr.deniedPaths);
+    if (fsr.allowedReadPaths)
+      result.filesystem.allowedReadPaths = intersectStrings(result.filesystem.allowedReadPaths, fsr.allowedReadPaths);
+    if (fsr.writeOnlyToWorkingDir === true) result.filesystem.writeOnlyToWorkingDir = true;
+    else if (fsr.writeOnlyToWorkingDir === false && b.filesystem.writeOnlyToWorkingDir)
+      warn('filesystem.writeOnlyToWorkingDir=false');
+  }
+
+  if (repo.network) {
+    const nr = repo.network;
+    if (nr.enabled === true) result.network.enabled = true;
+    else if (nr.enabled === false && b.network.enabled) warn('network.enabled=false');
+    if (nr.allowedDomains)
+      result.network.allowedDomains = intersectStrings(result.network.allowedDomains, nr.allowedDomains);
+  }
+
+  if (repo.excludedCommands) result.excludedCommands = intersectStrings(result.excludedCommands, repo.excludedCommands);
+
+  if (repo.allowUnsandboxedCommands === false) result.allowUnsandboxedCommands = false;
+  else if (repo.allowUnsandboxedCommands === true && !b.allowUnsandboxedCommands) warn('allowUnsandboxedCommands=true');
+
+  // Keep enabled/mode consistent for the schema refine: an enabled sandbox needs
+  // a non-disabled mode (default to the strictest), and a disabled one needs
+  // mode 'disabled'. This also means a repo cannot enable the sandbox by mode
+  // alone - it must set enabled:true, and then never gets auto-allow.
+  if (result.enabled && result.mode === 'disabled') result.mode = 'permissions';
+  if (!result.enabled) result.mode = 'disabled';
+
+  return result;
+}
+
+/**
+ * Fold repo-sourced MCP servers under the global set so a repo entry can never
+ * REPLACE a same-named global server. Global definitions always win; repo
+ * entries only fill names global does not already use. Later repo layers win
+ * over earlier ones for names global does not define.
+ */
+function mergeMcpServersGlobalWins(
+  global: NormalizedMcpServer[] | undefined,
+  ...repoLayers: (NormalizedMcpServer[] | null | undefined)[]
+): NormalizedMcpServer[] {
+  const byName = new Map<string, NormalizedMcpServer>();
+  for (const layer of repoLayers) {
+    if (!layer) continue;
+    for (const server of layer) byName.set(server.name, server);
+  }
+  if (global) {
+    for (const server of global) byName.set(server.name, server);
+  }
+  return Array.from(byName.values());
+}
+
+/**
+ * Merge configs with priority: global -> project -> local, with the invariant
+ * that repo layers may only TIGHTEN the user's global security posture, never
+ * loosen it. Sandbox goes through `tightenSandbox`; the repo `trustedTools`
+ * union is filtered to tools that can actually be trusted and aren't globally
+ * disabled; and any tool a repo tries to re-enable while it is disabled is
+ * dropped. `mcpServers` is NOT merged here - callers fold repo servers in via
+ * `mergeMcpServersGlobalWins` where all repo layers are visible together.
  */
 function mergeConfigs(global: CliConfig, project: ProjectConfig | null, local: ProjectLocalConfig | null): CliConfig {
   const merged: CliConfig = { ...global };
@@ -654,11 +754,8 @@ function mergeConfigs(global: CliConfig, project: ProjectConfig | null, local: P
         },
       };
     }
-    if (project.mcpServers) {
-      merged.mcpServers = mergeMcpServers(merged.mcpServers, project.mcpServers);
-    }
     if (project.sandbox) {
-      merged.sandbox = mergeSandboxConfig(merged.sandbox, project.sandbox);
+      merged.sandbox = tightenSandbox(merged.sandbox, project.sandbox);
     }
   }
 
@@ -680,13 +777,20 @@ function mergeConfigs(global: CliConfig, project: ProjectConfig | null, local: P
         ...local.preferences,
       };
     }
-    if (local.mcpServers) {
-      merged.mcpServers = mergeMcpServers(merged.mcpServers, local.mcpServers);
-    }
     if (local.sandbox) {
-      merged.sandbox = mergeSandboxConfig(merged.sandbox, local.sandbox);
+      merged.sandbox = tightenSandbox(merged.sandbox, local.sandbox);
     }
   }
+
+  // Never-loosen for tools: a repo cannot re-enable a globally-disabled tool,
+  // and a repo-contributed trusted tool must be one that can actually be
+  // trusted and isn't disabled. (Global's own trustedTools are left untouched.)
+  const disabledSet = new Set(merged.tools.disabled);
+  merged.tools = { ...merged.tools, enabled: merged.tools.enabled.filter(t => !disabledSet.has(t)) };
+  const globalTrusted = new Set(global.trustedTools || []);
+  merged.trustedTools = (merged.trustedTools || []).filter(
+    t => globalTrusted.has(t) || (canTrustTool(t) && !disabledSet.has(t))
+  );
 
   return merged;
 }
@@ -721,6 +825,22 @@ export class ConfigStore {
   private configPath: string;
   private config: CliConfig | null = null;
   private projectConfigDir: string | null = null;
+  /**
+   * The un-merged, validated GLOBAL config (the disk truth for
+   * ~/.bike4mind/config.json). `save()` persists only from here so repo layers
+   * are never laundered into the global file; `this.config` is the merged
+   * effective config used for reads during the session.
+   */
+  private globalConfig: CliConfig | null = null;
+  /** Canonicalized (realpath'd) discovered project root, or null. */
+  private projectRealPath: string | null = null;
+  /** Whether the discovered project root is in the global `trustedProjects`. */
+  private projectTrusted = false;
+  // Raw repo layers, loaded ONLY when the project is trusted. Kept so trust
+  // changes can re-merge without re-reading the global config file.
+  private rawProjectConfig: ProjectConfig | null = null;
+  private rawProjectLocalConfig: ProjectLocalConfig | null = null;
+  private rawMcpJsonServers: NormalizedMcpServer[] | null = null;
 
   constructor(configPath?: string) {
     this.configPath = configPath || path.join(homedir(), '.bike4mind', 'config.json');
@@ -838,70 +958,60 @@ export class ConfigStore {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
           // Global config doesn't exist, use defaults
-          globalConfig = { ...DEFAULT_CONFIG };
+          // structuredClone, not a spread: a shallow spread would share
+          // DEFAULT_CONFIG's mutable arrays (trustedTools/trustedProjects/...),
+          // so a later trustTool()/trustProject() would mutate the module
+          // singleton and leak into the next default config.
+          globalConfig = structuredClone(DEFAULT_CONFIG);
         } else if (error instanceof z.ZodError) {
           console.error('Global config validation error:', error.issues);
           console.error('Using default configuration');
-          globalConfig = { ...DEFAULT_CONFIG };
+          // structuredClone, not a spread: a shallow spread would share
+          // DEFAULT_CONFIG's mutable arrays (trustedTools/trustedProjects/...),
+          // so a later trustTool()/trustProject() would mutate the module
+          // singleton and leak into the next default config.
+          globalConfig = structuredClone(DEFAULT_CONFIG);
         } else {
           throw error;
         }
       }
 
-      // Discover project config directory (unless disabled via --no-project-config)
-      let projectConfig: ProjectConfig | null = null;
-      let projectLocalConfig: ProjectLocalConfig | null = null;
-      let mcpJsonServers: NormalizedMcpServer[] | null = null;
+      // Keep the un-merged global as the disk-truth snapshot: save() persists
+      // ONLY from here, never from the merged effective config, so repo layers
+      // can't be laundered into ~/.bike4mind/config.json.
+      this.globalConfig = globalConfig;
+
+      // Reset per-load project state, then discover + realpath the project root.
+      this.projectConfigDir = null;
+      this.projectRealPath = null;
+      this.projectTrusted = false;
+      this.rawProjectConfig = null;
+      this.rawProjectLocalConfig = null;
+      this.rawMcpJsonServers = null;
 
       if (process.env.B4M_NO_PROJECT_CONFIG !== '1') {
         this.projectConfigDir = findProjectConfigDir();
-
-        // Load project configs if found
         if (this.projectConfigDir) {
-          projectConfig = await loadProjectConfig(this.projectConfigDir);
-          projectLocalConfig = await loadProjectLocalConfig(this.projectConfigDir);
-          mcpJsonServers = await loadMcpJsonConfig(this.projectConfigDir);
+          // Canonicalize so a symlinked/relative cwd can't dodge the trust set.
+          this.projectRealPath = (await safeRealpath(this.projectConfigDir)) ?? this.projectConfigDir;
+          this.projectTrusted = (globalConfig.trustedProjects || []).includes(this.projectRealPath);
 
-          if (projectConfig) {
-            logger.debug(`📁 Project config loaded from: ${this.projectConfigDir}/.bike4mind/`);
+          // Repo-committed config/local/.mcp.json load ONLY for a trusted root.
+          // Until the folder is trusted they stay inert: not merged, and their
+          // MCP servers never reach config.mcpServers (so none can spawn).
+          if (this.projectTrusted) {
+            const loaded = await this.loadProjectLayers();
+            if (loaded.hasConfig) {
+              logger.debug(`📁 Project config loaded from: ${this.projectConfigDir}/.bike4mind/`);
+            }
+            if (loaded.mcpCount > 0) {
+              logger.debug(`📁 Project MCP config loaded from: ${this.projectConfigDir}/.mcp.json`);
+            }
           }
-          if (mcpJsonServers && mcpJsonServers.length > 0) {
-            logger.debug(`📁 Project MCP config loaded from: ${this.projectConfigDir}/.mcp.json`);
-          }
-        }
-      } else {
-        this.projectConfigDir = null;
-      }
-
-      // Merge configs: .mcp.json -> global -> project -> local
-      // Start with global config
-      const mergedConfig = mergeConfigs(globalConfig, projectConfig, projectLocalConfig);
-
-      // Merge .mcp.json servers with lowest priority (can be overridden by B4M configs)
-      if (mcpJsonServers && mcpJsonServers.length > 0) {
-        mergedConfig.mcpServers = mergeMcpServers(mcpJsonServers, mergedConfig.mcpServers);
-      }
-
-      // --mcp-config <file>: claude-shape MCP servers injected per-launch (e.g. by
-      // a host - HTTP+Bearer with a freshly-minted token). When --strict-mcp-config
-      // is set, use ONLY these servers (ignore file-config + .mcp.json). Otherwise
-      // merge them with highest priority so the injected server overrides by name.
-      const mcpConfigFile = process.env.B4M_MCP_CONFIG_FILE;
-      if (mcpConfigFile) {
-        const injected = await loadMcpConfigFile(mcpConfigFile);
-        if (process.env.B4M_STRICT_MCP_CONFIG === '1') {
-          // Strict means strict: the injected set is the ONLY allowed scope. A
-          // malformed/missing file (injected === null) yields an empty set, never a
-          // silent fall-back to the broader merged config - that would leak the
-          // user's other MCP servers into a pane meant to be locked (e.g. YAML).
-          mergedConfig.mcpServers = injected ?? [];
-        } else if (injected) {
-          mergedConfig.mcpServers = mergeMcpServers(mergedConfig.mcpServers, injected);
         }
       }
 
-      this.config = mergedConfig;
-
+      this.config = await this.computeMerged();
       return this.config;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -919,6 +1029,139 @@ export class ConfigStore {
       console.error('Failed to load config:', error);
       throw error;
     }
+  }
+
+  /**
+   * Load the raw repo config layers for the current project root. Called only
+   * for a trusted root; stores them on `this` so trust changes can re-merge
+   * without re-reading the global config file.
+   */
+  private async loadProjectLayers(): Promise<{ hasConfig: boolean; mcpCount: number }> {
+    if (!this.projectConfigDir) return { hasConfig: false, mcpCount: 0 };
+    this.rawProjectConfig = await loadProjectConfig(this.projectConfigDir);
+    this.rawProjectLocalConfig = await loadProjectLocalConfig(this.projectConfigDir);
+    this.rawMcpJsonServers = await loadMcpJsonConfig(this.projectConfigDir);
+    return { hasConfig: !!this.rawProjectConfig, mcpCount: this.rawMcpJsonServers?.length ?? 0 };
+  }
+
+  /**
+   * Build the merged effective config from the global layer plus the raw repo
+   * layers - but only when the project is trusted, so an untrusted root
+   * contributes nothing. Repo MCP servers are folded in global-wins (a repo
+   * name can never replace a global server); an explicit `--mcp-config` is host-
+   * injected (not repo-sourced) and keeps its override-by-name / strict scope.
+   */
+  private async computeMerged(): Promise<CliConfig> {
+    const global = this.globalConfig!;
+    const project = this.projectTrusted ? this.rawProjectConfig : null;
+    const local = this.projectTrusted ? this.rawProjectLocalConfig : null;
+    const mcpJson = this.projectTrusted ? this.rawMcpJsonServers : null;
+
+    const merged = mergeConfigs(global, project, local);
+    merged.mcpServers = mergeMcpServersGlobalWins(global.mcpServers, mcpJson, project?.mcpServers, local?.mcpServers);
+
+    const mcpConfigFile = process.env.B4M_MCP_CONFIG_FILE;
+    if (mcpConfigFile) {
+      const injected = await loadMcpConfigFile(mcpConfigFile);
+      if (process.env.B4M_STRICT_MCP_CONFIG === '1') {
+        // Strict means strict: the injected set is the ONLY allowed scope. A
+        // malformed/missing file (injected === null) yields an empty set, never
+        // a silent fall-back to the broader merged config.
+        merged.mcpServers = injected ?? [];
+      } else if (injected) {
+        merged.mcpServers = mergeMcpServers(merged.mcpServers, injected);
+      }
+    }
+
+    return merged;
+  }
+
+  /** Whether the current project root is trusted (folder-trust gate). */
+  isProjectTrusted(): boolean {
+    return this.projectTrusted;
+  }
+
+  /** Canonicalized project root discovered this session, or null. */
+  getProjectRealPath(): string | null {
+    return this.projectRealPath;
+  }
+
+  /** The realpath'd roots the user has explicitly trusted. */
+  getTrustedProjects(): string[] {
+    return this.globalConfig?.trustedProjects ? [...this.globalConfig.trustedProjects] : [];
+  }
+
+  /**
+   * Whether the current project root ships any repo-committed b4m files that the
+   * trust gate governs. Used to decide whether the startup trust prompt is even
+   * worth showing (nothing to gate = no prompt).
+   */
+  projectHasB4mFiles(): boolean {
+    const root = this.projectConfigDir;
+    if (!root) return false;
+    const candidates = [
+      ['.bike4mind', 'config.json'],
+      ['.bike4mind', 'local.json'],
+      ['.bike4mind', 'agents'],
+      ['.bike4mind', 'commands'],
+      ['.mcp.json'],
+      ['.claude', 'agents'],
+      ['.claude', 'skills'],
+      ['.claude', 'commands'],
+      // Plain context files (CLAUDE.md etc.) are trust-gated too - they steer the
+      // agent, so a context-only repo must still trigger the trust prompt rather
+      // than silently loading (or, once gated, silently dropping) its context.
+      ...PROJECT_CONTEXT_FILES.map(name => [name]),
+    ];
+    return candidates.some(parts => existsSync(path.join(root, ...parts)));
+  }
+
+  /**
+   * Trust a project root (default: the current one). Persists the realpath'd
+   * root to the global `trustedProjects` and, when it's the current root, loads
+   * its repo layers and re-merges so they take effect for this session.
+   */
+  async trustProject(root?: string): Promise<boolean> {
+    await this.load();
+    const target = root ? await safeRealpath(root) : this.projectRealPath;
+    if (!target) return false;
+
+    const g = this.globalConfig!;
+    if (!g.trustedProjects) g.trustedProjects = [];
+    if (!g.trustedProjects.includes(target)) g.trustedProjects.push(target);
+
+    // Trusting the current root: load its layers so the re-merge in save() picks
+    // them up. B4M_NO_PROJECT_CONFIG still forces project config off entirely.
+    if (target === this.projectRealPath && this.projectConfigDir && process.env.B4M_NO_PROJECT_CONFIG !== '1') {
+      this.projectTrusted = true;
+      await this.loadProjectLayers();
+    }
+
+    await this.save();
+    return true;
+  }
+
+  /**
+   * Revoke trust for a project root (default: the current one). Next launch
+   * re-prompts and repo layers stay inert until re-trusted. Revoking the current
+   * root drops its raw layers so nothing repo-sourced survives in this session.
+   */
+  async untrustProject(root?: string): Promise<void> {
+    await this.load();
+    const target = root ? await safeRealpath(root) : this.projectRealPath;
+    if (!target) return;
+
+    const g = this.globalConfig!;
+    g.trustedProjects = (g.trustedProjects || []).filter(p => p !== target);
+
+    if (target === this.projectRealPath) {
+      this.projectTrusted = false;
+      this.rawProjectConfig = null;
+      this.rawProjectLocalConfig = null;
+      this.rawMcpJsonServers = null;
+    }
+
+    await this.save();
   }
 
   /**
@@ -979,46 +1222,66 @@ export class ConfigStore {
   /**
    * Save configuration to disk
    */
-  async save(config?: Partial<CliConfig>): Promise<void> {
+  async save(config?: GlobalConfigPatch, opts?: { clearFeatures?: boolean }): Promise<void> {
     await this.init();
 
+    // Ensure the global snapshot exists (first save on a fresh store).
+    if (!this.globalConfig) {
+      await this.load();
+    }
+    const global = this.globalConfig!;
+
     if (config) {
-      // Merge with existing config
-      const existingConfig = await this.load();
-      this.config = {
-        ...existingConfig,
-        ...config,
-        auth: config.auth !== undefined ? config.auth : existingConfig.auth,
+      // The security-critical, repo-launderable fields never flow through a
+      // generic save(): the structural sets (mcpServers / trustedTools /
+      // additionalDirectories / trustedProjects) and the security-posture fields
+      // (tools / sandbox) change ONLY via their dedicated mutators (addMcpServer,
+      // trustTool, saveSandboxConfig, trustProject, ...). Stripping them here - a
+      // runtime allowlist on top of the GlobalConfigPatch type - means even a
+      // caller that casts past the type and spreads the merged effective config
+      // can't re-launder THOSE fields into ~/.bike4mind/config.json. It does NOT
+      // guard defaultModel / preferences / toolApiKeys, which stay writable (that
+      // is what /model and /config edit): callers must pass user-changed values,
+      // not the merged rest - see buildGlobalConfigPatch.
+      const { mcpServers, trustedTools, additionalDirectories, trustedProjects, tools, sandbox, ...rest } =
+        config as Partial<CliConfig>;
+      void mcpServers;
+      void trustedTools;
+      void additionalDirectories;
+      void trustedProjects;
+      void tools;
+      void sandbox;
+
+      this.globalConfig = {
+        ...global,
+        ...rest,
+        auth: 'auth' in config ? config.auth : global.auth,
         preferences: {
-          ...existingConfig.preferences,
+          ...global.preferences,
           ...(config.preferences || {}),
         },
-        tools: {
-          ...existingConfig.tools,
-          ...(config.tools || {}),
-        },
         toolApiKeys: {
-          ...existingConfig.toolApiKeys,
+          ...global.toolApiKeys,
           ...(config.toolApiKeys || {}),
         },
         // Merge features against the fresh on-disk map, applying only the keys
         // this caller changed vs its load-time snapshot, so a concurrent writer
         // (e.g. `b4m plugin add` in another process) isn't clobbered - including
         // conflicting edits, not just brand-new keys.
-        features: this.mergeFeatures(
-          await this.readDiskFeatures(),
-          existingConfig.features,
-          config.features ?? existingConfig.features
-        ),
+        features: opts?.clearFeatures
+          ? {}
+          : this.mergeFeatures(await this.readDiskFeatures(), global.features, config.features ?? global.features),
       };
-    }
-
-    if (!this.config) {
-      throw new Error('No configuration to save');
+    } else {
+      // No-arg save persists the global layer a mutator just changed in place;
+      // refresh features from disk so a concurrent writer isn't reverted - unless
+      // this is a reset, which intentionally wipes the feature map.
+      this.globalConfig = { ...global, features: opts?.clearFeatures ? {} : await this.readDiskFeatures() };
     }
 
     try {
-      await fs.writeFile(this.configPath, JSON.stringify(this.config, null, 2), 'utf-8');
+      // Persist ONLY the global layer, never the merged effective config.
+      await fs.writeFile(this.configPath, JSON.stringify(this.globalConfig, null, 2), 'utf-8');
 
       // Set secure permissions (0600 - only owner can read/write)
       // This protects auth tokens and API keys from other users
@@ -1027,15 +1290,26 @@ export class ConfigStore {
       console.error('Failed to save config:', error);
       throw error;
     }
+
+    // Refresh the merged effective config from the freshly-persisted global.
+    this.config = await this.computeMerged();
   }
 
   /**
    * Reset configuration to defaults
    */
   async reset(): Promise<CliConfig> {
-    this.config = { ...DEFAULT_CONFIG, userId: uuidv4() };
-    await this.save();
-    return this.config;
+    // structuredClone so reset never shares DEFAULT_CONFIG's mutable arrays.
+    this.globalConfig = { ...structuredClone(DEFAULT_CONFIG), userId: uuidv4() };
+    this.projectTrusted = false;
+    this.rawProjectConfig = null;
+    this.rawProjectLocalConfig = null;
+    this.rawMcpJsonServers = null;
+    // clearFeatures: a reset must wipe the on-disk feature map too, not inherit it
+    // via save()'s concurrent-writer disk-merge (reached e.g. from load()'s
+    // corrupt-config recovery path).
+    await this.save(undefined, { clearFeatures: true });
+    return this.config!;
   }
 
   /**
@@ -1048,39 +1322,54 @@ export class ConfigStore {
   /**
    * Update a specific configuration value
    */
-  async update(updates: Partial<CliConfig>): Promise<void> {
+  async update(updates: GlobalConfigPatch): Promise<void> {
     await this.save(updates);
+  }
+
+  /**
+   * Persist a sandbox config to the GLOBAL layer (the `/sandbox` handlers' path).
+   * Sandbox is excluded from the generic `save()` allowlist so it flows only
+   * through here - a merged-config save() can never launder a repo-tightened
+   * sandbox into the user's global default.
+   */
+  async saveSandboxConfig(sandbox: SandboxConfig): Promise<void> {
+    await this.load();
+    this.globalConfig!.sandbox = sandbox;
+    await this.save();
   }
 
   /**
    * Add MCP server configuration
    */
   async addMcpServer(server: CliConfig['mcpServers'][0]): Promise<void> {
-    const config = await this.load();
-    // Remove existing server with same name
-    config.mcpServers = config.mcpServers.filter(s => s.name !== server.name);
-    config.mcpServers.push(server);
-    await this.save(config);
+    await this.load();
+    const g = this.globalConfig!;
+    // Remove existing server with same name, then add (operates on GLOBAL only).
+    g.mcpServers = g.mcpServers.filter(s => s.name !== server.name);
+    g.mcpServers.push(server);
+    await this.save();
   }
 
   /**
    * Remove MCP server configuration
    */
   async removeMcpServer(name: string): Promise<void> {
-    const config = await this.load();
-    config.mcpServers = config.mcpServers.filter(s => s.name !== name);
-    await this.save(config);
+    await this.load();
+    const g = this.globalConfig!;
+    g.mcpServers = g.mcpServers.filter(s => s.name !== name);
+    await this.save();
   }
 
   /**
    * Enable/disable MCP server
    */
   async toggleMcpServer(name: string, enabled: boolean): Promise<void> {
-    const config = await this.load();
-    const server = config.mcpServers.find(s => s.name === name);
+    await this.load();
+    const g = this.globalConfig!;
+    const server = g.mcpServers.find(s => s.name === name);
     if (server) {
       server.enabled = enabled;
-      await this.save(config);
+      await this.save();
     }
   }
 
@@ -1088,13 +1377,14 @@ export class ConfigStore {
    * Add a tool to trusted tools list
    */
   async trustTool(toolName: string): Promise<void> {
-    const config = await this.load();
-    if (!config.trustedTools) {
-      config.trustedTools = [];
+    await this.load();
+    const g = this.globalConfig!;
+    if (!g.trustedTools) {
+      g.trustedTools = [];
     }
-    if (!config.trustedTools.includes(toolName)) {
-      config.trustedTools.push(toolName);
-      await this.save(config);
+    if (!g.trustedTools.includes(toolName)) {
+      g.trustedTools.push(toolName);
+      await this.save();
     }
   }
 
@@ -1102,15 +1392,16 @@ export class ConfigStore {
    * Remove a tool from trusted tools list
    */
   async untrustTool(toolName: string): Promise<void> {
-    const config = await this.load();
-    if (config.trustedTools) {
-      config.trustedTools = config.trustedTools.filter(t => t !== toolName);
-      await this.save(config);
+    await this.load();
+    const g = this.globalConfig!;
+    if (g.trustedTools) {
+      g.trustedTools = g.trustedTools.filter(t => t !== toolName);
+      await this.save();
     }
   }
 
   /**
-   * Get list of trusted tools
+   * Get list of trusted tools (merged effective view)
    */
   async getTrustedTools(): Promise<string[]> {
     const config = await this.load();
@@ -1121,9 +1412,9 @@ export class ConfigStore {
    * Clear all trusted tools
    */
   async clearTrustedTools(): Promise<void> {
-    const config = await this.load();
-    config.trustedTools = [];
-    await this.save(config);
+    await this.load();
+    this.globalConfig!.trustedTools = [];
+    await this.save();
   }
 
   /**
@@ -1148,18 +1439,18 @@ export class ConfigStore {
     expiresAt: string;
     userId: string;
   }): Promise<void> {
-    const config = await this.load();
-    config.auth = tokens;
-    await this.save(config);
+    await this.load();
+    this.globalConfig!.auth = tokens;
+    await this.save();
   }
 
   /**
    * Clear authentication tokens (logout)
    */
   async clearAuthTokens(): Promise<void> {
-    const config = await this.load();
-    config.auth = undefined;
-    await this.save(config);
+    await this.load();
+    this.globalConfig!.auth = undefined;
+    await this.save();
   }
 
   /**
@@ -1187,17 +1478,10 @@ export class ConfigStore {
    * Pass null to reset to the build-time default service.
    */
   async setCustomApiUrl(url: string | null): Promise<void> {
-    const config = await this.load();
-
-    if (url === null) {
-      // Reset to the build-time default service
-      config.apiConfig = undefined;
-    } else {
-      // Set custom URL for self-hosted instance
-      config.apiConfig = { customUrl: url };
-    }
-
-    await this.save(config);
+    await this.load();
+    // Reset to the build-time default service (null) or set a self-hosted URL.
+    this.globalConfig!.apiConfig = url === null ? undefined : { customUrl: url };
+    await this.save();
   }
 
   /**
@@ -1217,9 +1501,10 @@ export class ConfigStore {
   async switchApiEnvironment(
     target: 'dev' | 'prod' | { customUrl: string }
   ): Promise<{ url: string; envName: string; changed: boolean; authenticated: boolean }> {
-    const config = await this.load();
+    await this.load();
+    const g = this.globalConfig!;
 
-    const prevUrl = config.apiConfig?.customUrl || getDefaultApiUrl();
+    const prevUrl = g.apiConfig?.customUrl || getDefaultApiUrl();
     const prevKey = normalizeEnvKey(prevUrl);
 
     let newUrl: string;
@@ -1240,15 +1525,15 @@ export class ConfigStore {
 
     // No-op when already pointed at the requested environment - leave auth alone.
     if (prevKey === newKey) {
-      return { url: newUrl, envName, changed: false, authenticated: hasValidAuth(config.auth) };
+      return { url: newUrl, envName, changed: false, authenticated: hasValidAuth(g.auth) };
     }
 
     // Stash the current environment's token before switching away from it.
     // Keyed by a normalized URL (lowercase, no trailing slash) so trivial input
     // variations like `/set-api https://x.com/` vs `https://X.com` share an entry.
-    const authByEnv: Record<string, AuthTokens> = { ...(config.authByEnv || {}) };
-    if (config.auth) {
-      authByEnv[prevKey] = config.auth;
+    const authByEnv: Record<string, AuthTokens> = { ...(g.authByEnv || {}) };
+    if (g.auth) {
+      authByEnv[prevKey] = g.auth;
     } else {
       delete authByEnv[prevKey];
     }
@@ -1256,15 +1541,12 @@ export class ConfigStore {
     // Restore the target environment's previously-cached token (if any).
     const restored = authByEnv[newKey];
 
-    config.apiConfig = newApiConfig;
-    config.authByEnv = authByEnv;
-    config.auth = restored; // undefined → user will be prompted to /login
+    g.apiConfig = newApiConfig;
+    g.authByEnv = authByEnv;
+    g.auth = restored; // undefined → user will be prompted to /login
 
-    // Switching env does not touch features; refresh them from disk so a
-    // concurrent `b4m plugin add` in another process isn't reverted by this
-    // whole-config save (the no-arg save() path skips mergeFeatures).
-    config.features = await this.readDiskFeatures();
-
+    // No-arg save() persists these global mutations and refreshes features from
+    // disk, so a concurrent `b4m plugin add` isn't reverted by this switch.
     await this.save();
 
     return { url: newUrl, envName, changed: true, authenticated: hasValidAuth(restored) };
@@ -1395,18 +1677,19 @@ export class ConfigStore {
    * Persists to global config
    */
   async addDirectory(dirPath: string): Promise<void> {
-    const config = await this.load();
-    if (!config.additionalDirectories) {
-      config.additionalDirectories = [];
+    await this.load();
+    const g = this.globalConfig!;
+    if (!g.additionalDirectories) {
+      g.additionalDirectories = [];
     }
 
     // Resolve to absolute path
     const resolvedPath = path.resolve(dirPath);
 
     // Don't add duplicates
-    if (!config.additionalDirectories.includes(resolvedPath)) {
-      config.additionalDirectories.push(resolvedPath);
-      await this.save(config);
+    if (!g.additionalDirectories.includes(resolvedPath)) {
+      g.additionalDirectories.push(resolvedPath);
+      await this.save();
     }
   }
 
@@ -1414,37 +1697,52 @@ export class ConfigStore {
    * Remove a directory from the allowed directories list
    */
   async removeDirectory(dirPath: string): Promise<void> {
-    const config = await this.load();
-    if (config.additionalDirectories) {
+    await this.load();
+    const g = this.globalConfig!;
+    if (g.additionalDirectories) {
       // Resolve to absolute path for comparison
       const resolvedPath = path.resolve(dirPath);
-      config.additionalDirectories = config.additionalDirectories.filter(d => path.resolve(d) !== resolvedPath);
-      await this.save(config);
+      g.additionalDirectories = g.additionalDirectories.filter(d => path.resolve(d) !== resolvedPath);
+      await this.save();
     }
   }
 
   /**
-   * Get all additional directories (merged from global + project configs)
-   * Returns resolved absolute paths
+   * Get all additional directories (global config + trusted-project config).
+   * Returns resolved absolute paths. Project-declared directories are included
+   * ONLY when the project is trusted, and each must resolve inside the project
+   * root (a repo cannot widen file access beyond its own tree).
    */
   async getAdditionalDirectories(): Promise<string[]> {
-    const config = await this.load();
+    await this.load();
+    const g = this.globalConfig!;
     const dirs = new Set<string>();
 
-    // Add global config directories
-    if (config.additionalDirectories) {
-      for (const dir of config.additionalDirectories) {
+    // Global config directories are the user's own - no containment check.
+    if (g.additionalDirectories) {
+      for (const dir of g.additionalDirectories) {
         dirs.add(path.resolve(dir));
       }
     }
 
-    // Add project config directories
-    const projectConfig = await this.loadRawProjectConfig();
-    if (projectConfig?.additionalDirectories) {
-      // Project directories are relative to project root
-      const projectRoot = this.projectConfigDir || process.cwd();
-      for (const dir of projectConfig.additionalDirectories) {
-        dirs.add(path.resolve(projectRoot, dir));
+    // Project config directories: trusted-only, and confined to the project root.
+    if (this.projectTrusted && this.rawProjectConfig?.additionalDirectories) {
+      const projectRoot = this.projectRealPath || this.projectConfigDir;
+      if (projectRoot) {
+        for (const dir of this.rawProjectConfig.additionalDirectories) {
+          const resolved = path.resolve(projectRoot, dir);
+          // Canonicalize before the containment check: a committed symlink
+          // (e.g. `evil -> /`) passes the textual isWithin() on its logical path
+          // but escapes once resolved. safeRealpath returning null (missing /
+          // unresolvable) fails safe - the entry is dropped. The realpath'd path
+          // is what we hand downstream, so pathValidation can't re-expand it.
+          const real = await safeRealpath(resolved);
+          if (real && isWithin(projectRoot, real)) {
+            dirs.add(real);
+          } else {
+            logger.warn(`Ignoring project additionalDirectory outside project root: ${dir}`);
+          }
+        }
       }
     }
 
