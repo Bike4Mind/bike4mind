@@ -612,10 +612,10 @@ describe('apiKeyRateLimitCheck', () => {
       await expect(resetApiKeyRateLimit(mockKeyId)).rejects.toThrow(/failed to clear any rate-limit counters/i);
     });
 
-    it('does not discard a sibling counter that cleared when the other counter in its own group fails', async () => {
-      // Before this fixed, a fail-fast Promise.all inside deleteCounterGroup meant the day
-      // delete rejecting threw away the minute delete's already-succeeded usage too - a counter
-      // that WAS cleared got reported as if clearing it had failed entirely.
+    it('reports the whole counter as unverified, not usage 0, when only one of its two windows fails', async () => {
+      // A rejected day delete means the day window was never actually read - reporting it as 0
+      // would fabricate "not at ceiling" for a counter that might still be at its limit. Only
+      // when BOTH windows clear does the counter get a real reported usage.
       const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId);
       vi.mocked(cacheRepository.deleteByKeyAndReturn).mockImplementation(async key => {
         if (key === minuteKey) return { result: { count: 4 }, expiresAt: future(MINUTE_MS) } as never;
@@ -625,11 +625,21 @@ describe('apiKeyRateLimitCheck', () => {
 
       const result = await resetApiKeyRateLimit(mockKeyId);
 
-      expect(result.request).toEqual({
-        minute: 4,
-        day: 0,
-        minuteResetAt: Math.floor(future(MINUTE_MS).getTime() / 1000),
+      expect(result.request).toBeUndefined();
+    });
+
+    it('does not treat a single-leg failure as total failure when the sibling leg genuinely cleared', async () => {
+      // The one attempted counter's usage is unverifiable (see above), but the minute delete
+      // DID succeed - that must not read as "nothing cleared anywhere" and reject the whole
+      // reset. Only a group where NEITHER leg succeeded should ever trip that guard.
+      const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId);
+      vi.mocked(cacheRepository.deleteByKeyAndReturn).mockImplementation(async key => {
+        if (key === minuteKey) return null;
+        if (key === dayKey) throw new Error('cache unavailable');
+        return null;
       });
+
+      await expect(resetApiKeyRateLimit(mockKeyId)).resolves.toEqual({ request: undefined, management: undefined });
     });
   });
 
