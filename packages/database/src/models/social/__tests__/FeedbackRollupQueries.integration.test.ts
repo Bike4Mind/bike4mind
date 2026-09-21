@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import {
-  createMongoServer,
-  MONGO_TEST_TIMEOUT_MS,
-} from '../../../../../packages/database/src/__test__/createMongoServer';
-import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../__test__/createMongoServer';
+import { FeedbackModel } from '../FeedbackModel';
+import { FeedbackTextModel } from '../FeedbackTextModel';
 import { FeedbackStatus, FEEDBACK_ROLLUP_TOP_N, type IFeedback } from '@bike4mind/common';
-import { buildFeedbackRollupPipeline, toFeedbackRollupResponse, type FeedbackRollupFacet } from '../feedbackRollup';
+import {
+  buildFeedbackRollupPipeline,
+  toFeedbackRollupResponse,
+  type FeedbackRollupFacet,
+} from '../FeedbackRollupQueries';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 

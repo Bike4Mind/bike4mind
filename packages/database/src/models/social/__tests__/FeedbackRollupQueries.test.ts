@@ -1,7 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackTextModel } from '../FeedbackTextModel';
 import { FEEDBACK_ROLLUP_TOP_N } from '@bike4mind/common';
-import { buildFeedbackRollupPipeline, toFeedbackRollupResponse, type FeedbackRollupFacet } from '../feedbackRollup';
+import {
+  buildFeedbackRollupPipeline,
+  buildFeedbackWindowFilter,
+  toFeedbackRollupResponse,
+  type FeedbackRollupFacet,
+} from '../FeedbackRollupQueries';
 
 const FROM = new Date('2026-01-01T00:00:00.000Z');
 const TO = new Date('2026-02-01T00:00:00.000Z');
@@ -10,6 +15,34 @@ const TO = new Date('2026-02-01T00:00:00.000Z');
 const stages = (scope: Record<string, unknown>) => buildFeedbackRollupPipeline(scope, FROM, TO).pipeline as any[];
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const facetOf = (scope: Record<string, unknown>) => buildFeedbackRollupPipeline(scope, FROM, TO).facetStages as any;
+
+describe('buildFeedbackWindowFilter', () => {
+  it('composes the scope under $and rather than spreading it, so a scope $or survives', () => {
+    const scope = { $or: [{ userId: 'a' }, { userId: 'b' }] };
+
+    expect(buildFeedbackWindowFilter(scope, FROM, TO)).toEqual({
+      $and: [scope, { createdAt: { $gte: FROM, $lte: TO } }],
+    });
+  });
+
+  it('bounds the window inclusively at both ends and never rounds its instants', () => {
+    // Rounding belongs to apps/client/server/utils/orgFeedbackWindow.ts: the org summary queue
+    // handler keys its job off already-rounded instants, so rounding here would move that key.
+    const from = new Date('2026-01-01T07:13:42.123Z');
+    const to = new Date('2026-01-31T18:44:01.987Z');
+    const { $and } = buildFeedbackWindowFilter({ userId: 'a' }, from, to) as {
+      $and: Array<{ createdAt?: { $gte: Date; $lte: Date } }>;
+    };
+
+    expect($and[1].createdAt).toEqual({ $gte: from, $lte: to });
+  });
+
+  it('throws rather than match every tenant when no scope value survives Mongoose', () => {
+    expect(() => buildFeedbackWindowFilter({}, FROM, TO)).toThrow();
+    expect(() => buildFeedbackWindowFilter({ userId: undefined }, FROM, TO)).toThrow();
+    expect(() => buildFeedbackWindowFilter({ userId: null, organizationId: undefined }, FROM, TO)).toThrow();
+  });
+});
 
 describe('buildFeedbackRollupPipeline', () => {
   it('composes the caller scope with $and so a scope carrying its own $or survives', () => {

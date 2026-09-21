@@ -11,6 +11,7 @@ import {
   OrgMemberPopulation,
 } from '@bike4mind/common';
 import { FeedbackModel } from './FeedbackModel';
+import { buildFeedbackWindowFilter } from './FeedbackRollupQueries';
 import { userRepository } from '../auth/UserModel';
 import { convertPipelineForDocumentDB, executeFacetCompatible } from '../../utils/documentdb-compat';
 
@@ -90,13 +91,16 @@ export async function orgFeedbackReport(params: {
 
   const basePipeline = [
     {
-      $match: {
-        // The stamp is an ObjectId on the schema; a raw string here matches zero rows silently.
-        organizationId: new mongoose.Types.ObjectId(organizationId),
-        userId: { $in: members.userIds },
-        createdAt: { $gte: from, $lte: to },
-        ...(subject ? { subject } : {}),
-      },
+      $match: buildFeedbackWindowFilter(
+        {
+          // The stamp is an ObjectId on the schema; a raw string here matches zero rows silently.
+          organizationId: new mongoose.Types.ObjectId(organizationId),
+          userId: { $in: members.userIds },
+          ...(subject ? { subject } : {}),
+        },
+        from,
+        to
+      ),
     },
   ];
 
@@ -232,11 +236,12 @@ export async function orgFeedbackItems(params: {
   // everything rather than nothing.
   if (members.userIds.length === 0) return { items: [], total: 0, limit, offset };
 
-  const filter = {
-    ...drilldownScope(organizationId, members.userIds),
-    createdAt: { $gte: from, $lte: to },
-    ...(subject ? { subject } : {}),
-  };
+  // One filter object for both the page and its total, so the two cannot disagree on the window.
+  const filter = buildFeedbackWindowFilter(
+    { ...drilldownScope(organizationId, members.userIds), ...(subject ? { subject } : {}) },
+    from,
+    to
+  );
 
   // `_id` breaks the tie: `createdAt` alone is not unique, and an unstable sort silently repeats
   // or skips rows across pages.

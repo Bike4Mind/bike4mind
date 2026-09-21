@@ -5,14 +5,11 @@ import { FeedbackModel } from '../FeedbackModel';
 import { orgFeedbackReport } from '../FeedbackReportQueries';
 import User from '../../auth/UserModel';
 import { setupMongoTest } from '../../../__test__/utils';
-// The personal rollup still lives in apps/client; this cross-package import is what makes the two
-// window conventions comparable in one process, and it moves with the builder when the shared
-// seam lands in this package.
 import {
   buildFeedbackRollupPipeline,
   toFeedbackRollupResponse,
   type FeedbackRollupFacet,
-} from '../../../../../../apps/client/server/utils/feedbackRollup';
+} from '../FeedbackRollupQueries';
 
 const oid = () => String(new mongoose.Types.ObjectId());
 
