@@ -100,7 +100,13 @@ import { brand, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/co
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
-import { ignoresUpsamplingAndSeed, withInertNote } from './inertImageSettings';
+import {
+  ASPECT_RATIO_INERT_NOTE,
+  ignoresAspectRatio,
+  ignoresUpsamplingAndSeed,
+  withInertNote,
+} from './inertImageSettings';
+import { imageSizeUpdate } from './imageSizeUpdate';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { TabIntro } from './TabIntro';
@@ -1728,7 +1734,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               label: 'Image Size',
               type: 'select' as const,
               value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(shownModel)].defaultSize,
-              onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
+              // `model`, not `shownModel`: the panel renders the previewed model's controls, but the
+              // dimensions written here are consumed by whichever model actually generates.
+              onChange: (value: OpenAIImageSize | null) => value && setLLM(imageSizeUpdate(model, value)),
               options: getAvailableSizes(shownModel).map(s => ({ value: s, label: s })),
               tooltip: FIELD_TOOLTIPS.imageSize,
             },
@@ -1786,7 +1794,13 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               inputProps: {
                 type: 'number',
                 placeholder: 'Auto',
-                slotProps: { input: { min: 256, max: 4096, step: 8 } },
+                slotProps: {
+                  input: {
+                    min: IMAGE_SIZE_CONSTRAINTS.BFL.minWidth,
+                    max: IMAGE_SIZE_CONSTRAINTS.BFL.maxWidth,
+                    step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                  },
+                },
               },
             },
             {
@@ -1798,7 +1812,13 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               inputProps: {
                 type: 'number',
                 placeholder: 'Auto',
-                slotProps: { input: { min: 256, max: 4096, step: 8 } },
+                slotProps: {
+                  input: {
+                    min: IMAGE_SIZE_CONSTRAINTS.BFL.minHeight,
+                    max: IMAGE_SIZE_CONSTRAINTS.BFL.maxHeight,
+                    step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                  },
+                },
               },
             },
           ]
@@ -1808,7 +1828,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'select' as const,
         value: aspect_ratio?.toString() ?? '',
         onChange: (value: string | null) => setLLM({ aspect_ratio: value ? value : undefined }),
-        tooltip: FIELD_TOOLTIPS.aspectRatio,
+        tooltip: withInertNote(FIELD_TOOLTIPS.aspectRatio, ignoresAspectRatio(shownModel), ASPECT_RATIO_INERT_NOTE),
+        disabled: ignoresAspectRatio(shownModel),
         options: [
           { value: '', label: 'Auto' },
           { value: '16:9', label: '16:9' },
@@ -1829,7 +1850,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         ],
       },
     ],
-    [shownModel, isKontextModel, size, quality, style, seed, width, height, aspect_ratio, output_format, setLLM]
+    [shownModel, model, isKontextModel, size, quality, style, seed, width, height, aspect_ratio, output_format, setLLM]
   );
 
   const handleViewDetails = (model: ModelInfo) => {

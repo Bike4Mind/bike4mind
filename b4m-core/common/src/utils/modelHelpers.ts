@@ -41,6 +41,25 @@ export function isBflImageModel(model?: string | null): boolean {
 }
 
 /**
+ * Flux Ultra is the only BFL generation model driven by `aspect_ratio`; the Pro family takes
+ * discrete `width`/`height` and ignores aspect_ratio outright. Must stay in sync with the branch
+ * in `BFLImageService.generate`, which is what actually builds the request body.
+ */
+export function isBflUltraImageModel(model?: string | null): boolean {
+  return model === ImageModels.FLUX_PRO_ULTRA;
+}
+
+/**
+ * Image models sized by discrete `width`/`height` rather than a size string or an aspect ratio.
+ * Deliberately just the Flux Pro generation pair: Ultra takes an aspect ratio, and Fill and
+ * Kontext are dispatched through the edit path, which reads neither. The settings UI and the
+ * generation dispatch both key off this, so they cannot disagree about which controls matter.
+ */
+export function usesDiscreteImageDimensions(model?: string | null): boolean {
+  return model === ImageModels.FLUX_PRO || model === ImageModels.FLUX_PRO_1_1;
+}
+
+/**
  * Image models offering a prompt-enhancement toggle in the UI, where the provider is meant to
  * rewrite and expand the prompt before generating. BFL takes it as `prompt_upsampling` and honors
  * it. Gemini models are still included here for historical/UI-grouping reasons, but
