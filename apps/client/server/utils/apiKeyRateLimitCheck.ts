@@ -203,9 +203,14 @@ export async function resetApiKeyRateLimit(
  * back undefined rather than a value built from only the leg that succeeded:
  * the failed leg's window was never actually read, so reporting it as 0
  * would fabricate "not at ceiling" for a counter that might still be at its
- * limit. `cleared` is reported separately - true as long as at least one leg
- * didn't error - so a caller can still tell "something genuinely happened
- * here" apart from "the reported numbers are fully trustworthy".
+ * limit.
+ *
+ * `cleared` is reported separately, for `resetApiKeyRateLimit`'s all-fail
+ * guard: true when there was no rejection at all, or - when there was one -
+ * only when the OTHER leg fulfilled with an actual deleted document. A
+ * fulfilled-`null` sibling ("no document existed") proves nothing about
+ * whether the rejected leg had a live counter sitting at its ceiling, so it
+ * must never count as progress on its own.
  */
 async function deleteCounterGroup(
   keyId: string,
@@ -233,13 +238,23 @@ async function deleteCounterGroup(
     warn(`[API_KEY_RATE_LIMIT] Failed to clear ${counter} day counter for API key ${keyId}: ${dayResult.reason}`);
   }
 
-  const cleared = minuteResult.status === 'fulfilled' || dayResult.status === 'fulfilled';
-
-  if (minuteResult.status === 'rejected' || dayResult.status === 'rejected') {
-    return { usage: undefined, cleared };
+  const hasRejection = minuteResult.status === 'rejected' || dayResult.status === 'rejected';
+  if (!hasRejection) {
+    // Both legs fulfilled - even if both happened to find nothing (both null), that is a fully
+    // verified outcome, not a gap.
+    return { usage: docsToUsage(minuteResult.value, dayResult.value), cleared: true };
   }
 
-  return { usage: docsToUsage(minuteResult.value, dayResult.value), cleared };
+  // At least one leg rejected. A sibling that fulfilled with `null` proves nothing - the doc
+  // didn't exist, which is a legitimate no-op, not evidence that a live counter was cleared. A
+  // rejected leg's doc might have existed and been at its ceiling; a fulfilled-null sibling
+  // can't vouch for it. Only a fulfilled result that actually removed a document counts as
+  // genuine progress here.
+  const cleared =
+    (minuteResult.status === 'fulfilled' && minuteResult.value !== null) ||
+    (dayResult.status === 'fulfilled' && dayResult.value !== null);
+
+  return { usage: undefined, cleared };
 }
 
 function docsToUsage(
