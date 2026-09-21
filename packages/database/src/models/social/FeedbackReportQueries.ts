@@ -8,6 +8,7 @@ import {
   OrgFeedbackMember,
   OrgFeedbackMemberCount,
   OrgFeedbackReport,
+  ORG_FEEDBACK_BY_TAG_LIMIT,
   OrgMemberPopulation,
 } from '@bike4mind/common';
 import { FeedbackModel } from './FeedbackModel';
@@ -18,7 +19,9 @@ import { convertPipelineForDocumentDB, executeFacetCompatible } from '../../util
 /** Bucket key standing in for a row whose grouped field was never set. */
 const UNSPECIFIED = 'unspecified';
 
-const BY_TAG_LIMIT = 50;
+/** One key past the ceiling is fetched so truncation is a fact read off the returned rows rather
+ * than a guess, matching `ARM_FETCH_LIMIT` in the personal rollup builder. */
+const BY_TAG_FETCH_LIMIT = ORG_FEEDBACK_BY_TAG_LIMIT + 1;
 
 // any: a $group _id is either a field path or an aggregation expression, and Mongoose's typed
 // PipelineStage union does not admit both here. See documentdb-compat's module header.
@@ -130,7 +133,7 @@ export async function orgFeedbackReport(params: {
       { $group: { _id: '$tags', count: { $sum: 1 } } },
       { $project: { _id: 0, key: '$_id', count: 1 } },
       { $sort: { count: -1 as const, key: 1 as const } },
-      { $limit: BY_TAG_LIMIT },
+      { $limit: BY_TAG_FETCH_LIMIT },
     ],
     byMember: [
       { $group: { _id: '$userId', count: { $sum: 1 } } },
@@ -153,6 +156,7 @@ export async function orgFeedbackReport(params: {
   );
 
   const byMemberRows: { userId: string; count: number }[] = result?.byMember ?? [];
+  const byTagRows = buckets(result?.byTag);
 
   return {
     range,
@@ -161,7 +165,8 @@ export async function orgFeedbackReport(params: {
     bySubject: buckets(result?.bySubject),
     byType: buckets(result?.byType),
     byStatus: buckets(result?.byStatus),
-    byTag: buckets(result?.byTag),
+    byTag: byTagRows.slice(0, ORG_FEEDBACK_BY_TAG_LIMIT),
+    byTagTruncated: byTagRows.length > ORG_FEEDBACK_BY_TAG_LIMIT,
     byMember: byMemberRows.map<OrgFeedbackMemberCount>(row => ({
       userId: row.userId,
       displayName: names.get(row.userId) ?? row.userId,

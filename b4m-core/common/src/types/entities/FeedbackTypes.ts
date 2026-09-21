@@ -244,6 +244,13 @@ export interface OrgFeedbackMemberCount extends OrgFeedbackMember {
 }
 
 /**
+ * Tag keys kept in the org report. Tags are free-form, so unlike the enum-sized groupings beside
+ * them the key space is unbounded. Shared so a client caption naming the ceiling reads the same
+ * number the server applied.
+ */
+export const ORG_FEEDBACK_BY_TAG_LIMIT = 50;
+
+/**
  * GET /api/organizations/:id/feedback-report. Declared here rather than beside the route so the
  * handler, the aggregate that builds it and the client hook that reads it share one shape.
  *
@@ -262,6 +269,10 @@ export interface OrgFeedbackReport {
   byStatus: FeedbackCountBucket[];
   /** Rows carrying no tag are absent, so these counts do not sum to `totals.count`. */
   byTag: FeedbackCountBucket[];
+  /** Set when more than `ORG_FEEDBACK_BY_TAG_LIMIT` distinct tags matched, so `byTag` is a top-N
+   * cut rather than the whole key space. Optional so a report serialized before it existed still
+   * reads back. */
+  byTagTruncated?: boolean;
   byMember: OrgFeedbackMemberCount[];
   membership: {
     /** Size of the union the report scoped on. */

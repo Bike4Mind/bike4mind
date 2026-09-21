@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { FeedbackStatus, FeedbackType, OrgMemberPopulation } from '@bike4mind/common';
+import { FeedbackStatus, FeedbackType, ORG_FEEDBACK_BY_TAG_LIMIT, OrgMemberPopulation } from '@bike4mind/common';
 import { FeedbackModel } from '../FeedbackModel';
 import { orgFeedbackReport } from '../FeedbackReportQueries';
 import User, { userRepository } from '../../auth/UserModel';
@@ -248,5 +248,46 @@ describe('orgFeedbackReport', () => {
 
     expect(report.byType).toEqual([{ key: 'unspecified', count: 1 }]);
     expect(report.byType.reduce((sum, row) => sum + row.count, 0)).toBe(report.totals.count);
+  });
+
+  // One row carrying many tags is enough: byTag unwinds tags, so the key space it groups over is
+  // the row's tag list, not the row count.
+  const tagKeys = (count: number) => Array.from({ length: count }, (_, i) => `tag-${String(i).padStart(2, '0')}`);
+
+  it('leaves byTag unflagged when the distinct tags land exactly on the ceiling', async () => {
+    const orgId = oid();
+    const author = oid();
+    await makeUser(author, 'Author');
+    await makeFeedback({
+      userId: author,
+      organizationId: orgId,
+      createdAt: JAN_10,
+      tags: tagKeys(ORG_FEEDBACK_BY_TAG_LIMIT),
+    });
+
+    const report = await orgFeedbackReport({ organizationId: orgId, ...WINDOW, members: population([author]) });
+
+    expect(report.byTag).toHaveLength(ORG_FEEDBACK_BY_TAG_LIMIT);
+    expect(report.byTagTruncated).toBe(false);
+  });
+
+  it('flags byTag one key past the ceiling and keeps the top keys by count, then by key', async () => {
+    const orgId = oid();
+    const author = oid();
+    await makeUser(author, 'Author');
+    const tags = tagKeys(ORG_FEEDBACK_BY_TAG_LIMIT + 1);
+    const hottest = tags[tags.length - 1];
+    await makeFeedback({ userId: author, organizationId: orgId, createdAt: JAN_10, tags });
+    // A second row on the alphabetically last key, so the cut is decided by count first and the
+    // dropped key is the last of the count-1 group rather than the last tag overall.
+    await makeFeedback({ userId: author, organizationId: orgId, createdAt: JAN_11, tags: [hottest] });
+
+    const report = await orgFeedbackReport({ organizationId: orgId, ...WINDOW, members: population([author]) });
+
+    expect(report.byTagTruncated).toBe(true);
+    expect(report.byTag).toHaveLength(ORG_FEEDBACK_BY_TAG_LIMIT);
+    expect(report.byTag[0]).toEqual({ key: hottest, count: 2 });
+    expect(report.byTag[1]).toEqual({ key: tags[0], count: 1 });
+    expect(report.byTag.map(row => row.key)).not.toContain(tags[ORG_FEEDBACK_BY_TAG_LIMIT - 1]);
   });
 });
