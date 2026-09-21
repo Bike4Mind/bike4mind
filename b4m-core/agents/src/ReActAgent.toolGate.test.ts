@@ -84,9 +84,7 @@ describe('ReActAgent pre-execution tool gate', () => {
 
     expect(tool.toolFn).not.toHaveBeenCalled();
     expect(calls).toEqual([]);
-    expect(result.gatedToolCalls).toEqual([
-      { id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' },
-    ]);
+    expect(result.gatedToolCalls).toEqual([{ id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' }]);
   });
 
   it('pairs the withheld tool_use with a placeholder tool_result so the checkpoint stays valid', async () => {
@@ -173,5 +171,45 @@ describe('ReActAgent pre-execution tool gate', () => {
     await expect(agent.executeGatedToolCall(gatedResult.gatedToolCalls![0])).rejects.toThrow(/cannot record/);
     // The point of the check: the side effect must not have landed.
     expect(calls).toEqual([]);
+  });
+
+  it('supportsGatedReplay reflects whether the backend can record a replayed result', async () => {
+    const withReplay = new ReActAgent(buildContext([], createMockLlm([])));
+    expect(withReplay.supportsGatedReplay()).toBe(true);
+
+    const llmWithoutReplay = createMockLlm([]);
+    delete (llmWithoutReplay as { replaceLastToolResultObservation?: unknown }).replaceLastToolResultObservation;
+    const withoutReplay = new ReActAgent(buildContext([], llmWithoutReplay));
+    expect(withoutReplay.supportsGatedReplay()).toBe(false);
+  });
+
+  it('reports withheld calls on a confidence-gate pause too, not just the ordinary return', async () => {
+    const calls: string[] = [];
+    const safe = createTool('web_search', calls);
+    const gated = createTool('send_slack_message', calls);
+    const agent = new ReActAgent(
+      buildContext(
+        [safe, gated],
+        createMockLlm([
+          { name: 'web_search', arguments: '{}', id: 'toolu_1' },
+          { name: 'send_slack_message', arguments: '{}', id: 'toolu_2' },
+        ])
+      )
+    );
+
+    const result = await agent.runIteration('look and tell', {
+      toolGate: call => call.name === 'send_slack_message',
+      confidenceGate: () => ({ action: 'wait_for_human', confidence: 0, reason: 'test' }),
+    });
+
+    expect(result.gatedToolCalls?.map(c => c.name)).toEqual(['send_slack_message']);
+  });
+
+  it('run() refuses a toolGate rather than silently ignoring it', async () => {
+    const agent = new ReActAgent(buildContext([], createMockLlm([])));
+
+    await expect(agent.run('hello', { toolGate: () => true })).rejects.toThrow(
+      /toolGate is only honored by runIteration/
+    );
   });
 });

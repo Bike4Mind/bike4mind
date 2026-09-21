@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import type { GatedToolCall } from '@bike4mind/agents';
-import { classifyToolPermission, selectGatedToolCall, shouldWithholdToolCall } from './toolPermissions';
+import {
+  classifyToolPermission,
+  selectGatedToolCall,
+  shouldWithholdToolCall,
+  partitionApprovedPause,
+} from './toolPermissions';
 
 let nextId = 0;
 const call = (name: string, input: unknown = {}): GatedToolCall => ({ id: `toolu_${nextId++}`, name, input });
@@ -126,12 +131,14 @@ describe('selectGatedToolCall', () => {
 
   it('returns denied for a denied tool even when other calls only need approval', () => {
     const denied = call('image_generation', { prompt: 'cat' });
-    expect(selectGatedToolCall([call('send_slack_message', { text: 'hi' }), denied], [], ['image_generation'])).toEqual({
-      toolName: 'image_generation',
-      toolInput: { prompt: 'cat' },
-      verdict: 'denied',
-      toolCallId: denied.id,
-    });
+    expect(selectGatedToolCall([call('send_slack_message', { text: 'hi' }), denied], [], ['image_generation'])).toEqual(
+      {
+        toolName: 'image_generation',
+        toolInput: { prompt: 'cat' },
+        verdict: 'denied',
+        toolCallId: denied.id,
+      }
+    );
   });
 
   it('returns denied as soon as it sees a denied call, regardless of order', () => {
@@ -159,5 +166,47 @@ describe('selectGatedToolCall', () => {
 
   it('treats unknown tools as needing approval (safe default)', () => {
     expect(selectGatedToolCall([call('mystery_tool')], [], [])?.verdict).toBe('needs_approval');
+  });
+});
+
+describe('partitionApprovedPause', () => {
+  it('approves only the call the card named, leaving a same-tool sibling withheld', () => {
+    // Two calls to the same tool with different arguments - the card only ever showed
+    // one of them, so approving it must not silently approve the other.
+    const first = call('image_generation', { prompt: 'cat' });
+    const second = call('image_generation', { prompt: 'dog' });
+    const { nowApproved, stillWithheld } = partitionApprovedPause([first, second], first.id, [], []);
+    expect(nowApproved).toEqual([first]);
+    expect(stillWithheld).toEqual([second]);
+  });
+
+  it('approves every withheld call once a "remember for session" approval widens approvedTools', () => {
+    const first = call('send_slack_message', { text: 'a' });
+    const second = call('send_slack_message', { text: 'b' });
+    // approvedToolCallId names only `first`, but `approvedTools` now covers the tool
+    // outright - `second` rides along without needing its own card.
+    const { nowApproved, stillWithheld } = partitionApprovedPause(
+      [first, second],
+      first.id,
+      ['send_slack_message'],
+      []
+    );
+    expect(nowApproved).toEqual([first, second]);
+    expect(stillWithheld).toEqual([]);
+  });
+
+  it('leaves every call withheld when the approved id matches none of them', () => {
+    const first = call('image_generation', { prompt: 'cat' });
+    const { nowApproved, stillWithheld } = partitionApprovedPause([first], 'toolu_unrelated', [], []);
+    expect(nowApproved).toEqual([]);
+    expect(stillWithheld).toEqual([first]);
+  });
+
+  it('approves everything when a second, unrelated gated tool needs its own card next', () => {
+    const approved = call('send_slack_message', { text: 'hi' });
+    const stillGated = call('image_generation', { prompt: 'cat' });
+    const { nowApproved, stillWithheld } = partitionApprovedPause([approved, stillGated], approved.id, [], []);
+    expect(nowApproved).toEqual([approved]);
+    expect(stillWithheld).toEqual([stillGated]);
   });
 });

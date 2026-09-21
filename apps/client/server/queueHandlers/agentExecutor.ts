@@ -120,6 +120,7 @@ import {
   selectGatedToolCall,
   shouldWithholdToolCall,
   resolveGateDisposition,
+  partitionApprovedPause,
   type GatedAction,
 } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
@@ -151,7 +152,12 @@ import {
   attachmentNoticeStrings,
   unmaterializedAttachments,
 } from './agentExecutor.attachmentContent';
-import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
+import {
+  applySessionToolPolicy,
+  delegationOffer,
+  DELEGATION_TOOLS,
+  runHasAttachments,
+} from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
@@ -2335,7 +2341,8 @@ async function processExecution(
     };
 
     // See `toolGate` below for why these two are exempt from the pre-execution gate.
-    const HANDOFF_DISPATCH_TOOLS = new Set(['delegate_to_agent', 'coordinate_task']);
+    // Reuses `DELEGATION_TOOLS` so the exemption cannot drift from the tools it names.
+    const HANDOFF_DISPATCH_TOOLS = new Set<string>(DELEGATION_TOOLS);
 
     // Pre-execution permission gate (the callback the agent consults BEFORE invoking a
     // tool). Withholding here is what makes a denied or unapproved call cost nothing: the
@@ -2398,6 +2405,27 @@ async function processExecution(
         return;
       }
 
+      // Approving replays the call via `agent.executeGatedToolCall`, which needs the
+      // backend's `replaceLastToolResultObservation` to record the result in place. Only
+      // Anthropic / Bedrock-Anthropic / DeepSeek / OpenAI implement it - on any other
+      // backend a card here would offer an "Approve" whose only outcome is a failed
+      // replay, so treat it the same as `no_approver` instead of asking a question that
+      // cannot be answered.
+      if (!agent.supportsGatedReplay()) {
+        logger.warn(`[Permission] Tool "${toolName}" needs approval but the backend cannot replay it - failing`, {
+          executionId,
+          toolName,
+        });
+        const unsupportedMessage =
+          `Execution stopped: tool "${toolName}" requires approval, but the current model does ` +
+          'not support resuming after approval. Switch to a model that supports approval-gated ' +
+          'tools, or remove this tool from the run.';
+        await agentExecutionRepository.markFailed(executionId, { message: unsupportedMessage, callerSafe: true });
+        await sendWs('failed', { executionId, reason: 'gated_replay_unsupported', toolName });
+        await persistRunAsQuest(executionId, `${unsupportedMessage}`, logger);
+        return;
+      }
+
       logger.info(`[Permission] Tool "${toolName}" needs approval, pausing before it runs`);
       await agentExecutionRepository.updateStatus(executionId, 'awaiting_permission');
       await agentExecutionRepository.updatePermissionState(executionId, {
@@ -2436,21 +2464,23 @@ async function processExecution(
     const approvedPause = execution.pendingPermission?.approved ? execution.pendingPermission : undefined;
     if (approvedPause) {
       const withheld = approvedPause.gatedToolCalls ?? [];
-      // Match on the tool_use id, not the name: one iteration can withhold two calls to the
-      // same tool with different arguments, and the card only ever showed the user one of
-      // them. Anything the gate would no longer withhold at all rides along - that is how a
-      // "remember for this session" approval (which widened `approvedTools`) covers the rest.
-      const nowApproved = withheld.filter(
-        c => c.id === approvedPause.toolCallId || !shouldWithholdToolCall(c.name, approvedTools, deniedTools)
+      const { nowApproved, stillWithheld } = partitionApprovedPause(
+        withheld,
+        approvedPause.toolCallId,
+        approvedTools,
+        deniedTools
       );
-      const stillWithheld = withheld.filter(c => !nowApproved.includes(c));
 
       for (const call of nowApproved) {
         try {
           await agent.executeGatedToolCall({ id: call.id, name: call.name, input: call.input });
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          logger.error('[Permission] Approved tool call could not be replayed', { executionId, call: call.name, errMsg });
+          logger.error('[Permission] Approved tool call could not be replayed', {
+            executionId,
+            call: call.name,
+            errMsg,
+          });
           // Deliberately does not claim the tool did not run: `executeGatedToolCall` refuses
           // before invoking the tool when it cannot record the result, but any other throw
           // here can land after the side effect.
@@ -2478,10 +2508,13 @@ async function processExecution(
       if (stillWithheld.length > 0) {
         const nextGated = selectGatedToolCall(stillWithheld, approvedTools, deniedTools);
         if (!nextGated) {
-          logger.error('[Permission] Withheld calls remain but none classifies as gated - failing rather than stranding them', {
-            executionId,
-            tools: stillWithheld.map(c => c.name),
-          });
+          logger.error(
+            '[Permission] Withheld calls remain but none classifies as gated - failing rather than stranding them',
+            {
+              executionId,
+              tools: stillWithheld.map(c => c.name),
+            }
+          );
           await agentExecutionRepository.markFailed(executionId, {
             message: 'Execution stopped: a tool call was left awaiting approval that can no longer be resolved.',
           });
@@ -2734,6 +2767,27 @@ async function processExecution(
       );
       await billIterationIfNeeded(iterationIndex, iterationResult.checkpoint, counters);
 
+      // Permission check. The calls listed here were withheld BEFORE execution by
+      // `toolGate`, so nothing has run and nothing has been billed for them yet -
+      // denying costs the user nothing, and approving is what finally invokes the
+      // provider (see the resume block above the loop).
+      //
+      // This MUST run before the handoff/DAG branches below: `toolGate` only exempts
+      // `HANDOFF_DISPATCH_TOOLS` themselves, not the rest of the turn, so a turn that
+      // calls `coordinate_task`/`delegate_to_agent` alongside another gated tool sets
+      // both `handoffSignal`/`dagHandoffSignal` AND `iterationResult.gatedToolCalls`.
+      // Handing off first would strand the withheld call - the handoff branches
+      // `return`, so it would never reach a permission card, and the continuation
+      // Lambda would later restore its `GATED_TOOL_OBSERVATION` placeholder as if it
+      // were a real result. Pausing instead is safe: the checkpoint above is already
+      // persisted, so resuming after approval re-evaluates the same handoff signals.
+      const withheldCalls = iterationResult.gatedToolCalls ?? [];
+      const gated = withheldCalls.length > 0 ? selectGatedToolCall(withheldCalls, approvedTools, deniedTools) : null;
+      if (gated) {
+        await settleGatedCall(gated, withheldCalls);
+        return;
+      }
+
       // Handoff signal: orchestrator-side polling on a sync Lambda-dispatched
       // subagent ran out of time. The placeholder observation has been appended
       // to the agent's messages by `appendToolMessages` during this iteration -
@@ -2834,19 +2888,6 @@ async function processExecution(
           executionId,
           pendingNodes: pendingNodeIds,
         });
-        return;
-      }
-
-      // Permission check. The calls listed here were withheld BEFORE execution by
-      // `toolGate`, so nothing has run and nothing has been billed for them yet -
-      // denying costs the user nothing, and approving is what finally invokes the
-      // provider (see the resume block above the loop).
-      const withheldCalls = iterationResult.gatedToolCalls ?? [];
-      const gated = withheldCalls.length > 0 ? selectGatedToolCall(withheldCalls, approvedTools, deniedTools) : null;
-      if (gated) {
-        // Checkpoint persistence and iteration billing already happened above the branch;
-        // the iteration's LLM tokens were genuinely spent even though its tool did not run.
-        await settleGatedCall(gated, withheldCalls);
         return;
       }
 

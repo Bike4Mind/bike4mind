@@ -105,6 +105,31 @@ export function selectGatedToolCall(
 }
 
 /**
+ * Partition an iteration's withheld calls into the ones a permission response just
+ * approved and the ones still awaiting a verdict - the pure decision behind the
+ * approve -> replay resume block in `agentExecutor.ts`.
+ *
+ * A call is "now approved" when it is the specific `tool_use` the card named
+ * (matched by id, never by name - one iteration can withhold two calls to the same
+ * tool with different arguments, and the card only ever showed the user one of
+ * them), OR when the gate would no longer withhold it at all - that is how a
+ * "remember for this session" approval (which widened `approvedTools`) covers the
+ * rest of the batch in one response.
+ */
+export function partitionApprovedPause(
+  withheld: GatedToolCall[],
+  approvedToolCallId: string | undefined,
+  approvedTools: string[],
+  deniedTools: string[]
+): { nowApproved: GatedToolCall[]; stillWithheld: GatedToolCall[] } {
+  const nowApproved = withheld.filter(
+    c => c.id === approvedToolCallId || !shouldWithholdToolCall(c.name, approvedTools, deniedTools)
+  );
+  const stillWithheld = withheld.filter(c => !nowApproved.includes(c));
+  return { nowApproved, stillWithheld };
+}
+
+/**
  * What the executor should do about a gated action.
  *
  * - `denied` - the tool is on the execution's deny list; fail the run.

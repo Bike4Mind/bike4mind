@@ -351,6 +351,14 @@ export class ReActAgent extends EventEmitter {
    * @returns Agent result with final answer and all steps
    */
   async run(query: string | MessageContent, options: AgentRunOptions = {}): Promise<AgentResult> {
+    // `run()` has its own tool-execution loop and never consults `toolGate` -
+    // only `runIteration()` does. Silently ignoring it here would be the worst
+    // failure mode for a permission gate (every call runs ungated), so refuse
+    // outright rather than let a caller believe it is gating tool execution.
+    if (options.toolGate) {
+      throw new Error('ReActAgent.run: toolGate is only honored by runIteration(), not run()');
+    }
+
     // Reset state for new run
     this.steps = [];
     this.totalTokens = 0;
@@ -1001,6 +1009,16 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * Throws if the underlying backend doesn't support this surgery or if no
    * matching message is found.
    */
+  /**
+   * Whether the current backend can record a replayed tool result via
+   * `replaceLastToolResultObservation` / `executeGatedToolCall`. Only Anthropic,
+   * Bedrock-Anthropic, DeepSeek and OpenAI implement it today - checking this
+   * before raising a permission card avoids offering an "Approve" that can only fail.
+   */
+  supportsGatedReplay(): boolean {
+    return typeof this.context.llm.replaceLastToolResultObservation === 'function';
+  }
+
   replaceLastToolResultObservation(toolCallId: string, newObservation: string): void {
     if (!this.context.llm.replaceLastToolResultObservation) {
       throw new Error(
@@ -1342,13 +1360,18 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                   options.parallelExecution &&
                   shouldUseParallelExecution(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool)
                 ) {
+                  // Keyed by the provider `tool_use` id (not `getToolId`, which is
+                  // name+stringified-args and collides when a batch calls the same
+                  // tool twice with identical arguments). `withholdIfGated` assigns
+                  // `toolUse.id` when the provider omitted one, so every entry here
+                  // is guaranteed to have it set by the time this map is read.
                   const withheld = new Map<string, GatedToolCall>();
                   for (const toolUse of unprocessedTools) {
                     const actionStep = this.buildActionStep(toolUse);
                     iterationSteps.push(actionStep);
                     const gated = this.withholdIfGated(toolUse, options.toolGate);
                     if (gated) {
-                      withheld.set(getToolId(toolUse), gated);
+                      withheld.set(toolUse.id as string, gated);
                       gatedToolCalls.push(gated);
                     }
                   }
@@ -1357,11 +1380,11 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                   // That keeps the aborted iteration's checkpoint self-consistent (every
                   // tool_use paired) rather than relying on the catch-block rollback, so a
                   // resumed session replays cleanly with no orphaned tool_use ids.
-                  const runnable = unprocessedTools.filter(t => !withheld.has(getToolId(t)));
+                  const runnable = unprocessedTools.filter(t => !withheld.has(t.id as string));
                   const plan = categorizeTools(runnable, options.isReadOnlyTool ?? defaultIsReadOnlyTool);
                   const results = await this.runToolBatchAbortTolerant(plan, options.signal);
                   for (const toolUse of unprocessedTools) {
-                    if (withheld.has(getToolId(toolUse))) {
+                    if (withheld.has(toolUse.id as string)) {
                       this.appendToolMessages(this.messages, toolUse, GATED_TOOL_OBSERVATION, thinkingBlocks);
                       continue;
                     }
@@ -1457,6 +1480,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             isComplete: true,
             reachedMaxIterations: false,
             checkpoint: this.toCheckpoint(),
+            ...(gatedToolCalls.length > 0 ? { gatedToolCalls } : {}),
           };
         }
         this.emit('gate_proceed', { ...decision, iteration: this.iterations });
