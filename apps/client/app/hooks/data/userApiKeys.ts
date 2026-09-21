@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding } from '@bike4mind/common';
+import type { CounterLockoutState } from '@server/utils/apiKeyRateLimitCheck';
 import { toast } from 'sonner';
 
 function parseValidationError(error: any): string {
@@ -210,10 +211,24 @@ export function useAdminGetUserApiKeys(userId: string | undefined) {
   });
 }
 
+/** Response of POST /api/admin/user-api-keys/[id]/reset-rate-limit. Within
+ * `lockout`, a `request`/`management` entry is undefined when clearing that
+ * specific counter failed - the other counter is still cleared and reported
+ * independently. `lockout` itself is optional only for a stale bundled
+ * client talking to a server build that predates this field (deploy skew). */
+export interface ApiKeyRateLimitResetResponse {
+  success: boolean;
+  id: string;
+  lockout?: {
+    request?: CounterLockoutState;
+    management?: CounterLockoutState;
+  };
+}
+
 export function useAdminResetApiKeyRateLimit({ onSuccess }: { onSuccess?: () => void } = {}) {
   const queryClient = useQueryClient();
 
-  return useMutation<{ success: boolean; id: string }, Error, string>({
+  return useMutation<ApiKeyRateLimitResetResponse, Error, string>({
     mutationFn: async keyId => {
       const response = await api.post(`/api/admin/user-api-keys/${keyId}/reset-rate-limit`);
       return response.data;

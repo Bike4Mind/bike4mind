@@ -228,6 +228,40 @@ describe('CacheRepository.findByKey', () => {
   });
 });
 
+describe('CacheRepository.deleteByKeyAndReturn', () => {
+  it('deletes the entry and returns it as it stood at the moment of deletion', async () => {
+    const key = `cache:delete:${Date.now()}`;
+    await Cache.create({ key, result: { count: 7 }, expiresAt: new Date(Date.now() + 60_000) });
+
+    const deleted = await cacheRepository.deleteByKeyAndReturn(key);
+
+    expect(deleted?.result).toEqual({ count: 7 });
+    expect(await Cache.findOne({ key })).toBeNull();
+  });
+
+  it('returns null on a second call once the document is already gone', async () => {
+    const key = `cache:delete-twice:${Date.now()}`;
+    await Cache.create({ key, result: { count: 1 }, expiresAt: new Date(Date.now() + 60_000) });
+
+    await cacheRepository.deleteByKeyAndReturn(key);
+
+    expect(await cacheRepository.deleteByKeyAndReturn(key)).toBeNull();
+  });
+
+  it('also deletes and returns an expired-but-unswept row, unlike findByKey', async () => {
+    // No expiresAt predicate here (unlike findByKey) - the delete must still clear a row Mongo's
+    // TTL monitor hasn't gotten to yet, or a rate-limit reset could leave a "cleared" counter that
+    // reappears once the caller re-reads it.
+    const key = `cache:delete-expired:${Date.now()}`;
+    await Cache.create({ key, result: { count: 3 }, expiresAt: new Date(Date.now() - 1000) });
+
+    const deleted = await cacheRepository.deleteByKeyAndReturn(key);
+
+    expect(deleted?.result).toEqual({ count: 3 });
+    expect(await Cache.findOne({ key })).toBeNull();
+  });
+});
+
 describe('CacheRepository.tryAddWithinLimitFixedWindow', () => {
   const windowMs = 60_000;
 
