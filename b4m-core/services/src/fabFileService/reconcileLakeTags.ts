@@ -399,9 +399,12 @@ export const reconcileLakeTags = async (
       // knows the write actually landed and which lakes it joined; nothing upstream of `commit()`
       // can see that.
       const recomputed = new Set<string>();
+      // Recorded BEFORE the stats recompute, not after: the join is already persisted by the time
+      // `commit()` runs, and recording is best-effort while `recomputeLakeStats` can throw - a
+      // throw there would otherwise lose this lake's event AND every later join's in one go.
       for (const lake of joins) {
-        await recomputeLakeStats(lake, { db, logger }, { actor });
         await recordLakeMembershipChange({ actor, lake, fabFileId, action: 'added', origin: 'person' }, { db, logger });
+        await recomputeLakeStats(lake, { db, logger }, { actor });
         recomputed.add(lake.id);
       }
       // An unmanaged prefix-arm join: stats only, activation stays gated - see the comment above.
@@ -409,11 +412,11 @@ export const reconcileLakeTags = async (
       // still recorded - only the activation side effect is withheld.
       for (const lake of statsOnlyJoins) {
         if (!recomputed.has(lake.id)) {
-          await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
           await recordLakeMembershipChange(
             { actor, lake, fabFileId, action: 'added', origin: 'person' },
             { db, logger }
           );
+          await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
         }
       }
     },

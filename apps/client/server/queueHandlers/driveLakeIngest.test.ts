@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   changeStorageSize: vi.fn(),
   userSave: vi.fn(),
   removeFileFromLake: vi.fn(),
+  recordLakeMembershipChange: vi.fn(),
   loadPrefixArmCandidateLakes: vi.fn(),
   findOtherLakeClaims: vi.fn(),
   recomputeLakeStats: vi.fn(),
@@ -88,6 +89,8 @@ vi.mock('@bike4mind/database', () => ({
     markUploaded: h.markUploaded,
   },
   fabFileChunkRepository: {},
+  // The membership-audit repo the handler wires into every lake add/remove it drives.
+  lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   sessionRepository: { findAllWithKnowledgeId: h.sessionsWithKnowledgeId, update: h.sessionUpdate },
   userRepository: { findById: h.userRepoFindById },
   orgGoogleDriveConnectionRepository: {
@@ -113,6 +116,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     createDataLakeFallbackTagger: () => async (tags: unknown) => tags,
     removeFileFromLake: h.removeFileFromLake,
+    recordLakeMembershipChange: h.recordLakeMembershipChange,
     loadPrefixArmCandidateLakes: h.loadPrefixArmCandidateLakes,
     // The gate itself is the seam these tests drive; its two-arm resolution is unit-tested beside
     // its source (prefixArmMembership.test.ts). `hasOtherLakeClaim` is the real one-liner.
@@ -246,6 +250,7 @@ describe('driveLakeIngest consumer', () => {
     h.userRepoFindById.mockImplementation(async (id: string) => ({ id }));
     setExisting([]);
     h.removeFileFromLake.mockResolvedValue(undefined);
+    h.recordLakeMembershipChange.mockResolvedValue(undefined);
     h.lakeFind.mockResolvedValue([]);
     h.loadPrefixArmCandidateLakes.mockResolvedValue([]);
     // Default: no other lake holds the copy, so the retire is free to delete it outright.
@@ -554,7 +559,8 @@ describe('driveLakeIngest consumer', () => {
       expect.anything(),
       expect.anything(),
       'ff-old',
-      expect.anything()
+      expect.anything(),
+      { origin: 'connector' }
     );
     // The full delete reaps chunks / search index / session links / S3 / quota, unlike a soft-delete.
     expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
@@ -628,7 +634,8 @@ describe('driveLakeIngest consumer', () => {
       expect.anything(),
       expect.anything(),
       'ff-old',
-      expect.anything()
+      expect.anything(),
+      { origin: 'connector' }
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
@@ -701,7 +708,8 @@ describe('driveLakeIngest consumer', () => {
       expect.anything(),
       expect.anything(),
       'ff-old',
-      expect.anything()
+      expect.anything(),
+      { origin: 'connector' }
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
@@ -795,8 +803,12 @@ describe('driveLakeIngest consumer', () => {
 
     // Both vanished copies unpicked exactly once each, by the genuine-delete pass only.
     expect(h.removeFileFromLake).toHaveBeenCalledTimes(2);
-    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-a', expect.anything());
-    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-b', expect.anything());
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-a', expect.anything(), {
+      origin: 'connector',
+    });
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-b', expect.anything(), {
+      origin: 'connector',
+    });
     // A genuine delete is membership-only - the owner keeps their copy, nothing is deleted outright.
     expect(h.deleteFabFile).not.toHaveBeenCalled();
   });
@@ -869,7 +881,13 @@ describe('driveLakeIngest consumer', () => {
     await run();
 
     expect(h.removeFileFromLake).toHaveBeenCalledTimes(1);
-    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-d2', expect.anything());
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'ff-d2',
+      expect.anything(),
+      { origin: 'connector' }
+    );
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
     expect(h.batchCreate).not.toHaveBeenCalled();
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
@@ -1803,7 +1821,8 @@ describe('driveLakeIngest consumer', () => {
       expect.anything(),
       expect.anything(),
       'ff-old',
-      expect.anything()
+      expect.anything(),
+      { origin: 'connector' }
     );
     expect(h.upload).toHaveBeenCalledTimes(1);
   });
@@ -2099,7 +2118,8 @@ describe('driveLakeIngest consumer', () => {
         expect.anything(),
         expect.anything(),
         'ff-d1',
-        expect.anything()
+        expect.anything(),
+        { origin: 'connector' }
       );
       expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
         fullWalk: false,
@@ -2127,7 +2147,8 @@ describe('driveLakeIngest consumer', () => {
         expect.anything(),
         expect.anything(),
         'ff-d1',
-        expect.anything()
+        expect.anything(),
+        { origin: 'connector' }
       );
     });
 
@@ -2209,13 +2230,15 @@ describe('driveLakeIngest consumer', () => {
         expect.anything(),
         expect.anything(),
         'ff-older',
-        expect.anything()
+        expect.anything(),
+        { origin: 'connector' }
       );
       expect(h.removeFileFromLake).toHaveBeenCalledWith(
         expect.anything(),
         expect.anything(),
         'ff-newest',
-        expect.anything()
+        expect.anything(),
+        { origin: 'connector' }
       );
     });
 

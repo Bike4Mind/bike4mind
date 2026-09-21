@@ -39,6 +39,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 // actor breaks on this door.
 vi.mock('@bike4mind/database', () => ({
   lakeConfigChangeEventRepository: { record: h.recordConfigChange },
+  lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   dataLakeRepository: {
     findByDatalakeTag: h.findByDatalakeTag,
     find: vi.fn().mockResolvedValue([]),
