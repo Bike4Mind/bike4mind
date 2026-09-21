@@ -58,6 +58,43 @@ describe('addFileToLake', () => {
     );
     expect(adapters.db.fabFiles.pushTagsByFabFileId).not.toHaveBeenCalled();
   });
+
+  describe('membership event (#3052)', () => {
+    const makeAuditedAdapters = (inserted = 1) => ({
+      db: {
+        fabFiles: { pushTagsByFabFileId: vi.fn().mockResolvedValue(inserted) },
+        lakeMembershipChangeEvents: { record: vi.fn().mockResolvedValue({}) },
+      },
+    });
+
+    it('records an `added` event, defaulting to `person` origin', async () => {
+      const adapters = makeAuditedAdapters();
+
+      await addFileToLake(owner, lake(), 'f1', adapters);
+
+      expect(adapters.db.lakeMembershipChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'f1', action: 'added', origin: 'person' })
+      );
+    });
+
+    it('records `connector` when the call site says so - e.g. the Drive ingest handler', async () => {
+      const adapters = makeAuditedAdapters();
+
+      await addFileToLake(owner, lake(), 'f1', adapters, { origin: 'connector' });
+
+      expect(adapters.db.lakeMembershipChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ origin: 'connector' })
+      );
+    });
+
+    it('records nothing for a no-op re-add of an existing member', async () => {
+      const adapters = makeAuditedAdapters(0);
+
+      await addFileToLake(owner, lake(), 'f1', adapters);
+
+      expect(adapters.db.lakeMembershipChangeEvents.record).not.toHaveBeenCalled();
+    });
+  });
 });
 
 // The membership half of removeFileFromDataLake is covered end to end through that entry point
@@ -250,5 +287,49 @@ describe('removeFileFromLake', () => {
       /not found in this data lake/i
     );
     expect(adapters.db.fabFiles.pullTagsByFabFileId).not.toHaveBeenCalled();
+  });
+
+  describe('membership event (#3052)', () => {
+    const makeAuditedAdapters = () => ({
+      db: {
+        fabFiles: {
+          findById: vi.fn().mockResolvedValue(fileInLake),
+          pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        },
+        lakeMembershipChangeEvents: { record: vi.fn().mockResolvedValue({}) },
+      },
+    });
+
+    it('records a `removed` event, defaulting to `person` origin, after the pull lands', async () => {
+      const adapters = makeAuditedAdapters();
+
+      await removeFileFromLake(owner, lake(), 'f1', adapters);
+
+      expect(adapters.db.lakeMembershipChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'f1', action: 'removed', origin: 'person' })
+      );
+    });
+
+    it('records `connector` when the call site says so', async () => {
+      const adapters = makeAuditedAdapters();
+
+      await removeFileFromLake(owner, lake(), 'f1', adapters, { origin: 'connector' });
+
+      expect(adapters.db.lakeMembershipChangeEvents.record).toHaveBeenCalledWith(
+        expect.objectContaining({ origin: 'connector' })
+      );
+    });
+
+    it('never records when the member refusal throws first', async () => {
+      const adapters = {
+        db: {
+          fabFiles: { findById: vi.fn().mockResolvedValue(null), pullTagsByFabFileId: vi.fn() },
+          lakeMembershipChangeEvents: { record: vi.fn().mockResolvedValue({}) },
+        },
+      };
+
+      await expect(removeFileFromLake(owner, lake(), 'f1', adapters)).rejects.toThrow(/not found/i);
+      expect(adapters.db.lakeMembershipChangeEvents.record).not.toHaveBeenCalled();
+    });
   });
 });

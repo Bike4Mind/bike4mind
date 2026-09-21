@@ -29,6 +29,7 @@ import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
@@ -172,6 +173,7 @@ const handler = baseApi()
               // `lakeConfigAuditDb` carries `adminSettings`, which is also what the admission
               // contract's lever resolves from; only `scopedSettings` is additional here.
               ...lakeConfigAuditDb,
+              ...lakeMembershipAuditDb,
               scopedSettings: scopedSettingsRepository,
             },
             // `reconcileLakeTags` re-gates every lake this write JOINS, so its actor has to stay as

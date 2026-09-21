@@ -21,23 +21,28 @@ import type { MembershipActor, MembershipLake } from '../dataLakeService/lakeMem
 import { findPrefixArmChanges, loadPrefixArmCandidateLakes } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
+import {
+  recordLakeMembershipChange,
+  type LakeMembershipAuditAdapters,
+} from '../dataLakeService/recordLakeMembershipChange';
 import { assertLakeAdmission } from '../dataLakeService/lakeAdmissionGate';
 
-interface ReconcileLakeTagsAdapters extends LakeConfigAuditAdapters {
-  db: LakeConfigAuditAdapters['db'] & {
-    fabFiles: Pick<IFabFileRepository, 'findById' | 'computeDataLakeStats'>;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
-    // Grant-aware manage gates: consult a lake's active grants so a curator / org-admin /
-    // transferred owner is honored (and a superseded creator is not). Optional -> absent degrades
-    // to createdByUserId + org rung (grant supersession not honored on this door then). Batched via
-    // makeLakeGrantResolver so the many per-lake gates below cost one query.
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
-    // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
-    // caller cannot quietly opt this door out of the contract; `scopedSettings` is optional and its
-    // absence just resolves the lever at its platform value.
-    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
-  };
+interface ReconcileLakeTagsAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] &
+    LakeMembershipAuditAdapters['db'] & {
+      fabFiles: Pick<IFabFileRepository, 'findById' | 'computeDataLakeStats'>;
+      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+      // Grant-aware manage gates: consult a lake's active grants so a curator / org-admin /
+      // transferred owner is honored (and a superseded creator is not). Optional -> absent degrades
+      // to createdByUserId + org rung (grant supersession not honored on this door then). Batched via
+      // makeLakeGrantResolver so the many per-lake gates below cost one query.
+      dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listActiveByLakes'>;
+      // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
+      // caller cannot quietly opt this door out of the contract; `scopedSettings` is optional and its
+      // absence just resolves the lever at its platform value.
+      adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+      scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+    };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
   /**
@@ -387,17 +392,29 @@ export const reconcileLakeTags = async (
   return {
     tagsToPersist: departingPrefixTags.length > 0 ? [...reconciledTags, ...departingPrefixTags] : reconciledTags,
     commit: async () => {
-      // Joins need no write here: the caller has already persisted the canonical meta-tag (or,
-      // for a prefix-arm join, the qualifying content tag) as part of `tagsToPersist`, and their
-      // gate (where one applies) ran above, before that write. They still need stats.
+      // Joins need no MEMBERSHIP write here: the caller has already persisted the canonical
+      // meta-tag (or, for a prefix-arm join, the qualifying content tag) as part of
+      // `tagsToPersist`, and their gate (where one applies) ran above, before that write. The
+      // membership EVENT still has to be recorded here, though - this is the one place that
+      // knows the write actually landed and which lakes it joined; nothing upstream of `commit()`
+      // can see that.
       const recomputed = new Set<string>();
       for (const lake of joins) {
         await recomputeLakeStats(lake, { db, logger }, { actor });
+        await recordLakeMembershipChange({ actor, lake, fabFileId, action: 'added', origin: 'person' }, { db, logger });
         recomputed.add(lake.id);
       }
       // An unmanaged prefix-arm join: stats only, activation stays gated - see the comment above.
+      // Still real membership (the read-side predicate grants it on the tag alone), so it is
+      // still recorded - only the activation side effect is withheld.
       for (const lake of statsOnlyJoins) {
-        if (!recomputed.has(lake.id)) await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
+        if (!recomputed.has(lake.id)) {
+          await recomputeLakeStats(lake, { db, logger }, { skipActivation: true });
+          await recordLakeMembershipChange(
+            { actor, lake, fabFileId, action: 'added', origin: 'person' },
+            { db, logger }
+          );
+        }
       }
     },
   };

@@ -5,11 +5,23 @@ import type {
   IDataLakeDocument,
   IFabFileDocument,
   IFabFileRepository,
+  LakeMembershipChangeOrigin,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { type ManageActor } from './manageRule';
 import { resolveCanManageLake } from './authorizeLakeManage';
+import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
+
+/**
+ * Who drove this membership write - see `LakeMembershipChangeOrigin`'s own doc comment for why
+ * it cannot be inferred from the actor. Defaults to `'person'`: every membership-write entry
+ * point today is an interactive door except the Drive connector sync, which passes `'connector'`
+ * explicitly (see `driveLakeIngest.ts`).
+ */
+export interface MembershipOriginOptions {
+  origin?: LakeMembershipChangeOrigin;
+}
 
 /** The acting principal for a membership write - resolved from auth, never from the body. */
 export type MembershipActor = ManageActor;
@@ -26,16 +38,16 @@ export type MembershipLake = Pick<
   'id' | 'name' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId' | 'organizationId' | 'requiredPassageTokenTarget'
 >;
 
-interface RemoveMembershipAdapters {
-  db: {
+interface RemoveMembershipAdapters extends LakeMembershipAuditAdapters {
+  db: LakeMembershipAuditAdapters['db'] & {
     fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId'>;
     // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
 }
 
-interface AddMembershipAdapters {
-  db: {
+interface AddMembershipAdapters extends LakeMembershipAuditAdapters {
+  db: LakeMembershipAuditAdapters['db'] & {
     fabFiles: Pick<IFabFileRepository, 'pushTagsByFabFileId'>;
     dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
   };
@@ -154,7 +166,8 @@ export const removeFileFromLake = async (
   actor: MembershipActor,
   lake: MembershipLake,
   fabFileId: string,
-  { db }: RemoveMembershipAdapters
+  { db, logger }: RemoveMembershipAdapters,
+  { origin = 'person' }: MembershipOriginOptions = {}
 ): Promise<{ contentTags: { name: string; strength: number }[] }> => {
   if (!(await resolveCanManageLake(lake, actor, { db }))) {
     throw new BadRequestError('You do not have permission to remove files from this data lake');
@@ -182,6 +195,9 @@ export const removeFileFromLake = async (
   // One atomic $pull for both signals. Two writes would leave a window - and on a crash, a
   // permanent state - where the meta-tag is gone but a prefixed tag still matches this lake.
   await db.fabFiles.pullTagsByFabFileId(file.id, tagsToPull);
+  // Recorded AFTER the write lands, matching the auto-activate config event: the membership
+  // change is the artifact, and it has already happened by the time this runs.
+  await recordLakeMembershipChange({ actor, lake, fabFileId: file.id, action: 'removed', origin }, { db, logger });
   return { contentTags };
 };
 
@@ -202,12 +218,19 @@ export const addFileToLake = async (
   actor: MembershipActor,
   lake: MembershipLake,
   fabFileId: string,
-  { db }: AddMembershipAdapters
+  { db, logger }: AddMembershipAdapters,
+  { origin = 'person' }: MembershipOriginOptions = {}
 ): Promise<void> => {
   if (!(await resolveCanManageLake(lake, actor, { db }))) {
     throw new BadRequestError('You do not have permission to add files to this data lake');
   }
   assertLakeWritable(lake);
 
-  await db.fabFiles.pushTagsByFabFileId(fabFileId, [lake.datalakeTag], DATALAKE_TAG_STRENGTH);
+  const inserted = await db.fabFiles.pushTagsByFabFileId(fabFileId, [lake.datalakeTag], DATALAKE_TAG_STRENGTH);
+  // Idempotent by construction (`pushTagsByFabFileId` filters an already-present name out of its
+  // update), so a no-op re-add of an existing member records nothing - matching
+  // `recordLakeConfigChange`'s own "no real change, no row" rule.
+  if (inserted > 0) {
+    await recordLakeMembershipChange({ actor, lake, fabFileId, action: 'added', origin }, { db, logger });
+  }
 };

@@ -17,6 +17,7 @@ export * from './DataLakeResearchConfigModel';
 export * from './DataLakeResearchRunModel';
 export * from './LakeAccessQueryTextModel';
 export * from './LakeConfigChangeEventModel';
+export * from './LakeMembershipChangeEventModel';
 export * from './LakeMembershipDecisionModel';
 export * from './LakeMembershipRemovalModel';
 export * from './LatticeModel';
