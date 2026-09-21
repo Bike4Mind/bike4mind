@@ -17,15 +17,15 @@ import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/servi
 import { isReadOnlyTool } from '../config/toolSafety.js';
 import { reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildSystemPrompt } from '../core/prompts';
-import { generateCliTools, PermissionManager, type AgentContext, requireApiUrl, loadContextFiles } from '../utils';
+import { generateCliTools, PermissionManager, type AgentContext, requireApiUrl } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
+import { buildProjectAgentStore, loadProjectContext } from '../bootstrap/projectStores.js';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { createSseBackend } from '../bootstrap/sseTransport.js';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { ApiClient } from '../auth/ApiClient';
 import { logger } from '../utils/Logger';
-import { AgentStore } from '../agents/AgentStore.js';
 import { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
 import { createAgentDelegateTool } from '../agents/delegateTool.js';
@@ -340,16 +340,17 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       additionalDirectories
     );
 
-    // Initialize MCP, agent store, and context files in parallel (all independent)
+    // Initialize MCP, agent store, and context files in parallel (all independent).
+    // Folder-trust gate (shared with the interactive bootstrap via projectStores):
+    // an untrusted project contributes no agents/skills and no context file.
     const mcpManager = new McpManager(config);
-    const projectConfigDir = configStore.getProjectConfigDir();
     const builtinAgentsDir = new URL('../agents/defaults/', import.meta.url).pathname;
-    const agentStore = new AgentStore(builtinAgentsDir, projectConfigDir ?? process.cwd());
+    const agentStore = buildProjectAgentStore(builtinAgentsDir, configStore);
 
     const [, , contextResult] = await Promise.all([
       mcpManager.initialize(),
       agentStore.loadAgents(),
-      loadContextFiles(projectConfigDir),
+      loadProjectContext(configStore),
     ]);
 
     const mcpTools = mcpManager.getTools();

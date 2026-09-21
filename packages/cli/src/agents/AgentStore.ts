@@ -240,9 +240,10 @@ export class AgentStore {
   /**
    * Whether the project root is trusted. When false, project agent directories
    * are NOT scanned (folder-trust gate) - only built-in and global agents load.
-   * Defaults true so existing callers/tests are unaffected until set otherwise.
+   * Defaults FALSE (fail-safe): a caller that forgets `setProjectTrusted` gets
+   * the safe posture, never a silent trust of repo agents.
    */
-  private projectTrusted = true;
+  private projectTrusted = false;
 
   /**
    * Creates a new AgentStore

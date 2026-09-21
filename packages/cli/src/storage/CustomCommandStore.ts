@@ -26,9 +26,10 @@ export class CustomCommandStore {
   /**
    * Whether the project root is trusted. When false, project command/skill
    * directories are NOT scanned (folder-trust gate) - only global and remote
-   * skills load. Defaults true so existing callers/tests are unaffected.
+   * skills load. Defaults FALSE (fail-safe): a caller that forgets
+   * `setProjectTrusted` gets the safe posture, never a silent trust of repo skills.
    */
-  private projectTrusted = true;
+  private projectTrusted = false;
 
   constructor(projectRoot?: string, options: CustomCommandStoreOptions = {}) {
     this.remoteSource = options.remoteSource;
