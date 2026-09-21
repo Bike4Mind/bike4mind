@@ -288,6 +288,118 @@ describe('ImageEditService.process model dispatch', () => {
   });
 });
 
+describe('ImageEditService.process reference images (#2744)', () => {
+  const editSpy = vi.fn();
+  const cleanImage = (id: string) => ({
+    id,
+    fileName: `${id}.png`,
+    mimeType: 'image/png',
+    filePath: `fab/${id}.png`,
+    moderationStatus: 'clean',
+  });
+
+  const run = async (
+    bodyOverride: Record<string, unknown>,
+    opts: { accessible?: Record<string, unknown>; model?: string } = {}
+  ) => {
+    const accessible = opts.accessible ?? { a: cleanImage('a'), b: cleanImage('b') };
+    const findAccessibleInIds = vi.fn(async (ids: string[]) => (ids || []).map(id => accessible[id]).filter(Boolean));
+    const quest = {
+      id: 'quest1',
+      sessionId: 'session1',
+      status: undefined as string | undefined,
+      type: 'message',
+      reply: undefined as string | undefined,
+      replies: [],
+      images: [],
+    };
+    const service = new ImageEditService({
+      db: {
+        sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
+        quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
+        users: { findById: vi.fn(async () => richUser) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: {
+          findAllInIds: vi.fn(async () => []),
+          findAccessibleInIds,
+        },
+      },
+      startImageEditProcess: vi.fn(),
+      deleteFabFile: vi.fn(),
+      wsHttpsUrl: 'wss://example.invalid',
+      abilityGetter: vi.fn(),
+      logEvent: vi.fn(),
+      storage: {} as never,
+      fabFileStorage: { getSignedUrl: vi.fn(async (path: string) => `https://example.invalid/${path}`) } as never,
+    } as never);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (service as any).tokenizer = {
+      encodeTokens: vi.fn(async () => [1, 2, 3]),
+      decodeTokens: vi.fn(async () => 'make it blue'),
+    };
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'make it blue',
+        model: opts.model ?? ImageModels.GPT_IMAGE_1_5,
+        image: 'https://example.invalid/source.png',
+        fabFileIds: [],
+        ...bodyOverride,
+      } as never,
+      logger: silentLogger,
+    });
+    return { quest, findAccessibleInIds };
+  };
+
+  beforeEach(() => {
+    editSpy.mockReset();
+    editSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+    vi.mocked(aiImageService).mockClear();
+    vi.mocked(aiImageService).mockReturnValue({ edit: editSpy } as never);
+    vi.mocked(getAvailableModels).mockResolvedValue([]);
+  });
+
+  it('forwards signed anchor URLs in the caller-supplied order', async () => {
+    await run({ referenceImageFabFileIds: ['b', 'a'] });
+
+    expect(editSpy.mock.calls[0][2].referenceImages).toEqual([
+      'https://example.invalid/fab/b.png',
+      'https://example.invalid/fab/a.png',
+    ]);
+  });
+
+  it('scopes the anchor lookup to the caller, unlike the legacy unscoped mask lookup', async () => {
+    // findAllInIds (still used for the mask) ignores the principal entirely; anchors must
+    // not inherit that, or naming an id would read any user's file.
+    const { findAccessibleInIds } = await run({ referenceImageFabFileIds: ['a'] });
+
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['a'], { userId: 'user1', userGroups: undefined }, undefined);
+  });
+
+  it('fails the quest when an anchor is not accessible, rather than rendering fewer', async () => {
+    const { quest } = await run({ referenceImageFabFileIds: ['a', 'ghost'] });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('ghost');
+  });
+
+  it('sends no anchors to a provider that cannot carry them', async () => {
+    await run({ referenceImageFabFileIds: ['a'] }, { model: ImageModels.GEMINI_2_5_FLASH_IMAGE });
+
+    expect(vi.mocked(aiImageService).mock.calls[0][0]).toBe('gemini');
+    expect(editSpy.mock.calls[0][2]).not.toHaveProperty('referenceImages');
+  });
+
+  it('sends an empty anchor list when none are requested', async () => {
+    await run({});
+
+    expect(editSpy.mock.calls[0][2].referenceImages).toEqual([]);
+  });
+});
+
 describe('ImageEditService.validateUserCredits (per-member cap)', () => {
   beforeEach(() => {
     vi.mocked(getAvailableModels).mockResolvedValue([kontextPro, unsupportedImageModel]);
