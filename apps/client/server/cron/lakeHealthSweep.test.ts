@@ -1,13 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const mockFind = vi.fn();
+const mockFindDue = vi.fn();
+const mockHasMoreDue = vi.fn();
 const mockMarkHealthChecked = vi.fn();
 const mockUpsertSnapshot = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   dataLakeRepository: {
-    find: (...args: unknown[]) => mockFind(...args),
+    findDueForHealthCheck: (...args: unknown[]) => mockFindDue(...args),
+    hasMoreDueForHealthCheck: (...args: unknown[]) => mockHasMoreDue(...args),
     markHealthChecked: (...args: unknown[]) => mockMarkHealthChecked(...args),
   },
   fabFileRepository: {},
@@ -89,7 +91,8 @@ describe('lakeHealthSweep cron', () => {
     // never consumes (e.g. because pagination stopped after one page) would otherwise leak that
     // queued value into the next test - clearAllMocks only clears call history, not the queue.
     vi.resetAllMocks();
-    mockFind.mockResolvedValue([]);
+    mockFindDue.mockResolvedValue([]);
+    mockHasMoreDue.mockResolvedValue(false);
     mockComputeLakeHealth.mockResolvedValue(healthResult());
     mockUpsertSnapshot.mockResolvedValue(undefined);
     mockMarkHealthChecked.mockResolvedValue(undefined);
@@ -101,20 +104,27 @@ describe('lakeHealthSweep cron', () => {
     expect(mockComputeLakeHealth).not.toHaveBeenCalled();
   });
 
-  it('scopes the scan to active lakes only', async () => {
+  it('starts the scan with no cursor and a page-sized limit', async () => {
     await handler();
-    const [filter] = mockFind.mock.calls[0];
-    expect(filter.status).toBe('active');
+    expect(mockFindDue.mock.calls[0][0]).toMatchObject({ cursor: null, limit: 100 });
   });
 
-  it('sorts the scan by staleness (oldest/never-checked lastHealthCheckedAt first), not by _id', async () => {
+  it('excludes its own stamp from the candidate set, so a lake it graded cannot be regraded', async () => {
+    // The scan sorts on the field the run mutates as it walks, so a lake already graded this run
+    // re-enters the candidate set behind an older cursor unless the query excludes this exact
+    // stamp. Same Date the run passes to markHealthChecked, or the exclusion misses.
+    mockFindDue.mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+
     await handler();
-    const [, options] = mockFind.mock.calls[0];
-    expect(options.sort).toEqual({ lastHealthCheckedAt: 1, _id: 1 });
+
+    const stamped = mockMarkHealthChecked.mock.calls[0][1];
+    for (const [params] of mockFindDue.mock.calls) {
+      expect(params.excludeCheckedAt).toBe(stamped);
+    }
   });
 
   it('computes and persists health for each active lake, then stamps it as checked', async () => {
-    mockFind.mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+    mockFindDue.mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
 
     const result = await handler();
 
@@ -132,7 +142,7 @@ describe('lakeHealthSweep cron', () => {
   });
 
   it('isolates a per-lake failure so the rest of the run still completes', async () => {
-    mockFind.mockResolvedValueOnce([lake({ id: 'lake-fail' }), lake({ id: 'lake-ok' })]).mockResolvedValueOnce([]);
+    mockFindDue.mockResolvedValueOnce([lake({ id: 'lake-fail' }), lake({ id: 'lake-ok' })]).mockResolvedValueOnce([]);
     mockComputeLakeHealth.mockRejectedValueOnce(new Error('boom')).mockResolvedValue(healthResult());
 
     const result = await handler();
@@ -142,7 +152,7 @@ describe('lakeHealthSweep cron', () => {
   });
 
   it('stamps lastHealthCheckedAt even for a lake whose grading failed, so it rotates to the back next run', async () => {
-    mockFind.mockResolvedValueOnce([lake({ id: 'lake-fail' })]).mockResolvedValueOnce([]);
+    mockFindDue.mockResolvedValueOnce([lake({ id: 'lake-fail' })]).mockResolvedValueOnce([]);
     mockComputeLakeHealth.mockRejectedValueOnce(new Error('boom'));
 
     const result = await handler();
@@ -160,25 +170,48 @@ describe('lakeHealthSweep cron', () => {
     const firstPage = Array.from({ length: 100 }, (_, i) =>
       lake({ id: `lake-${i + 1}`, lastHealthCheckedAt: checkedAt })
     );
-    mockFind
+    mockFindDue
       .mockResolvedValueOnce(firstPage)
       .mockResolvedValueOnce([lake({ id: 'lake-101', lastHealthCheckedAt: null })]);
 
     const result = await handler();
 
     expect(result.scanned).toBe(101);
-    expect(mockFind).toHaveBeenCalledTimes(2);
+    expect(mockFindDue).toHaveBeenCalledTimes(2);
     // Second page's keyset cursor is (lastHealthCheckedAt, _id) of the first page's last row, not
     // just `_id` - the scan order is staleness, so the cursor has to track that field too.
-    const [secondFilter] = mockFind.mock.calls[1];
-    expect(secondFilter.$or).toEqual([
-      { lastHealthCheckedAt: { $gt: checkedAt } },
-      { lastHealthCheckedAt: checkedAt, _id: { $gt: 'lake-100' } },
-    ]);
+    expect(mockFindDue.mock.calls[1][0].cursor).toEqual({ lastHealthCheckedAt: checkedAt, id: 'lake-100' });
+  });
+
+  it('caps a run at MAX_LAKES_PER_RUN and reports the deferred remainder as truncated', async () => {
+    // 20 full pages of 100 is the cap exactly; the remainder probe is what says whether anything
+    // was actually left behind.
+    const page = Array.from({ length: 100 }, (_, i) => lake({ id: `lake-${i}` }));
+    mockFindDue.mockResolvedValue(page);
+    mockHasMoreDue.mockResolvedValue(true);
+
+    const result = await handler();
+
+    expect(result.scanned).toBe(2000);
+    expect(result.truncated).toBe(true);
+    expect(mockFindDue).toHaveBeenCalledTimes(20);
+  });
+
+  it('does not report truncated when the fleet size is an exact multiple of the cap', async () => {
+    // The cap stopped the loop and the last page was full, but nothing is left over - reporting a
+    // deferred remainder here would be a standing false alarm at any exact multiple of the cap.
+    const page = Array.from({ length: 100 }, (_, i) => lake({ id: `lake-${i}` }));
+    mockFindDue.mockResolvedValue(page);
+    mockHasMoreDue.mockResolvedValue(false);
+
+    const result = await handler();
+
+    expect(result.scanned).toBe(2000);
+    expect(result.truncated).toBe(false);
   });
 
   it('emits the run metric even when the scan itself throws', async () => {
-    mockFind.mockRejectedValue(new Error('cannot reach primary'));
+    mockFindDue.mockRejectedValue(new Error('cannot reach primary'));
 
     await expect(handler()).rejects.toThrow('cannot reach primary');
 

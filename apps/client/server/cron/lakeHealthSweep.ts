@@ -25,7 +25,10 @@
  * regrade the same prefix forever: whichever lakes were graded sort to the back next run, and the
  * previously-uncapped tail sorts to the front. No persisted cursor needed - the ordering itself
  * self-drains, and a run that dies mid-page loses nothing but that page's progress (see
- * `IDataLake.lastHealthCheckedAt`).
+ * `IDataLake.lastHealthCheckedAt`). Because that makes the scan sort on a field the run itself
+ * mutates mid-flight, the page query has to exclude this run's own stamps and cross the
+ * never-checked group explicitly - both live in `dataLakeRepository.findDueForHealthCheck`, which
+ * documents why, and both are proven against a real Mongo rather than a mocked `find`.
  *
  * Idempotency: `dataLakeHealthSnapshotRepository.upsertSnapshot` upserts on (lakeId, the UTC
  * calendar day), so a retried or re-run sweep overwrites that day's row instead of accumulating
@@ -88,7 +91,7 @@ const SNAPSHOT_FIELDS = {
   organizationId: 1,
   requiredPassageTokenTarget: 1,
   // Subpaths, never the whole report: `storedInconsistency` reads only these scalars and never
-  // `findings`, and DataLakeRepository.find projects `inconsistencyReport` away by default
+  // `findings`, and DataLakeRepository's own list projection drops `inconsistencyReport` by default
   // (LIST_PROJECTION_FIELDS) precisely so that array does not ride along on a fleet-wide scan.
   'inconsistencyReport.sampled': 1,
   'inconsistencyReport.memberSampled': 1,
@@ -180,30 +183,24 @@ export async function handler() {
   // Keyset cursor on the sort key itself (lastHealthCheckedAt, _id), not just `_id` - the scan
   // order is staleness, not insertion order, so the cursor has to be too. Null cursor = first page.
   let cursor: { lastHealthCheckedAt: Date | null; id: string } | null = null;
-  // Set only when a page came back FULL and the cap is what stopped the loop - `scanned >= cap`
-  // alone cannot tell "cap hit with lakes left over" from "the last lake was the 2000th".
-  let truncated = false;
+  let hitCap = false;
 
-  while (scanned < MAX_LAKES_PER_RUN) {
-    const pageLimit = Math.min(PAGE_SIZE, MAX_LAKES_PER_RUN - scanned);
-    const filter: Record<string, unknown> = { status: 'active' };
-    if (cursor) {
-      // Standard two-field keyset "greater than (a, b)": either the staleness key moved past the
-      // cursor's, or it's tied and `_id` breaks the tie. `$gt: null` matches only documents with a
-      // real (non-null) value - see BSON comparison order - which is exactly "past every
-      // never-checked lake" when the cursor itself was one of them.
-      filter.$or = [
-        { lastHealthCheckedAt: { $gt: cursor.lastHealthCheckedAt } },
-        { lastHealthCheckedAt: cursor.lastHealthCheckedAt, _id: { $gt: cursor.id } },
-      ];
+  while (true) {
+    if (scanned >= MAX_LAKES_PER_RUN) {
+      hitCap = true;
+      break;
     }
+    const pageLimit = Math.min(PAGE_SIZE, MAX_LAKES_PER_RUN - scanned);
 
     // Sequential pages are the point: each page's cursor depends on the previous one, and paging
-    // exists to avoid holding every active lake in memory at once.
-    const lakes = (await dataLakeRepository.find(filter, {
-      sort: { lastHealthCheckedAt: 1, _id: 1 },
+    // exists to avoid holding every active lake in memory at once. The cursor is still what
+    // guarantees forward progress - `computedAt` alone would not, since a lake whose stamp write
+    // fails stays a candidate and would otherwise be re-fetched on every page of the run.
+    const lakes = (await dataLakeRepository.findDueForHealthCheck({
+      cursor,
       limit: pageLimit,
-      ...SNAPSHOT_FIELDS,
+      excludeCheckedAt: computedAt,
+      projection: SNAPSHOT_FIELDS,
     })) as unknown as SweepLake[];
 
     if (lakes.length === 0) break;
@@ -238,8 +235,12 @@ export async function handler() {
     // Keep paging until a page comes back short of what was asked for - a full page always
     // implies "there may be more", so this only stops on a genuinely final (or empty) page.
     if (lakes.length < pageLimit) break;
-    truncated = scanned >= MAX_LAKES_PER_RUN;
   }
+
+  // `scanned >= cap` cannot tell "cap hit with lakes left over" from "the last lake WAS the
+  // 2000th", because at an exact multiple of the cap the final page is full too. One bounded,
+  // index-served existence probe answers it rather than warning about a remainder that is not there.
+  const truncated = hitCap && (await dataLakeRepository.hasMoreDueForHealthCheck(cursor, computedAt));
 
   if (truncated) {
     logger.warn('[LakeHealthSweep] Hit the per-run lake cap; the staler remainder is picked up next run', {

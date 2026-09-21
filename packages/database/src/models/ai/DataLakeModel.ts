@@ -174,8 +174,10 @@ DataLakeSchema.index({ organizationId: 1, slug: 1 }, { unique: true });
 // creator-OR-org scope rule is an OR, which no single Mongo unique index key can express.
 DataLakeSchema.index({ createdByUserId: 1, fileTagPrefix: 1 }, { unique: true });
 // Serves the lake health sweep's staleness-ordered scan (status: 'active', sorted oldest-checked
-// first) - mirrors OrgGoogleDriveConnectionModel's { enabled: 1, status: 1, lastPolledAt: 1 }.
-DataLakeSchema.index({ status: 1, lastHealthCheckedAt: 1 });
+// first). `_id` is a key rather than just the query's tiebreak: the scan pages by (staleness, _id),
+// and an index ending at lastHealthCheckedAt cannot satisfy that sort, so the planner would fall
+// back to a blocking top-k sort over every active lake on every page of a fleet-wide scan.
+DataLakeSchema.index({ status: 1, lastHealthCheckedAt: 1, _id: 1 });
 
 export const DataLakeModel =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
@@ -332,6 +334,53 @@ const orgGrantArms = (orgGrantedLakes?: Record<string, string[]>): Record<string
 
 const LIST_PROJECTION = '-inconsistencyReport';
 const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
+
+/** Keyset position in a staleness-ordered health-check scan: the sort key, then the `_id` tiebreak. */
+export type HealthCheckScanCursor = { lastHealthCheckedAt: Date | null; id: string };
+
+type DueForHealthCheckParams = {
+  cursor: HealthCheckScanCursor | null;
+  limit: number;
+  /** Stamp the calling run writes as it grades, so its own writes stay out of the candidate set. */
+  excludeCheckedAt: Date;
+  projection: Record<string, 0 | 1>;
+};
+
+/** Matches the { status, lastHealthCheckedAt, _id } index, so no page pays a blocking sort. */
+const DUE_FOR_HEALTH_CHECK_SORT = { lastHealthCheckedAt: 1, _id: 1 } as const;
+
+/**
+ * Candidate filter for one page of the health sweep's staleness-ordered scan.
+ *
+ * Two things a textbook keyset predicate gets wrong here, both of them because the scan's sort key
+ * is the very field the caller stamps while the scan is still in flight:
+ *
+ * 1. A lake this run already graded carries `lastHealthCheckedAt = excludeCheckedAt`, which is
+ *    newer than any cursor built from an older page, so it re-enters the candidate set and gets
+ *    graded a second time. The `$ne` drops exactly this run's own writes; it still admits null and
+ *    missing, so never-checked lakes qualify.
+ * 2. Mongo's comparison operators are type-bracketed: `$gt: null` matches NOTHING, not every dated
+ *    document. A cursor sitting on a never-checked lake therefore needs an explicit "leave the null
+ *    group" arm, or the scan ends the moment the nulls run out and every dated lake is skipped.
+ */
+function buildDueForHealthCheckFilter(
+  cursor: HealthCheckScanCursor | null,
+  excludeCheckedAt: Date
+): Record<string, unknown> {
+  const filter: Record<string, unknown> = {
+    status: 'active',
+    lastHealthCheckedAt: { $ne: excludeCheckedAt },
+  };
+  if (!cursor) return filter;
+  filter.$or =
+    cursor.lastHealthCheckedAt === null
+      ? [{ lastHealthCheckedAt: null, _id: { $gt: cursor.id } }, { lastHealthCheckedAt: { $ne: null } }]
+      : [
+          { lastHealthCheckedAt: { $gt: cursor.lastHealthCheckedAt } },
+          { lastHealthCheckedAt: cursor.lastHealthCheckedAt, _id: { $gt: cursor.id } },
+        ];
+  return filter;
+}
 
 /**
  * The pure filter build behind `findAccessible` - see that method's docblock for what the arms
@@ -1078,6 +1127,24 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
 
   async markHealthChecked(id: string, at: Date): Promise<void> {
     await this.dataLakeModel.updateOne({ _id: id }, { $set: { lastHealthCheckedAt: at } });
+  }
+
+  async findDueForHealthCheck(params: DueForHealthCheckParams): Promise<IDataLakeDocument[]> {
+    const { cursor, limit, excludeCheckedAt, projection } = params;
+    const docs = await this.dataLakeModel
+      .find(buildDueForHealthCheckFilter(cursor, excludeCheckedAt), projection)
+      .sort(DUE_FOR_HEALTH_CHECK_SORT)
+      .limit(limit);
+    return docs.map(d => d.toJSON() as IDataLakeDocument);
+  }
+
+  /** Whether any candidate remains behind `cursor` - distinguishes a real remainder from a run
+   * whose last page happened to land exactly on the cap. */
+  async hasMoreDueForHealthCheck(cursor: HealthCheckScanCursor | null, excludeCheckedAt: Date): Promise<boolean> {
+    const doc = await this.dataLakeModel
+      .findOne(buildDueForHealthCheckFilter(cursor, excludeCheckedAt), { _id: 1 })
+      .sort(DUE_FOR_HEALTH_CHECK_SORT);
+    return !!doc;
   }
 }
 

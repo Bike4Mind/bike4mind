@@ -1,15 +1,18 @@
 import { describe, it, expect } from 'vitest';
 import type { IDataLake } from '@bike4mind/common';
-import { dataLakeRepository } from './DataLakeModel';
+import { dataLakeRepository, type HealthCheckScanCursor } from './DataLakeModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 /**
- * Proves the fairness fix for #3050: `lakeHealthSweep` used to page `status: 'active'` lakes by
- * `_id` with a hard per-run cap and no persisted cursor, so above the cap the same first-N lakes
- * (by `_id`) were regraded every run and the tail was never snapshotted at all. The fix orders the
- * scan by `lastHealthCheckedAt` (oldest/never-checked first) and stamps it on every lake a run
- * attempts, so the cap self-drains. This exercises the exact query/stamp shape `lakeHealthSweep.ts`
- * uses - real Mongo, not mocked, since the behavior under test IS the sort/filter doing the work.
+ * The scan `lakeHealthSweep` runs over `status: 'active'` lakes, against real Mongo rather than a
+ * mocked `find` - the behavior under test IS the sort and filter doing the work, and every bug
+ * these guard against (a cursor that re-matches the run's own writes, a `$gt: null` that matches
+ * nothing because comparison operators are type-bracketed, an `_id` tiebreak across a page
+ * boundary) is invisible to a stubbed query that only has its literal shape asserted.
+ *
+ * The invariants: a per-run cap paged by `_id` alone would regrade the same prefix every run and
+ * never reach the tail, so the scan is ordered by `lastHealthCheckedAt` (oldest/never-checked
+ * first) and every lake a run attempts is stamped, which is what makes the cap self-drain.
  */
 describe('DataLakeRepository - lake health sweep staleness ordering', () => {
   setupMongoTest();
@@ -26,19 +29,44 @@ describe('DataLakeRepository - lake health sweep staleness ordering', () => {
       status: 'active',
     }) as Omit<IDataLake, 'id'>;
 
-  /** One simulated sweep run: the same staleness-ordered, capped query + unconditional stamp
-   * lakeHealthSweep.ts performs (collapsed to a single page since the cap in this test is far
-   * below PAGE_SIZE - the multi-page keyset mechanics are covered separately, by the mocked unit
-   * test in apps/client/server/cron/lakeHealthSweep.test.ts). */
-  async function runSweepPass(cap: number, at: Date): Promise<string[]> {
-    const lakes = await dataLakeRepository.find(
-      { status: 'active' },
-      { sort: { lastHealthCheckedAt: 1, _id: 1 }, limit: cap, _id: 1, lastHealthCheckedAt: 1 }
-    );
-    for (const lake of lakes) {
-      await dataLakeRepository.markHealthChecked(lake.id, at);
+  /**
+   * One simulated sweep run: lakeHealthSweep.ts's exact loop - keyset-paged
+   * findDueForHealthCheck plus the unconditional stamp - driven against real Mongo. `pageSize`
+   * defaults to the cap (one page); passing a smaller one exercises the multi-page keyset, which
+   * is the only way to reach the cursor arms at all. Returns ids in VISIT order, never deduped, so
+   * a lake graded twice in one run shows up as a duplicate rather than being hidden.
+   */
+  async function runSweepPass(cap: number, at: Date, pageSize: number = cap): Promise<string[]> {
+    const visited: string[] = [];
+    let cursor: HealthCheckScanCursor | null = null;
+    while (visited.length < cap) {
+      const limit = Math.min(pageSize, cap - visited.length);
+      const page = await dataLakeRepository.findDueForHealthCheck({
+        cursor,
+        limit,
+        excludeCheckedAt: at,
+        projection: { _id: 1, lastHealthCheckedAt: 1 },
+      });
+      if (page.length === 0) break;
+      const last = page[page.length - 1];
+      cursor = { lastHealthCheckedAt: last.lastHealthCheckedAt ?? null, id: last.id };
+      for (const lake of page) {
+        visited.push(lake.id);
+        await dataLakeRepository.markHealthChecked(lake.id, at);
+      }
+      if (page.length < limit) break;
     }
-    return lakes.map(l => l.id);
+    return visited;
+  }
+
+  async function seedMany(prefix: string, count: number, checkedAt: Date | null): Promise<string[]> {
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const lake = await dataLakeRepository.create(seedLake(`${prefix}-${String(i).padStart(2, '0')}`));
+      if (checkedAt) await dataLakeRepository.markHealthChecked(lake.id, checkedAt);
+      ids.push(lake.id);
+    }
+    return ids;
   }
 
   it('covers every active lake across runs instead of regrading a fixed prefix', async () => {
@@ -89,5 +117,62 @@ describe('DataLakeRepository - lake health sweep staleness ordering', () => {
 
     const round2 = await runSweepPass(1, new Date('2024-01-02T00:00:00Z'));
     expect(round2).toEqual([ok.id]);
+  });
+  it('grades each lake at most once per run, even though the run mutates its own sort key', async () => {
+    // Every lake shares one earlier stamp, so the whole scan pages through the _id tiebreak arm.
+    // A cursor built from that older stamp matches every lake the run has ALREADY stamped (their
+    // new stamp is strictly newer), so without excluding this run's own writes each lake is
+    // visited a second time: 2x the fleet-wide DB work, and a cap that reaches half the lakes it
+    // advertises.
+    const ids = await seedMany('s', 15, new Date('2024-01-01T00:00:00Z'));
+
+    const visited = await runSweepPass(1000, new Date('2024-02-01T00:00:00Z'), 10);
+
+    expect(visited).toHaveLength(ids.length);
+    expect(new Set(visited).size).toBe(ids.length);
+  });
+
+  it('reaches dated lakes even when a full page ends on a never-checked one', async () => {
+    // Mongo's comparison operators are type-bracketed, so a `$gt: null` cursor matches NOTHING
+    // rather than every dated document. With the null group spanning whole pages, a scan that
+    // cannot cross out of it stops the moment the nulls run out and silently skips every dated
+    // lake for that run - the day a bulk import lands, that is the whole pre-existing fleet.
+    const nulls = await seedMany('n', 25, null);
+    const dated = await seedMany('d', 20, new Date('2024-01-01T00:00:00Z'));
+
+    const visited = await runSweepPass(1000, new Date('2024-02-01T00:00:00Z'), 10);
+
+    expect(new Set(visited)).toEqual(new Set([...nulls, ...dated]));
+    expect(visited).toHaveLength(nulls.length + dated.length);
+  });
+
+  it('never-checked lakes are graded before dated ones', async () => {
+    const dated = await seedMany('d', 5, new Date('2024-01-01T00:00:00Z'));
+    const nulls = await seedMany('n', 5, null);
+
+    const visited = await runSweepPass(1000, new Date('2024-02-01T00:00:00Z'), 3);
+
+    expect(visited.slice(0, 5).sort()).toEqual([...nulls].sort());
+    expect(visited.slice(5).sort()).toEqual([...dated].sort());
+  });
+
+  it('reports no remainder once the scan has walked the whole fleet', async () => {
+    await seedMany('s', 6, new Date('2024-01-01T00:00:00Z'));
+    const at = new Date('2024-02-01T00:00:00Z');
+
+    // A cap equal to the fleet size leaves the cursor past the last lake: the run covered
+    // everything, so warning that a staler remainder was deferred would be a false alarm.
+    const visited = await runSweepPass(6, at, 3);
+    expect(visited).toHaveLength(6);
+
+    const last = await dataLakeRepository.findDueForHealthCheck({
+      cursor: null,
+      limit: 1,
+      excludeCheckedAt: new Date('2024-03-01T00:00:00Z'),
+      projection: { _id: 1, lastHealthCheckedAt: 1 },
+    });
+    expect(await dataLakeRepository.hasMoreDueForHealthCheck(null, at)).toBe(false);
+    // Sanity check that the probe is not vacuously false: a LATER run does see the fleet again.
+    expect(last).toHaveLength(1);
   });
 });
