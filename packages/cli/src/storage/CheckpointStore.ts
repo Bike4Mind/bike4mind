@@ -1,5 +1,5 @@
 import { promises as fs } from 'fs';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, type Stats } from 'fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, lstatSync, realpathSync, type Stats } from 'fs';
 import { execFileSync } from 'child_process';
 import path from 'path';
 
@@ -49,6 +49,11 @@ export class CheckpointStore {
   private metadata: CheckpointMetadata | null = null;
   private sessionId: string | null = null;
   private initialized = false;
+  // Symlink-resolved roots captured at init(); every write/read is contained to
+  // these, so a `.b4m`/`shadow-repo`/`projectDir` swapped to a symlink after init
+  // is detected instead of silently followed.
+  private realProjectDir: string | null = null;
+  private realShadowRepoDir: string | null = null;
 
   constructor(projectDir: string) {
     this.projectDir = projectDir;
@@ -92,6 +97,10 @@ export class CheckpointStore {
       // Create initial empty commit
       this.git('commit', '--allow-empty', '-m', 'checkpoint-init');
     }
+
+    // Anchor the real (symlink-resolved) roots now that both dirs exist.
+    this.realProjectDir = realpathSync(this.projectDir);
+    this.realShadowRepoDir = realpathSync(this.shadowRepoDir);
 
     // Load or create metadata
     await this.loadMetadata();
@@ -137,12 +146,13 @@ export class CheckpointStore {
         const shadowDir = path.dirname(shadowPath);
         const absentMarkerPath = path.join(shadowDir, `${path.basename(filePath)}${ABSENT_MARKER}`);
 
+        // Guard the dir BEFORE mkdir - a symlinked intermediate component would
+        // otherwise have `mkdir -p` create real dirs outside the sandbox - then
+        // guard both leaf destinations (copyFile/writeFile follow a symlink).
+        this.assertContainedSync(shadowDir, this.realShadowRoot());
         await fs.mkdir(shadowDir, { recursive: true });
-        // A committed symlink under shadow-repo/ (or a symlinked dir component)
-        // would make copyFile/writeFile below write THROUGH the link, outside the
-        // sandbox. Refuse any destination that is a symlink or escapes the shadow root.
-        await this.assertShadowDestSafe(shadowPath);
-        await this.assertShadowDestSafe(absentMarkerPath);
+        this.assertContainedSync(shadowPath, this.realShadowRoot());
+        this.assertContainedSync(absentMarkerPath, this.realShadowRoot());
 
         if (existsSync(absolutePath)) {
           // Use lstat to detect symlinks (don't follow them)
@@ -301,8 +311,10 @@ export class CheckpointStore {
     for (const filePath of checkpoint.filePaths) {
       const absolutePath = this.validatePathWithinProject(filePath);
 
-      const tmpCheckpoint = path.join(this.shadowRepoDir, '.diff-a');
-      const tmpCurrent = path.join(this.shadowRepoDir, '.diff-b');
+      // Temp files live directly under the shadow root; refuse if a committed
+      // `.diff-a`/`.diff-b` symlink would redirect the writeFileSync below.
+      const tmpCheckpoint = this.assertContainedSync(path.join(this.shadowRepoDir, '.diff-a'), this.realShadowRoot());
+      const tmpCurrent = this.assertContainedSync(path.join(this.shadowRepoDir, '.diff-b'), this.realShadowRoot());
 
       try {
         // Get checkpoint version
@@ -415,7 +427,9 @@ export class CheckpointStore {
     if (!absolutePath.startsWith(normalizedProject) && absolutePath !== path.resolve(this.projectDir)) {
       throw new Error(`Path traversal detected: ${filePath}`);
     }
-    return absolutePath;
+    // Lexical containment is not enough: a committed symlink (intermediate dir or
+    // leaf) makes the real target escape at write/read time. realpath + lstat it.
+    return this.assertContainedSync(absolutePath, this.realProjectRoot());
   }
 
   /**
@@ -451,25 +465,49 @@ export class CheckpointStore {
     }
   }
 
+  private realProjectRoot(): string {
+    if (this.realProjectDir === null) this.realProjectDir = realpathSync(this.projectDir);
+    return this.realProjectDir;
+  }
+
+  private realShadowRoot(): string {
+    if (this.realShadowRepoDir === null) this.realShadowRepoDir = realpathSync(this.shadowRepoDir);
+    return this.realShadowRepoDir;
+  }
+
   /**
-   * Refuse a per-file shadow write that would escape the sandbox: a symlinked
-   * destination (copyFile/writeFile follow it) or a parent dir whose realpath
-   * lands outside the shadow repo. Complements assertCheckpointPathsSafe, which
-   * only covers the three fixed top-level paths, not files written inside shadow-repo/.
+   * Refuse an absolute write/read target that escapes `realRoot` once symlinks are
+   * resolved, or whose final component is itself a symlink. The single containment
+   * guard for every checkpoint sink (create/restore/diff/metadata/gitignore): a
+   * committed symlink - an intermediate dir or the leaf - makes the real target
+   * escape at write time, which a lexical prefix check misses. For a not-yet-created
+   * path we realpath the nearest existing ancestor (the missing tail cannot hold a
+   * link yet) and re-append it. Returns `target` unchanged so callers can inline it.
    */
-  private async assertShadowDestSafe(destPath: string): Promise<void> {
-    const realRoot = await fs.realpath(this.shadowRepoDir);
-    const realDir = await fs.realpath(path.dirname(destPath));
-    if (realDir !== realRoot && !realDir.startsWith(realRoot + path.sep)) {
-      throw new Error(`Refusing shadow write outside sandbox: ${destPath}`);
-    }
+  private assertContainedSync(target: string, realRoot: string): string {
+    // Refuse a symlinked leaf: copyFile/writeFile/unlink would follow it.
     try {
-      if ((await fs.lstat(destPath)).isSymbolicLink()) {
-        throw new Error(`Refusing symlinked shadow path: ${destPath}`);
+      if (lstatSync(target).isSymbolicLink()) {
+        throw new Error(`Refusing symlinked checkpoint path: ${target}`);
       }
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
+    // realpath the nearest existing ancestor so a symlinked intermediate dir
+    // cannot smuggle the resolved path outside realRoot.
+    let existing = target;
+    const tail: string[] = [];
+    while (!existsSync(existing)) {
+      tail.unshift(path.basename(existing));
+      const parent = path.dirname(existing);
+      if (parent === existing) break; // reached filesystem root
+      existing = parent;
+    }
+    const realTarget = path.join(realpathSync(existing), ...tail);
+    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
+      throw new Error(`Refusing checkpoint path outside sandbox: ${target}`);
+    }
+    return target;
   }
 
   /**
@@ -527,6 +565,7 @@ export class CheckpointStore {
    */
   private async saveMetadata(): Promise<void> {
     if (!this.metadata) return;
+    this.assertContainedSync(this.metadataPath, this.realProjectRoot());
     await fs.writeFile(this.metadataPath, JSON.stringify(this.metadata, null, 2), 'utf-8');
   }
 
@@ -538,6 +577,11 @@ export class CheckpointStore {
     const entryToAdd = '.b4m/';
 
     try {
+      // A committed `.gitignore` symlink would make the readFile/writeFile below
+      // follow the link and corrupt a file outside the checkout - at CLI startup,
+      // with no user action. Refuse it before touching the file.
+      this.assertContainedSync(gitignorePath, this.realProjectRoot());
+
       let content = '';
       try {
         content = await fs.readFile(gitignorePath, 'utf-8');

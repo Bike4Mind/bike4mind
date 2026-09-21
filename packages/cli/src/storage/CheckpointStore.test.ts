@@ -389,27 +389,167 @@ describe('CheckpointStore repo-trust hardening', () => {
     }
   });
 
-  it('ignores a hostile GIT_DIR in the ambient env when checkpointing', async () => {
+  it('ignores hostile GIT_DIR / GIT_WORK_TREE / GIT_CONFIG_* in the ambient env when checkpointing', async () => {
     const proj = await createTestProject();
     const bogus = await makeBareDir(); // empty dir - not a git repo
-    const saved = process.env.GIT_DIR;
+    const saved = {
+      dir: process.env.GIT_DIR,
+      wt: process.env.GIT_WORK_TREE,
+      count: process.env.GIT_CONFIG_COUNT,
+      key: process.env.GIT_CONFIG_KEY_0,
+      val: process.env.GIT_CONFIG_VALUE_0,
+    };
     try {
       const store = new CheckpointStore(proj);
       await store.init('sess');
 
-      // If GIT_DIR leaked into the shadow git calls, `git add`/`commit` would run
-      // against this empty non-repo and fail (checkpoint would be null).
+      // If any of these leaked into the shadow git calls the checkpoint would fail:
+      // GIT_DIR/GIT_WORK_TREE redirect the repo to an empty non-repo, and the
+      // GIT_CONFIG_* injection sets `core.bare=true` (a bare repo cannot commit a
+      // worktree). All are neutralized, so the checkpoint succeeds and restores.
       process.env.GIT_DIR = bogus;
-      await fs.writeFile(path.join(proj, 'f.ts'), 'hello', 'utf-8');
-      const cp = await store.createCheckpoint('create_file', ['f.ts']);
+      process.env.GIT_WORK_TREE = bogus;
+      process.env.GIT_CONFIG_COUNT = '1';
+      process.env.GIT_CONFIG_KEY_0 = 'core.bare';
+      process.env.GIT_CONFIG_VALUE_0 = 'true';
 
+      await fs.writeFile(path.join(proj, 'f.ts'), 'original', 'utf-8');
+      const cp = await store.createCheckpoint('edit_local_file', ['f.ts']);
       expect(cp).not.toBeNull();
+
+      // Negative control: git ran in the shadow repo, not the ambient GIT_DIR.
       expect(existsSync(path.join(bogus, 'HEAD'))).toBe(false);
+      expect(existsSync(path.join(bogus, 'objects'))).toBe(false);
+
+      // Positive control: the shadow repo is a real repo that can restore.
+      await fs.writeFile(path.join(proj, 'f.ts'), 'modified', 'utf-8');
+      await store.restoreCheckpoint(1);
+      expect(await fs.readFile(path.join(proj, 'f.ts'), 'utf-8')).toBe('original');
     } finally {
-      if (saved === undefined) delete process.env.GIT_DIR;
-      else process.env.GIT_DIR = saved;
+      const restore = (k: string, v: string | undefined) =>
+        v === undefined ? delete process.env[k] : (process.env[k] = v);
+      restore('GIT_DIR', saved.dir);
+      restore('GIT_WORK_TREE', saved.wt);
+      restore('GIT_CONFIG_COUNT', saved.count);
+      restore('GIT_CONFIG_KEY_0', saved.key);
+      restore('GIT_CONFIG_VALUE_0', saved.val);
       await cleanup(proj);
       await cleanup(bogus);
+    }
+  });
+
+  it('refuses to write through a symlinked .gitignore at init, leaving the victim untouched', async () => {
+    // Blocking: init() -> ensureGitignore rewrites .gitignore at startup with no
+    // user action; a committed symlink would corrupt a file outside the checkout.
+    const proj = await makeBareDir();
+    const outside = await makeBareDir();
+    try {
+      const victim = path.join(outside, 'victim.txt');
+      await fs.writeFile(victim, 'IMPORTANT-USER-FILE', 'utf-8');
+      await fs.symlink(victim, path.join(proj, '.gitignore'));
+
+      const store = new CheckpointStore(proj);
+      // init must not throw (gitignore update is non-critical) but must not follow the link.
+      await store.init('sess');
+
+      expect(await fs.readFile(victim, 'utf-8')).toBe('IMPORTANT-USER-FILE');
+    } finally {
+      await cleanup(proj);
+      await cleanup(outside);
+    }
+  });
+
+  it('refuses to write diff temp files through a committed .diff-a symlink', async () => {
+    const proj = await createTestProject();
+    const outside = await makeBareDir();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      await fs.writeFile(path.join(proj, 'f.ts'), 'v1\n', 'utf-8');
+      await store.createCheckpoint('edit_local_file', ['f.ts']);
+      await fs.writeFile(path.join(proj, 'f.ts'), 'v2\n', 'utf-8');
+
+      const victim = path.join(outside, 'victim.txt');
+      await fs.writeFile(victim, 'victim-original', 'utf-8');
+      await fs.symlink(victim, path.join(proj, '.b4m', 'shadow-repo', '.diff-a'));
+
+      expect(() => store.getCheckpointDiff(1)).toThrow(/symlink|sandbox/i);
+      expect(await fs.readFile(victim, 'utf-8')).toBe('victim-original');
+    } finally {
+      await cleanup(proj);
+      await cleanup(outside);
+    }
+  });
+
+  it('refuses to restore through a worktree directory swapped for a symlink', async () => {
+    const proj = await createTestProject();
+    const outside = await makeBareDir();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      await fs.mkdir(path.join(proj, 'sub'), { recursive: true });
+      await fs.writeFile(path.join(proj, 'sub', 'app.ts'), 'original', 'utf-8');
+      await store.createCheckpoint('edit_local_file', ['sub/app.ts']);
+
+      // Attacker swaps sub/ for a symlink to outside (a committed checkpoints.json
+      // makes checkpoint.filePaths attacker-influenceable in the wild).
+      await fs.rm(path.join(proj, 'sub'), { recursive: true, force: true });
+      await fs.symlink(outside, path.join(proj, 'sub'));
+
+      await expect(store.restoreCheckpoint(1)).rejects.toThrow(/sandbox|symlink|traversal/i);
+      expect(existsSync(path.join(outside, 'app.ts'))).toBe(false);
+    } finally {
+      await cleanup(proj);
+      await cleanup(outside);
+    }
+  });
+
+  it('does not mkdir into the link target for a symlinked intermediate shadow dir', async () => {
+    const proj = await createTestProject();
+    const outside = await makeBareDir();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      // A committed .b4m/shadow-repo/evil symlink to outside would have `mkdir -p`
+      // create `evil/deep` in the link target before any leaf guard fired.
+      await fs.symlink(outside, path.join(proj, '.b4m', 'shadow-repo', 'evil'));
+
+      await fs.mkdir(path.join(proj, 'evil', 'deep'), { recursive: true });
+      await fs.writeFile(path.join(proj, 'evil', 'deep', 'f.ts'), 'x', 'utf-8');
+      const cp = await store.createCheckpoint('edit_local_file', ['evil/deep/f.ts']);
+
+      expect(cp).toBeNull();
+      expect(existsSync(path.join(outside, 'deep'))).toBe(false);
+    } finally {
+      await cleanup(proj);
+      await cleanup(outside);
+    }
+  });
+
+  it('refuses shadow writes after shadow-repo is swapped for a symlink post-init', async () => {
+    // The containment root is anchored at init(), so a later swap of shadow-repo
+    // to a symlink is detected instead of resolving both sides through the link.
+    const proj = await createTestProject();
+    const outside = await makeBareDir();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      const shadow = path.join(proj, '.b4m', 'shadow-repo');
+      await fs.rm(shadow, { recursive: true, force: true });
+      await fs.symlink(outside, shadow);
+
+      await fs.writeFile(path.join(proj, 'f.ts'), 'x', 'utf-8');
+      const cp = await store.createCheckpoint('edit_local_file', ['f.ts']);
+
+      expect(cp).toBeNull();
+      expect(existsSync(path.join(outside, 'f.ts'))).toBe(false);
+    } finally {
+      await cleanup(proj);
+      await cleanup(outside);
     }
   });
 });
