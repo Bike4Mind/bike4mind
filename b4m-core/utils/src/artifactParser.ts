@@ -27,6 +27,27 @@ export interface ArtifactParseResult {
 }
 
 /**
+ * Drops every complete `<!--...-->`, leaving an unterminated `<!--` where it is.
+ * A cursor pair rather than /<!--[\s\S]*?-->/g, whose lazy body re-scans to the end of
+ * the input from every opening that never finds a closer: quadratic on a run of bare
+ * `<!--` tokens. MUST STAY IN SYNC with the twin in apps/client/app/utils/artifactParser.ts.
+ */
+function stripHtmlComments(value: string): string {
+  let out = '';
+  let cursor = 0;
+  for (;;) {
+    const open = value.indexOf('<!--', cursor);
+    if (open < 0) break;
+    const close = value.indexOf('-->', open + '<!--'.length);
+    // Closers only move forward, so no later opening has one either.
+    if (close < 0) break;
+    out += value.slice(cursor, open);
+    cursor = close + '-->'.length;
+  }
+  return cursor === 0 ? value : out + value.slice(cursor);
+}
+
+/**
  * A "graphically empty" SVG has no drawable content - only the root <svg> wrapper
  * around whitespace and/or comments. Small local models sometimes emit such a stub
  * as a placeholder (e.g. `<svg ...><!-- fish illustration goes here --></svg>`),
@@ -36,7 +57,7 @@ export interface ArtifactParseResult {
  * Exported for tests.
  */
 export function isSvgGraphicallyEmpty(svg: string): boolean {
-  const withoutComments = svg.replace(/<!--[\s\S]*?-->/g, '');
+  const withoutComments = stripHtmlComments(svg);
   // Self-closing root, e.g. `<svg .../>`, has no children.
   if (/^\s*<svg\b[^>]*\/>\s*$/i.test(withoutComments)) return true;
   const inner = withoutComments.replace(/^\s*<svg\b[^>]*>/i, '').replace(/<\/svg\s*>\s*$/i, '');
@@ -153,6 +174,10 @@ function hasReactComponentLine(code: string): boolean {
   }
   return false;
 }
+
+// The next two are duplicated in apps/client/app/utils/artifactParser.ts (hasReactComponentLine
+// above is not: the client splits that decision across per-language predicates).
+// MUST STAY IN SYNC with that copy.
 
 // A full HTML document: a <!DOCTYPE ...> followed later by a closing </html>.
 function hasFullHtmlDocument(code: string): boolean {

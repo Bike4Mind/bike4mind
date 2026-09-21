@@ -4,6 +4,7 @@ import {
   transpileReactSource,
   rewriteImportsToRequire,
   stripTypeOnlyImports,
+  assertPublishableDependencies,
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
@@ -453,6 +454,20 @@ describe('rewriteImportsToRequire', () => {
     expect(out).toContain('debounce: db');
     expect(out).not.toContain('debounce as db');
   });
+
+  it('still resolves a default import whose `from` clause is on a later line', () => {
+    const out = rewriteImportsToRequire(`import Thing\n  from 'react';`);
+    expect(out).toContain('react is a runtime global');
+  });
+
+  it('still resolves a large multi-line named-import block (e.g. many lucide-react icons)', () => {
+    const iconNames = Array.from({ length: 50 }, (_, i) => `Icon${i}`);
+    const src = `import {\n  ${iconNames.join(',\n  ')},\n} from 'lucide-react';`;
+    const out = rewriteImportsToRequire(src);
+    expect(out).toContain(`require('lucide-react')`);
+    expect(out).toContain('Icon0');
+    expect(out).toContain('Icon49');
+  });
 });
 
 describe('LUCIDE_WRAPPER_FN single-source identity', () => {
@@ -466,5 +481,53 @@ describe('LUCIDE_WRAPPER_FN single-source identity', () => {
     expect(LUCIDE_WRAPPER_FN).not.toContain('`');
     expect(LUCIDE_WRAPPER_FN.includes('</scr' + 'ipt')).toBe(false);
     expect(LUCIDE_WRAPPER_FN).not.toContain('\\'); // no regex backslash -> no escape-doubling in the sandbox template
+  });
+});
+
+describe('extractImportedModules import-clause scan (perf and correctness)', () => {
+  // Same near-linear-scaling guard as b4m-core/utils/src/artifactParser.test.ts's
+  // assertLinearGrowth. A `from`-less `import` is the pathological input for the bounded clause
+  // scan (it burns its full length budget at every position without ever matching). Sized at
+  // 10000/20000 rather than a smaller pair: this scan also runs after stripTypeOnlyImports (same
+  // bounded-clause shape), and below this size the two measurements sit close enough together
+  // that this suite's own timing jitter can swamp the signal.
+  const MIN_BASELINE_MS = 25;
+  const GROWTH_RATIO_CEILING = 3;
+  const SMALL_INPUT_MS_CEILING = 800;
+
+  const measureMs = (n: number): number => {
+    const input = 'import x\n'.repeat(n); // no `from` clause: worst case for the bounded scan
+    const startedAt = performance.now();
+    assertPublishableDependencies(input); // exercises extractImportedModules; no deps -> no throw
+    return performance.now() - startedAt;
+  };
+
+  it('scans a from-less import list in near-linear time (regression guard for the unbounded scan)', () => {
+    const baselineMs = measureMs(10000);
+    expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+
+    const doubledMs = measureMs(20000);
+    const ratio = doubledMs / Math.max(baselineMs, MIN_BASELINE_MS);
+    expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+  });
+
+  it('still finds a default import whose from clause is on a later line than import', () => {
+    expect(() => assertPublishableDependencies(`import Thing\n  from 'unsupported-pkg';`)).toThrow(
+      UnsupportedReactDependencyError
+    );
+  });
+
+  it('still finds every module in a large multi-line named-import block (2000-char bound has headroom)', () => {
+    const iconNames = Array.from({ length: 80 }, (_, i) => `Icon${i}`);
+    const src = `import {\n  ${iconNames.join(',\n  ')},\n} from 'lucide-react';`;
+    expect(() => assertPublishableDependencies(src)).not.toThrow();
+  });
+
+  it('does not flag a supported module whose import clause exceeds the 2000-char bound', () => {
+    // Documents the residual behavior delta from bounding the scan: a clause this long is not
+    // realistic hand-written or generated code, but it silently stops matching rather than erroring.
+    const hugeNamedClause = Array.from({ length: 400 }, (_, i) => `Icon${i}`).join(', ');
+    const src = `import { ${hugeNamedClause} } from 'unsupported-pkg';`;
+    expect(() => assertPublishableDependencies(src)).not.toThrow();
   });
 });

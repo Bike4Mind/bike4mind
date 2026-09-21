@@ -36,15 +36,22 @@ const SMALL_INPUT_MS_CEILING = 500;
 function assertLinearGrowth(
   build: (n: number) => string,
   small: number,
-  checkOutput: (out: string, input: string) => void = (out, input) => expect(out).toBe(input)
+  checkOutput: (out: string, input: string) => void = (out, input) => expect(out).toBe(input),
+  run: (input: string) => string = convertCodeBlocksToArtifacts
 ) {
+  // Best of three, not a single timing: a GC pause landing in one measured window is
+  // worth more than the whole budget here (the current parser needs single-digit
+  // milliseconds), while a genuinely super-linear scan is slow on every attempt.
   const measure = (n: number) => {
     const input = build(n);
-    const startedAt = performance.now();
-    const out = convertCodeBlocksToArtifacts(input);
-    const elapsedMs = performance.now() - startedAt;
-    checkOutput(out, input);
-    return elapsedMs;
+    let bestMs = Infinity;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const startedAt = performance.now();
+      const out = run(input);
+      bestMs = Math.min(bestMs, performance.now() - startedAt);
+      if (attempt === 0) checkOutput(out, input);
+    }
+    return bestMs;
   };
 
   const baselineMs = measure(small);
@@ -343,6 +350,26 @@ describe('parseArtifactsWithFallback - graphically-empty SVG suppression', () =>
     expect(isSvgGraphicallyEmpty('<svg><text>hi</text></svg>')).toBe(false);
   });
 
+  it('leaves an unterminated comment in place, scaling linearly', () => {
+    // Openings with no closer: the shape that made the old /<!--[\s\S]*?-->/g re-scan to
+    // the end of the input from every one of them. The pre-fix code takes ~370ms at
+    // small=10000 and ~1.6s at its double, so it breaches the ratio ceiling (and, on a
+    // slower host, the small-input ceiling) rather than hanging the runner.
+    assertLinearGrowth(
+      n => '<svg>' + '<!--'.repeat(n) + '</svg>',
+      10000,
+      out => expect(out).toBe('false'),
+      input => String(isSvgGraphicallyEmpty(input))
+    );
+  });
+
+  it('strips a closed comment but keeps an unterminated one', () => {
+    expect(isSvgGraphicallyEmpty('<svg><!-- a --><!-- b --></svg>')).toBe(true);
+    expect(isSvgGraphicallyEmpty('<svg><!-- a --><rect/></svg>')).toBe(false);
+    // The unterminated opening is content, so the stub is not "empty".
+    expect(isSvgGraphicallyEmpty('<svg><!-- a --><!-- b</svg>')).toBe(false);
+  });
+
   it('drops an empty svg but keeps a real svg in the same reply (mixed content)', () => {
     const realSvg =
       '<artifact identifier="real" type="image/svg+xml" title="Real">' +
@@ -563,7 +590,10 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
     for (const label of ['html', 'svg', 'tsx', 'python', 'json']) {
-      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 120000);
+      // 30000, not more: the current parser needs well under a millisecond either side,
+      // so the budget is really GC noise in the measured window, and a shorter run
+      // allocates less. Pre-fix core still runs 211-9222ms at this size.
+      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 30000);
     }
   });
 
@@ -660,6 +690,42 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(out).toMatch(/title="a title"/);
   });
 
+  it('promotes a non-string tool-output title instead of dropping the artifact', () => {
+    // metadata.title is model-controlled and not type-guaranteed; a number used to
+    // throw inside stripTitleQuotes and leave the tool output as raw JSON text.
+    const recharts = '{"type":"recharts","metadata":{"title":7},"content":{"chartType":"bar","data":[{"x":1}]}}';
+    const chart = convertCodeBlocksToArtifacts('{"result": "' + recharts + '"}');
+    expect(chart).toContain('type="application/vnd.ant.recharts"');
+    expect(chart).toContain('title="7"');
+
+    const mermaid = '{"type":"mermaid","metadata":{"title":7},"content":"graph TD"}';
+    const diagram = convertCodeBlocksToArtifacts('{"result": "' + mermaid + '"}');
+    expect(diagram).toContain('type="application/vnd.ant.mermaid"');
+    expect(diagram).toContain('title="7"');
+  });
+
+  it('counts a self-closing tag with a long attribute span as JSX syntax', () => {
+    // 605 attribute characters, an ordinary inline SVG path. A capped attribute scan
+    // stopped matching it, which silently cost the fence its second React indicator.
+    const path = '<path d="' + 'M0 0 L1 1 '.repeat(60) + '"/>';
+    expect(path.length).toBe(612);
+    const code = 'const [n, setN] = useState(0);\nconst icon = ' + path + ';';
+    expect(convertCodeBlocksToArtifacts('```javascript\n' + code + '\n```')).toContain(
+      'type="application/vnd.ant.react"'
+    );
+  });
+
+  it('counts an import whose from clause sits on the next line as a react import', () => {
+    const code = "import Thing\n  from 'react';\nconst [n, setN] = useState(0);";
+    expect(convertCodeBlocksToArtifacts('```javascript\n' + code + '\n```')).toContain(
+      'type="application/vnd.ant.react"'
+    );
+    // One indicator short without the import, so the case above really turns on it.
+    expect(convertCodeBlocksToArtifacts('```javascript\nconst [n, setN] = useState(0);\n```')).not.toContain(
+      'type="application/vnd.ant.react"'
+    );
+  });
+
   it('leaves an svg fence with no closing tag untouched, scaling linearly', () => {
     // Openings with no closer: the shape that made the old doubly-anchored
     // <svg>...</svg> pattern re-scan the body from each one. At small=400 the pre-fix
@@ -731,10 +797,15 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // openings inside an unterminated fence. This test only cares about growth, not
     // the output shape (the first two get promoted, the third stays a code block
     // since its fence never closes), so it skips the output equality check.
+    // Sizes are set by the widest old-vs-new gap that still leaves the current parser
+    // far inside the ratio budget. The first shape promotes every document, so its
+    // output allocation is what costs: at n=22000 the current parser itself ran 20-60ms
+    // a side and the ratio went marginal, flaking. Pre-fix core at these sizes runs
+    // 34/434ms, 166/756ms and 545/2032ms against 5/9ms, 0.2/0.3ms and 0.3/0.5ms now.
     const noOutputCheck = () => {};
-    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 22000, noOutputCheck);
-    assertLinearGrowth(n => '<html>\n'.repeat(n), 28000, noOutputCheck);
-    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 1600, noOutputCheck);
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 3000, noOutputCheck);
+    assertLinearGrowth(n => '<html>\n'.repeat(n), 6000, noOutputCheck);
+    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 6400, noOutputCheck);
   });
 });
 
@@ -744,7 +815,7 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
  * Only behaviors both parsers genuinely implement are covered here: core has no
  * python-artifact promotion at all (that predicate is a client-only surface, unlike
  * the react fences, which are also excluded - the per-language react predicates
- * differ from core's hasComponentDeclarationLine by design), so the python case below
+ * differ from core's hasReactComponentLine by design), so the python case below
  * only pins the one shape both agree on (a small fence neither promotes).
  *
  * The core side of this comparison (coreConvertCodeBlocksToArtifacts / coreParseArtifacts)

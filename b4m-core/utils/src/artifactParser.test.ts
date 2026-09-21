@@ -24,15 +24,22 @@ const SMALL_INPUT_MS_CEILING = 500;
 function assertLinearGrowth(
   build: (n: number) => string,
   small: number,
-  checkOutput: (out: string, input: string) => void = (out, input) => expect(out).toBe(input)
+  checkOutput: (out: string, input: string) => void = (out, input) => expect(out).toBe(input),
+  run: (input: string) => string = convertCodeBlocksToArtifacts
 ) {
+  // Best of three, not a single timing: a GC pause landing in one measured window is
+  // worth more than the whole budget here (the current parser needs single-digit
+  // milliseconds), while a genuinely super-linear scan is slow on every attempt.
   const measure = (n: number) => {
     const input = build(n);
-    const startedAt = performance.now();
-    const out = convertCodeBlocksToArtifacts(input);
-    const elapsedMs = performance.now() - startedAt;
-    checkOutput(out, input);
-    return elapsedMs;
+    let bestMs = Infinity;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const startedAt = performance.now();
+      const out = run(input);
+      bestMs = Math.min(bestMs, performance.now() - startedAt);
+      if (attempt === 0) checkOutput(out, input);
+    }
+    return bestMs;
   };
 
   const baselineMs = measure(small);
@@ -233,6 +240,26 @@ describe('parseArtifacts - graphically-empty SVG suppression', () => {
     expect(isSvgGraphicallyEmpty('<svg><text>hi</text></svg>')).toBe(false);
   });
 
+  it('leaves an unterminated comment in place, scaling linearly', () => {
+    // Openings with no closer: the shape that made the old /<!--[\s\S]*?-->/g re-scan to
+    // the end of the input from every one of them. The pre-fix code takes ~370ms at
+    // small=10000 and ~1.6s at its double, so it breaches the ratio ceiling (and, on a
+    // slower host, the small-input ceiling) rather than hanging the runner.
+    assertLinearGrowth(
+      n => '<svg>' + '<!--'.repeat(n) + '</svg>',
+      10000,
+      out => expect(out).toBe('false'),
+      input => String(isSvgGraphicallyEmpty(input))
+    );
+  });
+
+  it('strips a closed comment but keeps an unterminated one', () => {
+    expect(isSvgGraphicallyEmpty('<svg><!-- a --><!-- b --></svg>')).toBe(true);
+    expect(isSvgGraphicallyEmpty('<svg><!-- a --><rect/></svg>')).toBe(false);
+    // The unterminated opening is content, so the stub is not "empty".
+    expect(isSvgGraphicallyEmpty('<svg><!-- a --><!-- b</svg>')).toBe(false);
+  });
+
   it('drops an empty svg but keeps a real svg in the same reply (mixed content)', () => {
     const realSvg =
       '<artifact identifier="real" type="image/svg+xml" title="Real">' +
@@ -405,7 +432,10 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
     for (const label of ['html', 'svg', 'tsx', 'json', 'mermaid']) {
-      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 120000);
+      // 30000, not more: the current parser needs well under a millisecond either side,
+      // so the budget is really GC noise in the measured window, and a shorter run
+      // allocates less. Pre-fix core still runs 211-9222ms at this size.
+      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 30000);
     }
   });
 
@@ -462,12 +492,14 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     }
   });
 
-  it('leaves an svg fence with no closing tag untouched, scaling linearly', () => {
-    // Openings with no closer. This copy's hasCompleteSvg is a plain indexOf scan and
-    // stays fast at any size; small=400 is chosen for the twin client parser, whose old
-    // doubly-anchored <svg>...</svg> pattern already takes ~0.6s there (vs ~0.01ms on
-    // the current parser) - a much larger size would only add runtime, not separation.
-    assertLinearGrowth(n => '```svg\n' + '<svg '.repeat(n) + '\n```', 400);
+  it('leaves an svg fence with no closing tag untouched', () => {
+    // Output equality only, not a regression guard: this copy's hasCompleteSvg was
+    // already a plain indexOf scan before the change (0.1ms at n=800, 0.9ms at n=25600),
+    // so there is no old-vs-new gap to pin. The growth-ratio version of this case lives
+    // in the twin client suite, whose pre-fix doubly-anchored <svg>...</svg> pattern
+    // takes ~0.6s at n=400.
+    const input = '```svg\n' + '<svg '.repeat(800) + '\n```';
+    expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
   it('leaves a single-line react fence untouched', () => {
@@ -479,12 +511,12 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   });
 
   it('leaves an unterminated html fence untouched, scaling linearly', () => {
-    // Many <!DOCTYPE occurrences and no </html> anywhere, so the old parser's lazy scan
-    // retried from each occurrence in turn. This size is chosen for the twin client
-    // parser, whose old fence pattern is worse (doubly-anchored) and clearly breaches
-    // the ceiling here; this copy's old parser is quadratic on the same shape but with
-    // a smaller constant, so it does not breach until a much larger size.
-    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 1600);
+    // Many <!DOCTYPE occurrences and no </html> anywhere, so the pre-fix bare-document
+    // pattern re-scanned to the end of the input from each one. Sized off this copy's
+    // own constant, not the client twin's: pre-fix core runs 38ms at n=1600 (inside the
+    // ceiling, so that size pinned nothing) but 357ms at 6400 and 1410ms at 12800, which
+    // breaches the growth ratio. The current parser is 0.3ms and 0.5ms.
+    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 6400);
   });
 
   it('leaves an unterminated html fence with no promotable markup untouched', () => {
@@ -536,7 +568,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 });
 
 /**
- * hasComponentDeclarationLine requires the declaration keyword (function/const/class)
+ * hasReactComponentLine requires the declaration keyword (function/const/class)
  * and the component marker (Component/App/export default) to sit on the SAME line -
  * that is the constraint the per-line scan exists to preserve (see its doc comment).
  */
@@ -609,10 +641,15 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // openings inside an unterminated fence. This test only cares about growth, not
     // the output shape (the first two get promoted, the third stays a code block
     // since its fence never closes), so it skips the output equality check.
+    // Sizes are set by the widest old-vs-new gap that still leaves the current parser
+    // far inside the ratio budget. The first shape promotes every document, so its
+    // output allocation is what costs: at n=22000 the current parser itself ran 20-60ms
+    // a side and the ratio went marginal, flaking. Pre-fix core at these sizes runs
+    // 34/434ms, 166/756ms and 545/2032ms against 5/9ms, 0.2/0.3ms and 0.3/0.5ms now.
     const noOutputCheck = () => {};
-    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 22000, noOutputCheck);
-    assertLinearGrowth(n => '<html>\n'.repeat(n), 28000, noOutputCheck);
-    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 1600, noOutputCheck);
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 3000, noOutputCheck);
+    assertLinearGrowth(n => '<html>\n'.repeat(n), 6000, noOutputCheck);
+    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 6400, noOutputCheck);
   });
 });
 

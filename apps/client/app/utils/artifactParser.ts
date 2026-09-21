@@ -34,6 +34,27 @@ export interface ArtifactParseResult {
 }
 
 /**
+ * Drops every complete `<!--...-->`, leaving an unterminated `<!--` where it is.
+ * A cursor pair rather than /<!--[\s\S]*?-->/g, whose lazy body re-scans to the end of
+ * the input from every opening that never finds a closer: quadratic on a run of bare
+ * `<!--` tokens. MUST STAY IN SYNC with the twin in b4m-core/utils/src/artifactParser.ts.
+ */
+function stripHtmlComments(value: string): string {
+  let out = '';
+  let cursor = 0;
+  for (;;) {
+    const open = value.indexOf('<!--', cursor);
+    if (open < 0) break;
+    const close = value.indexOf('-->', open + '<!--'.length);
+    // Closers only move forward, so no later opening has one either.
+    if (close < 0) break;
+    out += value.slice(cursor, open);
+    cursor = close + '-->'.length;
+  }
+  return cursor === 0 ? value : out + value.slice(cursor);
+}
+
+/**
  * A "graphically empty" SVG has no drawable content - only the root <svg> wrapper
  * around whitespace and/or comments. Small local models sometimes emit such a stub
  * as a placeholder (e.g. `<svg ...><!-- fish illustration goes here --></svg>`),
@@ -43,7 +64,7 @@ export interface ArtifactParseResult {
  * Exported for tests.
  */
 export function isSvgGraphicallyEmpty(svg: string): boolean {
-  const withoutComments = svg.replace(/<!--[\s\S]*?-->/g, '');
+  const withoutComments = stripHtmlComments(svg);
   // Self-closing root, e.g. `<svg .../>`, has no children.
   if (/^\s*<svg\b[^>]*\/>\s*$/i.test(withoutComments)) return true;
   const inner = withoutComments.replace(/^\s*<svg\b[^>]*>/i, '').replace(/<\/svg\s*>\s*$/i, '');
@@ -348,15 +369,36 @@ export function extractPythonPackages(content: string): string[] {
   return Array.from(packages);
 }
 
-// Bound the scan from an `import` token to its `from` clause, and the attribute span
-// of a self-closing tag, so a token that never finds its match cannot rescan the rest
-// of the body from every start position.
+// Bound the scan from an `import` token to its `from` clause so a token that never
+// finds its match cannot rescan the rest of the body from every start position.
 const MAX_IMPORT_CLAUSE_CHARS = 2000;
-const MAX_TAG_ATTR_CHARS = 500;
 
-// Built once rather than per fence.
-const REACT_IMPORT_PATTERN = new RegExp(`import\\s[^\\n]{0,${MAX_IMPORT_CLAUSE_CHARS}}?\\sfrom\\s+['"]react['"]`);
-const SELF_CLOSING_TAG_PATTERN = new RegExp(`<[a-z]+[^>]{0,${MAX_TAG_ATTR_CHARS}}?\\/>`);
+// Built once rather than per fence. `(?=(\s+))\1` is a possessive `\s+`: a JS lookahead
+// is never retried, so each whitespace run is consumed maximally instead of backtracking
+// against the neighboring clause, which is what made the `import\s+.*\s+from` this
+// replaces cost time quadratic in a long whitespace run. Match set is unchanged: the
+// clause is still single-line and, like the `.*`, may end only on a non-whitespace
+// character, and only a maximal run can be followed by the literal `from`.
+const REACT_IMPORT_PATTERN = new RegExp(
+  `import(?=(\\s+))\\1(?:[^\\n]{0,${MAX_IMPORT_CLAUSE_CHARS}}[^\\s])?(?=(\\s+))\\2from\\s+['"]react['"]`
+);
+
+/**
+ * A self-closing tag, e.g. `<path d="..."/>`, as `/<[a-z]+[^>]*\/>/` matched it. That
+ * pattern re-scans to the end of the input from every `<` when no `>` follows, so this
+ * walks the openings once instead: `[^>]*` cannot cross a `>`, which means a match can
+ * only ever end at the first `>` after its own opening.
+ */
+function hasSelfClosingTag(code: string): boolean {
+  for (let at = code.indexOf('<'); at >= 0; at = code.indexOf('<', at + 1)) {
+    const nameChar = code.charCodeAt(at + 1);
+    if (nameChar < 97 || nameChar > 122) continue;
+    const close = code.indexOf('>', at + 2);
+    if (close < 0) return false;
+    if (close >= at + 3 && code[close - 1] === '/') return true;
+  }
+  return false;
+}
 
 /**
  * Extracts React dependencies from import statements
@@ -464,9 +506,12 @@ export function validateArtifactContent(
  * The artifact attribute parser (ATTRIBUTE_REGEX) has no escape mechanism, so one would
  * truncate the attribute and leave the rest to be read as further attributes.
  * extractHTMLTitle applies the same rule to a <title> element.
+ * Takes unknown because the callers read it out of parsed tool-output JSON, where a
+ * title need not be a string; each caller's own default covers a value that coerces
+ * to empty.
  */
-function stripTitleQuotes(title: string): string {
-  return title.replace(/"/g, '');
+function stripTitleQuotes(title: unknown): string {
+  return String(title ?? '').replace(/"/g, '');
 }
 
 function convertToolOutputsToArtifacts(content: string): string {
@@ -617,10 +662,12 @@ ${toolOutput.content}
   return processedContent;
 }
 
-// Search-window bound for the five regex-based React indicator predicates below, the
-// only promotion predicates here that are not a plain indexOf scan. It is not a
-// body-length cap: an indicator inside the window still promotes the full, untruncated
-// body, and an indicator past the window leaves the fence a plain code block.
+// Search-window bound for the five React indicator predicates below. Each is linear on
+// its own, as are the other regex predicates here (the html-fragment tag check, the
+// python gates, looksLikeHtml, promoteBareHtmlDocument's open/close scans), which stay
+// uncapped; this only keeps five passes over the same fence body from adding up. It is
+// not a body-length cap: an indicator inside the window still promotes the full,
+// untruncated body, and an indicator past the window leaves the fence a plain code block.
 const MAX_FENCE_SCAN_CHARS = 256000;
 
 // Linear anchor checks for the html and svg fence detectors, mirroring the twins in
@@ -679,7 +726,7 @@ ${codeContent.trim()}
       /\buse(State|Effect|Context|Reducer|Callback|Memo|Ref|ImperativeHandle|LayoutEffect|DebugValue)\b/.test(
         scanContent
       );
-    const hasJSXSyntax = /<[A-Z][a-zA-Z0-9]*[\s\/>]/.test(scanContent) || SELF_CLOSING_TAG_PATTERN.test(scanContent);
+    const hasJSXSyntax = /<[A-Z][a-zA-Z0-9]*[\s\/>]/.test(scanContent) || hasSelfClosingTag(scanContent);
     const hasReactImport = REACT_IMPORT_PATTERN.test(scanContent);
     const hasReactComponent = /extends\s+(?:React\.)?Component\b/.test(scanContent);
     const hasJSXReturn = /return\s*\(\s*</.test(scanContent);

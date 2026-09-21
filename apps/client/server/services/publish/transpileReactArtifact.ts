@@ -19,6 +19,10 @@ import { PUBLISH_HOST } from './validateBundle';
  * Scope: SINGLE-FILE artifacts only (multi-file is rejected up front, matching the sandbox).
  */
 
+// Mirrors MAX_IMPORT_CLAUSE_CHARS in apps/client/app/utils/artifactParser.ts: comfortably above
+// even a large multi-line named-import destructuring block, while bounding the failed-match scan.
+const MAX_IMPORT_CLAUSE_CHARS = 2000;
+
 /**
  * Dependencies whose PUBLISH story exists. `react` is the base runtime (react-dom + prop-types
  * load alongside it); the optional deps (recharts, lucide-react, d3, lodash, mathjs, papaparse,
@@ -96,21 +100,30 @@ function findRelativeImport(source: string): string | null {
  * a modifier when followed by another binding identifier that is not `as`.
  */
 export function stripTypeOnlyImports(source: string): string {
+  // Both clause scans are length-bounded (MAX_IMPORT_CLAUSE_CHARS above): this runs first in
+  // every pipeline branch (extractImportedModules, rewriteImportsToRequire, transpileReactSource),
+  // so an unbounded scan here defeats the same bound applied downstream.
   return source
-    .replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*;?/g, '')
-    .replace(/import\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]\s*;?/g, (stmt: string, clause: string) => {
-      const braceMatch = clause.match(/\{([\s\S]*?)\}/);
-      if (!braceMatch) return stmt;
-      const kept = braceMatch[1]
-        .split(',')
-        .map(s => s.trim())
-        .filter(Boolean)
-        .filter(spec => !/^type\s+(?!as\b)\w/.test(spec));
-      // No value bindings left and no default/namespace before the brace -> whole import was type-only.
-      const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
-      if (!kept.length && !beforeBrace) return '';
-      return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
-    });
+    .replace(
+      new RegExp(`import\\s+type\\s+[\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?\\s+from\\s+['"][^'"]+['"]\\s*;?`, 'g'),
+      ''
+    )
+    .replace(
+      new RegExp(`import\\s+([\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?)\\s+from\\s+['"][^'"]+['"]\\s*;?`, 'g'),
+      (stmt: string, clause: string) => {
+        const braceMatch = clause.match(/\{([\s\S]*?)\}/);
+        if (!braceMatch) return stmt;
+        const kept = braceMatch[1]
+          .split(',')
+          .map(s => s.trim())
+          .filter(Boolean)
+          .filter(spec => !/^type\s+(?!as\b)\w/.test(spec));
+        // No value bindings left and no default/namespace before the brace -> whole import was type-only.
+        const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
+        if (!kept.length && !beforeBrace) return '';
+        return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
+      }
+    );
 }
 
 /** React APIs pre-injected as bare globals in the bootstrap (see HOOK_GLOBALS). A named import of
@@ -132,8 +145,9 @@ const HOOK_GLOBAL_NAMES: readonly string[] = [
  *    NOT already covered by HOOK_GLOBALS (useLayoutEffect, useId, forwardRef, memo, ...) are bound
  *    from `React` so they resolve instead of throwing ReferenceError at first render.
  *  - other modules map to `require('pkg')`, handling default / named / namespace / mixed forms.
- * Uses lazy `[\s\S]*?` (not greedy `[^;]+`) so adjacent semicolon-less imports (valid via ASI) are
- * not conflated into one broken match. Exported for unit tests.
+ * Uses lazy, length-bounded `[\s\S]{0,N}?` (not greedy `[^;]+`) so adjacent semicolon-less imports
+ * (valid via ASI) are not conflated into one broken match, and a `from`-less import can't rescan
+ * the rest of the source from every start position. Exported for unit tests.
  */
 export function rewriteImportsToRequire(rawSource: string): string {
   const source = stripTypeOnlyImports(rawSource); // TS type imports have no runtime binding
@@ -149,7 +163,14 @@ export function rewriteImportsToRequire(rawSource: string): string {
         return m ? `${m[1]}: ${m[2]}` : spec;
       })
       .join(', ');
-  return source.replace(/import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g, (_match, clauseRaw: string, mod: string) => {
+  // Same bounded-clause reasoning as extractImportedModules below: an unbounded lazy scan here
+  // hits the identical quadratic cost on a `from`-less import, and this runs on the same
+  // untrusted source right after that scan in the buildReactArtifactBundle pipeline.
+  const importClauseRe = new RegExp(
+    `import\\s+([\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?)\\s+from\\s+['"]([^'"]+)['"]`,
+    'g'
+  );
+  return source.replace(importClauseRe, (_match, clauseRaw: string, mod: string) => {
     const clause = clauseRaw.trim();
     const namedMatch = clause.match(/\{([\s\S]*)\}/);
     const namedRaw = namedMatch ? namedMatch[1].trim() : '';
@@ -186,7 +207,9 @@ export function rewriteImportsToRequire(rawSource: string): string {
 function extractImportedModules(rawSource: string): string[] {
   const source = stripTypeOnlyImports(rawSource); // don't gate a type-only import as a runtime dep
   const mods = new Set<string>();
-  const re = /import\s+[\s\S]*?\s+from\s+['"]([^'"]+)['"]/g;
+  // Bound the clause scan so a `from`-less `import` can't rescan the rest of the source from
+  // every start position (quadratic); [\s\S] still crosses newlines for multi-line named imports.
+  const re = new RegExp(`import\\s+[\\s\\S]{0,${MAX_IMPORT_CLAUSE_CHARS}}?\\s+from\\s+['"]([^'"]+)['"]`, 'g');
   let m: RegExpExecArray | null;
   while ((m = re.exec(source)) !== null) {
     const mod = m[1];
