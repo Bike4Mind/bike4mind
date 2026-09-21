@@ -289,9 +289,17 @@ export const RESERVED_FEATURE_COMMANDS: readonly string[] = ['tavern', 'quest', 
 /**
  * Checks if a command name is reserved (a built-in OR a first-party feature command).
  * Use this, not isBuiltInCommand, when deciding whether an external skill may register.
+ *
+ * `featureCommandNames` carries the LIVE feature/plugin command names from the
+ * runtime FeatureModuleRegistry - a dynamic superset of the static
+ * RESERVED_FEATURE_COMMANDS. Pass it so load, display, and dispatch share one
+ * reserved-name source; a repo-planted command whose name matches a runtime
+ * plugin command is otherwise hidden from display yet still loads and executes.
  */
-export function isReservedCommandName(name: string): boolean {
-  return isBuiltInCommand(name) || RESERVED_FEATURE_COMMANDS.includes(name);
+export function isReservedCommandName(name: string, featureCommandNames?: ReadonlySet<string>): boolean {
+  return (
+    isBuiltInCommand(name) || RESERVED_FEATURE_COMMANDS.includes(name) || (featureCommandNames?.has(name) ?? false)
+  );
 }
 
 /**
@@ -324,7 +332,7 @@ export function mergeCommands(
   // A custom command may not shadow a built-in OR a live feature command; the
   // latter set is dynamic (plugins), so union it with the passed featureCommands.
   const featureNames = new Set((featureCommands ?? []).map(cmd => cmd.name));
-  const isReserved = (name: string) => isReservedCommandName(name) || featureNames.has(name);
+  const isReserved = (name: string) => isReservedCommandName(name, featureNames);
   const customDefinitions = customCommands
     .filter(cmd => !isReserved(cmd.name)) // Filter out conflicts
     .map(customCommandToDefinition);

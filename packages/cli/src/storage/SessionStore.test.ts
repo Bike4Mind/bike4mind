@@ -657,5 +657,17 @@ describe('SessionStore', () => {
       vi.mocked(fs.readFile).mockRejectedValue(Object.assign(new Error('nope'), { code: 'ENOENT' }));
       await expect(sessionStore.load('550e8400-e29b-41d4-a716-446655440000')).resolves.toBeNull();
     });
+
+    it('reconciles a tampered file id to the validated load argument', async () => {
+      // The file on disk claims a traversal id; load() must keep the validated id
+      // it was called with, so the tampered value never flows into Logger/save.
+      const tampered = createMockSession({ id: traversal });
+      vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify(tampered) as any);
+
+      const loaded = await sessionStore.load('good-id');
+
+      expect(loaded).not.toBeNull();
+      expect(loaded!.id).toBe('good-id');
+    });
   });
 });

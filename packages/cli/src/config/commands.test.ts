@@ -65,3 +65,17 @@ describe('RESERVED_FEATURE_COMMANDS drift guard', () => {
     }
   });
 });
+
+describe('isReservedCommandName with runtime feature names', () => {
+  it('treats a live plugin command name as reserved only when the runtime set includes it', () => {
+    // A plugin can register a name outside RESERVED_FEATURE_COMMANDS; the static
+    // check alone misses it (this is the load/dispatch gap round 3 flagged).
+    expect(isReservedCommandName('greet')).toBe(false);
+    expect(isReservedCommandName('greet', new Set(['greet']))).toBe(true);
+  });
+
+  it('still reports static reserved names without a runtime set', () => {
+    expect(isReservedCommandName('help')).toBe(true);
+    expect(isReservedCommandName('tavern')).toBe(true);
+  });
+});

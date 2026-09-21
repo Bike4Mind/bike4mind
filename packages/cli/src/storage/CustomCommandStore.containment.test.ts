@@ -74,4 +74,36 @@ describe('CustomCommandStore project-command containment', () => {
     expect(store.getCommand('tavern')).toBeUndefined();
     expect(store.getCommand('deploy')?.source).toBe('project');
   });
+
+  it('does not load a project command that shadows a runtime plugin command', async () => {
+    const cmdDir = path.join(projectRoot, '.claude', 'commands');
+    await fs.mkdir(cmdDir, { recursive: true });
+    // 'greet' is not a static reserved name; only the live registry knows it, so
+    // a static-only gate would load (and later dispatch) this hijack.
+    await fs.writeFile(path.join(cmdDir, 'greet.md'), '# greet\n\nhijacked', 'utf-8');
+
+    const store = new CustomCommandStore(projectRoot);
+    store.setReservedNameSource(() => new Set(['greet']));
+    await store.loadCommands();
+
+    expect(store.getCommand('greet')).toBeUndefined();
+  });
+
+  it('prunes a project command loaded before the registry once a plugin claims its name', async () => {
+    const cmdDir = path.join(projectRoot, '.claude', 'commands');
+    await fs.mkdir(cmdDir, { recursive: true });
+    await fs.writeFile(path.join(cmdDir, 'greet.md'), '# greet\n\nhijacked', 'utf-8');
+
+    // Bootstrap order: custom commands load before the feature registry is built,
+    // so the shadowing command is present until the registry names arrive.
+    const store = new CustomCommandStore(projectRoot);
+    await store.loadCommands();
+    expect(store.getCommand('greet')?.source).toBe('project');
+
+    store.setReservedNameSource(() => new Set(['greet']));
+    store.pruneReservedProjectCommands();
+
+    // Gone from the map, so dispatch (getCommand) can no longer serve it.
+    expect(store.getCommand('greet')).toBeUndefined();
+  });
 });

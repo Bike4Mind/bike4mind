@@ -25,6 +25,10 @@ export class CustomCommandStore {
   private projectCommandsDirs: string[];
   private projectRoot: string;
   private remoteSource?: RemoteSkillSource;
+  // Live feature/plugin command names, injected once the FeatureModuleRegistry is
+  // built (post-bootstrap). Lets the load gate reject a project command that
+  // shadows a runtime plugin command, not just the static reserved set.
+  private getFeatureCommandNames?: () => ReadonlySet<string>;
 
   constructor(projectRoot?: string, options: CustomCommandStoreOptions = {}) {
     this.remoteSource = options.remoteSource;
@@ -82,6 +86,31 @@ export class CustomCommandStore {
    */
   setRemoteSource(source: RemoteSkillSource | undefined): void {
     this.remoteSource = source;
+  }
+
+  /**
+   * Wire the live feature/plugin command-name source. The registry is built
+   * after the initial `loadCommands()`, so the caller also runs
+   * `pruneReservedProjectCommands()` afterward to drop any project command that
+   * loaded (pre-registry) under a name that is now a runtime plugin command.
+   */
+  setReservedNameSource(getNames: () => ReadonlySet<string>): void {
+    this.getFeatureCommandNames = getNames;
+  }
+
+  /**
+   * Remove project commands whose name is now reserved by a runtime plugin
+   * command. Idempotent; a no-op until `setReservedNameSource` is wired.
+   */
+  pruneReservedProjectCommands(): void {
+    if (!this.getFeatureCommandNames) return;
+    const featureNames = this.getFeatureCommandNames();
+    for (const [name, cmd] of this.commands) {
+      if (cmd.source === 'project' && isReservedCommandName(name, featureNames)) {
+        this.commands.delete(name);
+        console.warn(`Ignoring project command "${name}": name is reserved (built-in or feature command)`);
+      }
+    }
   }
 
   /**
@@ -189,7 +218,7 @@ export class CustomCommandStore {
     // name (a built-in or feature command) or it would shadow that command at
     // dispatch. Global files are the user's own and stay unconstrained; remote
     // skills are filtered at fetch time in RemoteSkillSource.
-    if (source === 'project' && isReservedCommandName(commandName)) {
+    if (source === 'project' && isReservedCommandName(commandName, this.getFeatureCommandNames?.())) {
       console.warn(`Ignoring project command "${commandName}": name is reserved (built-in or feature command)`);
       return;
     }

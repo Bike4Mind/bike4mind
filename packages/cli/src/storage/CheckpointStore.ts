@@ -36,6 +36,18 @@ const DEFAULT_KEEP_COUNT = 50;
 const ABSENT_MARKER = '.b4m-absent';
 
 /**
+ * A checkpoint id is a git short/full sha we generate. It is later interpolated
+ * into a git argv (`git show <id>:<path>`), where an attacker-committed value
+ * like `--output=/abs/path` is parsed by git as an option and writes a file
+ * outside the checkout. `.b4m/checkpoints.json` is committable by a hostile
+ * clone, so reject any id that is not a plain sha before it can reach that sink.
+ */
+const CHECKPOINT_ID_PATTERN = /^[0-9a-f]{4,40}$/;
+function isValidCheckpointId(id: unknown): id is string {
+  return typeof id === 'string' && CHECKPOINT_ID_PATTERN.test(id);
+}
+
+/**
  * CheckpointStore manages a shadow git repository for file change recovery.
  *
  * Before any file-modifying tool (create_file, edit_local_file, delete_file) executes,
@@ -546,6 +558,9 @@ export class CheckpointStore {
       if (existsSync(this.metadataPath)) {
         const data = await fs.readFile(this.metadataPath, 'utf-8');
         this.metadata = JSON.parse(data) as CheckpointMetadata;
+        // Drop any entry whose id is not a plain sha (see CHECKPOINT_ID_PATTERN):
+        // it would otherwise reach `git show <id>:<path>` as an option-injection.
+        this.metadata.checkpoints = (this.metadata.checkpoints ?? []).filter(cp => isValidCheckpointId(cp.id));
       } else {
         this.metadata = {
           checkpoints: [],

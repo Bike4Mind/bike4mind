@@ -553,3 +553,43 @@ describe('CheckpointStore repo-trust hardening', () => {
     }
   });
 });
+
+describe('checkpoint id validation (git option-injection)', () => {
+  let dir: string;
+  let store: CheckpointStore;
+
+  beforeEach(async () => {
+    dir = await createTestProject();
+    store = new CheckpointStore(dir);
+    await store.init(sessionId);
+  });
+
+  afterEach(async () => {
+    await cleanup(dir);
+  });
+
+  it('refuses a tampered checkpoint id and writes nothing outside the checkout', async () => {
+    const rel = 'file.txt';
+    await fs.writeFile(path.join(dir, rel), 'v1', 'utf-8');
+    const cp = await store.createCheckpoint('edit_local_file', [rel]);
+    expect(cp).not.toBeNull();
+
+    // A hostile clone can commit `.b4m/checkpoints.json`. Tamper the id into a
+    // `git show --output=` option that would write a file outside the checkout.
+    const evilDir = path.join(tmpdir(), `b4m-evil-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(evilDir, { recursive: true });
+    const metaPath = path.join(dir, '.b4m', 'checkpoints.json');
+    const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+    meta.checkpoints[0].id = `--output=${path.join(evilDir, 'pwned')}`;
+    await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+
+    // Reload: the tampered entry is dropped at parse time, so no sink ever sees it.
+    const reopened = new CheckpointStore(dir);
+    await reopened.init(sessionId);
+
+    await expect(reopened.restoreCheckpoint(1)).rejects.toThrow(/not found/);
+    expect(await fs.readdir(evilDir)).toEqual([]);
+
+    await cleanup(evilDir);
+  });
+});
