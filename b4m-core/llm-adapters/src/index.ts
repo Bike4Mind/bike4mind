@@ -159,7 +159,7 @@ export function getLlmByModel(
       break;
     case 'bfl':
       if (apiKeyTable.bfl === 'expired') throw new Error('BFL API key is expired');
-      backend = apiKeyTable.bfl ? new BFLBackend(apiKeyTable.bfl) : new BFLBackend('demo-key');
+      backend = apiKeyTable.bfl ? new BFLBackend(apiKeyTable.bfl) : null;
       break;
     case 'xai':
       if (apiKeyTable.xai === 'expired') throw new Error('xAI API key is expired');
@@ -346,7 +346,7 @@ export const getAvailableModels = async (
   // Every listing credential comes from resolveListingKey, the same predicate
   // the catalog merge gates catalog-only records with, so the two tiers cannot
   // disagree about which backends this caller can reach. The local-image env
-  // fallback and BFL's demo key live in that predicate for the same reason.
+  // fallback lives in that predicate for the same reason.
   const gateCtx: BackendGateContext = { apiKeys, isSelfHost };
   const openaiKey = resolveListingKey(ModelBackend.OpenAI, gateCtx);
   const anthropicKey = resolveListingKey(ModelBackend.Anthropic, gateCtx);

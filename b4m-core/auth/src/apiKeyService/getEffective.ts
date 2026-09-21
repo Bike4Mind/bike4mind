@@ -24,6 +24,23 @@ const DEMO_KEY_MAP: Partial<Record<ApiKeyType, IAdminSettings['settingName']>> =
   [ApiKeyType.elevenlabs]: 'elevenLabsServerApiKey',
 };
 
+/**
+ * Self-host .env fallback per provider, mirroring the one getEffectiveLLMApiKeys applies
+ * below. MUST STAY IN SYNC with it: the two resolvers answer for the same provider on
+ * different paths - listing and the image queue handler read getEffectiveLLMApiKeys, the
+ * chat image_generation tool reads getEffectiveApiKey - so a provider only one of them
+ * resolves shows its models in the picker and then refuses to run them.
+ */
+const ENV_KEY_MAP: Partial<Record<ApiKeyType, string>> = {
+  [ApiKeyType.openai]: 'OPENAI_API_KEY',
+  [ApiKeyType.anthropic]: 'ANTHROPIC_API_KEY',
+  [ApiKeyType.gemini]: 'GEMINI_API_KEY',
+  [ApiKeyType.bfl]: 'BFL_API_KEY',
+  [ApiKeyType.xai]: 'XAI_API_KEY',
+  [ApiKeyType.kimi]: 'MOONSHOT_API_KEY',
+  [ApiKeyType.deepseek]: 'DEEPSEEK_API_KEY',
+};
+
 // Base type - used by getEffectiveApiKey (~15 callers, unchanged contract)
 export type GetEffectiveApiKeyAdapters = GetApiKeyAdapters &
   GetMultipleApiKeysAdapters & {
@@ -124,6 +141,12 @@ export const getEffectiveApiKey = async (
       const settings = await db.adminSettings.findBySettingName(demoKeyName as IAdminSettings['settingName']);
       key = settings?.settingValue;
     }
+  }
+
+  // envKey only answers under B4M_SELF_HOST, so hosted resolution is unchanged.
+  if (!key) {
+    const envName = ENV_KEY_MAP[params.type as keyof typeof ENV_KEY_MAP];
+    if (envName) key = envKey(envName) ?? undefined;
   }
 
   return key;
@@ -228,7 +251,7 @@ export const getEffectiveLLMApiKeys = async (
     openai: keyOrExpired(openaiUserKey) || openaiDemoKey || envKey('OPENAI_API_KEY'),
     anthropic: keyOrExpired(anthropicUserKey) || anthropicDemoKey || envKey('ANTHROPIC_API_KEY'),
     gemini: keyOrExpired(geminiUserKey) || geminiDemoKey || envKey('GEMINI_API_KEY'),
-    bfl: keyOrExpired(bflUserKey) || bflDemoKey || null,
+    bfl: keyOrExpired(bflUserKey) || bflDemoKey || envKey('BFL_API_KEY'),
     xai: keyOrExpired(xaiUserKey) || xaiDemoKey || envKey('XAI_API_KEY'),
     // MOONSHOT_API_KEY is the name Moonshot's own docs and SDK examples use, so a
     // self-hoster who followed their quickstart already has it exported.

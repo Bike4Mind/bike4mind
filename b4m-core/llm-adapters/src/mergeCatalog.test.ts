@@ -377,22 +377,20 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     expect(gated).toBe(1);
   });
 
-  it('emits a catalog-only BFL record with no key at all (the demo-key special case)', () => {
-    const { models } = mergeCatalogWithDrops(
-      [],
-      [
-        catalogOnly({
-          ...invocable,
-          id: 'flux-99',
-          vendor: 'black-forest-labs',
-          backend: ModelBackend.BFL,
-          type: 'image',
-          adapterFamily: 'bfl',
-        }),
-      ],
-      NO_KEYS
-    );
-    expect(models.map(m => m.id)).toEqual(['flux-99']);
+  it('gates a catalog-only BFL record behind a real BFL key, like every other keyed backend', () => {
+    const fluxRow = catalogOnly({
+      ...invocable,
+      id: 'flux-99',
+      vendor: 'black-forest-labs',
+      backend: ModelBackend.BFL,
+      type: 'image',
+      adapterFamily: 'bfl',
+    });
+
+    expect(mergeCatalogWithDrops([], [fluxRow], NO_KEYS).models).toEqual([]);
+    expect(
+      mergeCatalogWithDrops([], [fluxRow], { apiKeys: { bfl: 'k' }, isSelfHost: false }).models.map(m => m.id)
+    ).toEqual(['flux-99']);
   });
 
   it('never emits a catalog-only voyageai record: this build has no listing backend for it', () => {

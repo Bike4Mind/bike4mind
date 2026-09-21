@@ -195,10 +195,10 @@ describe('getLlmByModel', () => {
       expect(result.key).toBe('bfl-key');
     });
 
-    it('returns BFLBackend with demo-key when no key is provided', () => {
-      const result = getLlmByModel({}, { modelInfo, logger }) as any;
-      expect(result._mock).toBe('bfl');
-      expect(result.key).toBe('demo-key');
+    it('returns null when no key is provided', () => {
+      // A 'demo-key' stand-in here dispatched a keyless deployment's image generation
+      // straight into a provider 403; every other keyed backend returns null instead.
+      expect(getLlmByModel({}, { modelInfo, logger })).toBeNull();
     });
 
     it('throws when key is "expired"', () => {
