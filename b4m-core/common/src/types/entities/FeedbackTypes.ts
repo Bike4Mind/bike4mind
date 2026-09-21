@@ -277,9 +277,9 @@ export interface OrgFeedbackReport {
   byStatus: FeedbackCountBucket[];
   /** Rows carrying no tag are absent, so these counts do not sum to `totals.count`. */
   byTag: FeedbackCountBucket[];
-  /** Set when more than `ORG_FEEDBACK_BY_TAG_LIMIT` distinct tags matched, so `byTag` is a top-N
-   * cut rather than the whole key space. Optional so a report serialized before it existed still
-   * reads back. */
+  /** True when more than `ORG_FEEDBACK_BY_TAG_LIMIT` distinct tags matched, so `byTag` is a top-N
+   * cut rather than the whole key space. A fresh report always sets it either way; it is absent
+   * only on one serialized before the field existed, which is why it is optional. */
   byTagTruncated?: boolean;
   byMember: OrgFeedbackMemberCount[];
   membership: {
