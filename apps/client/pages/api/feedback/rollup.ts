@@ -27,17 +27,18 @@ import {
  * accumulated the whole matched set, so it never bounds the work a request can ask for. Two
  * separate bounds cover that: `rateLimit` below caps how many of these one caller can ask for per
  * window (chained after baseApi's auth, so it keys on `req.user.id` rather than the client IP),
- * and `maxTimeMS` bounds the work of any one request.
+ * and `maxTimeMS` bounds the work of any one request. Nothing decrements the limiter's counter on
+ * response, so it bounds requests per window, not aggregates in flight at the same instant.
  */
 // Same value/shape as apps/client/pages/api/users/counterLogs.ts's own aggregate timeout.
 const FEEDBACK_ROLLUP_MAX_TIME_MS = 45000;
 
 const ONE_MINUTE_MS = 60 * 1000;
-// The interactive date-window picker is the only caller, and it refetches on a window change, not
-// on a timer (the query sets no refetchInterval and the app's QueryClient disables retry and
-// focus/reconnect refetch), so this leaves a human ample headroom. Looser than the org-wide $facet
-// report's 10/min next door because a single principal's rollup is the cheaper scope.
-const FEEDBACK_ROLLUP_RATE_LIMIT = 20;
+// Same 10/min as the org-wide $facet report next door: narrower scope, but the same shape of read,
+// and this pipeline adds a per-document $lookup ahead of $facet. The interactive date-window picker
+// is the only caller and it refetches on a window change, not on a timer (the query sets no
+// refetchInterval and the app's QueryClient disables retry and focus/reconnect refetch).
+const FEEDBACK_ROLLUP_RATE_LIMIT = 10;
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: FEEDBACK_ROLLUP_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'feedback-rollup' }))

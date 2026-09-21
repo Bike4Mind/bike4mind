@@ -59,14 +59,14 @@ vi.mock('@bike4mind/database', async importOriginal => ({
   executeFacetCompatible: vi.fn().mockResolvedValue([]),
 }));
 
-import { cacheRepository } from '@bike4mind/database';
+import { executeFacetCompatible } from '@bike4mind/database';
 import handler from '@pages/api/feedback/rollup';
 
 // Mirrors FEEDBACK_ROLLUP_RATE_LIMIT in the route; the route owns the value, this is the
 // count of requests the test has to issue to reach it.
-const ROUTE_LIMIT = 20;
+const ROUTE_LIMIT = 10;
 
-// The route's own window; the test charges the same counter the middleware would.
+// The route's own window, and the ceiling Retry-After has to fall under.
 const ONE_MINUTE_MS = 60 * 1000;
 
 const FROM = '2026-01-01T00:00:00.000Z';
@@ -78,23 +78,14 @@ let mongoServer: MongoMemoryServer;
 // whole window, so the per-principal test contrasts against it without re-filling anything.
 const EXHAUSTED_USER = `rate-limit-principal-${Date.now()}`;
 
-// Must stay in sync with rateLimit's own key format in apps/client/server/middlewares/rateLimit.ts:
-// `rate-limit:<principal>:<bucket>`, with the bucket the route passes.
-const counterKey = (userId: string) => `rate-limit:${userId}:feedback-rollup`;
-
 /**
- * Charges the window through the limiter's own primitive instead of through ROUTE_LIMIT more
- * requests. The counter is the same Mongo document either way, and a runner already saturated by
- * other packages' pools cannot be relied on to serve twenty round trips inside the shared budget.
+ * Fills the window through the route, not through the limiter's own primitive: the counter key,
+ * the bucket and the window then all come from the route's configuration instead of a copy of it
+ * here that would keep passing after the route's changed.
  */
-const chargeWindow = async (userId: string, times: number) => {
+const fillWindow = async (userId: string, times: number) => {
   for (let i = 0; i < times; i++) {
-    const { success } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
-      counterKey(userId),
-      ROUTE_LIMIT,
-      ONE_MINUTE_MS
-    );
-    expect(success).toBe(true);
+    expect((await callAs(userId))._getStatusCode()).toBe(200);
   }
 };
 
@@ -143,13 +134,21 @@ describe('GET /api/feedback/rollup - per-principal rate limit', () => {
   it('serves the last request inside the window, then answers 429 with Retry-After', async () => {
     // One short of the limit, so the route's own request is the one that fills it - a limiter
     // that refused early, or an off-by-one, fails here rather than passing quietly.
-    await chargeWindow(EXHAUSTED_USER, ROUTE_LIMIT - 1);
+    await fillWindow(EXHAUSTED_USER, ROUTE_LIMIT - 1);
 
     expect((await callAs(EXHAUSTED_USER))._getStatusCode()).toBe(200);
 
+    vi.mocked(executeFacetCompatible).mockClear();
     const limited = await callAs(EXHAUSTED_USER);
     expect(limited._getStatusCode()).toBe(429);
-    expect(Number(limited.getHeader('Retry-After'))).toBeGreaterThan(0);
+    // The refusal has to come before the aggregate: a limiter that ran the pipeline and then
+    // answered 429 would leave the work this route is being bounded for unbounded.
+    expect(executeFacetCompatible).not.toHaveBeenCalled();
+    // Pinned to the window, not just positive - Math.max(1, ...) in the middleware makes a bare
+    // `> 0` pass for any windowMs, including a mistyped one.
+    const retryAfter = Number(limited.getHeader('Retry-After'));
+    expect(retryAfter).toBeGreaterThan(0);
+    expect(retryAfter).toBeLessThanOrEqual(ONE_MINUTE_MS / 1000);
   });
 
   it('keys the counter per principal, so a second user is unaffected by an exhausted window', async () => {
