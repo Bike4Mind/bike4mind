@@ -55,6 +55,12 @@ const handler = baseApi().get(async (req, res) => {
   // Usage cuts come from UsageEventModel (frozen COGS + per-member attribution);
   // by-API-key and by-source come from the ledger, the only source carrying
   // apiKeyId and source.
+  //
+  // findByOrganizationId's other consumer is the org key-management list
+  // (userApiKeyService/list.ts); both rely on it returning only Organization-billed
+  // keys, since the create-time invariant in userApiKeyService/create.ts guarantees
+  // organizationId is set iff billingOwnerType is Organization - a personal key never
+  // carries an organizationId to be mismatched against here.
   const [summary, apiKeyUsage, sourceUsage, ownerKeys] = await Promise.all([
     usageEventRepository.ownerUsageSummary(ownerId, ownerType, days),
     creditTransactionRepository.apiKeyUsageForOwner(ownerId, ownerType, days),
