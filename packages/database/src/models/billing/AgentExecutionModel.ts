@@ -29,10 +29,33 @@ export interface IIterationBilling {
 
 // --- Pending Permission ---
 
+/**
+ * A tool call the agent's pre-execution gate withheld: the provider was never
+ * invoked, and a placeholder tool_result holds its slot in the checkpointed
+ * conversation until the user approves and the executor replays it by `id`.
+ */
+export interface IGatedToolCall {
+  id: string;
+  name: string;
+  input: unknown;
+}
+
 export interface IPendingPermission {
   toolName: string;
   toolInput: unknown;
   toolCallId?: string;
+  /**
+   * Every call the gate withheld in the paused iteration, including the one this
+   * request names. Carried here rather than in a top-level field so the pause and
+   * the work it is holding back are written and cleared in one operation.
+   */
+  gatedToolCalls?: IGatedToolCall[];
+  /**
+   * Set by the WebSocket approval handler before it re-invokes the executor. The
+   * resumed executor replays `gatedToolCalls` only when this is true, which is what
+   * keeps a one-time approval from leaking into `approvedTools`.
+   */
+  approved?: boolean;
   requestedAt: Date;
 }
 
@@ -479,11 +502,22 @@ const IterationBillingSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const GatedToolCallSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    input: { type: mongoose.Schema.Types.Mixed },
+  },
+  { _id: false, minimize: false }
+);
+
 const PendingPermissionSchema = new mongoose.Schema(
   {
     toolName: { type: String, required: true },
     toolInput: { type: mongoose.Schema.Types.Mixed },
     toolCallId: { type: String },
+    gatedToolCalls: { type: [GatedToolCallSchema], default: undefined },
+    approved: { type: Boolean },
     requestedAt: { type: Date, required: true },
   },
   // A zero-argument tool records `toolInput: {}`; without `minimize: false` that reads back as
@@ -1371,6 +1405,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     gates: { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean }
   ): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { resolvedMementoGates: gates } });
+  }
+
+  /**
+   * Mark the pending permission approved without clearing it, so the resumed
+   * executor can still read the withheld calls it has to replay. CAS-guarded on
+   * `awaiting_permission` so a duplicate or stale approval cannot re-arm a pause
+   * the executor has already consumed; returns whether it landed.
+   */
+  async approvePendingPermission(id: string): Promise<boolean> {
+    const res = await this.model.updateOne(
+      { _id: id, status: 'awaiting_permission', pendingPermission: { $exists: true } },
+      { $set: { 'pendingPermission.approved': true } }
+    );
+    return res.modifiedCount > 0;
   }
 
   async updatePermissionState(

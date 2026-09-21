@@ -12,6 +12,7 @@ const mockFindById = vi.fn();
 const mockUpdatePermissionState = vi.fn();
 const mockMarkFailed = vi.fn();
 const mockUpdateStatus = vi.fn();
+const mockApprovePendingPermission = vi.fn();
 const mockRememberDecision = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
@@ -21,6 +22,7 @@ vi.mock('@bike4mind/database', () => ({
     updatePermissionState: (...args: unknown[]) => mockUpdatePermissionState(...args),
     markFailed: (...args: unknown[]) => mockMarkFailed(...args),
     updateStatus: (...args: unknown[]) => mockUpdateStatus(...args),
+    approvePendingPermission: (...args: unknown[]) => mockApprovePendingPermission(...args),
   },
   sessionToolApprovalRepository: {
     rememberDecision: (...args: unknown[]) => mockRememberDecision(...args),
@@ -115,6 +117,7 @@ describe('handlePermissionResponse', () => {
     mockFindById.mockResolvedValue(baseExecution);
     mockApiGwSend.mockResolvedValue(undefined);
     mockLambdaSend.mockResolvedValue(undefined);
+    mockApprovePendingPermission.mockResolvedValue(true);
   });
 
   it('remembers the approval keyed on execution.sessionId when rememberForSession is true', async () => {
@@ -177,5 +180,54 @@ describe('handlePermissionResponse', () => {
     expect(sentCommand.input.Data.toString()).toContain('"action":"failed"');
     expect(mockUpdateStatus).not.toHaveBeenCalled();
     expect(noopLogger.warn).not.toHaveBeenCalled();
+  });
+
+  it('marks the pause approved instead of clearing it, so the executor can still replay the withheld call', async () => {
+    await handlePermissionResponse(
+      baseCmd({ approved: true, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockApprovePendingPermission).toHaveBeenCalledWith('exec-1');
+    expect(mockUpdatePermissionState).not.toHaveBeenCalled();
+  });
+
+  it('does not resume when the approval loses the CAS - the pause was already settled', async () => {
+    mockApprovePendingPermission.mockResolvedValueOnce(false);
+
+    await handlePermissionResponse(
+      baseCmd({ approved: true, rememberForSession: true }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockRememberDecision).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockLambdaSend).not.toHaveBeenCalled();
+    // The card is waiting on a reply; without one it spins until the stale sweep.
+    expect(mockApiGwSend).toHaveBeenCalled();
+    const [sent] = mockApiGwSend.mock.calls[0];
+    expect(sent.input.Data.toString()).toContain('"action":"progress"');
+  });
+
+  it('clears the pending permission on deny, discarding the withheld calls unrun', async () => {
+    await handlePermissionResponse(
+      baseCmd({ approved: false, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockUpdatePermissionState).toHaveBeenCalledWith('exec-1', {
+      pendingPermission: null,
+      deniedTool: undefined,
+    });
+    expect(mockApprovePendingPermission).not.toHaveBeenCalled();
   });
 });

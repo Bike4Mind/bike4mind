@@ -1396,4 +1396,48 @@ describe('AgentExecutionRepository', () => {
       expect(reloaded?.pendingPermission?.toolInput).toEqual({});
     });
   });
+
+  describe('approvePendingPermission', () => {
+    const pause = () => ({
+      toolName: 'image_generation',
+      toolInput: { prompt: 'cat' },
+      toolCallId: 'toolu_1',
+      gatedToolCalls: [{ id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' }],
+      requestedAt: new Date(),
+    });
+
+    it('marks the pause approved while keeping the withheld calls the executor has to replay', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(true);
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission?.approved).toBe(true);
+      expect(reloaded?.pendingPermission?.gatedToolCalls).toEqual([
+        { id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' },
+      ]);
+    });
+
+    it('does not land when the run is no longer awaiting permission', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'running' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission?.approved).toBeUndefined();
+    });
+
+    it('does not land when there is no pause to approve', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
+    });
+  });
 });

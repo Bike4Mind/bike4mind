@@ -9,8 +9,10 @@ import type {
   AgentResult,
   AgentRunOptions,
   AgentStep,
+  GatedToolCall,
   IterationResult,
 } from './types';
+import { GATED_TOOL_OBSERVATION } from './types';
 import {
   categorizeTools,
   executeToolsInParallel,
@@ -1224,6 +1226,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       let currentText = '';
       let finalAnswer = '';
       const processedToolIds = new Set<string>();
+      const gatedToolCalls: GatedToolCall[] = [];
       let hadToolCalls = false;
       let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
       const iterStartInputTokens = this.totalInputTokens;
@@ -1339,18 +1342,29 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                   options.parallelExecution &&
                   shouldUseParallelExecution(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool)
                 ) {
+                  const withheld = new Map<string, GatedToolCall>();
                   for (const toolUse of unprocessedTools) {
                     const actionStep = this.buildActionStep(toolUse);
                     iterationSteps.push(actionStep);
+                    const gated = this.withholdIfGated(toolUse, options.toolGate);
+                    if (gated) {
+                      withheld.set(getToolId(toolUse), gated);
+                      gatedToolCalls.push(gated);
+                    }
                   }
                   // On abort this returns the partial results instead of throwing, so the
                   // loop below still pairs a tool_result with every advertised tool_use.
                   // That keeps the aborted iteration's checkpoint self-consistent (every
                   // tool_use paired) rather than relying on the catch-block rollback, so a
                   // resumed session replays cleanly with no orphaned tool_use ids.
-                  const plan = categorizeTools(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool);
+                  const runnable = unprocessedTools.filter(t => !withheld.has(getToolId(t)));
+                  const plan = categorizeTools(runnable, options.isReadOnlyTool ?? defaultIsReadOnlyTool);
                   const results = await this.runToolBatchAbortTolerant(plan, options.signal);
                   for (const toolUse of unprocessedTools) {
+                    if (withheld.has(getToolId(toolUse))) {
+                      this.appendToolMessages(this.messages, toolUse, GATED_TOOL_OBSERVATION, thinkingBlocks);
+                      continue;
+                    }
                     const result = results.get(getToolId(toolUse));
                     const observation = observationForResult(result);
                     this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
@@ -1361,6 +1375,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                   for (const toolUse of unprocessedTools) {
                     const actionStep = this.buildActionStep(toolUse);
                     iterationSteps.push(actionStep);
+
+                    const gated = this.withholdIfGated(toolUse, options.toolGate);
+                    if (gated) {
+                      gatedToolCalls.push(gated);
+                      this.appendToolMessages(this.messages, toolUse, GATED_TOOL_OBSERVATION, thinkingBlocks);
+                      continue;
+                    }
 
                     const queuedObs = this.observationQueue.find(obs => obs.toolId === getToolId(toolUse));
                     let observation: string;
@@ -1476,6 +1497,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           reachedMaxIterations: false,
           reachedMaxTotalTokens: true,
           checkpoint: this.toCheckpoint(),
+          ...(gatedToolCalls.length > 0 ? { gatedToolCalls } : {}),
         };
       }
 
@@ -1500,6 +1522,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           isComplete: true,
           reachedMaxIterations: true,
           checkpoint: this.toCheckpoint(),
+          ...(gatedToolCalls.length > 0 ? { gatedToolCalls } : {}),
         };
       }
 
@@ -1522,6 +1545,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         isComplete: iterationComplete,
         reachedMaxIterations: false,
         checkpoint: this.toCheckpoint(),
+        ...(gatedToolCalls.length > 0 ? { gatedToolCalls } : {}),
       };
     } catch (error) {
       // Capture the in-flight iteration index BEFORE rollback. `this.iterations`
@@ -1708,6 +1732,49 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       if (error instanceof ToolExecutionAbortedError) return error.partialResults;
       throw error;
     }
+  }
+
+  /**
+   * Ask the host's pre-execution gate whether this call may run.
+   *
+   * Assigns `toolUse.id` when the provider did not supply one, because the id is
+   * what later pairs the withheld call with its placeholder tool_result - the
+   * generated id must be the same one `appendToolMessages` writes, not a second
+   * fresh one.
+   */
+  private withholdIfGated(toolUse: ToolUseInfo, gate?: (call: GatedToolCall) => boolean): GatedToolCall | null {
+    if (!gate) return null;
+    if (!toolUse.id) {
+      toolUse.id = `${toolUse.name}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+    const call: GatedToolCall = { id: toolUse.id, name: toolUse.name, input: toolUse.arguments };
+    return gate(call) ? call : null;
+  }
+
+  /**
+   * Run a call the gate withheld earlier, once the host has approval for it, and
+   * swap its placeholder tool_result for the real observation. Call this on a
+   * checkpoint-resumed agent before the next `runIteration()`; the gate is NOT
+   * re-consulted, so the caller owns the approval decision.
+   */
+  async executeGatedToolCall(call: GatedToolCall): Promise<string> {
+    // Checked BEFORE executing: the backend method is optional and several backends
+    // (gemini, xai, kimi, ollama, ...) do not implement it. Running the tool first and
+    // discovering that afterwards would leave the side effect behind with no way to record
+    // its result, and report the failure as though the tool had never run.
+    if (!this.context.llm.replaceLastToolResultObservation) {
+      throw new Error(
+        `ReActAgent.executeGatedToolCall: backend (${this.context.llm.currentModel}) cannot record a replayed tool result, so an approval-gated tool cannot be run on it`
+      );
+    }
+    const observation = await this.executeToolWithQueueFallback({
+      id: call.id,
+      name: call.name,
+      arguments: typeof call.input === 'string' || call.input === undefined ? call.input : JSON.stringify(call.input),
+    });
+    this.replaceLastToolResultObservation(call.id, observation);
+    this.buildObservationStep(call.name, observation);
+    return observation;
   }
 
   /**

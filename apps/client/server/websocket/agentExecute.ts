@@ -448,11 +448,11 @@ export async function handlePermissionResponse(
     return;
   }
 
-  // Deny stops the run. The tool already executed this iteration (Phase 1
-  // post-execution gating), but we must not let the agent keep acting on a
-  // denied action. Mirror the executor's own denied-tool outcome: mark the run
-  // failed and emit `failed`; do NOT resume. (Previously this branch fell
-  // through to the resume below, so a one-time Deny silently let the run
+  // Deny stops the run. The gate withheld the call before it executed, so denying
+  // costs nothing and leaves no side effect behind - clearing `pendingPermission`
+  // discards the withheld calls unrun. Mirror the executor's own denied-tool
+  // outcome: mark the run failed and emit `failed`; do NOT resume. (Previously this
+  // branch fell through to the resume below, so a one-time Deny silently let the run
   // continue - the tool was only recorded when `rememberForSession` was set,
   // which the Deny button never sends.)
   if (!cmd.approved) {
@@ -481,11 +481,29 @@ export async function handlePermissionResponse(
   }
 
   // Approved: record (optionally remembering it for the session) and resume.
-  await agentExecutionRepository.updatePermissionState(cmd.executionId, {
-    pendingPermission: null,
-    approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
-  });
+  // `pendingPermission` is marked rather than cleared - it still holds the tool calls
+  // the gate withheld, and the resumed executor is what finally runs them. The CAS is
+  // on `awaiting_permission`, so a duplicate approval for a pause already consumed is
+  // dropped here instead of replaying the tool a second time.
+  const marked = await agentExecutionRepository.approvePendingPermission(cmd.executionId);
+  if (!marked) {
+    logger.warn('[Permission] Approval did not land - the pause was already settled', {
+      executionId: cmd.executionId,
+      toolName: cmd.toolName,
+    });
+    // The card that sent this approval is waiting on a reply, and no resume is coming.
+    // Send whatever the run's status actually is now so the UI leaves its spinner
+    // instead of hanging until the stale sweep - the deny path always answers too.
+    const current = await agentExecutionRepository.findById(cmd.executionId);
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'progress',
+      executionId: cmd.executionId,
+      status: current?.status ?? execution.status,
+    });
+    return;
+  }
   if (cmd.rememberForSession) {
+    await agentExecutionRepository.updatePermissionState(cmd.executionId, { approvedTool: cmd.toolName });
     await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'approved', logger);
   }
 
@@ -682,7 +700,17 @@ async function handleReconnect(
     found: true,
     executionId: execution.id,
     status: execution.status,
-    pendingPermission: execution.pendingPermission,
+    // Projected, not passed through: `pendingPermission` also stores the withheld
+    // tool calls the executor replays on approval, and their arguments are
+    // unbounded. Only what the permission card renders belongs in this envelope -
+    // see the steps-budget note above, which assumes the rest of it stays under 1KB.
+    pendingPermission: execution.pendingPermission
+      ? {
+          toolName: execution.pendingPermission.toolName,
+          toolInput: execution.pendingPermission.toolInput,
+          requestedAt: execution.pendingPermission.requestedAt,
+        }
+      : undefined,
     // Confidence-gate state - clients re-render the gate UI when
     // they reconnect to a `paused` execution. `pendingGate` and `paused`
     // are written atomically by `setPendingGate`, so either both are

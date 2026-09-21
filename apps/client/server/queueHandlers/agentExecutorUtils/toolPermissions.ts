@@ -9,7 +9,7 @@
  *    (`sessionToolApprovalRepository`) when the execution is created.
  */
 
-import type { AgentStep } from '@bike4mind/agents';
+import type { GatedToolCall } from '@bike4mind/agents';
 import { getToolSideEffects } from '@bike4mind/common';
 import { isHeadlessConnection } from '@server/utils/headlessConnection';
 
@@ -60,38 +60,44 @@ export type GatedAction = {
   toolName: string;
   toolInput: unknown;
   verdict: 'denied' | 'needs_approval';
+  /** Provider tool_use id, present when the action came from a pre-execution gate. */
+  toolCallId?: string;
 };
 
 /**
- * Scan an iteration's steps for the most-restrictive permission verdict.
- *
- * `ReActAgent.runIteration()` returns the iteration's *primary* step (final_answer
- * or last step), which for a tool-calling iteration is the `observation` - not the
- * `action`. Inspecting only the primary step misses every tool call. This helper
- * walks `allSteps` instead.
- *
- * Multi-tool iterations (parallel execution) can call several tools at once.
- * `pendingPermission` is single-toolName by design, so we pick deterministically:
- * any `denied` action wins immediately; otherwise the first `needs_approval`.
- *
- * Returns null when no action requires gating.
+ * True when a tool call must not run until the user says so - the predicate behind
+ * `AgentRunOptions.toolGate`, which the agent consults BEFORE invoking the tool.
+ * Withholding covers both `denied` and `needs_approval`: a denied tool must not run
+ * either, and the executor re-reads the verdict from the withheld call to decide
+ * between failing the run and asking.
  */
-export function selectGatedAction(
-  steps: AgentStep[],
+export function shouldWithholdToolCall(toolName: string, approvedTools: string[], deniedTools: string[]): boolean {
+  return classifyToolPermission(toolName, approvedTools, deniedTools) !== 'allowed';
+}
+
+/**
+ * Pick the verdict the executor acts on from the calls the gate withheld this
+ * iteration. Same deterministic rule as the post-execution scan it replaced:
+ * any `denied` call wins immediately, otherwise the first `needs_approval`.
+ *
+ * `pendingPermission` holds one toolName by design, so the remaining withheld calls
+ * are persisted alongside it and re-selected on the next pause - a second gated tool
+ * in the same iteration raises its own permission card after the first is settled.
+ */
+export function selectGatedToolCall(
+  calls: GatedToolCall[],
   approvedTools: string[],
   deniedTools: string[]
 ): GatedAction | null {
   let firstNeedsApproval: GatedAction | null = null;
 
-  for (const step of steps) {
-    if (step.type !== 'action' || !step.metadata?.toolName) continue;
-    const toolName = step.metadata.toolName;
-    const verdict = classifyToolPermission(toolName, approvedTools, deniedTools);
+  for (const call of calls) {
+    const verdict = classifyToolPermission(call.name, approvedTools, deniedTools);
     if (verdict === 'denied') {
-      return { toolName, toolInput: step.metadata.toolInput, verdict };
+      return { toolName: call.name, toolInput: call.input, verdict, toolCallId: call.id };
     }
     if (verdict === 'needs_approval' && !firstNeedsApproval) {
-      firstNeedsApproval = { toolName, toolInput: step.metadata.toolInput, verdict };
+      firstNeedsApproval = { toolName: call.name, toolInput: call.input, verdict, toolCallId: call.id };
     }
   }
 
