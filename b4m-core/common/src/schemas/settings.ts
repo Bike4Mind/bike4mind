@@ -1067,6 +1067,18 @@ export const RapidReplySettingsSchema = z.object({
 
 export type RapidReplySettings = z.infer<typeof RapidReplySettingsSchema>;
 
+/**
+ * Canonical repository and branch the What's New generator reads from.
+ *
+ * Every default in the What's New path (zod schema, settings registry, server
+ * config service, cron/backfill fallbacks, admin form seed) must resolve here.
+ * A stale slug is invisible in production: GitHubService.listMergedPullRequests
+ * returns [] for a repository outside the connection allowlist, so generation
+ * records "no PRs today" instead of an error and the surface silently goes dark.
+ */
+export const WHATS_NEW_DEFAULT_REPOSITORY = 'Bike4Mind/bike4mind';
+export const WHATS_NEW_DEFAULT_TARGET_BRANCH = 'prod';
+
 // What's New Configuration Validation Limits
 // Single source of truth for all numeric constraints used in both frontend and backend
 export const WHATS_NEW_VALIDATION_LIMITS = {
@@ -1159,11 +1171,11 @@ export const WhatsNewConfigSchema = z.object({
   repository: z
     .string()
     .regex(/^[\w.-]+\/[\w.-]+$/, 'Must be in owner/repo format (e.g., MyOrg/my-repo)')
-    .default('MillionOnMars/lumina5'),
+    .default(WHATS_NEW_DEFAULT_REPOSITORY),
   targetBranch: z
     .string()
     .regex(/^[\w./-]+$/, 'Must be a valid branch name')
-    .default('prod'),
+    .default(WHATS_NEW_DEFAULT_TARGET_BRANCH),
 
   // Custom prompt template (optional)
   promptTemplate: z
@@ -4244,8 +4256,8 @@ export const settingsMap = {
       maxPRBodyLength: 500,
       maxChangelogLength: 1000,
       // GitHub repository configuration
-      repository: 'MillionOnMars/lumina5',
-      targetBranch: 'main',
+      repository: WHATS_NEW_DEFAULT_REPOSITORY,
+      targetBranch: WHATS_NEW_DEFAULT_TARGET_BRANCH,
     },
     description:
       "Configuration for automated What's New modal generation, including LLM model selection, prompt parameters, validation rules, and content sanitization limits.",
