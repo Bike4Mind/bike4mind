@@ -65,7 +65,7 @@ function makeAdapters(existingSessions: unknown[] = [], user: Record<string, unk
       findAll: async () => [{ settingName: 'MaxFileSize', settingValue: String(MAX_FILE_SIZE_MB) }],
       findBySettingNames: async () => [],
     },
-    fileStorageService: { uploadFile: vi.fn(), getFileContent: vi.fn(), getSignedUrl: vi.fn() },
+    fileStorageService: { uploadFile: vi.fn(), deleteFile: vi.fn(), getFileContent: vi.fn(), getSignedUrl: vi.fn() },
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     generateId: () => 'generated-id',
   } as unknown as NotebookImportAdapters;
@@ -747,9 +747,11 @@ describe('notebook import: knowledge file admission', () => {
     );
 
     // The mirror of the upload-failure case above, and the reason the charge sits above the row
-    // write rather than below it: a.pdf's bytes are in the bucket even though its row never landed,
-    // so b.pdf must not be handed headroom those bytes already occupy. Moving the charge below the
-    // create admits b.
+    // write rather than below it: a.pdf's bytes were uploaded even though its row never landed, so
+    // b.pdf must not be handed headroom those bytes occupy. The compensating delete below does
+    // remove the object, but the charge deliberately stays anyway - that delete is best-effort, and
+    // the only guard against several files jointly overshooting the quota cannot depend on it.
+    // Moving the charge below the create admits b.
     expect(result.warnings).toEqual([
       expect.stringMatching(/a\.pdf.*write failed/),
       expect.stringMatching(/b\.pdf.*storage limit/),
@@ -776,5 +778,120 @@ describe('notebook import: knowledge file admission', () => {
     expect(first.warnings).toEqual([]);
     expect(second.warnings).toEqual([]);
     expect(adapters.fileStorageService.uploadFile).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * The bytes are written before the `FabFile` row that points at them, and the upload cannot join
+ * the caller's transaction, so a rejected row write leaves an object nothing references. The
+ * service removes it itself - but only when the write failed, and never at the cost of the import.
+ */
+describe('notebook import: a knowledge file whose row write fails leaves no object behind', () => {
+  const embedded = (name: string, bytes = 16) => ({
+    id: `exported-${name}`,
+    name,
+    mimeType: 'application/pdf',
+    size: bytes,
+    content: Buffer.alloc(bytes).toString('base64'),
+  });
+
+  function makeService() {
+    const { adapters } = makeAdapters();
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockResolvedValue({ id: 'store-knowledge-id' });
+    return adapters;
+  }
+
+  function importKnowledge(adapters: NotebookImportAdapters, files: Record<string, unknown>[]) {
+    return new NotebookImportService(adapters).importNotebooks(
+      'user-1',
+      { exportVersion: '1.0.0', notebooks: [{ ...NOTEBOOK, knowledge: files }] } as never,
+      { ...OPTIONS, importKnowledge: true } as never
+    );
+  }
+
+  it('deletes the object it uploaded when the row write rejects, and still commits', async () => {
+    const adapters = makeService();
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('write failed'));
+
+    const result = await importKnowledge(adapters, [embedded('a.pdf')]);
+
+    // The exact string the upload used: a delete of anything else would miss the object.
+    const [uploadedPath] = (adapters.fileStorageService.uploadFile as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(adapters.fileStorageService.deleteFile).toHaveBeenCalledTimes(1);
+    expect(adapters.fileStorageService.deleteFile).toHaveBeenCalledWith(uploadedPath);
+    // The outcome is unchanged: the file is warned and the notebook still lands. The delete is
+    // compensation, not a new failure mode.
+    expect(result.errors).toEqual([]);
+    expect(result.importedNotebooks).toBe(1);
+    expect(result.warnings).toEqual([expect.stringMatching(/a\.pdf.*write failed/)]);
+  });
+
+  it('does not let a failing compensating delete escalate into a failed import', async () => {
+    const adapters = makeService();
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('write failed'));
+    (adapters.fileStorageService.deleteFile as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error('delete failed')
+    );
+
+    const result = await importKnowledge(adapters, [embedded('a.pdf')]);
+
+    // The user hears about the row-write failure, never the delete failure, and the notebook still
+    // lands: a failed delete degrades to the orphan this fix improves on, nothing more.
+    expect(adapters.fileStorageService.deleteFile).toHaveBeenCalledTimes(1);
+    expect(result.errors).toEqual([]);
+    expect(result.importedNotebooks).toBe(1);
+    expect(result.warnings).toEqual([expect.stringMatching(/a\.pdf.*write failed/)]);
+    expect(result.warnings?.join(' ')).not.toContain('delete failed');
+    expect(adapters.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to delete uploaded knowledge file'),
+      expect.objectContaining({ filePath: expect.any(String) })
+    );
+  });
+
+  it('does not delete when the row write succeeded', async () => {
+    const adapters = makeService();
+
+    const result = await importKnowledge(adapters, [embedded('a.pdf')]);
+
+    expect(result.importedAttachments).toBe(1);
+    expect(adapters.fileStorageService.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('does not delete when the row was written but its id was unreadable', async () => {
+    const adapters = makeService();
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockResolvedValueOnce({});
+
+    const result = await importKnowledge(adapters, [embedded('a.pdf')]);
+
+    // `takeStoreId` threw after a successful insert, so a row DOES point at this object. Deleting
+    // it would leave the row pointing at nothing - the inverse orphan the rescue sweep collects.
+    expect(result.warnings).toEqual([expect.stringMatching(/a\.pdf.*no id/)]);
+    expect(adapters.fileStorageService.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('names a nameless entry by its export id rather than "undefined"', async () => {
+    const adapters = makeService();
+    (adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('write failed'));
+
+    // `name` is not required by the export format, so an entry missing it - the exact entry that
+    // fails the write - used to report as `"undefined"`, naming nothing at all.
+    const result = await importKnowledge(adapters, [{ ...embedded('a.pdf'), id: 'kf-1', name: undefined }]);
+
+    expect(result.warnings?.[0]).toContain('kf-1');
+    expect(result.warnings?.[0]).not.toContain('undefined');
+  });
+
+  it('falls back to the entry position when name and id are both absent', async () => {
+    const adapters = makeService();
+    const create = adapters.knowledgeRepository.create as ReturnType<typeof vi.fn>;
+    create.mockReset();
+    create.mockResolvedValueOnce({ id: 'store-knowledge-id' }).mockRejectedValueOnce(new Error('write failed'));
+
+    const result = await importKnowledge(adapters, [
+      embedded('first.pdf'),
+      { ...embedded('second.pdf'), id: undefined, name: undefined },
+    ]);
+
+    expect(result.warnings?.[0]).toContain('knowledge[1]');
   });
 });
