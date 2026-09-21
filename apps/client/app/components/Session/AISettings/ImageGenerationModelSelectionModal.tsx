@@ -49,7 +49,13 @@ import {
 import MetadataChip from './MetaDataChips';
 import { useModelStats } from '@client/app/hooks/data/useModelStats';
 import { ContextHelpButton } from '@client/app/components/help';
-import { ignoresUpsamplingAndSeed, withInertNote } from './inertImageSettings';
+import {
+  ASPECT_RATIO_INERT_NOTE,
+  ignoresAspectRatio,
+  ignoresUpsamplingAndSeed,
+  withInertNote,
+} from './inertImageSettings';
+import { imageSizeUpdate } from './imageSizeUpdate';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
@@ -291,7 +297,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             label: 'Image Size',
             type: 'select' as const,
             value: _size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(contextImageModel)].defaultSize,
-            onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
+            onChange: (value: OpenAIImageSize | null) => value && setLLM(imageSizeUpdate(contextImageModel, value)),
             options: getAvailableSizes(contextImageModel).map(s => ({ value: s, label: s })),
             testId: 'image-setting-size-select',
           },
@@ -357,7 +363,13 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             inputProps: {
               type: 'number',
               placeholder: 'Auto',
-              slotProps: { input: { min: 256, max: 4096, step: 8 } },
+              slotProps: {
+                input: {
+                  min: IMAGE_SIZE_CONSTRAINTS.BFL.minWidth,
+                  max: IMAGE_SIZE_CONSTRAINTS.BFL.maxWidth,
+                  step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                },
+              },
             },
             testId: 'image-setting-width-input',
           },
@@ -369,7 +381,13 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
             inputProps: {
               type: 'number',
               placeholder: 'Auto',
-              slotProps: { input: { min: 256, max: 4096, step: 8 } },
+              slotProps: {
+                input: {
+                  min: IMAGE_SIZE_CONSTRAINTS.BFL.minHeight,
+                  max: IMAGE_SIZE_CONSTRAINTS.BFL.maxHeight,
+                  step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                },
+              },
             },
             testId: 'image-setting-height-input',
           },
@@ -380,6 +398,12 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
       type: 'select' as const,
       value: _aspect_ratio?.toString() ?? '',
       onChange: (value: string | null) => setLLM({ aspect_ratio: value ? value : undefined }),
+      tooltip: withInertNote(
+        'Shape of the generated image',
+        ignoresAspectRatio(contextImageModel),
+        ASPECT_RATIO_INERT_NOTE
+      ),
+      disabled: ignoresAspectRatio(contextImageModel),
       options: [
         { value: '', label: 'Auto' },
         { value: '16:9', label: '16:9' },
@@ -566,6 +590,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
                         <Select
                           value={setting.value}
                           onChange={(_, newValue: any) => setting.onChange(newValue)}
+                          disabled={(setting as { disabled?: boolean }).disabled}
                           sx={commonSelectStyles}
                           slotProps={{ listbox: { sx: { zIndex: 2000 } } }}
                           data-testid={(setting as any).testId}

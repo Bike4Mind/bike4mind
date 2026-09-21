@@ -39,6 +39,8 @@ import {
   requiresImageInput,
   insufficientCreditsError,
   getQuestErrorCode,
+  resolveImageDimensions,
+  BFL_DIMENSION_BOUNDS,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -1110,8 +1112,7 @@ export class ImageGenerationService {
         } else {
           // For regular Pro models, use width and height
           images = await service.generate(truncatedPrompt, {
-            width: width || 1024,
-            height: height || 768,
+            ...resolveImageDimensions({ width, height, size: effectiveSize }, BFL_DIMENSION_BOUNDS),
             user: userId,
             model: model as any,
             safety_tolerance,

@@ -23,12 +23,16 @@ vi.mock('@bike4mind/utils/imageModeration', async importOriginal => {
 });
 
 const mockGeminiGenerate = vi.fn();
+const mockBflGenerate = vi.fn();
 vi.mock('@bike4mind/utils', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/utils')>();
   return {
     ...actual,
     GeminiImageService: vi.fn().mockImplementation(function () {
       return { generate: mockGeminiGenerate };
+    }),
+    BFLImageService: vi.fn().mockImplementation(function () {
+      return { generate: mockBflGenerate };
     }),
   };
 });
@@ -160,6 +164,78 @@ describe('image_generation Gemini branch parameter passthrough', () => {
         safety_tolerance: 1,
         output_format: 'jpeg',
       })
+    );
+  });
+});
+
+describe('image_generation BFL branch dimensions', () => {
+  // Flux Pro sizes its request from width/height, so the configured `size` preset has to reach it
+  // as dimensions or every Pro generation lands on BFLImageService's own 1024x768 default.
+  beforeEach(() => {
+    mockBflGenerate.mockReset();
+    mockBflGenerate.mockResolvedValue([]);
+  });
+
+  it('derives width/height from the configured size preset', async () => {
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+      size: '1440x810',
+    });
+
+    await toolFn({ prompt: 'a red bike' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 1440, height: 810 }));
+  });
+
+  it('derives width/height from the tool call size when imageConfig has none', async () => {
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+    });
+
+    await toolFn({ prompt: 'a red bike', size: '512x512' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 512, height: 512 }));
+  });
+
+  it('lets explicitly configured width/height win over the size preset', async () => {
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+      size: '1440x810',
+      width: 800,
+      height: 600,
+    });
+
+    await toolFn({ prompt: 'a red bike' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ width: 800, height: 600 }));
+  });
+
+  it('discards a preset BFL would reject rather than forwarding it', async () => {
+    // A size chosen for GPT Image 2 survives a switch to Flux Pro; 3840x2160 is over BFL's 1440
+    // cap, so sending it on would turn a wrong-size image into a failed generation.
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+      size: '3840x2160',
+    });
+
+    await toolFn({ prompt: 'a red bike' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith(
+      'a red bike',
+      expect.objectContaining({ width: undefined, height: undefined })
+    );
+  });
+
+  it('leaves dimensions undefined when no size or width/height is configured', async () => {
+    const { toolFn } = imageGenerationTool.implementation(createFakeContext(), {
+      model: ImageModels.FLUX_PRO_1_1,
+    });
+
+    await toolFn({ prompt: 'a red bike' });
+
+    expect(mockBflGenerate).toHaveBeenCalledWith(
+      'a red bike',
+      expect.objectContaining({ width: undefined, height: undefined })
     );
   });
 });

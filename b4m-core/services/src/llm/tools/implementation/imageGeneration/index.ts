@@ -8,6 +8,8 @@ import {
   GenerateImageToolCall,
   isBflImageModel,
   isGeminiImageModel,
+  resolveImageDimensions,
+  BFL_DIMENSION_BOUNDS,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -254,8 +256,7 @@ export const imageGenerationTool: ToolDefinition = {
             // generate() only accepts the generation FLUX variants; in practice only those
             // reach this branch (fill/Kontext are edit models), so narrow to satisfy it.
             model: bflModel as ImageModels.FLUX_PRO | ImageModels.FLUX_PRO_1_1 | ImageModels.FLUX_PRO_ULTRA,
-            width: width ?? 1024,
-            height: height ?? 768,
+            ...resolveImageDimensions({ width, height, size }, BFL_DIMENSION_BOUNDS),
             aspect_ratio: aspect_ratio,
             output_format: output_format ?? 'png',
             prompt_upsampling: prompt_upsampling ?? false,
@@ -336,23 +337,10 @@ export const imageGenerationTool: ToolDefinition = {
         }
         const service = new LocalImageService(selfHostBaseUrl, context.logger);
 
-        // The local backend takes discrete width/height; derive them from the
-        // size string (e.g. '512x512') when explicit dimensions aren't set.
-        let localWidth = width;
-        let localHeight = height;
-        if ((!localWidth || !localHeight) && typeof size === 'string') {
-          const [sw, sh] = size.split('x').map(Number);
-          if (sw && sh) {
-            localWidth = sw;
-            localHeight = sh;
-          }
-        }
-
         const images = await service.generate(prompt, {
           n,
           model: model.replace(/^local-image\//, ''),
-          width: localWidth,
-          height: localHeight,
+          ...resolveImageDimensions({ width, height, size }),
         });
 
         const storedImageUrls = await processAndStoreImages(images, context, model, provider);
@@ -402,7 +390,8 @@ export const imageGenerationTool: ToolDefinition = {
           },
           size: {
             type: 'string',
-            description: 'The size of the image to generate (OpenAI only)',
+            description:
+              "The size of the image to generate, as 'WIDTHxHEIGHT'. Ignored by providers that take an aspect ratio instead (Flux Ultra, Gemini), or that cannot produce the requested dimensions.",
             enum: ['256x256', '512x512', '1024x1024', '1792x1024', '1024x1792'],
           },
           quality: {
