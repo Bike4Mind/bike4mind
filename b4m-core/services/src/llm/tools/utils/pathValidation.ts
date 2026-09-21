@@ -18,21 +18,28 @@ export interface PathValidationResult {
 function resolveRealPath(filePath: string): string {
   try {
     return realpathSync(filePath);
-  } catch {
-    // realpathSync failed. Two distinct cases must be told apart:
-    //  1. `filePath` is itself a symlink (possibly DANGLING - target missing).
-    //     Follow the link manually so a dangling link can't be treated as an
-    //     in-workspace new file and smuggle a write out to its target.
-    //  2. `filePath` genuinely does not exist (e.g. a file being created).
-    //     Resolve the nearest existing ancestor and re-append the leaf.
-    try {
-      const linkTarget = readlinkSync(filePath); // throws unless filePath is a symlink
-      const resolvedTarget = path.isAbsolute(linkTarget)
-        ? linkTarget
-        : path.resolve(path.dirname(filePath), linkTarget);
-      return resolveRealPath(resolvedTarget);
-    } catch {
-      // Not a symlink - fall through to nearest-ancestor resolution.
+  } catch (err) {
+    // realpathSync failed. Only ENOENT (a missing final target) is safe to follow
+    // manually. Other errors must NOT recurse through readlink: a symlink cycle
+    // (a -> b -> a) throws ELOOP, and following it link-by-link would recurse
+    // without end. ELOOP/EACCES fall through to nearest-ancestor resolution, which
+    // terminates; a cyclic link can never open() anyway, so a lexical verdict is safe.
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') {
+      // Two ENOENT cases must be told apart:
+      //  1. `filePath` is itself a DANGLING symlink (target missing). Follow the
+      //     link manually so it can't pass as an in-workspace new file and smuggle
+      //     a write out to its target.
+      //  2. `filePath` genuinely does not exist (e.g. a file being created).
+      //     Fall through to nearest-existing-ancestor resolution.
+      try {
+        const linkTarget = readlinkSync(filePath); // throws unless filePath is a symlink
+        const resolvedTarget = path.isAbsolute(linkTarget)
+          ? linkTarget
+          : path.resolve(path.dirname(filePath), linkTarget);
+        return resolveRealPath(resolvedTarget);
+      } catch {
+        // Not a symlink - fall through to nearest-ancestor resolution.
+      }
     }
     const parentDir = path.dirname(filePath);
     const basename = path.basename(filePath);
