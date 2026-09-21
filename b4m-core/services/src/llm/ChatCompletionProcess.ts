@@ -1020,6 +1020,8 @@ export class ChatCompletionProcess {
           dataLakeTagPrefixes: [],
           scopedTagPrefixes: [],
           lakes: [],
+          // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
+          // shaped anything is unknown, not "nothing was excluded" (#3055).
         };
       }
     }
@@ -2897,15 +2899,27 @@ export class ChatCompletionProcess {
         // personal and the lake arms are suppressed. Fail direction is inherited from
         // getAccessibleDataLakeAccess, which degrades to empty access rather than throwing, so a
         // lake-resolution outage records an empty scope and the replay skips the turn.
-        const lakeScope = this.personalCorpusOnly
-          ? []
-          : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
+        const narrowedAccess = this.personalCorpusOnly
+          ? undefined
+          : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags);
+        const lakeScope = narrowedAccess?.dataLakeTags ?? [];
+        // Access-excluded count travels with the same resolution as lakeScope (#3055). Written
+        // whenever the count was actually measured - INCLUDING a genuine zero, per this field's
+        // own absence contract (RetrievalSummarySchema.excludedLakes: absent means not recorded,
+        // never "nothing excluded"). A personal-corpus turn (narrowedAccess undefined) or a failed
+        // count query (excludedByAccessCount undefined) both correctly stay unrecorded rather than
+        // reporting a zero that was never measured.
+        const excludedLakes =
+          narrowedAccess?.excludedByAccessCount !== undefined
+            ? { count: narrowedAccess.excludedByAccessCount, reason: 'access' as const }
+            : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
           surfaces: [],
           dataLakeTags: [],
           lakeScope,
+          ...(excludedLakes ? { excludedLakes } : {}),
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.
