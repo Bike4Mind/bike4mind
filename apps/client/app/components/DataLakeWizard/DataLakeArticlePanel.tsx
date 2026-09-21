@@ -7,6 +7,7 @@ import StorageIcon from '@mui/icons-material/Storage';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import { useReprocessFabFile, type DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
 import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
+import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 import PurgeLakeDocumentAction from '@client/app/components/DataLakeWizard/PurgeLakeDocumentAction';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
@@ -67,6 +68,11 @@ export default function DataLakeArticlePanel({
   const reprocess = useReprocessFabFile(dataLakeId);
   const [confirmRemove, setConfirmRemove] = useState(false);
   const stallNotice = file ? describePipelineStall(file) : null;
+  // This pane is reached from the lake manager, not from a citation click, so the anchor is
+  // usually absent. Honoring it when the ids DO match means opening the cited document here marks
+  // the same passage the chat viewer would - one primitive, both read surfaces (#3038).
+  const citedAnchor = useSessionLayout(s => s.citedPassage);
+  const citedPassage = citedAnchor?.fileId === readableFile?.id ? citedAnchor?.passage : undefined;
 
   if (!file) {
     return (
@@ -189,7 +195,7 @@ export default function DataLakeArticlePanel({
             <Skeleton variant="text" level="body-md" sx={{ width: '70%' }} />
           </Box>
         ) : content ? (
-          <MarkdownViewer content={content} />
+          <MarkdownViewer content={content} citedPassage={citedPassage} />
         ) : (
           <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
             Unable to load file content.

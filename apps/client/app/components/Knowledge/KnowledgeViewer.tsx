@@ -880,7 +880,10 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       // The data-lake View preview is just as session-transient: leaving it set would surface a
       // stale "just looking" tab inside a different notebook's viewer.
       if (useSessionLayout.getState().previewFile) {
-        setSessionLayout({ previewFile: null });
+        // The citation anchor is scoped to that preview and must go with it: a notebook switch
+        // leaves the same file reachable through the workbench, where a stale anchor would mark
+        // a passage nothing in this session cited.
+        setSessionLayout({ previewFile: null, citedPassage: null });
       }
       prevSessionIdRef.current = currentSessionId;
     }
@@ -2348,6 +2351,11 @@ const FileContent = ({
   const [content, setContent] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [readyToShow, setReadyToShow] = useState(false);
+  // The passage a citation click asked us to mark (#3038), narrowed to THIS file. The anchor is a
+  // single store slot shared by every open tab, so without the id guard a citation into one
+  // document would mark whatever text happens to collide in the others.
+  const citedAnchor = useSessionLayout(s => s.citedPassage);
+  const citedPassage = citedAnchor?.fileId === file?.id ? citedAnchor?.passage : undefined;
 
   // The signed URL takes a while to be ready; wait for it before showing content.
   useEffect(() => {
@@ -2570,7 +2578,7 @@ const FileContent = ({
 
         const wrappedContent = content.includes('```mermaid') ? `\`\`\`mermaid\n${content}\n\`\`\`` : content;
 
-        return <MarkdownViewer content={wrappedContent} />;
+        return <MarkdownViewer content={wrappedContent} citedPassage={citedPassage} />;
       } else {
         return (
           <>

@@ -53,13 +53,54 @@ export function redactFunctionCallsForViewer<T extends RedactableFunctionCall>(
   });
 }
 
-type RedactablePromptMeta = { functionCalls?: RedactableFunctionCall[] | null };
+type RedactableCitable = { metadata?: Record<string, unknown> | null } | null | undefined;
+
+type RedactablePromptMeta = {
+  functionCalls?: RedactableFunctionCall[] | null;
+  citables?: RedactableCitable[] | null;
+};
 
 /**
- * One-call wrapper around {@link redactFunctionCallsForViewer} for the common case of redacting
- * an entire `promptMeta` object for a non-owner viewer. This is the shape every quest-returning
- * route needs (owner sees it whole, everyone else loses `functionCalls[].returnValue`/`.error`) -
- * inherit it here rather than re-deriving the same three-line ternary at the next route.
+ * Verbatim retrieved passage text on a citation chip (#3038). Owner-only for exactly the reason
+ * `returnValue` is: it is a slice of a document the OWNER's retrieval read on the owner's behalf,
+ * and a share/subscribe/clone grant authorizes reading the conversation, not re-reading the
+ * owner's corpus through it. The sibling `chunkId` is deliberately kept - an opaque id is not
+ * content, and `citables[].id` (the file id) is already unredacted beside it.
+ */
+const OWNER_ONLY_CITABLE_METADATA_FIELDS = ['fullContext'] as const;
+
+/**
+ * Strip owner-only metadata from citation chips for a non-owner viewer.
+ *
+ * Copies at both levels it edits - the array, and the `metadata` of a chip that actually carries
+ * one of the fields - and MUST NOT mutate the input, for the same reason
+ * {@link redactFunctionCallsForViewer} must not: read paths share the in-memory document between
+ * an owner-scoped consumer and a client-response boundary.
+ *
+ * Returns the INPUT array when no chip carried a redactable field, which is what lets the caller
+ * keep its documented same-reference contract on the common case: a file-level citation (keyword
+ * search, whole-document retrieve) carries no passage text at all.
+ */
+function redactCitablesForViewer<T extends RedactableCitable>(citables: T[]): T[] {
+  let redactedAny = false;
+  const out = citables.map(citable => {
+    if (!citable?.metadata) return citable;
+    if (!OWNER_ONLY_CITABLE_METADATA_FIELDS.some(field => field in citable.metadata!)) return citable;
+    redactedAny = true;
+    const metadata = { ...citable.metadata };
+    for (const field of OWNER_ONLY_CITABLE_METADATA_FIELDS) {
+      delete metadata[field];
+    }
+    return { ...citable, metadata };
+  });
+  return redactedAny ? out : citables;
+}
+
+/**
+ * The one place a whole `promptMeta` is redacted for a non-owner viewer: the owner sees it whole,
+ * everyone else loses `functionCalls[].returnValue`/`.error` and `citables[].metadata.fullContext`.
+ * This is the shape every quest-returning route needs - inherit it here rather than re-deriving
+ * the per-field handling at the next route.
  *
  * Returns the SAME reference when `isOwner` is true or there is nothing to redact, so callers
  * that check reference equality (or just don't want a needless copy) are unaffected.
@@ -68,6 +109,14 @@ export function redactPromptMetaForViewer<T extends RedactablePromptMeta>(
   promptMeta: T | null | undefined,
   isOwner: boolean
 ): T | null | undefined {
-  if (isOwner || promptMeta == null || !promptMeta.functionCalls) return promptMeta;
-  return { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) };
+  if (isOwner || promptMeta == null) return promptMeta;
+  const citables = promptMeta.citables ? redactCitablesForViewer(promptMeta.citables) : undefined;
+  // functionCalls always copies when present, so its mere presence is a change; citables only
+  // counts as one when a chip actually lost a field.
+  if (!promptMeta.functionCalls && citables === promptMeta.citables) return promptMeta;
+  return {
+    ...promptMeta,
+    ...(promptMeta.functionCalls ? { functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) } : {}),
+    ...(citables ? { citables } : {}),
+  };
 }

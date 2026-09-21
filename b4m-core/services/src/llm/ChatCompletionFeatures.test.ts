@@ -526,6 +526,18 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
   });
 
+  it("anchors each citable at its file's best chunk, with the injected passage text (#3038)", async () => {
+    const { quest } = await runRetrieval('indexed');
+    const citables =
+      (quest.promptMeta as { citables?: Array<{ id: string; metadata?: Record<string, unknown> }> }).citables ?? [];
+    // fileA contributes chA1 and chA2, both ranked above fileB's. The file-level dedup keeps the
+    // FIRST appearance, and the walk is score-descending, so chA1 is the cited passage - asserting
+    // the text as well as the id, because an id-only assertion would pass on either chunk if the
+    // dedup ever kept the last one instead.
+    expect(citables.map(c => c.metadata?.chunkId)).toEqual(['chA1', 'chB1']);
+    expect(citables.map(c => c.metadata?.fullContext)).toEqual(['chunk A1', 'chunk B1']);
+  });
+
   it('indexed: fresh quest keeps forced-retrieval citables as the index-aligned array prefix (no warn)', async () => {
     const ctx = makeRetrievalContext();
     const feature = new KnowledgeRetrievalFeature(

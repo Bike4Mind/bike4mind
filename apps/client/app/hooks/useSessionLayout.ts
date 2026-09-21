@@ -64,6 +64,23 @@ export interface PendingMessageFile {
   uploadSessionId: string | null;
 }
 
+/**
+ * The passage a lake citation points at, set when the chip is clicked so the reader lands on the
+ * cited text rather than the top of the document (#3038).
+ *
+ * `passage` is the text as SERVED - trimmed, clipped, defanged - not the stored chunk, so the
+ * reader is shown exactly what grounded the claim. It rides the store rather than the URL because
+ * a passage does not belong in a query string and there is no endpoint that resolves `chunkId`
+ * back to its text; a shared or reloaded link therefore lands on the whole document, as it does
+ * today. `chunkId` is carried for the curator surfaces that key on it, not used by the viewer.
+ */
+export interface CitedPassage {
+  /** Guards against a stale anchor marking a DIFFERENT document the reader opens next. */
+  fileId: string;
+  chunkId: string;
+  passage: string;
+}
+
 interface SessionLayoutControlState {
   layout: DefaultLayoutType;
   artifactData?: ArtifactData;
@@ -72,6 +89,10 @@ interface SessionLayoutControlState {
   // viewer renders it as one extra tab; replaced by the next View, cleared on session switch.
   // Not persisted: a preview is a transient look, not session state.
   previewFile: IFabFileDocument | null;
+  // Set alongside previewFile by a citation click; cleared wherever previewFile is. Not persisted,
+  // for the same reason previewFile is not - an anchor outliving the reload that dropped the
+  // document it points into would mark nothing, or worse, the wrong thing.
+  citedPassage: CitedPassage | null;
   recentArtifacts: ArtifactData[]; // Collection of recently clicked artifacts
   selectedArtifactId?: string;
   // Selected version number for viewing, keyed by artifact id. Per-artifact so a version
@@ -114,6 +135,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
     _set => ({
       layout: 'hide',
       previewFile: null,
+      citedPassage: null,
       knowledgeViewerWidth: 50, // Default to 50% width
       recentArtifacts: [],
       maxRecentArtifacts: 10, // Default max cache size

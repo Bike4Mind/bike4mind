@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import remarkMath from 'remark-math';
@@ -8,9 +8,35 @@ import { ContentCopy, Check } from '@mui/icons-material';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import MermaidChart from '../Charts/MermaidChart';
+import { locateCitedPassage, blockIntersectsPassage, type PassageRange } from './citedPassage';
 
 interface Props {
   content: string;
+  /**
+   * The passage a citation pointed at, as served (#3038). Blocks overlapping it are marked and the
+   * first is scrolled into view. A passage that cannot be located in `content` is rendered as a
+   * callout above the document instead of being dropped, so the reader still sees the evidence.
+   *
+   * Only honored on the markdown render path: a `content` this viewer resolves to a single Mermaid
+   * diagram returns the chart before any of that, and has no prose to mark either way. Callers that
+   * route diagrams elsewhere (KnowledgeViewer does) never reach this prop for such a document.
+   */
+  citedPassage?: string;
+}
+
+/** Marks a block the citation covers. The scroll target is simply the first one in DOM order. */
+const CITED_BLOCK_ATTR = 'data-cited';
+
+type MarkdownNode = { position?: { start: { offset?: number }; end: { offset?: number } } };
+
+/**
+ * Attributes for one rendered block, given its source position. Returns `{}` for a block outside
+ * the cited range, so a document rendered without an anchor is byte-identical to before.
+ */
+function citedBlockProps(node: MarkdownNode | undefined, range: PassageRange | null): Record<string, string> {
+  if (!range) return {};
+  const block = { start: node?.position?.start.offset, end: node?.position?.end.offset };
+  return blockIntersectsPassage(block, range) ? { [CITED_BLOCK_ATTR]: 'true' } : {};
 }
 
 const CopyButton = ({ text }: { text: string }) => {
@@ -49,7 +75,63 @@ const CopyButton = ({ text }: { text: string }) => {
   );
 };
 
-const MarkdownViewer: React.FC<Props> = ({ content }) => {
+/**
+ * Shown when the document could not be marked with the cited passage, for either of two reasons -
+ * see the `title` each caller passes.
+ *
+ * Rendering it is the point: dropping the passage silently would leave the reader looking at an
+ * unmarked document with no sign that the deep link failed, which is indistinguishable from a
+ * citation that never had a passage. Showing the text keeps the evidence in front of them.
+ */
+const UnmarkedCitedPassage = ({ passage, title }: { passage: string; title: string }) => (
+  <Box
+    data-testid="markdown-cited-passage-fallback"
+    sx={{
+      mb: 2,
+      p: 1.5,
+      borderLeft: '3px solid',
+      borderColor: 'primary.solidBg',
+      bgcolor: 'primary.softBg',
+      borderRadius: 'sm',
+    }}
+  >
+    <Typography level="body-xs" sx={{ mb: 0.5, fontWeight: 'lg' }}>
+      {title}
+    </Typography>
+    <Typography level="body-sm" sx={{ whiteSpace: 'pre-wrap' }}>
+      {passage}
+    </Typography>
+  </Box>
+);
+
+const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Offsets are into the string ReactMarkdown actually parses, so the passage has to be located in
+  // the PROMOTED source - locating it in `content` would shift every offset by whatever that
+  // transform inserted and mark the wrong blocks.
+  const promotedContent = useMemo(() => promoteInlineLatexDollars(content), [content]);
+  const citedRange = useMemo(
+    () => (citedPassage ? locateCitedPassage(promotedContent, citedPassage) : null),
+    [promotedContent, citedPassage]
+  );
+
+  // True when the passage WAS located in the source but no rendered block carries it - the cited
+  // text sits in an element type this viewer does not override, a table cell being the common one.
+  // Distinct from "not located at all", and told apart in the copy below, because only the latter
+  // means the document drifted; both leave the reader needing to see the passage itself.
+  const [nothingMarked, setNothingMarked] = useState(false);
+
+  useEffect(() => {
+    if (!citedRange) {
+      setNothingMarked(false);
+      return;
+    }
+    const anchor = containerRef.current?.querySelector(`[${CITED_BLOCK_ATTR}]`);
+    setNothingMarked(!anchor);
+    anchor?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [citedRange, promotedContent]);
+
   // Check if the content is a direct Mermaid diagram
   const isMermaidDiagram =
     content.trim().startsWith('graph') ||
@@ -75,6 +157,7 @@ const MarkdownViewer: React.FC<Props> = ({ content }) => {
 
   return (
     <Box
+      ref={containerRef}
       className="markdown-viewer-container"
       sx={{
         p: 2,
@@ -87,8 +170,37 @@ const MarkdownViewer: React.FC<Props> = ({ content }) => {
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
         },
+        // The boundary mark. A rule down the side plus a tint reads as "this is the cited extent"
+        // across several blocks, which a background alone does not - a reader checking a claim
+        // needs to see where the passage ENDS, not just that something here is relevant.
+        [`& [${CITED_BLOCK_ATTR}]`]: {
+          borderLeft: '3px solid',
+          borderColor: 'primary.solidBg',
+          bgcolor: 'primary.softBg',
+          borderRadius: 'sm',
+          pl: 1.5,
+          pr: 1,
+          py: 0.5,
+          mx: -1.5,
+        },
+        // A passage covering a loose list marks both the `li` and the `p` inside it, and a nested
+        // list marks both levels of `li`. One extent should read as one box, so the inner marks
+        // inherit the outer one's tint instead of stacking their own rule and background.
+        [`& [${CITED_BLOCK_ATTR}] [${CITED_BLOCK_ATTR}]`]: {
+          border: 'none',
+          bgcolor: 'transparent',
+          borderRadius: 0,
+          p: 0,
+          mx: 0,
+        },
       }}
     >
+      {citedPassage && (!citedRange || nothingMarked) && (
+        <UnmarkedCitedPassage
+          passage={citedPassage}
+          title={citedRange ? 'Cited passage' : 'Cited passage (no longer found in this document)'}
+        />
+      )}
       <ReactMarkdown
         remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
         rehypePlugins={[rehypeKatex]}
@@ -110,6 +222,7 @@ const MarkdownViewer: React.FC<Props> = ({ content }) => {
               <Box
                 className="markdown-viewer-code-block"
                 sx={{ maxWidth: '100%', overflowX: 'auto', position: 'relative' }}
+                {...citedBlockProps(node, citedRange)}
               >
                 <CopyButton text={String(children).replace(/\n$/, '')} />
                 <SyntaxHighlighter
@@ -137,44 +250,58 @@ const MarkdownViewer: React.FC<Props> = ({ content }) => {
               </code>
             );
           },
-          p: ({ children }) => (
-            <Typography component="p" level="body-md" sx={{ mb: 2 }}>
+          // These two exist only to carry the cited-block attribute, so they must pass the props
+          // react-markdown computed through untouched - `className="task-list-item"` on a GFM
+          // checkbox item, `value` on an ordered item - or adding the anchor would quietly strip
+          // markup the default renderer produced.
+          li: ({ node, children, ...props }) => (
+            <li {...props} {...citedBlockProps(node, citedRange)}>
+              {children}
+            </li>
+          ),
+          blockquote: ({ node, children, ...props }) => (
+            <blockquote {...props} {...citedBlockProps(node, citedRange)}>
+              {children}
+            </blockquote>
+          ),
+          p: ({ node, children }) => (
+            <Typography component="p" level="body-md" sx={{ mb: 2 }} {...citedBlockProps(node, citedRange)}>
               {children}
             </Typography>
           ),
-          h1: ({ children }) => (
-            <Typography component="h1" level="h1" sx={{ mb: 2 }}>
+          h1: ({ node, children }) => (
+            <Typography component="h1" level="h1" sx={{ mb: 2 }} {...citedBlockProps(node, citedRange)}>
               {children}
             </Typography>
           ),
-          h2: ({ children }) => (
-            <Typography component="h2" level="h2" sx={{ mb: 2 }}>
+          h2: ({ node, children }) => (
+            <Typography component="h2" level="h2" sx={{ mb: 2 }} {...citedBlockProps(node, citedRange)}>
               {children}
             </Typography>
           ),
-          h3: ({ children }) => (
-            <Typography component="h3" level="h3" sx={{ mb: 2 }}>
+          h3: ({ node, children }) => (
+            <Typography component="h3" level="h3" sx={{ mb: 2 }} {...citedBlockProps(node, citedRange)}>
               {children}
             </Typography>
           ),
-          h4: ({ children }) => (
-            <Typography component="h4" level="title-lg" sx={{ mb: 2 }}>
+          h4: ({ node, children }) => (
+            <Typography component="h4" level="title-lg" sx={{ mb: 2 }} {...citedBlockProps(node, citedRange)}>
               {children}
             </Typography>
           ),
-          h5: ({ children }) => (
-            <Typography component="h5" level="title-md" sx={{ mb: 2 }}>
+          h5: ({ node, children }) => (
+            <Typography component="h5" level="title-md" sx={{ mb: 2 }} {...citedBlockProps(node, citedRange)}>
               {children}
             </Typography>
           ),
-          h6: ({ children }) => (
-            <Typography component="h6" level="title-sm" sx={{ mb: 2 }}>
+          h6: ({ node, children }) => (
+            <Typography component="h6" level="title-sm" sx={{ mb: 2 }} {...citedBlockProps(node, citedRange)}>
               {children}
             </Typography>
           ),
         }}
       >
-        {promoteInlineLatexDollars(content)}
+        {promotedContent}
       </ReactMarkdown>
     </Box>
   );

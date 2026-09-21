@@ -11,6 +11,8 @@ import { CitableSource, CitableSourceType } from '@bike4mind/common';
 import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useNavigate } from '@tanstack/react-router';
 import { useCitationInteraction } from './CitationInteractionContext';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { citedPassageOf } from '@client/app/components/Knowledge/citedPassage';
 
 interface CitableSourcesProps {
   citables: CitableSource[];
@@ -89,6 +91,11 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
     handleHostClick ??
     (isInternal
       ? () => {
+          // Hand the reader's destination the passage this chip cited, so the viewer can mark it
+          // instead of dropping them at the top of the document (#3038). Written on EVERY internal
+          // click, clearing on a chip that carries no passage: a leftover anchor from the previous
+          // citation would otherwise mark a stale extent in the newly-opened file.
+          setSessionLayout({ citedPassage: citedPassageOf(source) });
           const url = new URL(source.url!, window.location.origin);
           navigate({ to: url.pathname as never, search: Object.fromEntries(url.searchParams) as never });
         }
