@@ -1,6 +1,7 @@
 import { Request } from 'express';
 import { ForbiddenError } from '@server/utils/errors';
 import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { z } from 'zod';
 import { CounterLog, cacheRepository } from '@bike4mind/database';
 import { cacheService } from '@bike4mind/services';
@@ -134,34 +135,49 @@ async function fetchEventMetrics(filters: EventMetricsFilters): Promise<EventMet
   return metrics;
 }
 
-const handler = baseApi().get(async (req: Request<{}, {}, {}, EventMetricsQuery>, res) => {
-  // Check if user has admin permissions
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
-  }
+const ONE_MINUTE_MS = 60 * 1000;
+// Measured off the two dashboards that call this (app/components/admin/EventMetrics and
+// SlackMetrics, both through useEventMetrics): one request per distinct applied filter set behind
+// a 60s staleTime, and two per Refresh click - forceRefresh issues the `recache=true` fetch that
+// bypasses the 12h cache and then refetches. Neither sets a refetchInterval, and the app's
+// QueryClient disables retry and focus/reconnect refetch (app/providers.tsx). An admin tuning
+// filters and refreshing on both dashboards at once lands near 20 in a minute, so 30 leaves
+// headroom while still bounding the uncached recache path.
+const EVENT_METRICS_RATE_LIMIT = 30;
 
-  console.log('📊 Event metrics API called');
+// Chained after baseApi so auth has run and the limiter keys on req.user.id rather than the
+// client IP. It also runs ahead of the isAdmin check below, so a non-admin who empties their own
+// bucket is refused with 429 instead of 403 - both refuse, and the bucket is per principal.
+const handler = baseApi()
+  .use(rateLimit({ limit: EVENT_METRICS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'admin-event-metrics' }))
+  .get(async (req: Request<{}, {}, {}, EventMetricsQuery>, res) => {
+    // Check if user has admin permissions
+    if (!req.user?.isAdmin) {
+      throw new ForbiddenError('Admin access required');
+    }
 
-  try {
-    const { recache, ...filters } = req.query;
+    console.log('📊 Event metrics API called');
 
-    const cacheKey = CacheKeys.eventMetrics(filters);
-    const metrics = await cacheService.getCachedData(cacheKey, () => fetchEventMetrics(filters), {
-      db: { caches: cacheRepository },
-      expiry: 1000 * 60 * 60 * 12, // 12 hours (refresh button bypasses this)
-      recache: recache === 'true',
-      logger: req.logger,
-    });
+    try {
+      const { recache, ...filters } = req.query;
 
-    console.log(`✅ Returning ${metrics.length} event metrics (cached: ${!recache})`);
-    return res.json(metrics);
-  } catch (error) {
-    console.error('❌ Error fetching event metrics:', error);
-    return res.status(500).json({
-      error: 'Failed to fetch event metrics',
-      message: error instanceof Error ? error.message : 'Unknown error',
-    });
-  }
-});
+      const cacheKey = CacheKeys.eventMetrics(filters);
+      const metrics = await cacheService.getCachedData(cacheKey, () => fetchEventMetrics(filters), {
+        db: { caches: cacheRepository },
+        expiry: 1000 * 60 * 60 * 12, // 12 hours (refresh button bypasses this)
+        recache: recache === 'true',
+        logger: req.logger,
+      });
+
+      console.log(`✅ Returning ${metrics.length} event metrics (cached: ${!recache})`);
+      return res.json(metrics);
+    } catch (error) {
+      console.error('❌ Error fetching event metrics:', error);
+      return res.status(500).json({
+        error: 'Failed to fetch event metrics',
+        message: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+  });
 
 export default handler;
