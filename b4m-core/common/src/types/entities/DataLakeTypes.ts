@@ -588,6 +588,28 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       supersededOwnLakeIds?: string[];
     }
   ): Promise<IDataLakeDocument[]>;
+  /**
+   * Count-only companion to `findActiveByUserTagsAndEntitlements` (#3055): active lakes the
+   * caller can see exist - by org membership or public listing - but whose own
+   * `requiredUserTag`/`requiredEntitlement` gate they hold neither of. Excludes lakes reached
+   * through the owner or grant bypass (those are never "excluded"; the resolver restores them
+   * regardless of the gate) and gateless lakes (never a candidate for THIS count - they resolve
+   * for every org member).
+   *
+   * NEVER RETURNS A LAKE DOCUMENT, deliberately - a `countDocuments`, not a `find`. This method
+   * exists solely to measure denial for a caller-facing count; it must never become a second way
+   * to read a lake's fields, or the resolver's read-side stays a stricter gate than this one.
+   */
+  countGateExcludedLakes(
+    userTags: string[],
+    entitlementKeys: string[],
+    organizationIds: string[] | undefined,
+    userId: string | undefined,
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+    }
+  ): Promise<number>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
    * Datastore-side accessibility filter - owner OR org-admin OR public OR (org-match AND
