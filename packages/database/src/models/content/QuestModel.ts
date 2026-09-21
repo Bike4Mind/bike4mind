@@ -371,6 +371,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         urlContent: { type: Number, required: false },
         toolSchemas: { type: Number, required: false },
         userPrompt: { type: Number, required: false },
+        lakeRetrieval: { type: Number, required: false },
       },
       // Assembled context-window usage for the completed turn. Like the billing
       // audit fields above, this must be declared or Mongoose strict mode silently

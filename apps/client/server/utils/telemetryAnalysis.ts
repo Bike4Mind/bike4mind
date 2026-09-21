@@ -365,7 +365,8 @@ ${
 - Attached Files: ${contextWindow.tokensBySource.fabFiles.toLocaleString()} (${((contextWindow.tokensBySource.fabFiles / contextWindow.inputTokens) * 100).toFixed(1)}%)
 - URL Content: ${contextWindow.tokensBySource.urlContent.toLocaleString()} (${((contextWindow.tokensBySource.urlContent / contextWindow.inputTokens) * 100).toFixed(1)}%)
 - Tool Schemas: ${contextWindow.tokensBySource.toolSchemas.toLocaleString()} (${((contextWindow.tokensBySource.toolSchemas / contextWindow.inputTokens) * 100).toFixed(1)}%)
-- User Prompt: ${contextWindow.tokensBySource.userPrompt.toLocaleString()} (${((contextWindow.tokensBySource.userPrompt / contextWindow.inputTokens) * 100).toFixed(1)}%)`
+- User Prompt: ${contextWindow.tokensBySource.userPrompt.toLocaleString()} (${((contextWindow.tokensBySource.userPrompt / contextWindow.inputTokens) * 100).toFixed(1)}%)
+- Lake Retrieval: ${(contextWindow.tokensBySource.lakeRetrieval ?? 0).toLocaleString()} (${(((contextWindow.tokensBySource.lakeRetrieval ?? 0) / contextWindow.inputTokens) * 100).toFixed(1)}%)`
     : '_(Basic telemetry — token breakdown not available)_'
 }
 
@@ -806,6 +807,7 @@ export function formatIssueBody(telemetry: ContextTelemetry, options: IssueBodyO
         { name: 'URL Content', value: tokensBySource.urlContent },
         { name: 'Tool Schemas', value: tokensBySource.toolSchemas },
         { name: 'User Prompt', value: tokensBySource.userPrompt },
+        { name: 'Lake Retrieval', value: tokensBySource.lakeRetrieval ?? 0 },
       ];
       for (const source of sources) {
         if (source.value > 0) {

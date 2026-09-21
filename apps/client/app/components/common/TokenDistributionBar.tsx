@@ -3,7 +3,7 @@ import { styled } from '@mui/system';
 import type { ContextTelemetry } from '@bike4mind/common';
 
 /**
- * The seven token buckets an assembled turn is billed against, derived from the telemetry schema
+ * The token buckets an assembled turn is billed against, derived from the telemetry schema
  * itself so a bucket added there is a compile error here rather than a silently dropped segment -
  * shared by the admin Context Inspector and the user's own context breakdown, which must colour
  * and label the same buckets identically.

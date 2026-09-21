@@ -42,11 +42,11 @@ export type ContextBreakdownCategories = {
   userMessage: number;
   /**
    * Forced data-lake retrieval content injected this turn (KnowledgeRetrievalFeature), counted
-   * with the same tokenizer as every other bucket before it folds into `systemPromptBilled` - see
-   * ChatCompletionProcess's tokensBySource assembly. Distinct from `retrieval` below, which is a
-   * verdict (tags/surfaces/scope), not a token count. Zero on a turn recorded before this field
-   * existed, same as a turn that genuinely injected nothing - `tokensBySource.lakeRetrieval` being
-   * absent is not otherwise surfaced here.
+   * with the same tokenizer as every other bucket and carved OUT of `systemPromptBilled` rather
+   * than folded into it - see ChatCompletionProcess's tokensBySource assembly. Distinct from
+   * `retrieval` below, which is a verdict (tags/surfaces/scope), not a token count. Zero on a turn
+   * recorded before this field existed, same as a turn that genuinely injected nothing -
+   * `tokensBySource.lakeRetrieval` being absent is not otherwise surfaced here.
    */
   lakeRetrieval: number;
 };

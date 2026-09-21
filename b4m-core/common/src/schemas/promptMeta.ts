@@ -109,10 +109,10 @@ const PromptMetaTokensBySourceSchema = z.object({
   urlContent: z.number(),
   toolSchemas: z.number(),
   userPrompt: z.number(),
-  // Forced data-lake retrieval content injected this turn (KnowledgeRetrievalFeature), counted
-  // before it folds into the system-prompt remainder - see ChatCompletionProcess's tokensBySource
-  // assembly. Optional: turns recorded before this field existed carry none, and a reader must
-  // treat absence as "not recorded", not as zero.
+  // Forced data-lake retrieval content injected this turn (KnowledgeRetrievalFeature), subtracted
+  // from the system-prompt remainder rather than folded into it - see ChatCompletionProcess's
+  // tokensBySource assembly. Optional: turns recorded before this field existed carry none, and a
+  // reader must treat absence as "not recorded", not as zero.
   lakeRetrieval: z.number().optional(),
 });
 
