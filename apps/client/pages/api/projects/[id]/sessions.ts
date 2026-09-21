@@ -12,10 +12,18 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
 import { ProjectEvents, redactSessionsForClient } from '@bike4mind/common';
 import { ActivityType } from '@client/config/activities';
-import { ProjectSessionsRequestBody } from '../../../../types/api';
+import { z } from 'zod';
 import { SessionEvents } from '@server/utils/eventBus';
 import { filterSessionIdsByOperationalCredits } from '@server/utils/sessionOperationalCreditPreflight';
 import { OPERATIONS_PER_SUMMARIZE_WITH_TAGGING } from '@server/utils/sessionOperationCounts';
+
+const sessionIdsArray = z.array(z.string().min(1));
+
+const addSessionIdsBodySchema = z.object({ sessionIds: sessionIdsArray.min(1) });
+
+// No .min(1): removeSessions (b4m-core) is a no-op on an empty array, and this route is
+// API-key reachable, so DELETE stays as lenient as the sibling files.ts route.
+const removeSessionIdsBodySchema = z.object({ sessionIds: sessionIdsArray });
 
 const handler = baseApi()
   .get(
@@ -40,7 +48,7 @@ const handler = baseApi()
   .post(
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };
-      const { sessionIds } = req.body as ProjectSessionsRequestBody;
+      const { sessionIds } = addSessionIdsBodySchema.parse(req.body);
 
       const project = await projectService.get(
         req.user.id,
@@ -113,7 +121,7 @@ const handler = baseApi()
   .delete(
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };
-      const { sessionIds } = req.body as ProjectSessionsRequestBody;
+      const { sessionIds } = removeSessionIdsBodySchema.parse(req.body);
 
       const project = await withTransaction(() =>
         projectService.removeSessions(
