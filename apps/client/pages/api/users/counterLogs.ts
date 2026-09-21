@@ -170,11 +170,14 @@ interface WeeklyReportData {
 }
 
 const ONE_MINUTE_MS = 60 * 1000;
-// Higher than the 20/min on the admin help-analytics dashboard because two admin actions burst
-// against this one route rather than making a single request: the CSV export walks
-// MAX_EXPORT_ROWS/EXPORT_PAGE_SIZE = 10 pages back to back (app/components/admin/Analytics/
-// exportUserActivity.ts), and the weekly-report picker issues one request per selected week, up
-// to a year's worth. 60 clears either burst on its own; no caller refetches on a timer.
+// Higher than the 20/min on the admin help-analytics dashboard because admin actions burst
+// against this one route rather than making a single request. Measured against the real callers,
+// all of which go through fetchCounterLogs: the CSV export walks MAX_EXPORT_ROWS/EXPORT_PAGE_SIZE
+// = 10 pages back to back (app/components/admin/Analytics/exportUserActivity.ts), the
+// weekly-report picker issues one request per selected week and WeekPicker caps that at
+// maxWeeks = 4, the daily report is a single request for the whole range, and the grid is one
+// request per distinct filter behind a 5-minute staleTime. A session doing all of that in one
+// minute lands near 40, so 60 leaves headroom; no caller refetches on a timer.
 const COUNTER_LOGS_RATE_LIMIT = 60;
 
 // requiredScopes: an API key reaching this route gets its CASL ability rebuilt from `user.isAdmin`

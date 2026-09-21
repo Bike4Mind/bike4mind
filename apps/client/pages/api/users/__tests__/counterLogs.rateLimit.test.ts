@@ -74,8 +74,8 @@ const ONE_MINUTE_MS = 60 * 1000;
 
 let mongoServer: MongoMemoryServer;
 
-// Driven past the limit by the first test and left that way: the counter lives in Mongo for the
-// whole window, so the per-principal test contrasts against it without re-filling anything.
+// The principal whose window gets filled. Unique per run so a re-run inside the same window
+// does not inherit the previous run's counter from Mongo.
 const EXHAUSTED_USER = `counter-logs-principal-${Date.now()}`;
 
 // Every request carries a distinct counterName so it misses the route's own filter-scoped result
@@ -136,7 +136,16 @@ const fillWindow = async (userId: string, times: number) => {
 };
 
 describe('GET /api/users/counterLogs - per-principal rate limit', () => {
-  it('serves the last request inside the window, then answers 429 with Retry-After', async () => {
+  /**
+   * Deliberately one test rather than one per claim. The route's window and this file's
+   * testTimeout are both 60s, and `testTimeout` is per-test: an exhausted window carried across
+   * an `it` boundary would get a fresh 60s budget, so a slow run could let the window roll and
+   * then read the resulting 200 as a passing assertion. Inside a single test the window cannot
+   * roll before the timeout fires, so a slow run goes red instead of green-for-the-wrong-reason.
+   */
+  it('serves the last request inside the window, then 429s that principal only', async () => {
+    // Read before the first request, so it is never later than the window the limiter opens.
+    const windowOpenedAt = Date.now();
     // One short of the limit, so the route's own request is the one that fills it - a limiter
     // that refused early, or an off-by-one, fails here rather than passing quietly.
     await fillWindow(EXHAUSTED_USER, ROUTE_LIMIT - 1);
@@ -153,21 +162,20 @@ describe('GET /api/users/counterLogs - per-principal rate limit', () => {
     // The refusal has to come before the aggregate: a limiter that ran the pipeline and then
     // answered 429 would leave the work this route is being bounded for unbounded.
     expect(executeFacetCompatible).not.toHaveBeenCalled();
-    // Pinned to the window, not just positive - Math.max(1, ...) in the middleware makes a bare
-    // `> 0` pass for any windowMs, including a mistyped one.
-    const retryAfter = Number(limited.getHeader('Retry-After'));
-    expect(retryAfter).toBeGreaterThan(0);
-    expect(retryAfter).toBeLessThanOrEqual(ONE_MINUTE_MS / 1000);
-  });
 
-  it('keys the counter per principal, so a second admin is unaffected by an exhausted window', async () => {
+    // Pinned against how much of the window has actually elapsed, not just `> 0`: Math.max(1, ...)
+    // in the middleware makes a bare `> 0` pass for a mistyped windowMs too. Measuring elapsed
+    // after the response only ever makes this floor more conservative, never wrong.
+    const elapsedSeconds = (Date.now() - windowOpenedAt) / 1000;
+    const remainingWindowSeconds = ONE_MINUTE_MS / 1000 - elapsedSeconds;
+    const retryAfter = Number(limited.getHeader('Retry-After'));
+    expect(retryAfter).toBeGreaterThanOrEqual(Math.max(1, Math.floor(remainingWindowSeconds)));
+    expect(retryAfter).toBeLessThanOrEqual(ONE_MINUTE_MS / 1000);
+
     // Same route, same window, different principal: the limiter keys on req.user.id, which is
     // the whole claim being made about the JWT admin path.
-    const other = await callAs(`${EXHAUSTED_USER}-other`);
-
-    expect(other._getStatusCode()).toBe(200);
-
-    // The other direction of the same claim, and the half that is limiter-sensitive on its own:
+    expect((await callAs(`${EXHAUSTED_USER}-other`))._getStatusCode()).toBe(200);
+    // The other direction of that claim, and the half that is limiter-sensitive on its own:
     // serving the second admin neither reset nor charged the first admin's window.
     expect((await callAs(EXHAUSTED_USER))._getStatusCode()).toBe(429);
   });
