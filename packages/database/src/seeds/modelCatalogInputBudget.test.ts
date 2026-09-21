@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, MODEL_INFO_TYPES } from '@bike4mind/common';
+import { CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS, MODEL_INFO_TYPES, toModelInfo, toModelRecord } from '@bike4mind/common';
 import { attachedContentBudgetsAgree, safeInputWindow } from '@bike4mind/utils';
 import type { ModelInfo } from '@bike4mind/common';
 import { collectStaticCatalogModels } from './generateModelCatalogSeed';
@@ -45,6 +45,20 @@ describe('static model catalog input budget', () => {
       model => typeof model.contextWindow !== 'number' || typeof model.max_tokens !== 'number'
     );
     expect(missing.map(model => model.id)).toEqual([]);
+  });
+
+  it('keeps every cap declared through the seed round trip', async () => {
+    // These literals bypass toModelInfo, so their caps count as declared only while the seed
+    // pipeline preserves them: generateModelCatalogSeed writes toModelRecord(model), and the read
+    // path renders that row back with toModelInfo. A cap lost in between comes back as the 4096
+    // default, which resolveOutputMaxTokens then refuses to clamp a reasoning model to.
+    const models = await collectStaticCatalogModels();
+    const derived = models
+      .map(model => ({ model, rendered: toModelInfo(toModelRecord(model)) }))
+      .filter(
+        ({ model, rendered }) => rendered.maxOutputTokensDerived === true || rendered.max_tokens !== model.max_tokens
+      );
+    expect(derived.map(({ model }) => describeEntry(model))).toEqual([]);
   });
 
   it('leaves a positive input budget on every text entry', async () => {

@@ -101,8 +101,20 @@ describe('stripFabricatedLinks', () => {
   });
 
   it('collapses a fabricated link with angle-bracket-wrapped URL', () => {
+    // Note this one does not depend on the `>` fix: the old capture kept the trailing
+    // `>`, which defeats the `.md` test, but the host still matched APP_DOMAIN_RE and it
+    // was flagged anyway. The case below is the one that separates old from new.
     const input = 'See [AI Models](<https://app.bike4mind.com/ai-models.md>) here.';
     expect(stripFabricatedLinks(input)).toBe('See AI Models here.');
+  });
+
+  it('collapses an angle-bracket-wrapped .md link on a third-party host', () => {
+    // The discriminating case for the `>` fix. The old capture ended `...ai-models.md>`,
+    // whose pathname URL-encodes to `/ai-models.md%3E` - not `.md`, and not the app
+    // domain either, so a fabricated doc path on an external host survived. Excluding
+    // the `>` is what makes the `.md` heuristic reach it.
+    const input = 'See [doc](<https://example.com/ai-models.md>) here.';
+    expect(stripFabricatedLinks(input)).toBe('See doc here.');
   });
 
   it('preserves an external link written with a markdown title', () => {
@@ -129,5 +141,46 @@ describe('stripFabricatedLinks', () => {
   it('leaves link-free text untouched', () => {
     const input = 'Open any **Notebook**, then use the model selector dropdown.';
     expect(stripFabricatedLinks(input)).toBe(input);
+  });
+
+  it('completes on an unclosed markdown-link target without catastrophic backtracking', () => {
+    // The pre-rewrite MARKDOWN_LINK_RE backtracked exponentially on `[a](` followed by
+    // a long run of URL chars with no closing `)`. Linear now: this returns immediately.
+    // (If it ever regresses, this test blows the vitest timeout rather than hanging CI.)
+    // Kept under the 200k defense-in-depth cap so the passthrough assertion is exact.
+    const adversarial = 'preamble ' + '[a](' + 'a'.repeat(150_000);
+    const out = stripFabricatedLinks(adversarial);
+    expect(typeof out).toBe('string');
+    // No closing paren means it was never a link, so the text passes through unchanged.
+    expect(out).toBe(adversarial);
+  });
+
+  it('preserves a genuine external link whose URL is angle-bracket wrapped inside markdown', () => {
+    // A behaviour lock, not a regression test: the old regex leaked the trailing `>` into
+    // the capture, but `/en/api%3E` is neither `.md` nor the app domain, so this link
+    // survived before the fix too. It is here to pin that excluding the `>` did not start
+    // flagging genuine external links.
+    const input = 'See [the API](<https://docs.anthropic.com/en/api>) for details.';
+    expect(stripFabricatedLinks(input)).toBe(input);
+  });
+
+  it('does not truncate a reply longer than the scan cap', () => {
+    // The 200k cap bounds the scan; the tail is re-appended so an oversized reply is
+    // passed through rather than silently cut off mid-sentence.
+    const oversized = 'x'.repeat(250_000) + ' END_MARKER';
+    const out = stripFabricatedLinks(oversized);
+    expect(out).toBe(oversized);
+  });
+
+  it('does not strand a lone surrogate when the cap lands inside a surrogate pair', () => {
+    // capForParse slices by UTF-16 code unit, so the cut at 200_000 falls BETWEEN the two
+    // halves of this emoji. Re-appending the tail is what puts the pair back together; an
+    // implementation that returned only the scanned head would end in a lone high
+    // surrogate, which is why the assertion reads the last code POINT rather than
+    // comparing the whole string (that comparison holds for any head + tail split).
+    const input = 'a'.repeat(199_999) + '\u{1F600}';
+    const out = stripFabricatedLinks(input);
+    expect([...out].pop()).toBe('\u{1F600}');
+    expect(out).toHaveLength(input.length);
   });
 });

@@ -156,6 +156,16 @@ describe('help-docs job in ci.yml', () => {
     expect(steps.join('')).toContain('help/__tests__');
   });
 
+  it('still smoke-runs the index generator, after the suites', () => {
+    // The index is generated rather than committed, so nothing else in CI proves the generator
+    // still runs. Order is load-bearing: a generator break must not mask a suite failure, so the
+    // smoke step goes last rather than first.
+    const smoke = steps.findIndex(step => step.includes('help:build-index'));
+    const suites = steps.findIndex(step => step.includes('help/__tests__'));
+    expect(smoke, 'help-docs no longer smoke-runs help:build-index; the generator is unpinned').toBeGreaterThan(-1);
+    expect(smoke).toBeGreaterThan(suites);
+  });
+
   it('needs both the changes gate and core-build', () => {
     const needs = /^ {4}needs:\s*(.+)$/m.exec(helpDocs?.body ?? '')?.[1] ?? '';
     expect(needs).toContain('changes');

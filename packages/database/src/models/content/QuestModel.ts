@@ -371,6 +371,10 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         urlContent: { type: Number, required: false },
         toolSchemas: { type: Number, required: false },
         userPrompt: { type: Number, required: false },
+        // Must stay in sync with the Zod PromptMeta `context.tokensBySource.lakeRetrieval` (parity
+        // test enforces it). Optional: a turn recorded before this bucket existed has no value, which
+        // readers must treat as UNKNOWN rather than as zero.
+        lakeRetrieval: { type: Number, required: false },
       },
       // Assembled context-window usage for the completed turn. Like the billing
       // audit fields above, this must be declared or Mongoose strict mode silently

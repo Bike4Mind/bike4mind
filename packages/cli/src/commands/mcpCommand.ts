@@ -196,10 +196,9 @@ async function handleAdd(
     enabled: true,
   };
 
-  config.mcpServers.push(newServer);
-
   try {
-    await configStore.save(config);
+    // Global-layer mutator: never persists repo-sourced (merged) config.
+    await configStore.addMcpServer(newServer);
     console.log(`✅ Added MCP server "${name}"`);
     console.log('');
     console.log('Configuration saved to: ~/.bike4mind/config.json');
@@ -222,10 +221,8 @@ async function handleRemove(config: CliConfig, name: string, configStore: Config
     process.exit(1);
   }
 
-  config.mcpServers.splice(index, 1);
-
   try {
-    await configStore.save(config);
+    await configStore.removeMcpServer(name);
     console.log(`✅ Removed MCP server "${name}"`);
     console.log('');
     console.log('Configuration saved to: ~/.bike4mind/config.json');
@@ -251,10 +248,8 @@ async function handleEnable(config: CliConfig, name: string, configStore: Config
     return;
   }
 
-  server.enabled = true;
-
   try {
-    await configStore.save(config);
+    await configStore.toggleMcpServer(name, true);
     console.log(`✅ Enabled MCP server "${name}"`);
     console.log('');
     console.log('The server will connect next time you start the CLI.');
@@ -280,10 +275,8 @@ async function handleDisable(config: CliConfig, name: string, configStore: Confi
     return;
   }
 
-  server.enabled = false;
-
   try {
-    await configStore.save(config);
+    await configStore.toggleMcpServer(name, false);
     console.log(`✅ Disabled MCP server "${name}"`);
     console.log('');
     console.log('The server will not connect next time you start the CLI.');

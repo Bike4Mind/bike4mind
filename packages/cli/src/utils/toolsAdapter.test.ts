@@ -7,12 +7,17 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import path from 'path';
+import { promises as fs, existsSync } from 'fs';
+import { tmpdir } from 'os';
 import {
   wrapToolWithHooks,
   isPathAccessDenial,
   deriveGrantDirectory,
+  persistToolTrust,
   type HookWrapperContext,
 } from './toolsAdapter.js';
+import { ConfigStore } from '../storage/ConfigStore.js';
+import { PermissionManager } from './PermissionManager.js';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { AgentHooks, HookMatcher } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
@@ -592,5 +597,59 @@ describe('deriveGrantDirectory', () => {
     expect(deriveGrantDirectory('file_read', {})).toBeNull();
     expect(deriveGrantDirectory('grep_search', { dir_path: '' })).toBeNull();
     expect(deriveGrantDirectory('file_read', { path: 123 as unknown as string })).toBeNull();
+  });
+});
+
+describe('persistToolTrust (folder-trust gate)', () => {
+  let base: string;
+  let projectDir: string;
+  let globalConfigPath: string;
+  let originalCwd: string;
+
+  beforeEach(async () => {
+    originalCwd = process.cwd();
+    base = await fs.mkdtemp(path.join(tmpdir(), 'b4m-persist-trust-'));
+    projectDir = path.join(base, 'proj');
+    await fs.mkdir(path.join(projectDir, '.git'), { recursive: true }); // findProjectConfigDir marker
+    globalConfigPath = path.join(base, 'global', 'config.json');
+    await fs.mkdir(path.dirname(globalConfigPath), { recursive: true });
+    process.chdir(projectDir);
+  });
+
+  afterEach(async () => {
+    process.chdir(originalCwd);
+    await fs.rm(base, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('falls back to global (and writes no repo file) in an untrusted folder', async () => {
+    const store = new ConfigStore(globalConfigPath);
+    await store.load(); // untrusted is the default
+    const pm = new PermissionManager();
+
+    await persistToolTrust('file_read', pm, store);
+
+    // No .bike4mind/ dropped into the repo the user never trusted.
+    expect(existsSync(path.join(projectDir, '.bike4mind'))).toBe(false);
+
+    // The decision is honored on next launch: it landed in the global layer.
+    const reloaded = await new ConfigStore(globalConfigPath).load();
+    expect(reloaded.trustedTools).toContain('file_read');
+    const pmReloaded = new PermissionManager(reloaded.trustedTools);
+    expect(pmReloaded.needsPermission('file_read')).toBe(false);
+  });
+
+  it('persists to project-local when the folder IS trusted', async () => {
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+    expect(await store.trustProject()).toBe(true);
+    const pm = new PermissionManager();
+
+    await persistToolTrust('file_read', pm, store);
+
+    const localRaw = JSON.parse(await fs.readFile(path.join(projectDir, '.bike4mind', 'local.json'), 'utf-8'));
+    expect(localRaw.trustedTools).toContain('file_read');
+    // Trusted-path persistence must NOT also write it to the global layer.
+    const reloadedGlobal = JSON.parse(await fs.readFile(globalConfigPath, 'utf-8'));
+    expect(reloadedGlobal.trustedTools ?? []).not.toContain('file_read');
   });
 });

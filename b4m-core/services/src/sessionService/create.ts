@@ -56,6 +56,11 @@ const createSessionParametersSchema = z.object({
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
   summary: z.string().optional(),
   summaryAt: z.date().optional(),
+  // Companion of `tags` the way `summaryAt` is of `summary`, so clone/fork must carry it or the
+  // spider gate at apps/client/server/events/spider.ts pays to re-tag every copy; snip deliberately
+  // does not. Declared here because secureParameters strips unknown keys; still not a client input,
+  // since z.date() rejects the string a JSON body would carry.
+  taggedAt: z.date().optional(),
   clonedSourceId: z.string().optional().nullable(),
   forkedSourceId: z.string().optional().nullable(),
   projectId: z.string().optional(),
@@ -153,6 +158,8 @@ export const createSession = async (
     // After ...rest so the derived value wins over the (absent) request value it stands in for.
     ...(retrievalTags?.length ? { retrievalTags } : {}),
     ...(forceKnowledgeRetrieval !== undefined ? { forceKnowledgeRetrieval } : {}),
+    // A taggedAt with no tags would close the spider's gate on a notebook with nothing to show.
+    taggedAt: rest.tags?.length ? rest.taggedAt : undefined,
     userId: user.id,
     knowledgeIds,
     artifactIds,

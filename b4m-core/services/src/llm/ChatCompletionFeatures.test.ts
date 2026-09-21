@@ -1072,7 +1072,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   });
 
   it('grades a text-embedding-3-small corpus against its own floor, not the ada-002 default', async () => {
-    // 0.707 cosine clears 3-small's 49% floor but sits under the 75% ada-002 default - if the
+    // 0.707 cosine clears 3-small's 58% floor but sits under the 75% ada-002 default - if the
     // absolute floor were still hardcoded, this chunk would be rejected and the turn would abstain.
     const ctx = makeCtx({
       files: [
@@ -1094,7 +1094,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
       files: [
         { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-large', vectorizedChunkCount: 1 },
       ],
-      // cosine([1,4],[1,0]) = 1/sqrt(17) = 0.243 - well under both the 75% default and 3-small's 49%.
+      // cosine([1,4],[1,0]) = 1/sqrt(17) = 0.243 - well under both the 75% default and 3-small's 58%.
       rows: () => [{ id: 'c1', fabFileId: 'fileA', text: 'weakly related content', vector: [1, 4] }],
     });
     const { content } = await run(ctx);
@@ -1110,9 +1110,9 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
   });
 
   it('an operator-configured absolute floor is honored verbatim, not replaced by the by-space table', async () => {
-    // 3-small's table entry is 49%, which this chunk's 0.707 cosine clears easily. But the operator
+    // 3-small's table entry is 58%, which this chunk's 0.707 cosine clears easily. But the operator
     // explicitly dialed the setting to 90%, and that value must win outright - substituting the
-    // table's 49% here would silently discard a value someone deliberately tuned.
+    // table's 58% here would silently discard a value someone deliberately tuned.
     const ctx = makeCtx({
       files: [
         { id: 'fileA', fileName: 'A.pdf', tags: [], embeddingModel: 'text-embedding-3-small', vectorizedChunkCount: 1 },

@@ -116,6 +116,17 @@ export interface NotebookImportAdapters {
   agentRepository: AttachmentRepository;
   fileStorageService: {
     uploadFile: (path: string, content: Buffer) => Promise<unknown>;
+    /**
+     * The compensating action for `uploadFile`: the bytes are written outside the import's
+     * transaction, so when the row write they belong to fails there is no rollback that can remove
+     * them. Deliberately NOT moderation-gated like its `getFileContent`/`getSignedUrl` siblings -
+     * it hands no bytes to a user, and refusing here would strand the object it exists to remove.
+     *
+     * Required, not optional: a caller that omits it silently degrades to the orphan this exists to
+     * prevent. Callers must treat a rejection as "the orphan stays" - a failed delete must never
+     * escalate into an import that would otherwise have committed.
+     */
+    deleteFile: (path: string) => Promise<unknown>;
   };
   /**
    * Resolved once per import: existence is checked up front, and that same document then feeds the
@@ -140,6 +151,17 @@ export interface NotebookImportAdapters {
  * know would otherwise fail the write and lose the file. */
 function toKnowledgeType(raw: string | undefined): KnowledgeType {
   return raw && isValidEnumValue(raw, KnowledgeType) ? raw : KnowledgeType.FILE;
+}
+
+/**
+ * The label used to name a knowledge entry in a warning. Not `file.name`: nothing validates the
+ * uploaded JSON against `ExportedKnowledgeFile`, whose `name` is typed required but is absent from
+ * exports written by other tools or predating the field - and a missing `name` is exactly the kind
+ * of entry that fails, so interpolating it renders the one field whose absence caused the failure
+ * as "undefined". Falls back to the export's id, then the entry's position within the file.
+ */
+function describeKnowledgeFile(file: ExportedKnowledgeFile, index: number): string {
+  return file.name || file.id || `knowledge[${index}]`;
 }
 
 /** Refused rather than degraded, unlike knowledge above: the type picks the mime type and the
@@ -225,6 +247,32 @@ export class NotebookImportService {
       throw new Error(`${kind} store returned no id`);
     }
     return id;
+  }
+
+  /**
+   * Best-effort removal of the object whose row write just failed. Never throws: a failed delete
+   * degrades to exactly the orphan that exists today, and letting it out of the catch would turn a
+   * warned-and-continued file into a failed import - strictly worse than the object it cleans.
+   */
+  private async discardUploadedFile(filePath: string, cause: unknown): Promise<void> {
+    try {
+      await this.adapters.fileStorageService.deleteFile(filePath);
+    } catch (error) {
+      this.adapters.logger.warn('Failed to delete uploaded knowledge file after its row write failed', {
+        filePath,
+        cause,
+        error,
+      });
+    }
+  }
+
+  /**
+   * The S3 keys whose `FabFile` row was written and could still be rolled back. Exposed because a
+   * caller whose `importNotebooks` never returned has no `result` to read; the committed case uses
+   * `result.importedKnowledgeFilePaths` instead. A copy, so the caller cannot mutate this state.
+   */
+  getImportedKnowledgeFilePaths(): string[] {
+    return [...this.importedKnowledgeFilePaths];
   }
 
   async importNotebooks(
@@ -535,7 +583,8 @@ export class NotebookImportService {
   private async importKnowledgeFiles(knowledgeFiles: ExportedKnowledgeFile[], targetUserId: string): Promise<string[]> {
     const importedIds: string[] = [];
 
-    for (const file of knowledgeFiles) {
+    for (const [index, file] of knowledgeFiles.entries()) {
+      const label = describeKnowledgeFile(file, index);
       try {
         // Not branched on `preserveIds`: reusing the source id would imply this is the same document.
         const storageKeySuffix = this.adapters.generateId();
@@ -593,9 +642,10 @@ export class NotebookImportService {
         await this.adapters.fileStorageService.uploadFile(filePath, bytes);
 
         // Charged once the upload returns, so a file that fails to store cannot spend another file's
-        // headroom. Deliberately above the row write rather than below it: the bytes are in the
-        // bucket either way, so a file whose row write fails has still consumed storage and must
-        // still count against the files behind it.
+        // headroom. Deliberately above the row write rather than below it, and deliberately NOT
+        // refunded when that write fails and the compensating delete below removes the object: the
+        // delete is best-effort, so this accumulator - the only guard against several files jointly
+        // overshooting the quota - cannot depend on it having succeeded.
         this.admittedBytes += storedSize;
 
         // No `id`: FabFile has no such path, so the store assigns one.
@@ -616,20 +666,32 @@ export class NotebookImportService {
         };
         // No `uploadedAt`/`metadata`: not paths on FabFileSchema, so strict mode drops them silently.
 
-        importedIds.push(this.takeStoreId(await this.adapters.knowledgeRepository.create(knowledgeData), 'knowledge'));
+        // The create is wrapped, the two writes after it are not: `takeStoreId` throws on an
+        // adapter that returned no id *after* a successful insert, and deleting there would trade
+        // an orphaned object for a `FabFile` row pointing at nothing - the inverse orphan the
+        // moderation rescue sweep exists to collect. Only a rejected create means no row exists.
+        let created: { id: unknown };
+        try {
+          created = await this.adapters.knowledgeRepository.create(knowledgeData);
+        } catch (error) {
+          await this.discardUploadedFile(filePath, error);
+          throw error;
+        }
+
+        importedIds.push(this.takeStoreId(created, 'knowledge'));
         this.importedKnowledgeFilePaths.push(filePath);
 
         // After the write, not before: the file has to have landed for "imported as FILE" to be
         // true, and a file that then failed would otherwise be reported twice. Absent is expected
         // of older exports; present-but-unknown is format drift worth saying.
         if (file.type && !isValidEnumValue(file.type, KnowledgeType)) {
-          this.attachmentWarnings.push(`Imported "${file.name}" as FILE: unrecognised knowledge type "${file.type}"`);
+          this.attachmentWarnings.push(`Imported "${label}" as FILE: unrecognised knowledge type "${file.type}"`);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.attachmentWarnings.push(`Failed to import knowledge file "${file.name}": ${message}`);
+        this.attachmentWarnings.push(`Failed to import knowledge file "${label}": ${message}`);
         this.adapters.logger.warn('Failed to import knowledge file', {
-          fileName: file.name,
+          file: label,
           error,
         });
       }

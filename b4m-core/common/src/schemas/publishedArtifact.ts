@@ -321,8 +321,8 @@ export const PUBLISH_TAGS_MAX = 20;
 /**
  * Normalize one tag: trim, collapse internal whitespace, lowercase.
  *
- * Lowercasing is a deliberate trade. It loses the author's capitalisation ("IonQ" stores as
- * "ionq"), and in exchange every downstream use becomes an exact match: the filter is a plain
+ * Lowercasing is a deliberate trade. It loses the author's capitalisation ("NorthWind" stores as
+ * "northwind"), and in exchange every downstream use becomes an exact match: the filter is a plain
  * equality query that can use an index, the vocabulary groups without a case-folding pass, and
  * "Security" cannot sit beside "security" as two chips meaning the same thing. Case-preserving
  * storage with case-insensitive comparison would need a collation or a parallel folded field on

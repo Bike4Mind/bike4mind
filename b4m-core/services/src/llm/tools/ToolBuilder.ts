@@ -30,6 +30,7 @@ import { buildSharedTools } from '../sharedToolBuilder';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
+import { buildEarlyStopStamp } from '../earlyStopStamp';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -45,6 +46,8 @@ export function buildToolUsageEvent(params: {
   outputTokens?: number;
   cachedInputTokens?: number;
   cacheWriteTokens?: number;
+  /** Provider stop reason of the underlying completion, when the tool wraps one (e.g. delegate_to_agent). */
+  finishReason?: string;
 }): IUsageEventInput {
   const { quest, user, organization } = params;
   return {
@@ -63,7 +66,8 @@ export function buildToolUsageEvent(params: {
     units: params.units,
     costUsd: params.costUsd,
     creditsCharged: params.creditsCharged,
-    status: 'ok',
+    // Same refund key the chat/CLI completion paths record: see buildEarlyStopStamp.
+    status: buildEarlyStopStamp(params.finishReason)?.usageEventStatus ?? 'ok',
   };
 }
 
@@ -920,6 +924,7 @@ export class ToolBuilder {
                 outputTokens: meta.outputTokens,
                 cachedInputTokens: meta.cacheReadTokens,
                 cacheWriteTokens: meta.cacheWriteTokens,
+                finishReason: meta.finishReason,
               })
             );
           }

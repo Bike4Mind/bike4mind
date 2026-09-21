@@ -40,6 +40,16 @@ describe('ConfigStore features map', () => {
     expect(reloaded.features?.['b4m-plugin-foo']).toBe(true);
   });
 
+  it('clears the on-disk feature map on reset (not inherited via the disk-merge)', async () => {
+    const config = await store.load();
+    await store.save({ ...config, features: { tavern: true, 'b4m-plugin-foo': true } });
+
+    await store.reset();
+
+    const reloaded = await new ConfigStore(configPath).load();
+    expect(reloaded.features ?? {}).toEqual({});
+  });
+
   it('preserves a false value for a plugin key (no truthy coercion)', async () => {
     const config = await store.load();
     await store.save({ ...config, features: { 'b4m-plugin-foo': false } });

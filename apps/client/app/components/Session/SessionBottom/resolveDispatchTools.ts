@@ -30,6 +30,14 @@ import type { B4MLLMTools } from '@bike4mind/common';
  * `undefined` and let the server resolve the profile itself - one less place
  * for the client's view of admin config to drift from the server's.
  *
+ * The same applies when `agentModeDefaultTools` gives us no usable base: `null`
+ * (the org policy is unknown - the authed settings fetch has not landed, or the
+ * stored value is malformed; see `agentModeDefaultToolNames`) or an empty set
+ * (an admin turned the agent toolbelt off org-wide). Sending the bare Smart
+ * Tools there would REPLACE the org profile with a list the admin never
+ * approved, in the one case where we cannot vouch for the base - so we defer to
+ * the server, at the known cost of the user's Smart Tool picks on that send.
+ *
  * Agentless is inferred from an absent/empty `agentAllowedTools` rather than an
  * explicit flag; that matches the server's own per-field fallback, where
  * `resolveTopLevelProfile` also reads an empty `allowedTools` as "use defaults".
@@ -38,10 +46,11 @@ export function resolveDispatchTools(
   toolsOverride: B4MLLMTools[] | undefined,
   effectiveTools: B4MLLMTools[],
   agentAllowedTools: string[] | undefined,
-  agentModeDefaultTools: ReadonlySet<string>
+  agentModeDefaultTools: ReadonlySet<string> | null
 ): string[] | undefined {
   if (toolsOverride && toolsOverride.length > 0) return effectiveTools;
   if (agentAllowedTools && agentAllowedTools.length > 0) return agentAllowedTools;
   if (effectiveTools.length === 0) return undefined;
+  if (!agentModeDefaultTools || agentModeDefaultTools.size === 0) return undefined;
   return [...new Set<string>([...effectiveTools, ...agentModeDefaultTools])];
 }

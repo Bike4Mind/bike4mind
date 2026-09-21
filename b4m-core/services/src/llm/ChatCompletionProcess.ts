@@ -35,6 +35,9 @@ import {
   resolveHistoryFetchLimit,
   QuestErrorCode,
   getQuestErrorCode,
+  DEGENERATE_FINISH_REASON,
+  TRUNCATED_FINISH_REASON,
+  isEarlyStop,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -114,6 +117,7 @@ import {
   ELISION_MATCH_MAX,
   ELISION_NAME_MAX,
 } from './elisionStamp';
+import { buildEarlyStopStamp } from './earlyStopStamp';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -157,6 +161,7 @@ import {
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   resolveSkipAutoOffers,
+  lakeContentTokens,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
@@ -2375,7 +2380,7 @@ export class ChatCompletionProcess {
       // buildAndSortMessages return nothing and the empty-prompt guard fire on a misconfigured
       // model (a context window smaller than its own reserved output). Clamping there would
       // silently restore the empty payload that guard exists to catch.
-      const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+      const modelMaxOutput = modelInfo.max_tokens;
       // Resolved here, above its first use, because BOTH safeInputWindow callers have to
       // reserve the same output or the window drifts - which is exactly what the note
       // above promises cannot happen. Falling back to the model's full output cap was
@@ -3280,6 +3285,7 @@ export class ChatCompletionProcess {
             urlContent: number;
             toolSchemas: number;
             userPrompt: number;
+            lakeRetrieval?: number;
           }
         | undefined;
 
@@ -3427,6 +3433,8 @@ export class ChatCompletionProcess {
         // captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
         // Derived from totalTokens, NOT inputTokens, so the tool-schema count never inflates it.
         // Uses the post-recovery effective totals so a shed turn isn't double-counted as history.
+        // Lake content is still inside this residual HERE. It is promoted to its own bucket below,
+        // once systemPromptDetails has been derived, so what gets persisted is net of the lake layers.
         const knownSourceTokens = fabTokens + effectiveHistoryTokens + mementoTokens + urlTokens + userPromptTokens;
         const systemPromptTokens = Math.max(0, effectiveTotalTokens - knownSourceTokens);
 
@@ -3544,6 +3552,23 @@ export class ChatCompletionProcess {
         // model sees the blocks rather than the order the three helpers happened to run.
         systemPromptDetails = sortDetailsByDeliveryOrder(systemPromptDetails);
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
+      }
+
+      // Promote the lake layers out of the residual. `tokensBySource.systemPrompts` above is gross -
+      // it still contains the forced-retrieval and lake-memory content - so move exactly the tokens
+      // the layer rows recorded as delivered into a bucket of their own, conserving the sum rather
+      // than counting the lake messages a second time. One counter, and a lake block the budget
+      // dropped is not billed (the rows carry `wasIncluded`). `undefined` means the details never
+      // derived, so the volume is unknown and the residual stays gross rather than claiming zero.
+      if (tokensBySource) {
+        const lakeTokens = lakeContentTokens(systemPromptDetails);
+        if (lakeTokens !== undefined) {
+          tokensBySource = {
+            ...tokensBySource,
+            systemPrompts: Math.max(0, tokensBySource.systemPrompts - lakeTokens),
+            lakeRetrieval: lakeTokens,
+          };
+        }
       }
 
       // Opt-in only, and built from the same tagged stack the breakdown above is derived from, so
@@ -4348,8 +4373,9 @@ export class ChatCompletionProcess {
                 // stopReason follows the same preserve-last-non-null contract as token
                 // counts. Previously this field was overwritten by every callback (via
                 // the whole-object replace), so a tail callback emitting undefined would
-                // clobber a real value. Only the telemetry consumer at line ~3080 reads
-                // this, and it benefits from sticky last-known semantics.
+                // clobber a real value. Read downstream for telemetry, the usage-event
+                // status, and promptMeta.finishReason, all of which benefit from sticky
+                // last-known semantics.
                 if (completionInfo?.stopReason != null) actualTokenUsage.stopReason = completionInfo.stopReason;
               }
             );
@@ -4798,7 +4824,7 @@ export class ChatCompletionProcess {
           try {
             const stamp = quest.promptMeta
               ? buildElisionStamp(elisionHits, {
-                  wasTruncated: actualTokenUsage?.stopReason === 'max_tokens',
+                  stoppedEarly: isEarlyStop(actualTokenUsage?.stopReason),
                   priorWarnings: quest.promptMeta.warnings ?? [],
                 })
               : null;
@@ -5073,9 +5099,23 @@ export class ChatCompletionProcess {
           `🔍 [DEBUG] Individual feature durations: ability=${abilityDuration}ms, data=${essentialDataDuration}ms, model=${modelSetupDuration}ms, history=${historyDuration}ms, artifact=${artifactDuration}ms, onComplete=${onCompleteDuration}ms`
         );
 
+        // How generation ended. Computed here rather than at the promptMeta stamping
+        // below because the settlement/usage-event write is the first consumer: a turn we
+        // aborted ourselves still costs the provider tokens, so the billing row has to say
+        // so a future refund sweep could find it.
+        const providerStopReason = actualTokenUsage?.stopReason;
+        const wasTruncated = providerStopReason === TRUNCATED_FINISH_REASON;
+        const wasDegenerate = providerStopReason === DEGENERATE_FINISH_REASON;
+        const earlyStopStamp = buildEarlyStopStamp(providerStopReason);
+
         // P6: Credits reconciliation - settle the pre-reserved credits against actual usage.
         // The balance was already adjusted atomically at pre-reservation time; this step
         // handles the delta and records audit-trail transactions.
+        //
+        // NOTE: the usage-event write below (including the degenerate/truncated status)
+        // only fires when credit enforcement is on. A tenant with enforcement off gets no
+        // row for a degenerate turn at all, so the Degenerate Rate KPI under-reports there
+        // and there is nothing for a future refund sweep to find on that tenant.
         if (adminSettingsEnforceCredits) {
           if (!this.db.creditTransactions) {
             throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
@@ -5140,7 +5180,9 @@ export class ChatCompletionProcess {
               // tools included), recorded on the chat settlement event so
               // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
               writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
-              status: 'ok',
+              // Not always 'ok': a turn we aborted as degenerate is priced like any other
+              // (the provider tokens were really spent) but has to be findable for a refund.
+              status: earlyStopStamp?.usageEventStatus ?? 'ok',
               latencyMs: Date.now() - processStartTime,
             })
             .catch((usageEventError: unknown) => {
@@ -5276,15 +5318,18 @@ export class ChatCompletionProcess {
           }));
         }
 
-        // Surface the provider's stop reason so truncated responses are no longer
-        // silent. 'max_tokens' means generation was cut off against the
-        // output-token ceiling - which is what leaves a large artifact unclosed.
-        // Persisted on promptMeta so the client can render a truncation/recovery
-        // affordance instead of falling through to raw HTML.
-        const providerStopReason = actualTokenUsage?.stopReason;
-        const wasTruncated = providerStopReason === 'max_tokens';
+        // Surface the stop reason so a reply that ended early is no longer silent:
+        // 'max_tokens' (cut off against the output-token ceiling, which is what leaves a
+        // large artifact unclosed) or 'degenerate_repetition' (we aborted a stream that
+        // had started repeating itself). Persisted on promptMeta so the client can render
+        // the matching notice instead of falling through to raw HTML.
         if (quest.promptMeta) {
           quest.promptMeta.finishReason = providerStopReason;
+        }
+        if (wasDegenerate) {
+          logger.warn(
+            `⚠️ [Degeneration] Stream aborted after the output began repeating itself (model=${currentModel.id}, outputTokens=${outputTokens}, requestedMaxTokens=${safeMaxTokens}). Reply is the partial prefix.`
+          );
         }
         if (wasTruncated) {
           logger.warn(
@@ -5294,12 +5339,12 @@ export class ChatCompletionProcess {
             // this number - hence "requested" rather than the actual ceiling.
             `⚠️ [Truncation] Response hit max_tokens ceiling (model=${currentModel.id}, outputTokens=${outputTokens}, requestedMaxTokens=${safeMaxTokens}). Output may be truncated mid-artifact.`
           );
-          if (quest.promptMeta) {
-            quest.promptMeta.warnings = [
-              ...(quest.promptMeta.warnings ?? []),
-              'Response was truncated against the output-token limit (max_tokens). Large artifacts may be incomplete.',
-            ];
-          }
+        }
+        // Membership-checked for the same reason buildElisionStamp takes priorWarnings: if this
+        // block ever runs twice over a preserved promptMeta, the user must not see the warning
+        // twice.
+        if (earlyStopStamp && quest.promptMeta && !(quest.promptMeta.warnings ?? []).includes(earlyStopStamp.warning)) {
+          quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
         quest.status = 'done';
@@ -5307,11 +5352,12 @@ export class ChatCompletionProcess {
         // Context Telemetry: Finalize and attach to promptMeta
         if (telemetryBuilder) {
           try {
-            // Determine finish reason based on completion state. A max_tokens stop
-            // takes precedence - it maps to the telemetry 'length' bucket so
-            // truncation is observable in dashboards.
+            // Determine finish reason based on completion state. An early stop takes
+            // precedence - both the max_tokens ceiling and a degeneration abort map to
+            // the telemetry 'length' bucket (generation cut short against the output
+            // budget) so neither is counted as a clean 'stop' in dashboards.
             const hasToolCalls = (quest.promptMeta?.functionCalls?.length ?? 0) > 0;
-            const finishReason = wasTruncated ? 'length' : hasToolCalls ? 'tool_use' : 'stop';
+            const finishReason = wasTruncated || wasDegenerate ? 'length' : hasToolCalls ? 'tool_use' : 'stop';
 
             telemetryBuilder.setFinishReason(finishReason);
             telemetryBuilder.setUsedTools(hasToolCalls);

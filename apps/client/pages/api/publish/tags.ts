@@ -6,7 +6,7 @@ import { AppFileReservedTags, normalizePublishTag } from '@bike4mind/common';
  * GET /api/publish/tags - the caller's own tag vocabulary, for autocomplete.
  *
  * Drawn from BOTH the caller's published artifacts and their AppFile tags, because a label
- * should mean one thing across the app: if a file is already tagged `ionq`, offering `IonQ` as a
+ * should mean one thing across the app: if a file is already tagged `northwind`, offering `NorthWind` as a
  * fresh suggestion on the publish side is how you end up with two tags for one subject. Tags stay
  * freeform - nothing here restricts what may be typed; this only shapes what is SUGGESTED.
  *
@@ -53,7 +53,7 @@ const handler = baseApi().get(async (req, res) => {
   for (const raw of (fileTags as unknown[]) ?? []) {
     const tag = normalizePublishTag(String(raw ?? ''));
     // Normalizing the AppFile side too is what makes the vocabularies actually share: those tags
-    // were written without this normalizer, so `IonQ` there and `ionq` here are one entry.
+    // were written without this normalizer, so `NorthWind` there and `northwind` here are one entry.
     if (tag && !RESERVED.has(tag) && !counts.has(tag)) counts.set(tag, 0);
   }
 

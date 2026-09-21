@@ -7,6 +7,7 @@
 #   - Stripe price_/prod_ IDs
 #   - Google Analytics measurement IDs (G-XXXX, UA-XXXX)
 #   - AWS account IDs in ECR registry URLs + configured cross-account principals (via DENY_ACCOUNT_IDS)
+#   - bare 24-character hex Mongo ObjectIds (user, org and document ids)
 #
 # Also serves as the before/after evidence for the security review: run it on the
 # base ref to capture the violations, then on the fix branch to prove they're gone.
@@ -34,7 +35,7 @@ EXCLUDE_FILES=(--exclude='*.test.ts' --exclude='*.test.tsx' --exclude='*.spec.ts
 
 EXCLUDE_DIRS=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build
   --exclude-dir=.next --exclude-dir=.turbo --exclude-dir=coverage --exclude-dir=__tests__
-  --exclude-dir=seeders)
+  --exclude-dir=seeders --exclude-dir=out)
 
 # Scope (issue #9306, §8.3/§8.5): account-tied identifiers that functionally couple
 # a fork to Bike4Mind infrastructure — NOT general brand copy. Genericizing
@@ -48,9 +49,21 @@ EXCLUDE_DIRS=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build
 #   DENY_ACCOUNT_IDS   — pipe-joined account IDs,   e.g. "111111111111|222222222222"
 #   DENY_BRAND_DOMAINS — pipe-joined ERE domains,   e.g. "example\.com"
 # Set both as repo/org variables on the private source repo (wired into ci.yml).
-# Unset (e.g. on a public fork) simply skips those two checks — a fork has no B4M
+# Unset (e.g. on a public fork) simply skips those two checks - a fork has no B4M
 # account IDs to catch, so there is nothing to protect there.
-_alts=('price_[A-Za-z0-9]{10,}' 'prod_[A-Za-z0-9]{10,}' '\bG-[A-Z0-9]{8,}\b' '\bUA-[0-9]{4,}-[0-9]+\b' '[0-9]{12}\.dkr\.ecr\.')
+#
+# A bare 24-character lowercase hex run is a Mongo ObjectId as `toString()` renders it, so it is
+# a user, org or document id pasted into source - the shape CLAUDE.md answers with "resolve at
+# runtime". It is narrow enough to be safe: a 40-char git SHA or any longer hash has no word
+# boundary at 24, and every legitimate occurrence in this tree is a doc example or a vendored
+# bundle, allowlisted by path. A narrower pattern was measured and does not work - real ids
+# appear as plain property values under keys like `id`, never beside `userId`/`owners` and never
+# as a module-scope const, so keyword- and const-scoped variants catch nothing at all.
+#
+# LIMITATION: EXCLUDE_FILES drops *.test.ts and *.spec.ts, where synthetic ids are legitimate and
+# numerous - lifting that exclusion adds 242 matches across 83 files. So an id pasted into a test
+# file still gets past this gate, and review is the only backstop there.
+_alts=('price_[A-Za-z0-9]{10,}' 'prod_[A-Za-z0-9]{10,}' '\bG-[A-Z0-9]{8,}\b' '\bUA-[0-9]{4,}-[0-9]+\b' '[0-9]{12}\.dkr\.ecr\.' '\b[0-9a-f]{24}\b')
 if [ -n "${DENY_ACCOUNT_IDS:-}" ]; then _alts+=("\\b(${DENY_ACCOUNT_IDS})\\b"); fi
 if [ -n "${DENY_BRAND_DOMAINS:-}" ]; then _alts+=("(${DENY_BRAND_DOMAINS})"); fi
 ALWAYS_PATTERN="($(IFS='|'; printf '%s' "${_alts[*]}"))"
