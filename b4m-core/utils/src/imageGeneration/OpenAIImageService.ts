@@ -168,6 +168,12 @@ export type OpenAIImageGenerationOptions = Omit<ImageGenerateParams, 'prompt'> &
   seed?: number | null;
   output_format?: ImageOutputFormat | null;
   imagePrompt?: string;
+  /**
+   * Extra gpt-image style-anchor images, appended after `imagePrompt` in the order given.
+   * Only the gpt-image edit endpoint reads them; the dall-e-2 variation endpoint takes a
+   * single image and drops them with a warning. Callers cap the count (MAX_REFERENCE_IMAGES).
+   */
+  referenceImages?: string[];
 };
 
 /**
@@ -208,6 +214,35 @@ export function resolveGptImageOutputOptions(
 }
 
 export class OpenAIImageService extends AIImageService {
+  /**
+   * Fetches an image (URL or data URL) and normalizes it to the PNG-under-4MB form every
+   * OpenAI image endpoint accepts. The 4MB/PNG coercion is dall-e-2's constraint, not
+   * gpt-image's (which takes png/webp/jpg up to 50MB) - kept as-is so this refactor does
+   * not change what reaches the provider.
+   */
+  private async toImageFile(source: string, fileName: string): Promise<File> {
+    if (!this.imageProcessorLambdaName) {
+      throw new Error(
+        'ImageProcessor Lambda name is required for image processing. Please provide it when creating the image service.'
+      );
+    }
+    const buffer = await downloadImageAsBuffer(source);
+    const pngBuffer = await invokeImageProcessor(buffer, this.imageProcessorLambdaName, 4); // 4MB max for OpenAI
+    return new File([pngBuffer], fileName, { type: 'image/png' });
+  }
+
+  /**
+   * Converts style-anchor sources into files, in the order given. Parallel on purpose: each
+   * source costs a download plus an ImageProcessor Lambda round trip, and serialized those
+   * would eat a meaningful share of the 8-minute client budget (OPENAI_IMAGE_CLIENT_OPTS).
+   */
+  private async toReferenceImageFiles(sources: string[] | undefined): Promise<File[]> {
+    if (!sources?.length) {
+      return [];
+    }
+    return Promise.all(sources.map((source, i) => this.toImageFile(source, `reference-${i + 1}.png`)));
+  }
+
   async generate(prompt: string, options: OpenAIImageGenerationOptions): Promise<string[]> {
     const openai = new OpenAI({ apiKey: this.apiKey, ...OPENAI_IMAGE_CLIENT_OPTS });
     Logger.log('Generating image... with these params: ', options);
@@ -223,6 +258,7 @@ export class OpenAIImageService extends AIImageService {
         output_format,
         background,
         imagePrompt,
+        referenceImages,
         stream,
         ...openaiOptions
       } = options;
@@ -344,17 +380,7 @@ export class OpenAIImageService extends AIImageService {
       let result;
 
       if (imagePrompt) {
-        // Download the image; invokeImageProcessor converts it to PNG and enforces
-        // OpenAI's size limit.
-        const imageBuffer = await downloadImageAsBuffer(imagePrompt);
-        if (!this.imageProcessorLambdaName) {
-          throw new Error(
-            'ImageProcessor Lambda name is required for image processing. Please provide it when creating the image service.'
-          );
-        }
-        const pngBuffer = await invokeImageProcessor(imageBuffer, this.imageProcessorLambdaName, 4); // 4MB max for OpenAI
-
-        const imageFile = new File([pngBuffer], 'image.png', { type: 'image/png' });
+        const imageFile = await this.toImageFile(imagePrompt, 'image.png');
 
         // GPT-Image models use the edit endpoint for image-to-image generation
         if (isGPTImageModel(options.model)) {
@@ -372,17 +398,22 @@ export class OpenAIImageService extends AIImageService {
           const editQuality = toGptImageQuality(openaiOptions.quality);
           const editSize = isSupportedEditSize(editModel, openaiOptions.size) ? openaiOptions.size : undefined;
 
+          // Style anchors follow the primary image; a mask (not sent on this path) would
+          // bind to element 0, so the primary must stay first.
+          const imageFiles = [imageFile, ...(await this.toReferenceImageFiles(referenceImages))];
+
           this.logger.log('OpenAI image generation request (edit endpoint, image-to-image):', {
             model: editModel,
             prompt: truncatePromptForLog(prompt),
             quality: editQuality,
             size: editSize,
             n: openaiOptions.n,
+            referenceImageCount: imageFiles.length - 1,
             ...gptImageOutputOptions,
           });
           result = await openai.images.edit({
             model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
-            image: [imageFile],
+            image: imageFiles,
             prompt,
             ...(editQuality ? { quality: editQuality } : {}),
             ...(editSize ? { size: editSize } : {}),
@@ -390,7 +421,12 @@ export class OpenAIImageService extends AIImageService {
             ...gptImageOutputOptions,
           });
         } else {
-          // Legacy models (DALL-E 2) use the variation endpoint
+          // Legacy models (DALL-E 2) use the variation endpoint, which takes exactly one
+          // image - reference anchors have nowhere to go, so say so rather than silently
+          // rendering from the primary alone.
+          if (referenceImages?.length) {
+            Logger.globalInstance.debug(`[DEBUG] Reference images are not supported by ${modelName} and were removed`);
+          }
 
           const { style, quality, model, ...opts } = openaiOptions; // Remove unsupported params for variations
           const variationSize = ['256x256', '512x512', '1024x1024'].find(s => s === openaiOptions.size) as
@@ -493,6 +529,7 @@ export class OpenAIImageService extends AIImageService {
       user,
       background,
       output_format,
+      referenceImages,
     }: ImageEditOptions
   ): Promise<ImageEditResponse> {
     try {
@@ -533,6 +570,17 @@ export class OpenAIImageService extends AIImageService {
         editModel = ImageModels.GPT_IMAGE_2;
       }
 
+      // Anchors trail the edit source. OpenAI binds the mask to element 0, so `imageFile`
+      // has to stay first or an inpainting request would mask a style reference instead.
+      // Gated on the model that will actually receive them: dall-e-2's edit endpoint takes a
+      // single image, and each anchor costs a download plus an ImageProcessor round trip, so
+      // fetching them for a model that cannot use them is pure latency.
+      const editModelCarriesReferences = isGPTImageModel(editModel);
+      if (referenceImages?.length && !editModelCarriesReferences) {
+        Logger.globalInstance.debug(`[DEBUG] Reference images are not supported by ${editModel} and were removed`);
+      }
+      const referenceImageFiles = editModelCarriesReferences ? await this.toReferenceImageFiles(referenceImages) : [];
+
       const editWarnings: string[] = [];
       const gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, editWarnings, editModel);
       if (editWarnings.length > 0) {
@@ -559,6 +607,7 @@ export class OpenAIImageService extends AIImageService {
         requestedN: n,
         size,
         quality: editQuality,
+        referenceImageCount: referenceImageFiles.length,
         response_format,
       });
 
@@ -566,7 +615,7 @@ export class OpenAIImageService extends AIImageService {
         isGPTImageModel(editModel)
           ? {
               model: editModel as 'gpt-image-1' | 'gpt-image-1.5' | 'gpt-image-1-mini' | 'gpt-image-2',
-              image: [imageFile],
+              image: [imageFile, ...referenceImageFiles],
               prompt,
               ...(forwardSize ? { size } : {}),
               ...(maskFile ? { mask: maskFile } : {}),

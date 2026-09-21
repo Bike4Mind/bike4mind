@@ -113,6 +113,37 @@ describe('GET /api/quests/[id]/context', () => {
       window: { contextWindow: 200000, inputTokens: 7040, maxOutputTokens: 8192, freeSpace: 184768 },
     });
     expect(res._getJSONData().promptFingerprint).toMatch(/^[0-9a-f]{12}$/);
+    // The fixture predates the bucket, so the owner must see it as unknown, never as a zero.
+    expect(res._getJSONData().categories.lakeRetrieval).toBeNull();
+  });
+
+  it('surfaces a recorded lake bucket, out of the system-prompt layer sum', async () => {
+    mockQuestFindById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      promptMeta: {
+        ...PROMPT_META,
+        context: {
+          ...PROMPT_META.context,
+          tokensBySource: { ...PROMPT_META.context.tokensBySource, systemPrompts: 3660, lakeRetrieval: 340 },
+          systemPromptDetails: [
+            ...PROMPT_META.context.systemPromptDetails,
+            { source: 'session', name: 'knowledge_retrieval', tokenCount: 300, wasIncluded: true },
+            { source: 'session', name: 'lake_memory', tokenCount: 40, wasIncluded: true },
+          ],
+        },
+      },
+    });
+    const { req, res } = fire();
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().categories).toMatchObject({
+      // 2822 + 60 + 300 + 40 layers, less the 340 the lake row now reports.
+      systemPrompt: 2882,
+      lakeRetrieval: 340,
+      systemPromptBilled: 3660,
+    });
   });
 
   it('never returns prompt text, tool output or the telemetry document', async () => {

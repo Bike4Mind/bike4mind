@@ -53,6 +53,7 @@ describe('AgentStore project-agent containment', () => {
     await fs.symlink(path.join(outside, 'evil.md'), path.join(agentsDir, 'escape.md'));
 
     const store = new AgentStore(builtinDir, projectRoot);
+    store.setProjectTrusted(true); // folder-trust gate: project agents load only for a trusted root
     await store.loadAgents();
 
     expect(store.hasAgent('ok')).toBe(true);

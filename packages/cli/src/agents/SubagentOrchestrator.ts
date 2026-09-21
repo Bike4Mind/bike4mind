@@ -7,7 +7,6 @@ import type { IMessage } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { PermissionManager } from '../utils/PermissionManager.js';
-import { isTrustedHookSource } from '../utils/hookTrust.js';
 import type { PermissionResponse } from '../components/PermissionPrompt.js';
 import type { ApiClient } from '../auth/ApiClient.js';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
@@ -343,6 +342,9 @@ export class SubagentOrchestrator {
         parentInteractionMode: effectiveInteractionMode,
         // Onward forks inherit this agent's model unless they declare their own.
         parentModel: effectiveModel,
+        // Gate the skill's lifecycle hook shell commands through permission.
+        permissionManager: this.deps.permissionManager,
+        promptFn: this.deps.showPermissionPrompt,
       });
       filteredTools.push(skillTool);
 
@@ -365,18 +367,14 @@ export class SubagentOrchestrator {
       sessionId: parentSessionId,
       agentName,
       cwd: process.cwd(),
+      // Gate each agent lifecycle hook's shell command through permission.
+      permission: {
+        permissionManager: this.deps.permissionManager,
+        promptFn: this.deps.showPermissionPrompt,
+      },
     };
 
-    // Fail-closed hook trust gate: agent hooks shell out with no PermissionManager
-    // check, so only run hooks from a source the user controls (builtin/global). A
-    // project, remote, or dynamic (runtime-generated) agent's hooks are dropped so a
-    // hostile checkout cannot execute code via a lifecycle hook (see hookTrust.ts).
-    const trustedHooks = isTrustedHookSource(agentDef.source) ? agentDef.hooks : undefined;
-    if (agentDef.hooks && !trustedHooks) {
-      this.deps.logger.debug(`Agent "${agentName}" hooks skipped: untrusted source "${agentDef.source}"`);
-    }
-
-    const hookedTools = filteredTools.map(tool => wrapToolWithHooks(tool, trustedHooks, hookWrapperContext));
+    const hookedTools = filteredTools.map(tool => wrapToolWithHooks(tool, agentDef.hooks, hookWrapperContext));
 
     this.deps.logger.debug(
       `Spawning "${agentName}" agent with ${hookedTools.length} tools, ` +
@@ -472,14 +470,15 @@ export class SubagentOrchestrator {
     }
     const duration = Date.now() - startTime;
 
-    // Execute Stop hooks (same fail-closed trust gate as tool hooks above)
-    if (trustedHooks?.Stop) {
+    // Execute Stop hooks
+    if (agentDef.hooks?.Stop) {
       const stopResult = await executeHooks(
-        trustedHooks.Stop,
+        agentDef.hooks.Stop,
         buildHookContext({
           ...hookWrapperContext,
           hookEventName: 'Stop',
-        })
+        }),
+        hookWrapperContext.permission
       );
 
       if (stopResult.decision === 'block') {

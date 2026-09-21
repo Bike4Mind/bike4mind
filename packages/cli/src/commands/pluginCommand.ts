@@ -215,10 +215,9 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
       continue;
     }
     const config = await configStore.load();
-    await configStore.save({
-      ...config,
-      features: { ...config.features, [descriptor.configKey]: true },
-    });
+    // Minimal partial: only the features map is persisted (global-owned), so no
+    // repo-sourced layer from the merged config is laundered into global.
+    await configStore.save({ features: { ...config.features, [descriptor.configKey]: true } });
     console.log(`✅ Installed ${descriptor.name}@${descriptor.version} (plugin key: ${descriptor.configKey})`);
     console.log(`Enabled feature "${descriptor.configKey}". It will load next time you start b4m.`);
   }
@@ -256,11 +255,9 @@ export async function handleRemove(name: string, pluginsDir: string, configStore
   if (plugin.valid) {
     const config = await configStore.load();
     // Write false rather than deleting: save() deep-merges features with the
-    // on-disk map, so a deleted key would be resurrected from disk.
-    await configStore.save({
-      ...config,
-      features: { ...config.features, [plugin.configKey]: false },
-    });
+    // on-disk map, so a deleted key would be resurrected from disk. Minimal
+    // partial (features only) avoids laundering merged repo layers into global.
+    await configStore.save({ features: { ...config.features, [plugin.configKey]: false } });
   }
   console.log(`✅ Removed plugin ${plugin.name}${plugin.valid ? ` and disabled "${plugin.configKey}"` : ''}.`);
 }

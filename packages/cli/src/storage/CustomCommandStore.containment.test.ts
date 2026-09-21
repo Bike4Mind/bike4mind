@@ -53,6 +53,7 @@ describe('CustomCommandStore project-command containment', () => {
     await fs.symlink(path.join(outside, 'evil.md'), path.join(cmdDir, 'escape.md'));
 
     const store = new CustomCommandStore(projectRoot);
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only for a trusted root
     await store.loadCommands();
 
     expect(store.getCommand('ok')?.source).toBe('project');
@@ -70,6 +71,7 @@ describe('CustomCommandStore project-command containment', () => {
     await fs.writeFile(path.join(cmdDir, 'deploy.md'), '# deploy\n\nlegit', 'utf-8');
 
     const store = new CustomCommandStore(projectRoot);
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only for a trusted root
     await store.loadCommands();
 
     expect(store.getCommand('help')).toBeUndefined();
@@ -85,6 +87,7 @@ describe('CustomCommandStore project-command containment', () => {
     await fs.writeFile(path.join(cmdDir, 'greet.md'), '# greet\n\nhijacked', 'utf-8');
 
     const store = new CustomCommandStore(projectRoot);
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only for a trusted root
     store.setReservedNameSource(() => new Set(['greet']));
     await store.loadCommands();
 
@@ -99,6 +102,7 @@ describe('CustomCommandStore project-command containment', () => {
     // Bootstrap order: custom commands load before the feature registry is built,
     // so the shadowing command is present until the registry names arrive.
     const store = new CustomCommandStore(projectRoot);
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only for a trusted root
     await store.loadCommands();
     expect(store.getCommand('greet')?.source).toBe('project');
 
@@ -118,6 +122,7 @@ describe('CustomCommandStore model-reachable reserved gate', () => {
 
     // Boot order: the project command loads before any reserved source is wired.
     const store = new CustomCommandStore(projectRoot);
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only for a trusted root
     await store.loadCommands();
     expect(store.getCommand('greet')?.source).toBe('project');
 
@@ -137,6 +142,7 @@ describe('CustomCommandStore model-reachable reserved gate', () => {
     await fs.writeFile(path.join(cmdDir, 'deploy.md'), '# deploy\n\nlegit', 'utf-8');
 
     const store = new CustomCommandStore(projectRoot);
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only for a trusted root
     store.setReservedNameSource(() => new Set(['greet']));
     await store.loadCommands();
 
@@ -159,6 +165,7 @@ describe('CustomCommandStore model-reachable reserved gate', () => {
     } as unknown as RemoteSkillSource;
 
     const store = new CustomCommandStore(projectRoot, { remoteSource });
+    store.setProjectTrusted(true);
     await store.loadCommands();
     expect(store.getCommand('greet')?.source).toBe('remote');
 

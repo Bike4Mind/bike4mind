@@ -238,6 +238,13 @@ export class AgentStore {
   private projectB4MAgentsDir: string;
   private projectClaudeAgentsDir: string;
   private projectRoot: string;
+  /**
+   * Whether the project root is trusted. When false, project agent directories
+   * are NOT scanned (folder-trust gate) - only built-in and global agents load.
+   * Defaults FALSE (fail-safe): a caller that forgets `setProjectTrusted` gets
+   * the safe posture, never a silent trust of repo agents.
+   */
+  private projectTrusted = false;
 
   /**
    * Creates a new AgentStore
@@ -278,8 +285,19 @@ export class AgentStore {
     await this.loadAgentsFromDirectory(this.builtinAgentsDir, 'builtin');
     await this.loadAgentsFromDirectory(this.globalB4MAgentsDir, 'global');
     await this.loadAgentsFromDirectory(this.globalClaudeAgentsDir, 'global');
-    await this.loadAgentsFromDirectory(this.projectB4MAgentsDir, 'project');
-    await this.loadAgentsFromDirectory(this.projectClaudeAgentsDir, 'project');
+    // Project agents load ONLY for a trusted project root (folder-trust gate).
+    if (this.projectTrusted) {
+      await this.loadAgentsFromDirectory(this.projectB4MAgentsDir, 'project');
+      await this.loadAgentsFromDirectory(this.projectClaudeAgentsDir, 'project');
+    }
+  }
+
+  /**
+   * Set whether the project root is trusted. When false, `loadAgents()` skips
+   * the project agent directories. Call before `loadAgents()`.
+   */
+  setProjectTrusted(trusted: boolean): void {
+    this.projectTrusted = trusted;
   }
 
   /**

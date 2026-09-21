@@ -75,6 +75,15 @@ export const DEFAULT_TOOL_CATEGORIES: Record<string, ToolCategory> = {
  * Returns 'prompt_default' if tool is not in the default categories
  */
 export function getToolCategory(toolName: string, customCategories?: Record<string, ToolCategory>): ToolCategory {
+  // Hook shells (agent_hook:*, skill_hook:*) are never trustable: their command
+  // runs per-invocation and must be classified/prompted every time. Trusting a
+  // project folder loads the hook definitions but does not pre-authorize their
+  // shells, so this namespace check runs BEFORE custom/default categories - a
+  // repo-contributed category (or trustedTools entry) can never downgrade it.
+  if (toolName.startsWith('agent_hook:') || toolName.startsWith('skill_hook:')) {
+    return 'prompt_always';
+  }
+
   // Check custom categories first
   if (customCategories && toolName in customCategories) {
     return customCategories[toolName];

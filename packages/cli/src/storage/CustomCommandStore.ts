@@ -29,6 +29,13 @@ export class CustomCommandStore {
   // built (post-bootstrap). Lets the load gate reject a project command that
   // shadows a runtime plugin command, not just the static reserved set.
   private getFeatureCommandNames?: () => ReadonlySet<string>;
+  /**
+   * Whether the project root is trusted. When false, project command/skill
+   * directories are NOT scanned (folder-trust gate) - only global and remote
+   * skills load. Defaults FALSE (fail-safe): a caller that forgets
+   * `setProjectTrusted` gets the safe posture, never a silent trust of repo skills.
+   */
+  private projectTrusted = false;
 
   constructor(projectRoot?: string, options: CustomCommandStoreOptions = {}) {
     this.remoteSource = options.remoteSource;
@@ -67,9 +74,12 @@ export class CustomCommandStore {
       await this.loadCommandsFromDirectory(dir, 'global');
     }
 
-    // Load project commands - these override global via map replacement.
-    for (const dir of this.projectCommandsDirs) {
-      await this.loadCommandsFromDirectory(dir, 'project');
+    // Load project commands - these override global via map replacement. Loaded
+    // ONLY for a trusted project root (folder-trust gate).
+    if (this.projectTrusted) {
+      for (const dir of this.projectCommandsDirs) {
+        await this.loadCommandsFromDirectory(dir, 'project');
+      }
     }
 
     // Fill in remote skills under any name not already taken by a local file.
@@ -111,6 +121,14 @@ export class CustomCommandStore {
         console.warn(`Ignoring project command "${name}": name is reserved (built-in or feature command)`);
       }
     }
+  }
+
+  /**
+   * Set whether the project root is trusted. When false, `loadCommands()` skips
+   * the project command/skill directories. Call before `loadCommands()`.
+   */
+  setProjectTrusted(trusted: boolean): void {
+    this.projectTrusted = trusted;
   }
 
   /**

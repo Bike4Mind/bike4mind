@@ -65,3 +65,6 @@ apps/client/public/static/lib/d3@[0-9.x]+\.js
 apps/client/public/scalar/scalar\.standalone\.js
 # AWS X-Ray trace-id fragment in a JSDoc example log line, not a Mongo id.
 b4m-core/utils/src/slack\.ts.*Root=1-
+# The canonical MongoDB-docs example ObjectId, reused verbatim in the `getMe` contract's
+# code sample and the OpenAPI output it generates - a doc example, not a real user id.
+(openapi\.json|me\.contract\.ts):[0-9]+:.*507f1f77bcf86cd799439011

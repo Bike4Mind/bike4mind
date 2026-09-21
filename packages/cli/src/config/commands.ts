@@ -73,17 +73,17 @@ export const COMMANDS: CommandDefinition[] = [
   },
   {
     name: 'trust',
-    description: "Trust a tool (won't ask permission again)",
-    args: '<tool-name>',
+    description: "Trust a tool, or `folder` to trust this project's repo config/agents/skills/MCP",
+    args: '<tool-name|folder>',
   },
   {
     name: 'untrust',
-    description: 'Remove tool from trusted list',
-    args: '<tool-name>',
+    description: 'Remove a tool from the trusted list, or `folder` to revoke project trust',
+    args: '<tool-name|folder>',
   },
   {
     name: 'trusted',
-    description: 'List all trusted tools',
+    description: 'Show folder-trust status and list all trusted tools',
   },
   {
     name: 'usage',
