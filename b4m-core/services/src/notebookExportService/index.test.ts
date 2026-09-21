@@ -667,6 +667,7 @@ describe('notebook export - knowledge file bytes', () => {
         uploadFile: vi.fn(async (_path: string, content: Buffer) => {
           uploads.push(content);
         }),
+        deleteFile: vi.fn(),
       },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       generateId: () => 'generated-id',
@@ -704,7 +705,7 @@ describe('notebook export - the tags stamp', () => {
       toolRepository: { create: vi.fn(), find: vi.fn(), findById: vi.fn() },
       agentRepository: { create: vi.fn() },
       userRepository: { findById: vi.fn().mockResolvedValue({ id: 'user-2' }) },
-      fileStorageService: { uploadFile: vi.fn() },
+      fileStorageService: { uploadFile: vi.fn(), deleteFile: vi.fn() },
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       generateId: () => 'generated-id',
     } as unknown as NotebookImportAdapters;
