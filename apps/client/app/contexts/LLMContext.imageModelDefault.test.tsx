@@ -1,4 +1,4 @@
-import { render, waitFor, cleanup } from '@testing-library/react';
+import { render, waitFor, cleanup, act } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImageModels } from '@bike4mind/common';
 
@@ -19,6 +19,7 @@ const LOCAL_CHECKPOINT = 'local-image/sd-xl-base';
 const ALL = [
   TEXT,
   { id: ImageModels.FLUX_PRO_ULTRA, type: 'image', rank: 5 },
+  { id: ImageModels.FLUX_PRO_1_1, type: 'image', rank: 2 },
   { id: ImageModels.FLUX_KONTEXT_PRO, type: 'image', rank: 1 },
   { id: ImageModels.GPT_IMAGE_1, type: 'image', rank: 10 },
   { id: ImageModels.GPT_IMAGE_2, type: 'image', rank: 8 },
@@ -71,6 +72,21 @@ describe('LLMProvider default image model', () => {
 
   it('keeps the FLUX preference when the deployment holds a BFL key', async () => {
     h.accessibleIds = [TEXT.id, ImageModels.FLUX_PRO_ULTRA, ImageModels.GPT_IMAGE_1_MINI];
+    render(<LLMProvider />);
+    await waitFor(() => expect(useLLM.getState().imageModel).toBe(ImageModels.FLUX_PRO_ULTRA));
+  });
+
+  it('selects FLUX_PRO_ULTRA over a better-ranked candidate once the current model is inaccessible', async () => {
+    // The store's own initial default is already FLUX_PRO_ULTRA, so a fixture that starts
+    // accessible never reaches the preference line - it returns early at the "already
+    // accessible" check. Seed an inaccessible current model before mount, with a catalog
+    // that includes a better-ranked FLUX_PRO_1_1 alongside FLUX_PRO_ULTRA, so the assertion
+    // proves the preference line actually wins over rank rather than merely surviving intact.
+    act(() => {
+      useLLM.getState().setLLM({ imageModel: 'local-image/gone' });
+    });
+    h.accessibleIds = [TEXT.id, ImageModels.FLUX_PRO_1_1, ImageModels.FLUX_PRO_ULTRA];
+
     render(<LLMProvider />);
     await waitFor(() => expect(useLLM.getState().imageModel).toBe(ImageModels.FLUX_PRO_ULTRA));
   });

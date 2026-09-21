@@ -1,5 +1,11 @@
 import { getSettingsByNames } from '@bike4mind/utils';
-import { buildApiKeyTable, getAvailableModels, getLlmByModel, type ApiKeyTable } from '@bike4mind/llm-adapters';
+import {
+  buildApiKeyTable,
+  getAvailableModels,
+  getLlmByModel,
+  type ApiKeyTable,
+  type ICompletionBackend,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { apiKeyRepository, adminSettingsRepository, AdminSettings } from '@bike4mind/database';
@@ -210,18 +216,24 @@ export class OperationsModelService {
         imageModelInfo = getDefaultImageModel(models);
       }
 
+      // Image model is optional - a deployment with no configured image backend
+      // (e.g. self-host with no BFL/OpenAI/local-image key) has none, and
+      // text-only operations callers must not fail on that account.
+      let imageLlm: ICompletionBackend | null = null;
       if (!imageModelInfo) {
-        throw new Error(`No image models available for operations`);
-      }
+        this.logger.warn('No image models available for operations - continuing without image support');
+      } else {
+        imageLlm = getLlmByModel(apiKeyTable, {
+          modelInfo: imageModelInfo,
+          logger: this.logger,
+        });
 
-      const imageLlm = getLlmByModel(apiKeyTable, {
-        modelInfo: imageModelInfo,
-        logger: this.logger,
-      });
-
-      if (!imageLlm) {
-        this.logger.error(`Failed to initialize LLM for operations image model ${config.imageModelId}`);
-        throw new Error(`Failed to initialize operations image model ${config.imageModelId}`);
+        if (!imageLlm) {
+          this.logger.warn(
+            `Failed to initialize LLM for operations image model ${config.imageModelId} - continuing without image support`
+          );
+          imageModelInfo = undefined;
+        }
       }
 
       // Speech model is optional - proceed without it if unavailable
@@ -249,8 +261,8 @@ export class OperationsModelService {
         llm,
         modelInfo,
         imageLlm,
-        imageModelId: imageModelInfo.id,
-        imageModelInfo,
+        imageModelId: imageModelInfo ? imageModelInfo.id : null,
+        imageModelInfo: imageModelInfo || null,
         speechLlm,
         speechModelId: speechModelInfo ? speechModelInfo.id : null,
         speechModelInfo: speechModelInfo || null,
@@ -299,22 +311,27 @@ export class OperationsModelService {
       imageModelInfo = getDefaultImageModel(models);
     }
 
+    // Image model is optional - see getOperationsModel's comment.
+    let imageLlm: ICompletionBackend | null = null;
     if (!imageModelInfo) {
-      throw new Error('No image models available for operations');
+      this.logger.warn('No image models available for operations - continuing without image support');
+    } else {
+      imageLlm = getLlmByModel(apiKeyTable, {
+        modelInfo: imageModelInfo,
+        logger: this.logger,
+      });
+
+      if (!imageLlm) {
+        this.logger.warn(
+          `Failed to initialize hardcoded default operations image model ${imageModelInfo.id} - continuing without image support`
+        );
+        imageModelInfo = undefined;
+      } else {
+        this.logger.info(
+          `Using hardcoded default operations image model: ${imageModelInfo.id} (${imageModelInfo.backend})`
+        );
+      }
     }
-
-    const imageLlm = getLlmByModel(apiKeyTable, {
-      modelInfo: imageModelInfo,
-      logger: this.logger,
-    });
-
-    if (!imageLlm) {
-      throw new Error(`Failed to initialize hardcoded default operations image model ${imageModelInfo.id}`);
-    }
-
-    this.logger.info(
-      `Using hardcoded default operations image model: ${imageModelInfo.id} (${imageModelInfo.backend})`
-    );
 
     // Speech model is optional
     let speechModelInfo = models.find(m => m.id === defaultConfig.speechModelId);
@@ -348,8 +365,8 @@ export class OperationsModelService {
       modelId: modelInfo.id,
       llm,
       modelInfo,
-      imageModelId: imageModelInfo.id,
-      imageModelInfo: imageModelInfo,
+      imageModelId: imageModelInfo ? imageModelInfo.id : null,
+      imageModelInfo: imageModelInfo || null,
       imageLlm,
       speechModelId: speechModelInfo ? speechModelInfo.id : null,
       speechModelInfo: speechModelInfo || null,
@@ -402,24 +419,26 @@ export class OperationsModelService {
 
     this.logger.info(`Using default operations model: ${modelInfo.id} (${modelInfo.backend})`);
 
-    const imageModelInfo = getDefaultImageModel(models);
-    const imageModelId = imageModelInfo?.id;
+    let imageModelInfo = getDefaultImageModel(models);
 
-    if (imageModelInfo) {
-      this.logger.info(`Using default image model: ${imageModelId} (${imageModelInfo.backend})`);
-    }
-
+    // Image model is optional - see getOperationsModel's comment.
+    let imageLlm: ICompletionBackend | null = null;
     if (!imageModelInfo) {
-      throw new Error('No image models available for operations');
-    }
+      this.logger.warn('No image models available for operations - continuing without image support');
+    } else {
+      imageLlm = getLlmByModel(apiKeyTable, {
+        modelInfo: imageModelInfo,
+        logger: this.logger,
+      });
 
-    const imageLlm = getLlmByModel(apiKeyTable, {
-      modelInfo: imageModelInfo,
-      logger: this.logger,
-    });
-
-    if (!imageLlm) {
-      throw new Error(`Failed to initialize default operations image model ${imageModelInfo.id}`);
+      if (!imageLlm) {
+        this.logger.warn(
+          `Failed to initialize default operations image model ${imageModelInfo.id} - continuing without image support`
+        );
+        imageModelInfo = undefined;
+      } else {
+        this.logger.info(`Using default image model: ${imageModelInfo.id} (${imageModelInfo.backend})`);
+      }
     }
 
     // Speech model is optional
@@ -449,8 +468,8 @@ export class OperationsModelService {
       llm,
       modelInfo,
       imageLlm,
-      imageModelId: imageModelInfo.id,
-      imageModelInfo,
+      imageModelId: imageModelInfo ? imageModelInfo.id : null,
+      imageModelInfo: imageModelInfo || null,
       speechLlm,
       speechModelId: speechModelInfo ? speechModelInfo.id : null,
       speechModelInfo: speechModelInfo || null,

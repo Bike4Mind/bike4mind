@@ -12,9 +12,11 @@ export interface OperationsModelResult {
   llm: ICompletionBackend;
   modelId: string;
   modelInfo: ModelInfo;
-  imageLlm: ICompletionBackend;
-  imageModelId: string;
-  imageModelInfo: ModelInfo;
+  // Null on a deployment with no configured image backend at all (e.g. self-host
+  // with no BFL/OpenAI/local-image key) - text-only callers must tolerate this.
+  imageLlm: ICompletionBackend | null;
+  imageModelId: string | null;
+  imageModelInfo: ModelInfo | null;
   speechLlm: ICompletionBackend | null;
   speechModelId: string | null;
   speechModelInfo: ModelInfo | null;
