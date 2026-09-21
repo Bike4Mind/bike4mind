@@ -12,6 +12,29 @@ function captureJson(level: 'debug' | 'info' | 'warn' | 'error', emit: (logger: 
   return JSON.parse(spy.mock.calls[0][0] as string) as Record<string, unknown>;
 }
 
+function prettyLogger(metadata: Record<string, unknown> = {}) {
+  return new Logger({ metadata, logInJson: false, prettyPrint: true, minLevel: 'debug' });
+}
+
+/** Returns the single console call's arguments, joined into one string for substring assertions. */
+function capturePretty(level: 'debug' | 'info' | 'warn' | 'error', emit: (logger: Logger) => void) {
+  const spy = vi.spyOn(console, level).mockImplementation(() => {});
+  emit(prettyLogger({ context: 'example' }));
+  expect(spy).toHaveBeenCalledTimes(1);
+  return spy.mock.calls[0].join(' ');
+}
+
+function plainLogger(metadata: Record<string, unknown> = {}) {
+  return new Logger({ metadata, logInJson: false, prettyPrint: false, minLevel: 'debug' });
+}
+
+function capturePlain(level: 'debug' | 'info' | 'warn' | 'error', emit: (logger: Logger) => void) {
+  const spy = vi.spyOn(console, level).mockImplementation(() => {});
+  emit(plainLogger({ context: 'example' }));
+  expect(spy).toHaveBeenCalledTimes(1);
+  return spy.mock.calls[0] as unknown[];
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -102,5 +125,54 @@ describe('Logger.parseArgs metadata placement', () => {
 
   it('lets call metadata override instance metadata regardless of position', () => {
     expect(captureJson('warn', l => l.warn({ context: 'override' }, 'msg')).context).toBe('override');
+  });
+
+  it('preserves own enumerable properties of a nested Error alongside name/message/stack', () => {
+    class HttpError extends Error {
+      constructor(
+        message: string,
+        public statusCode: number,
+        public additionalInfo: Record<string, unknown>
+      ) {
+        super(message);
+        this.name = 'HttpError';
+      }
+    }
+    const entry = captureJson('error', l =>
+      l.error({ err: new HttpError('bad request', 400, { field: 'x' }) }, 'req failed')
+    );
+    const err = entry.err as { name: string; message: string; statusCode: number; additionalInfo: unknown };
+    expect(err.name).toBe('HttpError');
+    expect(err.message).toBe('bad request');
+    expect(err.statusCode).toBe(400);
+    expect(err.additionalInfo).toEqual({ field: 'x' });
+  });
+
+  it('does not throw when the leading arg is a hostile proxy', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw new Error('trap throws');
+        },
+      }
+    );
+    expect(() => captureJson('info', l => l.info(hostile, 'still logs'))).not.toThrow();
+  });
+});
+
+describe('Logger metadata-first rendering on non-JSON branches', () => {
+  it('renders a clean message plus the error metadata line in pretty output', () => {
+    const line = capturePretty('info', l => l.info({ err: new Error('kaboom') }, 'pipeline failed'));
+    expect(line).toContain('pipeline failed');
+    expect(line).not.toContain('{"err":{}}');
+    expect(line).toContain('err:');
+    expect(line).toContain('kaboom');
+  });
+
+  it('renders a clean message plus the metadata object in plain output', () => {
+    const [message, metadata] = capturePlain('warn', l => l.warn({ error: 'boom' }, 'call failed'));
+    expect(message).toBe('call failed');
+    expect(metadata).toMatchObject({ context: 'example', error: 'boom' });
   });
 });

@@ -78,11 +78,13 @@ export class Logger implements ILogger {
     return Logger.LOG_LEVELS[level] >= Logger.LOG_LEVELS[this.minLevel];
   }
 
-  // JSON.stringify drops an Error to `{}` (its fields are non-enumerable), which
-  // silently loses the stack wherever an Error is nested inside metadata.
+  // JSON.stringify drops name/message/stack from an Error (they're non-enumerable),
+  // which silently loses the stack wherever an Error is nested inside metadata. Spread
+  // first so own enumerable properties (HTTPError's statusCode/additionalInfo, axios's
+  // code/response, ...) survive alongside them.
   private static errorReplacer(_key: string, value: unknown): unknown {
     if (value instanceof Error) {
-      return { name: value.name, message: value.message, stack: value.stack };
+      return { ...value, name: value.name, message: value.message, stack: value.stack };
     }
     return value;
   }
@@ -103,7 +105,15 @@ export class Logger implements ILogger {
    * (Errors and arrays stay in the message so their shape survives).
    */
   private isMetadataArg(value: unknown): value is Record<string, unknown> {
-    return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Error);
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    try {
+      // `instanceof` walks the prototype chain via [[GetPrototypeOf]], which a hostile
+      // proxy (throwing trap, revoked proxy) can throw out of - must not crash the log
+      // call itself.
+      return !(value instanceof Error);
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -113,8 +123,12 @@ export class Logger implements ILogger {
    */
   private isPlainObject(value: unknown): value is Record<string, unknown> {
     if (!this.isMetadataArg(value)) return false;
-    const proto = Object.getPrototypeOf(value);
-    return proto === Object.prototype || proto === null;
+    try {
+      const proto = Object.getPrototypeOf(value);
+      return proto === Object.prototype || proto === null;
+    } catch {
+      return false;
+    }
   }
 
   /**

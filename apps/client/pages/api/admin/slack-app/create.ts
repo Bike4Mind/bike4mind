@@ -141,7 +141,7 @@ const handler = baseApi().post(async (req, res) => {
       throw new BadRequestError('Configuration token is invalid or expired. Please provide a valid token.');
     }
 
-    req.logger.error('Slack API error:', slackData);
+    req.logger.error('Slack API error:', { error: slackData.error, errors: slackData.errors });
     throw new BadRequestError(
       slackError || 'Failed to create Slack app',
       (slackData.errors || slackData.response_metadata) as Record<string, unknown> | undefined
