@@ -14,6 +14,7 @@ const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ art
 
   return (
     <ArtifactPreviewCard
+      sourceLanguage="tsx"
       artifactId={artifact.id}
       artifactType="react"
       mimeType="application/vnd.ant.react"

@@ -11,6 +11,7 @@ interface HtmlArtifactPreviewCardProps {
 const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artifact, onExpand }) => {
   return (
     <ArtifactPreviewCard
+      sourceLanguage="html"
       artifactId={artifact.id}
       artifactType="html"
       mimeType="text/html"

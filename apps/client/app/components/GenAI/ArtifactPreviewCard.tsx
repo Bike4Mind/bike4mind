@@ -25,6 +25,7 @@ import type { ArtifactType } from '@bike4mind/common';
 // on hover, over the same hover fill the sidebar items use (notebooklist.hoverBg) rather
 // than Joy's default plain-variant hover. Joy icons take their color from --Icon-color.
 import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 
 // Re-exported so existing importers keep working; it lives in common/ to keep this module
 // out of the markdown renderer's import graph (see the note on the recipe itself).
@@ -72,6 +73,8 @@ export interface ArtifactPreviewCardProps {
   saveFile?: () => ArtifactSaveFile;
   /** Live render shown when expanded. Omit for types with no lightweight inline renderer. */
   renderPreview?: () => ReactNode;
+  /** Prism language for the inline source body. Omit for plain text. */
+  sourceLanguage?: string;
   /** Overrides the default monospace source box (e.g. to syntax-highlight). */
   renderSource?: () => ReactNode;
   actions?: { copy?: boolean; save?: boolean };
@@ -108,6 +111,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   extra,
   testIdPrefix,
   source,
+  sourceLanguage,
   copyTooltip = 'Copy to clipboard',
   copyMessage = 'Copied to clipboard',
   saveTooltip = 'Save as file',
@@ -156,14 +160,30 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   const { settings } = useUserSettings();
   const [showFullSource, setShowFullSource] = useState(false);
   const [sourceOverflows, setSourceOverflows] = useState(false);
+  // How many lines the fold is hiding, so the control can say so - the code card names its
+  // count and this one used to say a bare "Show more". Derived from the measurement rather
+  // than counted, because the bound is a height: with wrapping, a line is not a row. That
+  // makes it an estimate, which is all a label needs.
+  const [hiddenLineCount, setHiddenLineCount] = useState(0);
   const sourceRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = sourceRef.current;
     if (!el || !settings.autoCollapseContent) {
       setSourceOverflows(false);
+      setHiddenLineCount(0);
       return;
     }
-    setSourceOverflows(el.scrollHeight > SOURCE_COLLAPSED_MAX_HEIGHT + 4);
+    const overflows = el.scrollHeight > SOURCE_COLLAPSED_MAX_HEIGHT + 4;
+    setSourceOverflows(overflows);
+
+    if (!overflows || !source) {
+      setHiddenLineCount(0);
+      return;
+    }
+    const totalLines = source.split('\n').length;
+    const perLine = el.scrollHeight / totalLines;
+    const visibleLines = Math.max(1, Math.floor(SOURCE_COLLAPSED_MAX_HEIGHT / perLine));
+    setHiddenLineCount(Math.max(0, totalLines - visibleLines));
   }, [source, settings.autoCollapseContent]);
   const sourceIsBounded = sourceOverflows && !showFullSource;
 
@@ -422,22 +442,18 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             <Box
               sx={{
                 mt: 2,
-                p: 1,
-                borderRadius: 'sm',
-                bgcolor: 'background.level2',
-                fontFamily: 'monospace',
-                fontSize: '11px',
-                lineHeight: 1.4,
-                color: 'text.secondary',
                 overflow: 'hidden',
+                borderRadius: '6px',
                 maxHeight: sourceIsBounded ? `${SOURCE_COLLAPSED_MAX_HEIGHT}px` : undefined,
               }}
               ref={sourceRef}
               data-testid={`${testIdPrefix}-artifact-source`}
             >
-              <Typography level="body-xs" sx={{ fontFamily: 'inherit', whiteSpace: 'pre-wrap' }}>
-                {source}
-              </Typography>
+              {/* The same code surface a fenced block and a code card use. This body used
+                  to be an 11px unhighlighted Typography on background.level2, a token this
+                  theme never defines - so the one artifact family that shows its source
+                  was the one place code did not look like code. */}
+              <HighlightedCode code={source ?? ''} language={sourceLanguage} />
             </Box>
           )
         ) : null}
@@ -446,6 +462,9 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           <ShowMoreButton
             expanded={showFullSource}
             onToggle={() => setShowFullSource(v => !v)}
+            // A one-line source that wraps (a serialised model) hides no LINES, so the
+            // count would read "0 more lines"; that case keeps the bare label.
+            collapsedLabel={hiddenLineCount > 0 ? `Show ${hiddenLineCount} more lines` : undefined}
             testId={`${testIdPrefix}-artifact-show-more-btn`}
           />
         )}

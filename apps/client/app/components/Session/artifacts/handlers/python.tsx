@@ -42,6 +42,7 @@ const PythonPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactI
       <ArtifactPreviewCard
         artifactId={pythonArtifact.id}
         artifactType="python"
+        sourceLanguage="python"
         mimeType="application/vnd.ant.python"
         artifactContent={pythonArtifact}
         contentKey={artifact.content}
