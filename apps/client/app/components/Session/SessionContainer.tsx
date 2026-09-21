@@ -64,6 +64,22 @@ export function shouldShowChromeBand(layout: DefaultLayoutType, isMobile: boolea
   return layout === 'vertical' && !isMobile;
 }
 
+/**
+ * Main-axis direction of the row holding the KnowledgeViewer, the splitter and the chat.
+ *
+ * The 'row-reverse' case is load-bearing beyond layout. DOM order stays knowledge -> splitter
+ * -> chat, which ResizableSplitter's children[0]/[2] lookup depends on, while the chat renders
+ * physically LEFT and the viewer RIGHT. That is the whole reason ResizableSplitter SUBTRACTS
+ * to move the separator right, in both its drag and its arrow keys. Turning this into a plain
+ * 'row' moves the wrong pane and no test in that component would notice, so the coupling is
+ * pinned in SessionContainer.openGuard.test.ts instead. Keep the two in sync.
+ */
+export function splitRowFlexDirection(layout: DefaultLayoutType, isMobile: boolean): 'row-reverse' | 'column' | 'row' {
+  if (shouldShowChromeBand(layout, isMobile)) return 'row-reverse';
+  if (layout === 'horizontal' || (isMobile && layout === 'vertical')) return 'column';
+  return 'row';
+}
+
 interface SessionLayoutProps {
   listClosed?: boolean;
   height?: string;
@@ -457,14 +473,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
       <Box
         sx={{
           display: 'flex',
-          // row-reverse in the split: the chat sits LEFT and the KnowledgeViewer right.
-          // DOM order stays knowledge -> splitter -> chat, which ResizableSplitter's
-          // children[0]/[2] lookup depends on; it flips the drag sign instead.
-          flexDirection: isVerticalSplit
-            ? 'row-reverse'
-            : layout === 'horizontal' || (isMobile && layout === 'vertical')
-              ? 'column'
-              : 'row',
+          flexDirection: splitRowFlexDirection(layout, isMobile),
           rowGap: layout === 'horizontal' || (isMobile && layout === 'vertical') ? '10px' : '0px',
           p: isMobile ? '0px' : '0px',
           height: '100%',
