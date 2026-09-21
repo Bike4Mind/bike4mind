@@ -103,7 +103,21 @@ describe('sessionTagging', () => {
     expect(written.taggedAt).toBeInstanceOf(Date);
   });
 
-  // The three inputs below all land in the same failure branch. Each is transient: none of them
+  // A blank element is dropped, not allowed to normalize into an empty-named tag: one bad element
+  // must not make the completion look usable and stamp `taggedAt`.
+  it('keeps a usable tag when a sibling name is whitespace-only', async () => {
+    h.completionText = ['[{"name": "  ", "strength": 5}, {"name": "pulsars", "strength": 9}]'];
+
+    await run();
+
+    expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
+    const written = h.sessionUpdate.mock.calls[0][0];
+    expect(written.id).toBe(SESSION_ID);
+    expect(written.tags).toEqual([{ name: 'pulsars', strength: 9 }]);
+    expect(written.taggedAt).toBeInstanceOf(Date);
+  });
+
+  // The four inputs below all land in the same failure branch. Each is transient: none of them
   // is a verdict that the notebook has no tags, so none may clear tags or close the spider gate.
   // Asserting on the absence of the write, not on `h.session.tags`: the fixture object is what the
   // mocked `findById` handed back, so asserting it still holds its tags cannot fail.
@@ -111,6 +125,7 @@ describe('sessionTagging', () => {
     ['an unparseable response', ['I was unable to produce tags for this notebook.']],
     ['an empty completion', ['']],
     ['a valid but empty JSON array', ['[]']],
+    ['a whitespace-only tag name', ['[{"name":"   ","strength":5}]']],
   ])('writes nothing on %s', async (_label, completion) => {
     h.completionText = completion as string[];
 

@@ -6,6 +6,15 @@ import { SessionEvents } from '@server/utils/eventBus';
 import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';
 
+// A name that is blank after trim is not a usable tag: keeping it would let one blank element make
+// an otherwise-unusable completion look like a success. Shared by both parse paths so they cannot
+// drift; the caller's `.map` trims, but this decides whether there is anything to trim.
+function hasUsableTagName(tag: unknown): boolean {
+  if (!tag || typeof tag !== 'object') return false;
+  const { name } = tag as { name?: unknown };
+  return String(name ?? '').trim().length > 0;
+}
+
 /**
  * Attempt to extract and parse JSON array from LLM response
  * Handles common LLM formatting issues like trailing commas, markdown code blocks, etc.
@@ -41,12 +50,10 @@ function parseTagsFromLLMResponse(text: string | undefined | null): Array<{ name
     if (!Array.isArray(parsed)) return null;
 
     // Validate and normalize the structure
-    return parsed
-      .filter(tag => tag && typeof tag === 'object' && tag.name)
-      .map(tag => ({
-        name: String(tag.name).trim(),
-        strength: Math.min(Math.max(Number(tag.strength) || 5, 1), 10),
-      }));
+    return parsed.filter(hasUsableTagName).map(tag => ({
+      name: String(tag.name).trim(),
+      strength: Math.min(Math.max(Number(tag.strength) || 5, 1), 10),
+    }));
   } catch {
     // If standard parsing fails, try a more aggressive cleanup
     try {
@@ -56,12 +63,10 @@ function parseTagsFromLLMResponse(text: string | undefined | null): Array<{ name
         const strictJson = strictArrayMatch[0].replace(/,(\s*[}\]])/g, '$1');
         const parsed = JSON.parse(strictJson);
         if (Array.isArray(parsed)) {
-          return parsed
-            .filter(tag => tag && typeof tag === 'object' && tag.name)
-            .map(tag => ({
-              name: String(tag.name).trim(),
-              strength: Math.min(Math.max(Number(tag.strength) || 5, 1), 10),
-            }));
+          return parsed.filter(hasUsableTagName).map(tag => ({
+            name: String(tag.name).trim(),
+            strength: Math.min(Math.max(Number(tag.strength) || 5, 1), 10),
+          }));
         }
       }
     } catch {
