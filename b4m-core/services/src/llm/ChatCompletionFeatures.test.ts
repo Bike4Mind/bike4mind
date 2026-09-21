@@ -414,19 +414,20 @@ describe('shouldSummarizeSession', () => {
 describe('KnowledgeRetrievalFeature citation styles', () => {
   // Two source documents; file A contributes two chunks (both ranked above file B's)
   // so the indexed style must give both A-sections the SAME number and B the next.
-  const makeRetrievalContext = () => {
+  const makeRetrievalContext = (overrides: { chunkText?: Record<string, string>; charBudget?: number } = {}) => {
     // fileA carries a date and fileB deliberately does not, so the passage-date test (#2236) covers
     // both the present and the absent case on one run.
     const files = [
       { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [], createdAt: new Date('2026-08-14T09:30:00.000Z') },
       { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [] },
     ];
+    const textOf = (chunkId: string, fallback: string) => overrides.chunkText?.[chunkId] ?? fallback;
     const chunksByFile: Record<string, unknown[]> = {
       fileA: [
-        { id: 'chA1', fabFileId: 'fileA', text: 'chunk A1', vector: [1, 0] },
-        { id: 'chA2', fabFileId: 'fileA', text: 'chunk A2', vector: [0.95, 0.05] },
+        { id: 'chA1', fabFileId: 'fileA', text: textOf('chA1', 'chunk A1'), vector: [1, 0] },
+        { id: 'chA2', fabFileId: 'fileA', text: textOf('chA2', 'chunk A2'), vector: [0.95, 0.05] },
       ],
-      fileB: [{ id: 'chB1', fabFileId: 'fileB', text: 'chunk B1', vector: [0.9, 0.1] }],
+      fileB: [{ id: 'chB1', fabFileId: 'fileB', text: textOf('chB1', 'chunk B1'), vector: [0.9, 0.1] }],
     };
     return {
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
@@ -438,7 +439,11 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
           findByFabFileId: vi.fn(),
           findVectorsByFabFileIds: vi.fn((ids: string[]) => Promise.resolve(ids.flatMap(id => chunksByFile[id] ?? []))),
         },
-        adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
+        adminSettings: {
+          getSettingsValue: vi.fn((setting: string) =>
+            Promise.resolve(setting === 'forcedRetrievalCharBudget' ? overrides.charBudget : undefined)
+          ),
+        },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
       resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
@@ -524,6 +529,46 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     // Citables order IS the index order: [N] maps to citables[N-1].
     const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
     expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
+  });
+
+  it("anchors each citable at its file's best chunk, with the injected passage text (#3038)", async () => {
+    const { quest } = await runRetrieval('indexed');
+    const citables =
+      (quest.promptMeta as { citables?: Array<{ id: string; metadata?: Record<string, unknown> }> }).citables ?? [];
+    // fileA contributes chA1 and chA2, both ranked above fileB's. The file-level dedup keeps the
+    // FIRST appearance, and the walk is score-descending, so chA1 is the cited passage - asserting
+    // the text as well as the id, because an id-only assertion would pass on either chunk if the
+    // dedup ever kept the last one instead.
+    expect(citables.map(c => c.metadata?.chunkId)).toEqual(['chA1', 'chB1']);
+    expect(citables.map(c => c.metadata?.fullContext)).toEqual(['chunk A1', 'chunk B1']);
+  });
+
+  it('clips the stored passage on a code-point boundary, not mid-surrogate-pair (#3038)', async () => {
+    // Asserted HERE and not only at clipToCodePointBoundary's own test: the shared fixture text is
+    // ASCII, so reverting this call site to `.slice(0, remaining)` would still pass every other
+    // case in this file. A lone surrogate would break the viewer's match against the document as
+    // well as the injected prompt, since neither half is a character the source contains.
+    const budget = 10;
+    const ctx = makeRetrievalContext({ chunkText: { chA1: 'abcdefghi\u{1F600}' }, charBudget: budget });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'indexed'
+    );
+    const quest = makeQuest();
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+
+    const citables =
+      (quest.promptMeta as { citables?: Array<{ id: string; metadata?: Record<string, unknown> }> }).citables ?? [];
+    const passage = citables[0]?.metadata?.fullContext as string;
+    // The emoji is 2 UTF-16 units, so a raw slice at 10 keeps its HIGH half and drops the low one.
+    expect(passage).toBe('abcdefghi');
+    expect(passage.length).toBeLessThanOrEqual(budget);
+    expect([...passage].every(char => !/[\uD800-\uDFFF]/.test(char))).toBe(true);
   });
 
   it('indexed: fresh quest keeps forced-retrieval citables as the index-aligned array prefix (no warn)', async () => {

@@ -563,7 +563,11 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
               .catch(err => context.logger.error('[lakeAccessAudit] failed to resolve retrieve attribution', err));
           }
 
-          // Create citable source chips for the UI - mirrors web_search pattern
+          // Create citable source chips for the UI - mirrors web_search pattern.
+          // No metadata.chunkId/fullContext here, deliberately: this tool returns WHOLE documents
+          // by file id and never scores a chunk, so the whole document IS the cited extent. The
+          // chunk anchor belongs only where a passage was ranked (semantic search, forced
+          // retrieval); inventing one here would point the reader at an arbitrary paragraph.
           const citables: CitableSource[] = retrievedFiles.map((file, index) => {
             const fileTags = (file.tags?.map(t => t.name) || [])
               .filter(t => !t.startsWith('datalake:')) // Hide internal meta-tags

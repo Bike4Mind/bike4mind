@@ -109,6 +109,7 @@ import {
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
 import { buildRetrievalConflictNote, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
+import { clipToCodePointBoundary } from './tools/implementation/knowledgeBaseSearch/tokenBudget';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
 import {
@@ -2944,6 +2945,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Fed the budget-sliced text below, so detection sees exactly what is injected.
       const conflictPassages: RetrievalPassage[] = [];
       const sourceFileIds: string[] = [];
+      // The passage each file's citation chip deep-links to. `scored` is score-descending, so the
+      // chunk recorded on a file's FIRST appearance is its best-scoring one - the same chunk the
+      // file-level dedup below keeps, and the one whose text leads that file's injected section.
+      const citedChunkByFile = new Map<string, { chunkId: string; passage: string }>();
       const injectedChunkIds: string[] = [];
       const injectedScores: number[] = [];
       // `scored` has cleared the absolute floor (in the scan) and the relative floor (just above),
@@ -2959,7 +2964,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // `used` counts and overshoot the char budget. Slicing the defanged string keeps `used`
         // equal to what is actually injected.
         const defanged = defangRetrievedContent(candidate.text);
-        const text = defanged.length > remaining ? defanged.slice(0, remaining) : defanged;
+        // Code-point safe, matching the search arm's own clip: a raw slice can land between the
+        // halves of a surrogate pair and emit a lone surrogate into both the injected prompt and
+        // the citable's fullContext, which then fails to match the document when the viewer
+        // locates it. Never returns MORE than `remaining`, so the budget accounting below holds.
+        const text = defanged.length > remaining ? clipToCodePointBoundary(defanged, remaining) : defanged;
         const name = file?.fileName || candidate.fabFileId;
         // Distinct-file first-appearance order IS the citation index order: the
         // citables emitted below follow sourceFileIds, so [N] -> citables[N-1].
@@ -2967,6 +2976,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         if (fileIdx === -1) {
           sourceFileIds.push(candidate.fabFileId);
           fileIdx = sourceFileIds.length - 1;
+          // `text`, not `candidate.text`: the budget-sliced, defanged passage is what the model was
+          // actually given, and the reader should be shown that extent, not a longer stored chunk.
+          citedChunkByFile.set(candidate.fabFileId, { chunkId: candidate.id, passage: text });
         }
         // Untrusted on every content-derived part, exactly as the two knowledge tools do - this is
         // the THIRD injection site for retrieved content and the only always-on one. toContentLabel
@@ -3113,6 +3125,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
       const citables: CitableSource[] = sourceFileIds.map((fid, index) => {
         const file = fileById.get(fid);
+        const cited = citedChunkByFile.get(fid);
         const tagDesc = (file?.tags?.map(t => t.name) || [])
           .filter(t => !t.startsWith('datalake:'))
           .slice(0, 4)
@@ -3129,6 +3142,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             sourceSystem: 'knowledge_base',
             tags: file?.tags?.map(t => t.name) || [],
             relevanceScore: 1 - index * 0.1,
+            // Spread rather than assigned: every fid in sourceFileIds was recorded in the same
+            // walk, so `cited` is always present - but an absent key must leave the fields off
+            // entirely, since an empty-string anchor would make the reader chase a passage that
+            // does not exist rather than showing the whole document.
+            ...(cited ? { chunkId: cited.chunkId, fullContext: cited.passage } : {}),
           },
         };
       });
