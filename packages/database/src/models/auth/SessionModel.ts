@@ -7,6 +7,7 @@ import {
   ISessionDocument,
   ISessionRepository,
   SearchOptions,
+  tagAttemptDueFilter,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
@@ -90,6 +91,10 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
     // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
     taggedAt: { type: Date, required: false },
+    // Same strict-schema hazard as `taggedAt` above: undeclared means silently dropped, and the
+    // retry gate would read permanently unattempted. Records that a completion was spent and
+    // produced nothing, which is what bounds the retry - NOT that tags exist.
+    tagLastAttemptAt: { type: Date, required: false },
     clonedSourceId: { type: String, required: false },
     forkedSourceId: { type: String, required: false },
     isAutoNamed: { type: Boolean, required: false },
@@ -490,14 +495,21 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
    * braces, so this does not depend on which verbs the plugin happens to cover.
    * (`deletedAt: null` matches a missing field as well as a null one.)
    *
+   * `tagAttemptDueFilter` excludes a notebook still inside its retry backoff. Without it this
+   * would re-price, on every run, the notebook the backoff exists to stop paying for - the same
+   * dispatch-vs-settlement gap in a new place.
+   *
    * Loads one id per untagged notebook to build the `$in`, which is the same per-notebook scale
    * the spider itself already runs at.
    *
-   * Must stay in step with the handler's gate: if that stops keying on quest existence, so does
-   * this.
+   * Must stay in step with the handler's gate (`determineSessionOperations` in
+   * apps/client/server/events/spider.ts): quest existence AND the retry backoff. Both halves of
+   * the backoff are declared together in `@bike4mind/common` so they cannot drift.
    */
   async countTaggableNotebooks(userId: string): Promise<number> {
-    const untagged = await this.sessionModel.find({ userId, deletedAt: null, taggedAt: null }, { _id: 1 }).lean();
+    const untagged = await this.sessionModel
+      .find({ userId, deletedAt: null, taggedAt: null, ...tagAttemptDueFilter() }, { _id: 1 })
+      .lean();
     if (untagged.length === 0) return 0;
 
     const Quest = this.questModel || mongoose.models.Quest || mongoose.model('Quest');

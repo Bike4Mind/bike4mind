@@ -36,10 +36,13 @@ type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'emb
  *   `countTaggableNotebooks` adds the quest-existence term that mirrors that gate.
  *
  * What remains is a gap this pre-flight cannot close: it prices DISPATCHES, and a dispatch is not
- * a settlement. A notebook whose completion never parses is charged on every run with no attempt
- * cap, and one that gains its first quest between this count and the spider's pass settles
- * without having been counted. `assertSessionOperationalCredits` only gates and never debits
- * (see its docstring), so neither moves a balance - they only shift the refusal threshold.
+ * a settlement. A notebook whose completion never parses is charged at most once per
+ * `TAG_RETRY_BACKOFF_MS` window (`isTagAttemptDue` gates the dispatch, `tagAttemptDueFilter` the
+ * count above) - bounded per window, but deliberately uncapped over time, because a terminal cap
+ * would strand a notebook no automated path can reopen. One that gains its first quest between
+ * this count and the spider's pass settles without having been counted.
+ * `assertSessionOperationalCredits` only gates and never debits (see its docstring), so neither
+ * moves a balance - they only shift the refusal threshold.
  */
 const SPENDING_SPIDER_OPERATIONS = {
   summarize: (userId: string) =>

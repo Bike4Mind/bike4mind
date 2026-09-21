@@ -83,6 +83,7 @@ vi.mock('@server/events/recordSessionOperationalUsage', () => ({
   recordSessionOperationalUsage: vi.fn(),
 }));
 
+import { TAG_RETRY_BACKOFF_MS } from '@bike4mind/common';
 import { Session, Quest, User, sessionRepository } from '@bike4mind/database';
 import { handler } from './sessionTagging';
 import { determineSessionOperations } from './spider';
@@ -144,10 +145,11 @@ describe('tagging handler -> persisted taggedAt -> spider gate', () => {
     expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(0);
   });
 
-  // The failure branch writes nothing on purpose, so the notebook stays eligible. This is the
-  // deliberate other half of not stamping on a bad completion, and the reason an unparseable
-  // completion is re-billed on every pass.
-  it('leaves the tags gate open when the completion does not parse', async () => {
+  // The completion was billed before the parse failed, so the notebook earns a backoff stamp -
+  // but NOT a `taggedAt`, which would close the gate forever on a notebook that was never tagged.
+  // Gate and counter are asserted together on the same real rows: they are two statements of one
+  // rule, and this file exists because a comment is not enough to keep them in step.
+  it('holds the tags gate shut for the backoff when the completion does not parse', async () => {
     const session = await insertSession();
     await insertQuest(session.id);
     h.completionText = ['I was unable to produce tags for this notebook.'];
@@ -156,9 +158,28 @@ describe('tagging handler -> persisted taggedAt -> spider gate', () => {
 
     const { session: reloaded, operations } = await gateAfterReload(session.id);
     expect(reloaded.taggedAt).toBeFalsy();
+    expect(reloaded.tagLastAttemptAt).toBeInstanceOf(Date);
+    expect(operations.tags).toBe(false);
+    expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(0);
+  });
+
+  // Bounded, not abandoned. No operator or automated path clears `taggedAt` - only a user's own
+  // import overwrite - so a terminal cap would strand the notebook; backdating the stamp past the
+  // window proves the gate and the price reopen together, which is what makes a transient bad
+  // completion recoverable.
+  it('reopens the tags gate and the price once the backoff has elapsed', async () => {
+    const session = await insertSession();
+    await insertQuest(session.id);
+    h.completionText = ['I was unable to produce tags for this notebook.'];
+
+    await runTagging(session.id);
+    await Session.collection.updateOne(
+      { _id: session._id },
+      { $set: { tagLastAttemptAt: new Date(Date.now() - TAG_RETRY_BACKOFF_MS - 60_000) } }
+    );
+
+    const { operations } = await gateAfterReload(session.id);
     expect(operations.tags).toBe(true);
-    // Still dispatched AND still priced on the next run: this is the uncapped retry the
-    // pre-flight docblock names, pinned so a future attempt cap has to change a test.
     expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(1);
   });
 

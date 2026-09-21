@@ -16,6 +16,7 @@ import {
   ISpiderCompleteAction,
   ISpiderErrorAction,
   isSupportedEmbeddingModel,
+  isTagAttemptDue,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { apiKeyService } from '@bike4mind/services';
@@ -95,7 +96,10 @@ export function determineSessionOperations(
     messageCount: requestedOperations.includes('messageCount'),
     curation: requestedOperations.includes('curation') && !session.curatedAt,
     summarize: requestedOperations.includes('summarize') && !session.summaryAt,
-    tags: requestedOperations.includes('tags') && !session.taggedAt,
+    // `isTagAttemptDue` holds back a notebook whose last completion produced no usable tags until
+    // its backoff expires. Keep it in step with `sessionRepository.countTaggableNotebooks`, which
+    // prices what this dispatches.
+    tags: requestedOperations.includes('tags') && !session.taggedAt && isTagAttemptDue(session),
     embeddings: requestedOperations.includes('embeddings'), // Always run when requested (per-message check)
   };
 }

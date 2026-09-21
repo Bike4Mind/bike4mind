@@ -115,6 +115,9 @@ describe('sessionTagging', () => {
     expect(written.id).toBe(SESSION_ID);
     expect(written.tags).toEqual([{ name: 'pulsars', strength: 9 }]);
     expect(written.taggedAt).toBeInstanceOf(Date);
+    // Cleared explicitly, not omitted: an import overwrite reopens the gate by nulling `taggedAt`,
+    // and a backoff left over from an earlier failure would hold the re-tag off for a full window.
+    expect(written.tagLastAttemptAt).toBeNull();
   });
 
   // A blank element is dropped, not allowed to normalize into an empty-named tag: one bad element
@@ -131,21 +134,29 @@ describe('sessionTagging', () => {
     expect(written.taggedAt).toBeInstanceOf(Date);
   });
 
-  // The four inputs below all land in the same failure branch. Each is transient: none of them
+  // The four inputs below all land in the same failure branch. The completion is already billed by
+  // the time it runs, so it stamps the retry backoff - but it must stamp ONLY that: none of these
   // is a verdict that the notebook has no tags, so none may clear tags or close the spider gate.
-  // Asserting on the absence of the write, not on `h.session.tags`: the fixture object is what the
+  // Asserting on the payload rather than on `h.session.tags`: the fixture object is what the
   // mocked `findById` handed back, so asserting it still holds its tags cannot fail.
   it.each([
     ['an unparseable response', ['I was unable to produce tags for this notebook.']],
     ['an empty completion', ['']],
     ['a valid but empty JSON array', ['[]']],
     ['a whitespace-only tag name', ['[{"name":"   ","strength":5}]']],
-  ])('writes nothing on %s', async (_label, completion) => {
+  ])('stamps only the retry backoff on %s', async (_label, completion) => {
     h.completionText = completion as string[];
 
     await run();
 
-    expect(h.sessionUpdate).not.toHaveBeenCalled();
+    expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
+    const written = h.sessionUpdate.mock.calls[0][0];
+    expect(written.id).toBe(SESSION_ID);
+    expect(written.tagLastAttemptAt).toBeInstanceOf(Date);
+    // Re-adding either of these is the regression this case exists to catch: a stamp makes one bad
+    // completion a permanent "already tagged", a wipe destroys tags a clone or import carried in.
+    expect(written).not.toHaveProperty('taggedAt');
+    expect(written).not.toHaveProperty('tags');
   });
 
   // A notebook with no quests never reached the model, so it has earned neither a stamp nor a

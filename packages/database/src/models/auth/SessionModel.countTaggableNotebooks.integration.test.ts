@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
+import { TAG_RETRY_BACKOFF_MS } from '@bike4mind/common';
 import { Session, sessionRepository } from './SessionModel';
 import { Quest } from '../content/QuestModel';
 
@@ -124,5 +125,36 @@ describe('sessionRepository.countTaggableNotebooks', () => {
 
   it('returns 0 when the user has no untagged notebooks at all', async () => {
     expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(0);
+  });
+
+  // The second half of the dispatch-vs-settlement gap. This notebook HAS a quest and reached the
+  // model, so the quest term above does not exclude it - only the backoff does. The raw count
+  // still sees it, which is what re-priced it on every run.
+  it('excludes a notebook still inside its tagging retry backoff', async () => {
+    const session = await insertSession({ tagLastAttemptAt: new Date(Date.now() - TAG_RETRY_BACKOFF_MS / 2) });
+    await insertQuest(session.id);
+
+    expect(await rawUntaggedCount(OWNER)).toBe(1);
+    expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(0);
+  });
+
+  // Bounded, not abandoned: the same notebook is priced again once the window passes, which is
+  // what a terminal attempt cap would have given up.
+  it('prices a notebook again once its tagging retry backoff has elapsed', async () => {
+    const session = await insertSession({ tagLastAttemptAt: new Date(Date.now() - TAG_RETRY_BACKOFF_MS - 60_000) });
+    await insertQuest(session.id);
+
+    expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(1);
+  });
+
+  // A notebook that never failed has no stamp at all. `tagLastAttemptAt: null` in the filter has
+  // to match a missing field too, or the first run would price nothing.
+  it('counts a notebook that has never been attempted', async () => {
+    const session = await insertSession();
+    await insertQuest(session.id);
+
+    const stored = await Session.collection.findOne({ _id: session._id });
+    expect(stored).not.toHaveProperty('tagLastAttemptAt');
+    expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(1);
   });
 });
