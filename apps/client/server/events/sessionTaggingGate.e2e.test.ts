@@ -17,6 +17,10 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/d
  * "the second run skips" was asserted as two disconnected halves - which is exactly how the
  * original defect hid: strict mode dropped the field between them, and both halves still passed.
  *
+ * The same join is asserted for the credit pre-flight's counter: `countTaggableNotebooks` and the
+ * handler's no-quest abort are two statements of one rule, and a comment is all that keeps them in
+ * step. Here they are checked against the same real rows.
+ *
  * Only the LLM, the usage settlement and the event wrappers are stubbed. The Session and Quest
  * models, the repository write and the gate are all real.
  *
@@ -129,6 +133,7 @@ describe('tagging handler -> persisted taggedAt -> spider gate', () => {
     h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
 
     expect((await gateAfterReload(session.id)).operations.tags).toBe(true);
+    expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(1);
 
     await runTagging(session.id);
 
@@ -136,6 +141,7 @@ describe('tagging handler -> persisted taggedAt -> spider gate', () => {
     expect(reloaded.taggedAt).toBeInstanceOf(Date);
     expect(reloaded.tags).toEqual([{ name: 'pulsars', strength: 9 }]);
     expect(operations.tags).toBe(false);
+    expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(0);
   });
 
   // The failure branch writes nothing on purpose, so the notebook stays eligible. This is the
@@ -151,12 +157,16 @@ describe('tagging handler -> persisted taggedAt -> spider gate', () => {
     const { session: reloaded, operations } = await gateAfterReload(session.id);
     expect(reloaded.taggedAt).toBeFalsy();
     expect(operations.tags).toBe(true);
+    // Still dispatched AND still priced on the next run: this is the uncapped retry the
+    // pre-flight docblock names, pinned so a future attempt cap has to change a test.
+    expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(1);
   });
 
-  // A questless notebook never reached the model, so it has earned no stamp - and stays eligible,
-  // which is why the credit pre-flight must not price it (see
-  // sessionRepository.countTaggableNotebooks).
-  it('leaves the tags gate open for a notebook with no quests', async () => {
+  // The case the pre-flight narrowing exists for. The notebook never reached the model, so it has
+  // earned no stamp and stays eligible - but it settles nothing, so it must NOT be priced. That
+  // the gate and the counter disagree here is the point: the gate prices dispatches, the counter
+  // prices what can settle.
+  it('leaves the tags gate open for a notebook with no quests, but does not price it', async () => {
     const session = await insertSession();
 
     await runTagging(session.id);
@@ -164,5 +174,6 @@ describe('tagging handler -> persisted taggedAt -> spider gate', () => {
     const { session: reloaded, operations } = await gateAfterReload(session.id);
     expect(reloaded.taggedAt).toBeFalsy();
     expect(operations.tags).toBe(true);
+    expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(0);
   });
 });

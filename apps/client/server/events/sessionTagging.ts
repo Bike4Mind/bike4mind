@@ -117,11 +117,11 @@ export const handler = withEventContext(async (event, logger) => {
     }
   }
 
-  // The first Quest submitted from this Session, looked up BEFORE the operations model is
-  // resolved. The no-quest branch below writes nothing, so it never closes the spider's
-  // `!taggedAt` gate and the notebook is re-dispatched on every pass; resolving admin settings,
-  // provider keys and the model catalog above this point would pay for all of that on every
-  // pass, for zero completions.
+  // A Quest from this Session (unsorted - only existence matters here), looked up BEFORE the
+  // operations model is resolved. The no-quest branch below writes nothing, so it never closes
+  // the spider's `!taggedAt` gate and the notebook is re-dispatched on every pass; resolving
+  // admin settings, provider keys and the model catalog above this point would pay for all of
+  // that on every pass, for zero completions.
   const quest = await questRepository.findOne({ sessionId: session.id });
   if (!quest) {
     // Deliberately writes nothing. `taggedAt` records that tags were derived from a notebook's

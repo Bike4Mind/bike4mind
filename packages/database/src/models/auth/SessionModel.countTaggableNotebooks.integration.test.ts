@@ -125,13 +125,4 @@ describe('sessionRepository.countTaggableNotebooks', () => {
   it('returns 0 when the user has no untagged notebooks at all', async () => {
     expect(await sessionRepository.countTaggableNotebooks(OWNER)).toBe(0);
   });
-
-  // The pre-flight sums this with the `summarize` leg, so a wrong-shaped result (an array, a
-  // string) would corrupt the total rather than fail. Pin that it is a number.
-  it('returns a number', async () => {
-    const session = await insertSession();
-    await insertQuest(session.id);
-
-    expect(typeof (await sessionRepository.countTaggableNotebooks(OWNER))).toBe('number');
-  });
 });

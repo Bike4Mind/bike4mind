@@ -20,10 +20,16 @@ type SpiderOperation = 'messageCount' | 'curation' | 'summarize' | 'tags' | 'emb
  * Both legs narrow past "every notebook", but not the same way, because the two handlers abort on
  * different things:
  *
- * - `summarize` can use `summaryAt: null` directly. Its one pre-model return
- *   (`server/events/sessionSummarization.ts`) also requires `!needsInitialSummaryId`, and a
- *   notebook with no `summaryAt` has no `summaryModelId` either, so that return never fires for
- *   the notebooks counted here: even an empty one reaches the model and settles.
+ * - `summarize` keeps a plain `summaryAt: null` count. Its only content-dependent return
+ *   (`server/events/sessionSummarization.ts`, after the model resolve and before the completion;
+ *   the four returns above it are argument and existence guards a counted notebook cannot hit)
+ *   also requires `!needsInitialSummaryId`, and the only writer of `summaryModelId` sets it in
+ *   the same update as `summaryAt` - so a notebook this leg
+ *   counts normally has no model id either, falls through, and settles even when it is empty. The
+ *   one way to hold a model id without a `summaryAt` is an import overwrite, which nulls
+ *   `summaryAt` and leaves the id (notebookImportService); such a notebook can return early only
+ *   if the imported file also carried no chat history. Not narrowed for: that population is tiny,
+ *   and the effect is the same harmless direction described below.
  * - `tags` cannot use `taggedAt: null` alone. `server/events/sessionTagging.ts` aborts before the
  *   model when the notebook has no quest AND writes nothing, so such a notebook is dispatched,
  *   counted, and re-counted on every run while settling nothing.

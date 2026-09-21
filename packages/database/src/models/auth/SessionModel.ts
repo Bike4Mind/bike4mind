@@ -483,23 +483,28 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
    * notebook does not overcharge anyone; it refuses a low-balance admin a run that would have
    * spent nothing on it.
    *
-   * `deletedAt: null` is stated explicitly on BOTH collections rather than left to
-   * `softDeletePlugin`, which hooks only `find` and `findOne`: `distinct` does not inherit it, and
-   * the handler's gate IS a hooked `findOne`, so omitting it would price a notebook whose only
-   * quest is soft-deleted. (`deletedAt: null` matches a missing field as well as a null one.)
+   * `deletedAt: null` is stated on both queries. On the quest side it is load-bearing:
+   * `softDeletePlugin` hooks only `find` and `findOne`, so `distinct` does NOT inherit it, while
+   * the handler's gate IS a hooked `findOne` - omitting it would price a notebook whose only
+   * quest is soft-deleted. On the session side the hook already applies and the term is belt and
+   * braces, so this does not depend on which verbs the plugin happens to cover.
+   * (`deletedAt: null` matches a missing field as well as a null one.)
+   *
+   * Loads one id per untagged notebook to build the `$in`, which is the same per-notebook scale
+   * the spider itself already runs at.
    *
    * Must stay in step with the handler's gate: if that stops keying on quest existence, so does
    * this.
    */
   async countTaggableNotebooks(userId: string): Promise<number> {
-    const untagged = await this.sessionModel.find({ userId, deletedAt: null, taggedAt: null }, { _id: 1 });
+    const untagged = await this.sessionModel.find({ userId, deletedAt: null, taggedAt: null }, { _id: 1 }).lean();
     if (untagged.length === 0) return 0;
 
     const Quest = this.questModel || mongoose.models.Quest || mongoose.model('Quest');
     // `distinct` collapses a notebook's many quests to one entry, so the length IS the notebook
     // count - no second pass needed.
     const taggable = await Quest.distinct('sessionId', {
-      sessionId: { $in: untagged.filter(s => s._id != null).map(s => s._id.toString()) },
+      sessionId: { $in: untagged.map(session => session._id.toString()) },
       deletedAt: null,
     });
     return taggable.length;
