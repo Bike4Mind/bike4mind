@@ -552,6 +552,112 @@ describe('CheckpointStore repo-trust hardening', () => {
       await cleanup(outside);
     }
   });
+
+  it('does not honor a $HOME/.gitconfig core.hooksPath when committing a checkpoint', async () => {
+    // Distinct from the shadow-repo .git/hooks vector: a hostile clone can also
+    // ship a global config that redirects hooksPath. git() forces
+    // GIT_CONFIG_GLOBAL=/dev/null, so an ambient ~/.gitconfig never applies.
+    const proj = await createTestProject();
+    const home = await makeBareDir();
+    const saved = { home: process.env.HOME, xdg: process.env.XDG_CONFIG_HOME };
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      const canary = path.join(proj, 'GLOBAL_HOOK_RAN');
+      const hooksDir = path.join(home, 'evil-hooks');
+      await fs.mkdir(hooksDir, { recursive: true });
+      await fs.writeFile(path.join(hooksDir, 'pre-commit'), `#!/bin/sh\ntouch "${canary}"\n`, { mode: 0o755 });
+      await fs.writeFile(path.join(home, '.gitconfig'), `[core]\n\thooksPath = ${hooksDir}\n`, 'utf-8');
+      process.env.HOME = home;
+      process.env.XDG_CONFIG_HOME = home;
+
+      await fs.writeFile(path.join(proj, 'f.ts'), 'x', 'utf-8');
+      await store.createCheckpoint('create_file', ['f.ts']);
+
+      expect(existsSync(canary)).toBe(false);
+    } finally {
+      const restore = (k: string, v: string | undefined) =>
+        v === undefined ? delete process.env[k] : (process.env[k] = v);
+      restore('HOME', saved.home);
+      restore('XDG_CONFIG_HOME', saved.xdg);
+      await cleanup(proj);
+      await cleanup(home);
+    }
+  });
+
+  it('refuses a symlinked .b4m directory at init', async () => {
+    const proj = await makeBareDir();
+    const outside = await makeBareDir();
+    try {
+      await fs.symlink(outside, path.join(proj, '.b4m'));
+      const store = new CheckpointStore(proj);
+      await expect(store.init('sess')).rejects.toThrow(/symlink/i);
+    } finally {
+      await cleanup(proj);
+      await cleanup(outside);
+    }
+  });
+
+  it('refuses a symlinked .b4m/checkpoints.json at init', async () => {
+    const proj = await makeBareDir();
+    const outside = await makeBareDir();
+    try {
+      await fs.mkdir(path.join(proj, '.b4m'), { recursive: true });
+      const victim = path.join(outside, 'victim.json');
+      await fs.writeFile(victim, '{"checkpoints":[]}', 'utf-8');
+      await fs.symlink(victim, path.join(proj, '.b4m', 'checkpoints.json'));
+
+      const store = new CheckpointStore(proj);
+      await expect(store.init('sess')).rejects.toThrow(/symlink/i);
+    } finally {
+      await cleanup(proj);
+      await cleanup(outside);
+    }
+  });
+
+  it('drops a null/non-object entry in checkpoints.json without discarding valid entries', async () => {
+    const proj = await createTestProject();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+      await fs.writeFile(path.join(proj, 'f.ts'), 'v1', 'utf-8');
+      const cp = await store.createCheckpoint('edit_local_file', ['f.ts']);
+      expect(cp).not.toBeNull();
+
+      // A hostile clone commits a null alongside the valid entry. Reading cp.id
+      // (not cp?.id) throws and the catch resets the whole history to empty.
+      const metaPath = path.join(proj, '.b4m', 'checkpoints.json');
+      const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+      meta.checkpoints = [null, ...meta.checkpoints];
+      await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+
+      const reopened = new CheckpointStore(proj);
+      await reopened.init('sess');
+      expect(reopened.listCheckpoints()).toHaveLength(1);
+    } finally {
+      await cleanup(proj);
+    }
+  });
+
+  it('refuses a write whose ancestor is a dangling symlink', async () => {
+    // A live symlink ancestor is caught because realpath resolves it outside the
+    // root. A DANGLING one is the gap: existsSync follows and reports false, so an
+    // existsSync-based walk would skip it and rebuild a path lexically under root.
+    const proj = await createTestProject();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      await fs.symlink(path.join(proj, 'nonexistent-target'), path.join(proj, 'sub'));
+
+      // filePaths is attacker-influenceable via a committed checkpoints.json.
+      const cp = await store.createCheckpoint('edit_local_file', ['sub/app.ts']);
+      expect(cp).toBeNull();
+    } finally {
+      await cleanup(proj);
+    }
+  });
 });
 
 describe('checkpoint id validation (git option-injection)', () => {

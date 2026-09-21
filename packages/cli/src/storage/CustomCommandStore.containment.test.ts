@@ -16,6 +16,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import { CustomCommandStore } from './CustomCommandStore.js';
+import type { CustomCommand } from './types.js';
+import type { RemoteSkillSource } from './RemoteSkillSource.js';
 
 let projectRoot: string;
 let outside: string;
@@ -105,5 +107,62 @@ describe('CustomCommandStore project-command containment', () => {
 
     // Gone from the map, so dispatch (getCommand) can no longer serve it.
     expect(store.getCommand('greet')).toBeUndefined();
+  });
+});
+
+describe('CustomCommandStore model-reachable reserved gate', () => {
+  it('refuses a shadowing project command at the model-reachable sink even when unpruned', async () => {
+    const cmdDir = path.join(projectRoot, '.claude', 'commands');
+    await fs.mkdir(cmdDir, { recursive: true });
+    await fs.writeFile(path.join(cmdDir, 'greet.md'), '# greet\n\nhijacked', 'utf-8');
+
+    // Boot order: the project command loads before any reserved source is wired.
+    const store = new CustomCommandStore(projectRoot);
+    await store.loadCommands();
+    expect(store.getCommand('greet')?.source).toBe('project');
+
+    // A plugin named 'greet' is enabled at runtime; the reserved source is
+    // re-pointed at it but the store is NOT re-pruned (the featuresChanged bug).
+    store.setReservedNameSource(() => new Set(['greet']));
+
+    // getCommand still serves the stale entry (that is exactly why the sink is
+    // needed), but the model-reachable accessor consults the live reserved set.
+    expect(store.getCommand('greet')).toBeDefined();
+    expect(store.getModelReachableCommand('greet')).toBeUndefined();
+  });
+
+  it('serves a non-reserved command through the model-reachable sink', async () => {
+    const cmdDir = path.join(projectRoot, '.claude', 'commands');
+    await fs.mkdir(cmdDir, { recursive: true });
+    await fs.writeFile(path.join(cmdDir, 'deploy.md'), '# deploy\n\nlegit', 'utf-8');
+
+    const store = new CustomCommandStore(projectRoot);
+    store.setReservedNameSource(() => new Set(['greet']));
+    await store.loadCommands();
+
+    expect(store.getModelReachableCommand('deploy')?.source).toBe('project');
+  });
+
+  it('refuses a remote skill whose name collides with a live plugin command', async () => {
+    const remoteGreet: CustomCommand = {
+      name: 'greet',
+      description: 'remote greet',
+      body: '# greet',
+      source: 'remote',
+      filePath: 'b4m:/api/skills/greet',
+    };
+    // Stub bypasses RemoteSkillSource's static fetch-time filter, mirroring a
+    // skill named after a plugin that is not statically reserved.
+    const remoteSource = {
+      fetchSkills: async () => [remoteGreet],
+      clearCache: async () => {},
+    } as unknown as RemoteSkillSource;
+
+    const store = new CustomCommandStore(projectRoot, { remoteSource });
+    await store.loadCommands();
+    expect(store.getCommand('greet')?.source).toBe('remote');
+
+    store.setReservedNameSource(() => new Set(['greet']));
+    expect(store.getModelReachableCommand('greet')).toBeUndefined();
   });
 });

@@ -174,7 +174,10 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
         }
       }
 
-      const command = customCommandStore.getCommand(skillName);
+      // Use the model-reachable accessor, not a bare getCommand: it enforces the
+      // live reserved-name gate at this execution chokepoint, so a repo-planted or
+      // remote command shadowing a plugin can't run here even if it survived load.
+      const command = customCommandStore.getModelReachableCommand(skillName);
 
       if (!command) {
         const available = customCommandStore

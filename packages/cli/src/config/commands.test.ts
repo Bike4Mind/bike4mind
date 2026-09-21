@@ -54,7 +54,10 @@ describe('RESERVED_FEATURE_COMMANDS drift guard', () => {
     // Derive the names from the real modules so adding/renaming a feature command
     // without updating RESERVED_FEATURE_COMMANDS (which the fetch-time and merge
     // filters depend on) fails here instead of silently voiding those filters.
-    const config = { features: { tavern: true, hearth: true } } as unknown as CliConfig;
+    // Enable EVERY feature flag (Proxy returns true for any key) so a newly added
+    // built-in module is constructed too - hardcoding {tavern, hearth} would let a
+    // future built-in's commands escape this guard entirely.
+    const config = { features: new Proxy({}, { get: () => true }) } as unknown as CliConfig;
     // getCommands() never touches the apiClient, so a bare stub is enough.
     const modules = createBuiltinModules(config, {} as ApiClient);
     const featureNames = new Set(modules.flatMap(m => (m.getCommands?.() ?? []).map(c => c.name)));

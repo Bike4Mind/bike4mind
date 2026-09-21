@@ -48,6 +48,27 @@ function isValidCheckpointId(id: unknown): id is string {
 }
 
 /**
+ * True when `realTarget` is `realRoot` itself or nested beneath it. Both must
+ * already be symlink-resolved (realpath) absolute paths.
+ */
+function isRealpathWithin(realTarget: string, realRoot: string): boolean {
+  return realTarget === realRoot || realTarget.startsWith(realRoot + path.sep);
+}
+
+/**
+ * True when `p` exists as a filesystem node without following its final
+ * component - a dangling symlink counts as existing (existsSync would not).
+ */
+function nodeExists(p: string): boolean {
+  try {
+    lstatSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * CheckpointStore manages a shadow git repository for file change recovery.
  *
  * Before any file-modifying tool (create_file, edit_local_file, delete_file) executes,
@@ -325,8 +346,10 @@ export class CheckpointStore {
 
       // Temp files live directly under the shadow root; refuse if a committed
       // `.diff-a`/`.diff-b` symlink would redirect the writeFileSync below.
-      const tmpCheckpoint = this.assertContainedSync(path.join(this.shadowRepoDir, '.diff-a'), this.realShadowRoot());
-      const tmpCurrent = this.assertContainedSync(path.join(this.shadowRepoDir, '.diff-b'), this.realShadowRoot());
+      const tmpCheckpoint = path.join(this.shadowRepoDir, '.diff-a');
+      const tmpCurrent = path.join(this.shadowRepoDir, '.diff-b');
+      this.assertContainedSync(tmpCheckpoint, this.realShadowRoot());
+      this.assertContainedSync(tmpCurrent, this.realShadowRoot());
 
       try {
         // Get checkpoint version
@@ -441,7 +464,8 @@ export class CheckpointStore {
     }
     // Lexical containment is not enough: a committed symlink (intermediate dir or
     // leaf) makes the real target escape at write/read time. realpath + lstat it.
-    return this.assertContainedSync(absolutePath, this.realProjectRoot());
+    this.assertContainedSync(absolutePath, this.realProjectRoot());
+    return absolutePath;
   }
 
   /**
@@ -469,7 +493,7 @@ export class CheckpointStore {
       const realProject = await fs.realpath(this.projectDir);
       const realB4m = await fs.realpath(b4mDir);
       const base = path.join(realProject, '.b4m');
-      if (realB4m !== base && !realB4m.startsWith(base + path.sep)) {
+      if (!isRealpathWithin(realB4m, base)) {
         throw new Error(`Checkpoint dir escaped project: ${realB4m}`);
       }
     } catch (err) {
@@ -478,25 +502,33 @@ export class CheckpointStore {
   }
 
   private realProjectRoot(): string {
-    if (this.realProjectDir === null) this.realProjectDir = realpathSync(this.projectDir);
+    // Anchored in init(); a null here means a checkpoint sink ran before init(),
+    // where realpath'ing on demand would pin to a path still swappable to a
+    // symlink. Fail instead of silently trusting an unanchored root.
+    if (this.realProjectDir === null) {
+      throw new Error('CheckpointStore.realProjectRoot() called before init()');
+    }
     return this.realProjectDir;
   }
 
   private realShadowRoot(): string {
-    if (this.realShadowRepoDir === null) this.realShadowRepoDir = realpathSync(this.shadowRepoDir);
+    if (this.realShadowRepoDir === null) {
+      throw new Error('CheckpointStore.realShadowRoot() called before init()');
+    }
     return this.realShadowRepoDir;
   }
 
   /**
    * Refuse an absolute write/read target that escapes `realRoot` once symlinks are
-   * resolved, or whose final component is itself a symlink. The single containment
-   * guard for every checkpoint sink (create/restore/diff/metadata/gitignore): a
-   * committed symlink - an intermediate dir or the leaf - makes the real target
-   * escape at write time, which a lexical prefix check misses. For a not-yet-created
-   * path we realpath the nearest existing ancestor (the missing tail cannot hold a
-   * link yet) and re-append it. Returns `target` unchanged so callers can inline it.
+   * resolved, or whose final component is itself a symlink: a committed symlink -
+   * an intermediate dir or the leaf - makes the real target escape at write time,
+   * which a lexical prefix check misses. For a not-yet-created path we realpath the
+   * nearest existing ancestor (the missing tail cannot hold a link yet) and
+   * re-append it. Guards the file-copy/write/unlink sinks in create/restore/diff and
+   * the metadata/gitignore writes; it does NOT wrap git() (its cwd is the anchored
+   * shadow root) or the read-only loadMetadata/cleanup paths.
    */
-  private assertContainedSync(target: string, realRoot: string): string {
+  private assertContainedSync(target: string, realRoot: string): void {
     // Refuse a symlinked leaf: copyFile/writeFile/unlink would follow it.
     try {
       if (lstatSync(target).isSymbolicLink()) {
@@ -506,20 +538,30 @@ export class CheckpointStore {
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
     }
     // realpath the nearest existing ancestor so a symlinked intermediate dir
-    // cannot smuggle the resolved path outside realRoot.
+    // cannot smuggle the resolved path outside realRoot. Probe with lstat, not
+    // existsSync: a dangling-symlink ancestor exists as a node but existsSync
+    // follows it and reports false, which would skip it and let the walk rebuild
+    // a path that sits lexically under realRoot while the link points elsewhere.
     let existing = target;
     const tail: string[] = [];
-    while (!existsSync(existing)) {
+    while (!nodeExists(existing)) {
       tail.unshift(path.basename(existing));
       const parent = path.dirname(existing);
       if (parent === existing) break; // reached filesystem root
       existing = parent;
     }
-    const realTarget = path.join(realpathSync(existing), ...tail);
-    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + path.sep)) {
+    let realExisting: string;
+    try {
+      realExisting = realpathSync(existing);
+    } catch {
+      // A dangling-symlink ancestor cannot be resolved, so containment cannot be
+      // proven. Refuse rather than trust the lexical reconstruction.
       throw new Error(`Refusing checkpoint path outside sandbox: ${target}`);
     }
-    return target;
+    const realTarget = path.join(realExisting, ...tail);
+    if (!isRealpathWithin(realTarget, realRoot)) {
+      throw new Error(`Refusing checkpoint path outside sandbox: ${target}`);
+    }
   }
 
   /**
@@ -560,7 +602,9 @@ export class CheckpointStore {
         this.metadata = JSON.parse(data) as CheckpointMetadata;
         // Drop any entry whose id is not a plain sha (see CHECKPOINT_ID_PATTERN):
         // it would otherwise reach `git show <id>:<path>` as an option-injection.
-        this.metadata.checkpoints = (this.metadata.checkpoints ?? []).filter(cp => isValidCheckpointId(cp.id));
+        // Use cp?.id: a null/non-object array element (a hostile clone can commit
+        // one) must be dropped, not throw and reset the whole valid history.
+        this.metadata.checkpoints = (this.metadata.checkpoints ?? []).filter(cp => isValidCheckpointId(cp?.id));
       } else {
         this.metadata = {
           checkpoints: [],

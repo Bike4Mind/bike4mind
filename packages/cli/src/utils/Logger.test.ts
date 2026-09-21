@@ -1,8 +1,8 @@
 /**
  * The debug logger turns the session id into a filename under
  * ~/.bike4mind/debug, so `initialize` validates the id at that sink. These tests
- * pin that guard: a valid id writes the file; a traversing id is refused and
- * writes nothing. Remove the guard in Logger.ts and the second test fails.
+ * pin that guard: a valid id writes the file; a traversing id is rejected before
+ * any write. Remove the guard in Logger.ts and the second test fails.
  *
  * Hermetic: os.homedir is mocked to an empty temp dir.
  */
@@ -32,11 +32,10 @@ describe('Logger.initialize session-id guard', () => {
     expect(existsSync(path.join(fakeHome, '.bike4mind', 'debug', 'valid-id.txt'))).toBe(true);
   });
 
-  it('refuses a traversing session id and writes no file', async () => {
+  it('refuses a traversing session id', async () => {
+    // The guard throws before the sink is touched, so asserting the throw is the
+    // real signal; a "no file written" check would pass vacuously (the dir never
+    // gets created) and prove nothing.
     await expect(Logger.getInstance().initialize('../../etc/evil')).rejects.toThrow(/Invalid session id/);
-
-    const debugDir = path.join(fakeHome, '.bike4mind', 'debug');
-    const entries = existsSync(debugDir) ? await fs.readdir(debugDir) : [];
-    expect(entries).toEqual([]);
   });
 });

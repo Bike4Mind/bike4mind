@@ -3589,7 +3589,17 @@ function CliApp() {
         logger,
         reservedToolNames: baseTools.map(t => t.toolSchema.name),
       });
-      newFeatureRegistry = rebuilt.registry;
+      const rebuiltRegistry = rebuilt.registry;
+      newFeatureRegistry = rebuiltRegistry;
+
+      // Re-point the custom-command reserved-name gate at the hot-swapped registry
+      // and re-prune, mirroring the bootstrap wiring. Without this the store's
+      // reserved source stays pinned to the boot registry, so a project command
+      // shadowing a plugin enabled at runtime survives load, display, and dispatch.
+      // Capture in a const so the closure keeps the non-null narrowing.
+      state.customCommandStore.setReservedNameSource(() => new Set(rebuiltRegistry.getAllCommands().map(c => c.name)));
+      state.customCommandStore.pruneReservedProjectCommands();
+
       for (const skippedPlugin of rebuilt.skipped) {
         console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
       }

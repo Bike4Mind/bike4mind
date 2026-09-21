@@ -256,6 +256,21 @@ export class CustomCommandStore {
   }
 
   /**
+   * Resolve a command for model-reachable execution (the `skill` tool). Unlike
+   * getCommand, this refuses any command whose name is currently reserved by a
+   * built-in or live feature/plugin command - the same gate `mergeCommands`
+   * applies at dispatch - so no execution path can run a repo-planted `project`
+   * (or `remote`) command that shadows a plugin, even when the load-time prune
+   * ran against a stale registry (e.g. a plugin enabled after boot). Reads the
+   * live reserved-name source on each call, falling back to the static reserved
+   * set before the registry is wired.
+   */
+  getModelReachableCommand(name: string): CustomCommand | undefined {
+    if (isReservedCommandName(name, this.getFeatureCommandNames?.())) return undefined;
+    return this.commands.get(name);
+  }
+
+  /**
    * Gets all loaded commands
    *
    * @returns Array of all custom commands
