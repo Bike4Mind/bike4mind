@@ -65,7 +65,7 @@ export async function embedKeyOwnerHasEntitlement(
       // itself threw, which is what makes it worth logging separately.
       ownerUserId,
       // Normalized: a raw Error passed to a structured log payload serializes
-      // as `{}` (JSON.stringify drops its own enumerable-less message/stack).
+      // as `{}` (message and stack are non-enumerable own properties, so JSON.stringify drops them).
       error: error instanceof Error ? error.message : String(error),
     });
     return false;
