@@ -8,7 +8,7 @@
 
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
-import { ApiKeyScope, requireEnv } from '@bike4mind/common';
+import { requireEnv } from '@bike4mind/common';
 import { Config } from '@server/utils/config';
 import { oauthClientRepository, oauthAuthorizationCodeRepository, IOAuthClientDocument } from '@bike4mind/database';
 
@@ -183,7 +183,7 @@ export function getOidcDiscovery() {
     response_types_supported: ['code'],
     subject_types_supported: ['public'],
     id_token_signing_alg_values_supported: ['RS256'],
-    scopes_supported: ['openid', 'email', 'profile', ApiKeyScope.ME_READ],
+    scopes_supported: ['openid', 'email', 'profile'],
     token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
     claims_supported: ['sub', 'iss', 'aud', 'exp', 'iat', 'email', 'name', 'picture'],
     code_challenge_methods_supported: ['S256'],
