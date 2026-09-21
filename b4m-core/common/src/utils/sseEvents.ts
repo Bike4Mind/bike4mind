@@ -164,6 +164,64 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   return event;
 }
 
+const THINK_OPEN = '<think>';
+const THINK_CLOSE = '</think>';
+
+/**
+ * Longest suffix of `text` that is a proper prefix of `tag` - a sentinel the provider
+ * split across streaming chunks. Held back rather than forwarded, so a half-arrived
+ * `<thi` can never reach a public caller as prose.
+ */
+function danglingTagPrefix(text: string, tag: string): string {
+  for (let len = Math.min(text.length, tag.length - 1); len > 0; len--) {
+    if (tag.startsWith(text.slice(text.length - len))) return text.slice(text.length - len);
+  }
+  return '';
+}
+
+/**
+ * Stateful <think>...</think> stripper for ONE public stream.
+ *
+ * Stateful by necessity: every backend emits per-chunk DELTAS (each declares a fresh
+ * `streamedText` inside its own event loop), so the sentinels and the reasoning between
+ * them arrive on separate callbacks and a per-chunk regex would never see a pair. These
+ * sentinels are the repo-wide reasoning convention and the ONLY signal separating the
+ * two channels - anthropicBackend brackets its extended-thinking block with them, and
+ * kimi/xai/deepseek/ollama inline reasoning at the SAME index as the prose wrapped in
+ * them. Fails closed: an unterminated block suppresses to end of stream. Non-streaming
+ * twin: stripThinkingBlocks in packages/cli/src/llm/streamAccumulator.ts.
+ */
+function createReasoningStripper(): (chunk: string) => string {
+  let suppressing = false;
+  let held = '';
+  return chunk => {
+    let rest = held + chunk;
+    held = '';
+    let out = '';
+    while (rest.length > 0) {
+      if (suppressing) {
+        const close = rest.indexOf(THINK_CLOSE);
+        if (close === -1) {
+          held = danglingTagPrefix(rest, THINK_CLOSE);
+          return out;
+        }
+        rest = rest.slice(close + THINK_CLOSE.length);
+        suppressing = false;
+      } else {
+        const open = rest.indexOf(THINK_OPEN);
+        if (open === -1) {
+          held = danglingTagPrefix(rest, THINK_OPEN);
+          return out + rest.slice(0, rest.length - held.length);
+        }
+        out += rest.slice(0, open);
+        rest = rest.slice(open + THINK_OPEN.length);
+        suppressing = true;
+      }
+    }
+    return out;
+  };
+}
+
 /**
  * Build an SSE event for an ANONYMOUS/public caller (e.g. the embed chat widget).
  * Allowlists only what such a caller may see - assistant text plus usage/credit
@@ -175,25 +233,46 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
  * only consumption signal forwarded. This is a redaction contract, so it
  * allowlists forward: any field later added to CompletionInfo stays hidden from
  * public surfaces until deliberately surfaced here.
+ *
+ * Reasoning is stripped from the text itself too - see {@link createReasoningStripper}
+ * - which is why this is a stateful builder rather than a pure function.
+ */
+export function createPublicSSEEventBuilder(): (
+  text: (string | null | undefined)[],
+  info?: CompletionInfo
+) => SSEContentEvent {
+  const stripReasoning = createReasoningStripper();
+  return (text, info) => {
+    // Resolve the response the way buildSSEEvent does. `text` is indexed by the
+    // provider's content-block/choice index - it is NOT [thinking, response]: an
+    // ordinary reply lands at index 0 and index 1 exists only when the backend opened
+    // a second block, so reading [1] alone dropped the text of every ordinary reply.
+    // Prefer [1] when present (an Anthropic text block following a thinking block),
+    // else [0]; reasoning is redacted by the <think> sentinels below, not by position.
+    const responseOnly: (string | null | undefined)[] = ['', stripReasoning(text[1] || text[0] || '')];
+    if (!info) return buildSSEEvent(responseOnly, undefined);
+    // Allowlist forward (not denylist): explicitly name the fields a public caller may
+    // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.
+    // Everything not listed (toolsUsed, thinking, responseFormatMode, usdCost, and
+    // any future addition) is dropped by omission.
+    const safeInfo: CompletionInfo = {
+      inputTokens: info.inputTokens,
+      outputTokens: info.outputTokens,
+      cacheReadInputTokens: info.cacheReadInputTokens,
+      cacheCreationInputTokens: info.cacheCreationInputTokens,
+      creditsUsed: info.creditsUsed,
+    };
+    return buildSSEEvent(responseOnly, safeInfo);
+  };
+}
+
+/**
+ * Single-shot {@link createPublicSSEEventBuilder}, for a one-chunk (non-streaming)
+ * public event. A STREAM must use the builder instead: reasoning sentinels span
+ * chunks, and a fresh stripper per chunk cannot pair them.
  */
 export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  // text[0] is the thinking channel, text[1] the response. Pass ONLY the response
-  // (never fall back to text[0]) so no reasoning content rides along. buildSSEEvent
-  // reads index [1], so put the response there with an empty thinking slot.
-  const responseOnly: (string | null | undefined)[] = ['', text[1] ?? ''];
-  if (!info) return buildSSEEvent(responseOnly, undefined);
-  // Allowlist forward (not denylist): explicitly name the fields a public caller may
-  // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.
-  // Everything not listed (toolsUsed, thinking, responseFormatMode, usdCost, and
-  // any future addition) is dropped by omission.
-  const safeInfo: CompletionInfo = {
-    inputTokens: info.inputTokens,
-    outputTokens: info.outputTokens,
-    cacheReadInputTokens: info.cacheReadInputTokens,
-    cacheCreationInputTokens: info.cacheCreationInputTokens,
-    creditsUsed: info.creditsUsed,
-  };
-  return buildSSEEvent(responseOnly, safeInfo);
+  return createPublicSSEEventBuilder()(text, info);
 }
 
 /**

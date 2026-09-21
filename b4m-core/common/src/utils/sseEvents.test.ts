@@ -1,9 +1,24 @@
 import { describe, it, expect } from 'vitest';
-import { buildMetaEvent, buildPublicSSEEvent, buildSSEEvent, formatSSEError, serializeSSEEvent } from './sseEvents';
+import {
+  buildMetaEvent,
+  buildPublicSSEEvent,
+  buildSSEEvent,
+  createPublicSSEEventBuilder,
+  formatSSEError,
+  serializeSSEEvent,
+} from './sseEvents';
 
 describe('buildPublicSSEEvent', () => {
+  // `text` is indexed by the provider's content-block/choice index, not by channel.
+  // An ordinary reply is a single-element array at index 0 - the shape every adapter
+  // in this repo emits for a non-reasoning turn (see anthropicBackend text_delta,
+  // openaiBackend streamedText[c.index], ollama/gemini callback([text])).
+  it('forwards an ordinary single-block reply at index 0', () => {
+    expect(buildPublicSSEEvent(['the answer']).text).toBe('the answer');
+  });
+
   it('passes assistant text and usage/credits through', () => {
-    const e = buildPublicSSEEvent(['', 'the answer'], {
+    const e = buildPublicSSEEvent(['the answer'], {
       inputTokens: 10,
       outputTokens: 5,
       creditsUsed: 2,
@@ -13,8 +28,14 @@ describe('buildPublicSSEEvent', () => {
     expect(e.credits).toMatchObject({ used: 2 });
   });
 
+  it('prefers the later block when the backend opened a second one', () => {
+    // Anthropic puts the text block after a thinking block, so index 1 wins over
+    // index 0 and the index-0 fallback cannot leak it.
+    expect(buildPublicSSEEvent(['reasoning', 'the answer']).text).toBe('the answer');
+  });
+
   it('redacts tool calls, thinking, and responseFormatMode from a public caller', () => {
-    const e = buildPublicSSEEvent(['reasoning here', 'the answer'], {
+    const e = buildPublicSSEEvent(['the answer'], {
       outputTokens: 5,
       toolsUsed: [{ name: 'search_knowledge_base', arguments: { query: 'secret' }, id: 't1' } as never],
       thinking: ['internal chain of thought'],
@@ -24,17 +45,15 @@ describe('buildPublicSSEEvent', () => {
     expect(e.tools).toBeUndefined();
     expect(e.thinking).toBeUndefined();
     expect(e.responseFormatMode).toBeUndefined();
-    // The thinking channel (text[0]) must not leak via the text fallback.
     expect(e.text).toBe('the answer');
   });
 
-  it('does not leak the thinking channel when the response channel is empty', () => {
-    const e = buildPublicSSEEvent(['internal thinking'], { outputTokens: 1 });
-    expect(e.text).toBe('');
+  it('strips an inline <think> block that arrives whole in one chunk', () => {
+    expect(buildPublicSSEEvent(['<think>my reasoning</think>the answer']).text).toBe('the answer');
   });
 
   it('drops usdCost while keeping creditsUsed', () => {
-    const e = buildPublicSSEEvent(['', 'the answer'], { creditsUsed: 2, usdCost: 0.0123 });
+    const e = buildPublicSSEEvent(['the answer'], { creditsUsed: 2, usdCost: 0.0123 });
     expect(e.credits).toMatchObject({ used: 2 });
     expect(e.credits?.usdCost).toBeUndefined();
     // The wire frame must not carry the key at all, not just an undefined value.
@@ -42,9 +61,45 @@ describe('buildPublicSSEEvent', () => {
   });
 
   it('emits no credits block when usdCost is the only credit field', () => {
-    const e = buildPublicSSEEvent(['', 'the answer'], { usdCost: 0.0123 });
+    const e = buildPublicSSEEvent(['the answer'], { usdCost: 0.0123 });
     expect(e.credits).toBeUndefined();
     expect(serializeSSEEvent(e)).not.toContain('usdCost');
+  });
+});
+
+describe('createPublicSSEEventBuilder', () => {
+  const textOf = (chunks: (string | null | undefined)[][]) => {
+    const build = createPublicSSEEventBuilder();
+    return chunks.map(c => build(c).text).join('');
+  };
+
+  it('suppresses reasoning split across chunk boundaries', () => {
+    // Backends emit deltas, so the sentinels and the reasoning land on separate
+    // callbacks - the case a per-chunk regex cannot catch.
+    expect(textOf([['<think>'], ['my reasoning'], ['</think>'], ['the answer']])).toBe('the answer');
+  });
+
+  it('suppresses an anthropic-shaped thinking block that precedes the text block', () => {
+    // content_block_start/stop emit the sentinels at the thinking block's index;
+    // the reply then streams at the text block's index.
+    expect(
+      textOf([['<think>'], ['step one'], ['step two'], ['</think>'], [undefined, 'the '], [undefined, 'answer']])
+    ).toBe('the answer');
+  });
+
+  it('holds back a sentinel the provider split mid-tag', () => {
+    expect(textOf([['before <thi'], ['nk>secret</thi'], ['nk>after']])).toBe('before after');
+  });
+
+  it('fails closed when a reasoning block is never terminated', () => {
+    expect(textOf([['<think>'], ['leaked?'], ['still reasoning']])).toBe('');
+  });
+
+  it('keeps each stream independent', () => {
+    const a = createPublicSSEEventBuilder();
+    a(['<think>']);
+    // A second stream must not inherit the first one's open block.
+    expect(createPublicSSEEventBuilder()(['the answer']).text).toBe('the answer');
   });
 });
 
