@@ -802,7 +802,7 @@ export function formatIssueBody(telemetry: ContextTelemetry, options: IssueBodyO
       sections.push(`| Source | Tokens | % |`);
       sections.push(`|--------|--------|---|`);
       const total = contextWindow.inputTokens;
-      const sources = [
+      const sources: { name: string; value: number; showZero?: boolean }[] = [
         { name: 'System Prompts', value: tokensBySource.systemPrompts },
         { name: 'Conversation History', value: tokensBySource.conversationHistory },
         { name: 'Mementos', value: tokensBySource.mementos },
@@ -810,12 +810,14 @@ export function formatIssueBody(telemetry: ContextTelemetry, options: IssueBodyO
         { name: 'URL Content', value: tokensBySource.urlContent },
         { name: 'Tool Schemas', value: tokensBySource.toolSchemas },
         { name: 'User Prompt', value: tokensBySource.userPrompt },
-        // Unrecorded reads as 0 here only to be dropped by the >0 filter below, same as any bucket
-        // that contributed nothing - the table never claims a lake volume it does not have.
-        { name: 'Lake Retrieval', value: tokensBySource.lakeRetrieval ?? 0 },
       ];
+      // A recorded zero is a measurement and gets a row; an unrecorded bucket (older telemetry)
+      // has no row at all, so the table never passes off unknown lake volume as none.
+      if (tokensBySource.lakeRetrieval !== undefined) {
+        sources.push({ name: 'Lake Retrieval', value: tokensBySource.lakeRetrieval, showZero: true });
+      }
       for (const source of sources) {
-        if (source.value > 0) {
+        if (source.value > 0 || source.showZero) {
           sections.push(
             `| ${source.name} | ${source.value.toLocaleString()} | ${((source.value / total) * 100).toFixed(1)}% |`
           );

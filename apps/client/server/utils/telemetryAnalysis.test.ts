@@ -119,6 +119,17 @@ describe('formatIssueBody', () => {
 
     expect(body).toContain('| Lake Retrieval | 250 | 25.0% |');
   });
+
+  it('keeps the lake row for a measured zero, unlike buckets that are merely empty', () => {
+    const telemetry = createTestTelemetry();
+    telemetry.contextWindow.tokensBySource!.lakeRetrieval = 0;
+    telemetry.contextWindow.tokensBySource!.urlContent = 0;
+
+    const body = formatIssueBody(telemetry, { includeTokenBreakdown: true });
+
+    expect(body).toContain('| Lake Retrieval | 0 | 0.0% |');
+    expect(body).not.toContain('URL Content');
+  });
 });
 
 describe('buildAnalysisPrompt token distribution', () => {
