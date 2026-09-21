@@ -22,6 +22,7 @@ import {
   FORCED_RETRIEVAL_CHAR_BUDGET_DEFAULT,
   FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_DEFAULT,
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
+  FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT,
 } from '../constants/forcedRetrieval';
 import { FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE } from '../constants/embeddingSpaceFloors';
 import { LAKE_RECALL_K_DEFAULT, LAKE_RECALL_K_MAX } from '../constants/lakeMemory';
@@ -45,11 +46,11 @@ import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/Sc
 
 /**
  * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
- * text-embedding-ada-002, 35 for text-embedding-3-small").
+ * text-embedding-ada-002, 58 for text-embedding-3-small").
  *
- * Rendered rather than written out in prose because these numbers are expected to move - 35 is
- * provisional until it is re-derived against a production lake - and a description that restates
- * the table is a wrong number shown to operators the moment it drifts, with nothing failing.
+ * Rendered rather than written out in prose because these numbers move as each space is re-measured
+ * against a production lake, and a description that restates the table is a wrong number shown to
+ * operators the moment it drifts, with nothing failing.
  */
 const forcedRetrievalFloorsBySpaceSummary = Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)
   .map(([space, pct]) => `${pct} for ${space}`)
@@ -407,6 +408,7 @@ export const SettingKeySchema = z.enum([
   'kbSearchMinRelevancePct',
   'forcedRetrievalRelativeFloorPct',
   'forcedRetrievalMinSimilarityPct',
+  'forcedRetrievalSpreadFloorPct',
 
   // DATA LAKE COST GOVERNANCE (spend levers - see resolveSpendLevers)
   'dataLakeEmbeddingSpendEnabled',
@@ -1581,7 +1583,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'lakeMemoryRecallK', order: 8 },
       { key: 'forcedRetrievalRelativeFloorPct', order: 9 },
       { key: 'forcedRetrievalMinSimilarityPct', order: 10 },
-      { key: 'dataLakeSearchMaxChunksPerFile', order: 11 },
+      { key: 'forcedRetrievalSpreadFloorPct', order: 11 },
+      { key: 'dataLakeSearchMaxChunksPerFile', order: 12 },
     ],
   },
   DATA_LAKE_COST: {
@@ -3541,7 +3544,7 @@ export const settingsMap = {
       'scoring ones admitted, would land in the passages that path discards.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
-    order: 11,
+    order: 12,
     // Organization/Owner only, no Lake rung - same reason as dataLakeSearchMaxFiles/MaxChunks
     // (#2624). The cap is enforced at a merge whose pool spans EVERY lake the caller can reach in
     // one pass, so there is no single lakeId for a narrower rung to key on and a Lake-scoped
@@ -3735,10 +3738,37 @@ export const settingsMap = {
       'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
       'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
       'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
-      'embedding model; the sweep tool is packages/scripts/retrieval/forcedFloorSweep.ts.',
+      'embedding model.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,
+    // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
+  }),
+  forcedRetrievalSpreadFloorPct: makeNumberSetting({
+    key: 'forcedRetrievalSpreadFloorPct',
+    name: 'Forced Retrieval Spread Floor (%)',
+    defaultValue: FORCED_RETRIEVAL_SPREAD_FLOOR_PCT_DEFAULT,
+    min: 0,
+    max: 100,
+    int: true,
+    description:
+      'How far below the best-scoring passage of the SAME turn a chunk may score and still be ' +
+      "injected, as a percent of the gap between that best score and a typical one (this turn's " +
+      'median). 0 (the default) disables it. This is the only one of the three floors whose cut ' +
+      'depends on the QUESTION rather than on where the score band sits: a question one document ' +
+      'answers sharply leaves its answer far above the median and admits few passages, while a ' +
+      'broad question leaves many passages bunched near the top and admits many. The other two ' +
+      'floors cannot tell those turns apart, which is why retrieved volume otherwise tracks the ' +
+      'character budget instead of the question. Because it is measured in units of the band ' +
+      'rather than against a fixed cosine, the same value means the same thing in every embedding ' +
+      'space and does not need re-tuning when the embedding model changes. Lower is stricter (10 ' +
+      'keeps only passages within a tenth of the way down to the median); 100 cuts at the median ' +
+      'itself. It can never empty a turn - the best passage always clears its own cutoff. Ships ' +
+      'off because no magnitude has been measured yet; measure one offline before turning it on.',
+    category: 'AI',
+    group: API_SERVICE_GROUPS.EMBEDDING.id,
+    order: 11,
     // Same rung set and same reason as forcedRetrievalRelativeFloorPct above.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner] },
   }),
@@ -4817,12 +4847,13 @@ export const SEARCH_BUDGET_SETTING_KEYS = [
  *
  * Lives here rather than beside that read so the guard can reach it - `common` cannot import from
  * `services`. A test fixture that enumerated these keys itself would keep passing on coded defaults
- * if a fourth were added, which is the one way those tests could go quiet without failing.
+ * if another were added, which is the one way those tests could go quiet without failing.
  */
 export const FORCED_RETRIEVAL_SETTING_KEYS = [
   'forcedRetrievalCharBudget',
   'forcedRetrievalRelativeFloorPct',
   'forcedRetrievalMinSimilarityPct',
+  'forcedRetrievalSpreadFloorPct',
 ] as const satisfies readonly SettingKey[];
 
 // ============================================================================

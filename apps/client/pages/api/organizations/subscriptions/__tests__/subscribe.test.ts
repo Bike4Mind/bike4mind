@@ -6,6 +6,7 @@ import {
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
   ORGANIZATION_SUBSCRIPTION_PRICE_ID,
 } from '@client/lib/subscriptions/constants';
+import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 
 // baseApi: unwrap the chain so handler.post(fn) just returns fn, and .use() is a no-op.
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -38,9 +39,13 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-const mockFindByPriceIdAndOwner = vi.fn();
+const mockFindNonTerminalSubscriptionsByOwner = vi.fn();
+const mockFindByPriceIdAndOwner = vi.fn(() => {
+  throw new Error('the org guard must read non-terminal rows; active-only lets a past_due org double-subscribe');
+});
 vi.mock('@server/models/Subscription', () => ({
   subscriptionRepository: {
+    findNonTerminalSubscriptionsByOwner: (...args: unknown[]) => mockFindNonTerminalSubscriptionsByOwner(...args),
     findByPriceIdAndOwner: (...args: unknown[]) => mockFindByPriceIdAndOwner(...args),
   },
 }));
@@ -86,7 +91,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
   beforeEach(() => {
     vi.clearAllMocks();
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
-    mockFindByPriceIdAndOwner.mockResolvedValue(null); // no active org subscription
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]); // no live org subscription
     // No stripeCustomerId: the route must therefore run createCustomer AND persist via
     // organizationRepository.update, which is what makes the "no side effect on rejection"
     // assertions below capable of failing. With a customer id pre-set the route skipped that
@@ -128,7 +133,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
 
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
 
-    expect(mockFindByPriceIdAndOwner).not.toHaveBeenCalled();
+    expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
     expect(mockOrgFindById).not.toHaveBeenCalled();
     expect(mockCreateCustomer).not.toHaveBeenCalled();
     expect(mockOrgUpdate).not.toHaveBeenCalled(); // the DB write the guard now provably precedes
@@ -220,6 +225,90 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     expect(args.customer).toBe('cus_new');
     expect(args.subscription_data.metadata).toMatchObject({ newOrganizationName: 'Brand New Org' });
     expect(args.subscription_data.metadata).not.toHaveProperty('organizationId');
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+/**
+ * The guard read active-only, so an org whose subscription was past_due - a row the read route
+ * also hid - could start a second checkout while the first kept dunning. This is the part that
+ * costs money; the UI assertions elsewhere are downstream of it.
+ */
+describe('POST /api/organizations/subscriptions/subscribe - duplicate subscription guard', () => {
+  const liveRow = (status: string) => ({ priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID, status });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
+    mockOrgFindById.mockResolvedValue({
+      id: 'org_1',
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      users: [{ userId: 'user_1' }],
+    });
+    mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it.each(['past_due', 'unpaid', 'incomplete'] as const)(
+    'refuses a second checkout while a %s subscription is live, and creates no session',
+    async status => {
+      mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([liveRow(status)]);
+      const { req, res } = makeReq();
+
+      await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+        constructor: BadRequestError,
+        statusCode: HttpStatus.BadRequest,
+        message: expect.stringContaining('payment problem'),
+      });
+
+      expect(mockSessionsCreate).not.toHaveBeenCalled();
+      // The guard sits above createCustomer and the org write, so a refused duplicate
+      // leaves no Stripe customer behind either.
+      expect(mockCreateCustomer).not.toHaveBeenCalled();
+      expect(mockOrgUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('still refuses an active row with the original wording', async () => {
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([liveRow('active')]);
+    const { req, res } = makeReq();
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: BadRequestError,
+      statusCode: HttpStatus.BadRequest,
+      message: 'An active subscription already exists for this organization',
+    });
+
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  // Deliberate: one live subscription per org, so trialing and paused block a second
+  // checkout too - they are non-terminal, so the widened read sees them.
+  it.each(['trialing', 'paused'] as const)(
+    'refuses a second checkout while a %s subscription is live',
+    async status => {
+      mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([liveRow(status)]);
+      const { req, res } = makeReq();
+
+      await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+        constructor: BadRequestError,
+        statusCode: HttpStatus.BadRequest,
+      });
+
+      expect(mockSessionsCreate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows a checkout when the only row is terminal, so a lapsed org can resubscribe', async () => {
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockFindNonTerminalSubscriptionsByOwner).toHaveBeenCalledWith(SubscriptionOwnerType.Organization, 'org_1');
+    expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
   });
 });

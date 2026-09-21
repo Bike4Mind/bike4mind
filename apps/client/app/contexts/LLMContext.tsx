@@ -88,6 +88,13 @@ export interface LLMContextProps {
   isLatticeEnabled: boolean;
   toolMode: 'fast' | 'smart';
   tools: Array<B4MLLMTools>;
+  /**
+   * "Only tools I pick" - suppresses tools added automatically rather than selected above
+   * (the server's own offers, and the client's Smart-mode recommendations). Withholds the
+   * OFFER, not knowledge already in scope: forced retrieval and already-attached files are
+   * unaffected. Persisted, unlike `disableAutoRouteForThisSession` below.
+   */
+  skipAutoOffers: boolean;
   researchMode: ResearchModeState;
   setResearchMode: (mode: Partial<ResearchModeState>) => void;
   addResearchConfiguration: (config: ResearchModeConfiguration) => void;
@@ -172,6 +179,7 @@ const DEFAULTS = {
   isLatticeEnabled: false, // Default controlled by user settings
   toolMode: 'smart' as const,
   tools: [],
+  skipAutoOffers: false,
   researchMode: {
     enabled: false,
     configurations: [],

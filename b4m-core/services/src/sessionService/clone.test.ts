@@ -97,6 +97,72 @@ describe('cloneSession - redaction at the copy boundary', () => {
   });
 
   /**
+   * `taggedAt` is the companion timestamp of `tags`, same as `summaryAt` is of `summary`. A clone
+   * that arrives without it looks untagged, so the spider re-tags it and overwrites the copied tags.
+   */
+  it('carries the source session taggedAt onto the clone', async () => {
+    const { db } = makeAdapters('caller-1');
+    const taggedAt = new Date('2026-01-01T00:00:00.000Z');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [{ name: 'racing', strength: 0.9 }],
+      taggedAt,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(
+      expect.objectContaining({ taggedAt, tags: [{ name: 'racing', strength: 0.9 }] })
+    );
+  });
+
+  /**
+   * `taggedAt` sits OUTSIDE the isOwner gate below, unlike the lake scope: a share holder's copy is
+   * the same conversation, so the source's tags are still the right tags for it. Pins that against
+   * an edit that reflexively folds this field into that gate.
+   */
+  it('carries taggedAt even when the caller only holds a share', async () => {
+    const { db } = makeAdapters('owner-1');
+    const taggedAt = new Date('2026-01-01T00:00:00.000Z');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'owner-1', // caller-1 holds only a share
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [{ name: 'racing', strength: 0.9 }],
+      taggedAt,
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ taggedAt }));
+  });
+
+  /**
+   * Mirror image of the bug this field guards: a source carrying tags from before `taggedAt` existed
+   * must not come out of the copy looking already-tagged, or the spider skips the tag pass it never
+   * had. Guards a future default landing beside firstCreated/lastUpdated in createSession.
+   */
+  it('does not fabricate taggedAt when the source has none', async () => {
+    const { db } = makeAdapters('caller-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [{ name: 'racing', strength: 0.9 }],
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    // The copy passes the field through explicitly, so the key is present holding undefined.
+    expect(db.sessions.create.mock.calls[0][0].taggedAt).toBeUndefined();
+  });
+
+  /**
    * Same boundary as this file's docblock, one field further along: a share grant lets you READ the
    * source, not inherit its lake scope. The cloner may not reach that lake, and the explicit-wins arm
    * in createSession skips the derivation, so nothing on this path would check. Inheriting it would

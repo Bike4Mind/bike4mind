@@ -27,6 +27,7 @@ import {
   assertLakeRebuildAccess,
   assertCanWriteDataLakeTags,
 } from './authorizeLakeWrite';
+import type { LakeGrant } from './manageRule';
 import { createDataLake } from './createDataLake';
 import { archiveDataLake } from './archiveDataLake';
 import { deleteDataLake } from './deleteDataLake';
@@ -644,7 +645,13 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
   it("marks the caller's own lakes manageable and strangers' (public) lakes read-only", async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine, theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -654,7 +661,13 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
 
   it('marks every DB lake manageable for an admin', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
 
@@ -663,7 +676,13 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
 
   it('now delegates to canManageLake, so a blank-identity lake stays unmanageable (#1153)', async () => {
     const blank = lake({ id: 'blank', slug: 'blank', createdByUserId: '' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([blank]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([blank]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: '' }), { db });
 
@@ -673,7 +692,13 @@ describe('listDataLakes - per-lake canManage flag for the UI', () => {
   it('marks built-in fallback lakes read-only even for their access holders', async () => {
     // No DB lakes; the Opti-gated fallback surfaces because the caller holds the tag. It has no
     // backing document (assertLakeWritable refuses it), so it must never be manageable.
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
     const fallback = result.find(l => l.id === 'opti-knowledge');
@@ -703,6 +728,7 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
   // the lake unconditionally could not tell a threaded repo from a missing one.
   const dbFor = (grants?: ReturnType<typeof grantRepo>) => ({
     dataLakes: {
+      findIdsCreatedBy: vi.fn().mockResolvedValue([]),
       findAccessible: vi.fn().mockImplementation(async (_ctx, opts) => (opts?.grantedLakeIds?.length ? [theirs] : [])),
       find: vi.fn(),
     },
@@ -719,6 +745,7 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
       statuses: ['draft', 'active'],
       grantedLakeIds: [],
       orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
     });
   });
 
@@ -734,6 +761,7 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     expect(row?.canManage).toBe(true);
     // A curator is not an owner, so the manage right must not be reported as ownership.
     expect(row?.isOwn).toBe(false);
+    expect(row?.canManageMemory).toBe(false);
   });
 
   it('reports a transferred owner as both manageable and own', async () => {
@@ -745,6 +773,7 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     expect(row?.canManage).toBe(true);
     // An owner grant supersedes createdByUserId, so this is the one grant role that is ownership.
     expect(row?.isOwn).toBe(true);
+    expect(row?.canManageMemory).toBe(true);
   });
 
   it('excludes a reader-only granted lake while the read-grant cutover is off', async () => {
@@ -763,7 +792,7 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     return {
       findAccessible,
       db: {
-        dataLakes: { findAccessible, find: vi.fn() },
+        dataLakes: { findIdsCreatedBy: vi.fn().mockResolvedValue([]), findAccessible, find: vi.fn() },
         settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
         dataLakeAccessGrants: {
           listActiveByLakes: vi.fn().mockResolvedValue([]),
@@ -822,7 +851,11 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
     // exclusion above is not the only thing standing between a reader and a write-gated list.
     const grants = grantRepo('reader');
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
       dataLakeAccessGrants: grants,
     };
 
@@ -833,7 +866,13 @@ describe('listDataLakes - grant-reachable lakes (#2034)', () => {
 });
 
 describe('listDataLakes - precomputed grantedLakeIds (#2425 P3)', () => {
-  const dbFor = () => ({ dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } });
+  const dbFor = () => ({
+    dataLakes: {
+      findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+      findAccessible: vi.fn().mockResolvedValue([]),
+      find: vi.fn(),
+    },
+  });
 
   it('reuses a precomputed grantedLakeIds set instead of re-resolving it', async () => {
     const db = dbFor();
@@ -848,6 +887,7 @@ describe('listDataLakes - precomputed grantedLakeIds (#2425 P3)', () => {
       statuses: ['draft', 'active'],
       grantedLakeIds,
       orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
     });
   });
 
@@ -871,7 +911,11 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
   it('carries the count for a lake the caller manages', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
       dataLakeProposals: counts({ mine: 4 }),
     };
 
@@ -885,7 +929,11 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
   it('withholds the count from a caller who can only read the lake', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
       dataLakeProposals: counts({ theirs: 9 }),
     };
 
@@ -900,7 +948,11 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
   it('omits the field entirely when nothing is pending', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
       dataLakeProposals: counts({}),
     };
 
@@ -911,7 +963,13 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
 
   it('is optional - a caller that wires no proposal repo pays for no read', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -923,7 +981,11 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
   it('still returns the list when the count read throws', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
       dataLakeProposals: {
         countPendingByLakes: vi.fn(async () => {
           throw new Error('aggregate unavailable');
@@ -947,7 +1009,11 @@ describe('listDataLakes - pending proposal count is the queue discovery surface'
   it('carries the count for an org admin who did not create the lake', async () => {
     const orgLake = lake({ id: 'org-lake', slug: 'org-lake', createdByUserId: 'creator', organizationId: 'org-a' });
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([orgLake]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([orgLake]),
+        find: vi.fn(),
+      },
       dataLakeProposals: counts({ 'org-lake': 2 }),
     };
 
@@ -966,7 +1032,13 @@ describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () =>
 
   it("returns the prompt for the caller's own lake (seeds the Settings editor)", async () => {
     const mine = withPrompt({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -975,7 +1047,13 @@ describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () =>
 
   it("WITHHOLDS the prompt from a stranger reading someone else's PUBLIC lake", async () => {
     const theirs = withPrompt({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
     const entry = result.find(l => l.id === 'theirs');
@@ -988,7 +1066,13 @@ describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () =>
 
   it('WITHHOLDS the prompt from a non-owner ORG member (read access is not manage access)', async () => {
     const theirs = withPrompt({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'member', organizationIds: ['orgA'] }), { db });
 
@@ -997,7 +1081,13 @@ describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () =>
 
   it("returns the prompt to an admin on another user's lake (admin is an editor)", async () => {
     const theirs = withPrompt({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
 
@@ -1006,7 +1096,13 @@ describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () =>
 
   it('omits a whitespace-only prompt so the client never distinguishes blank from unset', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', systemPrompt: '   \n ' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -1020,7 +1116,13 @@ describe('listDataLakes - systemPrompt is returned to a lake EDITOR only', () =>
 describe('listDataLakes - preferredSystemPromptId is returned to a lake EDITOR only', () => {
   it("returns the bound prompt id for the caller's own lake (seeds the picker)", async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', preferredSystemPromptId: 'triage_router' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -1035,7 +1137,13 @@ describe('listDataLakes - preferredSystemPromptId is returned to a lake EDITOR o
       isPublic: true,
       preferredSystemPromptId: 'triage_router',
     });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
     const entry = result.find(l => l.id === 'theirs');
@@ -1047,7 +1155,13 @@ describe('listDataLakes - preferredSystemPromptId is returned to a lake EDITOR o
 
   it('omits an empty stored value so the picker shows "None" rather than a blank binding', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', preferredSystemPromptId: '' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -1060,7 +1174,13 @@ describe('listDataLakes - preferredSystemPromptId is returned to a lake EDITOR o
 describe('listDataLakes - groundingMode is returned to a lake EDITOR only', () => {
   it("returns the stored mode for the caller's own lake (seeds the picker)", async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', groundingMode: 'inline' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -1075,7 +1195,13 @@ describe('listDataLakes - groundingMode is returned to a lake EDITOR only', () =
       isPublic: true,
       groundingMode: 'inline',
     });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
     const entry = result.find(l => l.id === 'theirs');
@@ -1093,7 +1219,13 @@ describe('listDataLakes - groundingMode is returned to a lake EDITOR only', () =
 describe('listDataLakes - embeddingSpendMicroUsd is returned to a lake EDITOR only, always defaulted', () => {
   it("returns the real meter for the caller's own lake with nonzero spend", async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me', embeddingSpendMicroUsd: 5_000_000 });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -1102,7 +1234,13 @@ describe('listDataLakes - embeddingSpendMicroUsd is returned to a lake EDITOR on
 
   it('defaults to 0 (never absent) for a manageable lake that has spent nothing yet', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
     const entry = result.find(l => l.id === 'mine');
@@ -1119,7 +1257,13 @@ describe('listDataLakes - embeddingSpendMicroUsd is returned to a lake EDITOR on
       isPublic: true,
       embeddingSpendMicroUsd: 5_000_000,
     });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'stranger' }), { db });
     const entry = result.find(l => l.id === 'theirs');
@@ -1133,7 +1277,13 @@ describe('listDataLakes - embeddingSpendMicroUsd is returned to a lake EDITOR on
 describe('listAllDataLakes - the admin list still gates the prompt on canManage', () => {
   it('returns the prompt on every DB lake, since an admin manages them all', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', systemPrompt: 'Cite sources.' });
-    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([theirs]) } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([theirs]),
+      },
+    };
 
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
 
@@ -1144,7 +1294,13 @@ describe('listAllDataLakes - the admin list still gates the prompt on canManage'
   });
 
   it('never carries a prompt on a built-in fallback lake, whatever the registry holds', async () => {
-    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
+    };
 
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     const fallback = result.find(l => l.id === 'opti-knowledge');
@@ -1168,7 +1324,13 @@ describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDispl
   it("marks the caller's own lakes isOwn:true and others isOwn:false", async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine, theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -1180,7 +1342,14 @@ describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDispl
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const users = usersPort([{ id: 'other', name: 'Ada Owner', email: 'ada@example.com' }]);
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs, mine]), find: vi.fn() }, users };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs, mine]),
+        find: vi.fn(),
+      },
+      users,
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -1196,7 +1365,14 @@ describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDispl
   it('falls back to username when the owner has no name', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
     const users = usersPort([{ id: 'other', username: 'ada99' }]);
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() }, users };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
+      users,
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -1205,7 +1381,13 @@ describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDispl
 
   it('omits ownerDisplayName entirely when NO user lookup is supplied (the content-scope path pays nothing)', async () => {
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
     const theirsResult = result.find(l => l.id === 'theirs');
@@ -1218,7 +1400,14 @@ describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDispl
     const adminOwn = lake({ id: 'adminOwn', slug: 'adminOwn', createdByUserId: 'admin' });
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
     const users = usersPort([{ id: 'other', name: 'Ada Owner' }]);
-    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([adminOwn, theirs]) }, users };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([adminOwn, theirs]),
+      },
+      users,
+    };
 
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
 
@@ -1229,7 +1418,13 @@ describe('listDataLakes / listAllDataLakes - owner labelling (isOwn + ownerDispl
   });
 
   it('a built-in fallback lake is never own and carries no owner label', async () => {
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
     const fallback = result.find(l => l.id === 'opti-knowledge');
@@ -1385,7 +1580,13 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
   it('redacts per lake in the archived management view', async () => {
     const mine = prompted({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, orgLake]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine, orgLake]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listArchivedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
 
@@ -1397,7 +1598,13 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
 
   it('redacts per lake in the deleted management view', async () => {
     const orgLake = prompted({ id: 'org', slug: 'org', createdByUserId: 'other', organizationId: 'orgA' });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([orgLake]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([orgLake]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDeletedDataLakes(ctx({ userId: 'me', organizationIds: ['orgA'] }), { db });
 
@@ -1431,7 +1638,11 @@ describe('management views - the grant reach is manage-scoped, not read-scoped',
   // only thing it proves at this level. The reaches are compared where they provably differ in
   // resolveLakeReadAccess.test.ts; these cases guard the wiring and the role split.
   const dbFor = (grants: ReturnType<typeof grantRepoFor>) => ({
-    dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
+    dataLakes: {
+      findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+      findAccessible: vi.fn().mockResolvedValue([]),
+      find: vi.fn(),
+    },
     dataLakeAccessGrants: grants,
     settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
   });
@@ -1504,7 +1715,11 @@ describe('management views - the grant reach is manage-scoped, not read-scoped',
 
   it('degrades to an empty reach when no grant repo is wired', async () => {
     const db = {
-      dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() },
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([]),
+        find: vi.fn(),
+      },
       settings: { getSettingsValue: vi.fn().mockResolvedValue(true) },
     };
 
@@ -1533,7 +1748,10 @@ describe("management views - an org grant on another org's lake discloses nothin
   // scenarios do not need it. Adding an arm to that method therefore fails HERE, next to the fake
   // that would otherwise have silently stopped covering it.
   const ARM_COVERAGE: Record<FindAccessibleArm, string> = {
-    owner: 'modeled: createdByUserId === actor.userId',
+    owner:
+      'modeled: createdByUserId === actor.userId, MINUS opts.supersededOwnLakeIds - the real arm ' +
+      'excludes a creator whose ownership has moved on, and a fake that kept the ' +
+      'bare provenance form would keep admitting rows the shipped query now drops',
     public:
       'not modeled - no scenario here uses a public lake, and the management views these ' +
       'cases exercise pass includePublic:false, which drops the arm from the real query too',
@@ -1558,19 +1776,24 @@ describe("management views - an org grant on another org's lake discloses nothin
   const findAccessibleFake = (all: IDataLakeDocument[]) =>
     vi
       .fn()
-      .mockImplementation(async (actor: AccessContext, opts: { grantedLakeIds?: string[] }) =>
-        all.filter(
-          l =>
-            l.createdByUserId === actor.userId ||
-            (!!l.organizationId &&
-              ((actor.organizationIds ?? []).includes(l.organizationId) ||
-                (actor.administeredOrgIds ?? []).includes(l.organizationId))) ||
-            (opts.grantedLakeIds ?? []).includes(l.id)
-        )
+      .mockImplementation(
+        async (actor: AccessContext, opts: { grantedLakeIds?: string[]; supersededOwnLakeIds?: string[] }) =>
+          all.filter(
+            l =>
+              (l.createdByUserId === actor.userId && !(opts.supersededOwnLakeIds ?? []).includes(l.id)) ||
+              (!!l.organizationId &&
+                ((actor.organizationIds ?? []).includes(l.organizationId) ||
+                  (actor.administeredOrgIds ?? []).includes(l.organizationId))) ||
+              (opts.grantedLakeIds ?? []).includes(l.id)
+          )
       );
 
   const dbWith = (all: IDataLakeDocument[], rows: Record<string, { dataLakeId: string; role: string }[]>) => ({
-    dataLakes: { findAccessible: findAccessibleFake(all), find: vi.fn() },
+    dataLakes: {
+      findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+      findAccessible: findAccessibleFake(all),
+      find: vi.fn(),
+    },
     dataLakeAccessGrants: {
       listByPrincipal: vi
         .fn()
@@ -1789,19 +2012,37 @@ describe('assertLakeRebuildAccess - narrower-than-write gate that DOES reach fal
 
 describe('listDataLakes / listAllDataLakes - canRebuild flag for fallback (built-in) lakes', () => {
   it('canManage stays false for a fallback lake even for an admin (listAllDataLakes)', async () => {
-    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
+    };
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     expect(result.find(l => l.id === 'opti-knowledge')?.canManage).toBe(false);
   });
 
   it('canRebuild is true for an admin on a fallback lake (listAllDataLakes)', async () => {
-    const db = { dataLakes: { findAccessible: vi.fn(), find: vi.fn().mockResolvedValue([]) } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
+    };
     const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
     expect(result.find(l => l.id === 'opti-knowledge')?.canRebuild).toBe(true);
   });
 
   it('canRebuild is false for a non-admin reader on a fallback lake (listDataLakes)', async () => {
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([]),
+        find: vi.fn(),
+      },
+    };
     const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
     const fallback = result.find(l => l.id === 'opti-knowledge');
     expect(fallback?.canManage).toBe(false);
@@ -1811,7 +2052,13 @@ describe('listDataLakes / listAllDataLakes - canRebuild flag for fallback (built
   it('canRebuild === canManage for a DB lake (both true for the owner, both false for a stranger)', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
-    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn().mockResolvedValue([mine, theirs]),
+        find: vi.fn(),
+      },
+    };
 
     const result = await listDataLakes(ctx({ userId: 'me' }), { db });
 
@@ -1998,6 +2245,192 @@ describe('updateDataLake - clearing an access gate', () => {
     const cleared = lake({ createdByUserId: 'owner', requiredUserTag: '', requiredEntitlement: '' });
     expect(canAccessLake(cleared, ctx({ userId: 'stranger' }))).toBe(false);
     expect(canAccessLake(cleared, ctx({ userId: 'owner' }))).toBe(true);
+  });
+});
+
+describe('updateDataLake - widening the gate is owner-only', () => {
+  const makeDb = (l: IDataLakeDocument, grants: LakeGrant[] = []) => {
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    return {
+      db: {
+        dataLakes: { findById: vi.fn().mockResolvedValue(l), update },
+        dataLakeAccessGrants: { listByLake: vi.fn().mockResolvedValue(grants) },
+      },
+      update,
+    };
+  };
+  const curator: LakeGrant[] = [{ principalType: 'user', principalId: 'curator', role: 'curator' }];
+
+  // The exposure itself, stated in read terms so it does not depend on which predicate the gate
+  // happens to call: stamping a tag on a private, org-less lake moves it off the private-deny arm.
+  it('a gate on a private, org-less lake is what makes it readable app-wide', () => {
+    const ungated = lake({ createdByUserId: 'owner' });
+    expect(canAccessLake(ungated, ctx({ userId: 'stranger', userTags: ['opti'] }))).toBe(false);
+
+    const gated = lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' });
+    expect(canAccessLake(gated, ctx({ userId: 'stranger', userTags: ['opti'] }))).toBe(true);
+  });
+
+  it('refuses a curator stamping a gate onto a private lake, and writes nothing', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  // The curator rung is real on this lake, so the refusal above is the widening gate talking and not
+  // simply a caller who could never manage it.
+  it('lets that same curator rename the lake, so the refusal is about widening only', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { name: 'Renamed' }, { db })
+    ).resolves.toMatchObject({ name: 'Renamed' });
+    expect(update).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets that same curator clear a gate, because clearing narrows to owner-only', async () => {
+    const { db } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: '' });
+  });
+
+  it('refuses a platform admin too - the same exclusion setLakeVisibility applies to exposing', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner' }));
+
+    await expect(
+      updateDataLake({ userId: 'admin', isAdmin: true }, 'lake1', { requiredEntitlement: 'product:pro' }, { db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('lets the owner widen', async () => {
+    const { db } = makeDb(lake({ createdByUserId: 'owner' }));
+
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: 'Opti' });
+  });
+
+  // A transferred owner holds the grant and the creator no longer does, so the gate must follow
+  // ownership rather than provenance - isEffectiveOwner's whole reason for existing. The creator is
+  // left a curator here on purpose: demoted to nothing they would be refused one gate earlier by
+  // canManageLake, which would prove nothing about this one.
+  it('follows a transfer: the new owner may widen, the demoted creator may not', async () => {
+    const transferred: LakeGrant[] = [
+      { principalType: 'user', principalId: 'newOwner', role: 'owner' },
+      { principalType: 'user', principalId: 'creator', role: 'curator' },
+    ];
+
+    const moved = makeDb(lake({ createdByUserId: 'creator' }), transferred);
+    await expect(
+      updateDataLake({ userId: 'newOwner', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db: moved.db })
+    ).resolves.toMatchObject({ requiredUserTag: 'Opti' });
+
+    const stale = makeDb(lake({ createdByUserId: 'creator' }), transferred);
+    await expect(
+      updateDataLake({ userId: 'creator', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db: stale.db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(stale.update).not.toHaveBeenCalled();
+  });
+
+  // On an org lake the org is a hard prerequisite, so a gate only ever selects a subset of members.
+  // The direction therefore inverts, and the rule has to invert with it.
+  it('inverts on an org lake: a curator may add a gate but not clear one', async () => {
+    const adding = makeDb(lake({ createdByUserId: 'owner', organizationId: 'org1' }), curator);
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db: adding.db })
+    ).resolves.toMatchObject({ requiredUserTag: 'Opti' });
+
+    const clearing = makeDb(
+      lake({ createdByUserId: 'owner', organizationId: 'org1', requiredUserTag: 'Opti' }),
+      curator
+    );
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db: clearing.db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(clearing.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a curator swapping one gate value for another', async () => {
+    const { db, update } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: 'Other' }, { db })
+    ).rejects.toThrow(/only the owner/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  // Reads lowercase the tag, so this edit cannot move a single reader and must not be treated as a
+  // widening the owner has to be summoned for.
+  it('lets a curator restyle a gate value that normalizes to the same population', async () => {
+    const { db } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' }), curator);
+
+    await expect(
+      updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: 'OPTI' }, { db })
+    ).resolves.toMatchObject({ requiredUserTag: 'OPTI' });
+  });
+
+  // The two fields are arms of one any-of, not independent switches. On a doubly gated lake either
+  // arm alone already admits its holders, so dropping one strictly removes readers - on an org lake
+  // too, where clearing the LAST arm opens the lake to the whole org and is refused just below.
+  describe('the gate is graded as a set, because lakeMatchesAccess is an any-of', () => {
+    const bothGates = { requiredUserTag: 'Opti', requiredEntitlement: 'product:pro' };
+
+    it('lets a curator drop one of two arms on a private lake', async () => {
+      const { db } = makeDb(lake({ createdByUserId: 'owner', ...bothGates }), curator);
+
+      await expect(
+        updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredUserTag: '' }, { db })
+      ).resolves.toMatchObject({ requiredUserTag: '', requiredEntitlement: 'product:pro' });
+    });
+
+    it('lets a curator drop one of two arms on an ORG lake, where clearing the last one is refused', async () => {
+      const partial = makeDb(lake({ createdByUserId: 'owner', organizationId: 'org1', ...bothGates }), curator);
+      await expect(
+        updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredEntitlement: '' }, { db: partial.db })
+      ).resolves.toMatchObject({ requiredUserTag: 'Opti', requiredEntitlement: '' });
+
+      const total = makeDb(lake({ createdByUserId: 'owner', organizationId: 'org1', ...bothGates }), curator);
+      await expect(
+        updateDataLake(
+          { userId: 'curator', isAdmin: false },
+          'lake1',
+          { requiredUserTag: '', requiredEntitlement: '' },
+          { db: total.db }
+        )
+      ).rejects.toThrow(/only the owner/i);
+      expect(total.update).not.toHaveBeenCalled();
+    });
+
+    // Each arm is tagged with the field it came from, so a tag and an entitlement that happen to
+    // share a spelling are two different populations and moving between them is a widening.
+    it('refuses a curator moving a gate value from the tag arm to the entitlement arm', async () => {
+      const { db, update } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'product:pro' }), curator);
+
+      await expect(
+        updateDataLake(
+          { userId: 'curator', isAdmin: false },
+          'lake1',
+          { requiredUserTag: '', requiredEntitlement: 'product:pro' },
+          { db }
+        )
+      ).rejects.toThrow(/only the owner/i);
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('refuses a curator ADDING a second arm to a private lake', async () => {
+      const { db, update } = makeDb(lake({ createdByUserId: 'owner', requiredUserTag: 'Opti' }), curator);
+
+      await expect(
+        updateDataLake({ userId: 'curator', isAdmin: false }, 'lake1', { requiredEntitlement: 'product:pro' }, { db })
+      ).rejects.toThrow(/only the owner/i);
+      expect(update).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -4461,6 +4894,42 @@ describe('setLakeVisibility - personal ↔ org promotion', () => {
     expect(db.dataLakes.update.mock.calls[0][0].organizationId).toBeNull();
   });
 
+  // Demotion is the cheap half of the manage gate because it only ever removes exposure - except on
+  // a gated lake, where dropping the org takes the org prerequisite away and leaves the requirement
+  // any-of standing on its own: every holder of the tag reads the lake, app-wide and across orgs.
+  // Same exposure updateDataLake's widening gate refuses, reached by moving the scope instead.
+  it('blocks a non-owner admin from demoting a TAG-GATED org lake to private', async () => {
+    const db = makeDb({ organizationId: 'orgA', requiredUserTag: 'Opti' });
+    await expect(
+      setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'private', { db } as any)
+    ).rejects.toThrow(/carries a gate/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-owner admin from demoting an ENTITLEMENT-GATED org lake to private', async () => {
+    const db = makeDb({ organizationId: 'orgA', requiredEntitlement: 'product:pro' });
+    await expect(
+      setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'private', { db } as any)
+    ).rejects.toThrow(/carries a gate/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('lets the OWNER demote a gated org lake to private - it is their lake to open', async () => {
+    const db = makeDb({ organizationId: 'orgA', requiredUserTag: 'Opti' });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'private', {
+      db,
+    } as any);
+    expect(db.dataLakes.update.mock.calls[0][0].organizationId).toBeNull();
+  });
+
+  // The gate is about the ORG PREREQUISITE going away, not about demotion in general: an org-less
+  // gated lake is already on the requirement arm, so un-publishing it moves nobody.
+  it('lets a non-owner admin un-publish a gated org-LESS lake, which changes no readership', async () => {
+    const db = makeDb({ isPublic: true, requiredUserTag: 'Opti' });
+    await setLakeVisibility({ userId: 'admin', isAdmin: true }, 'lake1', 'private', { db } as any);
+    expect(db.dataLakes.update.mock.calls[0][0].isPublic).toBe(false);
+  });
+
   it('maps a TOCTOU duplicate-key (E11000) on write to the friendly collision error', async () => {
     const db = makeDb(); // find pre-check passes, but the write loses the race
     db.dataLakes.update = vi.fn().mockRejectedValue(Object.assign(new Error('E11000 dup key'), { code: 11000 }));
@@ -4562,7 +5031,12 @@ describe('browsePublicDataLakes - public discover catalog projection', () => {
     });
 
   const makeDb = (lakes: IDataLakeDocument[], total = lakes.length) => ({
-    dataLakes: { findPublicLakes: vi.fn().mockResolvedValue({ lakes, total }) },
+    dataLakes: {
+      findPublicLakes: vi.fn().mockResolvedValue({ lakes, total }),
+      // The caller created none of these, so supersession resolves empty without reaching the
+      // grant collection - wired so the tests below run the real path, not its degrade-open catch.
+      findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+    },
     users: {
       findByIds: vi.fn().mockResolvedValue([
         { id: 'owner1', name: 'Ada Owner', username: 'ada', email: 'ada@example.com' },
@@ -4635,6 +5109,7 @@ describe('browsePublicDataLakes - public discover catalog projection', () => {
       offset: 20,
       grantedLakeIds: [],
       orgGrantedLakes: {},
+      supersededOwnLakeIds: [],
     });
   });
 
@@ -4932,7 +5407,11 @@ describe('listTransitionalDataLakes - the only list a stranded lake appears in',
   const stranded = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
     lake({ updatedAt: staleFor(overrides.status ?? 'archiving'), ...overrides });
   const dbWith = (lakes: IDataLakeDocument[]) => ({
-    dataLakes: { findAccessible: vi.fn().mockResolvedValue(lakes), find: vi.fn() },
+    dataLakes: {
+      findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+      findAccessible: vi.fn().mockResolvedValue(lakes),
+      find: vi.fn(),
+    },
   });
 
   it('asks the datastore for exactly the transitional statuses, management-scoped', async () => {

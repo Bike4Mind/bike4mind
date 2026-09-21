@@ -3,6 +3,7 @@ import BaseRepository from '@bike4mind/db-core';
 import { ShareableDocumentRepository, ShareableDocumentSchema } from '../content/SharableDocumentModel';
 import {
   DATA_LAKE_GROUNDING_MODES,
+  SESSION_SUMMARY_TRIGGERS,
   ISession,
   ISessionDocument,
   ISessionRepository,
@@ -76,16 +77,16 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     summary: { type: String, required: false },
     summaryAt: { type: Date, required: false },
     summaryModelId: { type: String, required: false },
-    summaryTrigger: {
-      type: String,
-      enum: ['manual', 'project', 'milestone', 'growth', 'throttling'],
-      required: false,
-    },
+    summaryTrigger: { type: String, enum: [...SESSION_SUMMARY_TRIGGERS], required: false },
     contextSummary: { type: String, required: false },
     contextSummaryUpToQuestId: { type: String, required: false },
     contextSummaryAt: { type: Date, required: false },
     contextSummaryModelId: { type: String, required: false },
     tags: { type: [TagSchema], required: false },
+    // Pairs with `tags` the way `summaryAt` pairs with `summary`. The schema is strict, so WITHOUT
+    // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
+    // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
+    taggedAt: { type: Date, required: false },
     clonedSourceId: { type: String, required: false },
     forkedSourceId: { type: String, required: false },
     isAutoNamed: { type: Boolean, required: false },

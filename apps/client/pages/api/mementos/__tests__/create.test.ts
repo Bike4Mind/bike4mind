@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Request, Response } from 'express';
+import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 
 const { mementoCreateMock, findByUserIdMock, getEffectiveLLMApiKeysMock, generateEmbeddingMock } = vi.hoisted(() => ({
   mementoCreateMock: vi.fn(),
@@ -82,6 +83,7 @@ describe('POST /api/mementos/create embedding', () => {
     expect(mementoCreateMock).toHaveBeenCalledTimes(1);
     expect(mementoCreateMock.mock.calls[0][0]).toMatchObject({
       embedding: [0.1, 0.2, 0.3],
+      embeddingModel: MEMENTO_EMBEDDING_ID,
       summary: 'I prefer TypeScript',
     });
   });
@@ -94,5 +96,6 @@ describe('POST /api/mementos/create embedding', () => {
 
     expect(mementoCreateMock).toHaveBeenCalledTimes(1);
     expect('embedding' in mementoCreateMock.mock.calls[0][0]).toBe(false);
+    expect('embeddingModel' in mementoCreateMock.mock.calls[0][0]).toBe(false);
   });
 });

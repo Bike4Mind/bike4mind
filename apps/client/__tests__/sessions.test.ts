@@ -30,7 +30,7 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 vi.mock('@bike4mind/database/auth', () => ({
-  default: {
+  Session: {
     deleteMany: vi.fn(),
   },
   sessionRepository: {},
@@ -113,7 +113,7 @@ describe.skip('/api/sessions', () => {
   describe('DELETE /api/sessions', () => {
     it('should delete all user sessions when authorized', async () => {
       const { logEvent } = await import('@server/utils/analyticsLog');
-      const SessionModel = (await import('@bike4mind/database/auth')).default;
+      const { Session: SessionModel } = await import('@bike4mind/database/auth');
       const handler = (await import('@pages/api/sessions/index')).default;
 
       (SessionModel.deleteMany as any).mockResolvedValue({

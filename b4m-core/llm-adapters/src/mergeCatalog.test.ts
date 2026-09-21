@@ -88,6 +88,24 @@ describe('mergeCatalog: per-field-group precedence', () => {
     });
   });
 
+  /**
+   * The seeded tier states a real cap, so its ModelInfo is declared by omission of the flag.
+   * A {limits} row that says nothing about the cap must not turn it derived: mergeRows carries
+   * the seeded value forward, so the read path still has data rather than toModelInfo's default.
+   */
+  it('keeps a seeded cap declared through a {limits} row that omits one', () => {
+    const seed = seedModel();
+    expect(seed.maxOutputTokensDerived).toBeUndefined();
+
+    const merged = mergeCatalog(
+      [seed],
+      [row({ modelId: seed.id, ownedGroups: ['limits'], patch: { contextWindow: 1_000_000 } })],
+      NO_KEYS
+    );
+    expect(merged[0]).toMatchObject({ contextWindow: 1_000_000, max_tokens: seed.max_tokens });
+    expect(merged[0].maxOutputTokensDerived).toBeUndefined();
+  });
+
   it('keeps the adapter price literal: a catalog row can never contribute pricing', () => {
     const seed = seedModel();
     const merged = mergeCatalog(
@@ -254,6 +272,21 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     expect(models[0]).toMatchObject({ id: 'grok-9', backend: ModelBackend.XAI, contextWindow: 2_000_000 });
     // Never priced from the catalog: the empty map is what trips [UNPRICED_MODEL].
     expect(models[0].pricing).toEqual({});
+  });
+
+  it('marks a catalog-only record that declares no cap as derived', () => {
+    const { models } = mergeCatalogWithDrops([], [catalogOnly(invocable)], {
+      apiKeys: { xai: 'xai-key' },
+      isSelfHost: false,
+    });
+    expect(models[0]).toMatchObject({ max_tokens: 4096, maxOutputTokensDerived: true });
+
+    const { models: declared } = mergeCatalogWithDrops([], [catalogOnly({ ...invocable, maxOutputTokens: 32_000 })], {
+      apiKeys: { xai: 'xai-key' },
+      isSelfHost: false,
+    });
+    expect(declared[0].max_tokens).toBe(32_000);
+    expect(declared[0].maxOutputTokensDerived).toBeUndefined();
   });
 
   it('drops and counts a record whose adapterFamily this build cannot dispatch', () => {

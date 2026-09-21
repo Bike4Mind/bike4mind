@@ -52,7 +52,11 @@ vi.mock('@bike4mind/services', () => ({
       return Promise.resolve({ artifact: { id: 'a1' } });
     },
   },
-  // Pulled in transitively by @server/utils/artifactGate.
+}));
+
+// Pulled in transitively by @server/utils/artifactGate, which imports it from the ./llm subpath -
+// mocking it on the barrel intercepted nothing and let the real module load.
+vi.mock('@bike4mind/services/llm', () => ({
   resolveArtifactsEnabled: (adminEnabled: boolean, requestedByCaller: boolean | undefined) =>
     adminEnabled && requestedByCaller !== false,
 }));

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
@@ -53,10 +53,25 @@ const run = (query: Record<string, string> = {}) => {
 describe('GET /api/admin/model-logs', () => {
   let mongoServer: MongoMemoryServer;
 
-  beforeEach(async () => {
+  // One mongod for the file, data isolation per test via dropDatabase below - booting a server
+  // per test spent most of the budget on startup. init() settles the background autoIndex build
+  // before any hook can drop the database out from under it (see createMongoServer).
+  beforeAll(async () => {
     mongoServer = await createMongoServer();
     await mongoose.connect(mongoServer.getUri());
+    await Quest.init();
+  });
 
+  afterAll(async () => {
+    await mongoose.disconnect();
+    await mongoServer?.stop();
+  });
+
+  afterEach(async () => {
+    await mongoose.connection.dropDatabase();
+  });
+
+  beforeEach(async () => {
     await Quest.create({
       sessionId: 'session-1',
       type: 'message',
@@ -135,11 +150,6 @@ describe('GET /api/admin/model-logs', () => {
         ],
       },
     });
-  });
-
-  afterEach(async () => {
-    await mongoose.disconnect();
-    await mongoServer.stop();
   });
 
   it('matches on promptMeta.model.name', async () => {

@@ -1,13 +1,23 @@
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { userRepository, imageModerationIncidentRepository, userAuthAuditLogRepository } from '@bike4mind/database';
+import {
+  userRepository,
+  imageModerationIncidentRepository,
+  userAuthAuditLogRepository,
+  USER_AUTH_AUDIT_EVENTS,
+  type UserAuthAuditEvent,
+} from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError } from '@bike4mind/utils';
 import { CURRENT_POLICY_VERSION, type UserComplianceResponse } from '@bike4mind/common';
+import { z } from 'zod';
 
 interface RequestQuery {
   userId: string;
+  event?: string;
 }
+
+const EventFilterSchema = z.enum(USER_AUTH_AUDIT_EVENTS as [UserAuthAuditEvent, ...UserAuthAuditEvent[]]);
 
 // One-shot with a fixed cap on both audit trails; add cursor paging only if a real user's
 // history ever exceeds it. Not a query param - nothing calls this with a page size.
@@ -20,10 +30,12 @@ const handler = baseApi({ auth: true }).get(
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
-    const { userId } = req.query as RequestQuery;
+    const { userId, event: eventParam } = req.query as RequestQuery;
     if (typeof userId !== 'string' || !userId) {
       throw new BadRequestError('Invalid user ID');
     }
+
+    const eventFilter = eventParam !== undefined ? EventFilterSchema.parse(eventParam) : undefined;
 
     const user = await userRepository.findById(userId);
     if (!user) {
@@ -32,7 +44,9 @@ const handler = baseApi({ auth: true }).get(
 
     const [moderationIncidents, recentAuthEvents] = await Promise.all([
       imageModerationIncidentRepository.find({ userId }, { sort: { createdAt: -1 }, limit: ROW_LIMIT }),
-      userAuthAuditLogRepository.findByUser(userId, ROW_LIMIT),
+      eventFilter
+        ? userAuthAuditLogRepository.findByUserAndEvent(userId, eventFilter, ROW_LIMIT)
+        : userAuthAuditLogRepository.findByUser(userId, ROW_LIMIT),
     ]);
 
     const payload: UserComplianceResponse = {

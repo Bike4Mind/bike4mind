@@ -40,6 +40,8 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlin
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import GavelIcon from '@mui/icons-material/GavelOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
+import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
+import { defaultFeedbackRollupWindow } from '@client/app/utils/feedbackRollupWindow';
 import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
@@ -327,6 +329,17 @@ const ProfileMenu = () => {
             label={t('skills.title', 'Skills')}
             onClick={() => {
               navigate({ to: '/skills' });
+              closeNavigation();
+            }}
+          />
+          <MenuRow
+            testId="profile-menu-feedback-rollup"
+            icon={<FeedbackOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('feedback.rollupTitle', 'Your feedback')}
+            onClick={() => {
+              // The route fills a missing window itself, but its search type requires both bounds,
+              // so the menu hands over the same default rather than a bare link.
+              navigate({ to: '/feedback/rollup', search: defaultFeedbackRollupWindow() });
               closeNavigation();
             }}
           />

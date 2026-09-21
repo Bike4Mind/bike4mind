@@ -8,6 +8,7 @@ import { OperationsModelService } from '@client/services/operationsModelService'
 import { cacheService } from '@bike4mind/services';
 import { CacheKeys } from '@server/utils/cacheKeys';
 import { Logger } from '@bike4mind/observability';
+import { ApiKeyScope } from '@bike4mind/common';
 
 const logger = new Logger({ metadata: { service: 'AdminSecurityDashboardAiAssessment' } });
 
@@ -263,7 +264,7 @@ Respond ONLY with the JSON object, no prose, no backticks.
   };
 }
 
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get(async (req, res) => {
   if (!req.user?.isAdmin) {
     throw new ForbiddenError('Admin access required');
   }

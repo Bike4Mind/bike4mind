@@ -1,4 +1,5 @@
 import { useCancelSubscription, useChangeSubscription, useSubscribePlan } from '@client/app/hooks/data/subscriptions';
+import { pickSubscriptionByPrice } from '@client/lib/subscriptions/types';
 import { IUserSubscription } from '@client/lib/userSubscriptions/types';
 import { Button } from '@mui/joy';
 import dayjs from 'dayjs';
@@ -6,26 +7,39 @@ import { ComponentProps, useMemo } from 'react';
 
 interface SubscribeButtonProps {
   priceId: string;
-  activeSubscriptions: IUserSubscription[];
+  /**
+   * The user's non-terminal subscriptions. A delinquent (past_due/unpaid) row is
+   * deliberately included: it is still the subscription they need to cancel, and
+   * holding it back is what left a dunned user with no way to stop the emails.
+   */
+  cancellableSubscriptions: IUserSubscription[];
 }
 
-const SubscribeButton = ({ priceId, activeSubscriptions }: SubscribeButtonProps) => {
+const SubscribeButton = ({ priceId, cancellableSubscriptions }: SubscribeButtonProps) => {
   const subscribe = useSubscribePlan();
   const cancelSubscription = useCancelSubscription();
   const changeSubscription = useChangeSubscription();
 
+  // Active-first per price, so a stale delinquent row at this price cannot shadow the
+  // plan the user is paying for and show them a stale "ends on" date instead.
+  const activeSubscription = useMemo(
+    () => pickSubscriptionByPrice(cancellableSubscriptions, priceId),
+    [cancellableSubscriptions, priceId]
+  );
+
   const type: 'subscribe' | 'cancel' | 'change' = useMemo(() => {
-    const activeSubscription = activeSubscriptions.find(subscription => subscription.priceId === priceId);
     if (activeSubscription) {
       return 'cancel';
-    } else if (activeSubscriptions.length > 0) {
+    } else if (cancellableSubscriptions.some(sub => sub.status === 'active')) {
+      // The affordance requires an active plan to change from; a delinquent,
+      // trialing or paused row falls through to Subscribe. The change route itself
+      // no longer requires an active row (it acts on the displayed plan), so this
+      // is the button's own rule rather than a mirror of that lookup.
       return 'change';
     } else {
       return 'subscribe';
     }
-  }, [activeSubscriptions, priceId]);
-
-  const activeSubscription = activeSubscriptions.find(subscription => subscription.priceId === priceId);
+  }, [activeSubscription, cancellableSubscriptions]);
 
   const handleClick = () => {
     switch (type) {

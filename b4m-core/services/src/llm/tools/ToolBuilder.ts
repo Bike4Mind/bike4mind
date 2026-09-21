@@ -30,6 +30,7 @@ import { buildSharedTools } from '../sharedToolBuilder';
 import type { ToolAvailability } from '../toolAvailability';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
+import { buildEarlyStopStamp } from '../earlyStopStamp';
 
 /** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
 export function buildToolUsageEvent(params: {
@@ -45,6 +46,8 @@ export function buildToolUsageEvent(params: {
   outputTokens?: number;
   cachedInputTokens?: number;
   cacheWriteTokens?: number;
+  /** Provider stop reason of the underlying completion, when the tool wraps one (e.g. delegate_to_agent). */
+  finishReason?: string;
 }): IUsageEventInput {
   const { quest, user, organization } = params;
   return {
@@ -63,7 +66,8 @@ export function buildToolUsageEvent(params: {
     units: params.units,
     costUsd: params.costUsd,
     creditsCharged: params.creditsCharged,
-    status: 'ok',
+    // Same refund key the chat/CLI completion paths record: see buildEarlyStopStamp.
+    status: buildEarlyStopStamp(params.finishReason)?.usageEventStatus ?? 'ok',
   };
 }
 
@@ -304,6 +308,10 @@ export interface BuildMcpToolsArgs {
 
 export interface BuildToolsArgs {
   enabledTools?: z.infer<typeof QuestStartBodySchema>['tools'];
+  /** See `BuildSharedToolsOptions.offerOnlyNamedTools` - must come from an explicit caller signal. */
+  offerOnlyNamedTools?: boolean;
+  /** See `BuildSharedToolsOptions.sessionDisabledTools`. */
+  sessionDisabledTools?: readonly string[];
   mcpToolsByServer?: Record<string, Array<{ name: string } & ICompletionOptionTools>>;
   quest: IChatHistoryItemDocument;
   saveQuest: (quest: IChatHistoryItemDocument) => Promise<IChatHistoryItemDocument | null>;
@@ -709,6 +717,8 @@ export class ToolBuilder {
    */
   buildTools({
     enabledTools = [],
+    offerOnlyNamedTools,
+    sessionDisabledTools,
     mcpToolsByServer = {},
     quest,
     saveQuest,
@@ -914,6 +924,7 @@ export class ToolBuilder {
                 outputTokens: meta.outputTokens,
                 cachedInputTokens: meta.cacheReadTokens,
                 cacheWriteTokens: meta.cacheWriteTokens,
+                finishReason: meta.finishReason,
               })
             );
           }
@@ -933,6 +944,8 @@ export class ToolBuilder {
       },
       {
         enabledTools,
+        offerOnlyNamedTools,
+        sessionDisabledTools,
         mcpToolsByServer,
         config,
         agentOnlyMcpServers,
@@ -948,9 +961,10 @@ export class ToolBuilder {
    * MCP integration guidance, conversation context, and agent delegation guidance.
    * Returns a single IMessage or null if there's nothing to add.
    *
-   * NOTE: not pure. When MCP tools are present this method also writes to the session
-   * via `extractAndSaveEntitiesFromUserMessage` to persist entities for later reference
-   * resolution (e.g. "review that PR"). See `# 5. Conversation context` block below.
+   * NOTE: not pure. Every invocation writes to the session via
+   * `extractAndSaveEntitiesFromUserMessage` to persist entities for later reference resolution
+   * (e.g. "review that PR"). This is intentionally independent of MCP availability; see the
+   * `# 5. Conversation context` block below.
    */
   async buildToolPrompt({
     toolPromptId,
@@ -1143,20 +1157,25 @@ ${integrationList}
         integrationCount: Object.keys(mcpIntegrations).length,
         integrations: Object.keys(mcpIntegrations),
       });
+    }
 
-      // 5. Conversation context for reference resolution.
-      // Enables "review that PR" after discussing a PR
-      try {
-        await extractAndSaveEntitiesFromUserMessage(sessionId, message, this.deps.db.sessions);
+    // 5. Conversation context for reference resolution.
+    // Enables "review that PR" after discussing a PR.
+    //
+    // Deliberately NOT gated on `mcpTools.length > 0`: it has nothing to do with MCP, and an
+    // `offerOnlyNamedTools` turn that withholds every MCP tool from a connected server would
+    // otherwise silently lose reference resolution along with the (unrelated) integration
+    // guidance above.
+    try {
+      await extractAndSaveEntitiesFromUserMessage(sessionId, message, this.deps.db.sessions);
 
-        const contextMessage = await getConversationContextSystemMessage(sessionId, this.deps.db.sessions);
-        if (contextMessage) {
-          sections.push(contextMessage.content);
-          logger.info('🧠 [ConversationContext] Added context to tool prompt');
-        }
-      } catch (contextErr) {
-        logger.debug('[ConversationContext] Failed to add context:', contextErr);
+      const contextMessage = await getConversationContextSystemMessage(sessionId, this.deps.db.sessions);
+      if (contextMessage) {
+        sections.push(contextMessage.content);
+        logger.info('🧠 [ConversationContext] Added context to tool prompt');
       }
+    } catch (contextErr) {
+      logger.debug('[ConversationContext] Failed to add context:', contextErr);
     }
 
     // 5. (Removed) Product-surface prompts are no longer injected here. A surface
