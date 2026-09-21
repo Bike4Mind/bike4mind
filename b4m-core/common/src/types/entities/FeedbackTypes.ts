@@ -208,8 +208,9 @@ export function parseFeedbackRollupBound(value: string): Date {
  * last instant included, so a caller tiling consecutive windows counts a row on a shared bound
  * twice. Both aggregations compose their scope through buildFeedbackWindowFilter
  * (@bike4mind/database), which is what keeps the personal rollup and orgFeedbackReport from
- * disagreeing about the documents sitting exactly on a bound. Agreeing on the bound is all it buys: an org total
- * equals the personal totals under it only when those are scoped `{ userId, organizationId }`.
+ * disagreeing about the documents sitting exactly on a bound. Agreeing on the bound is all it
+ * buys: an org total equals the personal totals under it only when those are scoped
+ * `{ userId, organizationId }`.
  */
 export const FeedbackRollupQuerySchema = z
   .object({

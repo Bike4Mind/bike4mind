@@ -86,6 +86,7 @@ beforeEach(() => {
     byType: [{ key: 'bug', count: 5 }],
     byStatus: [{ key: 'open', count: 6 }],
     byTag: [{ key: 'slow', count: 3 }],
+    byTagTruncated: true,
     byMember: [{ userId: 'u1', displayName: MEMBER_NAME, count: 7 }],
     membership: { memberCount: 1, aclOnly: [], stampOnly: [] },
   });
@@ -113,7 +114,10 @@ describe('runOrgFeedbackSummary', () => {
     expect(JSON.parse(payload as string)).toMatchObject({
       summaryJobId: SUMMARY_JOB_ID,
       summary: 'Feedback was steady across the window.',
-      counts: { totals: { count: 7 } },
+      // The truncation flag has to survive into the stored artifact: the read route parses it back
+      // out of S3, and a caption on a stale artifact is the only place a reader learns the tag
+      // list was cut.
+      counts: { totals: { count: 7 }, byTagTruncated: true },
     });
     // activeKey moving to the job's own id is what frees this window for a re-run.
     expect(h.updateOne).toHaveBeenLastCalledWith(
