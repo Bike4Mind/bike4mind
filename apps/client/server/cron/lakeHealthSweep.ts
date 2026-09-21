@@ -6,7 +6,7 @@
  * quietly is invisible until someone opens it. This cron computes it for every ACTIVE lake on a
  * schedule and persists one row per lake per day (`DataLakeHealthSnapshotModel`), so the trend is
  * visible rather than just the current value. Report-only: nothing here alerts or acts on a bad
- * reading (#3050) - that is deliberately future work once there is a baseline to alert against.
+ * reading - that is deliberately future work once there is a baseline to alert against.
  *
  * Scope: `status: 'active'` only. `deriveLakeServingState` gates retrieval on exactly that status,
  * so it is the one state where a health regression is actionable; a draft is still being assembled

@@ -877,9 +877,9 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
 });
 
 /**
- * Lake Health Sweep - scheduled counterpart to the on-demand GET /api/data-lakes/:id/health
- * (#3050). Computes computeLakeHealth for every active lake and persists one row per lake per
- * day, so a degrading lake is visible as a trend instead of only when someone opens it.
+ * Lake Health Sweep - scheduled counterpart to the on-demand GET /api/data-lakes/:id/health.
+ * Computes computeLakeHealth for every active lake and persists one row per lake per day, so a
+ * degrading lake is visible as a trend instead of only when someone opens it.
  *
  * Schedule: daily, after dataLakeBatchReconcile (5am UTC) so a batch that reconciler just forced
  * terminal is reflected in the same day's health.
