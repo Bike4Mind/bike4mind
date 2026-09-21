@@ -12,8 +12,9 @@ import {
  * limiter: the counter lives in the Cache collection, so a mocked store would prove nothing
  * about whether the increment actually bounds anything.
  *
- * Only baseApi's own environment is stubbed (logging, the JWT verifier, analytics, connectDB).
- * `rateLimit` and `cacheRepository` are the code under test and stay real.
+ * Stubbed: baseApi's own environment (logging, the JWT verifier, analytics, connectDB) and the
+ * aggregate the handler runs (see below). `rateLimit` and `cacheRepository` are the code under
+ * test and stay real.
  */
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
@@ -73,8 +74,8 @@ const TO = '2026-02-01T00:00:00.000Z';
 
 let mongoServer: MongoMemoryServer;
 
-// One principal's window is filled once and every assertion reads from it: the counter lives in
-// Mongo for the whole window, so re-filling it per test would only buy the same state twice.
+// Driven past the limit by the first test and left that way: the counter lives in Mongo for the
+// whole window, so the per-principal test contrasts against it without re-filling anything.
 const EXHAUSTED_USER = `rate-limit-principal-${Date.now()}`;
 
 // Must stay in sync with rateLimit's own key format in apps/client/server/middlewares/rateLimit.ts:
@@ -157,5 +158,9 @@ describe('GET /api/feedback/rollup - per-principal rate limit', () => {
     const other = await callAs(`${EXHAUSTED_USER}-other`);
 
     expect(other._getStatusCode()).toBe(200);
+
+    // The other direction of the same claim, and the half that is limiter-sensitive on its own:
+    // serving the second user neither reset nor charged the first user's window.
+    expect((await callAs(EXHAUSTED_USER))._getStatusCode()).toBe(429);
   });
 });

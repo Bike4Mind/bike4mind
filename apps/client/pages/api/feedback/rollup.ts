@@ -25,16 +25,18 @@ import {
  * FeedbackRollupQuerySchema and the shared per-dimension top-N bound the MATCHED set and the
  * RESPONSE size respectively - top-N is applied per arm only after $group has already
  * accumulated the whole matched set, so it never bounds the work a request can ask for. Two
- * separate bounds cover that: `rateLimit` below caps how many of these a single principal can
- * ask for per window (it keys on `req.user.id`, which `jwtOnly` guarantees), and `maxTimeMS`
- * bounds the work of any one request.
+ * separate bounds cover that: `rateLimit` below caps how many of these one caller can ask for per
+ * window (chained after baseApi's auth, so it keys on `req.user.id` rather than the client IP),
+ * and `maxTimeMS` bounds the work of any one request.
  */
 // Same value/shape as apps/client/pages/api/users/counterLogs.ts's own aggregate timeout.
 const FEEDBACK_ROLLUP_MAX_TIME_MS = 45000;
 
 const ONE_MINUTE_MS = 60 * 1000;
-// The interactive date-window picker is the only caller and refetches on a window change, not on
-// a timer, so a conservative cap matching the neighbouring routes leaves it ample headroom.
+// The interactive date-window picker is the only caller, and it refetches on a window change, not
+// on a timer (the query sets no refetchInterval and the app's QueryClient disables retry and
+// focus/reconnect refetch), so this leaves a human ample headroom. Looser than the org-wide $facet
+// report's 10/min next door because a single principal's rollup is the cheaper scope.
 const FEEDBACK_ROLLUP_RATE_LIMIT = 20;
 
 const handler = baseApi({ auth: 'jwtOnly' })
