@@ -24,6 +24,7 @@ import NotFound from './components/NotFound';
 import ExperimentalFeatureGate from './components/common/ExperimentalFeatureGate';
 import { ProviderBundle } from './contexts/ProviderBundle';
 import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
+import { partitionPremiumRoutes } from './premiumRoutePartition';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 
 // Lazy load all route components for code splitting
@@ -142,29 +143,42 @@ function buildPremiumGatedElement(descriptor: (typeof premiumRoutes)[number]) {
 // fetches. getParentRoute is a thunk (lazy), so referencing rootRoute/layoutRoute
 // (declared below) is safe. In the open-core fork `premiumRoutes` is empty -> both
 // arrays are empty.
-const builtStandalonePremiumRoutes = premiumRoutes
-  .filter(d => !d.appShell)
-  .map(descriptor => {
-    const gated = buildPremiumGatedElement(descriptor);
-    return createRoute({
-      getParentRoute: () => rootRoute,
-      path: descriptor.path,
-      // Standalone premium pages bypass the layoutRoute consent guard (they hang off rootRoute),
-      // so opt them in via the shared guard like the other standalone routes (issue #382).
-      beforeLoad: ({ location }) => enforceConsentRedirect(location),
-      component: () => <ProviderBundle>{gated}</ProviderBundle>,
-    });
+const premiumPartition = partitionPremiumRoutes(premiumRoutes);
+
+// Public premium routes render bare under the root route: the URL is the authorization,
+// so there is no RestrictedPage, and no ProviderBundle either, whose providers fetch a
+// signed-in user's data that a visitor with no session does not have.
+const builtPublicPremiumRoutes = premiumPartition.public.map(descriptor => {
+  const LazyComponent = lazy(descriptor.lazyImport);
+  return createRoute({
+    getParentRoute: () => rootRoute,
+    path: descriptor.path,
+    component: () => (
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <LazyComponent />
+      </Suspense>
+    ),
   });
-const builtAppShellPremiumRoutes = premiumRoutes
-  .filter(d => d.appShell)
-  .map(descriptor => {
-    const gated = buildPremiumGatedElement(descriptor);
-    return createRoute({
-      getParentRoute: () => layoutRoute,
-      path: descriptor.path,
-      component: () => gated,
-    });
+});
+const builtStandalonePremiumRoutes = premiumPartition.standalone.map(descriptor => {
+  const gated = buildPremiumGatedElement(descriptor);
+  return createRoute({
+    getParentRoute: () => rootRoute,
+    path: descriptor.path,
+    // Standalone premium pages bypass the layoutRoute consent guard (they hang off rootRoute),
+    // so opt them in via the shared guard like the other standalone routes (issue #382).
+    beforeLoad: ({ location }) => enforceConsentRedirect(location),
+    component: () => <ProviderBundle>{gated}</ProviderBundle>,
   });
+});
+const builtAppShellPremiumRoutes = premiumPartition.appShell.map(descriptor => {
+  const gated = buildPremiumGatedElement(descriptor);
+  return createRoute({
+    getParentRoute: () => layoutRoute,
+    path: descriptor.path,
+    component: () => gated,
+  });
+});
 
 // Root route that wraps all other routes
 function RootComponent() {
@@ -1104,6 +1118,7 @@ const routeTree = rootRoute.addChildren([
   activateRoute,
   adminRoute,
   ...builtStandalonePremiumRoutes,
+  ...builtPublicPremiumRoutes,
   // Slack integration routes (no layout)
   slackInstallRoute,
   slackSuccessRoute,
