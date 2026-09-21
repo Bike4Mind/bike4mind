@@ -435,6 +435,8 @@ export class TelemetryBuilder {
       urlContent: this.tokensBySource.urlContent ?? 0,
       toolSchemas: this.tokensBySource.toolSchemas ?? 0,
       userPrompt: this.tokensBySource.userPrompt ?? 0,
+      // Included only when known: an unknown lake volume must stay absent, not be fabricated as 0.
+      ...(this.tokensBySource.lakeRetrieval !== undefined ? { lakeRetrieval: this.tokensBySource.lakeRetrieval } : {}),
     };
 
     // Build complete contextWindow with defaults

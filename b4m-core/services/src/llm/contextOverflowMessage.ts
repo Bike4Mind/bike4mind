@@ -3,7 +3,14 @@
  * Mirrors the `tokensBySource` breakdown computed in ChatCompletionProcess.
  */
 export type TokenSource =
-  'systemPrompts' | 'conversationHistory' | 'mementos' | 'fabFiles' | 'urlContent' | 'toolSchemas' | 'userPrompt';
+  | 'systemPrompts'
+  | 'conversationHistory'
+  | 'mementos'
+  | 'fabFiles'
+  | 'urlContent'
+  | 'toolSchemas'
+  | 'userPrompt'
+  | 'lakeRetrieval';
 
 export interface ContextOverflowMessageParams {
   /** Human-readable model name (e.g. "Claude 4.5 Sonnet"). */

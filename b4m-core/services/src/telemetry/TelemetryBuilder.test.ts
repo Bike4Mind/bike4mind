@@ -197,6 +197,33 @@ describe('TelemetryBuilder anomaly classification', () => {
   });
 });
 
+describe('TelemetryBuilder lake-retrieval bucket', () => {
+  const tokensBySourceFor = (data: Parameters<TelemetryBuilder['setTokensBySource']>[0]) => {
+    const builder = new TelemetryBuilder(sessionId);
+    builder.setTokensBySource(data);
+    return builder.build().contextWindow.tokensBySource;
+  };
+
+  it('carries a recorded lake bucket through unchanged', () => {
+    const tokens = tokensBySourceFor({ systemPrompts: 3660, lakeRetrieval: 340 });
+
+    expect(tokens.lakeRetrieval).toBe(340);
+    // The residual the write site already netted the lake tokens out of.
+    expect(tokens.systemPrompts).toBe(3660);
+  });
+
+  // An unlisted field would be dropped from stored telemetry entirely; the inverse mistake -
+  // defaulting it to 0 - is worse, because a pre-change turn would then claim "no lake content"
+  // instead of "unknown".
+  it('leaves the bucket absent rather than fabricating a zero', () => {
+    const tokens = tokensBySourceFor({ systemPrompts: 4000 });
+
+    expect(tokens.lakeRetrieval).toBeUndefined();
+    expect(Object.keys(tokens)).not.toContain('lakeRetrieval');
+    expect(tokens.systemPrompts).toBe(4000);
+  });
+});
+
 // Pins the classification of every message observed on the quest-processing failure path, so
 // a future keyword addition can't silently re-bucket a neighbouring message.
 describe('categorizeToolError', () => {

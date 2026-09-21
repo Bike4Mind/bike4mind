@@ -38,12 +38,16 @@ const toDistribution = (categories: ContextBreakdown['categories']): TokenDistri
   urlContent: categories.urlContent,
   toolSchemas: categories.toolDefinitions,
   userPrompt: categories.userMessage,
+  // Omitted when null so an unknown lake volume stays absent from the bar rather than reading as a
+  // zero-token segment.
+  ...(categories.lakeRetrieval !== null ? { lakeRetrieval: categories.lakeRetrieval } : {}),
 });
 
 const CategoryTable: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => {
   const { categories, window: contextWindow } = breakdown;
   const rows: Array<[string, number | null]> = [
     ['System prompts', billedSystemPrompt(categories)],
+    ['Lake retrieval', categories.lakeRetrieval],
     ['Tool definitions', categories.toolDefinitions],
     ['Attached files', categories.attachedFiles],
     ['Conversation history', categories.conversationHistory],
