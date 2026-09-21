@@ -3,7 +3,11 @@ import { useCreateTeamModal } from '@client/app/components/organizations/CreateT
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetUserOrganizations, useOrganizationSeats } from '@client/app/hooks/data/organizations';
 import { useGetSubscriptionsByOwner } from '@client/app/hooks/data/subscriptions';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
+import {
+  SubscriptionOwnerType,
+  isDelinquentSubscriptionStatus,
+  pickDisplayedSubscription,
+} from '@client/lib/subscriptions/types';
 import { Add as AddIcon, Business as BusinessIcon, Search as SearchIcon } from '@mui/icons-material';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import {
@@ -31,7 +35,12 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
   const { currentUser } = useUser();
   const navigate = useNavigate();
   const { data: subscriptions } = useGetSubscriptionsByOwner(SubscriptionOwnerType.Organization, organization.id);
-  const hasActiveSubscription = subscriptions?.some(sub => !sub.canceledAt);
+  // The read now returns non-terminal rows, so a dunning org arrives here instead of as an empty
+  // list. Pick the displayed row the same way the billing screen does, and call a delinquent one
+  // what it is - a green "Active Subscription" while entitlements deny access is a false green.
+  const subscription = pickDisplayedSubscription(subscriptions ?? []);
+  const paymentIssue = !!subscription && isDelinquentSubscriptionStatus(subscription.status);
+  const hasActiveSubscription = !!subscription && !subscription.canceledAt && !paymentIssue;
   const { currentSeats } = useOrganizationSeats(organization.id);
 
   const isOwner = organization.userId === currentUser?.id;
@@ -83,8 +92,16 @@ const OrganizationCard: FC<{ organization: IOrganizationDocument }> = ({ organiz
               {organization.billingContact}
             </Chip>
           )}
-          <Chip size="sm" variant="soft" color={hasActiveSubscription ? 'success' : 'warning'}>
-            {hasActiveSubscription ? t('organization.active_subscription') : t('organization.no_subscription')}
+          <Chip
+            size="sm"
+            variant="soft"
+            color={paymentIssue ? 'danger' : hasActiveSubscription ? 'success' : 'warning'}
+          >
+            {paymentIssue
+              ? t('organization.payment_issue')
+              : hasActiveSubscription
+                ? t('organization.active_subscription')
+                : t('organization.no_subscription')}
           </Chip>
         </Stack>
 

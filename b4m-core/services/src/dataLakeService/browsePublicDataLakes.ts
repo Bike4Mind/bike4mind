@@ -8,7 +8,7 @@ import type {
   PublicDataLakeSummary,
 } from '@bike4mind/common';
 import { canManageLake, isEffectiveOwner, type LakeGrant } from './manageRule';
-import { grantedLakeReachFor, resolveEnforceReadGrants } from './resolveLakeReadAccess';
+import { grantedLakeReachFor, resolveEnforceReadGrants, supersededOwnLakeIdsFor } from './resolveLakeReadAccess';
 
 /**
  * The browsing caller: the full access context, not just an id. The catalog is per-caller (a
@@ -33,7 +33,7 @@ type OwnerLookup = { id: string; name?: string; username?: string }[];
 
 interface BrowsePublicDataLakesAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findPublicLakes'>;
+    dataLakes: Pick<IDataLakeRepository, 'findPublicLakes' | 'findIdsCreatedBy'>;
     users: { findByIds: (ids: string[]) => Promise<OwnerLookup> };
     /**
      * Optional: makes the isOwn/canManage labels honor curator + transferred-owner grants, and
@@ -68,8 +68,10 @@ export const browsePublicDataLakes = async (
 ): Promise<BrowsePublicDataLakesResult> => {
   // Resolved before the catalog query so an explicitly granted public lake discovers on the same
   // terms it lists on - the arms `listDataLakes` already passes to findAccessible. Cost per page on
-  // this load-more path: the flag read, the user-grant lookup, and under enforce one org-grant
-  // lookup per org the caller belongs to.
+  // this load-more path: the flag read, the user-grant lookup, under enforce one org-grant lookup
+  // per org the caller belongs to, and the two indexed supersession reads below (one, and no
+  // second, for a caller who has created no lakes). Not memoized per turn like the retrieval side:
+  // browse is one read per request, so there is no repeat to collapse.
   const includeReaders = await resolveEnforceReadGrants(db.settings);
   const { grantedLakeIds, orgGrantedLakes } = await grantedLakeReachFor(
     actor.userId,
@@ -78,12 +80,20 @@ export const browsePublicDataLakes = async (
     includeReaders
   );
 
+  // The catalog's creator arm lifts a lake's post-publish gate for "its owner", and
+  // `createdByUserId` is immutable, so without this a creator transferred off a lake keeps
+  // discovering it on terms nobody else gets. Same seam and same degrade-open contract as the
+  // grant reach above; `isOwn` below already resolves through `isEffectiveOwner`, so this is what
+  // stops the row set and the label from disagreeing.
+  const supersededOwnLakeIds = await supersededOwnLakeIdsFor(actor, db.dataLakes, db.dataLakeAccessGrants);
+
   const { lakes, total } = await db.dataLakes.findPublicLakes(actor, {
     search: opts.search,
     limit: opts.limit,
     offset: opts.offset,
     grantedLakeIds,
     orgGrantedLakes,
+    supersededOwnLakeIds,
   });
 
   // Batch-resolve owners in one round-trip. Dedupe ids and drop blanks so a lake with a

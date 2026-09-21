@@ -1,5 +1,30 @@
 # @bike4mind/llm-adapters
 
+## 0.15.6
+
+### Patch Changes
+
+- Updated dependencies [[`8e31cbf`](https://github.com/Bike4Mind/bike4mind/commit/8e31cbfad875f80f372f16032f487cde1e624ce1), [`4ce553e`](https://github.com/Bike4Mind/bike4mind/commit/4ce553ebc6d706aef224317811c004f64a8df5f3), [`3593192`](https://github.com/Bike4Mind/bike4mind/commit/3593192f407f6a1a337824d2d2b1d5e9d9065a8e), [`f687f87`](https://github.com/Bike4Mind/bike4mind/commit/f687f87600e726f00d1a480d12b8e72bbe3f9691), [`34443c6`](https://github.com/Bike4Mind/bike4mind/commit/34443c6911e1e96197c2f1d6306fc3ebabde5153)]:
+  - @bike4mind/common@10.1.0
+
+## 0.15.5
+
+### Patch Changes
+
+- Updated dependencies [[`f3f76c2`](https://github.com/Bike4Mind/bike4mind/commit/f3f76c21ef2e882fad72db3f0f36c8c5e8113065), [`b8bd20d`](https://github.com/Bike4Mind/bike4mind/commit/b8bd20d40a1551f6b999cb84745a677984144916)]:
+  - @bike4mind/common@10.0.0
+
+## 0.15.4
+
+### Patch Changes
+
+- [#2920](https://github.com/Bike4Mind/bike4mind/pull/2920) [`abfce42`](https://github.com/Bike4Mind/bike4mind/commit/abfce420f22de9373d1104d88d3648b5281ac9c1) Thanks [@vinchi777](https://github.com/vinchi777)! - normalize multimodal content across providers
+
+- [#2924](https://github.com/Bike4Mind/bike4mind/pull/2924) [`45469bd`](https://github.com/Bike4Mind/bike4mind/commit/45469bd8142119d63393cb5fc353914633acbe88) Thanks [@jjmarfa](https://github.com/jjmarfa)! - key the empty-turn guard on prose, and floor Bedrock DeepSeek R1
+
+- Updated dependencies [[`9f936cd`](https://github.com/Bike4Mind/bike4mind/commit/9f936cd95670f4e4a254e457ccd5156da26e8242), [`a5dddf3`](https://github.com/Bike4Mind/bike4mind/commit/a5dddf329c18fb52da5c0b69ecb164c22cd006b6), [`17daf4c`](https://github.com/Bike4Mind/bike4mind/commit/17daf4cfae91f1b83887ce05816446c5d4834ea3), [`1f4cf3e`](https://github.com/Bike4Mind/bike4mind/commit/1f4cf3e673a53ab86e7710e20a1bf031751aaf8f), [`8edb070`](https://github.com/Bike4Mind/bike4mind/commit/8edb070c37947550d9f1fcc2b06eda15069e93a4), [`abfce42`](https://github.com/Bike4Mind/bike4mind/commit/abfce420f22de9373d1104d88d3648b5281ac9c1), [`c29a80d`](https://github.com/Bike4Mind/bike4mind/commit/c29a80d73048693e57572b20ba281185f795e5b6), [`4717962`](https://github.com/Bike4Mind/bike4mind/commit/4717962ddba858b806befe85578d29ac59c41e2f), [`2c9221c`](https://github.com/Bike4Mind/bike4mind/commit/2c9221c0fca6903ff823b064627bb2100c696697), [`8c3870b`](https://github.com/Bike4Mind/bike4mind/commit/8c3870b58e57fa98f97672ea8c2dbedd4d4348a3), [`d0ad77c`](https://github.com/Bike4Mind/bike4mind/commit/d0ad77cecbdace4bb0bdeb109aa754f76f1ee9f1), [`a09600c`](https://github.com/Bike4Mind/bike4mind/commit/a09600c89f6366a45990afa6cb45c789ba672c4d)]:
+  - @bike4mind/common@9.0.0
+
 ## 0.15.3
 
 ### Patch Changes

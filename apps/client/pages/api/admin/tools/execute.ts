@@ -2,9 +2,9 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { ForbiddenError } from '@bike4mind/utils';
 import { initializeServerAdminTools, getServerAdminToolService } from '@client/server/tools/adminToolsServer';
-import { AdminToolContext, AdminToolParams } from '@bike4mind/common';
+import { AdminToolContext, AdminToolParams, ApiKeyScope } from '@bike4mind/common';
 
-const handler = baseApi().post(
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).post(
   asyncHandler(async (req: any, res: any) => {
     // Check if user is admin using server-side authentication
     if (!req.user?.isAdmin) {

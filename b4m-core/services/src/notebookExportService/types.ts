@@ -27,6 +27,13 @@ export interface ExportedNotebook {
     name: string;
     strength: number;
   }>;
+  /**
+   * When the source's `tags` were derived. Optional because the source may never have been tagged,
+   * and because exports written before this field existed do not carry it. An import reads absence
+   * as "the file carries no stamp" and clears the target's, which is the safe direction: the
+   * spider's `!session.taggedAt` gate then re-tags.
+   */
+  taggedAt?: string; // ISO timestamp
   isAutoNamed: boolean;
   lastUsedModel?: string;
 

@@ -1,8 +1,14 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ImageModels, ModelBackend, type IUserDocument, type ModelInfo } from '@bike4mind/common';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  ImageModels,
+  IMAGES_PER_EDIT_REQUEST,
+  ModelBackend,
+  type IUserDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
-import { aiImageService } from '@bike4mind/utils';
+import { aiImageService, getSettingsValue } from '@bike4mind/utils';
 import { estimateImageCredits } from '../imageCost';
 import { ImageEditService } from './ImageEdit';
 
@@ -64,13 +70,12 @@ const gptImage = makeModelInfo(ImageModels.GPT_IMAGE_1_5);
 const richUser = { id: 'user1', currentCredits: 1_000_000 } as unknown as IUserDocument;
 
 const validate = (
-  n: number,
   model: string,
   imageParams: { size?: string; quality?: 'low' | 'medium' | 'high' } = {}
 ): Promise<{ requiredCredits: number; usdCost: number }> => {
   const service = new ImageEditService({ db: {} } as never);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (service as any).validateUserCredits(richUser, model, n, imageParams, silentLogger, null);
+  return (service as any).validateUserCredits(richUser, model, imageParams, silentLogger, null);
 };
 
 describe('ImageEditService.validateUserCredits', () => {
@@ -78,48 +83,43 @@ describe('ImageEditService.validateUserCredits', () => {
     vi.mocked(getAvailableModels).mockResolvedValue([kontextPro, unsupportedImageModel, gptImage]);
   });
 
-  it('scales with n instead of billing a flat 1 credit', async () => {
-    const one = await validate(1, ImageModels.FLUX_KONTEXT_PRO);
-    const three = await validate(3, ImageModels.FLUX_KONTEXT_PRO);
+  it('bills one image, the number this path renders, not a flat 1 credit', async () => {
+    const actual = await validate(ImageModels.FLUX_KONTEXT_PRO);
 
-    expect(one.requiredCredits).toBeGreaterThan(1);
-    expect(three.usdCost).toBe(one.usdCost * 3);
-    // Credits round UP (usdToCredits ceils), so 3 images can land one credit
-    // above 3x a single image; the USD cost above carries the exact ratio.
-    expect(three.requiredCredits - one.requiredCredits * 3).toBeLessThanOrEqual(1);
-    expect(three.requiredCredits).toBeGreaterThanOrEqual(one.requiredCredits * 3);
+    expect(actual.requiredCredits).toBeGreaterThan(1);
+    expect(actual).toEqual(estimateImageCredits(kontextPro, IMAGES_PER_EDIT_REQUEST, { model: kontextPro.id }));
   });
 
   it('matches estimateImageCredits so the preview and the charge agree', async () => {
     const input = { model: ImageModels.FLUX_KONTEXT_PRO, size: '1024x1024' };
-    const expected = estimateImageCredits(kontextPro, 2, input);
+    const expected = estimateImageCredits(kontextPro, IMAGES_PER_EDIT_REQUEST, input);
 
-    const actual = await validate(2, ImageModels.FLUX_KONTEXT_PRO, { size: '1024x1024' });
+    const actual = await validate(ImageModels.FLUX_KONTEXT_PRO, { size: '1024x1024' });
 
     expect(actual.requiredCredits).toBe(expected.requiredCredits);
     expect(actual.usdCost).toBe(expected.usdCost);
   });
 
   it('surfaces "Model not supported" for an image model with no cost calculator', async () => {
-    await expect(validate(1, 'made-up-image-model')).rejects.toThrow('Model not supported');
+    await expect(validate('made-up-image-model')).rejects.toThrow('Model not supported');
   });
 
   it('bills a GPT-Image model at the requested tier - high costs more than low', async () => {
-    const low = await validate(1, ImageModels.GPT_IMAGE_1_5, { quality: 'low' });
-    const high = await validate(1, ImageModels.GPT_IMAGE_1_5, { quality: 'high' });
+    const low = await validate(ImageModels.GPT_IMAGE_1_5, { quality: 'low' });
+    const high = await validate(ImageModels.GPT_IMAGE_1_5, { quality: 'high' });
 
     expect(high.requiredCredits).toBeGreaterThan(low.requiredCredits);
   });
 
   it('still rejects a model that is not in the available list', async () => {
-    await expect(validate(1, 'not-available-at-all')).rejects.toThrow('Invalid model');
+    await expect(validate('not-available-at-all')).rejects.toThrow('Invalid model');
   });
 });
 
 describe('ImageEditService.process model dispatch', () => {
   const editSpy = vi.fn();
 
-  const makeService = () => {
+  const makeService = (dbExtra: Record<string, unknown> = {}) => {
     const quest = {
       id: 'quest1',
       sessionId: 'session1',
@@ -135,6 +135,7 @@ describe('ImageEditService.process model dispatch', () => {
         quests: { findById: vi.fn(async () => quest), update: vi.fn(async () => quest) },
         users: { findById: vi.fn(async () => richUser) },
         organizations: { findById: vi.fn(async () => null) },
+        ...dbExtra,
         fabFiles: {
           findAllInIds: vi.fn(async () => [
             {
@@ -163,8 +164,8 @@ describe('ImageEditService.process model dispatch', () => {
     return { service, quest };
   };
 
-  const run = async (model: string, bodyOverride: Record<string, unknown> = {}) => {
-    const { service, quest } = makeService();
+  const run = async (model: string, bodyOverride: Record<string, unknown> = {}, dbExtra?: Record<string, unknown>) => {
+    const { service, quest } = makeService(dbExtra);
     await service.process({
       body: {
         sessionId: 'session1',
@@ -218,6 +219,25 @@ describe('ImageEditService.process model dispatch', () => {
     expect(editSpy.mock.calls[0][2]).toMatchObject({ model: ImageModels.GPT_IMAGE_1_5, quality: 'high' });
   });
 
+  it('forwards background and output_format to the OpenAI edit service', async () => {
+    await run(ImageModels.GPT_IMAGE_1_5, { background: 'transparent', output_format: 'png' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({
+      model: ImageModels.GPT_IMAGE_1_5,
+      background: 'transparent',
+      output_format: 'png',
+    });
+  });
+
+  it('steps a gpt-image-2 selection down to gpt-image-1.5 when background is transparent', async () => {
+    await run(ImageModels.GPT_IMAGE_2, { background: 'transparent', output_format: 'png' });
+
+    expect(editSpy.mock.calls[0][2]).toMatchObject({
+      model: ImageModels.GPT_IMAGE_1_5,
+      background: 'transparent',
+    });
+  });
+
   it('rejects a model that cannot edit instead of silently substituting one', async () => {
     const quest = await run(ImageModels.FLUX_KONTEXT_PRO);
 
@@ -233,6 +253,39 @@ describe('ImageEditService.process model dispatch', () => {
     expect(quest.type).toBe('error');
     expect(quest.reply).toContain('does not support image editing');
   });
+
+  describe('credits charged vs images rendered', () => {
+    // Enforcement is off in the dispatch cases above; these need the credit branch to run.
+    const runBilled = (bodyOverride: Record<string, unknown>) =>
+      run(ImageModels.GPT_IMAGE_1_5, bodyOverride, { creditTransactions: { create: vi.fn() } });
+
+    beforeEach(() => {
+      vi.mocked(getAvailableModels).mockResolvedValue([gptImage]);
+      vi.mocked(getSettingsValue).mockImplementation(name => name === 'enforceCredits' || undefined);
+    });
+
+    // Nothing resets this mock globally, so leave enforcement off for whatever runs next.
+    afterEach(() => {
+      vi.mocked(getSettingsValue).mockImplementation(() => undefined);
+    });
+
+    it('bills a multi-image request the same as a single one, since only one image renders', async () => {
+      const single = await runBilled({ n: 1 });
+      const many = await runBilled({ n: 5 });
+
+      expect(single.creditsUsed).toBeGreaterThan(0);
+      expect(many.creditsUsed).toBe(single.creditsUsed);
+      // Both dispatched exactly once, and edit() resolves to a single-image ImageEditResponse,
+      // so the charge above is for the one image the caller actually gets back.
+      expect(editSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not offer the provider an image count it would render and we would discard', async () => {
+      await runBilled({ n: 5 });
+
+      expect(editSpy.mock.calls[0][2]).not.toHaveProperty('n');
+    });
+  });
 });
 
 describe('ImageEditService.validateUserCredits (per-member cap)', () => {
@@ -243,14 +296,7 @@ describe('ImageEditService.validateUserCredits (per-member cap)', () => {
   const validateWithOrg = (organization: unknown) => {
     const service = new ImageEditService({ db: {} } as never);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return (service as any).validateUserCredits(
-      richUser,
-      ImageModels.FLUX_KONTEXT_PRO,
-      1,
-      {},
-      silentLogger,
-      organization
-    );
+    return (service as any).validateUserCredits(richUser, ImageModels.FLUX_KONTEXT_PRO, {}, silentLogger, organization);
   };
 
   it('throws when the member is over the org per-member cap even though the pool is funded', async () => {

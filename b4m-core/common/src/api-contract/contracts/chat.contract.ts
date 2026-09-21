@@ -1,6 +1,11 @@
 import { defineEndpoint } from '../defineEndpoint';
 import { ApiKeyScope } from '../../types/entities/UserApiKeyTypes';
-import { SimplifiedChatRequestSchema, ChatAckSchema, ApiErrorSchema } from '../../schemas/chat';
+import {
+  SimplifiedChatRequestSchema,
+  ChatAckSchema,
+  ChatQuestPollResultSchema,
+  ApiErrorSchema,
+} from '../../schemas/chat';
 
 /**
  * Contract for POST /api/chat. Single source of truth: the Next.js handler
@@ -19,7 +24,18 @@ export const chatContract = defineEndpoint({
     '`wait: true` to block until the reply is ready and receive it inline. A tool that produced ' +
     'machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` ' +
     'entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` ' +
-    'body and on the polled quest. Authenticate with an API key (`b4m_live_`) or a JWT.',
+    'body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as ' +
+    '`type: "error"`, since the ACK was already sent. A terminal `status: "stopped"` (a missing ' +
+    'session, a user-cancelled turn) is ALSO a failure even without `type: "error"` - it carries ' +
+    'an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure ' +
+    'signal for every classified failure class (an abort, a provider timeout, a recovered stuck ' +
+    'quest, credit exhaustion); `errorCode` is an optional refinement present only when the ' +
+    'failure is a classified billing reason. `QUEST_ERROR_CODES` has two members, but only ' +
+    '`insufficient_credits` reaches this poll path - a spend-cap-exceeded rejection is checked ' +
+    'before a quest exists and surfaces as a synchronous 422 on `/api/embed/chat` instead. A ' +
+    'caller must treat `type: "error"` OR a terminal `status: "stopped"` as failure even when ' +
+    '`errorCode` is absent, and must not read `reply` as an answer without checking those first. ' +
+    'Authenticate with an API key (`b4m_live_`) or a JWT.',
   tags: ['AI'],
   auth: 'apiKeyOrJwt',
   scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
@@ -31,11 +47,41 @@ export const chatContract = defineEndpoint({
   responses: {
     200: {
       description:
-        'Message accepted. The default (async) path returns this queued ACK. With `wait: true` the ' +
-        'body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, ' +
-        '`createdAt`, and `performance` timings - fields not modelled here yet; the synchronous ' +
-        'response shape is a follow-up.',
+        'Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; ' +
+        'the outcome arrives on `GET /api/quests/{id}` (see the `sendChatMessage200PollResult` ' +
+        'schema), which reports a failed turn as `type: "error"` plus an `errorCode` classifier. ' +
+        'With `wait: true` the body additionally carries the completed reply ' +
+        '(`response`/`responses`), `toolPayloads`, `createdAt`, and `performance` timings - fields ' +
+        'not modelled here yet; the synchronous response shape is a follow-up.',
       schema: ChatAckSchema,
+      pollResult: {
+        schema: ChatQuestPollResultSchema,
+        description:
+          'Outcome fields of the quest polled at `GET /api/quests/{id}` after this ACK. A finished ' +
+          'turn that failed is `status: "done"` with `type: "error"` and the failure text in ' +
+          '`reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check ' +
+          '`type` first, and also treat a terminal `status: "stopped"` (a missing session, a ' +
+          'user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an ' +
+          'optional refinement of `type: "error"`, present only for a classified billing failure; ' +
+          'credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the ' +
+          'synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. ' +
+          '`QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but that rejection ' +
+          'is caught before a quest exists and surfaces as a synchronous 422 on `/api/embed/chat` ' +
+          'instead - it can never appear here. Most `type: "error"` turns - an abort, a provider ' +
+          'timeout or overload, a recovered stuck quest - have NO `errorCode`; its absence does ' +
+          'not mean success, only that the failure is unclassified. `type`/`errorCode` separate a ' +
+          'recovered from a timeout with partial content keeps `type: "message"` even though it did ' +
+          'not finish. The poll body carries further fields not modelled here, including `images`, ' +
+          '`files`, `toolPayloads`, `promptMeta`, and the attachment report ' +
+          '(`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.',
+        example: {
+          id: '664f1c2b9a1e4d0012ab34cd',
+          status: 'done',
+          type: 'error',
+          errorCode: 'insufficient_credits',
+          reply: "You're out of credits. This request needs about 12 credits, but only 3 are available.",
+        },
+      },
     },
     400: { description: 'No usable default chat model is configured and none was supplied.', schema: ApiErrorSchema },
     404: { description: 'No notebook/session exists to attach the message to.', schema: ApiErrorSchema },

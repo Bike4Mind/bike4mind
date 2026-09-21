@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
+import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
 // The agent-tool image_generation path must run the SAME moderation gate the
 // queue-handler ImageGeneration service uses, before context.imageGenerateStorage.upload().
@@ -183,10 +184,43 @@ describe('image_generation effective-arg precedence (tool call vs client imageCo
 
   // #2889 taught the OpenAI layer to map standard/hd, but the schema still advertised only
   // those two, so "generate it at low quality" could not be expressed at all.
-  it('exposes the real GPT-image quality tiers in the tool schema', () => {
+  //
+  // #2899 then removed 'auto': it bills at the ceiling tier because OpenAI picks the effort per
+  // request, so the model must not be able to reach for it - omitting the field is the way to
+  // defer to the user's saved preference, and that costs whatever that preference costs.
+  //
+  // Pinned exactly rather than with arrayContaining/not.toContain: a future value added to
+  // OPENAI_IMAGE_QUALITIES would reach the model unreviewed under a looser assertion.
+  it('exposes exactly the model-selectable GPT-image quality tiers in the tool schema', () => {
     const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
     const quality = toolSchema.parameters.properties.quality;
-    expect(quality.enum).toEqual(expect.arrayContaining(['low', 'medium', 'high', 'auto']));
+    expect(quality.enum).toEqual(['standard', 'hd', 'low', 'medium', 'high']);
+  });
+
+  // #2936: the schema advertised five sizes but the calculator prices three, so four of them
+  // rendered at the asked-for size and billed at the 1024x1024 row. Offer only priceable sizes.
+  it('offers only sizes the cost calculator can price in the tool schema', () => {
+    const { toolSchema } = imageGenerationTool.implementation(createFakeContext(), { model: ImageModels.GPT_IMAGE_2 });
+
+    expect(toolSchema.parameters.properties.size.enum).toEqual([...PRICEABLE_IMAGE_SIZES]);
+  });
+
+  // The enum is advisory to the model, so the resolver has to hold the line too.
+  it('ignores an off-enum model size and bills what it dispatches', async () => {
+    const context = createFakeContext();
+    const onStart = vi.fn().mockResolvedValue(undefined);
+    context.onStart = onStart;
+
+    const { toolFn } = imageGenerationTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: 'high',
+      size: '1536x1024',
+    });
+
+    await toolFn({ prompt: 'a red bike', size: '1792x1024' });
+
+    expect(onStart).toHaveBeenCalledWith('image_generation', expect.objectContaining({ size: '1536x1024' }));
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith('a red bike', expect.objectContaining({ size: '1536x1024' }));
   });
 });
 
@@ -222,6 +256,52 @@ describe('image_generation Gemini branch parameter passthrough', () => {
         safety_tolerance: 1,
         output_format: 'jpeg',
       })
+    );
+  });
+});
+
+describe('image_generation OpenAI model selection for transparent backgrounds', () => {
+  beforeEach(() => {
+    mockOpenAIGenerate.mockReset();
+    mockOpenAIGenerate.mockResolvedValue([]);
+  });
+
+  it('steps a default gpt-image-2 selection down to gpt-image-1.5 when transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, {});
+
+    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+  });
+
+  it('steps an explicitly-selected gpt-image-2 down to gpt-image-1.5 when transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, { model: ImageModels.GPT_IMAGE_2 });
+
+    await toolFn({ prompt: 'an inventory icon', background: 'transparent' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_1_5, background: 'transparent' })
+    );
+  });
+
+  it('keeps the gpt-image-2 default when no transparency is requested', async () => {
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, {});
+
+    await toolFn({ prompt: 'an inventory icon' });
+
+    expect(mockOpenAIGenerate).toHaveBeenCalledWith(
+      'an inventory icon',
+      expect.objectContaining({ model: ImageModels.GPT_IMAGE_2 })
     );
   });
 });

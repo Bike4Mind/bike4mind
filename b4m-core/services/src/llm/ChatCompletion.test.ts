@@ -40,7 +40,12 @@ import {
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
+import {
+  ToolBuilder,
+  applyQuestStatusChanges,
+  type BuildToolPromptArgs,
+  type BuildToolsArgs,
+} from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -3797,6 +3802,144 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
 
       expect(toolAvailability).toBeTypeOf('object');
+    });
+  });
+
+  // MCP tools are merged into buildSharedTools' outgoing list AFTER its native `enabledTools`
+  // filter, so `offerOnlyNamedTools`/`sessionDisabledTools` are the only levers that reach them -
+  // and sharedToolBuilder.mcpNarrowing.test.ts only exercises buildSharedTools directly. It cannot
+  // prove ChatCompletionProcess actually passes these options on a real turn; deleting the four
+  // lines that wire them at this call site would leave that suite green.
+  describe('MCP narrowing options threaded into buildTools', () => {
+    const runWithOptions = async (opts: {
+      promptMode?: 'raw' | 'grounded' | 'surface';
+      skipAutoOffers?: boolean;
+      disabledTools?: string[];
+      connectedMcpTools?: boolean;
+      /** Have the buildTools stub apply `sessionDisabledTools`, the way buildSharedTools does. */
+      deniedFromBuild?: boolean;
+    }) => {
+      const previousDisabledTools = mockSession.disabledTools;
+      mockSession.disabledTools = opts.disabledTools;
+      const mcpTools = ['notion__search', 'notion__create_page'].map(name => ({
+        name,
+        toolFn: vi.fn(),
+        toolSchema: { name, description: name, parameters: { type: 'object', properties: {} } },
+        _isMcpTool: true,
+      }));
+      const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockResolvedValue({
+        mcpToolsByServer: opts.connectedMcpTools ? { notion: mcpTools } : {},
+        serverAgentConfig: {},
+      });
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockImplementation(options => {
+        if (!opts.connectedMcpTools) return [];
+        // Stands in for the real narrowing this spy replaces: buildSharedTools subtracts
+        // `sessionDisabledTools` by namespaced name (sharedToolBuilder.ts) before returning.
+        const denied = new Set(options.sessionDisabledTools ?? []);
+        const survived = opts.deniedFromBuild ? mcpTools.filter(tool => !denied.has(tool.name)) : mcpTools;
+        return options.offerOnlyNamedTools ? survived.slice(0, 1) : survived;
+      });
+      buildToolsSpy.mockClear();
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = {
+        ...startQuestParams,
+        ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
+        ...(opts.skipAutoOffers ? { skipAutoOffers: true } : {}),
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        return {
+          passedOptions: buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined,
+          toolPromptOptions: buildToolPromptSpy.mock.calls[0]?.[0] as BuildToolPromptArgs | undefined,
+        };
+      } finally {
+        // In a finally because these three spies live on ToolBuilder.prototype and
+        // `mockSession` is shared: a throw here used to leak both into every later test in the
+        // file, where the symptom is an unrelated failure far from the cause.
+        buildMcpToolsSpy.mockRestore();
+        buildToolsSpy.mockRestore();
+        buildToolPromptSpy.mockRestore();
+        mockSession.disabledTools = previousDisabledTools;
+      }
+    };
+
+    it('passes offerOnlyNamedTools: true on a promptMode turn', async () => {
+      const { passedOptions } = await runWithOptions({ promptMode: 'raw' });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
+    });
+
+    it('passes offerOnlyNamedTools: true on an explicit skipAutoOffers turn', async () => {
+      const { passedOptions } = await runWithOptions({ skipAutoOffers: true });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
+    });
+
+    // The default web payload (no promptMode, no skipAutoOffers) must keep reaching MCP tools -
+    // this is the regression sharedToolBuilder.mcpNarrowing.test.ts guards from the pure-function
+    // side; this pins that ChatCompletionProcess never flips the flag on for an ordinary turn.
+    it('passes offerOnlyNamedTools: false on a default turn', async () => {
+      const { passedOptions } = await runWithOptions({});
+      expect(passedOptions?.offerOnlyNamedTools).toBe(false);
+    });
+
+    it('threads session.disabledTools through as sessionDisabledTools', async () => {
+      const { passedOptions } = await runWithOptions({ disabledTools: ['notion__notion_search'] });
+      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__notion_search']);
+    });
+
+    it('passes only offered MCP tools into the tool prompt after narrowing', async () => {
+      const { toolPromptOptions } = await runWithOptions({ skipAutoOffers: true, connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+
+    it('passes every offered MCP tool into the tool prompt on a default turn', async () => {
+      const { toolPromptOptions } = await runWithOptions({ connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual([
+        'notion__search',
+        'notion__create_page',
+      ]);
+    });
+
+    // The intersection is against what SURVIVED the build, so it has to hold for the denylist too
+    // and not just for offerOnlyNamedTools - both narrow the same list, and the two cases above
+    // would stay green if the filter were re-derived from the flag instead of the built tools.
+    it('keeps a session-denied MCP tool out of the tool prompt', async () => {
+      const { toolPromptOptions } = await runWithOptions({
+        connectedMcpTools: true,
+        disabledTools: ['notion__create_page'],
+        deniedFromBuild: true,
+      });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
     });
   });
 

@@ -2,11 +2,11 @@ import {
   DATA_LAKE_SEARCH_MAX_CHUNKS_DEFAULT,
   DATA_LAKE_SEARCH_MAX_CHUNKS_PER_FILE_DEFAULT,
   DATA_LAKE_SEARCH_MAX_FILES_DEFAULT,
-  defaultEmbeddingModelForEnv,
   FabFileChunkVector,
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
+  OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   type ChunkStallReason,
   type DataLakeMembershipScope,
@@ -34,6 +34,7 @@ import {
   type EmbeddingMismatchReport,
 } from './embeddingMismatch';
 import { BoundedTopK } from './boundedTopK';
+import { lakeOrderScopes, orderFilesFairlyAcrossLakes } from './lakeFairOrder';
 import { recordDataLakeSearchMetrics } from './dataLakeSearchMetrics';
 import { reportScanTruncation, type ScanTruncationReport, type SearchEntrypoint } from './scanTruncationMetrics';
 import {
@@ -216,6 +217,17 @@ export interface SemanticSearchScanAccounting {
    * operator needs to see cap pressure.
    */
   annModelsQueried: number;
+  /**
+   * Scoped files per lake, keyed by the lake's `datalake:<slug>` meta-tag (or `prefix:<p>` for a
+   * registry lake that stamps none); the empty-string key holds files attributable to no lake -
+   * the caller's own and shared files, which `collectScopedFiles` admits via `includeShared`.
+   *
+   * This is what makes "which lakes were searched" checkable rather than assumed: the caller's
+   * `dataLakeTags` says which lakes were REQUESTED, and a lake missing here (or present with 0)
+   * contributed no candidate at all. Counts files SCOPED, not files that scored - a lake can be
+   * fairly searched and still lose every passage to the top-K on relevance.
+   */
+  filesByLake: Record<string, number>;
   /**
    * Slowest single backend ANN query in this search, in ms, or `null` when no query reached a
    * backend at all. The number to read against the caller's request timeout: the frontend server
@@ -642,6 +654,7 @@ export function emptyScanAccounting(budgets?: SemanticSearchBudgets): SemanticSe
     annHits: 0,
     annUnrankedFilesLeftOffScan: 0,
     annModelsQueried: 0,
+    filesByLake: {},
     // null, not 0: no query reached a backend, and 0 would read as an instant one.
     annSlowestQueryMs: null,
     capPromotions: 0,
@@ -906,6 +919,8 @@ async function rankChunksForFiles(args: {
   budgets: ResolvedBudgets;
   filesMatching: number;
   fileBudgetHit: boolean;
+  /** Per-lake scoped-file counts for `scan.filesByLake`; `{}` for the file-scoped entrypoint, which has no lakes. */
+  filesByLake?: Record<string, number>;
   vectorSearchEnabled: boolean;
   /**
    * Opt-in to per-lake supersession collapse. Present only from `semanticDataLakeSearch`;
@@ -1376,6 +1391,7 @@ async function rankChunksForFiles(args: {
     annHits: annResult.hitsReturned + alternateHitsReturned,
     annUnrankedFilesLeftOffScan,
     annModelsQueried: (primaryAnnQueried ? 1 : 0) + alternateModelsQueried,
+    filesByLake: args.filesByLake ?? {},
     annSlowestQueryMs: slowestAnnQueryMs([annResult.backendQueryMs, ...outcomes.map(o => o.backendQueryMs)]),
     capPromotions,
     candidatePoolK,
@@ -1474,13 +1490,17 @@ async function rankChunksForFiles(args: {
       skippedChunks: mismatchReport.skippedChunks.byReason,
     });
   }
-  // Unlabeled chunks are scored on the assumption they were embedded with the deployment default.
-  // Under any other query model that assumption is probably wrong, and since we choose not to
-  // exclude them, the choice needs to be auditable.
-  if (mismatchReport.unlabeled.chunks > 0 && embeddingModel !== defaultEmbeddingModelForEnv()) {
+  // Unlabeled chunks are scored on the assumption they were embedded in ada-002, and the constant
+  // is deliberately NOT the deployment default. An unset label means the row predates the field, so
+  // its space is a HISTORICAL fact that no current setting can restate; keying this off the default
+  // inverts the diagnostic the moment that default moves - it would go quiet on exactly the case
+  // worth auditing (a 3-small query scoring legacy chunks) and fire on the one that is fine.
+  //
+  // Since we choose to score them rather than exclude them, that choice has to stay auditable.
+  if (mismatchReport.unlabeled.chunks > 0 && embeddingModel !== OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002) {
     logger?.warn?.('[semanticSearch] scored chunks with no recorded embedding model', {
       queryEmbeddingModel: embeddingModel,
-      assumedModel: defaultEmbeddingModelForEnv(),
+      assumedModel: OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002,
       unlabeledChunks: mismatchReport.unlabeled.chunks,
       unlabeledFiles: mismatchReport.unlabeled.files,
     });
@@ -1587,7 +1607,33 @@ async function lakeScopedSearch(
 
   // Authoritative post-filter: never load vectors for or rank a file the caller excludes,
   // regardless of the DB regex engine or fileNameLower presence (see filterRetrievalExcluded).
-  const scopedFiles = filterRetrievalExcluded(scoped.files, retrievalFilter);
+  const admitted = filterRetrievalExcluded(scoped.files, retrievalFilter);
+
+  // Round-robin the scope across its lakes before ranking. `fabfiles.search` returns one global
+  // `fileName asc` sort over the union, and the chunk budget below is spent sequentially down
+  // this order - so without the interleave a lake sorting late contributes nothing, and adding it
+  // to a session leaves retrieval byte-identical. See lakeFairOrder.ts.
+  const orderScopes = lakeOrderScopes({ dataLakeTags, dataLakeTagPrefixes, lakeMemberships });
+  const { ordered: scopedFiles, filesByLake } = orderFilesFairlyAcrossLakes(
+    admitted,
+    orderScopes,
+    f => f.tags?.map(t => t.name) ?? []
+  );
+  // A lake the caller resolved but that contributed no file: `dataLakeTags` would report it as
+  // searched while nothing of it was ever in scope. Gated on some OTHER lake having attributed,
+  // because attribution is best-effort - a file matched by a lake's prefix/membership arm can
+  // carry no reversible `datalake:` tag (see attributeAccessedLakes), and on a scope where NOTHING
+  // attributed the right reading is "attribution was inconclusive", not "every lake was empty".
+  const anyLakeAttributed = orderScopes.some(scope => !!filesByLake[scope.key]);
+  const emptyLakes = anyLakeAttributed ? orderScopes.filter(scope => !filesByLake[scope.key]).map(s => s.key) : [];
+  if (emptyLakes.length > 0) {
+    logger?.warn?.('[semanticSearch] scoped lakes contributed no files', {
+      emptyLakes,
+      scopedLakes: orderScopes.length,
+      fileBudgetHit: scoped.fileBudgetHit,
+    });
+  }
+
   const fileIds = scopedFiles.map(f => f.id);
   if (fileIds.length === 0) {
     return emptyResult(embeddingModel, budgets, {
@@ -1641,6 +1687,7 @@ async function lakeScopedSearch(
     budgets,
     filesMatching: scoped.filesMatching,
     fileBudgetHit: scoped.fileBudgetHit,
+    filesByLake,
     vectorSearchEnabled: params.vectorSearchEnabled ?? false,
     // Both halves are required: the flag alone with no lakes could not attribute anything, and
     // lakes alone would collapse behind an admin's back.

@@ -118,7 +118,15 @@ export interface ToolContext {
     // fallback tagger's prefix-overlap check.
     dataLakes?: Pick<
       IDataLakeRepository,
-      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findByDatalakeTag' | 'findById' | 'find'
+      | 'findActiveByUserTags'
+      | 'findActiveByUserTagsAndEntitlements'
+      | 'findByDatalakeTag'
+      | 'findById'
+      | 'find'
+      // Required, not optional, and that is the point: it is the anchor for the ownership-supersession
+      // read that narrows the retrieval creator arm, so every host that can retrieve has to wire it
+      // rather than silently degrade to bare creator provenance.
+      | 'findIdsCreatedBy'
     >;
     /**
      * Optional overlay lookup for a static (registry) lake's `systemPrompt` (Phase 2 - see

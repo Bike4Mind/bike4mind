@@ -19,6 +19,16 @@ import type { DataLakeArticlesParams, DataLakeBrowseSource } from '@client/app/h
 export const dataLakeKeys = {
   /** The lake list (GET /api/data-lakes). */
   list: ['data-lakes'] as const,
+  /**
+   * The lake list as it applies to ANOTHER user - same rows, but `canPreauthorize` resolved
+   * against `userId` rather than the caller (GET /api/data-lakes?preauthorizableFor=, #2945).
+   *
+   * A distinct key, not `list`, because the two responses differ in exactly the field the admin
+   * key-mint picker gates on: sharing `list` would let a target-scoped response answer the
+   * ordinary lake list and offer the caller admissions that are not theirs. Kept UNDER the
+   * `data-lakes` prefix on purpose, so a rename or visibility change still refreshes it.
+   */
+  preauthorizableFor: (userId: string) => ['data-lakes', 'preauthorizable-for', userId] as const,
   /** One lake's owner-facing access & membership view (GET /api/data-lakes/:id/access). */
   access: (dataLakeId: string) => ['data-lakes', 'access', dataLakeId] as const,
   /**

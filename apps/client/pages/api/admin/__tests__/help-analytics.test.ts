@@ -16,6 +16,10 @@ import { createMocks } from 'node-mocks-http';
 const mocks = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
   countDocuments: vi.fn(),
+  // Per-test fixtures for the stitch below. Empty by default so the date tests stay about dates.
+  helpEvents: [] as unknown[],
+  feedbackReports: [] as unknown[],
+  feedbackTexts: [] as unknown[],
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -31,6 +35,11 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
 
+// FeedbackModel/FeedbackTextModel are reached through stitchRoutedComments, which the route calls
+// to stitch routed comments back onto the events. Omitting them here does not fail loudly:
+// vitest throws "No FeedbackModel export is defined" only once a row actually reaches the stitch,
+// so with an empty HelpEventModel.find the whole read path would be skipped and the mock would
+// look complete while covering nothing.
 vi.mock('@bike4mind/database', () => ({
   HelpEventModel: {
     aggregate: () => Promise.resolve([]),
@@ -40,8 +49,14 @@ vi.mock('@bike4mind/database', () => ({
     },
     distinct: () => Promise.resolve([]),
     find: () => ({
-      sort: () => ({ limit: () => ({ select: () => ({ lean: () => Promise.resolve([]) }) }) }),
+      sort: () => ({ limit: () => ({ select: () => ({ lean: () => Promise.resolve(mocks.helpEvents) }) }) }),
     }),
+  },
+  FeedbackModel: {
+    find: () => ({ select: () => ({ lean: () => Promise.resolve(mocks.feedbackReports) }) }),
+  },
+  FeedbackTextModel: {
+    find: () => ({ lean: () => Promise.resolve(mocks.feedbackTexts) }),
   },
 }));
 
@@ -61,6 +76,9 @@ const filterDates = (): Date[] => {
 
 beforeEach(() => {
   mocks.countDocuments.mockClear();
+  mocks.helpEvents = [];
+  mocks.feedbackReports = [];
+  mocks.feedbackTexts = [];
 });
 
 describe('GET /api/admin/help-analytics - tzOffset clamp', () => {
@@ -116,5 +134,35 @@ describe('GET /api/admin/help-analytics - extreme-year dates', () => {
     const { promise } = run({ dateFrom: '+275760-09-10' });
     await promise;
     expect(Number.isNaN(filterDates()[0].getTime())).toBe(false);
+  });
+});
+
+/**
+ * The comment an admin triages on this tab no longer lives on the help event it is rendered from -
+ * it is stitched back from the routed Feedback report. That stitch is a convention each read site
+ * has to remember rather than something the type system enforces, and forgetting it renders every
+ * row commentless with no error, so it is asserted here against the route's own projection.
+ */
+describe('GET /api/admin/help-analytics - routed comment stitch', () => {
+  it('surfaces a routed comment on the event it was written against', async () => {
+    mocks.helpEvents = [{ _id: 'event-1', slug: 'getting-started', rating: 'not_helpful', userId: 'u1' }];
+    mocks.feedbackReports = [{ _id: 'report-1', helpContext: { eventId: 'event-1' }, contentStored: true }];
+    mocks.feedbackTexts = [{ _id: 'report-1', content: 'the second step is wrong', contentTruncated: false }];
+
+    const { res, promise } = run({});
+    await promise;
+
+    expect(res._getJSONData().recentFeedback[0].comment).toBe('the second step is wrong');
+  });
+
+  it('leaves the comment absent once the text sibling has aged out from under the report', async () => {
+    mocks.helpEvents = [{ _id: 'event-1', slug: 'getting-started', userId: 'u1' }];
+    mocks.feedbackReports = [{ _id: 'report-1', helpContext: { eventId: 'event-1' }, contentStored: true }];
+
+    const { res, promise } = run({});
+    await promise;
+
+    // An empty string here would render as a comment the user never wrote.
+    expect(res._getJSONData().recentFeedback[0].comment).toBeUndefined();
   });
 });

@@ -2,6 +2,7 @@ import { User, userRepository, authSessionRepository } from '@bike4mind/database
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { UnauthorizedError } from '@server/utils/errors';
 import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
+import { decryptAtRest } from '@bike4mind/utils/security';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -80,10 +81,12 @@ const handler = baseApi({ auth: false })
     // (mint a fresh AuthSession + opaque refresh token) so nobody is logged out on deploy.
     // Support secret rotation: if JWT_SECRET was recently rotated, allow tokens
     // signed with the previous secret for a 24-hour grace period
-    const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
+    const secretRotation = await secretRotationRepository.findByKeyNameWithSecret('JWT_SECRET');
     let previousSecret: string | undefined;
-    if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
-      previousSecret = secretRotation?.previousKey;
+    // `previousKey` is stored encrypted at rest (see secret-rotations/renewed.ts);
+    // decrypt before verifying. Legacy plaintext rows pass through unchanged.
+    if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt) && secretRotation?.previousKey) {
+      previousSecret = decryptAtRest(secretRotation.previousKey) || undefined;
     }
 
     const decoded = authTokenGenerator.verifyRefreshToken(token, previousSecret);
