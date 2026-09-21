@@ -271,6 +271,85 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
   });
 });
 
+// #3055: count-only companion to findActiveByUserTagsAndEntitlements. The population here is the
+// deliberate COMPLEMENT of that method's own arms - a lake visible (org member or public) but
+// gated in a way the caller cannot pass, with the owner/grant bypasses subtracted rather than
+// counted, since a bypass means "not excluded" regardless of the gate.
+describe('DataLakeRepository.countGateExcludedLakes', () => {
+  setupMongoTest();
+
+  it('counts a gated lake in the caller org that the caller holds neither the tag nor the entitlement for', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'medlib', organizationId: 'orgA', requiredUserTag: 'medlib', requiredEntitlement: 'medlib:pro' })
+    );
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(1);
+  });
+
+  it('does not count a gate the caller DOES hold, by tag or by entitlement', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'by-tag', organizationId: 'orgA', requiredUserTag: 'medlib' }));
+    await dataLakeRepository.create(
+      baseLake({ slug: 'by-key', organizationId: 'orgA', requiredEntitlement: 'medlib:pro' })
+    );
+
+    expect(await dataLakeRepository.countGateExcludedLakes(['medlib'], [], ['orgA'], 'bob')).toBe(1);
+    expect(await dataLakeRepository.countGateExcludedLakes([], ['medlib:pro'], ['orgA'], 'bob')).toBe(1);
+  });
+
+  it('does not count a GATELESS lake - it resolves for every org member regardless', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'open', organizationId: 'orgA' }));
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
+  });
+
+  it('does not count a lake outside the caller org and not public - never visible, so never "excluded"', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'tag' }));
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
+  });
+
+  it('counts a gated PUBLIC lake app-wide, even with no shared org', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'public-gated', organizationId: 'orgB', isPublic: true, requiredUserTag: 'tag' })
+    );
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(1);
+  });
+
+  it('never counts a lake the caller OWNS, gate or no gate', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'mine', organizationId: 'orgA', createdByUserId: 'bob', requiredUserTag: 'TagBobLacks' })
+    );
+
+    expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
+  });
+
+  it('never counts a lake the caller reaches by a USER or ORG grant', async () => {
+    const byUserGrant = await dataLakeRepository.create(
+      baseLake({ slug: 'user-granted', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    const byOrgGrant = await dataLakeRepository.create(
+      baseLake({ slug: 'org-granted', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+        grantedLakeIds: [byUserGrant.id],
+        orgGrantedLakes: { orgA: [byOrgGrant.id] },
+      })
+    ).toBe(0);
+  });
+
+  it('never returns a lake document - count only, defense-in-depth stays with the caller', async () => {
+    // Not a behavior a TypeScript signature alone proves - the return type is checked here against
+    // the actual resolved value, not just declared.
+    await dataLakeRepository.create(baseLake({ slug: 'medlib', organizationId: 'orgA', requiredUserTag: 'medlib' }));
+
+    const result = await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob');
+    expect(typeof result).toBe('number');
+  });
+});
+
 describe('DataLakeRepository.findIdsCreatedBy', () => {
   setupMongoTest();
 
