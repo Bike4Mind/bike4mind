@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   recordDetected: vi.fn(),
   loggerWarn: vi.fn(),
+  loggerError: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
   // The rate limiter is a middleware, so it is only reachable if the mocked chain below actually
   // RUNS what the route hands to `.use` - see that mock.
@@ -82,7 +83,13 @@ const invoke = (body: Record<string, unknown> = {}, method = 'POST') => {
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method, query: { id: 'lake1' }, body, user: { id: 'u1' }, logger: { warn: h.loggerWarn } },
+      {
+        method,
+        query: { id: 'lake1' },
+        body,
+        user: { id: 'u1' },
+        logger: { warn: h.loggerWarn, error: h.loggerError },
+      },
       res
     ),
   };
@@ -308,6 +315,26 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
     await done;
 
     expect(order).toEqual(['report', 'findings']);
+  });
+
+  it('still returns the stored report when the findings write fails outright', async () => {
+    // The outcome the ordering above exists to produce, which ordering alone does not pin: the blob
+    // write has already committed by the time this path runs, so an uncaught throw would 500 a run
+    // whose report is in the database and make the caller re-run a ~1000-chunk detection pass to
+    // get back something they already have. Deleting the try/catch passes the ordering test.
+    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.recordLakeFindings.mockRejectedValue(new Error('findings collection unavailable'));
+
+    const { json, done } = invoke();
+    await done;
+
+    expect(h.update).toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ findings }));
+    // And the run is still reported as partial rather than clean - every finding went unwritten.
+    expect(h.loggerWarn).toHaveBeenCalledWith(
+      'Lake findings partially recorded',
+      expect.objectContaining({ failed: findings.length })
+    );
   });
 
   it('reports a partially written run rather than letting it read as clean', async () => {

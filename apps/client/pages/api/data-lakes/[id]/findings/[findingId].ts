@@ -61,6 +61,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // LAKE, so without this a caller who manages one lake could rule on any finding id in the
     // database by quoting their own lake in the URL. Not-found rather than forbidden, so the refusal
     // leaks nothing about findings in lakes the caller cannot see.
+    //
+    // The mutations below ALSO carry `lake.id` as a filter term, so the rule holds without this
+    // read. It stays because the two answer different questions: the filter refuses the write, this
+    // decides the STATUS - without it a cross-lake id and an already-resolved one both come back as
+    // the same null, and the 404/400 split below could not tell them apart without leaking which.
     const existing = await dataLakeFindingRepository.findById(findingId);
     if (!existing || existing.lakeId !== lake.id) throw new NotFoundError('Finding not found');
 
@@ -71,20 +76,26 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // the user row exist?) would assure a caller of something it had not established. The picker
       // that produces this id is #3044/#3045; a dead assignment is visible and reversible, and no
       // assignment grants any access on its own.
-      const assigned = await dataLakeFindingRepository.assignFinding(findingId, body.assigneeUserId);
+      const assigned = await dataLakeFindingRepository.assignFinding(lake.id, findingId, body.assigneeUserId);
       if (!assigned) throw new NotFoundError('Finding not found');
       return res.json({ data: assigned });
     }
 
-    const resolved = await dataLakeFindingRepository.resolveFinding(findingId, {
+    const resolved = await dataLakeFindingRepository.resolveFinding(lake.id, findingId, {
       status: body.action === 'resolve' ? 'resolved' : 'dismissed',
       resolvedByUserId: ctx.userId,
       resolvedAt: new Date(),
       resolution: body.resolution,
     });
-    // Null means the row was not open. That is the double-resolve guard reporting a race or a
-    // double-click, not a missing row - the belongs-to-lake read above already proved it exists.
+    // Null means the CAS filter matched nothing, which is two different things: the row is still
+    // there but no longer open (the double-resolve guard firing on a race or a double-click), or it
+    // was deleted between the read above and this write - a lake teardown and a source purge both
+    // sweep findings, so that is a real interleaving and not a theoretical one. Re-read to tell
+    // them apart rather than reporting a row that no longer exists as "already ruled on"; the
+    // `assign` branch above already 404s that same case, and this is what makes the two agree.
     if (!resolved) {
+      const stillPresent = await dataLakeFindingRepository.findById(findingId);
+      if (!stillPresent) throw new NotFoundError('Finding not found');
       throw new BadRequestError('This finding has already been ruled on');
     }
 

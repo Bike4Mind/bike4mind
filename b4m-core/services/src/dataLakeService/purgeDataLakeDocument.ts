@@ -308,12 +308,31 @@ export const purgeDataLakeDocument = async (
     // finding whose document is gone can never be re-detected. Global, like the destruction itself.
     // Caught for the same reason as the chunk sweep above: past the row delete there is no retry
     // door, and a throw here would skip the quota refund below.
-    try {
-      await db.dataLakeFindings?.deleteForPurgedDocument(file.id);
-    } catch (error) {
-      logger?.error('[dataLake] permanent deletion removed the row but could not sweep its findings', {
+    //
+    // DELIBERATELY THE OPPOSITE POSTURE TO `cleanupDeletedDataLake`, which sweeps BEFORE the row
+    // delete and lets a rejection abort. The difference is which recoverable direction exists at
+    // each door. The teardown runs in a queue consumer whose DLQ retry re-resolves its ids from the
+    // surviving rows, so aborting early costs nothing and keeps the sweep replayable. This door
+    // runs inside the owner's request and owes them a quota refund that only `deletedByThisCall`
+    // can authorize; there is no retry, and ordering the sweep first would trade a stranded excerpt
+    // for a silently unrefunded purge. A stranded excerpt is loggable and sweepable later - see
+    // #3040, which carries the stored-report cleanup this door also does not do. A lost refund is
+    // neither. Do not "make the two doors consistent" without answering the refund.
+    if (db.dataLakeFindings) {
+      try {
+        await db.dataLakeFindings.deleteForPurgedDocument(file.id);
+      } catch (error) {
+        logger?.error('[dataLake] permanent deletion removed the row but could not sweep its findings', {
+          fabFileId: file.id,
+          error: error instanceof Error ? error.message : 'Unknown error',
+        });
+      }
+    } else {
+      // An unwired host destroys the document with no sweep, no error and no symptom -
+      // indistinguishable from a document that never carried a finding. One document per call
+      // here, so unlike the teardown this needs no per-run rate limiting.
+      logger?.warn('[dataLake] permanent deletion destroyed a document with no findings repo wired', {
         fabFileId: file.id,
-        error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
 

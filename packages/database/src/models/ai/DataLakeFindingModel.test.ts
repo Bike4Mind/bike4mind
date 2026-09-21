@@ -1,4 +1,4 @@
-import { beforeEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import type { LakeFindingSource, RecordLakeFindingInput } from '@bike4mind/common';
 import { dataLakeFindingRepository as repo, DataLakeFindingModel } from './DataLakeFindingModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -31,6 +31,13 @@ describe('DataLakeFindingRepository', () => {
   // first would run without the constraint it is asserting on.
   beforeEach(async () => {
     await DataLakeFindingModel.ensureIndexes();
+  });
+
+  // Two tests below spy on `DataLakeFindingModel.findOneAndUpdate`. Restoring at the END of a test
+  // body only runs when the body reaches it, so a failing assertion above would leak the spy into
+  // every subsequent test in the file - one real failure reported as a cascade of unrelated ones.
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('declares a source subschema field for field with LakeFindingSource', () => {
@@ -121,7 +128,6 @@ describe('DataLakeFindingRepository', () => {
     expect(spy).toHaveBeenCalledTimes(2);
     expect(recovered.id).toBe(created.id);
     expect(recovered.lastSeenAt).toEqual(SEEN_LATER);
-    spy.mockRestore();
   });
 
   it('rethrows a non-11000 write error unchanged rather than retrying into it', async () => {
@@ -133,7 +139,6 @@ describe('DataLakeFindingRepository', () => {
 
     await expect(repo.recordDetected(input())).rejects.toThrow('connection reset');
     expect(spy).toHaveBeenCalledTimes(1);
-    spy.mockRestore();
   });
 
   it('never drags lastSeenAt backwards when two runs land out of order', async () => {
@@ -151,8 +156,8 @@ describe('DataLakeFindingRepository', () => {
 
   it('never lets a re-detection overwrite a curator decision', async () => {
     const created = await repo.recordDetected(input());
-    await repo.assignFinding(created.id, 'curator-1');
-    await repo.resolveFinding(created.id, {
+    await repo.assignFinding('lake-1', created.id, 'curator-1');
+    await repo.resolveFinding('lake-1', created.id, {
       status: 'resolved',
       resolvedByUserId: 'curator-1',
       resolvedAt: SEEN_FIRST,
@@ -181,8 +186,8 @@ describe('DataLakeFindingRepository', () => {
       resolution: 'both figures are correct for different years',
     };
 
-    const first = await repo.resolveFinding(created.id, review);
-    const second = await repo.resolveFinding(created.id, { ...review, resolvedByUserId: 'curator-2' });
+    const first = await repo.resolveFinding('lake-1', created.id, review);
+    const second = await repo.resolveFinding('lake-1', created.id, { ...review, resolvedByUserId: 'curator-2' });
 
     expect(first?.status).toBe('dismissed');
     expect(first?.resolvedByUserId).toBe('curator-1');
@@ -194,8 +199,29 @@ describe('DataLakeFindingRepository', () => {
   it('assigns and unassigns in any status', async () => {
     const created = await repo.recordDetected(input());
 
-    expect((await repo.assignFinding(created.id, 'curator-1'))?.assigneeUserId).toBe('curator-1');
-    expect((await repo.assignFinding(created.id, null))?.assigneeUserId).toBeNull();
+    expect((await repo.assignFinding('lake-1', created.id, 'curator-1'))?.assigneeUserId).toBe('curator-1');
+    expect((await repo.assignFinding('lake-1', created.id, null))?.assigneeUserId).toBeNull();
+  });
+
+  it('refuses both mutations when the lake does not own the row, whatever the id says', async () => {
+    // `lakeId` is a FILTER term on both writes, so belongs-to-lake holds even for a caller that
+    // never ran the route's check. Dropping it from either filter leaves the rule route-only and
+    // this is the only thing that would notice.
+    const created = await repo.recordDetected(input());
+
+    expect(await repo.assignFinding('someone-elses-lake', created.id, 'curator-2')).toBeNull();
+    expect(
+      await repo.resolveFinding('someone-elses-lake', created.id, {
+        status: 'dismissed',
+        resolvedByUserId: 'curator-2',
+        resolvedAt: SEEN_LATER,
+      })
+    ).toBeNull();
+
+    // And the row is untouched - not merely "the call returned null".
+    const untouched = await DataLakeFindingModel.findById(created.id);
+    expect(untouched?.status).toBe('open');
+    expect(untouched?.assigneeUserId).toBeNull();
   });
 
   it('filters by status, kind and detector independently, most recently seen first', async () => {
@@ -203,7 +229,7 @@ describe('DataLakeFindingRepository', () => {
     const dismissed = await repo.recordDetected(input({ subject: 'dismissed one', seenAt: SEEN_LATER }));
     await repo.recordDetected(input({ subject: 'other kind', kind: 'expired-claim', seenAt: SEEN_LATER }));
     await repo.recordDetected(input({ subject: 'other detector', detector: 'model', seenAt: SEEN_LATER }));
-    await repo.resolveFinding(dismissed.id, {
+    await repo.resolveFinding('lake-1', dismissed.id, {
       status: 'dismissed',
       resolvedByUserId: 'curator-1',
       resolvedAt: SEEN_LATER,
@@ -243,6 +269,36 @@ describe('DataLakeFindingRepository', () => {
 
     expect(await repo.deleteForPurgedDocument('file-a')).toBe(2);
     expect((await repo.listByLake('lake-1')).map(f => f.subject)).toEqual(['unrelated']);
+    expect(await repo.listByLake('lake-2')).toHaveLength(0);
+  });
+
+  it('sweeps a batch of purged documents in one pass, across all lakes, and skips an empty list', async () => {
+    // The teardown's form: one `$in` per chunk instead of one round trip per file. Same global
+    // blast radius as the single-id method, and the same index serves it.
+    await repo.recordDetected(input({ lakeId: 'lake-1', subject: 'cites file-a' }));
+    await repo.recordDetected(input({ lakeId: 'lake-2', subject: 'also cites file-a' }));
+    await repo.recordDetected(
+      input({
+        lakeId: 'lake-1',
+        subject: 'cites file-z',
+        sources: [{ fabFileId: 'file-z', fileName: 'z.md', excerpt: 'x' }],
+      })
+    );
+    await repo.recordDetected(
+      input({
+        lakeId: 'lake-1',
+        subject: 'survivor',
+        sources: [{ fabFileId: 'file-keep', fileName: 'k.md', excerpt: 'x' }],
+      })
+    );
+
+    // An empty list must not become a match-everything delete - the failure mode that would make
+    // an empty chunk wipe the collection.
+    expect(await repo.deleteForPurgedDocuments([])).toBe(0);
+    expect(await DataLakeFindingModel.countDocuments({})).toBe(4);
+
+    expect(await repo.deleteForPurgedDocuments(['file-a', 'file-z'])).toBe(3);
+    expect((await repo.listByLake('lake-1')).map(f => f.subject)).toEqual(['survivor']);
     expect(await repo.listByLake('lake-2')).toHaveLength(0);
   });
 

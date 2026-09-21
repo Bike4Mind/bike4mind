@@ -129,6 +129,14 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
     expect(h.listByLake).not.toHaveBeenCalled();
   });
 
+  it('refuses a SINGLE-element limit array, which coerces silently rather than landing NaN', async () => {
+    // The one the multi-element case above cannot catch, and the reason the schema pins its input
+    // to a scalar before coercing: Number(['10']) is 10, so a bare z.coerce.number() would accept
+    // this shape and no assertion anywhere would notice the array had been swallowed.
+    await expect(invoke({ limit: ['10'] as unknown as string }).done).rejects.toThrow();
+    expect(h.listByLake).not.toHaveBeenCalled();
+  });
+
   it('refuses a limit above the page cap', async () => {
     await expect(invoke({ limit: '500' }).done).rejects.toThrow();
   });

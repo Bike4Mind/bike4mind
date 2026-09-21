@@ -74,8 +74,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.findById.mockResolvedValue(existing);
-  h.resolveFinding.mockImplementation(async (_id, input) => ({ ...existing, ...input }));
-  h.assignFinding.mockImplementation(async (_id, assigneeUserId) => ({ ...existing, assigneeUserId }));
+  h.resolveFinding.mockImplementation(async (_lakeId, _id, input) => ({ ...existing, ...input }));
+  h.assignFinding.mockImplementation(async (_lakeId, _id, assigneeUserId) => ({ ...existing, assigneeUserId }));
 });
 
 describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
@@ -107,7 +107,10 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
     const { json, done } = invoke({ action: 'resolve', resolution: 'corrected the stale figure' });
     await done;
 
-    const [id, input] = h.resolveFinding.mock.calls[0];
+    const [lakeId, id, input] = h.resolveFinding.mock.calls[0];
+    // Lake-scoped in the FILTER, not just checked above it: belongs-to-lake is a property of the
+    // write, so a future caller that skips the route's guard still cannot reach another lake's row.
+    expect(lakeId).toBe('lakeDoc1');
     expect(id).toBe('f1');
     expect(input.status).toBe('resolved');
     expect(input.resolvedByUserId).toBe('curator-1');
@@ -120,22 +123,33 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
     const { done } = invoke({ action: 'dismiss' });
     await done;
 
-    expect(h.resolveFinding.mock.calls[0][1].status).toBe('dismissed');
+    expect(h.resolveFinding.mock.calls[0][2].status).toBe('dismissed');
   });
 
   it('reports an already-ruled finding as a bad request, not as a missing one', async () => {
     // Null from the compare-and-set means the row was not open - a race or a double-click. The
-    // belongs-to-lake read above already proved the row exists, so a 404 here would be a lie.
+    // re-read below it confirms the row is still there, so a 404 here would be a lie.
     h.resolveFinding.mockResolvedValue(null);
 
     await expect(invoke({ action: 'resolve' }).done).rejects.toThrow(/already been ruled on/i);
+  });
+
+  it('reports a row DELETED between the read and the CAS as not-found, not as already-ruled', async () => {
+    // The other thing a null from the compare-and-set can mean, and the reason it is re-read. A
+    // lake teardown or a source purge can sweep the row mid-request; answering "this finding has
+    // already been ruled on" then describes a row that no longer exists, and disagrees with the
+    // assign branch, which 404s the identical case.
+    h.resolveFinding.mockResolvedValue(null);
+    h.findById.mockResolvedValueOnce(existing).mockResolvedValueOnce(null);
+
+    await expect(invoke({ action: 'resolve' }).done).rejects.toThrow(/not found/i);
   });
 
   it('assigns and unassigns without touching the resolution path', async () => {
     const { json, done } = invoke({ action: 'assign', assigneeUserId: 'curator-2' });
     await done;
 
-    expect(h.assignFinding).toHaveBeenCalledWith('f1', 'curator-2');
+    expect(h.assignFinding).toHaveBeenCalledWith('lakeDoc1', 'f1', 'curator-2');
     expect(h.resolveFinding).not.toHaveBeenCalled();
     expect(json.mock.calls[0][0].data.assigneeUserId).toBe('curator-2');
 
@@ -148,7 +162,7 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
     await cleared.done;
 
     // Null has to be sayable: otherwise "unassign" is indistinguishable from "leave it alone".
-    expect(h.assignFinding).toHaveBeenCalledWith('f1', null);
+    expect(h.assignFinding).toHaveBeenCalledWith('lakeDoc1', 'f1', null);
   });
 
   it('rejects an unknown action rather than falling through to a resolution', async () => {

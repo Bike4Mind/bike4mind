@@ -857,4 +857,26 @@ describe('purgeDataLakeDocument', () => {
       expect.objectContaining({ fabFileId: 'file-1' })
     );
   });
+
+  it('warns when it destroys a document with no findings repo wired, rather than going quiet', async () => {
+    // The port is optional, and `?.` makes an unwired host destroy documents with no sweep, no
+    // error and no symptom - indistinguishable from a document that never carried a finding. The
+    // warning is the only thing separating "nothing to sweep" from "this door was never wired".
+    const db = makeDb({ filePath: 'uploads/q3.pdf', fileSize: 27707 });
+    const { dataLakeFindings: _unwired, ...dbWithoutFindings } = db;
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    const receipt = await purgeDataLakeDocument(OWNER, 'lake-1', 'file-1', {
+      db: dbWithoutFindings,
+      storage: makeStorage(),
+      logger,
+    });
+
+    // The destruction itself must not become conditional on the port.
+    expect(receipt.documentDeleted).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('no findings repo wired'),
+      expect.objectContaining({ fabFileId: 'file-1' })
+    );
+  });
 });

@@ -78,8 +78,10 @@ export interface LakeFindingSource {
  * persisted, which is a decision to make deliberately); if it RENAMES or retypes one, this fails
  * here rather than at runtime as a silently empty column.
  *
- * A TYPE, not a function: the constraint is what does the work, so this needs no call site to fire.
- * The previous identity function had none, which made it dead code that only looked load-bearing.
+ * A TYPE, not a function. The identity function this replaced was a working guard - TS checks a
+ * declared return type at the DECLARATION, so it fired with or without a call site - but its
+ * runtime export was dead weight: a function shipped to every consumer purely to make a
+ * compile-time assertion that a type alias makes for free.
  */
 type AssertAssignable<Target, Source extends Target> = Source;
 export type StorableEvidence = AssertAssignable<LakeFindingSource, InconsistencyEvidence>;
@@ -103,9 +105,11 @@ export interface IDataLakeFinding {
   /** When this problem was first detected. Never moves once set, including across a resolution. */
   firstSeenAt: Date;
   /**
-   * The most recent detection run that still saw the problem. Moves on every re-detection whatever
-   * the status, so `lastSeenAt > resolvedAt` is how a surface spots a resolved problem that came
-   * back - the recurrence is visible rather than either hidden or duplicated into a second row.
+   * The newest detection run that still saw the problem, whatever the status. ADVANCES only: the
+   * write is a `$max`, so a run landing out of order (a retried queue message, a slow run finishing
+   * after a later one) cannot drag it backwards. That monotonicity is what `lastSeenAt > resolvedAt`
+   * rests on as the recurrence signal - it is how a surface spots a resolved problem that came back,
+   * rather than the recurrence being hidden or duplicated into a second row.
    */
   lastSeenAt: Date;
   /** The curator who owns triaging this. Independent of status: an open finding may be assigned. */
@@ -166,23 +170,29 @@ export interface IDataLakeFindingRepository extends IBaseRepository<IDataLakeFin
   listByLake(lakeId: string, options?: ListLakeFindingsOptions): Promise<IDataLakeFindingDocument[]>;
   /**
    * Atomically move an OPEN finding to a terminal status, stamping the resolver. Returns the
-   * updated row, or null when it was not open - which is the whole double-resolve guard for two
+   * updated row, or null when the filter missed - which is the whole double-resolve guard for two
    * curators racing the same finding, or one double-click. Never a read-then-write.
+   *
+   * `lakeId` is a FILTER term, not a convenience argument. Without it the mutation is keyed on
+   * `_id` alone and belongs-to-lake becomes a rule that lives only in the route, so any future
+   * caller reaching this repo directly can rule on a finding in a lake it was never authorized
+   * for. Lake-first, matching `deleteForLake`. Null therefore means "not open OR not this lake's";
+   * a caller that has to tell those apart re-reads (see the route's 404-vs-400 split).
    */
-  resolveFinding(id: string, input: ResolveLakeFindingInput): Promise<IDataLakeFindingDocument | null>;
+  resolveFinding(lakeId: string, id: string, input: ResolveLakeFindingInput): Promise<IDataLakeFindingDocument | null>;
   /**
    * Set or clear the assignee. Permitted in any status: assigning a resolved finding is how a
    * recurrence gets an owner, and forbidding it would only push that into a reopen this model
-   * deliberately does not have.
+   * deliberately does not have. Lake-scoped for the same reason as `resolveFinding`.
    */
-  assignFinding(id: string, assigneeUserId: string | null): Promise<IDataLakeFindingDocument | null>;
+  assignFinding(lakeId: string, id: string, assigneeUserId: string | null): Promise<IDataLakeFindingDocument | null>;
   /**
    * Drop a deleted lake's findings. A finding outliving its lake is unresolvable by anyone.
    *
    * NOT sufficient on its own for a lake teardown. The teardown hard-deletes its member FabFiles
    * GLOBALLY, and a file can belong to two lakes at once, so a sibling lake's rows can be left
    * quoting a destroyed document - rows this call cannot reach, because they are not this lake's.
-   * `cleanupDeletedDataLake` therefore runs `deleteForPurgedDocument` per destroyed id as well.
+   * `cleanupDeletedDataLake` therefore runs `deleteForPurgedDocuments` over its destroyed ids too.
    */
   deleteForLake(lakeId: string): Promise<number>;
   /**
@@ -202,4 +212,19 @@ export interface IDataLakeFindingRepository extends IBaseRepository<IDataLakeFin
    * reasoning as `shredDocumentMemory`, which shreds across every member lake for this reason.
    */
   deleteForPurgedDocument(fabFileId: string): Promise<number>;
+  /**
+   * The same retention sweep over many destroyed documents at once - everything on
+   * `deleteForPurgedDocument` applies, including the deliberate lack of lake scoping.
+   *
+   * Exists for `cleanupDeletedDataLake`, which destroys a whole lake's documents inside a fan-out
+   * already chunked for the Lambda budget: the single-id form costs one round trip per file there,
+   * where an `$in` costs one per chunk against the same index. Equally replay-safe, because a
+   * finding sweep is idempotent and independent of whether the FabFile row still exists - and
+   * slightly MORE atomic, since a failed batch leaves its whole chunk's rows intact rather than
+   * half of them destroyed.
+   *
+   * A no-op on an empty list. The purge door keeps the single-id form: it destroys one document
+   * inside the owner's request, where a batch would buy nothing.
+   */
+  deleteForPurgedDocuments(fabFileIds: string[]): Promise<number>;
 }

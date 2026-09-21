@@ -12,7 +12,15 @@ const ListQuery = z.object({
   status: z.enum(LAKE_FINDING_STATUSES).optional(),
   kind: z.enum(INCONSISTENCY_KINDS).optional(),
   detector: z.enum(LAKE_FINDING_DETECTORS).optional(),
-  limit: z.coerce.number().int().min(1).max(200).optional(),
+  // The union is load-bearing, not decoration. A repeated query param arrives as a string[], and
+  // `z.coerce.number()` alone does NOT refuse one: `Number(['10'])` is 10, so the single-element
+  // form would coerce silently while only the multi-element form landed NaN. Narrowing the input
+  // to a scalar first makes both array shapes a 400, so the page bound is always a thing the
+  // schema decided rather than something Array.prototype.toString happened to produce. `Number`
+  // then does the coercion explicitly, because `z.coerce.number()` accepts `unknown` - the very
+  // reason it swallows the array, and why it will not sit on the right of this pipe. A
+  // non-numeric string lands NaN, which `z.number()` rejects.
+  limit: z.union([z.string(), z.number()]).transform(Number).pipe(z.number().int().min(1).max(200)).optional(),
 });
 
 /** Bounds one page of the queue when a caller does not ask for a size. */

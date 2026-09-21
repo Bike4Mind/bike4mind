@@ -41,10 +41,12 @@ interface CleanupDeletedDataLakeAdapters {
     /**
      * Optional for the same reason again: the detected-findings rows (#3039) exist only where
      * detection has run. BOTH sweeps are needed and they are not the same sweep: `deleteForLake`
-     * drops this lake's own rows, while `deleteForPurgedDocument` drops every OTHER lake's rows
+     * drops this lake's own rows, while `deleteForPurgedDocuments` drops every OTHER lake's rows
      * that quote a document step 2 destroys globally (a file can carry two lakes' meta-tags).
+     * The batched form, not the single-id one: this door sweeps a whole lake, inside a fan-out
+     * already chunked for the Lambda budget.
      */
-    dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForLake' | 'deleteForPurgedDocument'>;
+    dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForLake' | 'deleteForPurgedDocuments'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -78,10 +80,23 @@ interface CleanupDeletedDataLakeAdapters {
 /** Default fan-out chunk size - bounds peak Mongo concurrency for a large lake's sweep. */
 const DEFAULT_CLEANUP_CHUNK_SIZE = 100;
 
-/** Run `fn` over `items` in sequential slices of `size`, so peak concurrency stays bounded. */
-async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<unknown>): Promise<void> {
+/**
+ * Run `fn` over `items` in sequential slices of `size`, so peak concurrency stays bounded.
+ *
+ * `beforeSlice` runs once per slice, before any of its items, and a rejection aborts with that
+ * whole slice untouched. It exists for work that is naturally batched (one `$in` instead of N
+ * point writes) but must still HAPPEN BEFORE the per-item work it guards.
+ */
+async function inChunks<T>(
+  items: T[],
+  size: number,
+  fn: (item: T) => Promise<unknown>,
+  beforeSlice?: (slice: T[]) => Promise<unknown>
+): Promise<void> {
   for (let i = 0; i < items.length; i += size) {
-    await Promise.all(items.slice(i, i + size).map(fn));
+    const slice = items.slice(i, i + size);
+    if (beforeSlice) await beforeSlice(slice);
+    await Promise.all(slice.map(fn));
   }
 }
 
@@ -181,23 +196,46 @@ export const cleanupDeletedDataLake = async (
   // no-ops on already-purged data, so a replay over a partially-swept lake is harmless. Chunk
   // deletion covers soft-deleted files too, since the id list is resolved before any hard delete.
   //
-  // The findings sweep is GLOBAL (`deleteForPurgedDocument`), not lake-scoped, and it is paired
-  // here rather than batched after the loop for the same replay reason as the chunk delete. This
-  // row is about to be destroyed everywhere, but a file can carry two lakes' meta-tags - there is
-  // no exclusivity check on `addFileToLake`, and the membership filter's arms have no "no other
+  // The findings sweep is GLOBAL (`deleteForPurgedDocuments`), not lake-scoped. These rows are
+  // about to be destroyed everywhere, but a file can carry two lakes' meta-tags - there is no
+  // exclusivity check on `addFileToLake`, and the membership filter's arms have no "no other
   // lake's tag" conjunct - so a sibling lake's finding would otherwise be left quoting a 240-char
   // excerpt of a document that no longer exists, unresolvable and never re-detectable. Step 4f's
   // `deleteForLake` cannot reach it: that row belongs to the lake that is NOT being deleted.
   //
-  // FIRST in the iteration, before the row goes. The reverse order strands the finding permanently
-  // on an interruption - once the row is gone the id is no longer resolvable by
+  // BEFORE the slice's rows go, which is the whole ordering contract. The reverse order strands
+  // findings permanently on an interruption - once a row is gone its id is no longer resolvable by
   // `findIdsByDataLakeTag`, so a DLQ retry can never name it again. This way an interruption only
-  // costs a finding that is still re-detectable from a document that still exists.
-  await inChunks(fileIds, chunkSize, async id => {
-    await db.dataLakeFindings?.deleteForPurgedDocument(id);
-    await db.fabFiles.hardDeleteOneById(id);
-    await db.fabFileChunks.deleteManyByFabFileId(id);
-  });
+  // costs findings that are still re-detectable from documents that still exist.
+  //
+  // Batched per slice rather than per id - unlike the row/chunk pairing below, which must stay
+  // per id (#2583). One `$in` on the same multikey index replaces `chunkSize` point deletes inside
+  // a fan-out that is chunked for the Lambda budget in the first place. It is equally replay-safe
+  // (the sweep is idempotent and independent of row existence) and marginally MORE atomic: a
+  // rejected batch leaves its whole slice's rows present, so the replay re-resolves every one of
+  // them, where the per-id form could die with half the slice already destroyed.
+  //
+  // The port is optional (a host that never ran detection has no rows), and `?.` means an unwired
+  // host destroys documents with no sweep, no error and no symptom - indistinguishable from a lake
+  // that genuinely had no findings. Say so ONCE per teardown rather than per file: a large lake
+  // would otherwise emit one line per document for a single wiring fact.
+  if (!db.dataLakeFindings && fileIds.length > 0) {
+    logger?.warn('[dataLake] lake teardown is destroying documents with no findings repo wired', {
+      dataLakeId,
+      fileCount: fileIds.length,
+    });
+  }
+  await inChunks(
+    fileIds,
+    chunkSize,
+    async id => {
+      await db.fabFiles.hardDeleteOneById(id);
+      await db.fabFileChunks.deleteManyByFabFileId(id);
+    },
+    async slice => {
+      await db.dataLakeFindings?.deleteForPurgedDocuments(slice);
+    }
+  );
 
   // 2b. Whatever the predicate STILL names is exactly that spared mid-sweep joiner, and sparing it
   // is only half a decision: step 5 deletes the lake, so its prefix tag would outlive the lake it

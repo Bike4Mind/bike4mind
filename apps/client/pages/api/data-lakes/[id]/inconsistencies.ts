@@ -111,14 +111,38 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // Also emit each finding as a durable row (#3039). Additive for now, and ordered after the blob
     // deliberately: the blob is still what GET here and the counts on GET /health read, so until
     // #3040 moves those readers over, a failure in this newer path must not cost the run its report.
+    //
+    // RETENTION IS ONLY HALF DONE UNTIL THEN. The stored blob above still carries
+    // `evidence[].excerpt` on the lake document, and the purge-time sweeps added with the rows
+    // (the `deleteForPurgedDocument(s)` sweeps at both destruction doors) reach the ROWS only -
+    // nothing rewrites the blob when a document it quotes is destroyed. #3040 must carry that
+    // cleanup along with moving the readers; deleting the blob write here first would blind
+    // GET and /health.
+    //
     // The same `computedAt` is passed as `seenAt` so a run's rows and its report agree on one
     // instant rather than drifting by the write's latency.
-    const { failed } = await dataLakeService.recordLakeFindings(
-      lake.id,
-      stored.findings,
-      { detector: 'lexical', seenAt: computedAt },
-      { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
-    );
+    //
+    // CAUGHT, and that is what makes the ordering above worth anything. The service already
+    // isolates per-finding failures into its `failed` count, so reaching here means something
+    // unexpected - but the blob write has already COMMITTED, and letting the throw out would hand
+    // the caller a 500 for a run whose report is sitting in the database. They would re-run a
+    // ~1000-chunk detection pass to get back a report they already have. Log and return it.
+    let failed = 0;
+    try {
+      ({ failed } = await dataLakeService.recordLakeFindings(
+        lake.id,
+        stored.findings,
+        { detector: 'lexical', seenAt: computedAt },
+        { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
+      ));
+    } catch (error) {
+      failed = stored.findings.length;
+      req.logger?.error('Lake findings write failed outright; returning the stored report', {
+        dataLakeId: lake.id,
+        total: stored.findings.length,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
     // A partially-written run must not read as a clean one. Each failure is already logged with its
     // subject by the service; this is the one line that says the RUN was partial.
     if (failed > 0) {

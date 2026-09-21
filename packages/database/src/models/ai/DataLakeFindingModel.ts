@@ -72,10 +72,11 @@ DataLakeFindingSchema.index({ lakeId: 1, detector: 1, kind: 1, subject: 1 }, { u
 // sort for it. A listing that skips status (kind-only, detector-only, unfiltered) still seeks on the
 // lakeId prefix but sorts in memory, which is bounded by the page limit the list route always sends.
 DataLakeFindingSchema.index({ lakeId: 1, status: 1, kind: 1, lastSeenAt: -1 });
-// The purge sweep's only access path, and the only index here not keyed on a lake: a purge destroys
-// a document globally, so `deleteForPurgedDocument` queries across every lake at once and has no
-// lake prefix to seek on. Multikey over `sources` (bounded at LAKE_FINDING_SOURCE_MAX entries per
-// row). Same shape, for the same lookup, as PublishedArtifactSchema's `source.fabFileId` index.
+// The purge sweeps' only access path, and the only index here not keyed on a lake: a purge destroys
+// a document globally, so `deleteForPurgedDocument`/`deleteForPurgedDocuments` query across every
+// lake at once and have no lake prefix to seek on. The batched form's `$in` seeks this same index
+// once per chunk. Multikey over `sources` (bounded at LAKE_FINDING_SOURCE_MAX entries per row).
+// Same shape, for the same lookup, as PublishedArtifactSchema's `source.fabFileId` index.
 DataLakeFindingSchema.index({ 'sources.fabFileId': 1 });
 
 export const DataLakeFindingModel: IDataLakeFindingModel =
@@ -147,20 +148,36 @@ class DataLakeFindingRepository extends BaseRepository<IDataLakeFindingDocument>
     return docs.map(d => d.toJSON() as IDataLakeFindingDocument);
   }
 
-  async resolveFinding(id: string, input: ResolveLakeFindingInput): Promise<IDataLakeFindingDocument | null> {
+  async resolveFinding(
+    lakeId: string,
+    id: string,
+    input: ResolveLakeFindingInput
+  ): Promise<IDataLakeFindingDocument | null> {
     const { status, resolvedByUserId, resolvedAt, resolution } = input;
     // `status: 'open'` in the FILTER is the double-resolve guard: the second writer of a race
     // matches nothing and gets null. Never split into a read then a write.
+    //
+    // `lakeId` is in the filter for a different reason: it keeps belongs-to-lake a property of the
+    // WRITE rather than a rule the caller is trusted to have checked. A route that forgot the
+    // check could otherwise rule on any finding id in the database.
     const doc = await this.findingModel.findOneAndUpdate(
-      { _id: id, status: 'open' },
+      { _id: id, lakeId, status: 'open' },
       { $set: { status, resolvedByUserId, resolvedAt, resolution: resolution ?? null } },
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeFindingDocument) ?? null;
   }
 
-  async assignFinding(id: string, assigneeUserId: string | null): Promise<IDataLakeFindingDocument | null> {
-    const doc = await this.findingModel.findOneAndUpdate({ _id: id }, { $set: { assigneeUserId } }, { new: true });
+  async assignFinding(
+    lakeId: string,
+    id: string,
+    assigneeUserId: string | null
+  ): Promise<IDataLakeFindingDocument | null> {
+    const doc = await this.findingModel.findOneAndUpdate(
+      { _id: id, lakeId },
+      { $set: { assigneeUserId } },
+      { new: true }
+    );
     return (doc?.toJSON() as IDataLakeFindingDocument) ?? null;
   }
 
@@ -177,6 +194,16 @@ class DataLakeFindingRepository extends BaseRepository<IDataLakeFindingDocument>
     // scan of the WHOLE collection (every lake's findings, not one lake's) on a path that runs
     // inside the caller's purge request.
     const res = await this.findingModel.deleteMany({ 'sources.fabFileId': fabFileId });
+    return res.deletedCount ?? 0;
+  }
+
+  async deleteForPurgedDocuments(fabFileIds: string[]): Promise<number> {
+    // Guarded: `$in: []` matches nothing, but issuing the round trip to learn that is the cost this
+    // method exists to avoid.
+    if (fabFileIds.length === 0) return 0;
+    // Same single dotted condition as the one-id form, so the same multikey index serves it and the
+    // same "no $elemMatch needed" reasoning holds - one condition, no cross-element hazard.
+    const res = await this.findingModel.deleteMany({ 'sources.fabFileId': { $in: fabFileIds } });
     return res.deletedCount ?? 0;
   }
 }
