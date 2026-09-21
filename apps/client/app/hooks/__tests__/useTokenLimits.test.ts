@@ -107,6 +107,24 @@ describe('useTokenLimits', () => {
     expect(result.current.maxInputTokens).toBe(0);
   });
 
+  // A derived cap is toModelInfo's substitute default, not a statement about the model (see
+  // computeDefaultMaxTokens), so it must not clamp the window-share default back down to it -
+  // that would re-pin a catalog-only adaptive model at the exact value that starves it.
+  it('does not clamp the window-share default to a derived cap', () => {
+    const modelInfo = [
+      { id: 'catalog-only-adaptive', contextWindow: 400_000, max_tokens: 4_096, maxOutputTokensDerived: true },
+    ];
+    const { result } = renderHook(() =>
+      useTokenLimits({
+        model: 'catalog-only-adaptive',
+        modelInfo,
+        max_tokens: undefined,
+        chatInputLength: 100,
+      })
+    );
+    expect(result.current.effectiveMaxOutputTokens).toBeGreaterThan(4_096);
+  });
+
   it('flips isOverContextWindow when input genuinely exceeds the available budget', () => {
     const { result } = renderHook(() =>
       useTokenLimits({

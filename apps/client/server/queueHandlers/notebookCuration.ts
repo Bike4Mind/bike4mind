@@ -7,6 +7,7 @@ import {
   fabFileRepository,
   creditTransactionRepository,
   userRepository,
+  adminSettingsRepository,
 } from '@bike4mind/database';
 import { secureParameters } from '@bike4mind/utils';
 import { notebookCurationService } from '@bike4mind/services';
@@ -97,6 +98,28 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 
   const websocketEndpoint = Resource.websocket.managementEndpoint;
 
+  // Shared by the outer catch and the permanent-admission-refusal branch below, so both
+  // failure paths notify the client and the event bus identically.
+  const notifyFailure = async (errorMessage: string) => {
+    await Promise.all([
+      sendToClient(userId, websocketEndpoint, {
+        action: 'notebook_curation_progress',
+        curationJobId,
+        sessionId,
+        status: 'failed',
+        percentage: 0,
+        errorMessage,
+      }),
+      NotebookCurationEvents.Error.publish({
+        curationJobId,
+        sessionId,
+        userId,
+        error: errorMessage,
+        stage: 'loading',
+      }),
+    ]);
+  };
+
   try {
     // Create LLM service adapter if executive summary is requested
     let llmService: any = undefined;
@@ -150,6 +173,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       fileStorageService: storageAdapter,
       creditTransactionRepository,
       userRepository,
+      adminSettingsRepository,
       logger,
       llmService,
       llmModelId, // Pass the model ID from OperationsModelService
@@ -220,6 +244,16 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         error: result.error,
         errorDetails: result,
       });
+
+      if (result.retryable === false) {
+        // An admission gate refusal (storage quota / MaxFileSize) can never succeed on
+        // redelivery. Notify like any other failure, but don't rethrow: rethrowing here
+        // would let SQS retry the full (LLM-billed) pipeline up to 3 times before DLQing
+        // a message that was always going to fail the same way.
+        await notifyFailure(result.error || 'Curation failed');
+        return;
+      }
+
       throw new Error(result.error || 'Curation failed');
     }
 
@@ -268,24 +302,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
   } catch (error) {
     logger.error(`Failed to curate notebook ${sessionId}:`, error);
 
-    // Send error update via WebSocket
-    await sendToClient(userId, websocketEndpoint, {
-      action: 'notebook_curation_progress',
-      curationJobId,
-      sessionId,
-      status: 'failed',
-      percentage: 0,
-      errorMessage: error instanceof Error ? error.message : 'Unknown error',
-    });
-
-    // Publish error event
-    await NotebookCurationEvents.Error.publish({
-      curationJobId,
-      sessionId,
-      userId,
-      error: error instanceof Error ? error.message : 'Unknown error',
-      stage: 'loading',
-    });
+    await notifyFailure(error instanceof Error ? error.message : 'Unknown error');
 
     // Failures are intentionally NOT recorded. Re-throwing
     // lets SQS retry the message and, if it keeps failing, route it to the DLQ -

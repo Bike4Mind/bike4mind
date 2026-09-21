@@ -1,5 +1,11 @@
 # @bike4mind/infra
 
+## 1.0.0
+
+### Major Changes
+
+- [#2930](https://github.com/Bike4Mind/bike4mind/pull/2930) [`f3f76c2`](https://github.com/Bike4Mind/bike4mind/commit/f3f76c21ef2e882fad72db3f0f36c8c5e8113065) Thanks [@jarlacut](https://github.com/jarlacut)! - gate the remaining FabFile ingest doors
+
 ## 0.10.1
 
 ### Patch Changes

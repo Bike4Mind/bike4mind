@@ -193,6 +193,19 @@ export interface ISubscriptionRepository extends BaseRepository<ISubscription & 
   }>;
 
   findActiveSubscriptionsByOwner(ownerType: SubscriptionOwnerType, ownerId: string): Promise<ISubscription[]>;
+
+  /**
+   * Every non-terminal subscription an owner has - deliberately a deny-list, because a
+   * `past_due` owner still has a row to act on (fix the card, or cancel), and a status
+   * Stripe adds later should surface rather than vanish.
+   *
+   * NOT a "does this owner have a plan" check - that stays
+   * `findActiveSubscriptionsByOwner`; entitlements and rate tiers are active-only by
+   * design (see TERMINAL_SUBSCRIPTION_STATUSES above). Unordered: callers pick with
+   * `pickDisplayedSubscription`.
+   */
+  findNonTerminalSubscriptionsByOwner(ownerType: SubscriptionOwnerType, ownerId: string): Promise<ISubscription[]>;
+
   /**
    * Find a subscription by price ID and owner.
    * Used to check if a user is subscribed to a plan before they subscribe.

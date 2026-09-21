@@ -569,18 +569,25 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
-  // Mirrors MAX_FENCE_SCAN_CHARS in the source file (not exported). A promotion
-  // predicate only reads the first 256000 chars of a fence body, so an anchor
-  // sitting past that window must leave the fence as a plain code block rather
-  // than being promoted - the deliberate DoS ceiling, not a correctness bug.
+  // Mirrors MAX_FENCE_SCAN_CHARS in the source file (not exported). The five React
+  // indicator predicates are regex-based and read only the first 256000 chars of a
+  // fence body, so indicators sitting past that window leave the fence a plain code
+  // block - the deliberate DoS ceiling, not a correctness bug. The html and svg
+  // detectors are indexOf scans and are deliberately not capped.
   const MAX_FENCE_SCAN_CHARS = 256000;
 
-  it('leaves a fence whose promotion anchor sits past the scan window as a plain code block', () => {
-    const body = 'x'.repeat(MAX_FENCE_SCAN_CHARS + 50000) + '<svg></svg>';
-    const input = '```svg\n' + body + '\n```';
+  it('leaves a react fence whose indicators sit past the scan window as a plain code block', () => {
+    const indicators = "import React from 'react';\nconst x = useState(0);\nreturn (\n<Foo />";
+    const input = '```javascript\n' + 'x'.repeat(MAX_FENCE_SCAN_CHARS + 50000) + '\n' + indicators + '\n```';
     const out = convertCodeBlocksToArtifacts(input);
     expect(out).toBe(input);
     expect(out).not.toContain('<artifact');
+  });
+
+  it('promotes the same react fence when its indicators sit inside the scan window', () => {
+    const indicators = "import React from 'react';\nconst x = useState(0);\nreturn (\n<Foo />";
+    const input = '```javascript\n' + indicators + '\n' + 'x'.repeat(MAX_FENCE_SCAN_CHARS + 50000) + '\n```';
+    expect(convertCodeBlocksToArtifacts(input)).toContain('type="application/vnd.ant.react"');
   });
 
   it('falls a non-document html fence through to the fragment handler', () => {

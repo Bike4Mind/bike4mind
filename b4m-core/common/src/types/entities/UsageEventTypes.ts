@@ -31,7 +31,11 @@ export const USAGE_EVENT_FEATURES = [
 
 export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];
 
-export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout', 'refusal'] as const;
+// 'degenerate': the call was aborted because the output stopped making progress and began
+// repeating itself (DEGENERATE_FINISH_REASON). The tokens were really spent, so the row is
+// priced like any other, but the outcome is not one the user got full value from - this is
+// the key a future refund sweep would filter on.
+export const USAGE_EVENT_STATUSES = ['ok', 'error', 'timeout', 'refusal', 'degenerate'] as const;
 
 export type UsageEventStatus = (typeof USAGE_EVENT_STATUSES)[number];
 
@@ -383,14 +387,18 @@ export interface ISpendLatency {
 
 /**
  * Request-outcome counts over the window. The error rate folds `errors` and
- * `timeouts` together (both are failed calls); `refusals` are counted separately
- * so a model refusal reads as its own rate rather than an error.
+ * `timeouts` together (both are failed calls); `refusals` and `degenerates` are counted
+ * separately so each COULD read as its own rate rather than an error - a degenerate call did
+ * return content and bill normally, it just stopped making progress first. Today only
+ * `degenerates` has a writer (see `earlyStopStamp.ts`) and its own `degenerateRate` KPI;
+ * `refusals` has no writer anywhere in the repo yet.
  */
 export interface ISpendStatusCounts {
   total: number;
   errors: number;
   timeouts: number;
   refusals: number;
+  degenerates: number;
 }
 
 /**
@@ -433,7 +441,8 @@ export type SpendKpiKey =
   | 'p50Latency'
   | 'p95Latency'
   | 'errorRate'
-  | 'refusalRate';
+  | 'refusalRate'
+  | 'degenerateRate';
 
 export interface SpendKpi {
   key: SpendKpiKey;

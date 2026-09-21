@@ -1,4 +1,5 @@
 export * from './create';
+export * from './resolveLakeScopeForcedRetrieval';
 export * from './resolveLakeSessionDefaults';
 export * from './delete';
 export * from './sumarize';

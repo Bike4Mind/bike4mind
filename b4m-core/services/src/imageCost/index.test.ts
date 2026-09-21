@@ -29,6 +29,25 @@ describe('computeImageUsdCostPerImage', () => {
     expect(computeImageUsdCostPerImage(ImageModels.FLUX_PRO_FILL, { model: ImageModels.FLUX_PRO_FILL })).toBe(0.05);
   });
 
+  // #2899: this is the single seam both charging (validateUserCredits) and the client-side cost
+  // preview go through, so the ceiling price for 'auto' has to survive the GPT-image branch's
+  // cast into OpenAICostInput - not just the calculator's own unit tests.
+  it("prices 'auto' quality at the ceiling tier, matching an explicit 'high'", () => {
+    const auto = computeImageUsdCostPerImage(ImageModels.GPT_IMAGE_2, {
+      model: ImageModels.GPT_IMAGE_2,
+      quality: 'auto',
+      size: '1024x1024',
+    });
+    expect(auto).toBe(0.211);
+    expect(auto).toBe(
+      computeImageUsdCostPerImage(ImageModels.GPT_IMAGE_2, {
+        model: ImageModels.GPT_IMAGE_2,
+        quality: 'high',
+        size: '1024x1024',
+      })
+    );
+  });
+
   it('still throws for a genuinely unknown model', () => {
     expect(() => computeImageUsdCostPerImage('totally-made-up-model', { model: 'totally-made-up-model' })).toThrow(
       UnsupportedImageModelError

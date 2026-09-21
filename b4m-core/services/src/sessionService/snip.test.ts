@@ -55,6 +55,30 @@ describe('snipSession', () => {
     expect(db.sessions.create).toHaveBeenCalledWith(expect.objectContaining({ retrievalTags: ['datalake:acme'] }));
   });
 
+  /**
+   * A snip keeps only the quests AFTER the snip point, so the quest the source tags were derived
+   * from is usually gone from the copy. The copy must look untagged so the groom re-derives tags
+   * from what the snip actually holds, even though the (possibly stale) tags themselves still copy.
+   */
+  it('does not carry taggedAt onto the snip', async () => {
+    const { db } = makeAdapters();
+    const taggedAt = new Date('2026-01-01T00:00:00.000Z');
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [{ name: 'racing', strength: 0.9 }],
+      taggedAt,
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await snipSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    const persisted = db.sessions.create.mock.calls[0][0];
+    expect(persisted.taggedAt).toBeUndefined();
+    expect(persisted.tags).toEqual([{ name: 'racing', strength: 0.9 }]);
+  });
+
   it('snips messages from the snip point forward when the message belongs to the session', async () => {
     const { db, created } = makeAdapters();
     db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });

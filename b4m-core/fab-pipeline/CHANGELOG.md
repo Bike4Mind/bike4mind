@@ -1,5 +1,25 @@
 # @bike4mind/fab-pipeline
 
+## 1.3.12
+
+### Patch Changes
+
+- Updated dependencies [[`8e31cbf`](https://github.com/Bike4Mind/bike4mind/commit/8e31cbfad875f80f372f16032f487cde1e624ce1), [`4ce553e`](https://github.com/Bike4Mind/bike4mind/commit/4ce553ebc6d706aef224317811c004f64a8df5f3), [`3593192`](https://github.com/Bike4Mind/bike4mind/commit/3593192f407f6a1a337824d2d2b1d5e9d9065a8e), [`f687f87`](https://github.com/Bike4Mind/bike4mind/commit/f687f87600e726f00d1a480d12b8e72bbe3f9691), [`34443c6`](https://github.com/Bike4Mind/bike4mind/commit/34443c6911e1e96197c2f1d6306fc3ebabde5153)]:
+  - @bike4mind/common@10.1.0
+  - @bike4mind/db-core@0.6.4
+
+## 1.3.11
+
+### Patch Changes
+
+- [#2852](https://github.com/Bike4Mind/bike4mind/pull/2852) [`ae494b7`](https://github.com/Bike4Mind/bike4mind/commit/ae494b7b21b97337a9af3e715be20e38ea1d696d) Thanks [@vinchi777](https://github.com/vinchi777)! - strip page chrome from URL-ingest text before it reaches embeddings
+
+- [#2988](https://github.com/Bike4Mind/bike4mind/pull/2988) [`b8bd20d`](https://github.com/Bike4Mind/bike4mind/commit/b8bd20d40a1551f6b999cb84745a677984144916) Thanks [@ken-b4m](https://github.com/ken-b4m)! - pin memento embedding space and refit the 3-small floor
+
+- Updated dependencies [[`f3f76c2`](https://github.com/Bike4Mind/bike4mind/commit/f3f76c21ef2e882fad72db3f0f36c8c5e8113065), [`b8bd20d`](https://github.com/Bike4Mind/bike4mind/commit/b8bd20d40a1551f6b999cb84745a677984144916)]:
+  - @bike4mind/common@10.0.0
+  - @bike4mind/db-core@0.6.3
+
 ## 1.3.10
 
 ### Patch Changes

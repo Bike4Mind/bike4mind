@@ -35,10 +35,18 @@ const SEARCH_DIRS = 'apps b4m-core packages';
 const EXCLUDES = '--exclude-dir=premium --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.next';
 
 /**
- * Packages whose mocks must be checked. Every one is a transitive dependency of this package, so
- * turbo's `^build` has built each `dist` before this test runs (`@bike4mind/scripts#test` in
- * turbo.json). Listed rather than globbed so a package dropping off the list is a diff, not a
- * silent loss of coverage.
+ * Packages whose mocks must be checked. A package belongs here once it is a transitive dependency
+ * of this one - so turbo's `^build` has built its `dist` before this test runs
+ * (`@bike4mind/scripts#test` in turbo.json) - and every subpath in its `exports` map points at a
+ * built `.mjs`, which is all `readPackageEntries` can read a surface off. A package meeting both
+ * and left off this list is an invisible hole, because a missing line errors nowhere.
+ *
+ * That is a build-ordering rule rather than a coverage one, so it does not describe everything
+ * worth checking. `@bike4mind/slack` and `@bike4mind/memory` are built, enumerable, and carry
+ * mocks today, but sit outside that closure, so nothing guarantees their `dist` when this test
+ * runs and their mocks go unchecked. Covering them needs an explicit build edge on
+ * `@bike4mind/scripts#test` first. Listed rather than globbed so a package dropping off is a diff,
+ * not a silent loss of coverage.
  */
 const GUARDED_PACKAGES = [
   'b4m-core/agents',
@@ -46,9 +54,11 @@ const GUARDED_PACKAGES = [
   'b4m-core/common',
   'b4m-core/db-core',
   'b4m-core/fab-pipeline',
+  'b4m-core/hearth',
   'b4m-core/llm-adapters',
   'b4m-core/mcp',
   'b4m-core/observability',
+  'b4m-core/resource',
   'b4m-core/services',
   'b4m-core/utils',
   'packages/database',

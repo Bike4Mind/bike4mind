@@ -58,6 +58,11 @@ function generateNewApiKey(): { key: string; keyPrefix: string; keyHash: string 
  * the person actually holding it. Billing is untouched: an org-billed key still
  * bills the org, which is what `billingOwnerType`/`organizationId` govern.
  *
+ * That org-admin capability is qualified by the no-escalation check below, which is
+ * skipped only for a browser/JWT caller. An API-key-authenticated admin - even one scoped
+ * `admin:*` - is still subject to it and can be refused, because `admin:*` is not treated
+ * as a superset of the target key's scopes.
+ *
  * Callers should surface `previousOwnerUserId` so the original minter can be told
  * their key changed hands.
  */

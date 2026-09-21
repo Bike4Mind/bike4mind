@@ -119,46 +119,72 @@ export function parseArtifacts(content: string): ArtifactParseResult {
 
 // mapMimeTypeToArtifactType is the single source of truth in @bike4mind/common.
 
-/**
- * True when one line of `body` holds a declaration keyword followed, on that same line,
- * by a component marker: the pair the anchored fence pattern used to require. Written as
- * a per-line scan because a single keyword-then-marker pattern re-scans the rest of the
- * line from every keyword hit, which is quadratic on a body with no line breaks.
- */
-function hasComponentDeclarationLine(body: string): boolean {
-  for (const line of body.split('\n')) {
-    const at = line.search(/function|const|class/i);
-    if (at >= 0 && /Component|App|export default/i.test(line.slice(at))) return true;
+// Linear anchor checks for the fenced-code detectors below. Each detector used to
+// encode a content requirement inside a `(?:.*\n)*?ANCHOR(?:\n.*)*?` regex that
+// backtracks quadratically on a fence with no closing delimiter. Capturing the body
+// with a single lazy group and moving the ANCHOR check here runs in linear time. The
+// decision is unchanged on a single well-formed fence; a multi-fence body no longer
+// over-matches. Two behaviours do change, both toward the intended reading: an anchor
+// in a LATER fence no longer promotes an earlier one, and a bare `\r` or `U+2028`
+// before the anchor now promotes, because `.` did not cross those but `split('\n')`
+// keeps them in-line.
+
+// True when some line has a declaration keyword followed, later on the SAME line, by
+// a component token - the React detector's original requirement (case-insensitive).
+// Checking the earliest declaration is equivalent to the old regex's backtracking:
+// if any declaration has a component token after it, the earliest one does too.
+function hasReactComponentLine(code: string): boolean {
+  const DECLARATIONS = ['function', 'const', 'class'];
+  const COMPONENT_TOKENS = ['component', 'app', 'export default'];
+  for (const rawLine of code.split('\n')) {
+    const line = rawLine.toLowerCase();
+    let declStart = Infinity;
+    let declEnd = -1;
+    for (const decl of DECLARATIONS) {
+      const at = line.indexOf(decl);
+      if (at >= 0 && at < declStart) {
+        declStart = at;
+        declEnd = at + decl.length;
+      }
+    }
+    if (declEnd < 0) continue;
+    const afterDecl = line.slice(declEnd);
+    if (COMPONENT_TOKENS.some(token => afterDecl.includes(token))) return true;
   }
   return false;
 }
 
-// Search-window bound for the anchor-search predicates (react, html full-document,
-// svg), not a body-length cap and not applied to every promotion predicate. An
-// anchor inside the window still promotes the full, untruncated body; an anchor
-// past the window leaves the fence a plain code block.
-// MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts.
-const MAX_FENCE_SCAN_CHARS = 256000;
+// A full HTML document: a <!DOCTYPE ...> followed later by a closing </html>.
+function hasFullHtmlDocument(code: string): boolean {
+  const lower = code.toLowerCase();
+  const doctype = lower.indexOf('<!doctype');
+  if (doctype < 0) return false;
+  return lower.indexOf('</html>', doctype + '<!doctype'.length) >= 0;
+}
+
+// A complete SVG: an opening <svg followed later by a closing </svg>.
+function hasCompleteSvg(code: string): boolean {
+  const lower = code.toLowerCase();
+  const open = lower.indexOf('<svg');
+  if (open < 0) return false;
+  return lower.indexOf('</svg>', open + '<svg'.length) >= 0;
+}
 
 /**
  * Post-processes AI responses to detect code blocks that should be artifacts
  * and converts them to proper artifact syntax as a fallback
  */
 export function convertCodeBlocksToArtifacts(content: string): string {
-  // The rewritten fence patterns put no \s* in front of the body group: it is greedy
-  // over the characters the lazy body matches anyway, so on a fence label followed by a
-  // long whitespace run and no closer it gives back one character at a time and rescans,
-  // which is quadratic. Every callback trims the body, so the leading break is free.
-  // Detect React component code blocks. The fence is matched on its own and the
-  // component markers are checked in the callback. With them anchored inside the
-  // pattern, its two lazy multi-line groups had to split the body between them, so a
-  // fence that never closed cost time quadratic in body size. The client twin
-  // (apps/client/app/utils/artifactParser.ts) already matches the fence this way, with
-  // its own per-language predicate.
+  // The fence patterns below put no \s* in front of the body group: it is greedy over
+  // characters the lazy body matches anyway, so a fence label followed by a long
+  // whitespace run and no closer backtracks quadratically. Every callback trims.
+  // Detect React component code blocks (body captured linearly; see hasReactComponentLine)
   const reactCodeBlockRegex = /```(?:tsx?|javascript|jsx)([\s\S]*?)```/gi;
 
   content = content.replace(reactCodeBlockRegex, (match, codeContent) => {
-    if (!hasComponentDeclarationLine(codeContent.slice(0, MAX_FENCE_SCAN_CHARS))) return match;
+    // Anchor requirement the old regex encoded inline: a declaration + component token
+    // on one line. Without it, this fence is not a React component - leave it alone.
+    if (!hasReactComponentLine(codeContent)) return match;
     // Check if this looks like a React component
     if (
       codeContent.includes('useState') ||
@@ -177,18 +203,15 @@ ${codeContent.trim()}
     return match;
   });
 
-  // Detect HTML code blocks. The fence is matched on its own and the document
-  // anchors are checked in the callback. With <!DOCTYPE and </html> anchored inside
-  // the pattern, two lazy multi-line groups had to split the body between them, so a
-  // fence that never closed and repeated </html> cost time quadratic in body size.
+  // Detect full HTML-document code blocks (body captured linearly; see hasFullHtmlDocument).
+  // A fence that is not a full document is left unchanged here so the fragment handler
+  // below still promotes it. The two-tier split is the original behavior; what changed is
+  // that two adjacent `html` fences are now two artifacts, where the old regex merged
+  // them into one.
   const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
-    // The closer must follow the declaration, as the anchored pattern required. The
-    // first declaration is the only one worth testing: closers only move forward.
-    const head = codeContent.slice(0, MAX_FENCE_SCAN_CHARS);
-    const docAt = head.search(/<!DOCTYPE/i);
-    if (docAt < 0 || !/<\/html\s*>/i.test(head.slice(docAt))) return match;
+    if (!hasFullHtmlDocument(codeContent)) return match;
     const title = extractHTMLTitle(codeContent) || 'HTML Page';
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
@@ -212,17 +235,12 @@ ${codeContent.trim()}
 </artifact>`;
   });
 
-  // Detect SVG code blocks. Same shape as the HTML pass above: match the fence,
-  // then check for a complete <svg> element in the callback.
+  // Detect SVG code blocks (body captured linearly; see hasCompleteSvg)
   const svgCodeBlockRegex = /```svg([\s\S]*?)```/gi;
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {
-    // Located in two forward scans rather than one <svg...</svg> pattern, which
-    // re-scans to the end of the body from every <svg that has no closer. Closers only
-    // move forward, so the first opening is the only one worth testing.
-    const svgHead = codeContent.slice(0, MAX_FENCE_SCAN_CHARS);
-    const svgAt = svgHead.search(/<svg/i);
-    if (svgAt < 0 || !/<\/svg\s*>/i.test(svgHead.slice(svgAt))) return match;
+    // Not a complete <svg>...</svg> - leave the fence unchanged.
+    if (!hasCompleteSvg(codeContent)) return match;
     const identifier = 'svg-graphic';
 
     return `<artifact identifier="${identifier}" type="image/svg+xml" title="SVG Graphic">
