@@ -1,6 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { shouldAttemptSessionOpen, shouldShowChromeBand } from './SessionContainer';
+import { shouldAttemptSessionOpen, shouldShowChromeBand, splitRowFlexDirection } from './SessionContainer';
 import type { DefaultLayoutType } from '@client/app/hooks/useSessionLayout';
+
+const ALL_LAYOUTS: DefaultLayoutType[] = [
+  'horizontal',
+  'vertical',
+  'pip',
+  'noAI',
+  'hide',
+  'floatingChat',
+  'dockRight',
+  'dockBottom',
+];
 
 // Guards the fix for the 404 retry loop: changeSession must be attempted at most
 // once per session id, even when the open keeps failing and contextSessionId
@@ -40,17 +51,6 @@ describe('shouldAttemptSessionOpen', () => {
 // negative `layout !== ...` chain that silently gave new/other layouts the band. A new member
 // added to the union without a row here defaults to false, which is the intended safe direction.
 describe('shouldShowChromeBand', () => {
-  const ALL_LAYOUTS: DefaultLayoutType[] = [
-    'horizontal',
-    'vertical',
-    'pip',
-    'noAI',
-    'hide',
-    'floatingChat',
-    'dockRight',
-    'dockBottom',
-  ];
-
   it('is true ONLY for desktop vertical', () => {
     expect(shouldShowChromeBand('vertical', false)).toBe(true);
   });
@@ -66,4 +66,37 @@ describe('shouldShowChromeBand', () => {
   it.each(ALL_LAYOUTS)('is false for %s on mobile', layout => {
     expect(shouldShowChromeBand(layout, true)).toBe(false);
   });
+});
+
+// Pins the single layout fact ResizableSplitter's sign convention rests on. Under row-reverse
+// the knowledge pane renders physically RIGHT, which is why both the drag and the arrow keys
+// SUBTRACT to move the separator right. Turn this into a plain 'row' and both move the wrong
+// pane with every ResizableSplitter test still green - this is what stands in the way.
+describe('splitRowFlexDirection', () => {
+  it('reverses the split row so the chat sits left of the knowledge pane', () => {
+    expect(splitRowFlexDirection('vertical', false)).toBe('row-reverse');
+  });
+
+  // The splitter renders under exactly the same condition, so the reversal and the component
+  // relying on it cannot drift apart without this failing.
+  it('reverses exactly when the splitter is rendered', () => {
+    for (const layout of ALL_LAYOUTS) {
+      for (const isMobile of [false, true]) {
+        expect(splitRowFlexDirection(layout, isMobile) === 'row-reverse').toBe(shouldShowChromeBand(layout, isMobile));
+      }
+    }
+  });
+
+  it('stacks the horizontal layout and the mobile vertical collapse', () => {
+    expect(splitRowFlexDirection('horizontal', false)).toBe('column');
+    expect(splitRowFlexDirection('horizontal', true)).toBe('column');
+    expect(splitRowFlexDirection('vertical', true)).toBe('column');
+  });
+
+  it.each(['pip', 'noAI', 'hide', 'floatingChat', 'dockRight', 'dockBottom'] as const)(
+    'leaves %s a plain row',
+    layout => {
+      expect(splitRowFlexDirection(layout, false)).toBe('row');
+    }
+  );
 });
