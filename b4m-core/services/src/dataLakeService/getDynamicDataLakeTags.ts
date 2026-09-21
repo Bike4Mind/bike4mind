@@ -36,7 +36,11 @@ export interface DataLakeAccessContext {
   db: {
     dataLakes?: Pick<
       IDataLakeRepository,
-      'findActiveByUserTags' | 'findActiveByUserTagsAndEntitlements' | 'findById' | 'findIdsCreatedBy'
+      | 'findActiveByUserTags'
+      | 'findActiveByUserTagsAndEntitlements'
+      | 'countGateExcludedLakes'
+      | 'findById'
+      | 'findIdsCreatedBy'
     >;
     /**
      * Resolves the caller's org membership set (owner + `users[]` ACL) internally from
@@ -215,6 +219,22 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   scopedTagPrefixes: string[];
   lakes: ResolvedLakeAccess[];
   /**
+   * How many active lakes the caller can see exist - by org membership or public listing - but
+   * whose own `requiredUserTag`/`requiredEntitlement` gate they hold neither of (#3055). From a
+   * dedicated count-only query (`countGateExcludedLakes`), NOT derived from the candidate set
+   * fetched below: that set's non-owner arms already enforce the gate in Mongo
+   * (`requirementConstraint`), so a lake the caller's org can see but lacks the entitlement for is
+   * never among `dbLakes` at all - a diff against it would count almost nothing real. Excludes
+   * lakes reached via the owner or grant bypass, which are never "excluded" regardless of the
+   * gate.
+   *
+   * OPTIONAL, same reason and same contract as `lakeViewComplete` below: a failed or unwired count
+   * query means "not measured", never a false "nothing excluded". A rebuild that forgets this
+   * field degrades to "say nothing", which is the safe direction - there is no safe default number
+   * (0 would under-report a real outage as a clean turn).
+   */
+  excludedByAccessCount?: number;
+  /**
    * True when the dynamic-lake read either succeeded or was never configured. False when it failed
    * and the sets below are the static registry alone.
    *
@@ -239,6 +259,10 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
   const userId = context.user.id ? String(context.user.id) : undefined;
+  // #3055: unknown (never a false 0) until the count-only query below actually runs and
+  // succeeds - see excludedByAccessCount's own doc on the return type for why absence must
+  // mean "not measured", the same contract lakeViewComplete keeps for the rest of this function.
+  let excludedByAccessCount: number | undefined;
   let dynamicDataLakes: DataLakeConfig[] | undefined;
   // Ids of fetched lakes whose PERSISTED createdByUserId is this caller. Read off the raw
   // documents because toDataLakeConfig drops createdByUserId - and that projection is also what
@@ -399,6 +423,26 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       // This flag is what lets a consumer act on the degradation instead of misreading it as access.
       lakeViewComplete = false;
     }
+    // #3055: a separate COUNT-ONLY query (never returns a lake document - see
+    // countGateExcludedLakes's own doc), because the candidate set fetched above cannot answer
+    // this. Its non-owner arms already enforce the gate in Mongo (requirementConstraint), so a
+    // lake the caller's org can see but lacks the entitlement for is never among `dbLakes` at
+    // all - diffing that set against `resolvedLakes` would count almost nothing real. Degrades to
+    // `undefined` (unknown), never `0`, on any failure - a caller must not read "no access issue"
+    // from a query that could not run. Guarded separately from the block above: a host that wired
+    // `findActiveByUserTagsAndEntitlements` but not this newer method must not lose lake access
+    // entirely over one missing capability.
+    try {
+      excludedByAccessCount = await context.db.dataLakes.countGateExcludedLakes(
+        userTags,
+        entitlementKeys,
+        organizationIds,
+        userId,
+        reach
+      );
+    } catch (err) {
+      context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
+    }
   }
   const accessibleLakes = getAccessibleDataLakes(userTags, dynamicDataLakes, entitlementKeys);
   // getAccessibleDataLakes is a pure tag/entitlement predicate with no ownership rule (by
@@ -455,6 +499,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   const isShadowedRegistryTag = (dl: DataLakeConfig) => dynamicIds.has(dl.id) && reservedTags.has(dl.datalakeTag);
   return {
     lakeViewComplete,
+    excludedByAccessCount,
     dataLakeTags: resolvedLakes.filter(dl => !isShadowedRegistryTag(dl)).map(dl => dl.datalakeTag),
     dataLakeTagPrefixes: resolvedLakes.filter(dl => !dynamicIds.has(dl.id)).map(dl => dl.fileTagPrefix),
     scopedTagPrefixes: resolvedLakes.filter(dl => dynamicIds.has(dl.id)).map(dl => dl.fileTagPrefix),
