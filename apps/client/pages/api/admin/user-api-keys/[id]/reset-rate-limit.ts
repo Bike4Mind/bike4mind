@@ -5,8 +5,9 @@ import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { ForbiddenError } from '@server/utils/errors';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { logEvent } from '@server/utils/analyticsLog';
-import { resetApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
+import { evaluateCounterLockout, resetApiKeyRateLimit, resolveCounterLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { UserApiKeyEvents } from '@bike4mind/common';
+import { userApiKeyService } from '@bike4mind/services';
 
 /**
  * POST /api/admin/user-api-keys/[id]/reset-rate-limit
@@ -19,6 +20,19 @@ import { UserApiKeyEvents } from '@bike4mind/common';
  * only operator override for a client that has exhausted its own management
  * quota and locked itself out of the self-service rate-limit PATCH, its only
  * other path back.
+ *
+ * Response includes `lockout`: per-counter (request/management), per-window
+ * (minute/day) whether usage was at/over its ceiling at the moment it was
+ * reset - the only way to tell an admin which counter actually caused the
+ * lockout, since the reset clears that state. Derived directly from what
+ * `resetApiKeyRateLimit` atomically deleted (read and delete happen as one
+ * operation per counter), never from a separate pre-read - a separate read
+ * would leave a window for a concurrent request to move a counter between
+ * "observed" and "cleared", misreporting the cause. A `lockout` entry is
+ * omitted only if clearing that specific counter failed - best-effort, and
+ * never blocks clearing (or reporting) the other counter. If EVERY counter
+ * fails to clear, `resetApiKeyRateLimit` itself rejects rather than
+ * returning a result this route could report as a 200 success.
  */
 const handler = baseApi({ auth: true })
   .use(csrfProtection())
@@ -38,7 +52,15 @@ const handler = baseApi({ auth: true })
         throw new NotFoundError('API key not found');
       }
 
-      await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true });
+      const resetUsage = await resetApiKeyRateLimit(apiKey.id, { alsoResetManagement: true, logger: req.logger });
+      const rateLimit = apiKey.rateLimit ?? userApiKeyService.API_KEY_RATE_LIMIT_DEFAULTS;
+      const lockout = {
+        request:
+          resetUsage.request && evaluateCounterLockout(resetUsage.request, resolveCounterLimit('request', rateLimit)),
+        management:
+          resetUsage.management &&
+          evaluateCounterLockout(resetUsage.management, resolveCounterLimit('management', rateLimit)),
+      };
 
       // Attributed to the key owner; resetBy records the acting admin.
       // Best-effort: the reset already happened, and the counter write throws
@@ -63,7 +85,7 @@ const handler = baseApi({ auth: true })
         `Admin ${req.user.username} (${req.user.id}) reset rate-limit counters for API key ${apiKey.id} (owner ${apiKey.userId})`
       );
 
-      return res.status(200).json({ success: true, id: apiKey.id });
+      return res.status(200).json({ success: true, id: apiKey.id, lockout });
     })
   );
 
