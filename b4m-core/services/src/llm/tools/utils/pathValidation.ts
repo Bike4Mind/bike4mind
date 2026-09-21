@@ -1,5 +1,5 @@
 import path from 'path';
-import { realpathSync } from 'fs';
+import { realpathSync, readlinkSync } from 'fs';
 
 /**
  * Result of path validation check
@@ -19,7 +19,21 @@ function resolveRealPath(filePath: string): string {
   try {
     return realpathSync(filePath);
   } catch {
-    // Path doesn't exist yet - resolve the parent directory instead
+    // realpathSync failed. Two distinct cases must be told apart:
+    //  1. `filePath` is itself a symlink (possibly DANGLING - target missing).
+    //     Follow the link manually so a dangling link can't be treated as an
+    //     in-workspace new file and smuggle a write out to its target.
+    //  2. `filePath` genuinely does not exist (e.g. a file being created).
+    //     Resolve the nearest existing ancestor and re-append the leaf.
+    try {
+      const linkTarget = readlinkSync(filePath); // throws unless filePath is a symlink
+      const resolvedTarget = path.isAbsolute(linkTarget)
+        ? linkTarget
+        : path.resolve(path.dirname(filePath), linkTarget);
+      return resolveRealPath(resolvedTarget);
+    } catch {
+      // Not a symlink - fall through to nearest-ancestor resolution.
+    }
     const parentDir = path.dirname(filePath);
     const basename = path.basename(filePath);
     if (parentDir === filePath) {

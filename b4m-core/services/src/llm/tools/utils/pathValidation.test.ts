@@ -145,6 +145,28 @@ describe('pathValidation', () => {
     });
   });
 
+  describe('isPathAllowed with dangling symlinks', () => {
+    let danglingLink: string;
+
+    beforeAll(async () => {
+      // A symlink INSIDE cwd whose target does not exist and is OUTSIDE cwd.
+      // realpathSync throws on it, so a naive "resolve the parent" fallback would
+      // treat it as an in-cwd new file and allow a create that then follows the
+      // link outside the workspace.
+      danglingLink = join(testDir, 'dangling-link');
+      await symlink(join(testDir, '..', 'nonexistent-outside-target', 'evil.txt'), danglingLink);
+    });
+
+    afterAll(async () => {
+      await rm(danglingLink, { force: true }).catch(() => {});
+    });
+
+    it('denies a create against a dangling symlink pointing outside cwd', () => {
+      const result = isPathAllowed('dangling-link');
+      expect(result.allowed).toBe(false);
+    });
+  });
+
   describe('isPathAllowed with non-existent paths', () => {
     it('should allow non-existent files within cwd', () => {
       const result = isPathAllowed('does-not-exist.txt');
