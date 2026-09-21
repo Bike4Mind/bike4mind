@@ -1,5 +1,5 @@
 import { beforeEach, describe, it, expect } from 'vitest';
-import type { RecordLakeFindingInput } from '@bike4mind/common';
+import type { LakeFindingSource, RecordLakeFindingInput } from '@bike4mind/common';
 import { dataLakeFindingRepository as repo, DataLakeFindingModel } from './DataLakeFindingModel';
 import { setupMongoTest } from '../../__test__/utils';
 
@@ -20,6 +20,9 @@ const input = (overrides: Partial<RecordLakeFindingInput> = {}): RecordLakeFindi
   ...overrides,
 });
 
+/** Every field of LakeFindingSource. `keyof` makes the compiler reject this once the type gains one. */
+const SOURCE_FIELDS: Record<keyof LakeFindingSource, true> = { fabFileId: true, fileName: true, excerpt: true };
+
 describe('DataLakeFindingRepository', () => {
   setupMongoTest();
 
@@ -28,6 +31,21 @@ describe('DataLakeFindingRepository', () => {
   // first would run without the constraint it is asserting on.
   beforeEach(async () => {
     await DataLakeFindingModel.ensureIndexes();
+  });
+
+  it('declares a source subschema field for field with LakeFindingSource', () => {
+    // The parity guard the round-trip test below cannot be: that one names three fields literally,
+    // so a FOURTH added to LakeFindingSource and forgotten here would not fail it - Mongoose strict
+    // mode would just drop the field on write with nothing going red. Keyed off `keyof` so adding
+    // to the interface breaks this object's type first, and the assertion second, forcing the
+    // schema edit into the same commit.
+    // Mongoose types `path()` as the base SchemaType, which carries no `schema` - narrowing to the
+    // document-array shape is the only way to read a subschema's declared paths.
+    const sources = DataLakeFindingModel.schema.path('sources') as unknown as {
+      schema: { paths: Record<string, unknown> };
+    };
+
+    expect(Object.keys(sources.schema.paths).sort()).toEqual(Object.keys(SOURCE_FIELDS).sort());
   });
 
   it('persists every field of a source, so the schema cannot silently drop one', async () => {
@@ -174,7 +192,11 @@ describe('DataLakeFindingRepository', () => {
     await repo.recordDetected(input({ lakeId: 'lake-1', subject: 'cites the doomed file' }));
     await repo.recordDetected(input({ lakeId: 'lake-2', subject: 'also cites it' }));
     await repo.recordDetected(
-      input({ lakeId: 'lake-1', subject: 'unrelated', sources: [{ fabFileId: 'file-z', fileName: 'z.md', excerpt: 'x' }] })
+      input({
+        lakeId: 'lake-1',
+        subject: 'unrelated',
+        sources: [{ fabFileId: 'file-z', fileName: 'z.md', excerpt: 'x' }],
+      })
     );
 
     expect(await repo.deleteForPurgedDocument('file-a')).toBe(2);

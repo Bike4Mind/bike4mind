@@ -14,6 +14,7 @@ vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEO
 
 const IDENTITY_INDEX = 'lakeId_1_detector_1_kind_1_subject_1';
 const QUEUE_INDEX = 'lakeId_1_status_1_kind_1_lastSeenAt_-1';
+const PURGE_SWEEP_INDEX = 'sources.fabFileId_1';
 
 const row = (overrides: Record<string, unknown> = {}) => ({
   lakeId: 'lake-1',
@@ -53,6 +54,7 @@ beforeEach(async () => {
   await DataLakeFindingModel.collection.deleteMany({});
   await safeDropIndex(DataLakeFindingModel.collection, IDENTITY_INDEX);
   await safeDropIndex(DataLakeFindingModel.collection, QUEUE_INDEX);
+  await safeDropIndex(DataLakeFindingModel.collection, PURGE_SWEEP_INDEX);
 });
 
 // Real mongod, not mocks: the migration's job is entirely index-build side effects, which a mocked
@@ -75,6 +77,16 @@ describe('ensure-data-lake-finding-indexes migration (real DB)', () => {
     const idx = (await DataLakeFindingModel.collection.indexes()).find(i => i.name === QUEUE_INDEX);
     expect(idx).toBeDefined();
     expect(idx?.key).toEqual({ lakeId: 1, status: 1, kind: 1, lastSeenAt: -1 });
+  });
+
+  it('builds the multikey index the purge sweep seeks on', async () => {
+    // The only index here with no lake prefix: a purge destroys a document globally, so the sweep
+    // queries every lake at once and would otherwise scan the whole collection inside a request.
+    await migration.up();
+
+    const idx = (await DataLakeFindingModel.collection.indexes()).find(i => i.name === PURGE_SWEEP_INDEX);
+    expect(idx).toBeDefined();
+    expect(idx?.key).toEqual({ 'sources.fabFileId': 1 });
   });
 
   it('is idempotent on re-run', async () => {

@@ -68,18 +68,21 @@ const DataLakeFindingSchema = new Schema<IDataLakeFindingDocument>(
 // because re-detecting a resolved problem is the same problem recurring, not a new one. Keeping the
 // key occupied is what lets `lastSeenAt` move past `resolvedAt` and make that recurrence visible.
 DataLakeFindingSchema.index({ lakeId: 1, detector: 1, kind: 1, subject: 1 }, { unique: true });
-// The review queue: one lake's findings, most recently seen first, narrowed by status then kind.
-// Ordered so the lakeId prefix still serves a kind-only or unfiltered listing.
+// The review queue. Serves the common narrowing - one lake, by status, then kind - and supplies the
+// sort for it. A listing that skips status (kind-only, detector-only, unfiltered) still seeks on the
+// lakeId prefix but sorts in memory, which is bounded by the page limit the list route always sends.
 DataLakeFindingSchema.index({ lakeId: 1, status: 1, kind: 1, lastSeenAt: -1 });
+// The purge sweep's only access path, and the only index here not keyed on a lake: a purge destroys
+// a document globally, so `deleteForPurgedDocument` queries across every lake at once and has no
+// lake prefix to seek on. Multikey over `sources` (bounded at LAKE_FINDING_SOURCE_MAX entries per
+// row). Same shape, for the same lookup, as PublishedArtifactSchema's `source.fabFileId` index.
+DataLakeFindingSchema.index({ 'sources.fabFileId': 1 });
 
 export const DataLakeFindingModel: IDataLakeFindingModel =
   (mongoose.models[ModelName] as IDataLakeFindingModel) ||
   mongoose.model<IDataLakeFindingDocument, IDataLakeFindingModel>(ModelName, DataLakeFindingSchema);
 
-class DataLakeFindingRepository
-  extends BaseRepository<IDataLakeFindingDocument>
-  implements IDataLakeFindingRepository
-{
+class DataLakeFindingRepository extends BaseRepository<IDataLakeFindingDocument> implements IDataLakeFindingRepository {
   constructor(private findingModel: mongoose.Model<IDataLakeFindingDocument>) {
     super(findingModel);
   }
@@ -144,11 +147,7 @@ class DataLakeFindingRepository
   }
 
   async assignFinding(id: string, assigneeUserId: string | null): Promise<IDataLakeFindingDocument | null> {
-    const doc = await this.findingModel.findOneAndUpdate(
-      { _id: id },
-      { $set: { assigneeUserId } },
-      { new: true }
-    );
+    const doc = await this.findingModel.findOneAndUpdate({ _id: id }, { $set: { assigneeUserId } }, { new: true });
     return (doc?.toJSON() as IDataLakeFindingDocument) ?? null;
   }
 
@@ -160,9 +159,10 @@ class DataLakeFindingRepository
   async deleteForPurgedDocument(fabFileId: string): Promise<number> {
     // A single dotted condition over the `sources` array, so this needs no $elemMatch: the
     // cross-element matching hazard only arises once two conditions have to hold on the SAME
-    // element. Unindexed and deliberately not lake-scoped - see the interface for why the blast
-    // radius is global. A purge is rare and operator-initiated, so a collection scan bounded by
-    // ~200 findings per lake is the right trade against carrying an index for it.
+    // element. Deliberately not lake-scoped - see the interface for why the blast radius is global.
+    // That is also why it carries its own index: with no lakeId to seek on, the alternative is a
+    // scan of the WHOLE collection (every lake's findings, not one lake's) on a path that runs
+    // inside the caller's purge request.
     const res = await this.findingModel.deleteMany({ 'sources.fabFileId': fabFileId });
     return res.deletedCount ?? 0;
   }
