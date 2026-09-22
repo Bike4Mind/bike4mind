@@ -79,6 +79,13 @@ const HudPage = lazy(() => import('./routes/hud'));
 const HearthPage = lazy(() => import('./routes/hearth'));
 const QuestMasterV5Page = lazy(() => import('./routes/quests-v5'));
 
+// Shared coercion for the optional string search params nearly every route declares.
+// Identical to the inline form it replaces: falsy (missing or empty) becomes undefined,
+// anything else is String()-coerced. A few routes below deliberately keep a stricter
+// `typeof === 'string'` guard instead, which is not the same thing - do not fold those in.
+const optionalStringParam = (search: Record<string, unknown>, key: string): string | undefined =>
+  search[key] ? String(search[key]) : undefined;
+
 // AI-themed loading messages for route transitions
 const loadingMessages = [
   'Warming up the neural networks...',
@@ -292,11 +299,11 @@ const newRoute = createRoute({
     search: Record<string, unknown>
   ): { projectId?: string; questmaster?: string; goal?: string; article?: string } => {
     return {
-      projectId: search.projectId ? String(search.projectId) : undefined,
-      questmaster: search.questmaster ? String(search.questmaster) : undefined,
-      goal: search.goal ? String(search.goal) : undefined,
+      projectId: optionalStringParam(search, 'projectId'),
+      questmaster: optionalStringParam(search, 'questmaster'),
+      goal: optionalStringParam(search, 'goal'),
       // Data Lake article deep link, forwarded here from the retired /data-lakes route (#1943).
-      article: search.article ? String(search.article) : undefined,
+      article: optionalStringParam(search, 'article'),
     };
   },
 });
@@ -316,8 +323,8 @@ const notebookRoute = createRoute({
   // session loads normally and ChatHistory scrolls to that turn once it has rendered.
   validateSearch: (search: Record<string, unknown>): { projectId?: string; questId?: string } => {
     return {
-      projectId: search.projectId ? String(search.projectId) : undefined,
-      questId: search.questId ? String(search.questId) : undefined,
+      projectId: optionalStringParam(search, 'projectId'),
+      questId: optionalStringParam(search, 'questId'),
     };
   },
 });
@@ -366,9 +373,9 @@ const profileRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { tab?: string; subtab?: string; section?: string } => {
     return {
-      tab: search.tab ? String(search.tab) : undefined,
-      subtab: search.subtab ? String(search.subtab) : undefined,
-      section: search.section ? String(search.section) : undefined,
+      tab: optionalStringParam(search, 'tab'),
+      subtab: optionalStringParam(search, 'subtab'),
+      section: optionalStringParam(search, 'section'),
     };
   },
 });
@@ -417,7 +424,7 @@ const subscriptionsCheckoutRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { plan?: string } => {
     return {
-      plan: search.plan ? String(search.plan) : undefined,
+      plan: optionalStringParam(search, 'plan'),
     };
   },
 });
@@ -646,7 +653,7 @@ const organizationDetailRoute = createRoute({
   // slack_connected/slack_error, which OrgSlackIntegration reads loosely. Keep those reads loose,
   // or declare the params here too - a strict schema listing only `tab` would hide them.
   validateSearch: (search: Record<string, unknown>): { tab?: string } => {
-    return { tab: search.tab ? String(search.tab) : undefined };
+    return { tab: optionalStringParam(search, 'tab') };
   },
 });
 
@@ -661,8 +668,8 @@ const authCallbackRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { code?: string; state?: string } => {
     return {
-      code: search.code ? String(search.code) : undefined,
-      state: search.state ? String(search.state) : undefined,
+      code: optionalStringParam(search, 'code'),
+      state: optionalStringParam(search, 'state'),
     };
   },
 });
@@ -680,10 +687,10 @@ const authSuccessRoute = createRoute({
     search: Record<string, unknown>
   ): { token?: string; error?: string; userId?: string; redirectTo?: string } => {
     return {
-      token: search.token ? String(search.token) : undefined,
-      error: search.error ? String(search.error) : undefined,
-      userId: search.userId ? String(search.userId) : undefined,
-      redirectTo: search.redirectTo ? String(search.redirectTo) : undefined,
+      token: optionalStringParam(search, 'token'),
+      error: optionalStringParam(search, 'error'),
+      userId: optionalStringParam(search, 'userId'),
+      redirectTo: optionalStringParam(search, 'redirectTo'),
     };
   },
 });
@@ -699,8 +706,8 @@ const loginRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { error?: string; redirectTo?: string } => {
     return {
-      error: search.error ? String(search.error) : undefined,
-      redirectTo: search.redirectTo ? String(search.redirectTo) : undefined,
+      error: optionalStringParam(search, 'error'),
+      redirectTo: optionalStringParam(search, 'redirectTo'),
     };
   },
 });
@@ -729,7 +736,7 @@ const acceptPoliciesRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { redirectTo?: string } => {
     return {
-      redirectTo: search.redirectTo ? String(search.redirectTo) : undefined,
+      redirectTo: optionalStringParam(search, 'redirectTo'),
     };
   },
 });
@@ -745,7 +752,7 @@ const verifyEmailRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { token?: string } => {
     return {
-      token: search.token ? String(search.token) : undefined,
+      token: optionalStringParam(search, 'token'),
     };
   },
 });
@@ -761,7 +768,7 @@ const verifyEmailChangeRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { token?: string } => {
     return {
-      token: search.token ? String(search.token) : undefined,
+      token: optionalStringParam(search, 'token'),
     };
   },
 });
@@ -788,7 +795,7 @@ const googleDriveCallbackRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { code?: string } => {
     return {
-      code: search.code ? String(search.code) : undefined,
+      code: optionalStringParam(search, 'code'),
     };
   },
 });
@@ -855,8 +862,8 @@ const questsRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { filter?: string; search?: string } => {
     return {
-      filter: search.filter ? String(search.filter) : undefined,
-      search: search.search ? String(search.search) : undefined,
+      filter: optionalStringParam(search, 'filter'),
+      search: optionalStringParam(search, 'search'),
     };
   },
 });
@@ -909,7 +916,7 @@ const hudRoute = createRoute({
     </Suspense>
   ),
   validateSearch: (search: Record<string, unknown>): { tab?: string } => ({
-    tab: search.tab ? String(search.tab) : undefined,
+    tab: optionalStringParam(search, 'tab'),
   }),
 });
 
@@ -936,8 +943,8 @@ const slackSuccessRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { workspace?: string; reinstall?: boolean; teamId?: string } => {
     return {
-      workspace: search.workspace ? String(search.workspace) : undefined,
-      teamId: search.teamId ? String(search.teamId) : undefined,
+      workspace: optionalStringParam(search, 'workspace'),
+      teamId: optionalStringParam(search, 'teamId'),
       reinstall: search.reinstall === 'true' || search.reinstall === true,
     };
   },
@@ -954,7 +961,7 @@ const slackErrorRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { reason?: string } => {
     return {
-      reason: search.reason ? String(search.reason) : undefined,
+      reason: optionalStringParam(search, 'reason'),
     };
   },
 });
@@ -990,7 +997,7 @@ const activateRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { code?: string } => {
     return {
-      code: search.code ? String(search.code) : undefined,
+      code: optionalStringParam(search, 'code'),
     };
   },
 });
@@ -1017,9 +1024,9 @@ const adminRoute = createRoute({
     search: Record<string, unknown>
   ): { emergency_access?: string; tab?: string; feedbackId?: string } => {
     return {
-      emergency_access: search.emergency_access ? String(search.emergency_access) : undefined,
-      tab: search.tab ? String(search.tab) : undefined,
-      feedbackId: search.feedbackId ? String(search.feedbackId) : undefined,
+      emergency_access: optionalStringParam(search, 'emergency_access'),
+      tab: optionalStringParam(search, 'tab'),
+      feedbackId: optionalStringParam(search, 'feedbackId'),
     };
   },
 });
@@ -1035,7 +1042,7 @@ const emailUnsubscribeRoute = createRoute({
   ),
   validateSearch: (search: Record<string, unknown>): { token?: string } => {
     return {
-      token: search.token ? String(search.token) : undefined,
+      token: optionalStringParam(search, 'token'),
     };
   },
 });
@@ -1062,14 +1069,14 @@ const oauthAuthorizeRoute = createRoute({
     code_challenge_method?: string;
     nonce?: string;
   } => ({
-    client_id: search.client_id ? String(search.client_id) : undefined,
-    redirect_uri: search.redirect_uri ? String(search.redirect_uri) : undefined,
-    response_type: search.response_type ? String(search.response_type) : undefined,
-    scope: search.scope ? String(search.scope) : undefined,
-    state: search.state ? String(search.state) : undefined,
-    code_challenge: search.code_challenge ? String(search.code_challenge) : undefined,
-    code_challenge_method: search.code_challenge_method ? String(search.code_challenge_method) : undefined,
-    nonce: search.nonce ? String(search.nonce) : undefined,
+    client_id: optionalStringParam(search, 'client_id'),
+    redirect_uri: optionalStringParam(search, 'redirect_uri'),
+    response_type: optionalStringParam(search, 'response_type'),
+    scope: optionalStringParam(search, 'scope'),
+    state: optionalStringParam(search, 'state'),
+    code_challenge: optionalStringParam(search, 'code_challenge'),
+    code_challenge_method: optionalStringParam(search, 'code_challenge_method'),
+    nonce: optionalStringParam(search, 'nonce'),
   }),
 });
 
