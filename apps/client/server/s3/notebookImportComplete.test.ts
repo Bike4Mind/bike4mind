@@ -95,7 +95,7 @@ const event = {
     {
       s3: {
         bucket: { name: 'import-bucket' },
-        object: { key: 'notebooks/user-1/2026-08-10T00-00-00.json' },
+        object: { key: 'notebooks/user-1/1700000000000.json' },
       },
     },
   ],
@@ -220,5 +220,20 @@ describe('notebook import: uploaded knowledge objects track the transaction outc
     expect(moderateImportedKnowledgeFiles).toHaveBeenCalledWith(
       expect.objectContaining({ filePaths: ['knowledge/user-1/a'] })
     );
+  });
+});
+
+describe('notebook data key filtering', () => {
+  it.each([
+    'notebooks/user-1/1700000000000.options.json',
+    'notebooks/user-1/1700000000000.json/extra',
+    'notebooks/user-1/2026-08-10T00-00-00.json',
+    'notebooks//1700000000000.json',
+  ])('skips non-data or malformed object keys before storage or job work (%s)', async key => {
+    const record = { Records: [{ s3: { bucket: { name: 'import-bucket' }, object: { key } } }] };
+    await (dispatch as unknown as (e: unknown, c: unknown, l: unknown) => Promise<void>)(record, {}, logger);
+    expect(h.getMetadata).not.toHaveBeenCalled();
+    expect(h.jobCreate).not.toHaveBeenCalled();
+    expect(h.createInboxMessage).not.toHaveBeenCalled();
   });
 });
