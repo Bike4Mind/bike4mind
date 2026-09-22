@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 
 // Keep the import chain light: generateIdToken only needs the RSA key pair + APP_URL. Stub the
 // DB repositories and Config so importing oauthServer does not pull in mongoose/env validation.
@@ -9,7 +10,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 vi.mock('@server/utils/config', () => ({ Config: { OAUTH_RSA_PRIVATE_KEY: undefined } }));
 
-import { generateIdToken, releasedIdentityClaims } from './oauthServer';
+import { generateIdToken, releasedIdentityClaims, verifyPkce } from './oauthServer';
 
 beforeAll(() => {
   process.env.APP_URL = process.env.APP_URL || 'https://app.test';
@@ -96,5 +97,51 @@ describe('releasedIdentityClaims', () => {
       email: false,
       profile: true,
     });
+  });
+});
+
+/**
+ * PKCE grammar + S256 match (RFC 7636). Before the grammar guard, verifyPkce hashed any string and
+ * returned true for a matching challenge, so a 1-char verifier passed - offline-recoverable from the
+ * challenge exposed at authorization. These pin the 43-128 unreserved verifier grammar, the 43-char
+ * base64url S256 challenge grammar, and that a well-formed non-match still fails.
+ */
+describe('verifyPkce (RFC 7636 grammar + S256 match)', () => {
+  const challengeFor = (v: string) => crypto.createHash('sha256').update(v).digest('base64url');
+
+  it('accepts the RFC 7636 Appendix B example pair', () => {
+    expect(
+      verifyPkce('dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk', 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM')
+    ).toBe(true);
+  });
+
+  it('accepts verifiers at the length bounds (43 and 128) with a matching challenge', () => {
+    for (const len of [43, 128]) {
+      const v = 'a'.repeat(len);
+      expect(verifyPkce(v, challengeFor(v))).toBe(true);
+    }
+  });
+
+  it('rejects verifiers outside the length bounds even with a correctly computed challenge', () => {
+    // These all returned true before the grammar guard (the offline-recovery hole onoya flagged).
+    for (const len of [1, 42, 129]) {
+      const v = 'a'.repeat(len);
+      expect(verifyPkce(v, challengeFor(v))).toBe(false);
+    }
+  });
+
+  it('rejects a verifier with an out-of-set character', () => {
+    const v = 'a'.repeat(42) + '!'; // 43 chars, '!' is not in the unreserved set
+    expect(verifyPkce(v, challengeFor(v))).toBe(false);
+  });
+
+  it('rejects a challenge that is not exactly 43 base64url characters', () => {
+    const v = 'a'.repeat(43);
+    expect(verifyPkce(v, 'a'.repeat(42))).toBe(false);
+    expect(verifyPkce(v, 'a'.repeat(44))).toBe(false);
+  });
+
+  it('rejects a well-formed but non-matching verifier/challenge pair', () => {
+    expect(verifyPkce('a'.repeat(43), challengeFor('b'.repeat(43)))).toBe(false);
   });
 });

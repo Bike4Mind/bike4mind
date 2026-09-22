@@ -11,6 +11,7 @@ import jwt from 'jsonwebtoken';
 import { requireEnv } from '@bike4mind/common';
 import { Config } from '@server/utils/config';
 import { oauthClientRepository, oauthAuthorizationCodeRepository, IOAuthClientDocument } from '@bike4mind/database';
+import { PKCE_CODE_VERIFIER_RE, PKCE_S256_CHALLENGE_RE } from './pkce';
 
 // ─── RSA key pair (RS256) ─────────────────────────────────────────────────────
 // In production set OAUTH_RSA_PRIVATE_KEY=<base64-encoded PEM private key>
@@ -75,6 +76,13 @@ export function getJwks() {
 // ─── PKCE ─────────────────────────────────────────────────────────────────────
 
 export function verifyPkce(codeVerifier: string, codeChallenge: string): boolean {
+  // Reject anything outside RFC 7636's grammar before hashing. A low-entropy verifier (e.g. "a") is
+  // offline-recoverable from the challenge exposed at authorization, and the challenge must be a
+  // 43-char base64url S256 digest. The request schemas enforce this at the boundary too; guarding the
+  // predicate keeps it safe for any caller.
+  if (!PKCE_CODE_VERIFIER_RE.test(codeVerifier) || !PKCE_S256_CHALLENGE_RE.test(codeChallenge)) {
+    return false;
+  }
   const computed = crypto.createHash('sha256').update(codeVerifier).digest('base64url');
   return computed === codeChallenge;
 }

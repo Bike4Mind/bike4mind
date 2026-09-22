@@ -12,6 +12,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { oauthAuthorizationCodeRepository, oauthGrantRepository, userRepository } from '@bike4mind/database';
 import { verifyPkce, validateClientSecret, validateClient, generateIdToken } from '@server/auth/oauthServer';
+import { PKCE_CODE_VERIFIER_RE } from '@server/auth/pkce';
 import { issueSessionForRequest } from '@server/auth/issueSession';
 import { ACCESS_TOKEN_TTL_SECONDS, authTokenGenerator } from '@server/auth/tokenGenerator';
 import { grantCovers, oauthAccessTokenAudience } from '@server/auth/oauthConsent';
@@ -21,8 +22,14 @@ const AuthCodeRequestSchema = z.object({
   code: z.string(),
   redirect_uri: z.string().url(),
   client_id: z.string(),
-  // PKCE clients send code_verifier; confidential clients (e.g. Cognito) send client_secret instead
-  code_verifier: z.string().optional(),
+  // PKCE clients send code_verifier; confidential clients (e.g. Cognito) send client_secret instead.
+  // Constrained to RFC 7636's grammar (43-128 unreserved chars) so a low-entropy verifier is rejected
+  // at the boundary rather than hashed - the challenge is exposed at authorization, so a short
+  // verifier would be offline-recoverable if the code were intercepted.
+  code_verifier: z
+    .string()
+    .regex(PKCE_CODE_VERIFIER_RE, 'code_verifier must be 43-128 unreserved characters (RFC 7636)')
+    .optional(),
   client_secret: z.string().optional(),
 });
 

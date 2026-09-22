@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { baseApi } from '@server/middlewares/baseApi';
 import { oauthGrantRepository } from '@bike4mind/database';
 import { generateAuthCode, validateClient } from '@server/auth/oauthServer';
+import { PKCE_S256_CHALLENGE_RE } from '@server/auth/pkce';
 import { decideConsent } from '@server/auth/oauthConsent';
 
 const RequestSchema = z.object({
@@ -17,8 +18,12 @@ const RequestSchema = z.object({
   redirect_uri: z.string().url(),
   scope: z.string().default('openid email profile'),
   state: z.string().optional(),
-  // PKCE is optional - confidential clients (e.g. Cognito) omit these
-  code_challenge: z.string().optional(),
+  // PKCE is optional - confidential clients (e.g. Cognito) omit these. When present, the S256
+  // challenge must be a 43-char base64url SHA-256 digest (RFC 7636), validated at the boundary.
+  code_challenge: z
+    .string()
+    .regex(PKCE_S256_CHALLENGE_RE, 'code_challenge must be a 43-character base64url S256 digest (RFC 7636)')
+    .optional(),
   code_challenge_method: z.literal('S256').optional(),
   nonce: z.string().optional(),
   // The user clicked Allow on the consent screen for this request (relying-party clients only).

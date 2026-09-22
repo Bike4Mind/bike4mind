@@ -70,6 +70,9 @@ const baseBody = {
   redirect_uri: 'https://app.example/cb',
 };
 
+// A grammar-valid S256 challenge: 43 base64url chars (RFC 7636 Appendix B example).
+const VALID_CHALLENGE = 'E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM';
+
 describe('POST /api/oauth/code PKCE hardening', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -98,7 +101,7 @@ describe('POST /api/oauth/code PKCE hardening', () => {
       allowedScopes: ['openid', 'email', 'profile'],
     });
 
-    const res = await call({ ...baseBody, code_challenge: 'a-challenge', code_challenge_method: 'S256' });
+    const res = await call({ ...baseBody, code_challenge: VALID_CHALLENGE, code_challenge_method: 'S256' });
 
     expect(res.body?.code).toBe('the-code');
     expect(h.generateAuthCode).toHaveBeenCalledOnce();
@@ -112,11 +115,27 @@ describe('POST /api/oauth/code PKCE hardening', () => {
       allowedScopes: ['openid', 'email', 'profile'],
     });
 
-    const res = await call({ ...baseBody, code_challenge: 'a-challenge' });
+    const res = await call({ ...baseBody, code_challenge: VALID_CHALLENGE });
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_request');
     expect(res.body?.error_description).toMatch(/S256/);
+    expect(h.generateAuthCode).not.toHaveBeenCalled();
+  });
+
+  it('rejects a code_challenge that is not a 43-char base64url S256 digest (400 invalid_request)', async () => {
+    // RFC 7636 grammar guard at the boundary: a short/malformed challenge is rejected before it can
+    // be stored and later matched against a hashed verifier.
+    (h.validateClient as Mock).mockResolvedValue({
+      tokenEndpointAuthMethod: 'none',
+      allowedScopes: ['openid', 'email', 'profile'],
+    });
+
+    for (const bad of ['short', 'a'.repeat(42), 'a'.repeat(44), 'a'.repeat(42) + '+']) {
+      const res = await call({ ...baseBody, code_challenge: bad, code_challenge_method: 'S256' });
+      expect(res.statusCode).toBe(400);
+      expect(res.body?.error).toBe('invalid_request');
+    }
     expect(h.generateAuthCode).not.toHaveBeenCalled();
   });
 

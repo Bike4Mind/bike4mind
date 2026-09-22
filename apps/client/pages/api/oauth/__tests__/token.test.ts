@@ -90,6 +90,10 @@ const baseBody = {
   client_id: 'client-1',
 };
 
+// A grammar-valid PKCE verifier (RFC 7636 Appendix B example: 43 unreserved chars). verifyPkce is
+// mocked in this suite, so only the request-schema grammar check sees this value.
+const VALID_VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+
 const authCode = (codeChallenge: string) => ({
   clientId: 'client-1',
   redirectUri: 'https://app.example/cb',
@@ -180,7 +184,7 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
     (h.findValidCode as Mock).mockResolvedValue(authCode('challenge'));
     (h.verifyPkce as Mock).mockReturnValue(false);
 
-    const res = await call({ ...baseBody, code_verifier: 'nope' });
+    const res = await call({ ...baseBody, code_verifier: VALID_VERIFIER });
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_grant');
@@ -193,10 +197,39 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
     seedValidCode(authCode('challenge'));
     (h.verifyPkce as Mock).mockReturnValue(true);
 
-    const res = await call({ ...baseBody, code_verifier: 'good' });
+    const res = await call({ ...baseBody, code_verifier: VALID_VERIFIER });
 
     expect(res.body?.access_token).toBe('a.jwt');
     expect(h.issueSessionForRequest).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a code_verifier outside RFC 7636 grammar at the boundary (400 invalid_request), never hashing it', async () => {
+    // The verifier is constrained to 43-128 unreserved chars in the request schema, so a
+    // low-entropy verifier (recoverable offline from the exposed challenge) is rejected before
+    // verifyPkce ever hashes it. Boundary lengths: 42 and 129 fail; an in-range value with an
+    // out-of-set char fails.
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
+    seedValidCode(authCode('challenge'));
+
+    for (const bad of ['a'.repeat(42), 'a'.repeat(129), 'a'.repeat(42) + '!']) {
+      const res = await call({ ...baseBody, code_verifier: bad });
+      expect(res.statusCode).toBe(400);
+      expect(res.body?.error).toBe('invalid_request');
+    }
+    expect(h.verifyPkce).not.toHaveBeenCalled();
+    expect(h.consumeValidCode).not.toHaveBeenCalled();
+  });
+
+  it('accepts a boundary-length code_verifier (43 and 128 unreserved chars) at the schema', async () => {
+    // The valid ends of the range must pass the schema and reach verifyPkce (mocked true here).
+    (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none' });
+    (h.verifyPkce as Mock).mockReturnValue(true);
+
+    for (const ok of ['a'.repeat(43), 'a'.repeat(128)]) {
+      seedValidCode(authCode('challenge'));
+      const res = await call({ ...baseBody, code_verifier: ok });
+      expect(res.body?.access_token).toBe('a.jwt');
+    }
   });
 
   it('does NOT burn the code on a client_id/redirect_uri mismatch (consume deferred until validation passes)', async () => {
@@ -222,7 +255,7 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
     (h.consumeValidCode as Mock).mockResolvedValue(null);
     (h.verifyPkce as Mock).mockReturnValue(true);
 
-    const res = await call({ ...baseBody, code_verifier: 'good' });
+    const res = await call({ ...baseBody, code_verifier: VALID_VERIFIER });
 
     expect(res.statusCode).toBe(400);
     expect(res.body?.error).toBe('invalid_grant');
@@ -234,7 +267,7 @@ describe('POST /api/oauth/token authorization_code hardening', () => {
     seedValidCode(authCode('challenge'));
     (h.verifyPkce as Mock).mockReturnValue(true);
 
-    await call({ ...baseBody, code_verifier: 'good' });
+    await call({ ...baseBody, code_verifier: VALID_VERIFIER });
 
     expect(h.generateIdToken).toHaveBeenCalledWith(expect.objectContaining({ scopeLimited: false }));
   });
@@ -257,7 +290,7 @@ describe('POST /api/oauth/token relying-party issuance', () => {
     (h.validateClient as Mock).mockResolvedValue({ tokenEndpointAuthMethod: 'none', clientType: 'relying-party' });
     seedValidCode(authCode('challenge'));
     (h.verifyPkce as Mock).mockReturnValue(true);
-    return call({ ...baseBody, code_verifier: 'good' });
+    return call({ ...baseBody, code_verifier: VALID_VERIFIER });
   };
 
   it('issues a kind:oauth access token with no refresh_token and echoes the granted scope', async () => {
