@@ -30,6 +30,9 @@ vi.mock('@bike4mind/utils', async importOriginal => {
   return {
     ...actual,
     aiImageService: vi.fn(),
+    // The SSRF-guarded fetch is unit-tested in @bike4mind/utils; stubbed here so these dispatch
+    // tests neither resolve DNS nor need a fake HTTP response shaped like a real axios one.
+    downloadImageAsBuffer: vi.fn(async () => Buffer.from('image-bytes')),
     getSettingsMap: vi.fn(async () => ({})),
     getSettingsValue: vi.fn(() => undefined),
     ClientMessageSender: class {
@@ -39,10 +42,6 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 });
 
 vi.mock('./questHeartbeat', () => ({ startQuestHeartbeat: vi.fn(async () => () => {}) }));
-
-vi.mock('axios', () => ({
-  default: { get: vi.fn(async () => ({ data: Buffer.from('image-bytes') })) },
-}));
 
 const silentLogger = {
   debug: vi.fn(),

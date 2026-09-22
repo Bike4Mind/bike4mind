@@ -62,13 +62,13 @@ import {
   ImageEditResponse,
   BaseStorage,
   getSettingsByNames,
+  downloadImageAsBuffer,
 } from '@bike4mind/utils';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { truncateImagePrompt } from './imagePromptTruncation';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
-import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
@@ -157,21 +157,10 @@ interface IImageGenerationServiceOptions {
   resolveLakeAccess?: (user: IUserDocument, logger: Logger) => Promise<AttachmentLakeAccess>;
 }
 
-async function downloadImage(url: string) {
-  // Handle data URLs (base64 images) from GPT-Image-1
-  if (url.startsWith('data:image/')) {
-    const base64Data = url.split(',')[1];
-    return Buffer.from(base64Data, 'base64');
-  }
-
-  // Handle regular URLs from DALL-E and other models
-  const response = await axios.get(url, { responseType: 'arraybuffer' });
-  return response.data;
-}
-
 async function imageUrlToBase64(imageUrl: string): Promise<string> {
-  const data = await downloadImage(imageUrl);
-  const buffer = Buffer.from(data, 'binary');
+  // `downloadImageAsBuffer` handles both the data URLs GPT-Image-1 returns and the http(s) URLs
+  // from DALL-E and friends, and SSRF-guards the latter.
+  const buffer = await downloadImageAsBuffer(imageUrl);
   return buffer.toString('base64');
 }
 
@@ -1254,7 +1243,7 @@ export class ImageGenerationService {
             model,
           });
 
-          const buffer = await downloadImage(image);
+          const buffer = await downloadImageAsBuffer(image);
           const fileType = await fileTypeFromBuffer(buffer);
           const filename = `${uuidv4()}.${fileType?.ext}`;
 

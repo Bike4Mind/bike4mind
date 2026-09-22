@@ -24,6 +24,7 @@ import {
   GeminiImageService,
   getSettingsMap,
   getSettingsValue,
+  downloadImageAsBuffer,
 } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
@@ -33,17 +34,12 @@ import { v4 as uuidv4 } from 'uuid';
 import { NotFoundError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 
-async function downloadImage(url: string) {
-  // Handle data URLs (base64 images)
-  if (url.startsWith('data:image/')) {
-    const base64Data = url.split(',')[1];
-    return Buffer.from(base64Data, 'base64');
-  }
-
-  // Handle regular URLs
+async function imageUrlToBase64(imageUrl: string): Promise<string> {
   try {
-    const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000 });
-    return response.data;
+    // `downloadImageAsBuffer` handles data URLs and SSRF-guards http(s) ones; the LLM picks this
+    // URL, so it is caller-influenced.
+    const buffer = await downloadImageAsBuffer(imageUrl);
+    return buffer.toString('base64');
   } catch (error) {
     // If URL fails (expired, inaccessible, etc.), throw a more helpful error
     if (axios.isAxiosError(error)) {
@@ -56,12 +52,6 @@ async function downloadImage(url: string) {
     }
     throw error;
   }
-}
-
-async function imageUrlToBase64(imageUrl: string): Promise<string> {
-  const data = await downloadImage(imageUrl);
-  const buffer = Buffer.from(data, 'binary');
-  return buffer.toString('base64');
 }
 
 // Exported for testability (mirrors `processAndStoreImage` below) - the serveability
@@ -196,7 +186,7 @@ export async function processAndStoreImage(
   model: string,
   provider: string
 ): Promise<string> {
-  const buffer = await downloadImage(imageUrl);
+  const buffer = await downloadImageAsBuffer(imageUrl);
   const fileType = await fileTypeFromBuffer(buffer);
   const filename = `${uuidv4()}.${fileType?.ext}`;
   const mimeType = fileType?.mime ?? 'image/png';

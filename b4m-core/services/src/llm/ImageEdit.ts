@@ -50,13 +50,13 @@ import {
   BFLImageService,
   GeminiImageService,
   OpenAIImageService,
+  downloadImageAsBuffer,
 } from '@bike4mind/utils';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { truncateImagePrompt } from './imagePromptTruncation';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
-import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
@@ -129,14 +129,10 @@ interface IImageEditServiceOptions {
   imageModerationService?: ImageModerationService;
 }
 
-async function downloadImage(url: string) {
-  const response = await axios.get(url, { responseType: 'arraybuffer' });
-  return response.data;
-}
-
 async function imageUrlToBase64(imageUrl: string): Promise<string> {
-  const data = await downloadImage(imageUrl);
-  const buffer = Buffer.from(data, 'binary');
+  // MUST stay on `downloadImageAsBuffer`: the edit-image request body accepts `image` as a bare
+  // string, so this URL is caller-controlled and a direct axios.get here is an SSRF primitive.
+  const buffer = await downloadImageAsBuffer(imageUrl);
   return buffer.toString('base64');
 }
 
@@ -533,7 +529,7 @@ export class ImageEditService {
         model,
       });
 
-      const buffer = await downloadImage(result);
+      const buffer = await downloadImageAsBuffer(result);
       const fileType = await fileTypeFromBuffer(buffer);
       const filename = `${uuidv4()}.${fileType?.ext}`;
 

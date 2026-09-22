@@ -1,5 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import type { AxiosResponse } from 'axios';
 
 /**
  * AWS Lambda hard limit for synchronous (RequestResponse) invocation payloads.
@@ -16,6 +17,45 @@ const LAMBDA_SYNC_PAYLOAD_LIMIT_BYTES = 6_291_456; // 6 MB
  * the user-facing message, and the PR description all agree on "4.4MB".
  */
 const MAX_RAW_IMAGE_BYTES = 4.4 * 1024 * 1024; // 4.4 MiB
+
+/** Whole-chain budget for fetching a source image, redirects included. */
+const IMAGE_FETCH_TIMEOUT_MS = 30_000;
+
+/** Safety net against an unbounded response body; the size policy is enforced downstream. */
+const MAX_IMAGE_RESPONSE_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Redirect hops followed before giving up. Every hop is re-validated against the SSRF guard. Kept
+ * equal to `MAX_REDIRECTS` in `fab-pipeline/src/ingest.ts` so the two fetchers do not disagree about
+ * what a reachable URL is.
+ */
+const MAX_IMAGE_REDIRECTS = 5;
+
+/**
+ * Origin of an operator-configured S3-compatible endpoint (self-host MinIO, localstack), or null on
+ * hosted AWS where `AWS_ENDPOINT_URL_S3` is unset. Matches how `S3Storage` reads the same variable.
+ *
+ * Read per call rather than snapshotted at module load, because the Lambda runtime and the tests
+ * both set the environment after this module is imported.
+ */
+function configuredStorageOrigin(): string | null {
+  const endpoint = process.env.AWS_ENDPOINT_URL_S3;
+  if (!endpoint) return null;
+  try {
+    return new URL(endpoint).origin;
+  } catch {
+    return null;
+  }
+}
+
+function sameOrigin(url: string, origin: string | null): boolean {
+  if (!origin) return false;
+  try {
+    return new URL(url).origin === origin;
+  } catch {
+    return false;
+  }
+}
 
 export interface ImageProcessRequest {
   imageBuffer: string; // base64 encoded buffer
@@ -136,7 +176,24 @@ export async function invokeImageProcessor(
 }
 
 /**
- * Downloads an image from a URL or decodes a data URL
+ * Downloads an image from a URL or decodes a data URL.
+ *
+ * SECURITY: `imageUrl` can be caller-supplied (the public edit-image request body accepts a bare
+ * string), and this runs inside the VPC, so an unguarded GET here is an SSRF primitive against the
+ * instance metadata endpoint and anything else on the internal network. The guard is the same
+ * two-part shape as `fetchAndParseURL` in `@bike4mind/fab-pipeline`: `validateUrlForFetch` judges
+ * the scheme and the address of every URL in the chain, and the pinned agents' connect-time lookup
+ * judges the IP each socket actually dials, which is what closes the DNS-rebinding window between
+ * the two resolutions. Redirects are followed manually with `maxRedirects: 0` so no hop escapes the
+ * per-hop validation.
+ *
+ * SELF-HOST EXEMPTION: when `AWS_ENDPOINT_URL_S3` names an S3-compatible endpoint, the signed URLs
+ * this app generates point at it - and on a compose network that host resolves to a private address,
+ * which both halves of the guard would refuse, breaking image-to-image entirely. A hop on exactly
+ * that operator-configured origin therefore skips the address checks, the pinned agents included
+ * (their connect-time lookup would refuse it for the same reason the pre-flight would). The origin
+ * comes from deployment config and never from the caller, and every other hop - including whatever
+ * this endpoint might redirect to - is still fully validated.
  */
 export async function downloadImageAsBuffer(imageUrl: string): Promise<Buffer> {
   Logger.globalInstance.log(`[ImageProcessorUtils] Downloading image from URL:`, imageUrl.substring(0, 100) + '...');
@@ -151,11 +208,71 @@ export async function downloadImageAsBuffer(imageUrl: string): Promise<Buffer> {
   // Handle regular URLs - use dynamic import to avoid bundling axios if not needed
   Logger.globalInstance.log(`[ImageProcessorUtils] Fetching image from HTTP URL`);
   const axios = (await import('axios')).default;
-  const response = await axios.get(imageUrl, {
-    responseType: 'arraybuffer',
-    timeout: 30000, // 30 second timeout
-    maxContentLength: 50 * 1024 * 1024, // 50MB max (we'll validate later)
-  });
+  const { validateUrlForFetch, ssrfSafeHttpAgent, ssrfSafeHttpsAgent } = await import('@bike4mind/fab-pipeline');
+
+  let currentUrl = imageUrl;
+  let response: AxiosResponse<Buffer> | null = null;
+
+  // ONE budget for the whole chain rather than per hop, so a redirect chain cannot multiply the
+  // worst case by MAX_IMAGE_REDIRECTS and blow the caller's Lambda timeout.
+  const deadline = Date.now() + IMAGE_FETCH_TIMEOUT_MS;
+
+  const storageOrigin = configuredStorageOrigin();
+
+  for (let hop = 0; hop <= MAX_IMAGE_REDIRECTS; hop++) {
+    const isTrustedStorageHop = sameOrigin(currentUrl, storageOrigin);
+
+    if (!isTrustedStorageHop) {
+      const validation = await validateUrlForFetch(currentUrl);
+      if (!validation.valid) {
+        throw new Error(`Image URL blocked for security reasons: ${validation.error}`);
+      }
+    }
+
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) {
+      throw new Error('Timed out while following redirects for image URL');
+    }
+
+    const hopResponse: AxiosResponse<Buffer> = await axios.get(currentUrl, {
+      // BOTH agents: the scheme is not fixed across a chain, and axios picks the agent per request
+      // from the scheme it is currently on. Omitted on a trusted storage hop, whose address the
+      // connect-time lookup would refuse for the same reason the pre-flight would.
+      ...(isTrustedStorageHop ? {} : { httpAgent: ssrfSafeHttpAgent, httpsAgent: ssrfSafeHttpsAgent }),
+      // MUST accompany the agents. axios reads HTTPS_PROXY/HTTP_PROXY from the environment by
+      // default and then installs its own agent, which would silently drop the connect-time pin
+      // while every URL-level check still passed.
+      proxy: false,
+      responseType: 'arraybuffer',
+      timeout: remainingMs,
+      maxRedirects: 0,
+      maxContentLength: MAX_IMAGE_RESPONSE_BYTES,
+      maxBodyLength: MAX_IMAGE_RESPONSE_BYTES,
+      // 3xx must reach us as a value rather than a throw; anything else keeps axios's default.
+      validateStatus: status => (status >= 200 && status < 300) || (status >= 300 && status < 400),
+    });
+
+    response = hopResponse;
+    if (hopResponse.status < 300) break;
+
+    const location = hopResponse.headers?.location;
+    if (typeof location !== 'string' || location.length === 0) {
+      throw new Error(`Image URL returned status ${hopResponse.status} with no redirect target`);
+    }
+
+    if (hop === MAX_IMAGE_REDIRECTS) {
+      throw new Error(`Too many redirects (more than ${MAX_IMAGE_REDIRECTS}) while fetching image URL`);
+    }
+
+    // Resolved against the CURRENT url so a relative Location works, and re-validated at the top of
+    // the next iteration before anything is requested from it.
+    currentUrl = new URL(location, currentUrl).toString();
+  }
+
+  if (!response) {
+    // Unreachable: the loop always assigns before breaking. Guards the type, not a real case.
+    throw new Error('Image URL fetch produced no response');
+  }
 
   Logger.globalInstance.log(`[ImageProcessorUtils] Image downloaded:`, {
     status: response.status,
