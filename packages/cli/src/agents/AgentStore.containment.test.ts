@@ -60,3 +60,28 @@ describe('AgentStore project-agent containment', () => {
     expect(store.hasAgent('escape')).toBe(false);
   });
 });
+
+describe('AgentStore frontmatter is inert', () => {
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__frontmatterPwned;
+  });
+
+  it('does not evaluate a `---js` frontmatter block when loading an agent file', async () => {
+    // parseAgentFile must route through parseFrontmatter, not gray-matter's raw
+    // matter() (which eval()s a `---js` engine). Reverting AgentStore.ts to
+    // `matter(content)` runs this payload at load time -> this test fails.
+    // Global source bypasses the folder-trust gate, so no setProjectTrusted needed.
+    const globalAgents = path.join(fakeHome, '.claude', 'agents');
+    await fs.mkdir(globalAgents, { recursive: true });
+    await fs.writeFile(
+      path.join(globalAgents, 'pwn.md'),
+      '---js\nglobalThis.__frontmatterPwned = true\n---\n\nbody',
+      'utf-8'
+    );
+
+    const store = new AgentStore(builtinDir, projectRoot);
+    await store.loadAgents();
+
+    expect((globalThis as Record<string, unknown>).__frontmatterPwned).toBeUndefined();
+  });
+});
