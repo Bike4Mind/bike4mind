@@ -150,6 +150,28 @@ describe('redactPromptMetaForViewer: citable passage text', () => {
     expect(redactPromptMetaForViewer(fileLevel, false)).toBe(fileLevel);
   });
 
+  it('keeps conflict marks for a non-owner, which are ids rather than corpus content (#3041)', () => {
+    // A deliberate classification, pinned so it cannot be flipped by reflex alongside fullContext:
+    // `conflictsWith` holds fabFileIds that `citables[].id` already carries unredacted, so stripping
+    // it would cost a sharee the disagreement warning without withholding anything they cannot
+    // already see. If this field ever carries the conflicting SENTENCES, it changes class and this
+    // test should be the thing that fails.
+    const shared = {
+      model: { name: 'gpt-4' },
+      citables: [
+        {
+          id: 'file-1',
+          metadata: { sourceSystem: 'knowledge_base', fullContext: 'SECRET PASSAGE', conflictsWith: ['file-2'] },
+        },
+      ],
+    };
+
+    const out = redactPromptMetaForViewer(shared, false);
+
+    expect(out?.citables?.[0]?.metadata?.fullContext).toBeUndefined();
+    expect(out?.citables?.[0]?.metadata?.conflictsWith).toEqual(['file-2']);
+  });
+
   it('redacts citables even when the turn made no function calls', () => {
     // The early return used to bail on `!functionCalls`, which would have skipped citables
     // entirely on a forced-retrieval turn - the one that ALWAYS emits them.

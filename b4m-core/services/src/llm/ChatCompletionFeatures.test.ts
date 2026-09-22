@@ -4167,18 +4167,50 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
-  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+  const runWithQuest = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
     const ctx = makeCtx(chunks, hasMore);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
+    // Held rather than inlined: the citation chips this arm writes land on the quest, so the
+    // reader's half of the conflict signal is only observable through it.
+    const quest = makeQuest();
     const messages = await feature.getContextMessages(
-      makeQuest(),
+      quest,
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'uptime'
     );
-    return messages[0]?.content ?? '';
+    return { content: messages[0]?.content ?? '', quest };
   };
+
+  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) =>
+    (await runWithQuest(chunks, hasMore)).content;
+
+  // The note warns the MODEL; these pin that the same turn marks the chips the READER sees, so a
+  // change that keeps one channel and drops the other fails here rather than shipping silently.
+  it('marks both conflicting documents on the citation chips (#3041)', async () => {
+    const { quest } = await runWithQuest([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    const citables = quest.promptMeta?.citables ?? [];
+    expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
+    expect(citables.find(c => c.id === 'fileA')?.metadata?.conflictsWith).toEqual(['fileB']);
+    expect(citables.find(c => c.id === 'fileB')?.metadata?.conflictsWith).toEqual(['fileA']);
+  });
+
+  it('leaves the chips unmarked when the documents agree', async () => {
+    const { quest } = await runWithQuest([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 99.9%.' },
+    ]);
+
+    // Absent, not an empty array: a chip carrying `conflictsWith: []` would badge with no partner.
+    for (const citable of quest.promptMeta?.citables ?? []) {
+      expect(citable.metadata?.conflictsWith).toBeUndefined();
+    }
+  });
 
   it('keeps the note at column 0, outside the untrusted block', async () => {
     const content = await run([
