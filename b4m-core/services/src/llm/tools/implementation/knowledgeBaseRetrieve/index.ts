@@ -17,7 +17,7 @@ import {
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
-import { buildRetrievalConflictNote, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
+import { buildRetrievalConflictSignal, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import { attributeAccessedLakeIds } from '../../../../dataLakeService/attributeAccessedLakes';
@@ -568,7 +568,14 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // by file id and never scores a chunk, so the whole document IS the cited extent. The
           // chunk anchor belongs only where a passage was ranked (semantic search, forced
           // retrieval); inventing one here would point the reader at an arbitrary paragraph.
+          // Ahead of the chips rather than beside the note it also produces: one detector pass
+          // feeds both, so the reader is marked with exactly the conflicts the model is warned
+          // about (#3041). The statusUpdate that ships these chips fires before the note is even
+          // assembled, so computing it down there could never reach them.
+          const conflict = buildRetrievalConflictSignal(conflictPassages);
+
           const citables: CitableSource[] = retrievedFiles.map((file, index) => {
+            const conflictsWith = conflict.conflictsByFileId.get(file.id);
             const fileTags = (file.tags?.map(t => t.name) || [])
               .filter(t => !t.startsWith('datalake:')) // Hide internal meta-tags
               .slice(0, 4) // Keep chip description concise
@@ -585,6 +592,10 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 sourceSystem: 'knowledge_base',
                 tags: file.tags?.map(t => t.name) || [],
                 relevanceScore: 1 - index * 0.1,
+                // Spread and COPIED: an absent key must leave the field off entirely rather than
+                // stamping an empty array the chip would badge with no partner to name, and the
+                // chip must not alias the detector's own array.
+                ...(conflictsWith ? { conflictsWith: [...conflictsWith] } : {}),
               },
             };
           });
@@ -621,11 +632,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           // The conflict note below is last of our column-0 framing, nearest the content it
           // describes: the documents the caller named disagree, so say so rather than pick a side.
           const result =
-            header +
-            '\n' +
-            `${GROUNDED_NO_INVENTION_RULE}\n\n` +
-            buildRetrievalConflictNote(conflictPassages) +
-            renderRetrievedContentBlock(sections);
+            header + '\n' + `${GROUNDED_NO_INVENTION_RULE}\n\n` + conflict.note + renderRetrievedContentBlock(sections);
 
           // Retrieval-scoped lake-prompt injection (#1108): prepend the operating instructions of
           // the trusted lakes this content came from. Skipped for the agent-scoped branch, which

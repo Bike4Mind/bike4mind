@@ -274,9 +274,27 @@ export function applyQuestStatusChanges(
         dedupedCitables.push(citable);
         continue;
       }
-      if (!hasPassageAnchor(dedupedCitables[existingIndex]) && hasPassageAnchor(citable)) {
-        dedupedCitables[existingIndex] = citable;
-      }
+      const winner =
+        !hasPassageAnchor(dedupedCitables[existingIndex]) && hasPassageAnchor(citable)
+          ? citable
+          : dedupedCitables[existingIndex];
+      // Unioned across both chips rather than riding on the anchor rule above (#3041): the anchor
+      // and the conflict marks are independent signals written by different arms, and
+      // knowledgeBaseRetrieve stamps conflictsWith while deliberately never carrying an anchor. So
+      // whenever a search chip for the same file also lands this turn, letting the anchor decide
+      // alone would silently drop the marks - the reader would lose a warning the model still got.
+      // Array.isArray because these arrive off a stored document, where metadata is Mixed.
+      const conflictsWith = [
+        ...new Set(
+          [dedupedCitables[existingIndex], citable].flatMap(c =>
+            Array.isArray(c?.metadata?.conflictsWith) ? c.metadata.conflictsWith : []
+          )
+        ),
+      ];
+      // Copied, never mutated in place: the loser may be the caller's own object.
+      dedupedCitables[existingIndex] = conflictsWith.length
+        ? { ...winner, metadata: { ...winner.metadata, conflictsWith } }
+        : winner;
     }
     const mergedWarnings = [...(quest.promptMeta.warnings || []), ...(changedPromptMeta.warnings || [])];
     const mergedRetrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, changedPromptMeta.retrieval);

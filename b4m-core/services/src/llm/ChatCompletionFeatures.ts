@@ -108,7 +108,7 @@ import {
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
-import { buildRetrievalConflictNote, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
+import { buildRetrievalConflictSignal, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
 import { clipToCodePointBoundary } from './tools/implementation/knowledgeBaseSearch/tokenBudget';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
@@ -3122,10 +3122,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         ...(backgroundScore !== undefined ? { backgroundScore } : {}),
       });
 
+      // Ahead of the chips rather than beside the note it also produces: one detector pass feeds
+      // both, so the reader is marked with exactly the conflicts the model is warned about (#3041).
+      const conflict = buildRetrievalConflictSignal(conflictPassages);
+
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
       const citables: CitableSource[] = sourceFileIds.map((fid, index) => {
         const file = fileById.get(fid);
         const cited = citedChunkByFile.get(fid);
+        const conflictsWith = conflict.conflictsByFileId.get(fid);
         const tagDesc = (file?.tags?.map(t => t.name) || [])
           .filter(t => !t.startsWith('datalake:'))
           .slice(0, 4)
@@ -3147,6 +3152,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             // entirely, since an empty-string anchor would make the reader chase a passage that
             // does not exist rather than showing the whole document.
             ...(cited ? { chunkId: cited.chunkId, fullContext: cited.passage } : {}),
+            // Spread for the same reason, and COPIED: an absent key must leave the field off
+            // entirely rather than stamping an empty array the chip would badge with no partner to
+            // name, and the chip must not alias the detector's own array.
+            ...(conflictsWith ? { conflictsWith: [...conflictsWith] } : {}),
           },
         };
       });
@@ -3224,7 +3233,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         'consoles or other infrastructure steps for counting it.\n\n';
       // Last of the column-0 notes, nearest the content it describes: the injected passages
       // contradict each other, so the model must surface that rather than pick the top-ranked side.
-      const conflictNote = buildRetrievalConflictNote(conflictPassages);
+      // Computed above with the chips, so the two channels cannot name different documents.
+      const conflictNote = conflict.note;
       const header =
         this.citationStyle === 'indexed'
           ? '[Knowledge Base — Retrieved Context]\n' +

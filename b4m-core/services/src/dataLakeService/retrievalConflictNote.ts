@@ -17,6 +17,12 @@ import {
  * column 0, OUTSIDE the untrusted content block. Sibling of renderRetrievedContentBlock.ts: shared by
  * all three retrieval channels so the wording and the leak-safety decision cannot drift apart.
  *
+ * ONE detector pass feeds TWO channels (#3041): the model's note, and the witness pairs the citation
+ * UI marks so the reader sees the same disagreement the model was told about. They are returned
+ * together rather than computed by separate entry points on purpose - the sweep is bounded but not
+ * free (see RETRIEVAL_CONFLICT_MAX_CHARS) and it sits on the hot chat path, and two entry points
+ * would let the reader be shown a different set of conflicts than the model was warned about.
+ *
  * Distinct surface from detectLakeInconsistencies.ts, which shares the same rule engine but is an
  * async, stored, admin-facing whole-lake health scan. That surface OFFERS a finding to a human who
  * triages it, so it wants every rule's recall; this one ASSERTS disagreement to a model that cannot
@@ -68,9 +74,34 @@ export const RETRIEVAL_CONFLICT_MAX_CHARS = 120_000;
 /** Marker the site tests slice on, and the prefix `defangRetrievedContent` already indents inside content. */
 const NOTE_OPENING = 'NOTE: the retrieved documents below may contradict each other.';
 
+/** What one retrieval call's passages disagreeing about produces, for both channels that show it. */
+export interface RetrievalConflictSignal {
+  /**
+   * The column-0 note for the MODEL, or '' when nothing conflicts. The caller concatenates it
+   * alongside its other notes, outside the untrusted content block.
+   */
+  note: string;
+  /**
+   * The same witness pairs for the READER, keyed by `fabFileId`: the other documents this one
+   * provably disagrees with, in serve order. Empty whenever `note` is ''. Every caller stamps this
+   * onto the matching citation chip's `metadata.conflictsWith`.
+   *
+   * Ids only, deliberately: the chips carry these same ids already, so this adds a RELATIONSHIP
+   * between sources the viewer can see and no new content - which is what keeps it out of the
+   * owner-only egress list the verbatim-passage fields sit on (see promptMetaRedaction.ts).
+   *
+   * Unbounded where the note degrades to "and at least N more": that cap bounds a sentence, and a
+   * per-document partner list has no sentence to bound. Each entry is one half of a witness PAIR, so
+   * a document's list is as long as it has distinct partners; rendering caps belong in the UI.
+   */
+  conflictsByFileId: ReadonlyMap<string, readonly string[]>;
+}
+
+/** Fresh map per call rather than a shared empty one: a caller must never mutate another's result. */
+const noConflict = (): RetrievalConflictSignal => ({ note: '', conflictsByFileId: new Map() });
+
 /**
- * A column-0 note when the passages of ONE retrieval call disagree across documents, or '' when they
- * do not. The caller concatenates it alongside its other notes, outside the untrusted content block.
+ * The conflict signal for ONE retrieval call, or an empty one when its passages do not disagree.
  *
  * Renders `fabFileId`, counts, and our own `kind` vocabulary only. `subject`, `excerpt` and `fileName`
  * are all derived from document prose - a crafted one could carry a forged marker into our own
@@ -89,12 +120,12 @@ const NOTE_OPENING = 'NOTE: the retrieved documents below may contradict each ot
  * inside a number, and the code fix here (drop a trailing metric whose unit abuts end-of-string) would
  * re-cost the recall on unterminated bullet text that requiring a unit just bought back.
  */
-export function buildRetrievalConflictNote(passages: RetrievalPassage[]): string {
+export function buildRetrievalConflictSignal(passages: RetrievalPassage[]): RetrievalConflictSignal {
   const identified = passages.filter(p => p.fabFileId);
   // The common case on the hot path: one document cannot disagree with itself across documents, so
   // return before paying for the regex sweep. Behaviourally redundant - the detector's own
   // cross-document requirement drops the same input - so no test can see it, only a profiler.
-  if (new Set(identified.map(p => p.fabFileId)).size < 2) return '';
+  if (new Set(identified.map(p => p.fabFileId)).size < 2) return noConflict();
 
   // One CorpusDocument per passage. Not per document: the detector already groups by `fabFileId` and
   // keeps one excerpt per document, so merging a document's passages here would change nothing.
@@ -118,7 +149,7 @@ export function buildRetrievalConflictNote(passages: RetrievalPassage[]): string
   // `documentCount >= 2` is already guaranteed by the cross-document rules; asserted again here so a
   // future kind joining DISAGREEMENT_INCONSISTENCY_KINDS cannot emit a single-document "disagreement".
   const kept = findings.filter(f => asserted.includes(f.kind) && f.documentCount >= 2);
-  if (kept.length === 0) return '';
+  if (kept.length === 0) return noConflict();
 
   // Order is the detector's kind order, so the term list is fixed rather than incidental. A per-kind
   // count with only one kind in the list restates the headline count, so it is omitted there - which
@@ -170,13 +201,36 @@ export function buildRetrievalConflictNote(passages: RetrievalPassage[]): string
         ? groups.map(group => `(${group.join(', ')})`).join(' and ')
         : ids.join(', ');
 
+  // The reader's channel, off the SAME `groups` the note names: pairings, never the flattened
+  // `idList` above. That flattening is a length bound on one sentence, so a note that had to degrade
+  // to a flat list still leaves each chip marked with the exact document it disagrees with.
+  const conflictsByFileId = new Map<string, string[]>();
+  for (const group of groups) {
+    for (const fabFileId of group) {
+      const partners = group.filter(other => other !== fabFileId);
+      // A one-id group would name a document as conflicting with nothing. Unreachable - `kept`
+      // requires documentCount >= 2 and `witnessOrder` puts two distinct documents at evidence[0..1]
+      // - but an empty `conflictsWith` would reach the UI as a badge with no partner to name.
+      if (partners.length === 0) continue;
+      const existing = conflictsByFileId.get(fabFileId);
+      if (!existing) {
+        conflictsByFileId.set(fabFileId, partners);
+        continue;
+      }
+      // Deduped across groups: one document can be the witness in several disjoint pairs, and the
+      // same partner can recur once two findings dedup to overlapping pairs.
+      for (const partner of partners) if (!existing.includes(partner)) existing.push(partner);
+    }
+  }
+
   const conflicts = `${kept.length} cross-document ${kept.length === 1 ? 'conflict' : 'conflicts'}`;
-  return (
+  const note =
     `${NOTE_OPENING} ${conflicts} detected (${kindTerms}) across documents ` +
     `${idList}. These are heuristic pattern matches over the passage text, not proven contradictions - ` +
     'the same label can be measured over a different scope in each document. Read the passages before ' +
     'relying on any of them: if they really do disagree, say so rather than silently picking one side, ' +
     'attribute each conflicting claim to the document it came from using whatever citation style this ' +
-    'context already specifies, and say which one you relied on and why.\n\n'
-  );
+    'context already specifies, and say which one you relied on and why.\n\n';
+
+  return { note, conflictsByFileId };
 }
