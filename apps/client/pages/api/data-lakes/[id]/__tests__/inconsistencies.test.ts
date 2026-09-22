@@ -238,10 +238,12 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
     expect(json.mock.calls[0][0]).toMatchObject({ memberCount: 12, computedAt: new Date('2026-06-01T00:00:00Z') });
   });
 
-  it('reads the findings from the ROWS, bounded and open-only, not from the lake document', async () => {
-    // The stored summary carries no findings at all any more. Open-only because this endpoint
-    // answers "what is wrong with my corpus", which a problem a curator already ruled on is not -
-    // and `countsByKind` beside it stays the exact, unfiltered total either way.
+  it('reads the findings from the ROWS, bounded and open-or-resolved, not from the lake document', async () => {
+    // The stored summary carries no findings at all any more. `countsByKind` is an exact total over
+    // every finding the run reported, with no notion of a curator's status, so `open` alone could
+    // list fewer findings than the count beside them describes - see the docblock on
+    // `renderStoredReport`. `resolved` is included for that reason; `dismissed` never is, since a
+    // dismissed subject is dropped before the run counts it at all.
     const row = { id: 'finding-1', kind: 'expired-claim', subject: 'roadmap', status: 'open' };
     h.assertLakeWriteAccess.mockResolvedValue({
       ...lake,
@@ -254,7 +256,7 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
     await done;
 
     expect(h.listByLake).toHaveBeenCalledWith('lakeDoc1', {
-      status: 'open',
+      status: ['open', 'resolved'],
       seenSince: new Date('2026-06-01T00:00:00Z'),
       limit: 200,
     });

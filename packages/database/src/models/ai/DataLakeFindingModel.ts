@@ -140,7 +140,9 @@ class DataLakeFindingRepository extends BaseRepository<IDataLakeFindingDocument>
     const query = this.findingModel
       .find({
         lakeId,
-        ...(options?.status ? { status: options.status } : {}),
+        ...(options?.status
+          ? { status: Array.isArray(options.status) ? { $in: options.status } : options.status }
+          : {}),
         ...(options?.kind ? { kind: options.kind } : {}),
         ...(options?.detector ? { detector: options.detector } : {}),
         ...(options?.seenSince ? { lastSeenAt: { $gte: options.seenSince } } : {}),

@@ -98,6 +98,15 @@ const gateDeps = {
  *
  * Null rather than an empty report when detection has never run: "never asked" and "asked and found
  * nothing" are different answers and a surface has to be able to tell them apart.
+ *
+ * `status: ['open', 'resolved']`, not `'open'` alone. `countsByKind` is an exact total over every
+ * finding the run REPORTED - it has no notion of a curator's status, so it still counts a subject a
+ * curator already resolved if this run re-detected it (the row's status never reopens on
+ * re-detection; see `recordDetected`). Filtering the list to `open` only, as an earlier version of
+ * this did, could then hand back a non-zero count beside a shorter findings list than it described.
+ * Matching the two statuses `countsByKind` can actually contain - never `dismissed`, since
+ * `detectCorpusInconsistencies` drops a dismissed subject before counting it - keeps the response
+ * internally consistent instead.
  */
 async function renderStoredReport(
   lake: Pick<IDataLakeDocument, 'id' | 'inconsistencyReport' | 'inconsistencyComputedAt'>
@@ -105,9 +114,7 @@ async function renderStoredReport(
   if (!lake.inconsistencyReport) return null;
   const computedAt = lake.inconsistencyComputedAt ?? null;
   const findings = await dataLakeFindingRepository.listByLake(lake.id, {
-    // OPEN only: this endpoint answers what is wrong with the corpus, which a problem a curator has
-    // already resolved or dismissed is not.
-    status: 'open',
+    status: ['open', 'resolved'],
     ...(computedAt ? { seenSince: computedAt } : {}),
     // Matches what the detector would have capped a single run's findings at, so the page bound
     // cannot cut into a run the summary says was not truncated.

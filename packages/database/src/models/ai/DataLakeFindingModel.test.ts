@@ -247,6 +247,26 @@ describe('DataLakeFindingRepository', () => {
     expect(await repo.listByLake('lake-1', { limit: 2 })).toHaveLength(2);
   });
 
+  it('accepts a status array, matching any of them (GET /inconsistencies open+resolved)', async () => {
+    const open = await repo.recordDetected(input({ subject: 'open one', seenAt: SEEN_FIRST }));
+    const resolved = await repo.recordDetected(input({ subject: 'resolved one', seenAt: SEEN_LATER }));
+    const dismissed = await repo.recordDetected(input({ subject: 'dismissed one', seenAt: SEEN_LATER }));
+    await repo.resolveFinding('lake-1', resolved.id, {
+      status: 'resolved',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+    await repo.resolveFinding('lake-1', dismissed.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+
+    const subjects = (await repo.listByLake('lake-1', { status: ['open', 'resolved'] })).map(f => f.subject);
+    expect(subjects).toEqual(expect.arrayContaining([open.subject, resolved.subject]));
+    expect(subjects).not.toContain(dismissed.subject);
+  });
+
   it('narrows to the findings a run at or after seenSince still saw', async () => {
     // Nothing ever closes a finding the detector stops reporting - `status` is a curator's word, so
     // a detector retiring a row would be exactly the overwrite recordDetected refuses to make. The

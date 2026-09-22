@@ -156,7 +156,8 @@ export interface LakeFindingKey {
 
 /** How a surface narrows one lake's findings. Every filter is optional and independent. */
 export interface ListLakeFindingsOptions {
-  status?: LakeFindingStatus;
+  /** A single status, or (for a caller that must match a count taken over more than one) a set of them. */
+  status?: LakeFindingStatus | LakeFindingStatus[];
   kind?: InconsistencyKind;
   detector?: LakeFindingDetector;
   /**

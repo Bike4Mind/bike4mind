@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
-import { DataLakeModel, safeDropIndex } from '@bike4mind/database';
+import { DataLakeModel, DataLakeFindingModel, safeDropIndex } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/__test__/createMongoServer';
 
 // A core migration imported transitively via '@bike4mind/database' need not evaluate SST config,
@@ -58,6 +58,7 @@ beforeEach(async () => {
   // fresh mongod, unlike deleteMany.
   await mongoose.connection.db?.createCollection(DataLakeModel.collection.collectionName).catch(() => {});
   await DataLakeModel.collection.deleteMany({});
+  await DataLakeFindingModel.collection.deleteMany({});
   await safeDropIndex(DataLakeModel.collection, SCAN_INDEX);
 });
 
@@ -79,12 +80,15 @@ describe('ensure data lake inconsistency scan index and strip stored finding exc
     expect((await indexNames()).filter(n => n === SCAN_INDEX)).toHaveLength(1);
   });
 
-  it('strips the findings out of a legacy stored report, excerpts and all', async () => {
+  it('strips the findings out of a legacy stored report, excerpts and all - after backfilling them as rows', async () => {
     // RETENTION, not tidiness: a stored finding carries a 240-char excerpt of each source document,
     // and the purge-time sweeps that discharge that obligation reach the finding ROWS only. Nothing
-    // ever rewrites a blob when a document it quotes is destroyed.
-    await DataLakeModel.collection.insertOne({
+    // ever rewrites a blob when a document it quotes is destroyed. This lake was scanned in the
+    // window before the row-writing path existed, so its findings have no row behind them yet - the
+    // exact case a blind `$unset` would destroy outright.
+    const { insertedId } = await DataLakeModel.collection.insertOne({
       ...lake(),
+      inconsistencyComputedAt: new Date('2026-09-10T00:00:00Z'),
       inconsistencyReport: {
         ...legacySummary(),
         findings: [
@@ -104,6 +108,19 @@ describe('ensure data lake inconsistency scan index and strip stored finding exc
     expect(doc?.inconsistencyReport).not.toHaveProperty('findings');
     // The run-level summary the health surface renders is left exactly as it was.
     expect(doc?.inconsistencyReport).toMatchObject(legacySummary());
+
+    // The finding is not lost: it is now a row, attributed to the only detector that could have
+    // produced it, and dated to the run that actually saw it rather than the migration.
+    const rows = await DataLakeFindingModel.collection.find({ lakeId: String(insertedId) }).toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      kind: 'metric-disagreement',
+      subject: 'annual revenue usd',
+      detector: 'lexical',
+      status: 'open',
+      sources: [{ fabFileId: 'file-a', fileName: 'a.md', excerpt: 'revenue was 4.2M' }],
+    });
+    expect(rows[0].lastSeenAt).toEqual(new Date('2026-09-10T00:00:00Z'));
   });
 
   it('leaves a lake that never ran detection alone', async () => {
@@ -113,19 +130,64 @@ describe('ensure data lake inconsistency scan index and strip stored finding exc
 
     const doc = await DataLakeModel.collection.findOne({ slug: 'never-run' });
     expect(doc?.inconsistencyReport).toBeNull();
+    expect(await DataLakeFindingModel.collection.countDocuments({})).toBe(0);
   });
 
-  it('strips every legacy lake, not just the first', async () => {
+  it('backfills an archived lake too - the case the sweep can never reach on its own', async () => {
+    // `status: 'active'` only is what the sweep pages over, so an archived lake would otherwise sit
+    // with its findings unset and no row ever written for it - permanently, since re-scanning never
+    // happens for a lake in this state. The migration is the only pass that ever revisits it.
+    const { insertedId } = await DataLakeModel.collection.insertOne({
+      ...lake({ slug: 'archived-lake', status: 'archived' }),
+      inconsistencyReport: {
+        ...legacySummary(),
+        findings: [{ kind: 'expired-claim', subject: 'archived-lake', documentCount: 1, evidence: [] }],
+      },
+    } as never);
+
+    await migration.up();
+
+    const doc = await DataLakeModel.collection.findOne({ slug: 'archived-lake' });
+    expect(doc?.inconsistencyReport).not.toHaveProperty('findings');
+    const rows = await DataLakeFindingModel.collection.find({ lakeId: String(insertedId) }).toArray();
+    expect(rows).toHaveLength(1);
+  });
+
+  it('strips every legacy lake, not just the first, backfilling each', async () => {
     const withFindings = (slug: string) => ({
       ...lake({ slug, name: slug, fileTagPrefix: `${slug}:`, datalakeTag: `datalake:${slug}` }),
-      inconsistencyReport: { ...legacySummary(), findings: [{ kind: 'expired-claim', subject: slug, evidence: [] }] },
+      inconsistencyReport: {
+        ...legacySummary(),
+        findings: [{ kind: 'expired-claim', subject: slug, documentCount: 1, evidence: [] }],
+      },
     });
-    await DataLakeModel.collection.insertMany([withFindings('multi-a'), withFindings('multi-b')] as never[]);
+    const { insertedIds } = await DataLakeModel.collection.insertMany([
+      withFindings('multi-a'),
+      withFindings('multi-b'),
+    ] as never[]);
 
     await migration.up();
 
     const docs = await DataLakeModel.collection.find({ slug: { $in: ['multi-a', 'multi-b'] } }).toArray();
     expect(docs).toHaveLength(2);
     for (const doc of docs) expect(doc.inconsistencyReport).not.toHaveProperty('findings');
+
+    const lakeIds = Object.values(insertedIds).map(String);
+    expect(await DataLakeFindingModel.collection.countDocuments({ lakeId: { $in: lakeIds } })).toBe(2);
+  });
+
+  it('is idempotent on the backfill - a second run converges on the same rows rather than duplicating them', async () => {
+    await DataLakeModel.collection.insertOne({
+      ...lake(),
+      inconsistencyReport: {
+        ...legacySummary(),
+        findings: [{ kind: 'metric-disagreement', subject: 'annual revenue usd', documentCount: 2, evidence: [] }],
+      },
+    } as never);
+
+    await migration.up();
+    await migration.up();
+
+    expect(await DataLakeFindingModel.collection.countDocuments({})).toBe(1);
   });
 });
