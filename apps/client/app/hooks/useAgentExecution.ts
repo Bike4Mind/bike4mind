@@ -59,6 +59,12 @@ interface AgentExecuteStart {
    */
   agentId?: string;
   enabledTools?: string[];
+  /**
+   * Marks `enabledTools` as the composer's ambient Smart Tools rather than a pinned selection,
+   * so the executor unions them onto the profile it resolves instead of replacing it. Set by
+   * `resolveDispatchTools` on the agentless path only.
+   */
+  enabledToolsAreAmbient?: boolean;
   maxIterations?: number;
   // Knowledge / file context forwarded for first-iteration materialization.
   messageFileIds?: string[];

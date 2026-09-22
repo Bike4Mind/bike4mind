@@ -151,16 +151,36 @@ export function pickEffectiveMaxIterations(
 }
 
 /**
- * Pick the effective tool whitelist. A non-empty payload beats the profile default - the
- * briefcase-override contract (`resolveDispatchTools` on the client) depends on a pinned
- * selection surviving whatever profile the run resolves - EXCEPT for a profile whose
- * `toolsetIsExclusive`: there the profile's toolset IS the toolbelt and the payload is
- * ignored - an agent whose toolset is declared exclusive means it. The profile's
- * `deniedTools` ALWAYS wins as a final subtraction so an admin denylist can't be bypassed
- * by shipping `enabledTools` in the payload. (For the two delegation tools that
- * subtraction is advisory only - they are injected as objects, never registered by name;
- * their effective enforcement is the dependency gate in agentExecutor via
+ * Pick the effective tool whitelist. Three payload dispositions, in precedence order:
+ *
+ * 1. `toolsetIsExclusive` profile -> the profile's toolset IS the toolbelt and the payload is
+ *    ignored entirely. An agent whose toolset is declared exclusive means it.
+ * 2. A PINNED non-empty payload REPLACES the profile default. The briefcase-override contract
+ *    (`resolveDispatchTools` on the client) and a quest node's scoped toolset both depend on a
+ *    deliberate selection surviving whatever profile the run resolves.
+ * 3. An AMBIENT non-empty payload (`payloadIsAmbient`) is UNIONED onto the profile default
+ *    instead. That is the agentless chat dispatch: the user's Smart Tools are picks they made
+ *    for chat, not a statement about the agent's toolbelt, so replacing would strip the org's
+ *    agent-mode tools and sending nothing would strip the user's picks. Unioning here - rather
+ *    than on the client, which would have to derive the org toolbelt from admin config and put
+ *    that derived copy on the wire - keeps the decision next to the profile it unions against.
+ *
+ * The union is gated on `isSynthetic`: a persisted agent's `allowedTools` is a deliberate
+ * curation, so ambient chat picks must not widen it. Agentless dispatches always land on a
+ * synthetic profile (`resolveTopLevelProfile` only takes the persisted path when `agentId` is
+ * set), so the gate costs nothing and bounds the blast radius if a caller ever sets both.
+ *
+ * The profile's `deniedTools` ALWAYS wins as a final subtraction, so an admin denylist can't be
+ * bypassed by shipping `enabledTools` in the payload - ambient or pinned. (For the two
+ * delegation tools that subtraction is advisory only - they are injected as objects, never
+ * registered by name; their effective enforcement is the dependency gate in agentExecutor via
  * `delegationOffer`.)
+ *
+ * NOTE: widening the toolbelt is not widening permissions. A side-effecting tool the union adds
+ * still faces the permission gate, whose approval list (`AgentExecution.approvedTools`) is built
+ * in `startAgentExecution` from the RAW payload and never from this result. That is also why a
+ * headless caller, whose explicit `enabledTools` IS its approval, must never send the ambient
+ * flag - the public REST contract deliberately has no such field.
  *
  * An EMPTY payload array is treated as "use profile" rather than "explicitly
  * no tools" because the chat dispatch path can ship `[]` when no per-message
@@ -168,11 +188,23 @@ export function pickEffectiveMaxIterations(
  */
 export function pickEffectiveEnabledTools(
   payloadEnabledTools: string[] | undefined,
-  profile: ResolvedOrchestrationProfile
+  profile: ResolvedOrchestrationProfile,
+  payloadIsAmbient?: boolean
 ): string[] {
-  const payloadApplies = payloadEnabledTools && payloadEnabledTools.length > 0 && !profile.toolsetIsExclusive;
-  const chosen = payloadApplies ? payloadEnabledTools : profile.allowedTools;
+  const chosen = chooseToolbelt(payloadEnabledTools, profile, payloadIsAmbient);
   if (profile.deniedTools.length === 0) return chosen;
   const denied = new Set(profile.deniedTools);
   return chosen.filter(t => !denied.has(t));
+}
+
+function chooseToolbelt(
+  payloadEnabledTools: string[] | undefined,
+  profile: ResolvedOrchestrationProfile,
+  payloadIsAmbient: boolean | undefined
+): string[] {
+  if (!payloadEnabledTools?.length || profile.toolsetIsExclusive) return profile.allowedTools;
+  if (payloadIsAmbient && profile.isSynthetic) {
+    return [...new Set([...payloadEnabledTools, ...profile.allowedTools])];
+  }
+  return payloadEnabledTools;
 }
