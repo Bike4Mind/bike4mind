@@ -157,13 +157,20 @@ interface SerpApiImagesResponse {
  * hits, so they are attached by exact link match only - a positional or same-host guess would
  * caption a result with another page's picture.
  */
-function indexImagesByLink(...groups: (SerpApiImageResult[] | undefined)[]): Map<string, string[]> {
+function indexImagesByLink(
+  inlineImages: SerpApiImageResult[] | undefined,
+  shoppingResults: SerpApiImageResult[] | undefined
+): Map<string, string[]> {
   const byLink = new Map<string, string[]>();
-  for (const group of groups) {
-    if (!Array.isArray(group)) continue;
+  // Each group is keyed by its OWN documented field (see the SerpApiImageResult comment) - a
+  // shared `source ?? link` fallback would silently key `shopping_results` by its merchant display
+  // name (never a URL, so it can never match an organic hit's `link`), leaving that half of the
+  // pool dead without any test noticing.
+  const addGroup = (group: SerpApiImageResult[] | undefined, pageLinkField: 'source' | 'link') => {
+    if (!Array.isArray(group)) return;
     for (const entry of group) {
       if (!entry) continue;
-      const pageLink = typeof entry.source === 'string' && entry.source ? entry.source : entry.link;
+      const pageLink = entry[pageLinkField];
       if (typeof pageLink !== 'string' || !pageLink) continue;
       // `original` is the full-size picture on the publisher's own host; `thumbnail` is a ~100px
       // gstatic preview that visibly pixelates once a card tile scales it up. Prefer the former.
@@ -171,7 +178,9 @@ function indexImagesByLink(...groups: (SerpApiImageResult[] | undefined)[]): Map
       if (!image) continue;
       byLink.set(pageLink, [...(byLink.get(pageLink) ?? []), image]);
     }
-  }
+  };
+  addGroup(inlineImages, 'source');
+  addGroup(shoppingResults, 'link');
   return byLink;
 }
 

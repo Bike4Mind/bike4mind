@@ -1,5 +1,5 @@
 import { cacheRepository } from '@bike4mind/database';
-import { isExecutableUploadMimeType, verifyImageUrlSignature } from '@bike4mind/common';
+import { isExecutableUploadMimeType, stripImageUrlSignature, verifyImageUrlSignature } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
@@ -25,16 +25,19 @@ import { z } from 'zod';
  * client can attach, so SearchResultCards reads this through `api` and renders the bytes as a
  * blob: URL. jwtOnly because an API key cannot be in play on that path at all.
  *
- * `url` must carry a valid HMAC signature (verifyImageUrlSignature, checked first below) before anything
- * else runs. Without that, this would be an arbitrary-URL fetcher for any signed-in user: the
- * `b4m_cards` fence is model-authored, and nothing stops a hostile page's snippet text from
+ * `url` must carry a valid HMAC signature (verifyImageUrlSignature, checked first below) before
+ * anything else runs. Without that, this would be an arbitrary-URL fetcher for any signed-in user:
+ * the `b4m_cards` fence is model-authored, and nothing stops a hostile page's snippet text from
  * steering the model into writing an attacker-controlled URL with exfiltrated conversation data in
  * the query string - which this route would then fetch server-side as a beacon. The signature is
  * applied to every image URL where it's first shown to the model (websearch/index.ts's `Images:`
  * lines), using the same SECRET_ENCRYPTION_KEY as ChatCompletionFeatures.telemetryHmacSecret, so
- * only a URL that genuinely came from a search result can verify here. The per-user minute cap
- * below is a second, independent bound against egress-amplification abuse of the vetted URLs
- * themselves.
+ * only a URL that genuinely came from a search result can verify here. `verifyImageUrlSignature`
+ * itself refuses to pass on an unconfigured or placeholder secret, so a deploy that never set a
+ * real SECRET_ENCRYPTION_KEY fails closed (every image "Image unavailable") rather than accepting
+ * anything. The signature is stripped before the fetch (`stripImageUrlSignature`) so the upstream
+ * host only ever sees the exact URL the search provider returned. The per-user minute cap below is
+ * a second, independent bound against egress-amplification abuse of the vetted URLs themselves.
  */
 
 const SearchImageQuery = z.object({
@@ -61,6 +64,10 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
       req.logger.warn('Rejected unsigned image URL on /api/search-image');
       throw new BadRequestError('Image URL is not allowed');
     }
+    // The upstream never sees the app's own query param - it gets exactly the URL the provider
+    // returned, byte for byte, which also matters for a presigned CDN link whose own signature
+    // covers its query string.
+    const fetchUrl = stripImageUrlSignature(rawUrl);
 
     const quota = await cacheRepository.tryIncrementWithinLimitFixedWindow(
       `search-image-rate-limit:${req.user.id}:minute`,
@@ -82,7 +89,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
       try {
         // safeFetch asserts https + non-private target, then re-validates a single redirect hop,
         // so the CDN redirects these thumbnails routinely use still work.
-        response = await safeFetch(rawUrl, {
+        response = await safeFetch(fetchUrl, {
           headers: {
             'User-Agent': `Lumina5-SearchImageProxy/1.0${brand ? ` (${brand})` : ''}`,
             Accept: 'image/webp,image/apng,image/*,*/*;q=0.8',
@@ -94,7 +101,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
           // The reason names the host and the private address it resolved to. Every signed-in
           // user can reach this route, so echoing it back would make the app an internal-DNS
           // oracle - keep the detail in the log, hand the caller nothing.
-          req.logger.warn('Blocked SSRF attempt on /api/search-image', { url: rawUrl, reason: e.message });
+          req.logger.warn('Blocked SSRF attempt on /api/search-image', { url: fetchUrl, reason: e.message });
           throw new BadRequestError('Image URL is not allowed');
         }
         if (e instanceof Error && e.name === 'AbortError') {
@@ -112,7 +119,7 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
       // privileges. Reject it and every other executable type.
       const contentType = (response.headers.get('content-type') || '').toLowerCase().split(';')[0].trim();
       if (!contentType.startsWith('image/') || isExecutableUploadMimeType(contentType)) {
-        req.logger.warn('Rejected non-image content-type on /api/search-image', { url: rawUrl, contentType });
+        req.logger.warn('Rejected non-image content-type on /api/search-image', { url: fetchUrl, contentType });
         throw new BadRequestError('Response is not an image');
       }
 

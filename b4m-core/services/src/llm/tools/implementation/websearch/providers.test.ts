@@ -175,6 +175,24 @@ describe('createSerpApiProvider', () => {
     expect(results[1].thumbnail).toBeUndefined();
   });
 
+  // A real shopping_results entry carries BOTH fields - `source` is a merchant display name
+  // ("Jomashop"), never a URL, so keying it the same way as inline_images (by `source`) would key
+  // this entry by a merchant name that can never match an organic hit's `link`, silently dropping
+  // the whole shopping_results half of the pool. Only catchable when `source` is actually present.
+  it('keys a shopping_results entry by `link` even when it also carries a `source` merchant name', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        organic_results: [{ title: 'A', link: 'https://a.com/p', snippet: '' }],
+        shopping_results: [{ link: 'https://a.com/p', source: 'Jomashop', original: 'https://img/shop.jpg' }],
+      })
+    );
+
+    const results = await createSerpApiProvider(adapters).search('q', 3);
+
+    expect(results[0].images).toEqual(['https://img/shop.jpg']);
+  });
+
   // The organic thumbnail is a ~92px preview and becomes the card's HERO tile (the one scaled up
   // the most) if it sorts first, which is exactly backwards.
   it('orders the full-size images ahead of the low-resolution organic thumbnail', async () => {

@@ -146,11 +146,16 @@ export async function performWebSearch(
     const imageSection =
       withImages && imageResults.length ? `\n${formatImageResults(imageResults, imageUrlSigningSecret)}\n` : '';
 
-    const formattedOutput = formattedResults
-      ? `Here's what I found from searching the web:\n\n${formattedResults}` +
-        imageSection +
-        (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '')
-      : 'No results found from web search.';
+    // Composed from its parts rather than gated as a whole on `formattedResults`: a query can
+    // return zero organic hits but a real image cluster (the dedicated image search runs
+    // independently of the organic search), and that image cluster - plus the cards prompt telling
+    // the model how to use it - must not be thrown away just because there's no prose to go with it.
+    const baseText = formattedResults
+      ? `Here's what I found from searching the web:\n\n${formattedResults}`
+      : imageSection
+        ? "Here's what I found from searching the web:\n"
+        : 'No results found from web search.';
+    const formattedOutput = baseText + imageSection + (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '');
 
     return { formattedResults: formattedOutput, citables };
   } catch (error) {

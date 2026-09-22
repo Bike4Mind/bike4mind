@@ -10,5 +10,9 @@
  * MUST contain only `\w` characters: both the renderer (`/language-(\w+)/`) and the curation
  * extractor (```` /```(\w+)?/ ````) capture the language with `\w+`, so a hyphen would silently
  * truncate this and the cards would never render.
+ *
+ * MUST already be lowercase: `replyDownloads.ts` lowercases the language it captures before
+ * comparing, so an uppercase-containing value would pass the `\w`-only rule above while silently
+ * breaking that comparison.
  */
 export const SEARCH_RESULT_CARDS_LANGUAGE = 'b4m_cards';

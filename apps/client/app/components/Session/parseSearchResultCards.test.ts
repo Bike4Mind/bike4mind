@@ -12,6 +12,14 @@ describe('SEARCH_RESULT_CARDS_LANGUAGE', () => {
     expect(SEARCH_RESULT_CARDS_LANGUAGE).toMatch(/^\w+$/);
     expect(/language-(\w+)/.exec(`language-${SEARCH_RESULT_CARDS_LANGUAGE}`)?.[1]).toBe(SEARCH_RESULT_CARDS_LANGUAGE);
   });
+
+  // `replyDownloads.ts` lowercases the captured language before comparing against this constant
+  // (`infoString.split(/\s+/)[0]?.toLowerCase()`), so an uppercase-containing value would pass the
+  // `\w`-only guard above while silently breaking that comparison and letting the card JSON through
+  // as a downloadable file again.
+  it('is already lowercase, so a case-sensitive equality check against it never silently breaks', () => {
+    expect(SEARCH_RESULT_CARDS_LANGUAGE).toBe(SEARCH_RESULT_CARDS_LANGUAGE.toLowerCase());
+  });
 });
 
 describe('parseSearchResultCards', () => {
