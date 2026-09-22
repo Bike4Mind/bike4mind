@@ -237,7 +237,9 @@ describe('DELETE /api/files/[id] - data-lake stats', () => {
  * Silent failure mode: drop the `auditPrincipal` line from the route and every other suite stays
  * green while key-driven deletes are recorded as the owning human's own edit, permanently.
  */
-describe('DELETE /api/files/[id] - auto-activate attribution', () => {
+// Deleting a file that leaves a lake with members no longer publishes a draft lake as a
+// side effect - only the explicit promoteDataLake door does.
+describe('DELETE /api/files/[id] - draft lakes stay draft', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.userFindById.mockResolvedValue({ id: OWNER });
@@ -247,35 +249,18 @@ describe('DELETE /api/files/[id] - auto-activate attribution', () => {
     h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 3, totalSizeBytes: 300, totalChunkedChars: 0 });
     h.setStats.mockResolvedValue(undefined);
-    h.activateIfDraft.mockResolvedValue(true);
     h.recordConfigChange.mockResolvedValue({});
   });
 
-  const recorded = () => {
-    expect(h.recordConfigChange).toHaveBeenCalledTimes(1);
-    return h.recordConfigChange.mock.calls[0][0];
-  };
-
-  it('names the deleting user as the principal on a session request', async () => {
+  it("corrects a draft lake's stats on delete without publishing it", async () => {
     givenOwnedFile([{ name: LAKE.datalakeTag, strength: 1 }]);
     const { res } = makeRes();
 
     await run(res);
 
-    expect(recorded()).toMatchObject({ action: 'auto-activate', principalKind: 'user', principalId: OWNER });
-  });
-
-  it('names the KEY, not the human it acts for, on an API-key request', async () => {
-    givenOwnedFile([{ name: LAKE.datalakeTag, strength: 1 }]);
-    const { res } = makeRes();
-
-    await run(res, undefined, { apiKeyInfo: { keyId: 'key-abc' } });
-
-    expect(recorded()).toMatchObject({
-      principalKind: 'apiKey',
-      principalId: 'key-abc',
-      onBehalfOfUserId: OWNER,
-    });
+    expect(h.setStats).toHaveBeenCalledWith(LAKE.id, expect.anything());
+    expect(h.activateIfDraft).not.toHaveBeenCalled();
+    expect(h.recordConfigChange).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'auto-activate' }));
   });
 });
 

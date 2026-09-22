@@ -27,8 +27,9 @@ import { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import { RemoteSkillSource } from '../storage/RemoteSkillSource.js';
 import { CheckpointStore } from '../storage/CheckpointStore.js';
 import { ApiClient } from '../auth/ApiClient';
-import { requireApiUrl, type AgentContext } from '../utils';
+import { requireApiUrl, wrapTools, type AgentContext } from '../utils';
 import { PermissionManager } from '../utils';
+import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { PermissionResponse } from '../components';
 import { isReadOnlyTool } from '../config/toolSafety.js';
 import { logger } from '../utils/Logger';
@@ -598,6 +599,10 @@ export class AcpServer {
       historyStore,
       sessionId: stackSessionId,
       permissionManager,
+      agentContext,
+      apiClient,
+      sandboxOrchestrator: sandboxOrchestrator ?? undefined,
+      allowedDirectories: additionalDirectories,
     });
 
     const agentToolsRef: { current: ICompletionOptionTools[] | null } = { current: null };
@@ -646,27 +651,63 @@ export class AcpServer {
     historyStore: AgentHistoryStore;
     sessionId: string;
     permissionManager: PermissionManager;
+    agentContext: AgentContext;
+    apiClient: ApiClient;
+    sandboxOrchestrator?: SandboxOrchestrator;
+    allowedDirectories: string[];
   }): ICompletionOptionTools[] {
-    const { config, orchestrator, agentStore, backgroundManager, historyStore, sessionId, permissionManager } = input;
+    const {
+      config,
+      orchestrator,
+      agentStore,
+      backgroundManager,
+      historyStore,
+      sessionId,
+      permissionManager,
+      agentContext,
+      apiClient,
+      sandboxOrchestrator,
+      allowedDirectories,
+    } = input;
+
+    // Route the security-relevant raw tools (skill, find_definition,
+    // get_file_structure) through the ONE permission wrapper.
+    const cliWrapDeps = {
+      permissionManager,
+      showPermissionPrompt: this.promptFn,
+      agentContext,
+      configStore: this.configStore,
+      apiClient,
+      sandboxOrchestrator,
+      allowedDirectories,
+    };
+    const wrappedSecurityTools = wrapTools(
+      [
+        createFindDefinitionTool(allowedDirectories),
+        createGetFileStructureTool(allowedDirectories),
+        ...(config.preferences.enableSkillTool !== false
+          ? [
+              createSkillTool({
+                customCommandStore: this.customCommandStore,
+                subagentOrchestrator: orchestrator,
+                sessionId,
+                // Gate skill lifecycle hook shell commands through permission.
+                permission: { permissionManager, promptFn: this.promptFn },
+                allowedDirectories,
+              }),
+            ]
+          : []),
+      ],
+      cliWrapDeps
+    );
+
     const tools: ICompletionOptionTools[] = [
       createAgentDelegateTool(orchestrator, agentStore, sessionId, backgroundManager),
       ...createBackgroundAgentTools(backgroundManager),
       createResumeAgentTool(orchestrator, historyStore, backgroundManager),
       createWriteTodosTool(createTodoStore()),
-      createFindDefinitionTool(),
-      createGetFileStructureTool(),
+      ...wrappedSecurityTools,
     ];
-    if (config.preferences.enableSkillTool !== false) {
-      tools.push(
-        createSkillTool({
-          customCommandStore: this.customCommandStore,
-          subagentOrchestrator: orchestrator,
-          sessionId,
-          // Gate skill lifecycle hook shell commands through permission.
-          permission: { permissionManager, promptFn: this.promptFn },
-        })
-      );
-    }
     if (config.preferences.enableCoordinatorMode === true) {
       tools.push(createCoordinateTaskTool(orchestrator, agentStore, sessionId));
     }

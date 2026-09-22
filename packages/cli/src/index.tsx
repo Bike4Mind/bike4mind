@@ -44,6 +44,7 @@ import { getPlanModeFilePath } from './utils/planMode.js';
 import {
   PermissionManager,
   type AgentContext,
+  wrapTools,
   resolveApiEndpoint,
   requireApiUrl,
   ApiEndpointUnconfiguredError,
@@ -922,23 +923,44 @@ function CliApp() {
         reviewGateStoreRef.current.reviewGates = [];
       }
 
+      // Deps for routing the raw CLI-built tools (skill, find_definition,
+      // get_file_structure) through the ONE permission wrapper, exactly like the
+      // B4M and MCP tools. `additionalDirectories` is the same live allow-list
+      // reference threaded into generateCliTools, so runtime grants apply here too.
+      const cliWrapDeps = {
+        permissionManager,
+        showPermissionPrompt: promptFn,
+        agentContext,
+        configStore: state.configStore,
+        apiClient,
+        sandboxOrchestrator: sandboxOrchestrator ?? undefined,
+        allowedDirectories: additionalDirectories,
+      };
+
       // Create skill tool for AI-driven skill invocation (unless disabled)
       const enableSkillTool = config.preferences.enableSkillTool !== false;
       const skillTool = enableSkillTool
-        ? createSkillTool({
-            customCommandStore: state.customCommandStore,
-            subagentOrchestrator: orchestrator,
-            sessionId: newSession.id,
-            // Gate skill lifecycle hook shell commands through permission.
-            permission: { permissionManager, promptFn },
-          })
+        ? wrapTools(
+            [
+              createSkillTool({
+                customCommandStore: state.customCommandStore,
+                subagentOrchestrator: orchestrator,
+                sessionId: newSession.id,
+                // Gate skill lifecycle hook shell commands through permission.
+                permission: { permissionManager, promptFn },
+                // Confine skill @file refs to the workspace (plus granted dirs).
+                allowedDirectories: additionalDirectories,
+              }),
+            ],
+            cliWrapDeps
+          )[0]
         : null;
 
       // Create find_definition tool for fast symbol lookup
-      const findDefinitionTool = createFindDefinitionTool();
+      const findDefinitionTool = wrapTools([createFindDefinitionTool(additionalDirectories)], cliWrapDeps)[0];
 
       // Create get_file_structure tool for AST-based code overview
-      const getFileStructureTool = createGetFileStructureTool();
+      const getFileStructureTool = wrapTools([createGetFileStructureTool(additionalDirectories)], cliWrapDeps)[0];
 
       // Persistent work tracking - outlives the session, unlike write_todos.
       // Off by default: six tool schemas in every completion is a real cost for

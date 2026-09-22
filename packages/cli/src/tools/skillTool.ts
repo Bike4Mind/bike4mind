@@ -54,6 +54,14 @@ export interface SkillToolDependencies {
    * is now impossible, and forgetting it entirely is a type error.
    */
   permission: ShellCommandPermissionDeps;
+  /**
+   * Live filesystem allow-list (beyond the working directory) used to confine
+   * `@file` references in a skill body. A skill body is model- or repo-authored,
+   * so its `@file` refs are agent-driven and must not read outside the workspace
+   * (e.g. `@/etc/passwd`). Omitted/`[]` confines to the working directory only;
+   * runtime `--add-dir` grants widen it in place.
+   */
+  allowedDirectories?: string[];
 }
 
 /**
@@ -223,8 +231,9 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
         const argsArray = params.args ? parseArguments(params.args) : [];
         let expandedBody = substituteArguments(command.body, argsArray);
 
-        // Process @file references
-        const processed = await processFileReferences(expandedBody);
+        // Process @file references. A skill body is agent-driven content, so
+        // confine its refs to the workspace (plus any granted dirs).
+        const processed = await processFileReferences(expandedBody, deps.allowedDirectories ?? []);
         expandedBody = processed.content;
 
         if (processed.errors.length > 0) {

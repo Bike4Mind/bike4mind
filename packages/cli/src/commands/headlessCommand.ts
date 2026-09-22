@@ -17,7 +17,14 @@ import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/servi
 import { isReadOnlyTool } from '../config/toolSafety.js';
 import { reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildSystemPrompt } from '../core/prompts';
-import { generateCliTools, PermissionManager, type AgentContext, requireApiUrl } from '../utils';
+import {
+  generateCliTools,
+  wrapTools,
+  PermissionManager,
+  type AgentContext,
+  type PermissionPromptKind,
+  requireApiUrl,
+} from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
 import { buildProjectAgentStore, loadProjectContext } from '../bootstrap/projectStores.js';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
@@ -53,9 +60,9 @@ import {
   HEADLESS_SCHEMA_VERSION,
   createHeadlessEmitter,
   classifyToolRisk,
+  resolveHeadlessPermissionDecision,
   parseStringArray,
   parsePermissionPolicy,
-  evaluatePermissionPolicy,
   type HeadlessPermissionPolicy,
 } from './headlessProtocol.js';
 
@@ -257,22 +264,21 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const promptFn = (
       toolName: string,
       args: unknown,
-      _preview?: string
+      _preview?: string,
+      kind?: PermissionPromptKind
     ): Promise<{ action: 'allow-once' | 'allow-session' | 'allow-always' | 'deny' }> => {
       const risk = classifyToolRisk(toolName, args, permissionManager.getCategory(toolName));
       if (streaming) {
         emit({ type: 'permission_request', toolName, risk });
       }
 
-      let decision: { action: 'allow-once' | 'deny'; reason: string };
-      if (dangerouslySkipPermissions) {
-        decision = { action: 'allow-once', reason: 'dangerously-skip-permissions' };
-      } else if (permissionPolicy) {
-        const verdict = evaluatePermissionPolicy(permissionPolicy, toolName, risk.level);
-        decision = { action: verdict.action === 'allow' ? 'allow-once' : 'deny', reason: verdict.reason };
-      } else {
-        decision = { action: 'deny', reason: 'no permission policy; default deny' };
-      }
+      const decision = resolveHeadlessPermissionDecision({
+        dangerouslySkipPermissions,
+        isDirectoryGrant: kind === 'directory-grant',
+        toolName,
+        riskLevel: risk.level,
+        permissionPolicy,
+      });
 
       if (streaming) {
         emit({
@@ -353,7 +359,20 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       loadProjectContext(configStore),
     ]);
 
-    const mcpTools = mcpManager.getTools();
+    // Deps for routing raw CLI/MCP tools through the ONE permission wrapper.
+    const cliWrapDeps = {
+      permissionManager,
+      showPermissionPrompt: promptFn,
+      agentContext,
+      configStore,
+      apiClient,
+      sandboxOrchestrator,
+      allowedDirectories: additionalDirectories,
+    };
+
+    // MCP tools arrive raw - gate them through the permission wrapper (headless
+    // policy then decides allow/deny/prompt) exactly like the B4M tools.
+    const mcpTools = wrapTools(mcpManager.getTools(), cliWrapDeps);
 
     // Retains completed sub-agent conversations for resume_agent.
     const historyStore = new AgentHistoryStore(
@@ -376,6 +395,9 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       showUserQuestion: userQuestionFn,
       checkpointStore,
       historyStore,
+      // Subagent bash_execute is sandboxed and directory-scoped like the main agent.
+      sandboxOrchestrator,
+      additionalDirectories,
     });
 
     const backgroundManager = new BackgroundAgentManager(orchestrator);
@@ -384,8 +406,8 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const resumeAgentTool = createResumeAgentTool(orchestrator, historyStore, backgroundManager);
     const todoStore = createTodoStore();
     const writeTodosTool = createWriteTodosTool(todoStore);
-    const findDefinitionTool = createFindDefinitionTool();
-    const getFileStructureTool = createGetFileStructureTool();
+    const findDefinitionTool = wrapTools([createFindDefinitionTool(additionalDirectories)], cliWrapDeps)[0];
+    const getFileStructureTool = wrapTools([createGetFileStructureTool(additionalDirectories)], cliWrapDeps)[0];
     // Off by default - see the matching note in index.tsx.
     const workItemTools = config.preferences.enableWorkItemTools
       ? createWorkItemTools(new WorkItemsClient(apiClient))
@@ -393,12 +415,18 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     const enableSkillTool = config.preferences.enableSkillTool !== false;
     const skillTool = enableSkillTool
-      ? createSkillTool({
-          customCommandStore,
-          subagentOrchestrator: orchestrator,
-          sessionId: session.id,
-          permission: { permissionManager, promptFn },
-        })
+      ? wrapTools(
+          [
+            createSkillTool({
+              customCommandStore,
+              subagentOrchestrator: orchestrator,
+              sessionId: session.id,
+              permission: { permissionManager, promptFn },
+              allowedDirectories: additionalDirectories,
+            }),
+          ],
+          cliWrapDeps
+        )[0]
       : null;
 
     const cliTools = [

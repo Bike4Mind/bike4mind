@@ -8,6 +8,8 @@ import { createResumeAgentTool } from './resumeAgentTool.js';
 import { PermissionManager } from '../utils/PermissionManager.js';
 import { runShellCommand } from '../utils/shellRunner.js';
 import { createSkillTool } from '../tools/skillTool.js';
+import { generateCliTools } from '../utils/toolsAdapter.js';
+import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 
 // A denied hook must never reach the shell; mock it to observe (and to let the
 // allow path complete without spawning a real process).
@@ -237,6 +239,52 @@ describe('SubagentOrchestrator run lifecycle callbacks', () => {
     expect(beforeRun).toHaveBeenCalledTimes(1);
     expect(afterRun).toHaveBeenCalledTimes(1);
     expect(afterRun).toHaveBeenCalledWith(beforeRun.mock.calls[0][0], 'tester');
+  });
+});
+
+describe('SubagentOrchestrator sandbox parity (criterion 4)', () => {
+  it('default sandbox config denies the credential dirs a subagent must never read', () => {
+    const denied = DEFAULT_SANDBOX_CONFIG.filesystem.deniedPaths;
+    // The CLI credential/config stores were added by this work; main lacked them.
+    for (const p of ['$HOME/.ssh', '$HOME/.aws', '$HOME/.gnupg', '$HOME/.claude', '$HOME/.bike4mind', '/etc/passwd']) {
+      expect(denied).toContain(p);
+    }
+  });
+
+  it('generates subagent tools with the parent sandbox orchestrator + allow-list, not undefined', async () => {
+    vi.mocked(generateCliTools).mockClear();
+    const sandboxOrchestrator = { marker: 'real-orchestrator' };
+    const additionalDirectories = ['/granted/dir'];
+    const deps = {
+      userId: 'test-user',
+      llm: createOneShotLlm('done'),
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      permissionManager: {},
+      showPermissionPrompt: vi.fn(),
+      configStore: { get: async () => ({}) },
+      apiClient: {},
+      agentStore: { getAgent: () => undefined, getAgentNames: () => [] },
+      historyStore: new AgentHistoryStore(),
+      sandboxOrchestrator,
+      additionalDirectories,
+    } as unknown as OrchestratorDependencies;
+    const orchestrator = new SubagentOrchestrator(deps);
+
+    await orchestrator.delegateToAgent({
+      task: 'do the thing',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: inlineAgent(),
+    });
+
+    expect(generateCliTools).toHaveBeenCalled();
+    // Positions 11 (sandboxOrchestrator) and 12 (allowedDirectories) in the
+    // generateCliTools call; main passed `undefined` for both, so subagent
+    // bash_execute ran unsandboxed.
+    const calls = vi.mocked(generateCliTools).mock.calls;
+    const args = calls[calls.length - 1];
+    expect(args[11]).toBe(sandboxOrchestrator);
+    expect(args[12]).toBe(additionalDirectories);
   });
 });
 

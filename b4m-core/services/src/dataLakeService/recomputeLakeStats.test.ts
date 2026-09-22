@@ -13,7 +13,6 @@ const makeAdapters = (fileCount: number) => ({
   db: {
     dataLakes: {
       setStats: vi.fn().mockResolvedValue(null),
-      activateIfDraft: vi.fn().mockResolvedValue(true),
     },
     fabFiles: {
       computeDataLakeStats: vi
@@ -23,8 +22,10 @@ const makeAdapters = (fileCount: number) => ({
   },
 });
 
-describe('recomputeLakeStats draft activation', () => {
-  it('activates the lake once it holds a member file', async () => {
+// draft -> active is no longer a side effect of this function - see `promoteDataLake`,
+// the explicit, authorized, audited door that replaced the old implicit flip.
+describe('recomputeLakeStats', () => {
+  it('persists the recomputed stats regardless of the lake carrying files or not', async () => {
     const adapters = makeAdapters(1);
 
     await recomputeLakeStats(lake, adapters);
@@ -34,10 +35,9 @@ describe('recomputeLakeStats draft activation', () => {
       totalSizeBytes: 100,
       totalChunkedChars: 0,
     });
-    expect(adapters.db.dataLakes.activateIfDraft).toHaveBeenCalledWith('lake1');
   });
 
-  it('leaves an empty lake in draft', async () => {
+  it("leaves an empty lake's stats at zero", async () => {
     const adapters = makeAdapters(0);
 
     await recomputeLakeStats(lake, adapters);
@@ -47,10 +47,9 @@ describe('recomputeLakeStats draft activation', () => {
       totalSizeBytes: 0,
       totalChunkedChars: 0,
     });
-    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
   });
 
-  it('still returns the stats it computed', async () => {
+  it('returns the stats it computed', async () => {
     expect(await recomputeLakeStats(lake, makeAdapters(3))).toEqual({
       fileCount: 3,
       totalSizeBytes: 300,
@@ -58,24 +57,24 @@ describe('recomputeLakeStats draft activation', () => {
     });
   });
 
-  it('skipActivation still corrects stats but never activates, even with member files', async () => {
-    const adapters = makeAdapters(1);
+  it('never touches lake status, even when the lake holds member files', async () => {
+    const adapters = makeAdapters(1) as ReturnType<typeof makeAdapters> & {
+      db: { dataLakes: { activateIfDraft?: unknown; demoteToDraft?: unknown } };
+    };
 
-    await recomputeLakeStats(lake, adapters, { skipActivation: true });
+    await recomputeLakeStats(lake, adapters);
 
-    expect(adapters.db.dataLakes.setStats).toHaveBeenCalledWith('lake1', {
-      fileCount: 1,
-      totalSizeBytes: 100,
-      totalChunkedChars: 0,
-    });
-    expect(adapters.db.dataLakes.activateIfDraft).not.toHaveBeenCalled();
+    expect(adapters.db.dataLakes.activateIfDraft).toBeUndefined();
+    expect(adapters.db.dataLakes.demoteToDraft).toBeUndefined();
   });
 
-  it('activates normally when skipActivation is omitted or false', async () => {
+  it("accepts an unused logger, so every existing call site's `{ db, logger }` literal still compiles", async () => {
     const adapters = makeAdapters(1);
+    const logger = { warn: vi.fn(), error: vi.fn() };
 
-    await recomputeLakeStats(lake, adapters, { skipActivation: false });
+    await recomputeLakeStats(lake, { ...adapters, logger });
 
-    expect(adapters.db.dataLakes.activateIfDraft).toHaveBeenCalledWith('lake1');
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 });

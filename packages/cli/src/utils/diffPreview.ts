@@ -1,6 +1,7 @@
 import * as Diff from 'diff';
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
+import { fuzzyMatch } from '@bike4mind/services/llm/tools/cliTools';
 
 /**
  * Generate a preview of file changes for permission prompts
@@ -59,11 +60,39 @@ export function generateFileCreatePreview(args: { path: string; content: string 
 }
 
 /**
- * Generate a preview for edit_local_file (string replacement)
+ * Generate a preview for edit_local_file (string replacement).
+ *
+ * Shows the ACTUAL span edit_local_file will delete and its replacement, not
+ * just the model's typed old_string. A block-anchor (fuzzy) match can span more
+ * lines than old_string names, so previewing old_string alone would let a wider
+ * region be replaced than the user approved. Mirrors the tool's own match order:
+ * exact substring first, then the shared fuzzy matcher.
  */
-export function generateEditLocalFilePreview(args: { path: string; old_string: string; new_string: string }): string {
-  // Generate a simple diff showing the old -> new replacement
-  const patch = Diff.createPatch(args.path, args.old_string, args.new_string, 'Current', 'Proposed', { context: 3 });
+export async function generateEditLocalFilePreview(args: {
+  path: string;
+  old_string: string;
+  new_string: string;
+}): Promise<string> {
+  let deleted = args.old_string;
+  let inserted = args.new_string;
+
+  try {
+    if (existsSync(args.path)) {
+      const currentContent = await readFile(args.path, 'utf-8');
+      if (!currentContent.includes(args.old_string)) {
+        // No exact hit - resolve the real fuzzy span the tool would replace.
+        const fuzzy = fuzzyMatch(currentContent, args.old_string, args.new_string);
+        if (fuzzy) {
+          deleted = fuzzy.matchedText;
+          inserted = fuzzy.replacement;
+        }
+      }
+    }
+  } catch {
+    // Fall back to the typed strings on any read/match error (incl. ambiguous match).
+  }
+
+  const patch = Diff.createPatch(args.path, deleted, inserted, 'Current', 'Proposed', { context: 3 });
 
   // Extract just the diff lines (skip the header)
   const lines = patch.split('\n');

@@ -86,6 +86,7 @@ beforeEach(() => {
     byType: [{ key: 'bug', count: 5 }],
     byStatus: [{ key: 'open', count: 6 }],
     byTag: [{ key: 'slow', count: 3 }],
+    byTagTruncated: true,
     byMember: [{ userId: 'u1', displayName: MEMBER_NAME, count: 7 }],
     membership: { memberCount: 1, aclOnly: [], stampOnly: [] },
   });
@@ -113,7 +114,10 @@ describe('runOrgFeedbackSummary', () => {
     expect(JSON.parse(payload as string)).toMatchObject({
       summaryJobId: SUMMARY_JOB_ID,
       summary: 'Feedback was steady across the window.',
-      counts: { totals: { count: 7 } },
+      // The truncation flag has to survive into the stored artifact: the read route parses it back
+      // out of S3, and a caption on a stale artifact is the only place a reader learns the tag
+      // list was cut.
+      counts: { totals: { count: 7 }, byTagTruncated: true },
     });
     // activeKey moving to the job's own id is what frees this window for a re-run.
     expect(h.updateOne).toHaveBeenLastCalledWith(
@@ -121,6 +125,30 @@ describe('runOrgFeedbackSummary', () => {
       { status: 'completed', s3Key: key, activeKey: SUMMARY_JOB_ID }
     );
     expect(frames().map(f => f.status)).toEqual(['processing', 'processing', 'completed']);
+  });
+
+  it('serializes byTagTruncated: false rather than dropping the key on an empty population', async () => {
+    h.orgFeedbackReport.mockResolvedValue({
+      range: { from: message.startDate, to: message.endDate },
+      totals: { count: 0 },
+      byDay: [],
+      bySubject: [],
+      byType: [],
+      byStatus: [],
+      byTag: [],
+      byTagTruncated: false,
+      byMember: [],
+      membership: { memberCount: 0, aclOnly: [], stampOnly: [] },
+    });
+
+    await run();
+
+    // Asserted after the JSON round-trip the upload actually performs: JSON.stringify omits an
+    // undefined value entirely, and an absent key is what the artifact contract reserves for one
+    // written before the field existed. Reading the in-memory object would miss that.
+    const { counts } = JSON.parse(h.upload.mock.calls[0][0] as string);
+    expect('byTagTruncated' in counts).toBe(true);
+    expect(counts.byTagTruncated).toBe(false);
   });
 
   it('resolves and keeps the completed status when only the completion frame rejects', async () => {
