@@ -70,8 +70,10 @@ const handler = baseApi()
       await assertSessionAccess(sessionId, req.user!.id, 'write', req.user!.groups ?? []);
 
       // Detach and config cleanup must land together: a transient failure on either write must
-      // not leave the agent detached with its config row orphaned (the eligibility scan below is
-      // the backstop for a config re-created by a racing PUT, but this keeps the common case atomic).
+      // not leave the agent detached with its config row orphaned. A config re-created by a
+      // racing PUT right after this runs is left as an orphan for now (the eligibility scan
+      // skips it without deleting - see getEligibleConfigs.ts - and the queue worker refuses to
+      // execute a detached config regardless), pending a race-safe reconciliation follow-up.
       const updatedSession = await withTransaction(async () => {
         const session = await sessionRepository.detachAgent(sessionId, agentId);
         await sessionAgentConfigRepository.deleteBySessionAndAgent(sessionId, agentId);
