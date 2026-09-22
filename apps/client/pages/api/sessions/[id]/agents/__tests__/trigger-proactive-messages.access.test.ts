@@ -13,16 +13,22 @@ import { createMocks } from 'node-mocks-http';
 import type { Request, Response } from 'express';
 import { NotFoundError } from '@bike4mind/utils';
 
+type RouteHandler = (req: Request, res: Response) => unknown;
+
+interface MockChain {
+  post: (fn: RouteHandler) => MockChain;
+}
+
 const mockRefs = vi.hoisted(() => ({
-  postHandler: null as null | ((req: any, res: any) => unknown),
+  postHandler: null as null | RouteHandler,
   findById: vi.fn(),
   findBySessionId: vi.fn(),
   sendToQueue: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
-    post: (fn: any) => {
+  const chain: MockChain = {
+    post: fn => {
       mockRefs.postHandler = fn;
       return chain;
     },
