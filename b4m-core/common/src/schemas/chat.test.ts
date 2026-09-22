@@ -1,6 +1,75 @@
 import { describe, it, expect } from 'vitest';
-import { SimplifiedChatRequestSchema } from './chat';
+import { SimplifiedChatRequestSchema, ChatAckSchema, ChatQuestPollResultSchema } from './chat';
+import { CHAT_HISTORY_ITEM_TYPES } from '../types/entities/SessionTypes';
 import { filterKnownTools, B4MLLMToolsList } from './llm';
+
+const baseAck = {
+  id: 'quest-1',
+  status: 'done',
+  message_received: true,
+  timestamp: '2026-09-15T00:00:00Z',
+  model: 'test-model',
+  tracking_info: { quest_id: 'quest-1', check_status_url: '/api/quests/quest-1' },
+};
+
+/**
+ * `type`/`errorCode` model the classifier a caller matches on to tell a failed turn from a
+ * real answer (chat.contract.ts's 200 description). Both absent on the immediate async ack;
+ * `type` is the failure signal on a terminal turn and `errorCode` only names the reason when
+ * there is one, so the vocabulary here is wider than what this endpoint can actually emit.
+ */
+describe('ChatAckSchema error classifier', () => {
+  it('accepts the shape with no type/errorCode (the immediate async ack)', () => {
+    const result = ChatAckSchema.safeParse(baseAck);
+    expect(result.success).toBe(true);
+    expect(result.data?.type).toBeUndefined();
+    expect(result.data?.errorCode).toBeUndefined();
+  });
+
+  it.each(['insufficient_credits', 'spend_cap_exceeded'] as const)(
+    'accepts type: "error" with errorCode: "%s"',
+    errorCode => {
+      const result = ChatAckSchema.safeParse({ ...baseAck, type: 'error', errorCode });
+      expect(result.success).toBe(true);
+      expect(result.data?.type).toBe('error');
+      expect(result.data?.errorCode).toBe(errorCode);
+    }
+  );
+
+  it('accepts a real answer with type: "message" and no errorCode', () => {
+    const result = ChatAckSchema.safeParse({ ...baseAck, type: 'message' });
+    expect(result.success).toBe(true);
+    expect(result.data?.errorCode).toBeUndefined();
+  });
+
+  // The two surfaces a caller can see a completed turn on must publish ONE quest-type
+  // vocabulary: an enum accepted on one and rejected on the other forces two parsers, which is
+  // the defect this endpoint's parity work exists to remove. Asserted per surface, and against
+  // the const rather than a literal list, so adding a quest type cannot pass here while
+  // breaking one of them.
+  describe.each([
+    ['wait: true body (ChatAckSchema)', (type: string) => ChatAckSchema.safeParse({ ...baseAck, type })],
+    [
+      'polled quest (ChatQuestPollResultSchema)',
+      (type: string) => ChatQuestPollResultSchema.safeParse({ id: 'quest-1', type }),
+    ],
+  ])('quest type vocabulary on the %s', (_surface, parse) => {
+    it.each(CHAT_HISTORY_ITEM_TYPES)('accepts type: "%s"', type => {
+      expect(parse(type).success).toBe(true);
+    });
+
+    it('rejects a type outside the vocabulary', () => {
+      expect(parse('not_a_quest_type').success).toBe(false);
+    });
+  });
+
+  it('rejects an errorCode outside the quest-failure vocabulary (narrows API_ERROR_CODES)', () => {
+    // provider_not_configured/provider_rejected are real API_ERROR_CODES entries, but not
+    // quest-failure reasons - QUEST_ERROR_CODES narrows the shared union on purpose.
+    const result = ChatAckSchema.safeParse({ ...baseAck, type: 'error', errorCode: 'provider_not_configured' });
+    expect(result.success).toBe(false);
+  });
+});
 
 /**
  * Pins the public-API schema hygiene rule this endpoint's contract migration

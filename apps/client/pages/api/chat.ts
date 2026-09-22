@@ -223,6 +223,11 @@ const handler = nextRouteForContract(chatContract, {
       model: internalRequest.params.model,
       response: completedQuest.reply,
       responses: completedQuest.replies,
+      // Terminal-failure classifier (see chatContract's 200 description). `type` is present
+      // unconditionally, matching the polled quest (GET /api/quests/{id}); `errorCode` stays
+      // conditional since only the billing failures set it.
+      type: completedQuest.type,
+      ...(completedQuest.type === 'error' && { errorCode: completedQuest.errorCode }),
       // Additive twin of `response`: the machine-readable state the turn's tools produced, which
       // otherwise survives only on the quest (the model sees a terse displayMessage instead). The
       // prose above is unchanged - a caller reads one, the other, or both.

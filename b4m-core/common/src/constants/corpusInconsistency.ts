@@ -115,7 +115,10 @@ const EXCERPT_MAX = 240;
  * report is stored on the lake document, so the ceiling is a real failure mode rather than a
  * theoretical one, and `documentCount` keeps the truncation from costing the reader the number.
  */
-const EVIDENCE_MAX = 20;
+// Exported so `LAKE_FINDING_SOURCE_MAX` can be pinned against it by test rather than by comment.
+// They stay two constants deliberately: this one bounds a REPORT stored on the lake document, the
+// other bounds a persisted finding ROW written by producers that never build a report at all.
+export const EVIDENCE_MAX = 20;
 
 /**
  * Sentence-ish split. Deliberately crude: a full NLP splitter buys nothing here, because every rule

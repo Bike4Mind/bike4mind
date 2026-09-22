@@ -101,11 +101,9 @@ async function recomputeLakes(opts: Options): Promise<number> {
   for await (const lake of cursor) {
     scanned++;
     if (!opts.execute) continue;
-    await dataLakeService.recomputeLakeStats(
-      lake,
-      { db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository } },
-      { skipActivation: true }
-    );
+    await dataLakeService.recomputeLakeStats(lake, {
+      db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
+    });
   }
   console.log(`  phase 3: ${opts.execute ? 'recomputed' : '[dry-run] would recompute'} ${scanned} lake(s)`);
   return scanned;

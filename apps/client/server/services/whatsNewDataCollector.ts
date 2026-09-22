@@ -9,11 +9,7 @@
 import { GitHubService } from '@server/services/githubService';
 import { Logger } from '@bike4mind/observability';
 import type { WhatsNewGenerationPayload } from '@server/queueHandlers/types';
-
-// Default repository configuration
-// These could be moved to WhatsNewConfig AdminSettings in a future iteration
-const DEFAULT_REPOSITORY = 'MillionOnMars/lumina5';
-const DEFAULT_TARGET_BRANCH = 'main';
+import { WHATS_NEW_DEFAULT_REPOSITORY, WHATS_NEW_DEFAULT_TARGET_BRANCH } from '@bike4mind/common';
 
 /**
  * Noise patterns to filter out non-user-facing PRs
@@ -59,15 +55,16 @@ function isNoisePR(title: string): boolean {
  * @param targetDate - Publication date (YYYY-MM-DD); PRs from the previous day are collected.
  * @param logger - Logger instance
  * @param options - Optional overrides for repository and branch
- * @returns CollectedData or null if GitHubService is unavailable
+ * @returns CollectedData, or null if GitHubService is unavailable
+ * @throws if the repository is outside the connection's allowed list (permanent misconfiguration)
  */
 export async function collectDataForDate(
   targetDate: string,
   logger: Logger,
   options?: { repository?: string; targetBranch?: string }
 ): Promise<CollectedData | null> {
-  const repository = options?.repository || DEFAULT_REPOSITORY;
-  const targetBranch = options?.targetBranch || DEFAULT_TARGET_BRANCH;
+  const repository = options?.repository || WHATS_NEW_DEFAULT_REPOSITORY;
+  const targetBranch = options?.targetBranch || WHATS_NEW_DEFAULT_TARGET_BRANCH;
 
   logger.info('[WhatsNewDataCollector] Starting data collection', {
     targetDate,
@@ -80,6 +77,16 @@ export async function collectDataForDate(
   if (!github) {
     logger.error('[WhatsNewDataCollector] GitHubService.forSystem() returned null - credentials missing or disabled');
     return null;
+  }
+
+  // listMergedPullRequests returns [] for a repo outside the connection whitelist, which is
+  // indistinguishable from a quiet day: callers record "no PRs" and the surface goes dark with
+  // no error anywhere. Surface the misconfiguration instead.
+  if (!github.isRepositoryAllowed(repository)) {
+    throw new Error(
+      `Repository ${repository} is not in the system GitHub connection's allowed repositories. ` +
+        "Add it to the connection whitelist, or correct the repository in the What's New configuration."
+    );
   }
 
   // targetDate is the publication date; PRs merged the previous day

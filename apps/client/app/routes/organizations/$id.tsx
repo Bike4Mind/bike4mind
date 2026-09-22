@@ -48,7 +48,7 @@ import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
 import { canViewOrgUsage, OrganizationTabs, resolveAccessibleTab } from '@client/app/routes/organizations/orgTabAccess';
 import { useParams, useSearch } from '@tanstack/react-router';
-import { FC, useMemo, useState, useEffect } from 'react';
+import { FC, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 const OrganizationPage: FC = () => {
@@ -57,7 +57,7 @@ const OrganizationPage: FC = () => {
   const { data: organization, isLoading } = useGetOrganization(id as string);
   const { maxSeats, currentSeats } = useOrganizationSeats(id as string);
   const search = useSearch({ strict: false }) as { tab?: string };
-  const [selectedTab, setSelectedTab] = useState<OrganizationTabs>(
+  const [requestedTab, setRequestedTab] = useState<OrganizationTabs>(
     search.tab && Object.values(OrganizationTabs).includes(search.tab as OrganizationTabs)
       ? (search.tab as OrganizationTabs)
       : OrganizationTabs.Overview
@@ -104,11 +104,12 @@ const OrganizationPage: FC = () => {
     return currentUser.isAdmin || currentUser.id === organization.userId;
   }, [currentUser, organization]);
 
-  // A ?tab= deep link can select a tab this caller never gets rendered, so the selection is sent
-  // back through the same visibility rules the TabList applies.
-  useEffect(() => {
-    setSelectedTab(resolveAccessibleTab(selectedTab, { canManageOrg, canViewUsage, canManageGroups }));
-  }, [canManageOrg, canViewUsage, canManageGroups, selectedTab]);
+  // A ?tab= deep link can select a tab this caller never gets rendered, so the request is sent back
+  // through the same visibility rules the TabList applies. Resolved during render rather than in an
+  // effect on purpose: the gates read the org document, which lands a render after mount, and until
+  // it does they deny everyone. An effect would write that provisional denial into state and lose
+  // the requested tab for good; deriving it re-answers the question as soon as the document arrives.
+  const selectedTab = resolveAccessibleTab(requestedTab, { canManageOrg, canViewUsage, canManageGroups });
 
   useDocumentTitle(organization?.name, ' | Organization');
 
@@ -144,7 +145,7 @@ const OrganizationPage: FC = () => {
 
       <OrganizationHeader
         organization={organization}
-        onSettingsClick={() => canManageOrg && setSelectedTab(OrganizationTabs.Settings)}
+        onSettingsClick={() => canManageOrg && setRequestedTab(OrganizationTabs.Settings)}
       />
 
       <Box sx={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -157,7 +158,7 @@ const OrganizationPage: FC = () => {
             minHeight: 0,
           }}
           value={selectedTab}
-          onChange={(_, value) => setSelectedTab(value as OrganizationTabs)}
+          onChange={(_, value) => setRequestedTab(value as OrganizationTabs)}
         >
           <TabList
             sx={{

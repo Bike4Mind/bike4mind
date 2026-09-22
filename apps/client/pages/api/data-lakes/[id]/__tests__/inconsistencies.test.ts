@@ -3,7 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   assertLakeWriteAccess: vi.fn(),
   detectLakeInconsistencies: vi.fn(),
+  recordLakeFindings: vi.fn(),
   update: vi.fn(),
+  recordDetected: vi.fn(),
+  loggerWarn: vi.fn(),
+  loggerError: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
   // The rate limiter is a middleware, so it is only reachable if the mocked chain below actually
   // RUNS what the route hands to `.use` - see that mock.
@@ -55,11 +59,13 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeWriteAccess: h.assertLakeWriteAccess,
     detectLakeInconsistencies: h.detectLakeInconsistencies,
+    recordLakeFindings: h.recordLakeFindings,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { update: h.update },
   dataLakeAccessGrantRepository: {},
+  dataLakeFindingRepository: { recordDetected: h.recordDetected },
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
@@ -77,7 +83,13 @@ const invoke = (body: Record<string, unknown> = {}, method = 'POST') => {
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method, query: { id: 'lake1' }, body, user: { id: 'u1' }, logger: { warn: vi.fn() } },
+      {
+        method,
+        query: { id: 'lake1' },
+        body,
+        user: { id: 'u1' },
+        logger: { warn: h.loggerWarn, error: h.loggerError },
+      },
       res
     ),
   };
@@ -98,6 +110,7 @@ beforeEach(() => {
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.detectLakeInconsistencies.mockResolvedValue(report());
   h.update.mockResolvedValue(lake);
+  h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
 });
 
 describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
@@ -257,5 +270,102 @@ describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {
     await done;
 
     expect(h.rateLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)', () => {
+  const findings = [
+    { kind: 'metric-disagreement', subject: 'annual revenue usd', evidence: [], documentCount: 2 },
+    { kind: 'expired-claim', subject: 'current roadmap', evidence: [], documentCount: 3 },
+  ];
+
+  it('emits every finding the run produced as a durable row', async () => {
+    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+
+    const { done } = invoke();
+    await done;
+
+    expect(h.recordLakeFindings).toHaveBeenCalledTimes(1);
+    const [lakeId, passed, options] = h.recordLakeFindings.mock.calls[0];
+    expect(lakeId).toBe('lakeDoc1');
+    expect(passed).toBe(findings);
+    expect(options.detector).toBe('lexical');
+  });
+
+  it('stamps the rows with the SAME instant it stamped the report', async () => {
+    // A run's rows and its report have to agree on one instant. Were the clock read twice they would
+    // drift by the write latency, and nothing downstream could line a report up with its findings.
+    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+
+    const { done } = invoke();
+    await done;
+
+    const computedAt = h.update.mock.calls[0][0].inconsistencyComputedAt;
+    expect(h.recordLakeFindings.mock.calls[0][2].seenAt).toBe(computedAt);
+  });
+
+  it('writes the rows AFTER the report, so the newer path cannot cost the run its report', async () => {
+    // The blob is still what GET here and the counts on GET /health read, until #3040 moves them.
+    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    const order: string[] = [];
+    h.update.mockImplementation(async () => void order.push('report'));
+    h.recordLakeFindings.mockImplementation(async () => (order.push('findings'), { recorded: 2, failed: 0 }));
+
+    const { done } = invoke();
+    await done;
+
+    expect(order).toEqual(['report', 'findings']);
+  });
+
+  it('still returns the stored report when the findings write fails outright', async () => {
+    // The outcome the ordering above exists to produce, which ordering alone does not pin: the blob
+    // write has already committed by the time this path runs, so an uncaught throw would 500 a run
+    // whose report is in the database and make the caller re-run a ~1000-chunk detection pass to
+    // get back something they already have. Deleting the try/catch passes the ordering test.
+    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.recordLakeFindings.mockRejectedValue(new Error('findings collection unavailable'));
+
+    const { json, done } = invoke();
+    await done;
+
+    expect(h.update).toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ findings }));
+    // And the run is still reported as partial rather than clean - every finding went unwritten.
+    expect(h.loggerWarn).toHaveBeenCalledWith(
+      'Lake findings partially recorded',
+      expect.objectContaining({ failed: findings.length })
+    );
+  });
+
+  it('reports a partially written run rather than letting it read as clean', async () => {
+    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.recordLakeFindings.mockResolvedValue({ recorded: 1, failed: 1 });
+
+    const { done } = invoke();
+    await done;
+
+    expect(h.loggerWarn).toHaveBeenCalledWith(
+      'Lake findings partially recorded',
+      expect.objectContaining({ failed: 1, total: 2 })
+    );
+  });
+
+  it('stays quiet when every finding was recorded', async () => {
+    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.recordLakeFindings.mockResolvedValue({ recorded: 2, failed: 0 });
+
+    const { done } = invoke();
+    await done;
+
+    expect(h.loggerWarn).not.toHaveBeenCalled();
+  });
+
+  it('records nothing on GET, which runs no detection', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({ ...lake, inconsistencyReport: report() });
+
+    const { done } = invoke({}, 'GET');
+    await done;
+
+    expect(h.recordLakeFindings).not.toHaveBeenCalled();
   });
 });
