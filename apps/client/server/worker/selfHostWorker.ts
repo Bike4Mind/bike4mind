@@ -195,7 +195,15 @@ export class SelfHostWorker {
       return;
     }
     try {
-      await q.dispatch(this.toSqsEvent(message), this.fakeContext(q.name));
+      const result = await q.dispatch(this.toSqsEvent(message), this.fakeContext(q.name));
+      if (result && typeof result === 'object' && 'batchItemFailures' in result) {
+        const failures = result.batchItemFailures;
+        // Dispatch receives one record: any reported failure (including an invalid ID) retries it.
+        // SQS treats a null or empty failure list as success.
+        if (failures != null && (!Array.isArray(failures) || failures.length > 0)) {
+          throw new Error('Handler returned batch failures or an invalid batch failure response');
+        }
+      }
       if (message.ReceiptHandle) {
         await deleteFromQueue(q.url, message.ReceiptHandle);
       }
