@@ -12,6 +12,9 @@
 export const THINK_OPEN_TAG = '<think>';
 export const THINK_CLOSE_TAG = '</think>';
 
+/** Every closed thinking block, non-greedy so adjacent blocks stay separate. */
+const CLOSED_THINKING_SPAN = /<think>[\s\S]*?<\/think>/g;
+
 /**
  * The visible remainder of one reply slot, with hidden reasoning removed.
  *
@@ -21,23 +24,25 @@ export const THINK_CLOSE_TAG = '</think>';
  * use this and not a looser non-empty check: a metric built on a looser rule reports text
  * as seen while the UI is still hiding it.
  *
- * Faithfulness to the renderer is the contract, so two of its quirks are preserved on
- * purpose: text preceding a still-open thinking block stays visible (the UI shows it,
- * markers and all), and only the segment after the LAST close marker survives, because a
- * turn may open and close several thinking blocks before its answer.
+ * Thinking is removed span by span rather than by keeping the tail after the last close
+ * marker. A turn that answers, calls a tool and then thinks again reopens its thinking
+ * inside the slot that already holds the partial answer (the provider restarts its
+ * content-block indices - see appendStreamedChunk), so a tail rule would drop text the user
+ * has already watched stream in. An unclosed trailing marker hides everything after it, so a
+ * reopened block does not render its raw marker while it streams.
+ *
+ * Interior whitespace is preserved: callers concatenate slots with no separator, so trimming
+ * every slot would weld a heading onto the table beneath it.
  */
 export function visibleReplyText(part: string | null | undefined): string {
   if (!part || !part.trim()) return '';
 
-  if (part.includes(THINK_OPEN_TAG) && part.includes(THINK_CLOSE_TAG)) {
-    return part.substring(part.lastIndexOf(THINK_CLOSE_TAG) + THINK_CLOSE_TAG.length).trim();
-  }
+  const withoutClosedBlocks = part.replace(CLOSED_THINKING_SPAN, '');
 
-  // Reaching here with an open marker means it is unclosed: the block is still streaming,
-  // so nothing in this slot is renderable yet.
-  if (part.startsWith(THINK_OPEN_TAG)) return '';
+  const openIndex = withoutClosedBlocks.indexOf(THINK_OPEN_TAG);
+  const visible = openIndex === -1 ? withoutClosedBlocks : withoutClosedBlocks.slice(0, openIndex);
 
-  return part;
+  return visible.trim() ? visible : '';
 }
 
 /** Whether any slot of an in-progress reply carries text the user can see. */

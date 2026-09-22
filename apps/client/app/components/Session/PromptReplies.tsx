@@ -483,7 +483,9 @@ const PromptReplies: FC<PromptReplyProps> = ({
   const replies = useMemo(() => extractReplies(messageData), [messageData]);
 
   const thoughts = useMemo(() => {
-    return (messageData.replies || []).filter(Boolean).filter(r => r.startsWith('<think>'));
+    // Not startsWith: a turn that answers, calls a tool and thinks again reopens its thinking
+    // inside the slot that already holds the partial answer (see appendStreamedChunk).
+    return (messageData.replies || []).filter(Boolean).filter(r => r.includes('<think>'));
   }, [messageData.replies]);
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
