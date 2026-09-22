@@ -3,6 +3,7 @@ import { DATA_LAKES, type IDataLakeDocument } from '@bike4mind/common';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
+  measureIdentityNamedExclusion,
   type DataLakeAccessContext,
   type ResolvedLakeAccess,
 } from './getDynamicDataLakeTags';
@@ -447,6 +448,85 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
       'alice',
       expect.objectContaining({ supersededOwnLakeIds: ['lake-transferred'] })
     );
+  });
+});
+
+describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the count above', () => {
+  it('returns 0 without querying anything for an empty identity-tag list', async () => {
+    const countGateExcludedLakes = vi.fn();
+    const res = await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes } as never,
+          organizations: { findMembershipOrgIds: vi.fn() },
+        },
+        user: { tags: [] },
+      },
+      []
+    );
+    expect(res).toBe(0);
+    expect(countGateExcludedLakes).not.toHaveBeenCalled();
+  });
+
+  it('restricts the query to exactly the given identity tags', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(1);
+    await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue(['org1']) },
+        },
+        user: { id: 'u1', tags: ['x'] },
+        entitlementKeys: ['k:pro'],
+      },
+      ['datalake:b']
+    );
+    expect(countGateExcludedLakes).toHaveBeenCalledWith(
+      ['x'],
+      ['k:pro'],
+      ['org1'],
+      'u1',
+      expect.objectContaining({ restrictToTags: ['datalake:b'] })
+    );
+  });
+
+  it('returns the measured count, including a genuine zero', async () => {
+    const res = await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes: vi.fn().mockResolvedValue(0) } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        },
+        user: { tags: [] },
+      },
+      ['datalake:a']
+    );
+    expect(res).toBe(0);
+  });
+
+  it('degrades to undefined (unknown), never a false 0, when the count query fails', async () => {
+    const logger = { warn: vi.fn() } as never;
+    const res = await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes: vi.fn().mockRejectedValue(new Error('boom')) } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        },
+        user: { tags: [] },
+        logger,
+      },
+      ['datalake:a']
+    );
+    expect(res).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalled();
+  });
+
+  it('degrades to undefined when the dataLakes repo is unwired', async () => {
+    const res = await measureIdentityNamedExclusion(
+      { db: { organizations: { findMembershipOrgIds: vi.fn() } }, user: { tags: [] } },
+      ['datalake:a']
+    );
+    expect(res).toBeUndefined();
   });
 });
 
