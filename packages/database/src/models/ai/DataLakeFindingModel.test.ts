@@ -247,6 +247,24 @@ describe('DataLakeFindingRepository', () => {
     expect(await repo.listByLake('lake-1', { limit: 2 })).toHaveLength(2);
   });
 
+  it('narrows to the findings a run at or after seenSince still saw', async () => {
+    // Nothing ever closes a finding the detector stops reporting - `status` is a curator's word, so
+    // a detector retiring a row would be exactly the overwrite recordDetected refuses to make. The
+    // row therefore stays open once the problem is fixed, which is right for a triage queue and
+    // wrong for "what is wrong with my corpus NOW". This filter answers the second question without
+    // mutating anything: GET /inconsistencies passes the last run's own date, so its findings can
+    // never contradict the countsByKind stored beside them.
+    await repo.recordDetected(input({ subject: 'stale problem', seenAt: SEEN_FIRST }));
+    await repo.recordDetected(input({ subject: 'current problem', seenAt: SEEN_LATER }));
+
+    const current = await repo.listByLake('lake-1', { seenSince: SEEN_LATER });
+    expect(current.map(f => f.subject)).toEqual(['current problem']);
+
+    // Inclusive: a run stamps its rows with the SAME instant it dates its summary, so an exclusive
+    // bound would hide every finding the run just recorded.
+    expect(await repo.listByLake('lake-1', { seenSince: SEEN_FIRST })).toHaveLength(2);
+  });
+
   it('scopes every list to its own lake', async () => {
     await repo.recordDetected(input({ lakeId: 'lake-1' }));
     await repo.recordDetected(input({ lakeId: 'lake-2' }));

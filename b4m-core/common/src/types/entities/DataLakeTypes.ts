@@ -1,4 +1,4 @@
-import type { LakeInconsistencyReport } from '../../constants/corpusInconsistency';
+import type { LakeInconsistencyScanSummary } from '../../constants/corpusInconsistency';
 import { IBaseRepository, type IMongoDocument } from '.';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { ILakeUsageSummary } from './UsageEventTypes';
@@ -324,16 +324,33 @@ export interface IDataLake {
    */
   requiredPassageTokenTarget?: number | null;
   /**
-   * Last computed cross-document inconsistency report (#2242), and when.
+   * What the last cross-document detection run reported about ITSELF (#2242), and when it ran.
+   *
+   * A SUMMARY, never the findings. Each finding is a `DataLakeFinding` row, keyed so re-detecting a
+   * known problem updates it instead of duplicating it; what stays here is only what describes the
+   * pass (`sampled`, `memberCount`, the exact `countsByKind`) and so belongs to no single row. See
+   * `LakeInconsistencyScanSummary` for why the findings must not also be stored here.
    *
    * STORED rather than computed on read, because detection needs chunk TEXT and lake health is
    * forbidden from scanning the chunk collection (#1665 measured that as ruinous at connector scale).
-   * So an owner-triggered pass writes it here and health renders what it finds, the same separation
-   * `converge` uses between planning and executing. A null report means "never run", which the
-   * surface must distinguish from "run and found nothing".
+   * So a pass writes it here and health renders what it finds, the same separation `converge` uses
+   * between planning and executing. Null means "never run", which the surface must distinguish from
+   * "run and found nothing". Moves only when a run SUCCEEDS - `lastInconsistencyScanAt` is the stamp
+   * that moves on every attempt.
    */
-  inconsistencyReport?: LakeInconsistencyReport | null;
+  inconsistencyReport?: LakeInconsistencyScanSummary | null;
   inconsistencyComputedAt?: Date | null;
+  /**
+   * Last time the scheduled detection sweep ATTEMPTED this lake (`lakeInconsistencySweep`), stamped
+   * whether the pass succeeded or failed, and the sweep's fairness key - it scans `status: 'active'`
+   * lakes oldest-attempted-first (null/never-scanned sorts first), so a fleet larger than one run's
+   * cap drains across runs instead of the same `_id` prefix being rescanned forever.
+   *
+   * Deliberately NOT `inconsistencyComputedAt`, which would otherwise serve as the same key: that
+   * one dates the stored summary, so stamping it on a failed pass would date a summary the failed
+   * pass never wrote. Same split, and the same reasoning, as `lastHealthCheckedAt`.
+   */
+  lastInconsistencyScanAt?: Date | null;
   /** Tag prefix for all files in this data lake, must end with ":" (e.g. "acme:") */
   fileTagPrefix: string;
   /** Auto-computed meta-tag: "datalake:<slug>" */
@@ -862,6 +879,32 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   hasMoreDueForHealthCheck(
     cursor: { lastHealthCheckedAt: Date | null; id: string } | null,
     excludeCheckedAt: Date
+  ): Promise<boolean>;
+  /**
+   * Stamp `lastInconsistencyScanAt` for the detection sweep's staleness ordering - see the field's
+   * own doc comment. Called for every lake the sweep ATTEMPTS, success or failure, so a lake whose
+   * pass keeps failing does not sort first forever and starve the rest of the fleet.
+   */
+  markInconsistencyScanned(id: string, at: Date): Promise<void>;
+  /**
+   * One page of the detection sweep's staleness-ordered scan of active lakes: oldest/never-scanned
+   * first, keyset-paged on (lastInconsistencyScanAt, _id). `excludeScannedAt` is the stamp the
+   * calling run writes as it scans, and excluding it is load-bearing rather than an optimization,
+   * for exactly the reason `findDueForHealthCheck` documents: the scan sorts on the same field the
+   * run mutates, so without it every lake already scanned this run re-enters the candidate set
+   * behind an older cursor and is scanned twice - which here means a second ~1000-chunk pass.
+   */
+  findDueForInconsistencyScan(params: {
+    cursor: { lastInconsistencyScanAt: Date | null; id: string } | null;
+    limit: number;
+    excludeScannedAt: Date;
+    projection: Record<string, 0 | 1>;
+  }): Promise<IDataLakeDocument[]>;
+  /** Whether any candidate remains behind `cursor`, so a run can tell a deferred remainder from a
+   * last page that merely landed on the cap. */
+  hasMoreDueForInconsistencyScan(
+    cursor: { lastInconsistencyScanAt: Date | null; id: string } | null,
+    excludeScannedAt: Date
   ): Promise<boolean>;
 }
 

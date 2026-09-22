@@ -150,6 +150,17 @@ export interface ListLakeFindingsOptions {
   status?: LakeFindingStatus;
   kind?: InconsistencyKind;
   detector?: LakeFindingDetector;
+  /**
+   * Keep only rows a run at or after this instant still saw (`lastSeenAt >= seenSince`).
+   *
+   * Exists because nothing ever closes a finding the detector stops reporting - and nothing should:
+   * `status` is a human's word about the corpus, so a detector retiring a row would be exactly the
+   * overwrite `recordDetected` refuses to do. The row therefore stays `open` forever once the
+   * problem is fixed, which is right for a triage queue and wrong for "what is wrong with my corpus
+   * NOW". Passing the last run's `inconsistencyComputedAt` answers the second question without
+   * mutating anything, and leaves the retired row fully visible - status intact - on GET /findings.
+   */
+  seenSince?: Date;
   limit?: number;
 }
 

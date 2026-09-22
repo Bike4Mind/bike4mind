@@ -508,6 +508,27 @@ export interface LakeInconsistencyReport extends CorpusInconsistencyReport {
 }
 
 /**
+ * What the LAKE DOCUMENT stores about a detection run: everything the run reported about ITSELF,
+ * and none of what it found.
+ *
+ * The findings are rows now (`DataLakeFindingTypes`), so storing them here as well would be a
+ * second copy with no identity - the exact overwritable blob the findings model replaced. It would
+ * also keep a retention obligation on the lake: a finding carries a 240-char `excerpt` of each
+ * source, and the purge-time sweeps reach rows only, so a blob quoting a destroyed document had
+ * nothing to clean it up.
+ *
+ * The run-level flags stay here rather than moving onto every row, because they describe the PASS
+ * and not any one problem: `sampled` and `memberCount` are properties of what was read, and
+ * `countsByKind` is the EXACT per-kind total, which the capped row set cannot reconstruct. That is
+ * what `computeLakeHealth` renders as its counts-only, read-gated view.
+ */
+export type LakeInconsistencyScanSummary = Omit<LakeInconsistencyReport, 'findings'>;
+
+/** Drop a run's findings, keeping only what the run reports about itself. */
+export const toScanSummary = ({ findings, ...summary }: LakeInconsistencyReport): LakeInconsistencyScanSummary =>
+  summary;
+
+/**
  * Run every rule over a corpus.
  *
  * `nowYear` is injected rather than read from the clock so a report is reproducible - a test, and a

@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
+import { toScanSummary, type IDataLakeDocument } from '@bike4mind/common';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
@@ -45,6 +46,17 @@ const inconsistencyRunRateLimit = rateLimit({
  * should refuse a document for disagreeing with a sibling makes this product the arbiter of a
  * customer's editorial judgment.
  *
+ * NOT the only trigger any more. `lakeInconsistencySweep` runs this same pass over every active
+ * lake daily, so POST here is the "run it now" door rather than the only way a problem is ever
+ * found. The rate limit below stays for exactly that reason: the schedule is what guarantees
+ * coverage, so a caller hitting the cap has lost a fresher answer, not the answer.
+ *
+ * Findings are ROWS (`DataLakeFinding`), not a field of the response's own making: POST records
+ * them and GET reads them back, and what is stored on the LAKE is only the run's summary. That is
+ * what makes a repeating pass safe - the rows are keyed on (lakeId, detector, kind, subject), so the
+ * hundredth run over an unchanged problem updates one row instead of writing a hundredth copy, and a
+ * curator's status on it survives every one of those runs.
+ *
  * The GET exists because without it every look was a write. `converge` ships its plan as a GET that
  * writes nothing precisely so that reading costs nothing; here, re-reading findings meant re-POSTing
  * - re-scanning up to 200 members, overwriting the stored report and stamping a new `computedAt`,
@@ -71,6 +83,39 @@ const gateDeps = {
   db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
 };
 
+/**
+ * The stored summary plus the findings that summary actually describes.
+ *
+ * `seenSince` is the load-bearing argument, and it is what keeps the response from contradicting
+ * itself. Nothing ever closes a finding the detector stops reporting - deliberately, because
+ * `status` is a curator's word and a detector retiring a row would be exactly the overwrite
+ * `recordDetected` refuses to make. So a problem someone fixed leaves an `open` row behind forever.
+ * Listing every open row beside this run's `countsByKind` would therefore ship a payload whose
+ * counts said zero next to findings it did not count - and the daily sweep makes that gap permanent
+ * and growing rather than a transient. Selecting on the summary's own date answers "what is wrong
+ * with my corpus now" exactly, mutates nothing, and leaves the retired row - status intact - on the
+ * triage surface, GET /findings.
+ *
+ * Null rather than an empty report when detection has never run: "never asked" and "asked and found
+ * nothing" are different answers and a surface has to be able to tell them apart.
+ */
+async function renderStoredReport(
+  lake: Pick<IDataLakeDocument, 'id' | 'inconsistencyReport' | 'inconsistencyComputedAt'>
+) {
+  if (!lake.inconsistencyReport) return null;
+  const computedAt = lake.inconsistencyComputedAt ?? null;
+  const findings = await dataLakeFindingRepository.listByLake(lake.id, {
+    // OPEN only: this endpoint answers what is wrong with the corpus, which a problem a curator has
+    // already resolved or dismissed is not.
+    status: 'open',
+    ...(computedAt ? { seenSince: computedAt } : {}),
+    // Matches what the detector would have capped a single run's findings at, so the page bound
+    // cannot cut into a run the summary says was not truncated.
+    limit: dataLakeService.INCONSISTENCY_FINDINGS_CAP,
+  });
+  return { ...lake.inconsistencyReport, findings, computedAt };
+}
+
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use((req, res, next) => (req.method === 'POST' ? inconsistencyRunRateLimit(req, res, next) : next()))
@@ -79,10 +124,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps);
 
-    // Null rather than an empty report when detection has never run: "never asked" and "asked and
-    // found nothing" are different answers and a surface has to be able to tell them apart.
-    if (!lake.inconsistencyReport) return res.json(null);
-    return res.json({ ...lake.inconsistencyReport, computedAt: lake.inconsistencyComputedAt ?? null });
+    return res.json(await renderStoredReport(lake));
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
@@ -100,60 +142,60 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // No slicing here any more. The cap moved into the detector, which allocates it PER KIND - a
     // slice at this layer would re-create the starvation that allocation exists to prevent, because
     // findings sort by kind name and one prolific kind would take the whole budget again.
-    const stored = report;
     const computedAt = new Date();
+
+    // Rows FIRST, and they are now the only place a finding is persisted. Keyed on
+    // (lakeId, detector, kind, subject), so this run updating a problem a previous run already
+    // found refreshes that row rather than minting a second one - which is what makes the scheduled
+    // sweep (`lakeInconsistencySweep`) repeatable rather than a duplicate factory.
+    //
+    // `computedAt` is passed as `seenAt` so a run's rows and its summary agree on one instant rather
+    // than drifting by the write's latency - and so `renderStoredReport` below can use the summary's
+    // own date to select the rows this run saw.
+    const { failed } = await dataLakeService.recordLakeFindings(
+      lake.id,
+      report.findings,
+      { detector: 'lexical', seenAt: computedAt },
+      { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
+    );
+
+    // A run that did not record every finding does not get to date a summary, and does not get a
+    // 200. The service isolates per-finding failures into `failed` rather than throwing - so it
+    // NEVER throws for an unavailable collection, and an earlier version of this handler that
+    // merely reordered the two writes would have sailed past N failures and stamped a fresh
+    // `inconsistencyComputedAt` over zero persisted rows. That is the precise lie the ordering was
+    // supposed to prevent: `countsByKind` claiming problems a curator has no rows for.
+    //
+    // Failing instead of storing is safe to retry: `recordDetected` is an idempotent upsert, so a
+    // second attempt converges on the same rows, and the last COMPLETE run's summary stays in place
+    // and correctly dated meanwhile.
+    if (failed > 0) {
+      req.logger?.warn('Lake findings partially recorded; summary not stored', {
+        dataLakeId: lake.id,
+        failed,
+        total: report.findings.length,
+      });
+      throw new Error(`Recorded ${report.findings.length - failed} of ${report.findings.length} findings`);
+    }
+
+    // The SUMMARY only - `toScanSummary` drops the findings. Storing them here as well is what used
+    // to make this an overwritable blob with no identity per finding, and it also kept a retention
+    // obligation on the lake document that nothing could discharge: a finding carries a 240-char
+    // excerpt of each source, and the purge-time sweeps reach rows only.
+    const stored = toScanSummary(report);
     await dataLakeRepository.update({
       id: lake.id,
       inconsistencyReport: stored,
       inconsistencyComputedAt: computedAt,
     });
 
-    // Also emit each finding as a durable row (#3039). Additive for now, and ordered after the blob
-    // deliberately: the blob is still what GET here and the counts on GET /health read, so until
-    // #3040 moves those readers over, a failure in this newer path must not cost the run its report.
-    //
-    // RETENTION IS ONLY HALF DONE UNTIL THEN. The stored blob above still carries
-    // `evidence[].excerpt` on the lake document, and the purge-time sweeps added with the rows
-    // (the `deleteForPurgedDocument(s)` sweeps at both destruction doors) reach the ROWS only -
-    // nothing rewrites the blob when a document it quotes is destroyed. #3040 must carry that
-    // cleanup along with moving the readers; deleting the blob write here first would blind
-    // GET and /health.
-    //
-    // The same `computedAt` is passed as `seenAt` so a run's rows and its report agree on one
-    // instant rather than drifting by the write's latency.
-    //
-    // CAUGHT, and that is what makes the ordering above worth anything. The service already
-    // isolates per-finding failures into its `failed` count, so reaching here means something
-    // unexpected - but the blob write has already COMMITTED, and letting the throw out would hand
-    // the caller a 500 for a run whose report is sitting in the database. They would re-run a
-    // ~1000-chunk detection pass to get back a report they already have. Log and return it.
-    let failed = 0;
-    try {
-      ({ failed } = await dataLakeService.recordLakeFindings(
-        lake.id,
-        stored.findings,
-        { detector: 'lexical', seenAt: computedAt },
-        { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
-      ));
-    } catch (error) {
-      failed = stored.findings.length;
-      req.logger?.error('Lake findings write failed outright; returning the stored report', {
-        dataLakeId: lake.id,
-        total: stored.findings.length,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-    // A partially-written run must not read as a clean one. Each failure is already logged with its
-    // subject by the service; this is the one line that says the RUN was partial.
-    if (failed > 0) {
-      req.logger?.warn('Lake findings partially recorded', {
-        dataLakeId: lake.id,
-        failed,
-        total: stored.findings.length,
-      });
-    }
-
-    return res.json({ ...stored, computedAt });
+    // Rendered through the same helper GET uses, so "run it now" and "show me the last run" return
+    // ONE shape. Returning `report.findings` here instead would hand a caller the detector's
+    // in-memory findings - no id, no status, `evidence` where the row has `sources` - so a surface
+    // could not render both responses, and could not resolve or assign anything it had just run.
+    return res.json(
+      await renderStoredReport({ ...lake, inconsistencyReport: stored, inconsistencyComputedAt: computedAt })
+    );
   });
 
 // Matches 12 of the 14 routes in this directory, health and converge included. This handler can run
