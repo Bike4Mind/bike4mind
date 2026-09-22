@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionRepository, agentRepository, sessionAgentConfigRepository } from '@bike4mind/database';
-import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { assertSessionAccess } from '@server/utils/sessionAccess';
 import { z } from 'zod';
 
 const proactiveMessagingSchema = z.object({
@@ -18,6 +19,29 @@ const updateConfigSchema = z.object({
   proactiveMessaging: proactiveMessagingSchema,
 });
 
+/**
+ * Agent-level authz + attachment check, shared by all three verbs below: does the caller have
+ * access to the agent itself (owner, user-share, or group-share - the same object-level
+ * predicate agents.ts:47 uses), and is that agent actually attached to this session. Independent
+ * of the session-level assertSessionAccess call above each one - that only proves the caller
+ * belongs to THIS session, not that they may reach THIS agent's config.
+ */
+async function assertAgentAttached(
+  user: Parameters<typeof agentRepository.shareable.findAccessibleById>[0],
+  sessionId: string,
+  agentId: string
+): Promise<void> {
+  const agent = await agentRepository.shareable.findAccessibleById(user, agentId);
+  if (!agent) {
+    throw new NotFoundError('Agent not found');
+  }
+
+  const agentIds = await sessionRepository.getAttachedAgents(sessionId);
+  if (!agentIds.includes(agentId)) {
+    throw new BadRequestError('Agent is not attached to this session');
+  }
+}
+
 const handler = baseApi()
   .get(async (req, res) => {
     const { id: sessionId, agentId } = req.query;
@@ -26,32 +50,8 @@ const handler = baseApi()
       throw new BadRequestError('Invalid session ID or agent ID');
     }
 
-    // Verify session exists and user has access
-    const session = await sessionRepository.findById(sessionId);
-    if (!session) {
-      throw new NotFoundError('Session not found');
-    }
-
-    if (session.userId !== req.user!.id) {
-      throw new UnauthorizedError('Unauthorized');
-    }
-
-    // Verify agent exists and user has access
-    const agent = await agentRepository.findById(agentId);
-    if (!agent) {
-      throw new NotFoundError('Agent not found');
-    }
-
-    const isSharedWithUser = agent.users?.some((u: { userId: string }) => u.userId === req.user!.id);
-    if (agent.userId !== req.user!.id && !isSharedWithUser) {
-      throw new NotFoundError('Agent not found');
-    }
-
-    // Check if agent is attached to session
-    const agentIds = await sessionRepository.getAttachedAgents(sessionId);
-    if (!agentIds.includes(agentId)) {
-      throw new BadRequestError('Agent is not attached to this session');
-    }
+    await assertSessionAccess(sessionId, req.user!.id);
+    await assertAgentAttached(req.user!, sessionId, agentId);
 
     const config = await sessionAgentConfigRepository.findBySessionAndAgent(sessionId, agentId);
 
@@ -67,40 +67,21 @@ const handler = baseApi()
 
     const validatedData = updateConfigSchema.parse({ proactiveMessaging });
 
-    // Verify session exists and user has access
-    const session = await sessionRepository.findById(sessionId);
-    if (!session) {
-      throw new NotFoundError('Session not found');
-    }
-
-    if (session.userId !== req.user!.id) {
-      throw new UnauthorizedError('Unauthorized');
-    }
-
-    // Verify agent exists and user has access
-    const agent = await agentRepository.findById(agentId);
-    if (!agent) {
-      throw new NotFoundError('Agent not found');
-    }
-
-    const isSharedWithUser = agent.users?.some((u: { userId: string }) => u.userId === req.user!.id);
-    if (agent.userId !== req.user!.id && !isSharedWithUser) {
-      throw new NotFoundError('Agent not found');
-    }
-
-    // Check if agent is attached to session
-    const agentIds = await sessionRepository.getAttachedAgents(sessionId);
-    if (!agentIds.includes(agentId)) {
-      throw new BadRequestError('Agent is not attached to this session');
-    }
+    await assertSessionAccess(sessionId, req.user!.id, 'write', req.user!.groups ?? []);
+    await assertAgentAttached(req.user!, sessionId, agentId);
 
     const existingConfig = await sessionAgentConfigRepository.findBySessionAndAgent(sessionId, agentId);
 
     let config;
     if (existingConfig) {
-      // Update existing config
+      // Re-stamp userId to the caller on every update: this config's userId is who the
+      // proactive-messaging worker later executes and bills as (agentProactiveMessage.ts), so
+      // it must always be whoever last authored proactiveMessaging.systemPrompt, never whoever
+      // happened to create the row first - otherwise a session write-sharee could rewrite the
+      // prompt while leaving it to run under the original owner's identity, keys, and tools.
       config = await sessionAgentConfigRepository.update({
         ...existingConfig,
+        userId: req.user!.id,
         proactiveMessaging: {
           ...validatedData.proactiveMessaging,
           // Preserve lastProactiveMessageAt if not being reset
@@ -130,15 +111,8 @@ const handler = baseApi()
       throw new BadRequestError('Invalid session ID or agent ID');
     }
 
-    // Verify session exists and user has access
-    const session = await sessionRepository.findById(sessionId);
-    if (!session) {
-      throw new NotFoundError('Session not found');
-    }
-
-    if (session.userId !== req.user!.id) {
-      throw new UnauthorizedError('Unauthorized');
-    }
+    await assertSessionAccess(sessionId, req.user!.id, 'write', req.user!.groups ?? []);
+    await assertAgentAttached(req.user!, sessionId, agentId);
 
     await sessionAgentConfigRepository.deleteBySessionAndAgent(sessionId, agentId);
 
