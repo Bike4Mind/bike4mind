@@ -1482,7 +1482,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
               <MementoIndicator mementoIds={promptMeta.context.mementoIds} />
             </Box>
           )}
-          {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
           {isEditMode && onEdit ? (
             <EditModeContent
               content={processedContent || cleanReply}
@@ -1740,6 +1739,15 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       )}
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
+
+      {/* Below the reply, not above it. The [N] markers are plain text in the body, so a list
+          above it means reading forward to the marker and then scrolling BACK past the answer
+          to resolve it - and citables merge in mid-stream (useStreamingMessageMerge), so a card
+          above pushed text the reader had already started reading down the page.
+
+          After the expand control, which belongs to the reply body it truncates, and before
+          artifacts, so a tall chart cannot separate a source from the marker that cites it. */}
+      {promptMeta?.citables && promptMeta.citables.length > 0 && <CitableSources citables={promptMeta.citables} />}
 
       {/* Artifacts sit between the reply and the footer. This Stack owns ALL of their
           spacing - 24px above, 8px below, 16px between cards - so individual artifact
