@@ -10,6 +10,7 @@ import {
   SupportedEmbeddingModel,
   type ChunkStallReason,
   type DataLakeMembershipScope,
+  type LakeSupersession,
 } from '@bike4mind/common';
 import {
   computeCosineSimilarity,
@@ -486,6 +487,12 @@ interface RankableFile {
    * fails quiet - the collapse silently narrows to meta-tagged members - so both builders carry it.
    */
   userId?: string;
+  /**
+   * Curator supersession rulings (#3046), read by the collapse as a tier above every derived one.
+   * Same both-builders rule as the source-identity fields above: a builder that stopped carrying
+   * this would make an explicit curator ruling a silent no-op on that entrypoint.
+   */
+  supersededInLakes?: LakeSupersession[];
 }
 
 /**
@@ -926,8 +933,11 @@ async function rankChunksForFiles(args: {
    * Opt-in to per-lake supersession collapse. Present only from `semanticDataLakeSearch`;
    * `fileScopedSemanticSearch` deliberately never passes it (see the note at its builder), so the
    * collapse cannot reach a curated allow-list by accident.
+   *
+   * `identityTiers` gates the DERIVED tiers alone: curator rulings are honored whenever this is
+   * present at all, because they carry none of the doubt the admin setting exists for.
    */
-  supersession?: { lakes: AttributableLake[] };
+  supersession?: { lakes: AttributableLake[]; identityTiers?: boolean };
   logger?: Logger;
   fabfilechunks: FabFileChunksAdapter;
   vectorIndex?: OpenSearchVectorSearchAdapters;
@@ -992,6 +1002,10 @@ async function rankChunksForFiles(args: {
       driveFileId: file?.driveFileId,
       createdAt: file?.createdAt,
       userId: file?.userId,
+      // The curator ruling the collapse reads as its top tier. This projection is the LAST hop
+      // before the partition, so a field carried faithfully by both `fileById` builders and
+      // dropped here is silently never honored - which is exactly what happened to this one.
+      supersededInLakes: file?.supersededInLakes,
     };
   });
   // Refuse mid-(re)index files BEFORE anything else looks at them (#1681 constraint 1). Their old
@@ -1672,6 +1686,7 @@ async function lakeScopedSearch(
         relativePath: f.relativePath,
         driveFileId: f.driveFileId,
         userId: f.userId,
+        supersededInLakes: f.supersededInLakes,
       },
     ])
   );
@@ -1689,9 +1704,15 @@ async function lakeScopedSearch(
     fileBudgetHit: scoped.fileBudgetHit,
     filesByLake,
     vectorSearchEnabled: params.vectorSearchEnabled ?? false,
-    // Both halves are required: the flag alone with no lakes could not attribute anything, and
-    // lakes alone would collapse behind an admin's back.
-    supersession: params.supersessionCollapseEnabled && params.lakes?.length ? { lakes: params.lakes } : undefined,
+    // LAKES are what decide whether the partition runs at all: without them nothing can be
+    // attributed to a lake and neither half of the collapse has a scope to work in. The admin flag
+    // now gates only the DERIVED tiers, because a curator's explicit ruling carries none of the
+    // doubt that setting exists for - the same split `ChatCompletionFeatures` makes. Gating the
+    // whole partition on the flag, as this used to, made every curator ruling a no-op on the
+    // default deployment, where the setting is off.
+    supersession: params.lakes?.length
+      ? { lakes: params.lakes, identityTiers: params.supersessionCollapseEnabled ?? false }
+      : undefined,
     logger,
     fabfilechunks: adapters.db.fabfilechunks,
     vectorIndex: adapters.vectorIndex,
@@ -1797,6 +1818,7 @@ async function fileScopedSearch(
         relativePath: f.relativePath,
         driveFileId: f.driveFileId,
         userId: f.userId,
+        supersededInLakes: f.supersededInLakes,
       },
     ])
   );

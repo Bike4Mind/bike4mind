@@ -60,6 +60,8 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   ...createMockRepository<IFabFileDocument>(),
   shareable: createMockShareableRepository<IFabFileDocument>(),
   getAccessibleFiles: vi.fn(),
+  setLakeSupersession: vi.fn(),
+  clearLakeSupersession: vi.fn(),
   // Default true ("I still own my claim") rather than the vi.fn() default of undefined/falsy,
   // which would otherwise silently read as "claim lost" for any test that reaches this guard
   // through the shared mock without overriding it.

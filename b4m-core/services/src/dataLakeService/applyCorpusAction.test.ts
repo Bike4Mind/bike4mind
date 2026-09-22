@@ -1,0 +1,283 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  applyCorpusAction,
+  type ApplyCorpusActionAdapters,
+  type CorpusActionRequest,
+} from './applyCorpusAction';
+
+const removeFileFromDataLake = vi.hoisted(() => vi.fn());
+const setDataLakeFileTags = vi.hoisted(() => vi.fn());
+
+vi.mock('./removeFileFromDataLake', () => ({ removeFileFromDataLake }));
+vi.mock('./setDataLakeFileTags', () => ({ setDataLakeFileTags }));
+
+const LAKE_ID = 'lake1';
+const OWNER = 'owner-1';
+
+const lake = (over: Record<string, unknown> = {}) => ({
+  id: LAKE_ID,
+  name: 'Policies',
+  createdByUserId: OWNER,
+  status: 'active',
+  datalakeTag: 'datalake:lake1',
+  fileTagPrefix: 'policies:',
+  ...over,
+});
+
+const finding = (over: Record<string, unknown> = {}) => ({
+  id: 'finding-1',
+  lakeId: LAKE_ID,
+  kind: 'metric-disagreement',
+  subject: 'uptime %',
+  detector: 'lexical',
+  status: 'open',
+  documentCount: 2,
+  sources: [
+    { fabFileId: 'doc-a', fileName: 'a.md', excerpt: 'Uptime is 99.9%' },
+    { fabFileId: 'doc-b', fileName: 'b.md', excerpt: 'Uptime is 95%' },
+  ],
+  ...over,
+});
+
+const member = (id: string) => ({ id, userId: OWNER, tags: [{ name: 'datalake:lake1', strength: 1 }] });
+
+const actor = { userId: OWNER, isAdmin: false };
+
+function makeDeps(over: { lake?: unknown; finding?: unknown; files?: Record<string, unknown> } = {}) {
+  const record = vi.fn(async (input: unknown) => input);
+  const setLakeSupersession = vi.fn(async () => true);
+  const clearLakeSupersession = vi.fn(async () => true);
+  const files: Record<string, unknown> = over.files ?? {
+    'doc-a': member('doc-a'),
+    'doc-b': member('doc-b'),
+  };
+  return {
+    record,
+    setLakeSupersession,
+    clearLakeSupersession,
+    deps: {
+      db: {
+        dataLakes: { findById: vi.fn(async () => over.lake ?? lake()) },
+        dataLakeAccessGrants: { listByLake: vi.fn(async () => []) },
+        fabFiles: {
+          findById: vi.fn(async (id: string) => files[id] ?? null),
+          setLakeSupersession,
+          clearLakeSupersession,
+        },
+        dataLakeFindings: { findById: vi.fn(async () => over.finding ?? finding()) },
+        dataLakeCorpusActions: { record },
+      },
+      // The real bag is the intersection of three doors' Pick<> types; the two delegated doors are
+      // mocked here and never read theirs, so only the adapters this module itself touches are
+      // supplied. Cast rather than filled in, so the fixture stays about this door's own logic.
+    } as unknown as ApplyCorpusActionAdapters,
+  };
+}
+
+const run = (request: CorpusActionRequest, over?: Parameters<typeof makeDeps>[0]) => {
+  const { deps, record, setLakeSupersession, clearLakeSupersession } = makeDeps(over);
+  return {
+    promise: applyCorpusAction(actor, LAKE_ID, 'finding-1', request, deps),
+    record,
+    setLakeSupersession,
+    clearLakeSupersession,
+  };
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  removeFileFromDataLake.mockResolvedValue({ success: true, fileCount: 1, totalSizeBytes: 1 });
+  setDataLakeFileTags.mockResolvedValue({
+    success: true,
+    fileCount: 1,
+    totalSizeBytes: 1,
+    tags: { added: ['policies:current'], removed: [], retained: [], current: ['policies:current'] },
+    primaryTagCleared: false,
+  });
+});
+
+describe('applyCorpusAction merge', () => {
+  it('removes each retired document through the removal door and audits the outcome', async () => {
+    const { promise, record } = run({ action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b'] });
+    const result = await promise;
+
+    expect(removeFileFromDataLake).toHaveBeenCalledTimes(1);
+    expect(removeFileFromDataLake).toHaveBeenCalledWith(actor, LAKE_ID, 'doc-b', expect.anything());
+    expect(result.targets).toEqual([
+      { fabFileId: 'doc-a', fileName: 'a.md', role: 'kept' },
+      { fabFileId: 'doc-b', fileName: 'b.md', role: 'retired' },
+    ]);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'merge', lakeId: LAKE_ID, findingId: 'finding-1', actorUserId: OWNER })
+    );
+  });
+
+  it('refuses a document the finding does not cite', async () => {
+    const { promise } = run({ action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['stranger'] });
+    await expect(promise).rejects.toThrow(/not one of the documents this finding is about/);
+    expect(removeFileFromDataLake).not.toHaveBeenCalled();
+  });
+
+  it('refuses to both keep and retire the same document', async () => {
+    const { promise } = run({ action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-a'] });
+    await expect(promise).rejects.toThrow(/cannot both keep and retire/);
+  });
+});
+
+describe('applyCorpusAction supersede', () => {
+  it('writes the lake-scoped marker the retrieval collapse reads', async () => {
+    const { promise, setLakeSupersession, record } = run({
+      action: 'supersede',
+      keepFabFileId: 'doc-a',
+      retireFabFileId: 'doc-b',
+    });
+    const result = await promise;
+
+    expect(setLakeSupersession).toHaveBeenCalledWith('doc-b', {
+      dataLakeId: LAKE_ID,
+      supersededByFabFileId: 'doc-a',
+      decidedByUserId: OWNER,
+      decidedAt: expect.any(Date),
+    });
+    // Suppression, not deletion: nothing leaves the corpus, which is the property most easily
+    // misread about this action.
+    expect(result.detail).toEqual({ suppressedFromRanking: 'doc-b', removedFromCorpus: false });
+    expect(removeFileFromDataLake).not.toHaveBeenCalled();
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: 'supersede' }));
+  });
+
+  it('refuses when the winner is not a live member of the lake', async () => {
+    const { promise, setLakeSupersession } = run(
+      { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+      { files: { 'doc-b': member('doc-b') } }
+    );
+    await expect(promise).rejects.toThrow(/File not found in this data lake/);
+    expect(setLakeSupersession).not.toHaveBeenCalled();
+  });
+
+  it('refuses a self-supersede', async () => {
+    const { promise } = run({ action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-a' });
+    await expect(promise).rejects.toThrow(/cannot supersede itself/);
+  });
+});
+
+describe('applyCorpusAction unsupersede', () => {
+  it('clears the ruling and records the document as restored', async () => {
+    const { promise, clearLakeSupersession, record } = run({ action: 'unsupersede', fabFileId: 'doc-b' });
+    const result = await promise;
+
+    expect(clearLakeSupersession).toHaveBeenCalledWith('doc-b', LAKE_ID);
+    expect(result.targets).toEqual([{ fabFileId: 'doc-b', fileName: 'b.md', role: 'restored' }]);
+    expect(record).toHaveBeenCalledWith(expect.objectContaining({ action: 'unsupersede' }));
+  });
+
+  it('refuses when there was no ruling to clear', async () => {
+    const { deps, record } = makeDeps();
+    deps.db.fabFiles.clearLakeSupersession = vi.fn(async () => false);
+    await expect(
+      applyCorpusAction(actor, LAKE_ID, 'finding-1', { action: 'unsupersede', fabFileId: 'doc-b' }, deps)
+    ).rejects.toThrow(/not superseded in this data lake/);
+    expect(record).not.toHaveBeenCalled();
+  });
+});
+
+describe('applyCorpusAction retag', () => {
+  it('delegates to the tag door and records its diff', async () => {
+    const { promise, record } = run({ action: 'retag', fabFileId: 'doc-a', tags: ['policies:current'] });
+    const result = await promise;
+
+    expect(setDataLakeFileTags).toHaveBeenCalledWith(actor, LAKE_ID, 'doc-a', ['policies:current'], expect.anything());
+    expect(result.targets).toEqual([{ fabFileId: 'doc-a', fileName: 'a.md', role: 'retagged' }]);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'retag', detail: expect.objectContaining({ tags: expect.anything() }) })
+    );
+  });
+});
+
+describe('applyCorpusAction guards', () => {
+  it('refuses a finding belonging to another lake without saying it exists', async () => {
+    const { promise } = run(
+      { action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b'] },
+      { finding: finding({ lakeId: 'other-lake' }) }
+    );
+    await expect(promise).rejects.toThrow(/Finding not found/);
+  });
+
+  it('refuses a finding a curator already ruled on', async () => {
+    const { promise } = run(
+      { action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b'] },
+      { finding: finding({ status: 'dismissed' }) }
+    );
+    await expect(promise).rejects.toThrow(/already been ruled on/);
+    expect(removeFileFromDataLake).not.toHaveBeenCalled();
+  });
+
+  it('refuses an actor with no manage rung on the lake', async () => {
+    const { deps } = makeDeps();
+    await expect(
+      applyCorpusAction(
+        { userId: 'stranger', isAdmin: false },
+        LAKE_ID,
+        'finding-1',
+        { action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b'] },
+        deps
+      )
+    ).rejects.toThrow(/do not have permission/);
+  });
+
+  it('records the API-key principal rather than the human when a key is acting', async () => {
+    const { deps, record } = makeDeps();
+    await applyCorpusAction(
+      { ...actor, auditPrincipal: { principalKind: 'api-key', principalId: 'key-9', onBehalfOfUserId: OWNER } },
+      LAKE_ID,
+      'finding-1',
+      { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+      deps
+    );
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principal: { principalKind: 'api-key', principalId: 'key-9', onBehalfOfUserId: OWNER },
+        rung: 'creator',
+      })
+    );
+  });
+
+  it('audits only after the mutation succeeded', async () => {
+    removeFileFromDataLake.mockRejectedValueOnce(new Error('boom'));
+    const { promise, record } = run({ action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b'] });
+    await expect(promise).rejects.toThrow('boom');
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('audits a merge that failed PART WAY, naming only the members that really went', async () => {
+    // The first removal committed and cannot be rolled back, so the alternative to this row is
+    // membership changed with no trail saying who changed it. `partial` is what keeps the row from
+    // claiming the whole merge happened.
+    const finding3 = finding({
+      sources: [
+        { fabFileId: 'doc-a', fileName: 'a.md', excerpt: 'x' },
+        { fabFileId: 'doc-b', fileName: 'b.md', excerpt: 'y' },
+        { fabFileId: 'doc-c', fileName: 'c.md', excerpt: 'z' },
+      ],
+    });
+    removeFileFromDataLake.mockResolvedValueOnce({ success: true }).mockRejectedValueOnce(new Error('boom'));
+
+    const { promise, record } = run(
+      { action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b', 'doc-c'] },
+      { finding: finding3 }
+    );
+    await expect(promise).rejects.toThrow('boom');
+
+    expect(record).toHaveBeenCalledTimes(1);
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'merge',
+        detail: { removedFabFileIds: ['doc-b'], partial: true, requestedFabFileIds: ['doc-b', 'doc-c'] },
+        targets: [
+          { fabFileId: 'doc-a', fileName: 'a.md', role: 'kept' },
+          { fabFileId: 'doc-b', fileName: 'b.md', role: 'retired' },
+        ],
+      })
+    );
+  });
+});

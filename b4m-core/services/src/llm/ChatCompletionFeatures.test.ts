@@ -1807,7 +1807,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const { quest } = await run(makeCtx(twoGenerations, true));
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
-    const line = reasons.find(r => r.includes('older document version'));
+    const line = reasons.find(r => r.includes('were not ranked because this lake holds a version'));
     expect(line).toBeDefined();
     expect(line).toContain('old');
     expect(line).toContain('new');
@@ -1839,7 +1839,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
     expect(reasons.some(r => r.includes('re-indexed right now'))).toBe(true);
-    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+    expect(reasons.some(r => r.includes('were not ranked because this lake holds a version'))).toBe(false);
   });
 
   it('collapses AFTER the embedding-model partition: a foreign-model newest generation cannot suppress the older one', async () => {
@@ -1858,7 +1858,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
     const reasons =
       (quest.promptMeta as { retrievalCoverage?: { reasons: string[] } }).retrievalCoverage?.reasons ?? [];
     expect(reasons.some(r => r.includes('embedded with a different model'))).toBe(true);
-    expect(reasons.some(r => r.includes('older document version'))).toBe(false);
+    expect(reasons.some(r => r.includes('were not ranked because this lake holds a version'))).toBe(false);
   });
 });
 
@@ -3205,6 +3205,25 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
   it('records 0, not absence, when the collapse ran over a corpus with nothing to suppress', async () => {
     await run(makeCtx({ files: [generation('only', '2025-01-01')], collapseEnabled: true }));
     expect(recordedInput()?.filesSupersededCollapsed).toBe(0);
+  });
+
+  it('applies a curator ruling with the derived collapse switched off, and leaves the count absent', async () => {
+    // Two facts at once, and they are deliberately different facts (#3046). The ruling is honored
+    // whatever the admin setting says - a human read both documents, which is not what that
+    // setting exists to be cautious about - so `old` leaves the ranking. But the DERIVED collapse
+    // still did not run, so `filesSupersededCollapsed` must stay absent rather than report 1: the
+    // field's contract is about older GENERATIONS this pass looked for, and it looked for none.
+    // The curator half is recorded by DataLakeCorpusActionModel instead.
+    const ruled = {
+      ...generation('old', '2024-01-01'),
+      supersededInLakes: [
+        { dataLakeId: 'lakeZ', supersededByFabFileId: 'new', decidedByUserId: 'curator-1', decidedAt: new Date() },
+      ],
+    };
+    await run(makeCtx({ files: [ruled, generation('new', '2025-01-01')], collapseEnabled: false }));
+
+    expect(recordedInput()?.fileIds).toEqual(['new']);
+    expect(recordedInput()?.filesSupersededCollapsed).toBeUndefined();
   });
 
   it('writes a zero row when the corpus was searched and nothing cleared the similarity floor', async () => {
