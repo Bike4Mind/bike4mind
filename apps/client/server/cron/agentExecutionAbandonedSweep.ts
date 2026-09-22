@@ -32,10 +32,17 @@ const STALENESS_HOURS = 6;
 const CLOUDWATCH_NAMESPACE = 'Lumina5/AgentExecutions';
 
 export async function handler() {
+  await connectDB(Config.MONGODB_URI.replace('%STAGE%', Resource.App.stage));
+  return runAbandonedExecutionSweep();
+}
+
+export async function runAbandonedExecutionSweep({ emitMetrics = true } = {}) {
   const stage = Resource.App.stage;
   logger.info('[AgentExecutionAbandonedSweep] Starting sweep', { stage, stalenessHours: STALENESS_HOURS });
 
-  await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
+  const metric = async (name: string, value: number) => {
+    if (emitMetrics) await emitMetric(CLOUDWATCH_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
+  };
 
   const olderThan = new Date(Date.now() - STALENESS_HOURS * 60 * 60 * 1000);
   const staleIds = await agentExecutionRepository.findStaleActiveIds({ olderThan });
@@ -43,12 +50,12 @@ export async function handler() {
   // Emit a heartbeat metric every run so the absence of data points alarms.
   // Operators monitor for sweeps suddenly stopping (cron broken) or spiking
   // (regression introduced misclassification), so we emit even the zero case.
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'AbandonedSweepRuns', 1, { Stage: stage }, StandardUnit.Count);
+  await metric('AbandonedSweepRuns', 1);
 
   // No early return on an empty sweep: every metric below has to report its zero
   // case for the same reason the heartbeat does - operators watch for data points
   // stopping, and a quiet hour must look different from a broken cron.
-  const marked = await agentExecutionRepository.markAbandoned(staleIds);
+  const marked = await agentExecutionRepository.markAbandoned(staleIds, olderThan);
   if (staleIds.length === 0) {
     logger.info('[AgentExecutionAbandonedSweep] No stale executions found');
   } else {
@@ -57,23 +64,17 @@ export async function handler() {
       marked: marked.length,
     });
   }
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'MarkedAbandoned', marked.length, { Stage: stage }, StandardUnit.Count);
+  await metric('MarkedAbandoned', marked.length);
 
   const quests = await settleStrandedQuests(
     marked.map(m => m.id),
     logger,
     '[AgentExecutionAbandonedSweep]'
   );
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'StrandedQuestsSettled', quests.settled, { Stage: stage }, StandardUnit.Count);
+  await metric('StrandedQuestsSettled', quests.settled);
   // Emitted separately so a crashed settle pass is visible on the dashboard: it
   // and a legitimate no-op both settle 0, and only this tells them apart.
-  await emitMetric(
-    CLOUDWATCH_NAMESPACE,
-    'StrandedQuestSettleFailures',
-    quests.failed ? 1 : 0,
-    { Stage: stage },
-    StandardUnit.Count
-  );
+  await metric('StrandedQuestSettleFailures', quests.failed ? 1 : 0);
 
   return { status: 'OK', marked: marked.length, questsSettled: quests.settled };
 }

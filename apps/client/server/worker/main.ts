@@ -18,6 +18,7 @@ import { modelDiscoveryIntervalMs, runScheduledDiscovery } from '@server/modelDi
 import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscovery/startupLeg';
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
+import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
@@ -71,6 +72,7 @@ async function main() {
   bootLogger.info('MongoDB connected');
 
   const worker = new SelfHostWorker(bootLogger);
+  registerAbandonedExecutionSweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,

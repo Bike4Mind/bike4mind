@@ -33,6 +33,7 @@ interface ScheduledTaskRegistration {
   name: string;
   intervalMs: number;
   fn: () => Promise<void>;
+  runOnStartup?: boolean;
   /** The current run, kept (not a boolean) so shutdown can await it. */
   inFlight?: Promise<void>;
 }
@@ -83,8 +84,13 @@ export class SelfHostWorker {
     });
   }
 
-  registerScheduledTask(name: string, intervalMs: number, fn: () => Promise<void>): void {
-    this.scheduled.push({ name, intervalMs, fn });
+  registerScheduledTask(
+    name: string,
+    intervalMs: number,
+    fn: () => Promise<void>,
+    opts?: { runOnStartup?: boolean }
+  ): void {
+    this.scheduled.push({ name, intervalMs, fn, runOnStartup: opts?.runOnStartup });
   }
 
   /** Begin polling every registered queue and arm every scheduled task. Non-blocking. */
@@ -94,6 +100,7 @@ export class SelfHostWorker {
     this.pollers = this.queues.map(q => this.runPoller(q));
     for (const t of this.scheduled) {
       this.timers.push(setInterval(() => this.startScheduledTask(t), t.intervalMs));
+      if (t.runOnStartup) this.startScheduledTask(t);
     }
     // Names, not just counts: a queue whose env var is unset is skipped at registration, and the
     // only way to tell that from the outside is to see which consumers this line does NOT list.

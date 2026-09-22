@@ -42,7 +42,7 @@ vi.mock('@server/utils/cloudwatch', () => ({
 }));
 vi.mock('sst', () => ({ Resource: { App: { stage: 'test' } } }));
 
-import { handler } from './agentExecutionAbandonedSweep';
+import { handler, runAbandonedExecutionSweep } from './agentExecutionAbandonedSweep';
 import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
 
 describe('agentExecutionAbandonedSweep - handler', () => {
@@ -52,6 +52,14 @@ describe('agentExecutionAbandonedSweep - handler', () => {
     staleIds.length = 0;
     metrics.length = 0;
     vi.clearAllMocks();
+  });
+
+  it('runs the same recovery without CloudWatch metrics for self-host', async () => {
+    staleIds.push('exec1');
+    fakeQuests.push({ id: 'q1', agentExecutionId: 'exec1', status: 'pending' });
+    const result = await runAbandonedExecutionSweep({ emitMetrics: false });
+    expect(result).toMatchObject({ marked: 1, questsSettled: 1 });
+    expect(metrics).toEqual([]);
   });
 
   it('settles the quests of the executions it sweeps', async () => {

@@ -1212,7 +1212,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Transition the given executions to `failed` + `failureReason: 'abandoned'`.
    * Only executions still in a sweepable active status are flipped, so a
    * concurrent natural completion / explicit abort wins the race and we
-   * don't clobber its terminal state.
+   * don't clobber its terminal state. A supplied cutoff also preserves active work
+   * that refreshed its heartbeat after candidate selection.
    *
    * Uses per-doc `findOneAndUpdate` (status-guarded) so the returned array
    * reflects only the docs we actually wrote to - callers can safely emit a
@@ -1223,7 +1224,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * thousands of stale docs would otherwise hammer the connection pool on the
    * first sweep.
    */
-  async markAbandoned(ids: string[]): Promise<Array<{ id: string; userId: string }>> {
+  async markAbandoned(ids: string[], olderThan?: Date): Promise<Array<{ id: string; userId: string }>> {
     if (ids.length === 0) return [];
     const CHUNK_SIZE = 200;
     const now = new Date();
@@ -1235,7 +1236,11 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
         chunk.map(id =>
           this.model
             .findOneAndUpdate(
-              { _id: new mongoose.Types.ObjectId(id), status: { $in: this.sweepableStatuses } },
+              {
+                _id: new mongoose.Types.ObjectId(id),
+                status: { $in: this.sweepableStatuses },
+                ...(olderThan ? { updatedAt: { $lt: olderThan } } : {}),
+              },
               {
                 $set: {
                   status: 'failed',
