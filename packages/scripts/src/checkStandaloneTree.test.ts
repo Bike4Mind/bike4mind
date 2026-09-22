@@ -149,6 +149,13 @@ describe('check-standalone-tree', () => {
     // Deliberate asymmetry with the test above: vectors need an embedding credential, and
     // degrading to keyword search without one is the documented self-host default, not a
     // broken build. Pinned so a later tightening of the guard is a decision, not a drive-by.
+    //
+    // Revisited: a conditional requirement ("require it when a key was present at build time")
+    // would be dead code here. The guard runs in one place, the Dockerfile, and that build runs
+    // apps/client's `prebuild` - help:build-index + help:bundle-content - never help:vectorize,
+    // which no build or workflow in this repo invokes. So the container build has no key and no
+    // embeddings to require. What the vectors needed was a declaration rather than a guard; they
+    // have one now in next.config.mjs, see checkHelpTracingIncludes.test.ts.
     makeHealthyTree();
     expect(fs.existsSync(path.join(appDir, 'app', 'generated', 'help-embeddings.json'))).toBe(false);
 

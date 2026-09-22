@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 import path from 'node:path';
 
 /**
@@ -28,13 +29,41 @@ import path from 'node:path';
  * config is ESM and evaluating it is both cheap and strictly stronger, since it checks the
  * RESOLVED values. A text match would pass on `HELP_CONTENT_ROOTS = []`.
  */
-const CONFIG_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../apps/client/next.config.mjs');
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const CONFIG_PATH = path.join(REPO_ROOT, 'apps/client/next.config.mjs');
 
 const PUBLIC_GLOB = './public/help-content/**/*';
 const ADMIN_GLOB = './app/generated/help-content-admin/**/*';
 
+const INDEX_ENTRY = './app/generated/help-index.json';
+const EMBEDDINGS_ENTRY = './app/generated/help-embeddings.json';
+
 /** The routes that read help content off disk at request time. Both need BOTH roots. */
 const HELP_ROUTES = ['/api/help/content', '/api/help/chat'];
+
+/**
+ * The generated help artifacts, by the route that reads each. Unlike the content roots above,
+ * these DO trace themselves: every read site is a path.join(process.cwd(), '<literal>'), which
+ * the tracer folds to a concrete file. The declaration is what stops that being load-bearing -
+ * it is a tracer implementation detail, not a documented contract, so an upgrade that stopped
+ * folding it would take help-embeddings.json silently (nothing guards it) and help-index.json
+ * only as far as the container build's check-standalone-tree.mjs.
+ */
+const ARTIFACT_ROUTES: ReadonlyArray<[route: string, entries: string[]]> = [
+  ['/api/help', [INDEX_ENTRY]],
+  ['/api/help/chat', [INDEX_ENTRY, EMBEDDINGS_ENTRY]],
+];
+
+/**
+ * The read sites each route entry above was keyed to, so the declaration and its justification
+ * cannot drift apart: move a read out of one of these modules and the entry it justifies goes
+ * stale with nothing failing. This does NOT catch a brand new reader in a third module.
+ */
+const ARTIFACT_READERS: ReadonlyArray<[file: string, literal: string]> = [
+  ['apps/client/pages/api/help/index.ts', 'app/generated/help-index.json'],
+  ['apps/client/server/help/retrieval.ts', 'app/generated/help-index.json'],
+  ['apps/client/server/help/retrieval.ts', 'app/generated/help-embeddings.json'],
+];
 
 /** Every route that can construct a REPL sandbox; each needs the isolated-vm prebuild. */
 const SANDBOX_ROUTES = ['/api/data-lakes/rlm-answer', '/api/deep-agent/spin', '/api/agents/[id]/missions'];
@@ -58,6 +87,17 @@ describe('outputFileTracingIncludes', () => {
     // admin, and a route missing one 404s exactly the articles that root holds.
     expect(globs).toContain(PUBLIC_GLOB);
     expect(globs).toContain(ADMIN_GLOB);
+  });
+
+  it.each(ARTIFACT_ROUTES)('declares the generated help artifacts it reads for %s', (route, entries) => {
+    const globs = includes[route];
+    expect(globs, `${route} must be declared - it reads a generated help artifact at request time`).toBeTruthy();
+    for (const entry of entries) expect(globs).toContain(entry);
+  });
+
+  it.each(ARTIFACT_READERS)('%s still reads %s, so its declaration is not rotting', (file, literal) => {
+    const source = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
+    expect(source, `${file} no longer reads ${literal}; the entry in next.config.mjs is now stale`).toContain(literal);
   });
 
   it.each(SANDBOX_ROUTES)('still declares an isolated-vm prebuild for %s', route => {
