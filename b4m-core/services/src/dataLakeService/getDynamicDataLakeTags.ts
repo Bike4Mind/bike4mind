@@ -438,7 +438,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         entitlementKeys,
         organizationIds,
         userId,
-        // supersededOwnLakeIds (review onoya): withholds the owner-bypass exemption from a lake
+        // supersededOwnLakeIds (#3055): withholds the owner-bypass exemption from a lake
         // whose ownership has since moved off the caller - see countGateExcludedLakes's own doc.
         { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
       );
