@@ -11,6 +11,9 @@ import type {
   ResearchRunTrigger,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
+  IDataLakeFindingDocument,
+  InconsistencyKind,
+  LakeFindingStatus,
   IDataLakeSpendResponse,
   IFabFileDocument,
   DataLakePrincipalType,
@@ -2177,6 +2180,49 @@ export type ResearchConfigInput = {
   costCeilingMicroUsd?: number;
   proposedTags?: string[];
 };
+
+// -- Detected corpus problems (#3039) ---------------------------------------
+
+/**
+ * How a curator narrows one lake's findings. Every field is optional and independent, and the whole
+ * object is passed to the route as-is - so it doubles as the cache key, and two surfaces asking the
+ * same question share one fetch.
+ */
+export type LakeFindingFilters = { status?: LakeFindingStatus; kind?: InconsistencyKind; limit?: number };
+
+/**
+ * One lake's detected corpus problems. Manage-gated server-side - the rows carry document EXCERPTS
+ * - so a mere reader gets a 4xx, surfaced as `isForbidden` and never retried, matching
+ * `useDataLakeProposals`.
+ *
+ * Filtering is server-side rather than a client-side pass over one fetched page: the route bounds
+ * what it returns, so narrowing a page here would silently hide rows that never crossed the wire.
+ *
+ * No polling. Findings only change when a detection run is triggered, and a list that reshuffles
+ * under a curator comparing two passages is worse than one a few minutes stale.
+ */
+export function useDataLakeFindings(
+  dataLakeId: string | null,
+  filters?: LakeFindingFilters,
+  opts?: { enabled?: boolean }
+) {
+  const query = useQuery({
+    queryKey: dataLakeKeys.findings(dataLakeId, filters),
+    queryFn: async () => {
+      const { data } = await api.get<{ data: IDataLakeFindingDocument[] }>(`/api/data-lakes/${dataLakeId}/findings`, {
+        params: filters,
+      });
+      return data.data;
+    },
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    retry: false,
+    staleTime: 1000 * 60,
+    // Switching a filter re-keys the query, and without this the list blanks to a spinner on every
+    // switch - the rows are a queue a curator is scanning, not a page they navigated away from.
+    placeholderData: keepPreviousData,
+  });
+  return { ...query, isForbidden: isPermissionRejection(query.error) };
+}
 
 /** How often the run list re-reads while a run is queued or running. */
 const RESEARCH_RUN_POLL_MS = 1000 * 5;
