@@ -1,4 +1,4 @@
-import { FeedbackCountBucket, OrgFeedbackReport } from '@bike4mind/common';
+import { FeedbackCountBucket, ORG_FEEDBACK_BY_TAG_LIMIT, OrgFeedbackReport } from '@bike4mind/common';
 import OrgFeedbackDrilldownPanel from '@client/app/components/organizations/OrgFeedbackDrilldownPanel';
 import { useOrgFeedbackReport, type OrgFeedbackRange } from '@client/app/hooks/data/orgFeedbackReport';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -14,9 +14,10 @@ const CountTable: FC<{
   title: string;
   testId: string;
   rows: { key: string; count: number }[];
+  caption?: string;
   onSelect?: (key: string) => void;
   selectedKey?: string | null;
-}> = ({ title, testId, rows, onSelect, selectedKey }) => (
+}> = ({ title, testId, rows, caption, onSelect, selectedKey }) => (
   <Sheet variant="soft" sx={{ p: 2, borderRadius: 'sm', minWidth: 220, flex: 1 }} data-testid={testId}>
     <Typography level="title-sm" sx={{ mb: 1 }}>
       {title}
@@ -46,6 +47,11 @@ const CountTable: FC<{
           )
         )}
       </Stack>
+    )}
+    {caption && (
+      <Typography level="body-xs" textColor="text.tertiary" sx={{ mt: 1 }} data-testid={`${testId}-caption`}>
+        {caption}
+      </Typography>
     )}
   </Sheet>
 );
@@ -118,7 +124,18 @@ const FeedbackCountsPanel: FC<{ organizationId: string; range: OrgFeedbackRange 
           rows={report.byMember.map(row => ({ key: row.displayName, count: row.count }))}
         />
         {/* Rows carrying no tag are absent here, so these do not sum to the total. */}
-        <CountTable title="By tag" testId="org-analysis-by-tag" rows={asRows(report.byTag)} />
+        <CountTable
+          title="By tag"
+          testId="org-analysis-by-tag"
+          rows={asRows(report.byTag)}
+          caption={
+            // The drill-down cannot filter by tag, so a shorter window is the only way to reach
+            // the keys this cut leaves out - say that, and do not promise a tag filter.
+            report.byTagTruncated
+              ? `Showing the top ${ORG_FEEDBACK_BY_TAG_LIMIT} tags by count; narrow the window to see the rest.`
+              : undefined
+          }
+        />
       </Stack>
 
       {openSubject !== null && (

@@ -37,6 +37,18 @@ describe('resolveReportWindow', () => {
       new RegExp(`${MAX_WINDOW_DAYS} days`)
     );
   });
+
+  // The bounds are rounded out to whole UTC days here, so the ceiling is counted in days COVERED:
+  // 2026-01-01 through 2027-01-01 is 366 of them, and one day more is over.
+  it('accepts a window covering exactly the ceiling and rejects one day more', () => {
+    const { from, to } = resolveReportWindow({ from: '2026-01-01', to: '2027-01-01' });
+
+    expect(from.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+    expect(to.toISOString()).toBe('2027-01-01T23:59:59.999Z');
+    expect(() => resolveReportWindow({ from: '2026-01-01', to: '2027-01-02' })).toThrow(
+      new RegExp(`${MAX_WINDOW_DAYS} days`)
+    );
+  });
 });
 
 describe('resolveInstantWindow', () => {
@@ -62,6 +74,18 @@ describe('resolveInstantWindow', () => {
 
   it('rejects a range over the ceiling', () => {
     expect(() => resolveInstantWindow('2020-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')).toThrow(
+      new RegExp(`${MAX_WINDOW_DAYS} days`)
+    );
+  });
+
+  // Instants, not day strings: this helper rounds a pair the summary route has already keyed a job
+  // off, so it has to agree with resolveReportWindow on where the ceiling falls.
+  it('accepts a window covering exactly the ceiling and rejects one day more', () => {
+    const { from, to } = resolveInstantWindow('2026-01-01T09:00:00.000Z', '2027-01-01T09:00:00.000Z');
+
+    expect(from.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+    expect(to.toISOString()).toBe('2027-01-01T23:59:59.999Z');
+    expect(() => resolveInstantWindow('2026-01-01T09:00:00.000Z', '2027-01-02T09:00:00.000Z')).toThrow(
       new RegExp(`${MAX_WINDOW_DAYS} days`)
     );
   });

@@ -1,13 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import {
-  createMongoServer,
-  MONGO_TEST_TIMEOUT_MS,
-} from '../../../../../packages/database/src/__test__/createMongoServer';
-import { FeedbackModel, FeedbackTextModel } from '@bike4mind/database';
+import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../__test__/createMongoServer';
+import { FeedbackModel } from '../FeedbackModel';
+import { FeedbackTextModel } from '../FeedbackTextModel';
 import { FeedbackStatus, FEEDBACK_ROLLUP_TOP_N, type IFeedback } from '@bike4mind/common';
-import { buildFeedbackRollupPipeline, toFeedbackRollupResponse, type FeedbackRollupFacet } from '../feedbackRollup';
+import {
+  buildFeedbackRollupPipeline,
+  toFeedbackRollupResponse,
+  type FeedbackRollupFacet,
+} from '../FeedbackRollupQueries';
 
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });
 
@@ -83,10 +85,11 @@ beforeEach(async () => {
         subject: 'product',
         status: FeedbackStatus.InProgress,
       }),
-      // Exactly the lower bound: inside a half-open window.
+      // Exactly the lower bound: included.
       ...seed(1, FROM, { userId: USER_A, sessionId: 'a-session-3', subject: 'product' }),
-      // Exactly the upper bound: belongs to the NEXT window, so it must not appear anywhere.
-      ...seed(1, TO, { userId: USER_A, sessionId: 'a-session-excluded', subject: 'product' }),
+      // Exactly the upper bound: `to` is the last instant included, so this row counts. Tagged so
+      // the tag arm is covered at the bound too.
+      ...seed(1, TO, { userId: USER_A, sessionId: 'a-session-at-to', subject: 'product', tags: ['ux'] }),
       // One millisecond before the window.
       ...seed(1, new Date(FROM.getTime() - 1), { userId: USER_A, sessionId: 'a-session-before' }),
       // Another user's reports, inside the window, sharing nothing with A.
@@ -115,25 +118,26 @@ const runRollup = async (scope: Record<string, unknown>) => {
 };
 
 describe('feedback rollup against a real collection', () => {
-  it('counts exactly the owner rows inside the half-open window', async () => {
+  it('counts exactly the owner rows inside the inclusive window', async () => {
     const response = await runRollup({ userId: USER_A });
 
-    expect(response.total).toBe(19);
+    expect(response.total).toBe(20);
     expect(response.buckets.sessionId.buckets).toEqual([
       { key: 'a-session-1', count: 10 },
       { key: 'a-session-2', count: 5 },
       { key: 'a-session-3', count: 1 },
+      { key: 'a-session-at-to', count: 1 },
     ]);
     expect(response.buckets.sessionId.truncated).toBe(false);
-    // Only the 10 reports that carry one; the other 9 still count in `total`.
+    // Only the 10 reports that carry one; the other 10 still count in `total`.
     expect(response.buckets.questId.buckets).toEqual([{ key: 'a-quest-1', count: 10 }]);
     expect(response.buckets.subject.buckets).toEqual([
       { key: 'turn', count: 10 },
+      { key: 'product', count: 5 },
       { key: 'session', count: 5 },
-      { key: 'product', count: 4 },
     ]);
     expect(response.buckets.status.buckets).toEqual([
-      { key: FeedbackStatus.New, count: 11 },
+      { key: FeedbackStatus.New, count: 12 },
       { key: FeedbackStatus.Closed, count: 5 },
       { key: FeedbackStatus.InProgress, count: 3 },
     ]);
@@ -142,22 +146,29 @@ describe('feedback rollup against a real collection', () => {
   it('counts a duplicated tag once per report', async () => {
     const response = await runRollup({ userId: USER_A });
 
-    // 'ux' appears twice on each of the 10 turn reports and once on each of the 5 session ones.
+    // 'ux' appears twice on each of the 10 turn reports, once on each of the 5 session ones, and
+    // once on the row sitting exactly on `to`.
     expect(response.buckets.tags.buckets).toEqual([
-      { key: 'ux', count: 15 },
+      { key: 'ux', count: 16 },
       { key: 'bug', count: 5 },
     ]);
   });
 
-  it('excludes a report written at exactly the upper bound', async () => {
+  it('counts a report written at exactly the upper bound in every dimension', async () => {
     const response = await runRollup({ userId: USER_A });
     const keys = response.buckets.sessionId.buckets.map(bucket => bucket.key);
 
-    expect(keys).not.toContain('a-session-excluded');
+    expect(keys).toContain('a-session-at-to');
     expect(keys).not.toContain('a-session-before');
 
-    // The half-open bound moves that report into the adjoining window instead of dropping it,
-    // which is what keeps consecutive windows summing to the same total as one wide one.
+    expect(response.total).toBe(20);
+    expect(response.buckets.subject.buckets).toContainEqual({ key: 'product', count: 5 });
+    expect(response.buckets.status.buckets).toContainEqual({ key: FeedbackStatus.New, count: 12 });
+    expect(response.buckets.tags.buckets).toContainEqual({ key: 'ux', count: 16 });
+
+    // The price of an inclusive upper bound: a window opening on `to` counts that same row again.
+    // No shipped helper emits adjacent windows - orgFeedbackWindow rounds `to` to 23:59:59.999,
+    // and the personal client sends one trailing window ending at now.
     const nextTo = new Date('2026-03-01T00:00:00.000Z');
     const adjoiningPipeline = buildFeedbackRollupPipeline({ userId: USER_A }, TO, nextTo);
     const [adjoining] = await FeedbackModel.aggregate<FeedbackRollupFacet>([

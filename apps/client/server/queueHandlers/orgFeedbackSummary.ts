@@ -212,6 +212,7 @@ export async function runOrgFeedbackSummary(message: OrgFeedbackSummaryMessage, 
         byType: report.byType,
         byStatus: report.byStatus,
         byTag: report.byTag,
+        byTagTruncated: report.byTagTruncated,
       },
     };
 

@@ -1,5 +1,5 @@
 import type { FilterQuery, PipelineStage } from 'mongoose';
-import { FeedbackTextModel } from '@bike4mind/database';
+import { FeedbackTextModel } from './FeedbackTextModel';
 import {
   FEEDBACK_CONTENT_RETENTION_DAYS,
   FEEDBACK_ROLLUP_TOP_N,
@@ -46,33 +46,50 @@ export interface FeedbackRollupPipeline {
 }
 
 /**
+ * The window seam these feedback aggregations compose their authorization scope through - the
+ * personal rollup below and, in FeedbackReportQueries, the org report and its drill-down list.
+ * The window is INCLUSIVE at both ends in UTC (`$gte from`, `$lte to`): `to` is the last instant
+ * counted, not the first instant of the next window. The price is that two windows sharing an
+ * instant both count the row on it - the org routes round `to` to 23:59:59.999 so adjacent org
+ * windows never meet, and the personal client (apps/client/app/utils/feedbackRollupWindow.ts)
+ * sends `to = now` and never tiles.
+ *
+ * Deliberately does not round its bounds. Rounding lives in apps/client/server/utils/
+ * orgFeedbackWindow.ts, because the org summary queue handler hands orgFeedbackReport instants it
+ * has already rounded and keyed its job on - rounding again here would move that key.
+ */
+export function buildFeedbackWindowFilter(
+  scope: FilterQuery<IFeedbackDocument>,
+  from: Date,
+  to: Date
+): FilterQuery<IFeedbackDocument> {
+  // Fail closed: Mongoose strips null/undefined values, so a scope with none surviving would
+  // match like {} and aggregate every tenant.
+  if (Object.values(scope).every(value => value === null || value === undefined)) {
+    throw new Error('buildFeedbackWindowFilter requires a scope with at least one non-null constraint');
+  }
+
+  // $and rather than a merged object literal: a scope can carry its own $and/$or arm and a spread
+  // would silently drop one side of it (same reason as the feedback list route). MongoDB's planner
+  // normalizes $and onto the same compound indexes a flat filter would use; FeedbackModel's header
+  // warns that DocumentDB plans this collection differently, and that engine is not covered here.
+  return { $and: [scope, { createdAt: { $gte: from, $lte: to } }] };
+}
+
+/**
  * Counts-only rollup over the feedback collection.
  *
- * `scope` is the caller's authorization filter, and it is the seam an organization-wide rollup
- * would reuse with `{ organizationId }` where the personal route passes `{ userId }` - which is
- * why the window handling lives here rather than in a route. The window is HALF-OPEN in UTC
- * (`$gte from`, `$lt to`): a report written at exactly `to` belongs to the next window, and both
- * callers must keep that convention or an organization total stops equalling the sum of the
- * personal totals under it at the bounds.
+ * `scope` is the caller's authorization filter - `{ userId }` for the personal route - and it
+ * reaches the window through `buildFeedbackWindowFilter`, the same seam the org routes use.
  */
 export function buildFeedbackRollupPipeline(
   scope: FilterQuery<IFeedbackDocument>,
   from: Date,
   to: Date
 ): FeedbackRollupPipeline {
-  // Fail closed at the seam an org-wide rollup will reuse: Mongoose strips null/undefined values,
-  // so a scope with none surviving would match like {} and aggregate every tenant.
-  if (Object.values(scope).every(value => value === null || value === undefined)) {
-    throw new Error('buildFeedbackRollupPipeline requires a scope with at least one non-null constraint');
-  }
-
   return {
     pipeline: [
-      {
-        // $and rather than a merged object literal: a scope can carry its own $and/$or arm and a
-        // spread would silently drop one side of it (same reason as the feedback list route).
-        $match: { $and: [scope, { createdAt: { $gte: from, $lt: to } }] },
-      },
+      { $match: buildFeedbackWindowFilter(scope, from, to) },
       {
         // Plain localField/foreignField form (no `pipeline`) - the only $lookup shape DocumentDB
         // supports. Reduced to a boolean and dropped before $facet so no joined text ever reaches
