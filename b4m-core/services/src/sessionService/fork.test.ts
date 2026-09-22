@@ -85,6 +85,31 @@ describe('forkSession', () => {
    * copy claiming a summary with no provenance, the exact state the admin summarization-spend view
    * exists to read.
    */
+
+  /**
+   * A decision-only trigger can no longer be published or stored, but a copy path must not be the
+   * thing that discovers a document holding one: rejecting it in createSessionParametersSchema
+   * would turn a stale row into a 422 that makes the notebook uncopyable. Drop the provenance,
+   * keep the copy.
+   */
+  it('drops a decision-only summaryTrigger instead of failing the fork', async () => {
+    const { db } = makeAdapters();
+    db.sessions.findByIdAndUserId.mockResolvedValueOnce({
+      id: 'session-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryTrigger: 'throttling',
+    });
+    db.chatHistories.findBySessionIdAndId.mockResolvedValueOnce({ id: 'm1', timestamp: new Date(10) });
+
+    await forkSession('caller-1', { sessionId: 'session-1', messageId: 'm1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+    expect(db.sessions.create.mock.calls[0][0].summary).toBe('the gist');
+  });
+
   it('carries the source session summaryTrigger onto the fork', async () => {
     const { db } = makeAdapters();
     const summaryAt = new Date('2026-01-01T00:00:00.000Z');

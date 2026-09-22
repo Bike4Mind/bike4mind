@@ -4,6 +4,7 @@ import {
   ISessionRepository,
   IUserRepository,
   rebindPromptMetaSession,
+  toPersistedSummaryTrigger,
 } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -49,7 +50,7 @@ export const forkSession = async (userId: string, parameters: ForkSessionParamet
       tags: session.tags,
       summary: session.summary,
       summaryAt: session.summaryAt,
-      summaryTrigger: session.summaryTrigger,
+      summaryTrigger: toPersistedSummaryTrigger(session.summaryTrigger),
       taggedAt: session.taggedAt,
       forkedSourceId: session.id,
       // Carried from the source, not re-derived: the parent's scope is already correct and explicit,

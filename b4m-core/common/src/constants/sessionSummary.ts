@@ -17,13 +17,40 @@
  * billed pass, so it stamps 'spider' instead: without that, one deliberate click and a whole sweep
  * are indistinguishable when someone investigates unexpected summarization spend.
  */
-export const SESSION_SUMMARY_TRIGGERS = [
+/**
+ * The triggers a document may actually carry - every reason a summarization HAPPENED. The event
+ * payload and createSessionParametersSchema both name this list rather than the full union below,
+ * so 'throttling' cannot be published, cannot be stored, and therefore cannot reach a copy path.
+ * Add a new reason-it-happened here, not to SESSION_SUMMARY_TRIGGERS, and every one of those
+ * boundaries picks it up.
+ */
+export const PERSISTED_SESSION_SUMMARY_TRIGGERS = [
   'manual',
   'project',
   'earlyMilestone',
   'contentGrowth',
-  'throttling',
   'spider',
 ] as const;
 
+/**
+ * Everything a summarization CHECK can conclude: the persisted reasons plus 'throttling', which
+ * only ever describes a decision not to summarize. Keep this the type of a decision result, not of
+ * a stored field - ISessionDocument still uses it for compatibility, but no write accepts it.
+ */
+export const SESSION_SUMMARY_TRIGGERS = [...PERSISTED_SESSION_SUMMARY_TRIGGERS, 'throttling'] as const;
+
 export type SessionSummaryTrigger = (typeof SESSION_SUMMARY_TRIGGERS)[number];
+export type PersistedSessionSummaryTrigger = (typeof PERSISTED_SESSION_SUMMARY_TRIGGERS)[number];
+
+/**
+ * Narrows a stored value to what a write may carry, so a copy of a document that somehow holds a
+ * decision-only trigger loses the provenance instead of failing the copy. Nothing can store
+ * 'throttling' today - the field was never written before the enum was aligned, and both write
+ * boundaries now refuse it - but a copy path must not be the thing that discovers otherwise.
+ */
+export const toPersistedSummaryTrigger = (
+  trigger: SessionSummaryTrigger | undefined
+): PersistedSessionSummaryTrigger | undefined =>
+  trigger !== undefined && (PERSISTED_SESSION_SUMMARY_TRIGGERS as readonly string[]).includes(trigger)
+    ? (trigger as PersistedSessionSummaryTrigger)
+    : undefined;

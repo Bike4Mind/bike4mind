@@ -26,6 +26,7 @@ import {
   ImageModerationIncident as ImageModerationIncidentInput,
   AttachmentLakeAccess,
   materializePromptMetaSession,
+  PersistedSessionSummaryTrigger,
 } from '@bike4mind/common';
 import {
   BFL_IMAGE_MODELS,
@@ -167,7 +168,7 @@ interface IImageGenerationServiceOptions {
    * Wiring this lets image-only sessions accumulate long-term context just like chat sessions -
    * the resolver in `resolveImagePrompt` then has more than the last 6 turns to ground on.
    */
-  invokeSummarizeSession?: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
+  invokeSummarizeSession?: (sessionId: string, trigger: PersistedSessionSummaryTrigger) => Promise<void>;
   /** Lambda function name for image processing (from SST Resource.ImageProcessor.name) */
   imageProcessorLambdaName?: string;
   /** Checks a generated image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
@@ -239,10 +240,11 @@ export class ImageGenerationService {
       logger.debug(`Skipping image-gen summarize check: session ${sessionId} not found`);
       return;
     }
-    const [shouldSummarize, trigger] = await shouldSummarizeSession(session, { db: this.db, logger });
-    if (shouldSummarize) {
+    // Indexed rather than destructured - see the matching call in ChatCompletionFeatures.
+    const decision = await shouldSummarizeSession(session, { db: this.db, logger });
+    if (decision[0]) {
       logger.info(`Triggering notebook summarization from image-gen for session ${sessionId}`);
-      await this.invokeSummarizeSession(sessionId, trigger);
+      await this.invokeSummarizeSession(sessionId, decision[1]);
     }
   }
 

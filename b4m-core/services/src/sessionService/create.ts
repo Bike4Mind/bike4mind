@@ -5,7 +5,7 @@ import {
 } from '@bike4mind/utils/retrievalExclusion';
 import {
   DATA_LAKE_GROUNDING_MODES,
-  SESSION_SUMMARY_TRIGGERS,
+  PERSISTED_SESSION_SUMMARY_TRIGGERS,
   IAgentRepository,
   IFabFileRepository,
   IProjectRepository,
@@ -63,22 +63,10 @@ const createSessionParametersSchema = z.object({
   // the only check between a caller and a stored value. NOTE: declaring it makes it reachable from
   // the create route's raw body, which is why that route deletes it (see the strip there); this
   // schema is the copy paths' channel, not a client input.
-  // 'throttling' is refused by refinement rather than left out of the enum: it is the one member no
-  // document may carry (see sessionSummary.ts), but ISessionDocument types the field with it, so the
-  // copy paths have to stay assignable while the value itself is rejected at runtime. superRefine,
-  // not refine, for exactly that reason - refine's predicate is inferred as a type guard and would
-  // narrow this schema's output back out of the copy paths' reach.
-  summaryTrigger: z
-    .enum(SESSION_SUMMARY_TRIGGERS)
-    .superRefine((trigger, ctx) => {
-      if (trigger === 'throttling') {
-        ctx.addIssue({
-          code: 'custom',
-          message: 'throttling names a summarization that was declined, so it is never persisted',
-        });
-      }
-    })
-    .optional(),
+  // Persisted list, not the full union - a decision-only reason names no run to have provenance for.
+  // Copy paths pass their source value through toPersistedSummaryTrigger, so a document that somehow
+  // holds one loses the provenance instead of failing the copy.
+  summaryTrigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS).optional(),
   // Companion of `tags` the way `summaryAt` is of `summary`, so clone/fork must carry it or the
   // spider gate at apps/client/server/events/spider.ts pays to re-tag every copy; snip deliberately
   // does not. Declared here because secureParameters strips unknown keys; still not a client input,

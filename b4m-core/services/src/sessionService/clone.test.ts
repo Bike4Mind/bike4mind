@@ -213,6 +213,31 @@ describe('cloneSession - redaction at the copy boundary', () => {
 
   // A source summarized before the field existed must not come out of the copy carrying an invented
   // provenance; the copy passes the field through explicitly, so the key is present holding undefined.
+
+  /**
+   * A decision-only trigger can no longer be published or stored, but a copy path must not be the
+   * thing that discovers a document holding one: rejecting it in createSessionParametersSchema
+   * would turn a stale row into a 422 that makes the notebook uncopyable. Drop the provenance,
+   * keep the copy.
+   */
+  it('drops a decision-only summaryTrigger instead of failing the clone', async () => {
+    const { db } = makeAdapters('caller-1');
+    db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
+      id: 'session-1',
+      userId: 'caller-1',
+      name: 'Original',
+      knowledgeIds: [],
+      tags: [],
+      summary: 'the gist',
+      summaryTrigger: 'throttling',
+    });
+
+    await cloneSession('caller-1', { id: 'session-1' }, { db });
+
+    expect(db.sessions.create.mock.calls[0][0].summaryTrigger).toBeUndefined();
+    expect(db.sessions.create.mock.calls[0][0].summary).toBe('the gist');
+  });
+
   it('does not fabricate a summaryTrigger when the source has none', async () => {
     const { db } = makeAdapters('caller-1');
     db.sessions.shareable.findAccessibleById.mockResolvedValueOnce({
