@@ -95,3 +95,55 @@ describe('wrapToolWithPermission: write_shell_stdin force-prompt (criterion 6)',
     expect(prompt).not.toHaveBeenCalled();
   });
 });
+
+describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
+  // A fuzzy edit resolves the real span via the block-anchor matcher, which can
+  // write more than old_string names. Trailing whitespace on a single line means
+  // `content.includes(old_string)` is false but the line-trimmed strategy matches.
+  async function fuzzyFile(): Promise<string> {
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'b4m-fuzzy-'));
+    const file = path.join(dir, 'note.txt');
+    await fs.writeFile(file, 'hello world\n');
+    return file;
+  }
+  const fuzzyArgs = (file: string) => ({ path: file, old_string: 'hello world   ', new_string: 'hi world' });
+  const exactArgs = (file: string) => ({ path: file, old_string: 'hello world', new_string: 'hi world' });
+
+  it('forces the permission prompt under auto-accept when the edit resolves fuzzily', async () => {
+    useCliStore.getState().setInteractionMode('auto-accept');
+    const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
+    const wrapped = wrap(tool('edit_local_file'), prompt, new PermissionManager([], undefined, []));
+
+    await wrapped.toolFn(fuzzyArgs(await fuzzyFile()));
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt.mock.calls[0][0]).toBe('edit_local_file');
+  });
+
+  it('forces the permission prompt when the tool is session-trusted and the edit resolves fuzzily', async () => {
+    const pm = new PermissionManager([], undefined, []);
+    pm.trustToolForSession('edit_local_file');
+    const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
+    const wrapped = wrap(tool('edit_local_file'), prompt, pm);
+
+    await wrapped.toolFn(fuzzyArgs(await fuzzyFile()));
+
+    expect(prompt).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT prompt for an exact match under auto-accept or session-trust - tightening only', async () => {
+    useCliStore.getState().setInteractionMode('auto-accept');
+    const autoPrompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
+    const autoWrapped = wrap(tool('edit_local_file'), autoPrompt, new PermissionManager([], undefined, []));
+    await autoWrapped.toolFn(exactArgs(await fuzzyFile()));
+    expect(autoPrompt).not.toHaveBeenCalled();
+
+    useCliStore.getState().setInteractionMode('normal');
+    const pm = new PermissionManager([], undefined, []);
+    pm.trustToolForSession('edit_local_file');
+    const trustPrompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
+    const trustWrapped = wrap(tool('edit_local_file'), trustPrompt, pm);
+    await trustWrapped.toolFn(exactArgs(await fuzzyFile()));
+    expect(trustPrompt).not.toHaveBeenCalled();
+  });
+});

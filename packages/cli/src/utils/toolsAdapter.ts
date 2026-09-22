@@ -17,7 +17,12 @@ import {
 import type { PermissionManager } from './PermissionManager';
 import type { PermissionResponse } from '../components/PermissionPrompt';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
-import { generateFileDiffPreview, generateFileDeletePreview, generateEditLocalFilePreview } from './diffPreview';
+import {
+  generateFileDiffPreview,
+  generateFileDeletePreview,
+  generateEditLocalFilePreview,
+  willEditResolveFuzzily,
+} from './diffPreview';
 import { executeTool } from '../llm/ToolRouter';
 import type { ApiClient } from '../auth/ApiClient';
 import { executeHooks, buildHookContext } from '../agents/hookExecutor.js';
@@ -279,27 +284,43 @@ export function wrapToolWithPermission(
       }
       const forcePromptForRisk = commandRisk?.level === 'high';
 
+      // Fuzzy-edit gate: an edit_local_file whose old_string is not an exact
+      // match resolves via the block-anchor fallback, which can write a wider
+      // span than old_string names. Re-confirm it even under trust / auto-accept
+      // (mirroring forcePromptForRisk) so the human sees the real span first.
+      // edit_local_file is never shell-like, so this and forcePromptForRisk are
+      // mutually exclusive.
+      const forcePromptForFuzzyEdit =
+        toolName === 'edit_local_file'
+          ? await willEditResolveFuzzily(args as { path: string; old_string: string; new_string: string })
+          : false;
+      const forcePrompt = forcePromptForRisk || forcePromptForFuzzyEdit;
+
       // Host allowlist (claude --allowedTools): auto-approve tools matching an
       // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
       const allowedPatterns = getAllowedToolPatterns();
-      if (!forcePromptForRisk && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
+      if (!forcePrompt && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
         return executeAndRecord();
       }
 
       // Auto-approved, trusted, or sandbox auto-allowed
-      if (!forcePromptForRisk && !permissionManager.needsPermission(toolName, { isSandboxed })) {
+      if (!forcePrompt && !permissionManager.needsPermission(toolName, { isSandboxed })) {
         return executeAndRecord();
       }
 
       // Auto-accept: skip permission prompt when Shift+Tab toggle is on
-      if (!forcePromptForRisk && interactionMode === 'auto-accept') {
+      if (!forcePrompt && interactionMode === 'auto-accept') {
         return executeAndRecord();
       }
 
       // Generate preview for dangerous operations
       const basePreview = await generateToolPreview(toolName, args, isSandboxed);
       const preview =
-        forcePromptForRisk && commandRisk ? prependRiskBanner(basePreview, commandRisk.reasons) : basePreview;
+        forcePromptForRisk && commandRisk
+          ? prependRiskBanner(basePreview, commandRisk.reasons)
+          : forcePromptForFuzzyEdit
+            ? prependFuzzyEditBanner(basePreview)
+            : basePreview;
 
       // Show permission prompt and wait indefinitely for response
       const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
@@ -560,6 +581,17 @@ function prependRiskBanner(basePreview: string | undefined, reasons: string[]): 
   const details =
     reasons.length > 0 ? reasons.map(reason => `- ${reason}`).join('\n') : '- flagged by command analysis';
   const banner = `🛑 HIGH-RISK COMMAND — flagged by static command analysis:\n\n${details}`;
+  return basePreview ? `${banner}\n\n${basePreview}` : banner;
+}
+
+/**
+ * Prepend a banner to an edit_local_file preview whose old_string was not an
+ * exact match. The diff below (from generateEditLocalFilePreview) shows the real
+ * fuzzy span, so the banner just explains why this edit is re-prompted despite
+ * trust / auto-accept.
+ */
+function prependFuzzyEditBanner(basePreview: string | undefined): string {
+  const banner = '[!] old_string was not an exact match; the diff below is the actual span that will be written.';
   return basePreview ? `${banner}\n\n${basePreview}` : banner;
 }
 

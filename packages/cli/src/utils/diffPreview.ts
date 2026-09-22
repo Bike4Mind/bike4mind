@@ -102,6 +102,31 @@ export async function generateEditLocalFilePreview(args: {
 }
 
 /**
+ * True when an edit_local_file call would resolve via the fuzzy (block-anchor)
+ * fallback rather than an exact substring hit - i.e. old_string is not present
+ * verbatim but the shared matcher finds a span. The gate uses this to re-confirm
+ * such an edit under trust / auto-accept, since the span actually written can
+ * differ from what old_string names. Shares the exact guard order with
+ * generateEditLocalFilePreview above so the two cannot drift. Any read/match
+ * error (incl. ambiguous match) returns false: a detection error must not block
+ * a legitimate edit; the throw surfaces at tool execution instead.
+ */
+export async function willEditResolveFuzzily(args: {
+  path: string;
+  old_string: string;
+  new_string: string;
+}): Promise<boolean> {
+  try {
+    if (!existsSync(args.path)) return false;
+    const content = await readFile(args.path, 'utf-8');
+    if (content.includes(args.old_string)) return false;
+    return fuzzyMatch(content, args.old_string, args.new_string) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Generate a preview for file deletion
  */
 export async function generateFileDeletePreview(args: { path: string }): Promise<string> {
