@@ -722,15 +722,25 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * Visibility is org membership OR public - deliberately narrower than `findActiveByUserTagsAndEntitlements`'s
    * own arms (no owner bypass, no grant arm): those two arms are exactly what make a lake NOT
    * excluded regardless of its gate, so they are subtracted here via `_id: $nin` instead of
-   * counted as visible. `createdByUserId: { $ne: userId }` mirrors that subtraction for the
-   * owner bypass without needing the caller's own lake ids first.
+   * counted as visible.
+   *
+   * The owner-bypass exemption (review onoya): a lake is withheld from the count for its CREATOR
+   * only when ownership has not since moved off them - `createdByUserId` is immutable, so without
+   * `supersededOwnLakeIds` a transferred-away creator would still report a false zero for a lake
+   * they can no longer reach via the owner bypass. Mirrors `findActiveByUserTagsAndEntitlements`'s
+   * own creator arm: `$or` rather than a single `$ne`, because "exempt from the count" is now two
+   * cases (not mine at all, OR mine but superseded) that a single field comparison cannot express.
    */
   async countGateExcludedLakes(
     userTags: string[],
     entitlementKeys: string[],
     organizationIds: string[] | undefined,
     userId: string | undefined,
-    opts?: { grantedLakeIds?: string[]; orgGrantedLakes?: Record<string, string[]> }
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      supersededOwnLakeIds?: string[];
+    }
   ): Promise<number> {
     const memberOrgIds = organizationIds ?? [];
     const visibilityArms: Record<string, unknown>[] = [{ isPublic: true }];
@@ -742,13 +752,21 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       'DataLakeModel.countGateExcludedLakes'
     );
     const excludedIds = Array.from(new Set([...grantedLakeIds, ...orgGrantedIds]));
+    const supersededOwnLakeIds = usableObjectIds(opts?.supersededOwnLakeIds, 'DataLakeModel.countGateExcludedLakes');
+
+    const ownerExemptionArms: Record<string, unknown>[] = [{ createdByUserId: { $ne: userId } }];
+    if (supersededOwnLakeIds.length > 0) {
+      ownerExemptionArms.push({ createdByUserId: userId, _id: { $in: supersededOwnLakeIds } });
+    }
 
     const filter: Record<string, unknown> = {
       status: 'active',
-      $or: visibilityArms,
-      $nor: [requirementConstraint(userTags, entitlementKeys)],
-      ...(userId ? { createdByUserId: { $ne: userId } } : {}),
-      ...(excludedIds.length > 0 ? { _id: { $nin: excludedIds } } : {}),
+      $and: [
+        { $or: visibilityArms },
+        { $nor: [requirementConstraint(userTags, entitlementKeys)] },
+        ...(userId ? [{ $or: ownerExemptionArms }] : []),
+        ...(excludedIds.length > 0 ? [{ _id: { $nin: excludedIds } }] : []),
+      ],
     };
     return this.dataLakeModel.countDocuments(filter);
   }
