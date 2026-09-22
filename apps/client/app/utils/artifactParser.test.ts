@@ -857,6 +857,10 @@ describe('parity with the core parser', () => {
     expect(coreConvertCodeBlocksToArtifacts(doc), STALE).toContain('title="Say Hi"');
   });
 
+  // Core already split adjacent fences before this branch (its document scan was a lazy
+  // body plus hasFullHtmlDocument as of #2827), so this pins no change of ours. It stays
+  // as a broken-rewrite guard: a greedy body in either scan merges the two into one
+  // artifact and leaves a bare ```html inside it, which both assertions below catch.
   it('core dist keeps two adjacent html fences separate', () => {
     const out = coreConvertCodeBlocksToArtifacts('```html\n' + DOC + '\n```\n\n```html\n' + DOC + '\n```');
     expect(coreWrappers(out), STALE).toBe(2);
