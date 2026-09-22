@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeService } from '@bike4mind/services';
+import { dataLakeService, apiKeyService } from '@bike4mind/services';
 import { toScanSummary, type IDataLakeDocument } from '@bike4mind/common';
 import {
   dataLakeRepository,
@@ -9,11 +9,14 @@ import {
   dataLakeFindingRepository,
   fabFileRepository,
   fabFileChunkRepository,
+  apiKeyRepository,
+  adminSettingsRepository,
 } from '@bike4mind/database';
-import { Request } from 'express';
+import { Request, Response } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { isDevelopment } from '@server/utils/config';
+import { getSettingsByNames } from '@bike4mind/utils';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -35,6 +38,24 @@ const inconsistencyRunRateLimit = rateLimit({
   windowMs: HOUR_MS,
   bucket: 'data-lakes/inconsistencies',
 });
+
+/**
+ * Model-detection runs per caller per hour - far lower than the lexical `DETECTION_HOURLY_CAP` (20),
+ * and deliberately its own bucket rather than sharing that budget. The lexical pass costs a regex
+ * scan; this pass reads corpus content through an LLM (#3057), so its cost per run is real money,
+ * not just latency - the caller-triggered cap is this feature's primary spend control until a
+ * dollar-denominated one is worth building (see `enforceEmbeddingSpendGate` for that pattern, used
+ * today only on the embedding-ingest path).
+ */
+const MODEL_DETECTION_HOURLY_CAP = 3;
+
+const modelInconsistencyRunRateLimit = rateLimit({
+  limit: () => (isDevelopment() ? Infinity : MODEL_DETECTION_HOURLY_CAP),
+  windowMs: HOUR_MS,
+  bucket: 'data-lakes/inconsistencies/model',
+});
+
+const isModelDetectorRequest = (req: Request) => req.method === 'POST' && req.query.detector === 'model';
 
 /**
  * GET  /api/data-lakes/:id/inconsistencies - the last stored report (reads only, runs nothing)
@@ -154,9 +175,80 @@ async function renderStoredReport(
   return { ...lake.inconsistencyReport, countsByKind, findings, computedAt };
 }
 
+/**
+ * The model-driven contradiction pass (#3057). Kept out of the blob deliberately: `inconsistencyReport`
+ * / `inconsistencyComputedAt` are the lexical pass's shape (`LakeInconsistencyReport`), and GET here
+ * still reads exactly that - unchanged by this branch, matching how #3039's PR left GET and
+ * `GET /health` alone when it added rows. A model finding is visible via
+ * `GET /api/data-lakes/:id/findings?detector=model`, the same door the lexical rows already use.
+ *
+ * Resolves the LAKE OWNER's API keys, not the caller's - the cost belongs to the lake's resource,
+ * matching `extractLakeMemoryForBatch`'s attribution for the same reason.
+ */
+async function runModelDetection(
+  lake: Awaited<ReturnType<typeof dataLakeService.assertLakeWriteAccess>>,
+  req: Request,
+  res: Response
+) {
+  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(
+    lake.createdByUserId,
+    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+    { logger: req.logger }
+  );
+
+  const result = await dataLakeService.detectLakeInconsistenciesModel(lake, {
+    db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository },
+    apiKeyTable,
+    endUserId: lake.createdByUserId,
+    logger: req.logger,
+  });
+
+  const computedAt = new Date();
+  // Same ordering rationale as the lexical branch: isolate a write failure so the caller still gets
+  // back what the run actually found rather than a 500 for a pass that already spent its LLM budget.
+  let failed = 0;
+  try {
+    ({ failed } = await dataLakeService.recordLakeFindings(
+      lake.id,
+      result.findings,
+      { detector: 'model', seenAt: computedAt },
+      { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
+    ));
+  } catch (error) {
+    failed = result.findings.length;
+    req.logger?.error('Model lake findings write failed outright; returning the run result', {
+      dataLakeId: lake.id,
+      total: result.findings.length,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    });
+  }
+  if (failed > 0) {
+    req.logger?.warn('Model lake findings partially recorded', {
+      dataLakeId: lake.id,
+      failed,
+      total: result.findings.length,
+    });
+  }
+
+  return res.json({ ...result, computedAt });
+}
+
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
-  .use((req, res, next) => (req.method === 'POST' ? inconsistencyRunRateLimit(req, res, next) : next()))
+  // Gated separately from EnableDataLakes, and BEFORE the rate limiter below: a caller hitting a
+  // disabled model pass should not burn its (far lower) hourly budget on requests that were always
+  // going to 403, the same reason EnableDataLakes itself sits ahead of rate limiting.
+  .use((req, res, next) =>
+    isModelDetectorRequest(req)
+      ? requireFeatureEnabled('EnableLakeModelInconsistencyDetection')(req, res, next)
+      : next()
+  )
+  .use((req, res, next) => {
+    if (req.method !== 'POST') return next();
+    return isModelDetectorRequest(req)
+      ? modelInconsistencyRunRateLimit(req, res, next)
+      : inconsistencyRunRateLimit(req, res, next);
+  })
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
@@ -169,6 +261,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps);
+
+    if (isModelDetectorRequest(req)) return runModelDetection(lake, req, res);
 
     // The year is passed in rather than read inside the detector so the same corpus always produces
     // the same report - a stored result an owner already reviewed has to be comparable to the next.
