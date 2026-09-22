@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 // Hoisted mock for the Lambda client's send method so we can assert on calls.
 const { mockSend, mockAxiosGet } = vi.hoisted(() => ({ mockSend: vi.fn(), mockAxiosGet: vi.fn() }));
@@ -141,9 +142,7 @@ describe('downloadImageAsBuffer SSRF guard', () => {
       data: Buffer.alloc(0),
     });
 
-    await expect(downloadImageAsBuffer(`${PUBLIC_HOST}/image.png`)).rejects.toThrow(
-      /blocked for security reasons/
-    );
+    await expect(downloadImageAsBuffer(`${PUBLIC_HOST}/image.png`)).rejects.toThrow(/blocked for security reasons/);
     expect(mockAxiosGet).toHaveBeenCalledTimes(1);
   });
 
@@ -181,11 +180,13 @@ describe('downloadImageAsBuffer self-host storage endpoint', () => {
 
   // Self-host resolves the storage host to a compose-network private address, so without the
   // exemption every image-to-image generation would fail the guard.
-  it('fetches a signed URL on the configured storage endpoint', async () => {
+  it('fetches a signed URL on the configured storage endpoint when the caller asserts trust', async () => {
     process.env.AWS_ENDPOINT_URL_S3 = 'http://minio:9000';
     mockAxiosGet.mockResolvedValue({ status: 200, headers: {}, data: Buffer.from('image') });
 
-    const buf = await downloadImageAsBuffer('http://minio:9000/bucket/key.png?X-Amz-Signature=abc');
+    const buf = await downloadImageAsBuffer('http://minio:9000/bucket/key.png?X-Amz-Signature=abc', {
+      trustConfiguredStorageOrigin: true,
+    });
 
     expect(buf.toString()).toBe('image');
     // The pinned agents would refuse the same private address, so they must be omitted here.
@@ -196,22 +197,22 @@ describe('downloadImageAsBuffer self-host storage endpoint', () => {
   it('still blocks a different private host when a storage endpoint is configured', async () => {
     process.env.AWS_ENDPOINT_URL_S3 = 'http://minio:9000';
 
-    await expect(downloadImageAsBuffer('http://169.254.169.254/latest/meta-data/')).rejects.toThrow(
-      /blocked for security reasons/
-    );
+    await expect(
+      downloadImageAsBuffer('http://169.254.169.254/latest/meta-data/', { trustConfiguredStorageOrigin: true })
+    ).rejects.toThrow(/blocked for security reasons/);
     expect(mockAxiosGet).not.toHaveBeenCalled();
   });
 
   it('does not exempt a different port on the same storage host', async () => {
     process.env.AWS_ENDPOINT_URL_S3 = 'http://minio:9000';
 
-    await expect(downloadImageAsBuffer('http://minio:9001/bucket/key.png')).rejects.toThrow(
-      /blocked for security reasons/
-    );
+    await expect(
+      downloadImageAsBuffer('http://minio:9001/bucket/key.png', { trustConfiguredStorageOrigin: true })
+    ).rejects.toThrow(/blocked for security reasons/);
     expect(mockAxiosGet).not.toHaveBeenCalled();
   });
 
-  it('re-validates where the storage endpoint redirects to', async () => {
+  it('re-validates where the storage endpoint redirects to, even from a trusted hop', async () => {
     process.env.AWS_ENDPOINT_URL_S3 = 'http://minio:9000';
     mockAxiosGet.mockResolvedValueOnce({
       status: 302,
@@ -219,9 +220,62 @@ describe('downloadImageAsBuffer self-host storage endpoint', () => {
       data: Buffer.alloc(0),
     });
 
-    await expect(downloadImageAsBuffer('http://minio:9000/bucket/key.png')).rejects.toThrow(
+    await expect(
+      downloadImageAsBuffer('http://minio:9000/bucket/key.png', { trustConfiguredStorageOrigin: true })
+    ).rejects.toThrow(/blocked for security reasons/);
+    expect(mockAxiosGet).toHaveBeenCalledTimes(1);
+  });
+
+  it('never exempts the configured storage origin unless the caller explicitly asserts trust', async () => {
+    // Reproduces the exploit: EditImageRequestBodySchema.image is a bare caller string, and
+    // without an explicit trust assertion, a caller who knows the self-host endpoint could
+    // otherwise reach it - here, an internal admin path - unguarded.
+    process.env.AWS_ENDPOINT_URL_S3 = 'http://minio:9000';
+
+    await expect(downloadImageAsBuffer('http://minio:9000/admin/health')).rejects.toThrow(
       /blocked for security reasons/
     );
+    expect(mockAxiosGet).not.toHaveBeenCalled();
+  });
+
+  it('does not let a redirect from an untrusted URL acquire trust by landing on the configured origin', async () => {
+    process.env.AWS_ENDPOINT_URL_S3 = 'http://minio:9000';
+    mockAxiosGet.mockResolvedValueOnce({
+      status: 302,
+      headers: { location: 'http://minio:9000/admin/health' },
+      data: Buffer.alloc(0),
+    });
+
+    await expect(downloadImageAsBuffer(`${PUBLIC_HOST}/image.png`)).rejects.toThrow(/blocked for security reasons/);
     expect(mockAxiosGet).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('downloadImageAsBuffer log redaction', () => {
+  beforeEach(() => {
+    mockAxiosGet.mockReset();
+  });
+
+  it('never logs the query string, fragment, or userinfo of the image URL', async () => {
+    const logSpy = vi.spyOn(Logger.globalInstance, 'log').mockImplementation(() => undefined);
+    mockAxiosGet.mockResolvedValue({ status: 200, headers: {}, data: Buffer.from('image') });
+
+    await downloadImageAsBuffer(`${PUBLIC_HOST}/i?token=super-secret#frag`);
+
+    const loggedArgs = logSpy.mock.calls.flatMap(call => call.map(arg => String(arg)));
+    expect(loggedArgs.some(arg => arg.includes('super-secret'))).toBe(false);
+    expect(loggedArgs.some(arg => arg.includes('#frag'))).toBe(false);
+    logSpy.mockRestore();
+  });
+
+  it('never logs the contents of a data URL', async () => {
+    const logSpy = vi.spyOn(Logger.globalInstance, 'log').mockImplementation(() => undefined);
+    const secretPayload = Buffer.from('should-not-be-logged').toString('base64');
+
+    await downloadImageAsBuffer(`data:image/png;base64,${secretPayload}`);
+
+    const loggedArgs = logSpy.mock.calls.flatMap(call => call.map(arg => String(arg)));
+    expect(loggedArgs.some(arg => arg.includes(secretPayload))).toBe(false);
+    logSpy.mockRestore();
   });
 });

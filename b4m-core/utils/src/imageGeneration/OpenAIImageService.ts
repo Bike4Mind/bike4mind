@@ -220,13 +220,13 @@ export class OpenAIImageService extends AIImageService {
    * gpt-image's (which takes png/webp/jpg up to 50MB) - kept as-is so this refactor does
    * not change what reaches the provider.
    */
-  private async toImageFile(source: string, fileName: string): Promise<File> {
+  private async toImageFile(source: string, fileName: string, trustConfiguredStorageOrigin = false): Promise<File> {
     if (!this.imageProcessorLambdaName) {
       throw new Error(
         'ImageProcessor Lambda name is required for image processing. Please provide it when creating the image service.'
       );
     }
-    const buffer = await downloadImageAsBuffer(source);
+    const buffer = await downloadImageAsBuffer(source, { trustConfiguredStorageOrigin });
     const pngBuffer = await invokeImageProcessor(buffer, this.imageProcessorLambdaName, 4); // 4MB max for OpenAI
     return new File([pngBuffer], fileName, { type: 'image/png' });
   }
@@ -236,11 +236,16 @@ export class OpenAIImageService extends AIImageService {
    * source costs a download plus an ImageProcessor Lambda round trip, and serialized those
    * would eat a meaningful share of the 8-minute client budget (OPENAI_IMAGE_CLIENT_OPTS).
    */
-  private async toReferenceImageFiles(sources: string[] | undefined): Promise<File[]> {
+  private async toReferenceImageFiles(
+    sources: string[] | undefined,
+    trustConfiguredStorageOrigin = false
+  ): Promise<File[]> {
     if (!sources?.length) {
       return [];
     }
-    return Promise.all(sources.map((source, i) => this.toImageFile(source, `reference-${i + 1}.png`)));
+    return Promise.all(
+      sources.map((source, i) => this.toImageFile(source, `reference-${i + 1}.png`, trustConfiguredStorageOrigin))
+    );
   }
 
   async generate(prompt: string, options: OpenAIImageGenerationOptions): Promise<string[]> {
@@ -259,6 +264,7 @@ export class OpenAIImageService extends AIImageService {
         background,
         imagePrompt,
         referenceImages,
+        trustConfiguredStorageOrigin = false,
         stream,
         ...openaiOptions
       } = options;
@@ -380,7 +386,7 @@ export class OpenAIImageService extends AIImageService {
       let result;
 
       if (imagePrompt) {
-        const imageFile = await this.toImageFile(imagePrompt, 'image.png');
+        const imageFile = await this.toImageFile(imagePrompt, 'image.png', trustConfiguredStorageOrigin);
 
         // GPT-Image models use the edit endpoint for image-to-image generation
         if (isGPTImageModel(options.model)) {
@@ -400,7 +406,10 @@ export class OpenAIImageService extends AIImageService {
 
           // Style anchors follow the primary image; a mask (not sent on this path) would
           // bind to element 0, so the primary must stay first.
-          const imageFiles = [imageFile, ...(await this.toReferenceImageFiles(referenceImages))];
+          const imageFiles = [
+            imageFile,
+            ...(await this.toReferenceImageFiles(referenceImages, trustConfiguredStorageOrigin)),
+          ];
 
           this.logger.log('OpenAI image generation request (edit endpoint, image-to-image):', {
             model: editModel,
@@ -530,6 +539,7 @@ export class OpenAIImageService extends AIImageService {
       background,
       output_format,
       referenceImages,
+      trustConfiguredStorageOrigin = false,
     }: ImageEditOptions
   ): Promise<ImageEditResponse> {
     try {
@@ -579,7 +589,9 @@ export class OpenAIImageService extends AIImageService {
       if (referenceImages?.length && !editModelCarriesReferences) {
         Logger.globalInstance.debug(`[DEBUG] Reference images are not supported by ${editModel} and were removed`);
       }
-      const referenceImageFiles = editModelCarriesReferences ? await this.toReferenceImageFiles(referenceImages) : [];
+      const referenceImageFiles = editModelCarriesReferences
+        ? await this.toReferenceImageFiles(referenceImages, trustConfiguredStorageOrigin)
+        : [];
 
       const editWarnings: string[] = [];
       const gptImageOutputOptions = resolveGptImageOutputOptions(background, output_format, editWarnings, editModel);

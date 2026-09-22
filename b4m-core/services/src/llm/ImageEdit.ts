@@ -138,10 +138,12 @@ interface IImageEditServiceOptions {
   resolveLakeAccess?: (user: IUserDocument, logger: Logger) => Promise<AttachmentLakeAccess>;
 }
 
-async function imageUrlToBase64(imageUrl: string): Promise<string> {
+async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   // MUST stay on `downloadImageAsBuffer`: the edit-image request body accepts `image` as a bare
   // string, so this URL is caller-controlled and a direct axios.get here is an SSRF primitive.
-  const buffer = await downloadImageAsBuffer(imageUrl);
+  // `trustConfiguredStorageOrigin` must only be set true by a caller passing a URL it just got
+  // back from `getSignedUrl` - never for `imageUrl`/`sourceImageUrl`, which came from the request.
+  const buffer = await downloadImageAsBuffer(imageUrl, { trustConfiguredStorageOrigin });
   return buffer.toString('base64');
 }
 
@@ -533,7 +535,8 @@ export class ImageEditService {
       if (!sourceBase64Image) throw new NotFoundError('Source image not found');
 
       const signedUrl = fileImage?.filePath ? await this.fabFileStorage.getSignedUrl(fileImage.filePath) : undefined;
-      const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl) : undefined;
+      // `signedUrl` was just minted above from `fabFileStorage.getSignedUrl` - trusted provenance.
+      const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl, true) : undefined;
 
       // Owner-wide lake access, mirroring ImageGenerationService: a lake-only anchor the
       // workbench admitted must still resolve. Absent resolver degrades to
@@ -600,6 +603,8 @@ export class ImageEditService {
           // Trail the edit source; OpenAI binds the mask to the first entry, which must stay
           // `sourceBase64Image` or an inpainting request would mask an anchor instead.
           referenceImages: referenceImageUrls,
+          // `referenceImageUrls` are all freshly minted `fabFileStorage.getSignedUrl` calls above.
+          trustConfiguredStorageOrigin: true,
         });
       }
 

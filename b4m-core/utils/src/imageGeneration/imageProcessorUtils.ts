@@ -57,6 +57,21 @@ function sameOrigin(url: string, origin: string | null): boolean {
   }
 }
 
+/**
+ * Renders a URL safe to write to logs: origin and path only, never userinfo, query, or
+ * fragment, since a caller-supplied or presigned URL can carry a credential (an access token,
+ * an S3 signature) in any of those. Never called with a `data:` URL - its base64 payload has
+ * no safe partial form.
+ */
+function redactedUrlForLogging(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return '<unparseable URL>';
+  }
+}
+
 export interface ImageProcessRequest {
   imageBuffer: string; // base64 encoded buffer
   maxSizeMB?: number;
@@ -189,21 +204,27 @@ export async function invokeImageProcessor(
  *
  * SELF-HOST EXEMPTION: when `AWS_ENDPOINT_URL_S3` names an S3-compatible endpoint, the signed URLs
  * this app generates point at it - and on a compose network that host resolves to a private address,
- * which both halves of the guard would refuse, breaking image-to-image entirely. A hop on exactly
- * that operator-configured origin therefore skips the address checks, the pinned agents included
- * (their connect-time lookup would refuse it for the same reason the pre-flight would). The origin
- * comes from deployment config and never from the caller, and every other hop - including whatever
- * this endpoint might redirect to - is still fully validated.
+ * which both halves of the guard would refuse, breaking image-to-image entirely. The caller must opt
+ * in with `trustConfiguredStorageOrigin` - never inferred from the URL alone - so the exemption only
+ * ever applies to a URL a caller freshly produced from `BaseStorage.getSignedUrl`, never to a
+ * caller-supplied or provider-returned one that merely happens to share that origin. It also only
+ * ever covers the URL as given: it is checked once, before hop 0, and a redirect - even one that
+ * lands back on the configured origin - cannot regain it, so an untrusted URL can never launder
+ * itself through the exemption by bouncing off the configured host.
  */
-export async function downloadImageAsBuffer(imageUrl: string): Promise<Buffer> {
-  Logger.globalInstance.log(`[ImageProcessorUtils] Downloading image from URL:`, imageUrl.substring(0, 100) + '...');
-
-  // Handle data URLs (base64 images) from previous generations
+export async function downloadImageAsBuffer(
+  imageUrl: string,
+  options: { trustConfiguredStorageOrigin?: boolean } = {}
+): Promise<Buffer> {
+  // Handle data URLs (base64 images) from previous generations. Checked, and short-circuited,
+  // before any logging: a data URL's payload has no safe partial form to print.
   if (imageUrl.startsWith('data:image/')) {
     Logger.globalInstance.log(`[ImageProcessorUtils] Processing base64 data URL`);
     const base64Data = imageUrl.split(',')[1];
     return Buffer.from(base64Data, 'base64');
   }
+
+  Logger.globalInstance.log(`[ImageProcessorUtils] Downloading image from URL:`, redactedUrlForLogging(imageUrl));
 
   // Handle regular URLs - use dynamic import to avoid bundling axios if not needed
   Logger.globalInstance.log(`[ImageProcessorUtils] Fetching image from HTTP URL`);
@@ -217,10 +238,13 @@ export async function downloadImageAsBuffer(imageUrl: string): Promise<Buffer> {
   // worst case by MAX_IMAGE_REDIRECTS and blow the caller's Lambda timeout.
   const deadline = Date.now() + IMAGE_FETCH_TIMEOUT_MS;
 
-  const storageOrigin = configuredStorageOrigin();
+  // Decided once, from the URL as given, never recomputed against a redirect target - see the
+  // SELF-HOST EXEMPTION note above.
+  const isTrustedStorageUrl =
+    options.trustConfiguredStorageOrigin === true && sameOrigin(imageUrl, configuredStorageOrigin());
 
   for (let hop = 0; hop <= MAX_IMAGE_REDIRECTS; hop++) {
-    const isTrustedStorageHop = sameOrigin(currentUrl, storageOrigin);
+    const isTrustedStorageHop = hop === 0 && isTrustedStorageUrl;
 
     if (!isTrustedStorageHop) {
       const validation = await validateUrlForFetch(currentUrl);

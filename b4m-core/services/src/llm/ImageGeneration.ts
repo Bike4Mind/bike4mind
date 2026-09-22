@@ -164,10 +164,11 @@ interface IImageGenerationServiceOptions {
   resolveLakeAccess?: (user: IUserDocument, logger: Logger) => Promise<AttachmentLakeAccess>;
 }
 
-async function imageUrlToBase64(imageUrl: string): Promise<string> {
+async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   // `downloadImageAsBuffer` handles both the data URLs GPT-Image-1 returns and the http(s) URLs
-  // from DALL-E and friends, and SSRF-guards the latter.
-  const buffer = await downloadImageAsBuffer(imageUrl);
+  // from DALL-E and friends, and SSRF-guards the latter. `trustConfiguredStorageOrigin` must only
+  // be set true for a URL a caller just got back from `getSignedUrl` in this same request.
+  const buffer = await downloadImageAsBuffer(imageUrl, { trustConfiguredStorageOrigin });
   return buffer.toString('base64');
 }
 
@@ -990,7 +991,9 @@ export class ImageGenerationService {
               Logger.globalInstance.debug(`[DEBUG] Gemini edit: converting input image to base64`, {
                 urlPreview: imageUrl.substring(0, 100) + '...',
               });
-              base64Image = await imageUrlToBase64(imageUrl);
+              // `imageUrl` is always a fabFile/storage `getSignedUrl` result or an internal
+              // storage key above, never a caller-supplied string.
+              base64Image = await imageUrlToBase64(imageUrl, true);
               Logger.globalInstance.debug(`[DEBUG] Gemini edit: base64 conversion successful`, {
                 length: base64Image.length,
               });
@@ -1151,7 +1154,8 @@ export class ImageGenerationService {
         let base64Image: string | undefined;
         if (imageUrl) {
           try {
-            base64Image = await imageUrlToBase64(imageUrl);
+            // `imageUrl` above always came from `fabFileStorage.getSignedUrl` or `storage.getSignedUrl`.
+            base64Image = await imageUrlToBase64(imageUrl, true);
             Logger.globalInstance.debug(`[DEBUG] ✅ Base64 conversion successful:`, {
               base64Length: base64Image.length,
               preview: base64Image.substring(0, 50) + '...',
@@ -1314,6 +1318,9 @@ export class ImageGenerationService {
         if (referenceImageUrls.length) {
           openaiParams.referenceImages = referenceImageUrls;
         }
+        // `imageUrl` and `referenceImageUrls` above are always `getSignedUrl` results, never a
+        // caller- or provider-supplied string.
+        openaiParams.trustConfiguredStorageOrigin = true;
 
         Logger.globalInstance.debug(`[DEBUG] OpenAI API call parameters:`, {
           model,
