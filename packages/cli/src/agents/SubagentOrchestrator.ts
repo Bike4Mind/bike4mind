@@ -353,8 +353,10 @@ export class SubagentOrchestrator {
         // Onward forks inherit this agent's model unless they declare their own.
         parentModel: effectiveModel,
         // Gate the skill's lifecycle hook shell commands through permission.
-        permissionManager: this.deps.permissionManager,
-        promptFn: this.deps.showPermissionPrompt,
+        permission: {
+          permissionManager: this.deps.permissionManager,
+          promptFn: this.deps.showPermissionPrompt,
+        },
         // Confine skill @file refs to the workspace (plus granted dirs).
         allowedDirectories: this.deps.additionalDirectories,
       });
@@ -372,8 +374,10 @@ export class SubagentOrchestrator {
       });
       filteredTools.push(skillTool);
 
-      // Build skills section for system prompt with agent's restrictions
-      const commands = this.deps.customCommandStore.getAllCommands();
+      // Build skills section for system prompt with agent's restrictions. Use the
+      // model-reachable set so a reserved-named skill is never advertised as
+      // invokable when the dispatch chokepoint would refuse it.
+      const commands = this.deps.customCommandStore.getModelReachableCommands();
       const skillsSection = buildSkillsPromptSection(commands, agentDef.skills);
       if (skillsSection) {
         systemPrompt += skillsSection;

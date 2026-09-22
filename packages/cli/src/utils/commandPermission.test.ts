@@ -119,6 +119,7 @@ describe('skill lifecycle hooks (createSkillTool)', () => {
     } as unknown as CustomCommand;
     return {
       getCommand: (name: string) => (name === 'demo' ? cmd : undefined),
+      getModelReachableCommand: (name: string) => (name === 'demo' ? cmd : undefined),
       getAllCommands: () => [cmd],
     } as unknown as CustomCommandStore;
   }
@@ -127,8 +128,7 @@ describe('skill lifecycle hooks (createSkillTool)', () => {
     const pm = new PermissionManager();
     const tool = createSkillTool({
       customCommandStore: storeWithHookedSkill(),
-      permissionManager: pm,
-      promptFn: promptReturning('deny'),
+      permission: { permissionManager: pm, promptFn: promptReturning('deny') },
     });
     await expect(tool.toolFn({ skill: 'demo' })).rejects.toThrow(/Pre-invoke hook/);
     expect(mockRun).not.toHaveBeenCalled();
@@ -138,8 +138,7 @@ describe('skill lifecycle hooks (createSkillTool)', () => {
     const pm = new PermissionManager();
     const tool = createSkillTool({
       customCommandStore: storeWithHookedSkill(),
-      permissionManager: pm,
-      promptFn: promptReturning('allow-once'),
+      permission: { permissionManager: pm, promptFn: promptReturning('allow-once') },
     });
     const result = await tool.toolFn({ skill: 'demo' });
     expect(mockRun).toHaveBeenCalledTimes(1);

@@ -17,7 +17,7 @@ function makeInput(overrides: Partial<BuildAgentInput> = {}): BuildAgentInput {
     initialInteractionMode: 'normal',
     contextContent: 'PROJECT CONTEXT',
     agentStore: { getDirectoryContext: () => '' } as never,
-    customCommandStore: { getAllCommands: vi.fn(() => []) } as never,
+    customCommandStore: { getAllCommands: vi.fn(() => []), getModelReachableCommands: vi.fn(() => []) } as never,
     enableSkillTool: true,
     additionalDirectories: [],
     featureModulePrompts: '',
@@ -53,15 +53,17 @@ describe('buildAgent', () => {
     expect(plan).not.toBe(normal);
   });
 
-  it('re-evaluates customCommandStore.getAllCommands() on every prompt build (not a snapshot)', () => {
-    const getAllCommands = vi.fn(() => []);
-    const input = makeInput({ customCommandStore: { getAllCommands } as never });
+  it('re-evaluates the model-reachable commands on every prompt build (not a snapshot)', () => {
+    // The prompt advertises the model-reachable set (reserved names filtered), so a
+    // reserved-named global/remote skill is never listed as invokable.
+    const getModelReachableCommands = vi.fn(() => []);
+    const input = makeInput({ customCommandStore: { getModelReachableCommands } as never });
     const { buildPromptForMode } = buildAgent(input);
     // buildAgent invokes the closure once internally for the initial system prompt.
-    const callsAfterBuild = getAllCommands.mock.calls.length;
+    const callsAfterBuild = getModelReachableCommands.mock.calls.length;
     expect(callsAfterBuild).toBeGreaterThanOrEqual(1);
     buildPromptForMode('plan');
     buildPromptForMode('normal');
-    expect(getAllCommands.mock.calls.length).toBe(callsAfterBuild + 2);
+    expect(getModelReachableCommands.mock.calls.length).toBe(callsAfterBuild + 2);
   });
 });

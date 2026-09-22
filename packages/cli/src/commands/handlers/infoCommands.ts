@@ -10,7 +10,7 @@ import type { CommandHandler } from '../types';
 const help: CommandHandler = {
   name: 'help',
   run: (_args, ctx) => {
-    const customCommands = ctx.customCommandStore.getAllCommands();
+    const customCommands = ctx.customCommandStore.getModelReachableCommands();
     const hasCustomCommands = customCommands.length > 0;
 
     console.log(`
