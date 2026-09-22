@@ -688,7 +688,27 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 - **Image generation or image edit never completes (the quest stays "pending")** - both are queued to the `worker` service. Check `IMAGE_GENERATION_QUEUE` and `IMAGE_EDIT_QUEUE` are set in `.env.selfhost` (added after the initial release, so an upgraded install may be missing them), then confirm the worker picked them up: its boot line names every queue it polls, e.g. `[selfHostWorker] started: polling 6 queue(s) [researchEngineQueue, ..., imageGenerationQueue, imageEditQueue]`. An unset var is warned about by name and the consumer is skipped, leaving the rest of the worker running. Also make sure the queues exist in `elasticmq.conf` and that a provider key is configured (see "Image generation and image edit"). An OpenAI **edit** fails by design here - use Gemini or BFL.
 - **Research/deep-research tasks never complete** - the `worker` consumes the research queue. Confirm it's running and check its logs; a task that keeps failing is left for a few retries, then dropped with an error log (ElasticMQ has no dead-letter queue).
 - **Files chunk but never get vectors / vectorize fails with a `401`** - your `OPENAI_API_KEY` (or `VOYAGE_API_KEY`) is set to an invalid or placeholder value, so embedding is routed to that cloud provider and rejected. Set a real key, or clear it and configure a local Ollama embedder (see "Offline RAG") for the airgapped path. A dummy/placeholder value is ignored automatically; a present-but-invalid key now surfaces an actionable error on the file instead of a raw 401. If you previously picked a cloud embedder in **Settings -> AI**, switch it back to a local one after clearing the key.
-- **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` ran the `mc event add` on the fab-file bucket (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs. Running the app on your host with `next dev`? The webhook (aimed at the compose `app`) can't reach it at all - that is expected, and the safety-net scan still chunks within a few minutes. See [Frontend dev mode](#frontend-dev-mode-host-next-dev).
+- **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` registered notifications on `FAB_FILE_BUCKET` (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs. Running the app on your host with `next dev`? The webhook (aimed at the compose `app`) can't reach it at all - that is expected, and the safety-net scan still chunks within a few minutes. See [Frontend dev mode](#frontend-dev-mode-host-next-dev).
+
+### History or notebook uploads never start importing
+
+`createbuckets` registers ObjectCreated notifications on **both** `FAB_FILE_BUCKET` and `HISTORY_IMPORT_BUCKET`. The first drives uploaded-file ingestion; the second drives history and notebook imports. Both must point to `arn:minio:sqs::primary:webhook`, whose endpoint is `http://app:3000/api/internal/s3/object-created`. Verify that `HISTORY_IMPORT_BUCKET` names the same bucket for the app, MinIO registration and uploaded objects. The notebook data object uses `notebooks/<userId>/<timestamp>.json`; its `.options.json` sibling is configuration, not an import trigger.
+
+Check the registrations without changing them:
+
+```bash
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost run --rm --no-deps --entrypoint /bin/sh createbuckets -c '
+  mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null &&
+  mc event list "local/$FAB_FILE_BUCKET" &&
+  mc event list "local/$HISTORY_IMPORT_BUCKET"
+'
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs createbuckets
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f minio app
+```
+
+Confirm both registrations include the `put` event and webhook target. If one is missing, correct the bucket environment values and rerun `createbuckets` with the same Compose files and environment. During a fresh import through the UI, inspect MinIO delivery failures and the app's webhook/import logs. Check that `INTERNAL_S3_WEBHOOK_SECRET` agrees between MinIO and the app, and that MinIO can reach the configured endpoint. When using host-side `next dev`, repoint the webhook as described in [Frontend dev mode](#frontend-dev-mode-host-next-dev); delivery to the stopped Compose app cannot trigger imports.
+
+The FabFile safety-net filter in `apps/client/server/worker/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
 
 ## Security notes
 
