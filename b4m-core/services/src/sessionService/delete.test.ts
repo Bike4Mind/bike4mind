@@ -4,8 +4,14 @@ import {
   createMockSessionRepository,
   createMockProjectRepository,
   createMockFabFileRepository,
+  createMockSessionAgentConfigRepository,
 } from '../__tests__/utils/testUtils';
-import { IFabFileRepository, IProjectRepository, ISessionRepository } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  IProjectRepository,
+  ISessionRepository,
+  ISessionAgentConfigRepository,
+} from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 
 describe('sessionService - delete', () => {
@@ -16,11 +22,13 @@ describe('sessionService - delete', () => {
   let mockSessionRepo: ISessionRepository;
   let mockProjectRepo: IProjectRepository;
   let mockFabFileRepo: IFabFileRepository;
+  let mockSessionAgentConfigRepo: ISessionAgentConfigRepository;
   let adapters: {
     db: {
       sessions: ISessionRepository;
       projects: IProjectRepository;
       fabFiles: IFabFileRepository;
+      sessionAgentConfigs: ISessionAgentConfigRepository;
     };
   };
 
@@ -28,6 +36,7 @@ describe('sessionService - delete', () => {
     mockSessionRepo = createMockSessionRepository();
     mockProjectRepo = createMockProjectRepository();
     mockFabFileRepo = createMockFabFileRepository();
+    mockSessionAgentConfigRepo = createMockSessionAgentConfigRepository();
     // The cascade now also reaches session.knowledgeIds, since a grant this session minted can sit
     // on a file uploaded somewhere else entirely.
     (mockFabFileRepo.findAllByIds as Mock).mockResolvedValue([]);
@@ -36,6 +45,7 @@ describe('sessionService - delete', () => {
         sessions: mockSessionRepo,
         projects: mockProjectRepo,
         fabFiles: mockFabFileRepo,
+        sessionAgentConfigs: mockSessionAgentConfigRepo,
       },
     };
   });
@@ -59,6 +69,20 @@ describe('sessionService - delete', () => {
 
     expect(mockFabFileRepo.deleteManyInIds).toHaveBeenCalledWith(['file-owned']);
     expect(mockFabFileRepo.updateGuarded).not.toHaveBeenCalled();
+  });
+
+  // Otherwise an enabled row survives its session forever - the worker's own deletedAt guard
+  // stops it firing, but the cron keeps queuing a job for it with nothing left to clean it up.
+  it('deletes the session-agent-configs for a deleted session', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await deleteSession(ownerId, { id: sessionId }, adapters);
+
+    expect(mockSessionAgentConfigRepo.deleteBySessionId).toHaveBeenCalledWith(sessionId);
   });
 
   // A grant row records its source. Deleting a session may drop only the rows tagged with that
@@ -183,6 +207,7 @@ describe('sessionService - delete', () => {
     expect(mockSessionRepo.update).not.toHaveBeenCalled();
     expect(session.deletedAt).toBeNull();
     expect(mockFabFileRepo.deleteManyInIds).not.toHaveBeenCalled();
+    expect(mockSessionAgentConfigRepo.deleteBySessionId).not.toHaveBeenCalled();
   });
 
   it('does not delete a file attached to the session but owned by someone else', async () => {
