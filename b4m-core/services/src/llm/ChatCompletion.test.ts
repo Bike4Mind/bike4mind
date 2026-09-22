@@ -1011,6 +1011,33 @@ describe('ChatCompletionProcess', () => {
       expect(access).toEqual({ lakeMemberships: [], dataLakeTags: [], dataLakeTagPrefixes: [] });
     });
 
+    it('#3055: a countGateExcludedLakes rejection warns via the process logger, and excludedByAccessCount stays absent', async () => {
+      // Distinct from the resolver-wide failure above: findMembershipOrgIds and
+      // findActiveByUserTagsAndEntitlements both succeed here - only the count query rejects.
+      // getDynamicDataLakeAccess catches that internally and warns via its OWN `logger` param;
+      // without wiring `this.logger` through at this call site, the warn went nowhere and the
+      // count failure was indistinguishable from success.
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).logger = { warn: vi.fn() };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes: vi.fn().mockRejectedValue(new Error('count query timed out')),
+        },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      const access = await (service as any).getAccessibleDataLakeAccess();
+
+      expect(access.excludedByAccessCount).toBeUndefined();
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('gate-excluded-lake count failed'),
+        expect.any(Error)
+      );
+    });
+
     it('getAttachedKnowledgeFiles forwards the resolved lakeAccess as the getAccessibleFiles third argument', async () => {
       (service as any).accessibleDataLakeAccessMemo = {
         dataLakeTags: ['datalake:acme'],
