@@ -109,6 +109,11 @@ export function buildRetrievalConflictNote(passages: RetrievalPassage[]): string
     chars += Math.min(text.length, remaining);
   }
 
+  // `dismissed` is deliberately not passed, and the divergence from the lake pass is real: a curator
+  // who dismissed a finding there still gets this note. There is no lake here to key a dismissal on
+  // - this runs over whatever one retrieval call pooled, across documents that need share no lake -
+  // and the subjects would not match anyway, because `metricUnitRequired` folds the unit into
+  // `subject`. Closing it means giving this hot, synchronous path a lake id and a repository read.
   const { findings } = detectCorpusInconsistencies(documents, {
     nowYear: ALL_DATED_CLAIMS_EXPIRED_YEAR,
     metricUnitRequired: true,
