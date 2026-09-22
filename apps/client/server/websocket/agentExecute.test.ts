@@ -321,11 +321,53 @@ describe('handlePermissionResponse', () => {
     expect(mockApiGwSend).not.toHaveBeenCalled();
   });
 
-  it('retries the resume dispatch when the earlier call already flipped status to continuing before dying', async () => {
-    // Repro: the earlier call's `updateStatus` succeeded but it threw during the
-    // Lambda dispatch that followed (not before `updateStatus`, which the
-    // `awaiting_permission` case above covers) - so status is already `continuing`
-    // when this retry lands, not `awaiting_permission`.
+  it('retries the resume dispatch when the FIRST read already finds the pause stuck in continuing', async () => {
+    // Repro: an earlier call's `updateStatus` succeeded but it threw during the
+    // Lambda dispatch that followed - so the doc is already `continuing`, with
+    // `pendingPermission.approved` true, on the VERY FIRST `findById` this retry
+    // makes. It must never reach (or need) the `approvePendingPermission` CAS.
+    mockFindById.mockResolvedValueOnce({
+      ...baseExecution,
+      status: 'continuing',
+      pendingPermission: { toolName: 'web_search', toolCallId: 'call-1', approved: true },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: true, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockApprovePendingPermission).not.toHaveBeenCalled();
+    expect(mockLambdaSend).toHaveBeenCalled();
+    expect(mockApiGwSend).not.toHaveBeenCalled();
+  });
+
+  it('does not recover a stuck continuing pause when the retry names a different toolCallId', async () => {
+    mockFindById.mockResolvedValueOnce({
+      ...baseExecution,
+      status: 'continuing',
+      pendingPermission: { toolName: 'web_search', toolCallId: 'call-1', approved: true },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: true, toolCallId: 'call-2', rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockLambdaSend).not.toHaveBeenCalled();
+    expect(mockApprovePendingPermission).not.toHaveBeenCalled();
+  });
+
+  it('retries the resume dispatch when the CAS-loss re-read finds a concurrent duplicate already stuck in continuing', async () => {
+    // Repro: two concurrent responses to the same pause both clear the entry-point
+    // `awaiting_permission` read before either writes. The CAS winner flips status
+    // and dispatches; the loser's CAS then fails and its re-read sees `continuing`.
     mockApprovePendingPermission.mockResolvedValueOnce(false);
     mockFindById.mockResolvedValueOnce(baseExecution).mockResolvedValueOnce({
       ...baseExecution,

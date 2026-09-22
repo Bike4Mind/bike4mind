@@ -656,6 +656,9 @@ describe('handleWithheldToolCalls', () => {
       reason: 'gated_handoff_conflict',
       toolName: withheld[0].name,
     });
+    // The Quest write is the one user-visible record of why the run died here -
+    // without it the Quest created at dispatch stays `pending` forever.
+    expect(deps.persistRunAsQuest).toHaveBeenCalledWith(expect.stringContaining('subagent/DAG handoff'));
   });
 });
 

@@ -468,6 +468,32 @@ export async function handlePermissionResponse(
 ): Promise<void> {
   const execution = await agentExecutionRepository.findById(cmd.executionId);
   if (!execution || execution.userId !== userId) return;
+
+  // Recovery for a stuck `continuing` pause: an earlier call of this handler flipped
+  // the status via `updateStatus` and then threw during the Lambda dispatch that
+  // follows it, leaving the doc `continuing` with `pendingPermission.approved` true
+  // and no Lambda running. The client retries with the same approval; that retry
+  // would otherwise be dropped by the `awaiting_permission` guard below, since this
+  // doc no longer satisfies it - so match it to the stuck pause here first and
+  // re-drive the dispatch instead. `dispatchPermissionResume` is safe to call twice
+  // (see its own docstring).
+  if (
+    execution.status === 'continuing' &&
+    cmd.approved &&
+    execution.pendingPermission?.approved === true &&
+    (!execution.pendingPermission.toolCallId || cmd.toolCallId === execution.pendingPermission.toolCallId)
+  ) {
+    logger.warn('[Permission] Approval landed but the resume dispatch did not - retrying', {
+      executionId: cmd.executionId,
+      toolName: cmd.toolName,
+    });
+    await dispatchPermissionResume(cmd.executionId, connectionId);
+    logger.info('[Permission] Approved - Lambda re-invoked (recovered retry)', {
+      executionId: cmd.executionId,
+    });
+    return;
+  }
+
   if (execution.status !== 'awaiting_permission') return;
 
   // Bind the response to the SPECIFIC pause it answers, not just its tool name. One
@@ -556,12 +582,15 @@ export async function handlePermissionResponse(
     // else (a different pause entirely, or one already past `awaiting_permission`) is
     // a genuinely stale response with nothing left to resume.
     const current = await agentExecutionRepository.findById(cmd.executionId);
-    // `continuing` covers a throw during the Lambda dispatch itself: `updateStatus`
-    // above already flipped the status before the invoke that threw, so a retry
-    // landing here must recognize that window too, not just a crash before the flip.
-    // Resuming twice is safe regardless - `claimExecution`'s CAS in agentExecutor.ts
-    // (around the "Atomic CAS - prevent duplicate Lambda execution" comment) de-dupes
-    // the actual replay.
+    // The `continuing` disjunct here covers two concurrent responses to the same
+    // pause both clearing the entry-point `awaiting_permission` read before either
+    // writes: the CAS winner has already flipped the status (and, past it, already
+    // dispatched) by the time the loser re-reads. The invoke-throwing-after-flip
+    // window is caught earlier, by the entry-point `continuing` check above - this
+    // branch is only reachable for the race, so the dispatch below is a safe,
+    // idempotent duplicate rather than the actual recovery for that window.
+    // `claimExecution`'s CAS in agentExecutor.ts (around the "Atomic CAS - prevent
+    // duplicate Lambda execution" comment) de-dupes the actual replay either way.
     const sameApprovedPauseStuck =
       (current?.status === 'awaiting_permission' || current?.status === 'continuing') &&
       current.pendingPermission?.approved === true &&
