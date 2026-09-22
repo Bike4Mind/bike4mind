@@ -631,6 +631,13 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
        * the resolver's own read-side would disagree about who still owns it.
        */
       supersededOwnLakeIds?: string[];
+      /**
+       * Restricts the count to lakes whose `datalakeTag` is in this list - the per-turn-scoped
+       * question "of exactly these lakes, how many are excluded" for a caller that named specific
+       * lakes by identity, as opposed to the whole-account question this method otherwise answers.
+       * Absent or empty runs the unrestricted, account-wide count.
+       */
+      restrictToTags?: string[];
     }
   ): Promise<number>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
