@@ -61,6 +61,31 @@ describe('createSearxngProvider', () => {
     expect(calledUrl).toContain('q=cats');
   });
 
+  it('maps img_src / thumbnail_src into thumbnail + images', async () => {
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        results: [
+          {
+            url: 'https://a.com',
+            title: 'A',
+            content: 'about a',
+            img_src: 'https://img/a.jpg',
+            thumbnail_src: 'https://img/a-small.jpg',
+          },
+          { url: 'https://b.com', title: 'B', content: 'about b' },
+        ],
+      })
+    );
+
+    const results = await createSearxngProvider('http://searxng:8080').search('cats', 5);
+
+    expect(results[0]).toMatchObject({
+      thumbnail: 'https://img/a.jpg',
+      images: ['https://img/a.jpg', 'https://img/a-small.jpg'],
+    });
+    expect(results[1].thumbnail).toBeUndefined();
+  });
+
   it('trims a trailing slash on the base URL', async () => {
     fetchMock.mockResolvedValue(jsonRes({ results: [] }));
     await createSearxngProvider('http://searxng:8080/').search('q');
@@ -109,6 +134,59 @@ describe('createSerpApiProvider', () => {
 
     expect(results).toEqual([{ title: 'T', url: 'https://x.com', snippet: 'snip' }]);
     expect(String(fetchMock.mock.calls[0][0])).toContain('serpapi.com/search');
+  });
+
+  it('carries organic thumbnails through as thumbnail + images', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        organic_results: [{ title: 'T', link: 'https://x.com', snippet: 'snip', thumbnail: 'https://img/x.jpg' }],
+      })
+    );
+
+    const results = await createSerpApiProvider(adapters).search('q', 3);
+
+    expect(results[0]).toMatchObject({ thumbnail: 'https://img/x.jpg', images: ['https://img/x.jpg'] });
+  });
+
+  it('attaches inline_images and shopping_results by exact link match only', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        organic_results: [
+          { title: 'A', link: 'https://a.com/p', snippet: '' },
+          { title: 'B', link: 'https://b.com/p', snippet: '' },
+        ],
+        inline_images: [{ link: 'https://a.com/p', thumbnail: 'https://img/a1.jpg' }],
+        shopping_results: [
+          { link: 'https://a.com/p', original: 'https://img/a2.jpg' },
+          // Same host, different path: must NOT be borrowed by https://b.com/p.
+          { link: 'https://b.com/other', thumbnail: 'https://img/wrong.jpg' },
+        ],
+      })
+    );
+
+    const results = await createSerpApiProvider(adapters).search('q', 3);
+
+    expect(results[0].images).toEqual(['https://img/a1.jpg', 'https://img/a2.jpg']);
+    expect(results[1].images).toBeUndefined();
+    expect(results[1].thumbnail).toBeUndefined();
+  });
+
+  it('drops non-https image URLs rather than emitting an unrenderable thumbnail', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        organic_results: [
+          { title: 'A', link: 'https://a.com', snippet: '', thumbnail: 'http://img/a.jpg' },
+          { title: 'B', link: 'https://b.com', snippet: '', thumbnail: 'data:image/png;base64,AAAA' },
+        ],
+      })
+    );
+
+    const results = await createSerpApiProvider(adapters).search('q', 3);
+
+    expect(results.every(r => r.thumbnail === undefined)).toBe(true);
   });
 });
 

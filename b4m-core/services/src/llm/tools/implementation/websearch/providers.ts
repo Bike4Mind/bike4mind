@@ -11,6 +11,10 @@ export interface WebSearchProviderResult {
   title: string;
   url: string;
   snippet: string;
+  /** Provider-supplied image for this hit, absent when the provider gave none. Same as `images[0]`. */
+  thumbnail?: string;
+  /** Every image the provider supplied for this hit, deduped and capped. */
+  images?: string[];
 }
 
 /**
@@ -63,15 +67,63 @@ const SERPAPI_QDR: Record<NonNullable<ReturnType<typeof recencyBucket>>, string>
 const DEFAULT_NUM_RESULTS = 3;
 // Mirror serpApiSearch's request timeout so a hung provider fails the same way.
 const SEARCH_TIMEOUT_MS = 60_000;
+// Citables are persisted with the quest, so keep the per-hit image list bounded.
+const MAX_IMAGES_PER_RESULT = 4;
+
+/**
+ * Images are hotlinked straight from the origin by the browser, so only absolute https URLs are
+ * usable: http:// is blocked as mixed content, and a data: URI would bloat every stored citable.
+ */
+function safeImageUrl(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value) return undefined;
+  try {
+    return new URL(value).protocol === 'https:' ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function dedupeImages(values: (string | undefined)[]): string[] {
+  return [...new Set(values.filter((v): v is string => !!v))].slice(0, MAX_IMAGES_PER_RESULT);
+}
 
 interface SerpApiOrganicResult {
   title?: string;
   link?: string;
   snippet?: string;
+  thumbnail?: string;
+}
+
+/** Shape shared by SerpAPI's `inline_images` and `shopping_results` entries. */
+interface SerpApiImageResult {
+  link?: string;
+  original?: string;
+  thumbnail?: string;
 }
 
 interface SerpApiResponse {
   organic_results?: SerpApiOrganicResult[];
+  inline_images?: SerpApiImageResult[];
+  shopping_results?: SerpApiImageResult[];
+}
+
+/**
+ * `inline_images` and `shopping_results` are sibling arrays rather than nested under the organic
+ * hits, so they are attached by exact link match only - a positional or same-host guess would
+ * caption a result with another page's picture.
+ */
+function indexImagesByLink(...groups: (SerpApiImageResult[] | undefined)[]): Map<string, string[]> {
+  const byLink = new Map<string, string[]>();
+  for (const group of groups) {
+    if (!Array.isArray(group)) continue;
+    for (const entry of group) {
+      if (!entry || typeof entry.link !== 'string' || !entry.link) continue;
+      const image = safeImageUrl(entry.thumbnail) ?? safeImageUrl(entry.original);
+      if (!image) continue;
+      byLink.set(entry.link, [...(byLink.get(entry.link) ?? []), image]);
+    }
+  }
+  return byLink;
 }
 
 /**
@@ -144,13 +196,18 @@ export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): Web
     async search(query, numResults, options) {
       const data = await serpApiSearch(adapters, query, numResults, options);
       const organic = Array.isArray(data.organic_results) ? data.organic_results : [];
+      const extraImages = indexImagesByLink(data.inline_images, data.shopping_results);
       return organic
         .filter((r): r is SerpApiOrganicResult => !!r && typeof r.link === 'string')
-        .map(r => ({
-          title: r.title ?? r.link!,
-          url: r.link!,
-          snippet: r.snippet ?? '',
-        }));
+        .map(r => {
+          const images = dedupeImages([safeImageUrl(r.thumbnail), ...(extraImages.get(r.link!) ?? [])]);
+          return {
+            title: r.title ?? r.link!,
+            url: r.link!,
+            snippet: r.snippet ?? '',
+            ...(images.length > 0 ? { thumbnail: images[0], images } : {}),
+          };
+        });
     },
   };
 }
@@ -169,7 +226,17 @@ function parseSearxngResults(data: unknown, numResults: number): WebSearchProvid
     if (!url) continue; // a hit with no URL cannot be cited
     const title = typeof record.title === 'string' ? record.title : '';
     const snippet = typeof record.content === 'string' ? record.content : '';
-    mapped.push({ title: title || url, url, snippet });
+    const images = dedupeImages([
+      safeImageUrl(record.img_src),
+      safeImageUrl(record.thumbnail_src),
+      safeImageUrl(record.thumbnail),
+    ]);
+    mapped.push({
+      title: title || url,
+      url,
+      snippet,
+      ...(images.length > 0 ? { thumbnail: images[0], images } : {}),
+    });
   }
   return mapped.slice(0, numResults);
 }

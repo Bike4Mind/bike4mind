@@ -2,7 +2,8 @@ import { Logger } from '@bike4mind/observability';
 import { ToolDefinition, ToolContext } from '../../base/types';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import { CitableSource } from '@bike4mind/common';
-import { resolveWebSearchProvider } from './providers';
+import { resolveWebSearchProvider, type WebSearchProviderResult } from './providers';
+import { WEB_SEARCH_CARDS_PROMPT } from '../../../prompts';
 
 // serpApiSearch lives in providers.ts (alongside the provider abstraction) but is re-exported here
 // so its external import path (`.../websearch`) and the existing tests stay stable.
@@ -20,6 +21,25 @@ export function safeHostname(url: string): string {
 export interface WebSearchParams {
   query: string;
   num_results?: number;
+  /**
+   * Opt in to image URLs in the tool output so the model can illustrate a visual answer with a
+   * `b4m_cards` fence. Off by default: on a non-visual query the URLs are pure junk tokens, and the
+   * output is byte-for-byte what it was before this parameter existed.
+   */
+  include_images?: boolean;
+}
+
+// One stray thumbnail among text hits is not a picture answer, so images reach the model only once
+// the provider returned a real cluster of them.
+const MIN_IMAGE_RESULTS = 2;
+
+/**
+ * Whether this result set is worth showing the model as images: the model asked, and the provider
+ * actually returned enough pictures to build a card row from.
+ */
+export function shouldIncludeImages(results: WebSearchProviderResult[], includeImages?: boolean): boolean {
+  if (!includeImages) return false;
+  return results.filter(r => !!r.thumbnail).length >= MIN_IMAGE_RESULTS;
 }
 
 interface WebSearchResult {
@@ -50,6 +70,8 @@ export async function performWebSearch(
     const results = await provider.search(params.query, params.num_results);
     Logger.globalInstance.log(`📊 WebSearch Tool: ${provider.name} found ${results.length} results`);
 
+    const withImages = shouldIncludeImages(results, params.include_images);
+
     const citables: CitableSource[] = results.map((result, index) => ({
       id: result.url, // Use URL as unique identifier
       type: 'web_url' as const,
@@ -62,19 +84,24 @@ export async function performWebSearch(
         sourceSystem: 'web_search',
         relevanceScore: 1 - index * 0.1, // Higher relevance for earlier results
         fullContext: result.snippet,
+        ...(result.thumbnail ? { thumbnail: result.thumbnail, images: result.images } : {}),
       },
     }));
 
     const formattedResults = results
-      .map(
-        (result, index) =>
+      .map((result, index) => {
+        const imageLine = withImages && result.images?.length ? `Images: ${result.images.join(' | ')}\n` : '';
+        return (
           `${index + 1}. **${result.title}**\n${result.snippet}\n` +
+          imageLine +
           `Source: [${safeHostname(result.url)}](${result.url})\n`
-      )
+        );
+      })
       .join('\n');
 
     const formattedOutput = formattedResults
-      ? `Here's what I found from searching the web:\n\n${formattedResults}`
+      ? `Here's what I found from searching the web:\n\n${formattedResults}` +
+        (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '')
       : 'No results found from web search.';
 
     return { formattedResults: formattedOutput, citables };
@@ -124,6 +151,11 @@ export const webSearchTool: ToolDefinition = {
             description: 'Number of results to return (default: 3, max: 10)',
             minimum: 1,
             maximum: 10,
+          },
+          include_images: {
+            type: 'boolean',
+            description:
+              'Set true only when the answer is visual - products, places, hardware, people, anything the user would want to SEE. Adds image URLs to the results so you can illustrate your reply with a b4m_cards block. Leave unset otherwise; the URLs are junk tokens on a conceptual question.',
           },
         },
         required: ['query'],

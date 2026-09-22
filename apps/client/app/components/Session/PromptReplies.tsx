@@ -64,6 +64,9 @@ import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
 
+import SearchResultCards from './SearchResultCards';
+import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
+
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
 import {
@@ -96,7 +99,7 @@ function simpleHash(str: string): string {
 // Prism theme is closed over rather than read from a hook here, because the
 // caller already resolves the color scheme and this function deliberately
 // stays a plain render helper.
-const createCodeComponent = (syntaxTheme: PrismStyle) => {
+const createCodeComponent = (syntaxTheme: PrismStyle, replyComplete: boolean) => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
@@ -154,6 +157,11 @@ const createCodeComponent = (syntaxTheme: PrismStyle) => {
       } catch {
         // Not a blog-draft JSON block - fall through to normal code rendering.
       }
+    }
+
+    // Model-authored image cards for a visual web_search answer, placed inline by the model.
+    if (language === SEARCH_RESULT_CARDS_LANGUAGE) {
+      return <SearchResultCards content={codeContent} replyComplete={replyComplete} />;
     }
 
     // Recharts inline rendering
@@ -1212,7 +1220,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   // palette.mode rather than useColorScheme(), which can report 'system'.
   const replyTheme = useTheme();
   const syntaxTheme = useMemo(() => getMarkdownSyntaxTheme(replyTheme.palette.mode), [replyTheme.palette.mode]);
-  const codeComponent = useMemo(() => createCodeComponent(syntaxTheme), [syntaxTheme]);
+  const codeComponent = useMemo(() => createCodeComponent(syntaxTheme, !!completed), [syntaxTheme, completed]);
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');

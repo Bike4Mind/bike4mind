@@ -96,6 +96,17 @@ export interface CitableSource {
     chunkId?: string;
     relevanceScore?: number;
     fullContext?: string; // For text-based sources (RAG, web search)
+    /**
+     * Primary image for the source, same as `images[0]`. Set by web_search whenever the provider
+     * supplied one - NOT a signal that the user asked for a visual answer, and not currently read
+     * by any renderer. Absent means the provider gave no picture.
+     */
+    thumbnail?: string;
+    /**
+     * Every image the provider supplied for this source, most representative first, capped at 4.
+     * These persist with the quest, so they are a small but real addition to every stored web hit.
+     */
+    images?: string[];
     [key: string]: unknown;
   };
 }
