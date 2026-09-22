@@ -1006,6 +1006,9 @@ export class ChatCompletionProcess {
           db: this.db,
           user: this.user,
           entitlementKeys,
+          // Without this, a countGateExcludedLakes failure warns into a void: the resolver
+          // swallows it internally (never throws), so this call's own try/catch never sees it.
+          logger: this.logger,
         });
         // Same union the retrieval and tool doors run, so all three agree on what this session can
         // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
