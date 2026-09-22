@@ -15,6 +15,8 @@ import {
   ICreditTransactionDocument,
   IAuthSessionRepository,
   IAuthSessionDocument,
+  ISessionAgentConfigRepository,
+  ISessionAgentConfigDocument,
 } from '@bike4mind/common';
 import {
   IResearchTask,
@@ -54,6 +56,16 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   searchAccessible: vi.fn(),
   removeSession: vi.fn(),
   findAllBySessionId: vi.fn(),
+});
+
+export const createMockSessionAgentConfigRepository = (): ISessionAgentConfigRepository => ({
+  ...createMockRepository<ISessionAgentConfigDocument>(),
+  findBySessionAndAgent: vi.fn(),
+  findBySessionId: vi.fn(),
+  findAllWithProactiveMessagingEnabled: vi.fn(),
+  updateLastProactiveMessageAt: vi.fn(),
+  deleteBySessionId: vi.fn(),
+  deleteBySessionAndAgent: vi.fn(),
 });
 
 export const createMockFabFileRepository = (): IFabFileRepository => ({

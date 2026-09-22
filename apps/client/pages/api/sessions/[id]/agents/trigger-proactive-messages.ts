@@ -1,8 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { sessionRepository, sessionAgentConfigRepository } from '@bike4mind/database';
-import { BadRequestError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
+import { sessionAgentConfigRepository } from '@bike4mind/database';
+import { BadRequestError } from '@bike4mind/utils';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
+import { assertSessionAccess } from '@server/utils/sessionAccess';
 
 const handler = baseApi().post(async (req, res) => {
   const { id: sessionId } = req.query;
@@ -12,19 +13,21 @@ const handler = baseApi().post(async (req, res) => {
     throw new BadRequestError('Invalid session ID');
   }
 
-  // Verify session exists and user has access
-  const session = await sessionRepository.findById(sessionId);
-  if (!session) {
-    throw new NotFoundError('Session not found');
-  }
+  // Write-level: this queues real side effects (proactive-message sends), not a read.
+  await assertSessionAccess(sessionId, req.user!.id, 'write', req.user!.groups ?? []);
 
-  if (session.userId !== req.user!.id) {
-    throw new UnauthorizedError('Unauthorized');
-  }
-
-  // Get all configs for this session with proactive messaging enabled
+  // Get all configs for this session with proactive messaging enabled, scoped to the caller's
+  // own configs: this bypasses the eligibility gates (activeHours/minIntervalHours) the cron
+  // path enforces, so it must never let a session write-sharee force ANOTHER user's config to
+  // fire and spend that user's LLM keys/credits on demand - only your own can be triggered here.
+  // Side effect: config.ts's PUT re-stamps userId to whoever last edited a config, so once a
+  // sharee edits one, the original owner can no longer trigger it here even though they still
+  // own the session/agent - intentional (this route follows current authorship, not ownership),
+  // and the cron path is unaffected since it fires every enabled config regardless of owner.
   const allConfigs = await sessionAgentConfigRepository.findBySessionId(sessionId);
-  const enabledConfigs = allConfigs.filter(config => config.proactiveMessaging.enabled);
+  const enabledConfigs = allConfigs.filter(
+    config => config.proactiveMessaging.enabled && config.userId === req.user!.id
+  );
 
   if (enabledConfigs.length === 0) {
     return res.json({
