@@ -22,7 +22,8 @@ const updateConfigSchema = z.object({
 /**
  * Agent-level authz + attachment check, shared by all three verbs below: does the caller have
  * access to the agent itself (owner, user-share, or group-share - the same object-level
- * predicate agents.ts:47 uses), and is that agent actually attached to this session. Independent
+ * predicate agents.ts's POST agent-attach handler uses), and is that agent actually attached to
+ * this session. Independent
  * of the session-level assertSessionAccess call above each one - that only proves the caller
  * belongs to THIS session, not that they may reach THIS agent's config.
  */
@@ -114,6 +115,9 @@ const handler = baseApi()
     await assertSessionAccess(sessionId, req.user!.id, 'write', req.user!.groups ?? []);
     await assertAgentAttached(req.user!, sessionId, agentId);
 
+    // A write-sharee can delete a config they can't trigger (trigger-proactive-messages.ts only
+    // fires configs the caller owns) - intentional: deletion doesn't run anyone else's prompt or
+    // spend anyone else's credits, so it doesn't need the same per-owner restriction.
     await sessionAgentConfigRepository.deleteBySessionAndAgent(sessionId, agentId);
 
     res.json({ success: true });
