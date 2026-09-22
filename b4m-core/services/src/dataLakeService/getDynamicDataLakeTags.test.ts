@@ -415,6 +415,39 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
       expect.objectContaining({ grantedLakeIds: [], orgGrantedLakes: {} })
     );
   });
+
+  // Review onoya (#3055): supersededOwnLakeIds must reach the count query the same way it already
+  // reaches findActiveByUserTagsAndEntitlements's creator arm - otherwise a transferred-away creator
+  // reports a false zero here even though the resolver's own read-side no longer exempts them.
+  it('threads supersededOwnLakeIds into the count query when ownership has been transferred away', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(1);
+    await getDynamicDataLakeAccess({
+      db: {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes,
+          findIdsCreatedBy: vi.fn().mockResolvedValue(['lake-transferred']),
+        } as never,
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        dataLakeAccessGrants: {
+          listByPrincipal: vi.fn().mockResolvedValue([]),
+          listActiveByLakes: vi
+            .fn()
+            .mockResolvedValue([
+              { dataLakeId: 'lake-transferred', principalType: 'user', principalId: 'bob', role: 'owner' },
+            ]),
+        } as never,
+      },
+      user: { id: 'alice', tags: [] },
+    });
+    expect(countGateExcludedLakes).toHaveBeenCalledWith(
+      [],
+      [],
+      [],
+      'alice',
+      expect.objectContaining({ supersededOwnLakeIds: ['lake-transferred'] })
+    );
+  });
 });
 
 // #2243: the membership arms a retrieval query should carry - one per DYNAMIC lake, none for a
