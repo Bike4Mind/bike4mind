@@ -31,6 +31,7 @@ const {
   mockGetSettingsValue,
   mockGetAttachedAgents,
   mockDetachAgent,
+  mockDeleteBySessionAndAgent,
   mockAgentFindAccessibleById,
   mockAutoName,
   mockGetOperationsModel,
@@ -44,6 +45,7 @@ const {
   mockGetSettingsValue: vi.fn(),
   mockGetAttachedAgents: vi.fn(),
   mockDetachAgent: vi.fn(),
+  mockDeleteBySessionAndAgent: vi.fn(),
   mockAgentFindAccessibleById: vi.fn(),
   mockAutoName: vi.fn(),
   mockGetOperationsModel: vi.fn(),
@@ -69,6 +71,10 @@ vi.mock('@bike4mind/database', async orig => {
         ...((actual.agentRepository as { shareable?: object })?.shareable ?? {}),
         findAccessibleById: (...a: unknown[]) => mockAgentFindAccessibleById(...a),
       },
+    },
+    sessionAgentConfigRepository: {
+      ...(actual.sessionAgentConfigRepository as object),
+      deleteBySessionAndAgent: (...a: unknown[]) => mockDeleteBySessionAndAgent(...a),
     },
     Quest: Object.assign(Object.create(actual.Quest as object), {
       create: (...a: unknown[]) => mockQuestCreate(...a),
@@ -182,6 +188,7 @@ describe('object-level authz: user A cannot act on user B session/quest', () => 
     // the session guard). The denial cases never reach these - the guard 404s first.
     mockGetAttachedAgents.mockResolvedValue([]);
     mockDetachAgent.mockResolvedValue({ id: SESSION_ID, userId: USER_A, name: 'S' });
+    mockDeleteBySessionAndAgent.mockResolvedValue(undefined);
     mockAgentFindAccessibleById.mockResolvedValue(null);
     mockAutoName.mockResolvedValue({ id: SESSION_ID, userId: USER_A, name: 'Renamed' });
     mockGetOperationsModel.mockResolvedValue({ modelId: 'op-model', llm: { complete: vi.fn() } });
