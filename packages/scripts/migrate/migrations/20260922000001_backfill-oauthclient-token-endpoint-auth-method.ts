@@ -44,7 +44,7 @@ const CONFIRM_ENV = 'OAUTH_BACKFILL_CONFIRMED';
  * core id; do not renumber it below a migration that must still run. (Guarded in the sibling test.)
  */
 const migration: MigrationFile = {
-  id: 20260918020000,
+  id: 20260922000001,
   name: 'backfill-oauthclient-token-endpoint-auth-method',
 
   up: async () => {

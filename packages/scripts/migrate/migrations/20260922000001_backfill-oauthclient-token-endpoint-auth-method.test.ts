@@ -12,7 +12,10 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-import migration from './20260918020000_backfill-oauthclient-token-endpoint-auth-method';
+import { readdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname } from 'node:path';
+import migration from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
 
 const CONFIRM_ENV = 'OAUTH_BACKFILL_CONFIRMED';
 let logged: string[] = [];
@@ -82,11 +85,18 @@ describe('backfill-oauthclient-token-endpoint-auth-method', () => {
     expect(mockUpdateMany).not.toHaveBeenCalled();
   });
 
-  it('sorts after every migration it must not block, so its throw holds only itself', () => {
-    // MigrationManager.up() runs ascending by id and aborts the whole run on the first throw. This
-    // fail-closed migration therefore MUST sort after the migrations that were pending alongside it
-    // (20260913/14/15*) - at id 20260912 it blocked all four until OAUTH_BACKFILL_CONFIRMED was set.
-    // 20260915130000 is the highest of that set; keep this above it.
-    expect(migration.id).toBeGreaterThan(20260915130000);
+  it('has the highest id of every migration on disk, so its fail-closed throw holds only itself', () => {
+    // MigrationManager.up() runs ascending by id and aborts the whole run on the first throw, so this
+    // fail-closed migration must be the HIGHEST core migration id; otherwise its throw blocks a
+    // later one that still needs to run. Derived from the migration files on disk rather than a
+    // hardcoded bound (which is exactly how the stale 20260915130000 bound missed the 20260921
+    // data-lake migration). Reading the directory avoids importing the registry, whose modules pull
+    // in SST-bound config that is unavailable under a plain unit test.
+    const dir = dirname(fileURLToPath(import.meta.url));
+    const ids = readdirSync(dir)
+      .filter(f => /^\d+_.+\.ts$/.test(f) && !f.includes('.test.') && !f.includes('.integration.'))
+      .map(f => Number(f.slice(0, f.indexOf('_'))));
+    const otherIds = ids.filter(id => id !== migration.id);
+    expect(migration.id).toBeGreaterThan(Math.max(...otherIds));
   });
 });
