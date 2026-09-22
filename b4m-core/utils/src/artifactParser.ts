@@ -202,7 +202,9 @@ function hasCompleteSvg(code: string): boolean {
 export function convertCodeBlocksToArtifacts(content: string): string {
   // The fence patterns below put no \s* in front of the body group: it is greedy over
   // characters the lazy body matches anyway, so a fence label followed by a long
-  // whitespace run and no closer backtracks quadratically. Every callback trims.
+  // whitespace run and no closer backtracks quadratically. Every callback trims. The
+  // mermaid pattern is the exception - it keeps \s*, but its body group starts with \S,
+  // so there is nothing for the \s* to give back.
   // Detect React component code blocks (body captured linearly; see hasReactComponentLine)
   const reactCodeBlockRegex = /```(?:tsx?|javascript|jsx)([\s\S]*?)```/gi;
 

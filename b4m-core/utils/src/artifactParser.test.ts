@@ -644,10 +644,13 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // Sizes are set by the widest old-vs-new gap that still leaves the current parser
     // far inside the ratio budget. The first shape promotes every document, so its
     // output allocation is what costs: at n=22000 the current parser itself ran 20-60ms
-    // a side and the ratio went marginal, flaking. Pre-fix core at these sizes runs
-    // 34/434ms, 166/756ms and 545/2032ms against 5/9ms, 0.2/0.3ms and 0.3/0.5ms now.
+    // a side and the ratio went marginal, flaking. Each size has to be large enough that
+    // the pre-fix parser breaks the ratio ceiling on its own: the first shape needs 6000
+    // (at 3000 it ran 13/52ms, ratio 2.1, and passed pre-fix). Pre-fix core at these sizes
+    // runs 52/207ms, 32/132ms and 86/340ms, ratio ~3.9 each, against 1.1/2.1ms, 0.1/0.2ms
+    // and 0.2/0.4ms now.
     const noOutputCheck = () => {};
-    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 3000, noOutputCheck);
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 6000, noOutputCheck);
     assertLinearGrowth(n => '<html>\n'.repeat(n), 6000, noOutputCheck);
     assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 6400, noOutputCheck);
   });

@@ -715,6 +715,15 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     );
   });
 
+  it('scales linearly on a fence body of unmatched openings ahead of a single closer', () => {
+    // `<a` repeated then one `>`: every opening is a self-closing-tag candidate and the
+    // only `>` is at the end, which made the uncached scan re-read to it from each opening
+    // (~4x per doubling). Both sizes keep that `>` inside MAX_FENCE_SCAN_CHARS; past the
+    // cap it is sliced off and the shape is fast either way, so the case would prove
+    // nothing.
+    assertLinearGrowth(n => '```javascript\n' + '<a'.repeat(n) + '>\n```', 60000);
+  });
+
   it('counts an import whose from clause sits on the next line as a react import', () => {
     const code = "import Thing\n  from 'react';\nconst [n, setN] = useState(0);";
     expect(convertCodeBlocksToArtifacts('```javascript\n' + code + '\n```')).toContain(
@@ -800,10 +809,13 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // Sizes are set by the widest old-vs-new gap that still leaves the current parser
     // far inside the ratio budget. The first shape promotes every document, so its
     // output allocation is what costs: at n=22000 the current parser itself ran 20-60ms
-    // a side and the ratio went marginal, flaking. Pre-fix core at these sizes runs
-    // 34/434ms, 166/756ms and 545/2032ms against 5/9ms, 0.2/0.3ms and 0.3/0.5ms now.
+    // a side and the ratio went marginal, flaking. Each size has to be large enough that
+    // the pre-fix parser breaks the ratio ceiling on its own: the first shape needs 6000
+    // (at 3000 it ran 13/52ms, ratio 2.1, and passed pre-fix). Pre-fix core at these sizes
+    // runs 52/207ms, 32/132ms and 86/340ms, ratio ~3.9 each, against 1.1/2.1ms, 0.1/0.2ms
+    // and 0.2/0.4ms now.
     const noOutputCheck = () => {};
-    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 3000, noOutputCheck);
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 6000, noOutputCheck);
     assertLinearGrowth(n => '<html>\n'.repeat(n), 6000, noOutputCheck);
     assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 6400, noOutputCheck);
   });
@@ -821,23 +833,52 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
  * The core side of this comparison (coreConvertCodeBlocksToArtifacts / coreParseArtifacts)
  * resolves through @bike4mind/utils' package exports to b4m-core/utils/dist, not source.
  * `pnpm turbo:core:build` rebuilds that dist after any core change; CI is safe because
- * turbo's test task depends on ^build, and the first case below fails loudly when a local
- * run would otherwise validate a stale core build.
+ * turbo's test task depends on ^build, and the staleness cases below fail loudly when a
+ * local run would otherwise validate a stale core build.
  */
 describe('parity with the core parser', () => {
-  // Pins a behavior this branch changed in core (extractHTMLTitle strips a literal double
-  // quote from the title, not just the toolCallJsonToArtifact call site), so a stale dist
-  // fails on content. An mtime comparison cannot do this job: mtime moves on a branch
-  // switch, content does not, and turbo then skips the rebuild its own message asks for.
-  it('core dist reflects this branch, not a stale build', () => {
+  const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
+
+  // Content pins against a stale core dist; an mtime comparison cannot do this job, since
+  // mtime moves on a branch switch while content does not, and turbo then skips the
+  // rebuild its own message asks for. Only the title case catches a dist built from main,
+  // because the title escaping is this branch's only behavior change in core. The four
+  // after it pin the linearizations, which are behavior-preserving by design and so catch
+  // a dist whose rewrite was reverted or broken rather than a plain main build.
+  const STALE = 'core dist is stale - run pnpm turbo:core:build (or --force if that reports FULL TURBO)';
+  const coreWrappers = (out: string) => (out.match(/<artifact /g) || []).length;
+
+  it('core dist strips a double quote from a promoted document title', () => {
     const doc = '<!DOCTYPE html>\n<html><head><title>Say "Hi"</title></head><body>Hi</body></html>';
-    const result = coreConvertCodeBlocksToArtifacts(doc);
-    expect(result, 'core dist is stale - run pnpm turbo:core:build (or --force if that reports FULL TURBO)').toContain(
-      'title="Say Hi"'
+    expect(coreConvertCodeBlocksToArtifacts(doc), STALE).toContain('title="Say Hi"');
+  });
+
+  it('core dist keeps two adjacent html fences separate', () => {
+    const out = coreConvertCodeBlocksToArtifacts('```html\n' + DOC + '\n```\n\n```html\n' + DOC + '\n```');
+    expect(coreWrappers(out), STALE).toBe(2);
+    expect(out, STALE).not.toContain('```html');
+  });
+
+  it('core dist keeps the mermaid fence body non-greedy', () => {
+    const two = '```mermaid\ngraph TD\n  A-->B\n```\n\n```mermaid\ngraph TD\n  C-->D\n```';
+    expect(coreWrappers(coreConvertCodeBlocksToArtifacts(two)), STALE).toBe(2);
+    // A greedy body would also stop requiring the trailing newline it used to match on.
+    const unterminated = '```mermaid\ngraph TD\n  A-->B```';
+    expect(coreConvertCodeBlocksToArtifacts(unterminated), STALE).toBe(unterminated);
+  });
+
+  it('core dist splices two bare documents without dropping or repeating the gaps', () => {
+    const wrap = '<artifact identifier="page" type="text/html" title="Page">\n' + DOC + '\n</artifact>';
+    expect(coreConvertCodeBlocksToArtifacts('A\n\n' + DOC + '\n\nB\n\n' + DOC + '\n\nC'), STALE).toBe(
+      'A\n\n' + wrap + '\n\nB\n\n' + wrap + '\n\nC'
     );
   });
 
-  const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
+  it('core dist drops a comment-only svg artifact as graphically empty', () => {
+    const content = '<artifact identifier="s" type="image/svg+xml" title="S">\n<svg><!-- note --></svg>\n</artifact>';
+    expect(coreParseArtifacts(content).artifacts, STALE).toHaveLength(0);
+  });
+
   const buildHtmlCall = (html: string) => JSON.stringify({ name: 'build_html', arguments: { html } });
 
   const cases: Array<{ name: string; input: string; promoted: boolean; type?: string }> = [

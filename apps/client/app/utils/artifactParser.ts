@@ -372,16 +372,21 @@ export function extractPythonPackages(content: string): string[] {
 
 /**
  * A self-closing tag, e.g. `<path d="..."/>`, as `/<[a-z]+[^>]*\/>/` matched it. That
- * pattern re-scans to the end of the input from every `<` when no `>` follows, so this
- * walks the openings once instead: `[^>]*` cannot cross a `>`, which means a match can
- * only ever end at the first `>` after its own opening.
+ * pattern re-scans to the end of the input from every `<`, so this scans each character
+ * of `code` once instead: `[^>]*` cannot cross a `>`, so a candidate can only end at the
+ * first `>` after its own opening, and a cached `close` at or past `at + 2` is still that
+ * first `>` (a nearer one would have been found when the cursor was set).
  */
 function hasSelfClosingTag(code: string): boolean {
+  let close = -1;
   for (let at = code.indexOf('<'); at >= 0; at = code.indexOf('<', at + 1)) {
     const nameChar = code.charCodeAt(at + 1);
     if (nameChar < 97 || nameChar > 122) continue;
-    const close = code.indexOf('>', at + 2);
-    if (close < 0) return false;
+    if (close < at + 2) {
+      close = code.indexOf('>', at + 2);
+      // No `>` after this opening means none after any later one either.
+      if (close < 0) return false;
+    }
     if (close >= at + 3 && code[close - 1] === '/') return true;
   }
   return false;
@@ -683,7 +688,9 @@ export function convertCodeBlocksToArtifacts(content: string): string {
   // Then process code blocks
   // The fence patterns below put no \s* in front of the body group: it is greedy over
   // characters the lazy body matches anyway, so a fence label followed by a long
-  // whitespace run and no closer backtracks quadratically. Every callback trims.
+  // whitespace run and no closer backtracks quadratically. Every callback trims. (The
+  // core twin's mermaid fence keeps its \s*, safe there because that body starts with
+  // \S; there is no mermaid fence here.)
   // Detect React component code blocks - use stricter matching
   // Match tsx/jsx explicitly, or javascript/typescript with React patterns
   const reactCodeBlockRegex = /```(tsx?|jsx|javascript|typescript)([\s\S]*?)```/gi;

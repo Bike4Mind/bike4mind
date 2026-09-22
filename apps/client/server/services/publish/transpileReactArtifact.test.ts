@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   buildReactArtifactBundle,
   transpileReactSource,
@@ -555,4 +555,121 @@ describe('one-specifier-per-line lucide-react imports of any size', () => {
       expect(indexHtml).toContain(PUBLISH_REACT_DEP_SCRIPTS['lucide-react'].path);
     });
   }
+});
+
+describe('rewriteImportsToRequire ESM survivor backstop', () => {
+  afterEach(() => {
+    vi.doUnmock('@client/app/utils/importStatements');
+    vi.resetModules();
+  });
+
+  it('stays quiet on rewritable shapes and on the near-misses that fail one of its guards', () => {
+    const quiet = [
+      `import React from 'react';`,
+      `import { useLayoutEffect } from 'react';`,
+      `import { useState } from 'react';`,
+      `import * as d3 from 'd3';`,
+      `import LineChart, { BarChart } from 'recharts';`,
+      `import { debounce as db, throttle } from 'lodash';`,
+      `import {\n  A,\n  B,\n} from 'lucide-react';`,
+      `import Chart from 'chartjs'\nimport Grid from 'gridjs';`,
+      `import type { Foo } from 'react';\nimport { useRef } from 'react';`,
+      `import A\r\nfrom 'lodash';`,
+      // Not rewritable and not scanner matches either, so the backstop must let each through:
+      // no `from` before the quote, a one-space clause gap, no whitespace before `from`, empty spec.
+      `import 'x';`,
+      `import from 'x';`,
+      `import {a}from 'm';`,
+      `import a from '';`,
+    ];
+    for (const source of quiet) expect(() => rewriteImportsToRequire(source)).not.toThrow();
+  });
+
+  it('throws when a rewritable import survives, which only a gap in the scanner can produce', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    const call = () => mod.rewriteImportsToRequire(`import { useState } from 'react';`);
+    expect(call).toThrow(mod.ReactArtifactTranspileError);
+    expect(call).toThrow(/Could not rewrite an ESM import/);
+  });
+
+  it('reports the surviving statement, not just the first line of the file', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    expect(() =>
+      mod.rewriteImportsToRequire(`const a = 1;\nimport Chart from 'chartjs'\nimport Grid from 'gridjs';`)
+    ).toThrow(/import Chart from 'chartjs'/);
+  });
+});
+
+/** Verbatim origin/main implementation: the oracle for the two brace regexes `braceSpan` replaced. */
+function originalStripTypeOnlyImports(source: string): string {
+  return source
+    .replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*;?/g, '')
+    .replace(/import\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]\s*;?/g, (stmt: string, clause: string) => {
+      const braceMatch = clause.match(/\{([\s\S]*?)\}/);
+      if (!braceMatch) return stmt;
+      const kept = braceMatch[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .filter(spec => !/^type\s+(?!as\b)\w/.test(spec));
+      const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
+      if (!kept.length && !beforeBrace) return '';
+      return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
+    });
+}
+
+describe('stripTypeOnlyImports differential vs the original brace regexes', () => {
+  const CASES: readonly string[] = [
+    `import type { Foo } from 'react';`,
+    `import type Foo from 'react';`,
+    `import type from 'react';`,
+    `import { type Foo } from 'react';`,
+    `import { type as T } from 'react';`,
+    `import { type Foo, bar } from 'react';`,
+    `import { type Foo, type Bar } from 'react';`,
+    `import Default, { type Foo } from 'react';`,
+    `import Default, { type Foo, bar } from 'react';`,
+    `import * as ns from 'd3';`,
+    `import {} from 'react';`,
+    `import { } from 'react';`,
+    `import {\n  type Foo,\n  bar,\n} from 'react';`,
+    `import { a }, { b } from 'm';`,
+    `import { a } from 'm'; import { b } from 'n';`,
+    `import { a from 'm';`,
+    `import a } from 'm';`,
+    `import { a, b } from 'm'\nimport { c } from 'n'`,
+    `import type { A } from 'm'\nimport { B } from 'n';`,
+    `const s = { a: 1 };\nimport { b } from 'm';`,
+    `import { a } from 'm'   ;`,
+    `import { a } from 'm'`,
+    `import 'side-effect';`,
+    `import  from 'm';`,
+    `import from 'm';`,
+    `import {a}from 'm';`,
+    `import { a as b, type C as D } from 'm';`,
+    `import React, {\n  useState,\n  type FC,\n} from 'react';\nexport default () => null;`,
+  ];
+
+  it('produces the identical output on every shape', () => {
+    const diffs = CASES.filter(src => stripTypeOnlyImports(src) !== originalStripTypeOnlyImports(src));
+    expect(diffs).toEqual([]);
+  });
+
+  it('is not vacuous: the pass actually rewrites most of these', () => {
+    expect(CASES.filter(src => stripTypeOnlyImports(src) !== src).length).toBeGreaterThan(10);
+  });
 });
