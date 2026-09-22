@@ -12,6 +12,7 @@ import {
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 /**
@@ -58,6 +59,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         // has nothing to report. Every other audited lake-write route spreads this; omitting it fails
         // silently, which is why it lives in one shared helper.
         ...lakeConfigAuditDb,
+        ...lakeMembershipAuditDb,
       },
       logger: req.logger,
     });
@@ -83,6 +85,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
         lakeMembershipRemovals: lakeMembershipRemovalRepository,
         scopedSettings: scopedSettingsRepository,
         ...lakeConfigAuditDb,
+        ...lakeMembershipAuditDb,
       },
       logger: req.logger,
     });

@@ -14,6 +14,7 @@ const h = vi.hoisted(() => ({
   findAllUpdateAccessByIds: vi.fn(),
   findById: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
+  pushTagReturningPriorState: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
   computeDataLakeStats: vi.fn(),
   administeredOrgIds: [] as string[],
@@ -39,6 +40,7 @@ vi.mock('@server/middlewares/asyncHandler', () => ({
 // actor breaks on this door.
 vi.mock('@bike4mind/database', () => ({
   lakeConfigChangeEventRepository: { record: h.recordConfigChange },
+  lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   dataLakeRepository: {
     findByDatalakeTag: h.findByDatalakeTag,
     find: vi.fn().mockResolvedValue([]),
@@ -50,6 +52,7 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAllUpdateAccessByIds: h.findAllUpdateAccessByIds },
     findById: h.findById,
     pushTagsByFabFileId: h.pushTagsByFabFileId,
+    pushTagReturningPriorState: h.pushTagReturningPriorState,
     pullTagsByFabFileId: h.pullTagsByFabFileId,
     computeDataLakeStats: h.computeDataLakeStats,
   },
@@ -113,6 +116,7 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
     h.listActiveByLakes.mockResolvedValue([]);
     const file = { id: 'f1', userId: 'u2', tags: [] };
     h.findAllUpdateAccessByIds.mockResolvedValue([{ ...file, toJSON: () => file }]);
+    h.pushTagReturningPriorState.mockResolvedValue({ userId: file.userId, tags: [] });
     h.computeDataLakeStats.mockResolvedValue({ fileCount: 1, totalSizeBytes: 0, totalChunkedChars: 0 });
     h.recordConfigChange.mockResolvedValue({});
     h.activateIfDraft.mockResolvedValue(undefined);
@@ -124,7 +128,7 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
 
     await call({ ids: ['f1'], tags: [META] }, res);
 
-    expect(h.pushTagsByFabFileId).toHaveBeenCalledWith('f1', [META], expect.any(Number));
+    expect(h.pushTagReturningPriorState).toHaveBeenCalledWith('f1', META, expect.any(Number));
   });
 
   it('admits a curator grant holder', async () => {
@@ -133,7 +137,7 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
 
     await call({ ids: ['f1'], tags: [META] }, res);
 
-    expect(h.pushTagsByFabFileId).toHaveBeenCalledWith('f1', [META], expect.any(Number));
+    expect(h.pushTagReturningPriorState).toHaveBeenCalledWith('f1', META, expect.any(Number));
   });
 
   it('admits an org admin removing a file from the lake', async () => {
@@ -155,7 +159,7 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
     await expect(call({ ids: ['f1'], tags: [META] }, res)).rejects.toThrow(
       /permission to change this data lake's files/
     );
-    expect(h.pushTagsByFabFileId).not.toHaveBeenCalled();
+    expect(h.pushTagReturningPriorState).not.toHaveBeenCalled();
   });
 
   /**
