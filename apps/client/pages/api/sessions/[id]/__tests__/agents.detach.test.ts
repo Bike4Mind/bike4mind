@@ -20,6 +20,7 @@ const mockRefs = vi.hoisted(() => ({
   sessionFindById: vi.fn(),
   detachAgent: vi.fn(),
   deleteBySessionAndAgent: vi.fn(),
+  withTransaction: vi.fn((fn: (session: unknown) => Promise<unknown>) => fn(undefined)),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
@@ -50,8 +51,11 @@ vi.mock('@bike4mind/database', () => ({
     deleteBySessionAndAgent: (...args: unknown[]) => mockRefs.deleteBySessionAndAgent(...args),
   },
   // A real transaction needs a replica-set connection this unit test doesn't have; run the
-  // callback directly so the detach + cleanup ordering under test is unaffected.
-  withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
+  // callback directly so the detach + cleanup ordering under test is unaffected. Rollback itself
+  // is mongoose's transaction primitive (tested at that layer, see db-core/mongo.test.ts) - what
+  // this file can and does prove is that the route wraps both writes in exactly one
+  // withTransaction call, since two separate calls would silently drop the atomicity guarantee.
+  withTransaction: (...args: Parameters<typeof mockRefs.withTransaction>) => mockRefs.withTransaction(...args),
 }));
 
 // Import after mocks so the chain captures the handler; exercises the real assertSessionAccess.
@@ -74,24 +78,28 @@ describe('DELETE /api/sessions/[id]/agents (detach)', () => {
     mockRefs.detachAgent.mockResolvedValue(OWNED_SESSION);
   });
 
-  it('deletes the session-agent-config row for the detached pairing', async () => {
+  it('deletes the session-agent-config row for the detached pairing inside a single transaction', async () => {
     const { req, res } = invoke('owner', 'agent-1');
 
     await mockRefs.deleteHandler!(req, res);
 
+    expect(mockRefs.withTransaction).toHaveBeenCalledTimes(1);
     expect(mockRefs.detachAgent).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa', 'agent-1');
     expect(mockRefs.deleteBySessionAndAgent).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa', 'agent-1');
   });
 
-  // Both writes run inside withTransaction, so a failure on the second write must surface as a
-  // rejection out of the handler (and, under a real transaction, roll the first write back too) -
-  // never a 200 with the config row left orphaned.
+  // Proves the route's contract, not mongoose's: both writes go through one withTransaction call
+  // (never two separate ones, which would silently drop atomicity), and a failure on the second
+  // write surfaces as a rejection rather than a 200 with the config row left orphaned. Real
+  // rollback of the first write is mongoose's transaction primitive, covered at that layer in
+  // db-core/mongo.test.ts, not re-provable against a mocked repository layer here.
   it('propagates a config-cleanup failure rather than responding 200 with an orphaned config row', async () => {
     mockRefs.deleteBySessionAndAgent.mockRejectedValue(new Error('transient write conflict'));
     const { req, res } = invoke('owner', 'agent-1');
 
     await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('transient write conflict');
 
+    expect(mockRefs.withTransaction).toHaveBeenCalledTimes(1);
     expect(mockRefs.detachAgent).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa', 'agent-1');
     expect(res._isJSON()).toBe(false);
   });
