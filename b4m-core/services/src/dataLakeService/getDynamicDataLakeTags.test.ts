@@ -416,7 +416,7 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
     );
   });
 
-  // Review onoya (#3055): supersededOwnLakeIds must reach the count query the same way it already
+  // #3055: supersededOwnLakeIds must reach the count query the same way it already
   // reaches findActiveByUserTagsAndEntitlements's creator arm - otherwise a transferred-away creator
   // reports a false zero here even though the resolver's own read-side no longer exempts them.
   it('threads supersededOwnLakeIds into the count query when ownership has been transferred away', async () => {
