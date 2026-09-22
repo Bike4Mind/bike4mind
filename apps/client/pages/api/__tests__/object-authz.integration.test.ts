@@ -76,6 +76,9 @@ vi.mock('@bike4mind/database', async orig => {
       ...(actual.sessionAgentConfigRepository as object),
       deleteBySessionAndAgent: (...a: unknown[]) => mockDeleteBySessionAndAgent(...a),
     },
+    // The real withTransaction needs a replica-set connection this test's mocked connectDB never
+    // opens; run the callback directly so the detach route's atomicity wrapper is a no-op here.
+    withTransaction: (fn: (session: unknown) => Promise<unknown>) => fn(undefined),
     Quest: Object.assign(Object.create(actual.Quest as object), {
       create: (...a: unknown[]) => mockQuestCreate(...a),
     }),
