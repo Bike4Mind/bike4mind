@@ -2,6 +2,8 @@ import mongoose, { Model, Schema } from 'mongoose';
 import type {
   IDataLakeFindingDocument,
   IDataLakeFindingRepository,
+  LakeFindingDetector,
+  LakeFindingKey,
   ListLakeFindingsOptions,
   RecordLakeFindingInput,
   ResolveLakeFindingInput,
@@ -146,6 +148,16 @@ class DataLakeFindingRepository extends BaseRepository<IDataLakeFindingDocument>
     if (options?.limit) query.limit(options.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as IDataLakeFindingDocument);
+  }
+
+  async listDismissedKeys(lakeId: string, detector: LakeFindingDetector): Promise<LakeFindingKey[]> {
+    // Projected to the two key halves and lean, because this is read on every detection run to
+    // filter that run's output: hydrating the rows would pull each one's `sources` excerpts across
+    // purely to throw them away. Seeks the review-queue index on its `lakeId, status` prefix.
+    const rows = await this.findingModel
+      .find({ lakeId, status: 'dismissed', detector }, { kind: 1, subject: 1, _id: 0 })
+      .lean();
+    return rows.map(({ kind, subject }) => ({ kind, subject }));
   }
 
   async resolveFinding(
