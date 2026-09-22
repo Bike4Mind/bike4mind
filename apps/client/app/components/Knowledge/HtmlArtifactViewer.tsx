@@ -169,7 +169,10 @@ const HtmlArtifactViewer: React.FC<HtmlArtifactViewerProps> = ({ artifact, onErr
         </Box>
 
         <TabPanel value="preview" sx={{ flex: 1, minHeight: 0, p: 0 }}>
-          <Box sx={{ width: '100%', height: '100%', position: 'relative', minHeight: 0 }}>
+          {/* White for the same reason the inline preview is: the iframe is transparent
+              unless the artifact sets its own background, so this Box is the page the
+              artifact renders on. */}
+          <Box sx={{ width: '100%', height: '100%', position: 'relative', minHeight: 0, bgcolor: '#FFFFFF' }}>
             {isLoading && (
               <Box
                 sx={{

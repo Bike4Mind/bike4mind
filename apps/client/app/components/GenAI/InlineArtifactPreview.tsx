@@ -284,7 +284,13 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
           maxHeight: type === 'react' ? REACT_PREVIEW_MAX_HEIGHT : htmlFrameHeight,
           overflow: 'hidden',
           borderRadius: 'sm',
-          bgcolor: 'background.surface',
+          // The canvas an artifact is drawn on, not a chrome surface. Neither a fragment
+          // nor most complete documents set a body background, so the iframe is usually
+          // transparent and whatever sits behind it IS the page the artifact renders on.
+          // A theme-following surface therefore put a document's default black text on a
+          // near-black backdrop in dark mode. White in both modes, matching the React
+          // sandbox (which paints its own body white) and the SVG preview.
+          bgcolor: '#FFFFFF',
         }}
         data-testid="inline-artifact-preview"
       >
