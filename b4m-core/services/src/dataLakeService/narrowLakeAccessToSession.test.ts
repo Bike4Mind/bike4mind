@@ -41,14 +41,23 @@ describe('narrowLakeAccessToSession', () => {
   });
 
   /**
-   * #3055: this narrowing is subtractive on the SESSION's behalf and does not change how many
-   * lakes the caller's org/tags surfaced but couldn't pass the gate for - that count was already
-   * fixed upstream, before the session even entered the picture.
+   * #3055 (review onoya): a NARROWED session cannot honestly claim the account-wide count as its
+   * own - the caller can access lake `alpha`, could be excluded from some unrelated lake `zulu`
+   * elsewhere in the org, and a session scoped to `alpha` alone must not report `zulu`'s exclusion
+   * as if it were in this turn's scope. Dropping to undefined (not measured) is the honest answer;
+   * reporting the account-wide number would be a false claim about THIS turn.
    */
-  it('carries excludedByAccessCount through a narrowing unchanged', () => {
+  it('drops excludedByAccessCount to undefined on an actual narrowing, never the account-wide number', () => {
     const withExclusions = { ...access(), excludedByAccessCount: 3 };
-    expect(narrowLakeAccessToSession(withExclusions, ['datalake:beta']).excludedByAccessCount).toBe(3);
-    // The no-op path (session names no lake) returns the input object outright.
+    expect(narrowLakeAccessToSession(withExclusions, ['datalake:beta']).excludedByAccessCount).toBeUndefined();
+  });
+
+  /**
+   * The no-op path (session names no lake at all) returns the input object outright - nothing was
+   * narrowed away, so the account-wide count still describes exactly this turn's scope.
+   */
+  it('carries excludedByAccessCount through the no-op path unchanged', () => {
+    const withExclusions = { ...access(), excludedByAccessCount: 3 };
     expect(narrowLakeAccessToSession(withExclusions, undefined).excludedByAccessCount).toBe(3);
   });
 
