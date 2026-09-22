@@ -42,7 +42,15 @@ import handler from '../[id]';
 
 const OWNER = 'owner-1';
 
-/** A minimal artifact doc: an open-public artifact the owner is patching. */
+/**
+ * A minimal artifact doc: an open-public artifact the owner is patching.
+ *
+ * `toJSON` returns a COPY of accessGate, never the live reference. Real Mongoose toJSON
+ * serializes to a fresh plain object, and the handler's last act is a defensive
+ * `delete json.accessGate.passphraseHash` - against a shared reference that reaches back
+ * into the doc under test and blanks the very field these tests assert on (making a
+ * "never echoes the hash" assertion pass for the wrong reason).
+ */
 function makeArtifact() {
   return {
     ownerId: OWNER,
@@ -53,7 +61,8 @@ function makeArtifact() {
     embedOrigins: undefined as string[] | undefined,
     save: vi.fn().mockResolvedValue(undefined),
     toJSON() {
-      return { publicId: this.publicId, visibility: this.visibility, accessGate: this.accessGate };
+      const gate = this.accessGate as Record<string, unknown> | null;
+      return { publicId: this.publicId, visibility: this.visibility, accessGate: gate ? { ...gate } : gate };
     },
   };
 }
@@ -341,7 +350,7 @@ describe('PATCH /api/publish/artifacts/[id] - discoverable de-arms on leaving op
 });
 
 /**
- * The gate-enforcement invariant (b4m-bob#275). `GATE_REQUIRES_PUBLIC` used to key on
+ * The gate-enforcement invariant (b4m-bob#275). The surface check used to key on
  * `visibility === 'public'` alone, which predates the share-token surface: checkShareGrant
  * runs the SAME checkAccessGate on top of `/a/<token>` possession at any visibility (#383),
  * and the passphrase-verify route resolves a `share` path by shareToken with no visibility
@@ -360,23 +369,11 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
     return { res, artifact };
   }
 
-  /**
-   * A PRIVATE artifact that has been shared by no-sign-in link (`/a/<token>`).
-   *
-   * `toJSON` returns a COPY of accessGate, not the live reference. Real Mongoose toJSON
-   * serializes to a fresh plain object, and the handler's last act is a defensive
-   * `delete json.accessGate.passphraseHash` - against a shared reference that would reach
-   * back into the doc under test and blank the very field these tests assert on (making
-   * the "never echoes the hash" test pass for the wrong reason).
-   */
+  /** A PRIVATE artifact that has been shared by no-sign-in link (`/a/<token>`). */
   function tokenSharedPrivate() {
     const a = makeArtifact();
     a.visibility = 'private';
     (a as unknown as { shareToken?: string }).shareToken = 'TOKEN-abc123';
-    a.toJSON = function () {
-      const gate = this.accessGate as Record<string, unknown> | null;
-      return { publicId: this.publicId, visibility: this.visibility, accessGate: gate ? { ...gate } : gate };
-    };
     return a;
   }
 
@@ -421,7 +418,7 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
       a
     );
     expect(res._getStatusCode()).toBe(400);
-    expect(res._getJSONData().code).toBe('GATE_REQUIRES_PUBLIC');
+    expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
     // Rejected BEFORE persisting - a 400 must not leave a half-applied gate behind.
     expect(artifact.save).not.toHaveBeenCalled();
   });
@@ -431,7 +428,7 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
     a.visibility = 'organization';
     const { res } = await patchBody({ accessGate: { kind: 'passphrase', passphrase: 'a-long-passphrase' } }, a);
     expect(res._getStatusCode()).toBe(400);
-    expect(res._getJSONData().code).toBe('GATE_REQUIRES_PUBLIC');
+    expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
   });
 
   it('rejects a short passphrase on a token-shared artifact (the 8-char floor still applies)', async () => {
@@ -451,6 +448,27 @@ describe('PATCH /api/publish/artifacts/[id] - a gate needs an ENFORCING surface,
     const { res, artifact } = await patchBody({ accessGate: null }, a);
     expect(res._getStatusCode()).toBe(200);
     expect(artifact.accessGate).toBeNull();
+  });
+
+  // The check reads STORED state, so it must not hold unrelated fields hostage on a
+  // document that reached the bad state elsewhere (finalize preserves a gate while
+  // setting a private visibility). A rename touches neither the gate nor visibility.
+  it('lets a title-only PATCH through on an already private + gated + tokenless artifact', async () => {
+    const a = makeArtifact();
+    a.visibility = 'private';
+    (a as unknown as { accessGate: unknown }).accessGate = { kind: 'passphrase', passphraseHash: 'x' };
+    const { res, artifact } = await patchBody({ title: 'Renamed' }, a);
+    expect(res._getStatusCode()).toBe(200);
+    expect(artifact.save).toHaveBeenCalled();
+  });
+
+  it('still rejects a visibility-only downgrade that strands an existing gate', async () => {
+    const a = makeArtifact();
+    (a as unknown as { accessGate: unknown }).accessGate = { kind: 'passphrase', passphraseHash: 'x' };
+    const { res, artifact } = await patchBody({ visibility: 'private' }, a);
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('GATE_REQUIRES_ENFORCING_SURFACE');
+    expect(artifact.save).not.toHaveBeenCalled();
   });
 
   it('does not purge the CDN for a private artifact gaining a gate - it was never open-public', async () => {

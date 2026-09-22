@@ -25,9 +25,10 @@ import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
 /**
- * Access gate on top of `visibility: 'public'` (issue #383). The passphrase
- * arrives in plaintext ONCE here and is bcrypt-hashed before it touches the
- * document; `null` clears the gate. Only valid while visibility is public.
+ * Access gate on top of an ENFORCING surface (issue #383). The passphrase arrives
+ * in plaintext ONCE here and is bcrypt-hashed before it touches the document;
+ * `null` clears the gate. Valid while visibility is public OR while an active
+ * share token exists - see the surface check in the PATCH handler below.
  */
 const AccessGatePatchSchema = z.union([
   z.object({
@@ -200,11 +201,17 @@ const handler = baseApi()
     // invariant: does this gate have a surface that will honor it? A private artifact
     // with NO share token still fails loud - only the owner/admin can reach it, and they
     // pass their own gate, so the gate would genuinely never apply.
-    if (artifact.accessGate && artifact.visibility !== 'public' && !artifact.shareToken) {
+    // SCOPED to requests that touch the gate or the visibility, deliberately: the check
+    // reads the document's STORED state, so an artifact that reached the bad state by some
+    // other door (finalize can $set a private visibility over a preserved gate) would have
+    // every unrelated PATCH - a title rename - rejected with an access-gate error it can't
+    // act on. Unscoped, a stored inconsistency holds title/description/tags hostage.
+    const touchesGateSurface = parsed.data.accessGate !== undefined || parsed.data.visibility !== undefined;
+    if (touchesGateSurface && artifact.accessGate && artifact.visibility !== 'public' && !artifact.shareToken) {
       return res.status(400).json({
         error:
           'An access gate requires visibility "public" or an active share link - clear the gate, set visibility to public, or create a share link first',
-        code: 'GATE_REQUIRES_PUBLIC',
+        code: 'GATE_REQUIRES_ENFORCING_SURFACE',
       });
     }
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;

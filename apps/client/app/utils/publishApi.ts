@@ -330,7 +330,7 @@ export type PublishAccessGateInput =
  *
  * The item must already have an enforcing surface: public visibility, OR a share
  * token (mint one with `createOrGetShareToken` FIRST). Otherwise the server rejects
- * the write with `GATE_REQUIRES_PUBLIC` rather than store a gate nothing honors.
+ * the write with `GATE_REQUIRES_ENFORCING_SURFACE` rather than store a gate nothing honors.
  */
 export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
   await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
@@ -755,7 +755,12 @@ export async function regenerateShareToken(publicId: string): Promise<{ shareTok
   return createOrGetShareToken(publicId, true);
 }
 
-/** Revoke the share token so every `/a` link 404s immediately (owner/admin). */
+/**
+ * Revoke the share token so every `/a` link 404s immediately (owner/admin).
+ * Refused with `REVOKE_WOULD_ORPHAN_GATE` while a non-public item carries an access
+ * gate - the token is then the gate's only enforcing surface; clear the gate or go
+ * public first.
+ */
 export async function revokeShareToken(publicId: string): Promise<void> {
   await api.delete(`/api/publish/${publicId}/share-token`);
 }
