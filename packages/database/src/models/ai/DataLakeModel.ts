@@ -721,8 +721,17 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    *
    * Visibility is org membership OR public - deliberately narrower than `findActiveByUserTagsAndEntitlements`'s
    * own arms (no owner bypass, no grant arm): those two arms are exactly what make a lake NOT
-   * excluded regardless of its gate, so they are subtracted here via `_id: $nin` instead of
-   * counted as visible.
+   * excluded regardless of its gate, so they are subtracted here instead of counted as visible.
+   * The user-grant arm is an unconditional `_id: $nin` (a user-principal grant crosses orgs by
+   * design). The org-grant arm reuses `orgGrantArms` under `$nor`, one arm per granting org,
+   * for the same reason `findActiveByUserTagsAndEntitlements` does: flattening every org's
+   * granted ids into one list loses which org issued which grant, so a lake in org B granted by
+   * org A would wrongly exempt a caller who belongs to both but was never granted that lake by
+   * ITS org - undercounting a real exclusion.
+   *
+   * `restrictToTags`, when given, further limits the count to lakes whose `datalakeTag` is in the
+   * list - the per-turn-scoped sibling question "of exactly these lakes, how many are excluded",
+   * for a caller that named specific lakes by identity rather than asking about the whole account.
    *
    * The owner-bypass exemption (#3055): a lake is withheld from the count for its CREATOR
    * only when ownership has not since moved off them - `createdByUserId` is immutable, so without
@@ -740,6 +749,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
       supersededOwnLakeIds?: string[];
+      restrictToTags?: string[];
     }
   ): Promise<number> {
     const memberOrgIds = organizationIds ?? [];
@@ -747,11 +757,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     if (memberOrgIds.length > 0) visibilityArms.push({ organizationId: { $in: memberOrgIds } });
 
     const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.countGateExcludedLakes');
-    const orgGrantedIds = usableObjectIds(
-      Object.values(opts?.orgGrantedLakes ?? {}).flat(),
-      'DataLakeModel.countGateExcludedLakes'
-    );
-    const excludedIds = Array.from(new Set([...grantedLakeIds, ...orgGrantedIds]));
+    const orgGrantExemptionArms = orgGrantArms(opts?.orgGrantedLakes);
     const supersededOwnLakeIds = usableObjectIds(opts?.supersededOwnLakeIds, 'DataLakeModel.countGateExcludedLakes');
 
     const ownerExemptionArms: Record<string, unknown>[] = [{ createdByUserId: { $ne: userId } }];
@@ -765,7 +771,11 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
         { $or: visibilityArms },
         { $nor: [requirementConstraint(userTags, entitlementKeys)] },
         ...(userId ? [{ $or: ownerExemptionArms }] : []),
-        ...(excludedIds.length > 0 ? [{ _id: { $nin: excludedIds } }] : []),
+        ...(grantedLakeIds.length > 0 ? [{ _id: { $nin: grantedLakeIds } }] : []),
+        ...(orgGrantExemptionArms.length > 0 ? [{ $nor: orgGrantExemptionArms }] : []),
+        ...(opts?.restrictToTags && opts.restrictToTags.length > 0
+          ? [{ datalakeTag: { $in: opts.restrictToTags } }]
+          : []),
       ],
     };
     return this.dataLakeModel.countDocuments(filter);
