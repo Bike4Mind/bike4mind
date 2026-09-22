@@ -6,7 +6,8 @@
  * its logged-in user, and receives a short-lived, revocable `ai:generate` key
  * scoped to that user. The ID token is either one the app's own Cognito pool
  * issued (with B4M federated upstream) or one B4M issued directly, per the
- * client's registered `federatedIdp.subjectSource`. The app then sends the key
+ * client's registered `federatedIdp.subjectSource` (see
+ * server/auth/verifyFederatedIdToken.ts). The app then sends the key
  * as `X-API-Key` to `/api/ai/v1/completions`, so completions bill the resolved
  * user's B4M credits with no manual API-key paste.
  *
@@ -29,7 +30,7 @@ import {
 import { userApiKeyService } from '@bike4mind/services';
 import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
-import { verifyCognitoIdToken, CognitoIdTokenError } from '@server/auth/verifyCognitoIdToken';
+import { verifyFederatedIdToken, FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 
 /** Minted key lifetime. The app caches the key per-user and re-exchanges only when it expires. */
 const AI_TOKEN_TTL_SECONDS = 15 * 60; // 900s
@@ -119,9 +120,9 @@ const handler = baseApi({ auth: false })
     //    token B4M issued itself); every gate above and below is identical either way.
     let b4mUserId: string;
     try {
-      ({ b4mUserId } = await verifyCognitoIdToken(id_token, federatedIdp));
+      ({ b4mUserId } = await verifyFederatedIdToken(id_token, federatedIdp));
     } catch (err) {
-      if (err instanceof CognitoIdTokenError) {
+      if (err instanceof FederatedIdTokenError) {
         req.logger.warn(`[OAUTH_AI_TOKEN] ID token rejected for client ${client_id}: ${err.message}`);
         return res.status(401).json({ error: 'invalid_grant', error_description: 'Invalid ID token' });
       }

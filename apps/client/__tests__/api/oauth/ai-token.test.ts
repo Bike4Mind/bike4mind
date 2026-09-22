@@ -51,15 +51,15 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
-const mockVerifyCognitoIdToken = vi.fn();
-vi.mock('@server/auth/verifyCognitoIdToken', () => ({
-  verifyCognitoIdToken: (...a: any[]) => mockVerifyCognitoIdToken(...a),
+const mockVerifyIdToken = vi.fn();
+vi.mock('@server/auth/verifyFederatedIdToken', () => ({
+  verifyFederatedIdToken: (...a: any[]) => mockVerifyIdToken(...a),
   // Defined inside the factory (hoisted): a class declaration in the module body
   // would be in its TDZ when the hoisted mock runs.
-  CognitoIdTokenError: class CognitoIdTokenError extends Error {
+  FederatedIdTokenError: class FederatedIdTokenError extends Error {
     constructor(message: string) {
       super(message);
-      this.name = 'CognitoIdTokenError';
+      this.name = 'FederatedIdTokenError';
     }
   },
 }));
@@ -67,7 +67,7 @@ vi.mock('@server/auth/verifyCognitoIdToken', () => ({
 // Real consent gate (pure) - exercises the actual invariant, not a stub.
 
 import handler from '../../../pages/api/oauth/ai-token';
-import { CognitoIdTokenError } from '@server/auth/verifyCognitoIdToken';
+import { FederatedIdTokenError } from '@server/auth/verifyFederatedIdToken';
 
 const FEDERATED_CLIENT = {
   name: 'VibesWire',
@@ -75,6 +75,17 @@ const FEDERATED_CLIENT = {
     issuer: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool',
     audience: 'app-client-id',
     providerName: 'B4M',
+  },
+};
+
+// A client that signs users in directly against B4M: subjectSource 'sub', no providerName, explicit jwksUri.
+const B4M_ISSUED_CLIENT = {
+  name: 'Tarot',
+  federatedIdp: {
+    issuer: 'https://app.example.com',
+    audience: 'b4m-oauth-client-id',
+    jwksUri: 'https://app.example.com/api/oauth/jwks',
+    subjectSource: 'sub',
   },
 };
 
@@ -94,7 +105,7 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     // Defaults for the happy path; individual tests override.
     mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
     mockVerifyClientSecret.mockResolvedValue(FEDERATED_CLIENT);
-    mockVerifyCognitoIdToken.mockResolvedValue({ b4mUserId: 'b4m-user-1', claims: {} });
+    mockVerifyIdToken.mockResolvedValue({ b4mUserId: 'b4m-user-1', claims: {} });
     mockUserFindById.mockResolvedValue(CONSENTED_USER);
     mockFindByUserId.mockResolvedValue([]);
     mockCreateUserApiKey.mockResolvedValue({ id: 'key-1', key: 'b4m_live_deadbeef', scopes: ['ai:generate'] });
@@ -166,12 +177,12 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
 
     expect(res._getStatusCode()).toBe(403);
     expect(res._getJSONData().error).toBe('access_denied');
-    expect(mockVerifyCognitoIdToken).not.toHaveBeenCalled();
+    expect(mockVerifyIdToken).not.toHaveBeenCalled();
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
   });
 
-  it('AC3: invalid Cognito token → 401 invalid_grant, no mint', async () => {
-    mockVerifyCognitoIdToken.mockRejectedValue(new CognitoIdTokenError('bad signature'));
+  it('AC3: invalid ID token → 401 invalid_grant, no mint', async () => {
+    mockVerifyIdToken.mockRejectedValue(new FederatedIdTokenError('bad signature'));
     const { req, res } = makeReq();
     await handler(req as any, res as any);
 
@@ -230,7 +241,7 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     await handler(req as any, res as any);
 
     expect(res._getStatusCode()).toBe(429);
-    expect(mockVerifyCognitoIdToken).not.toHaveBeenCalled();
+    expect(mockVerifyIdToken).not.toHaveBeenCalled();
     expect(mockCreateUserApiKey).not.toHaveBeenCalled();
   });
 
@@ -241,83 +252,75 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(res._getJSONData().error).toBe('invalid_request');
   });
-});
 
-// A client that signs its users in against B4M's own OIDC provider - no Cognito hop.
-// The route itself has no branch for this: it hands the whole trust config to the
-// verifier. These tests pin that every gate keeps firing on the new path.
-const B4M_ISSUER_CLIENT = {
-  name: 'Tarot',
-  federatedIdp: {
-    issuer: 'https://app.example-b4m.test',
-    audience: 'client-1',
-    jwksUri: 'https://app.example-b4m.test/api/oauth/jwks',
-    subjectSource: 'sub',
-  },
-};
+  // A client that signs its users in against B4M's own OIDC provider directly
+  // (subjectSource: 'sub') - no Cognito hop. The route itself has no branch for
+  // this: it hands the whole trust config to the verifier. These tests pin that
+  // every gate keeps firing on the new path.
+  describe('client whose trust config is subjectSource: sub (B4M-issued token)', () => {
+    beforeEach(() => {
+      mockVerifyClientSecret.mockResolvedValue(B4M_ISSUED_CLIENT);
+      mockVerifyIdToken.mockResolvedValue({ b4mUserId: 'b4m-user-1', claims: { sub: 'b4m-user-1' } });
+    });
 
-describe('POST /api/oauth/ai-token - B4M-issued ID token client', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockTryIncrement.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 60_000) });
-    mockVerifyClientSecret.mockResolvedValue(B4M_ISSUER_CLIENT);
-    mockVerifyCognitoIdToken.mockResolvedValue({ b4mUserId: 'b4m-user-1', claims: { sub: 'b4m-user-1' } });
-    mockUserFindById.mockResolvedValue(CONSENTED_USER);
-    mockFindByUserId.mockResolvedValue([]);
-    mockCreateUserApiKey.mockResolvedValue({ id: 'key-2', key: 'b4m_live_cafebabe', scopes: ['ai:generate'] });
-    mockAuditCreate.mockResolvedValue({});
-    mockRevokeUserApiKey.mockResolvedValue(undefined);
-  });
+    it('mints against the sub-resolved user, passing the trust config through verbatim', async () => {
+      const { req, res } = makeReq();
+      await handler(req as any, res as any);
 
-  it('mints a key billed to the sub-identified user, passing the trust config through verbatim', async () => {
-    const { req, res } = makeReq();
-    await handler(req as any, res as any);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toMatchObject({ api_key: 'b4m_live_deadbeef', scope: 'ai:generate' });
+      expect(mockVerifyIdToken).toHaveBeenCalledWith('cognito-id-token', B4M_ISSUED_CLIENT.federatedIdp);
+      expect(mockCreateUserApiKey.mock.calls[0][0]).toBe('b4m-user-1');
+    });
 
-    expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({ api_key: 'b4m_live_cafebabe', scope: 'ai:generate' });
-    expect(mockVerifyCognitoIdToken).toHaveBeenCalledWith('cognito-id-token', B4M_ISSUER_CLIENT.federatedIdp);
-    expect(mockCreateUserApiKey.mock.calls[0][0]).toBe('b4m-user-1');
-  });
+    it('still enforces the consent gate', async () => {
+      mockUserFindById.mockResolvedValue({ id: 'b4m-user-1', aupAcceptedVersion: null });
+      const { req, res } = makeReq();
+      await handler(req as any, res as any);
 
-  it('SECURITY: the consent gate still fires on this path', async () => {
-    mockUserFindById.mockResolvedValue({ id: 'b4m-user-1', aupAcceptedVersion: null });
-    const { req, res } = makeReq();
-    await handler(req as any, res as any);
+      expect(res._getStatusCode()).toBe(403);
+      expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+      expect(mockAuditCreate).not.toHaveBeenCalled();
+    });
 
-    expect(res._getStatusCode()).toBe(403);
-    expect(res._getJSONData().error).toBe('access_denied');
-    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
-    expect(mockAuditCreate).not.toHaveBeenCalled();
-  });
+    it('still enforces the per-client rate limit', async () => {
+      mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
+      const { req, res } = makeReq();
+      await handler(req as any, res as any);
 
-  it('the per-client rate limit still fires on this path', async () => {
-    mockTryIncrement.mockResolvedValue({ success: false, expiresAt: new Date(Date.now() + 30_000) });
-    const { req, res } = makeReq();
-    await handler(req as any, res as any);
+      expect(res._getStatusCode()).toBe(429);
+      expect(mockVerifyIdToken).not.toHaveBeenCalled();
+    });
 
-    expect(res._getStatusCode()).toBe(429);
-    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
-  });
+    it('still writes a mint audit entry', async () => {
+      const { req, res } = makeReq();
+      await handler(req as any, res as any);
 
-  it('revoke-and-replace and the mint audit entry still fire on this path', async () => {
-    mockFindByUserId.mockResolvedValue([
-      { id: 'old-key', status: 'active', metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-1' } },
-    ]);
-    const { req, res } = makeReq();
-    await handler(req as any, res as any);
+      expect(mockAuditCreate).toHaveBeenCalledTimes(1);
+      expect(mockAuditCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'mint', actorUserId: 'b4m-user-1' })
+      );
+    });
 
-    expect(res._getStatusCode()).toBe(200);
-    expect(mockRevokeUserApiKey).toHaveBeenCalledTimes(1);
-    expect(mockAuditCreate).toHaveBeenCalledTimes(1);
-  });
+    it('still enforces reuse-or-replace before minting', async () => {
+      mockFindByUserId.mockResolvedValue([
+        { id: 'old-key', status: 'active', metadata: { createdFrom: 'oauth-exchange', oauthClientId: 'client-1' } },
+      ]);
+      const { req, res } = makeReq();
+      await handler(req as any, res as any);
 
-  it('a token from an issuer not configured on this client → 401 invalid_grant', async () => {
-    mockVerifyCognitoIdToken.mockRejectedValue(new CognitoIdTokenError('Issuer not allowed'));
-    const { req, res } = makeReq();
-    await handler(req as any, res as any);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRevokeUserApiKey).toHaveBeenCalledTimes(1);
+    });
 
-    expect(res._getStatusCode()).toBe(401);
-    expect(res._getJSONData().error).toBe('invalid_grant');
-    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    it('a rejected ID token → 401 invalid_grant, no mint', async () => {
+      mockVerifyIdToken.mockRejectedValue(new FederatedIdTokenError('Issuer not allowed'));
+      const { req, res } = makeReq();
+      await handler(req as any, res as any);
+
+      expect(res._getStatusCode()).toBe(401);
+      expect(res._getJSONData().error).toBe('invalid_grant');
+      expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    });
   });
 });
