@@ -96,7 +96,9 @@ Working from a checkout and want to run your own edits (or a freshly pulled `mai
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d --build
 ```
 
-`--build` rebuilds the `app` image from the Dockerfile before starting; only `app` rebuilds, the backing services just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+`--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, and `worker` - before starting; the pure-image backing services (Mongo, MinIO, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+
+> **Upgrading: rebuild the `ws` gateway in lockstep with the app.** The `ws` gateway is built from source (there is no published image for it), while the app is pulled by default. The browser and the gateway share a connection contract (the browser sends its realtime credential as a `?ticket=` query the gateway must forward), so a version skew between them breaks realtime for every browser silently - the socket is simply rejected. A pull-only upgrade (`docker compose ... pull && ... up -d`) refreshes the published `app` image but leaves the already-built `ws` container at its old version. When you move to a new version, `git pull` your checkout and bring the stack up with `--build` (which rebuilds `ws` too), or rebuild the gateway explicitly with `docker compose -f compose.selfhost.yaml build ws`.
 
 Confirm it came up, then follow the logs:
 
@@ -835,7 +837,7 @@ WEBSOCKET_URL=wss://chat.example.com/ws
 
 `APP_URL` is the CSRF origin allow-list and must be the public `https` origin, not the container address: left at the template's `http://localhost:3000` it cannot match the origin your visitors browse from, so every state-changing request 403s with `Invalid request origin. CSRF protection triggered (expected http://localhost:3000).` while reads keep working.
 
-The `WEBSOCKET_URL` path must be `/ws` to match the Caddyfile route: the browser uses `WEBSOCKET_URL` verbatim (plus a `?token=` query), and Caddy proxies `/ws` to the ws gateway, which accepts the upgrade on any path. No app-side change is needed.
+The `WEBSOCKET_URL` path must be `/ws` to match the Caddyfile route: the browser uses `WEBSOCKET_URL` verbatim (plus a `?ticket=` query), and Caddy proxies `/ws` to the ws gateway, which accepts the upgrade on any path. No app-side change is needed.
 
 **4. Bring the stack up with the `proxy` profile:**
 

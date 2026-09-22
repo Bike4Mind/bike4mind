@@ -62,7 +62,15 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
       tokenVersion?: number;
       mfaPending?: boolean;
       typ?: string;
+      kind?: string;
     };
+
+    // A relying-party OAuth access token is scope/audience-bound to OAuth-reachable REST routes
+    // (see oauthRouteGate) and must NOT drive the CLI/LLM surfaces this primitive backs. The route
+    // gate does not cover this path, so default-deny the OAuth kind here explicitly.
+    if (decoded.kind === 'oauth') {
+      throw new Error('OAuth access tokens are not accepted on this endpoint');
+    }
 
     // Reject a first-factor-only token: the mfaPending access token (issued pre-2FA, before the
     // second factor) must NOT drive these LLM/CLI surfaces. Mirrors the REST strategy's mfaPending
