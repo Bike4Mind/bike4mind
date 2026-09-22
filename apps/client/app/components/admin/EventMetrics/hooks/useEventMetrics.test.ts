@@ -44,13 +44,15 @@ const rateLimitError = () =>
 
 const isRecacheUrl = (url: string) => url.includes('recache=true');
 
-function makeWrapper() {
-  const client = new QueryClient({
+const makeClient = () =>
+  new QueryClient({
     defaultOptions: {
       queries: { retry: false },
       mutations: { retry: false },
     },
   });
+
+function makeWrapper(client: QueryClient = makeClient()) {
   function Wrapper({ children }: { children: ReactNode }) {
     return createElement(QueryClientProvider, { client }, children);
   }
@@ -194,5 +196,45 @@ describe('useEventMetrics forceRefresh', () => {
 
     await waitFor(() => expect(result.current.data).toEqual(freshMetrics));
     expect(result.current.isError).toBe(false);
+  });
+
+  it('writes a resolved recache into the filter set it was issued for, not the one selected when it lands', async () => {
+    const filtersA = { userFilter: 'alice' };
+    const filtersB = { userFilter: 'bob' };
+
+    let resolveRecacheForA: (() => void) | undefined;
+    vi.mocked(api.get).mockImplementation((url: string) => {
+      if (isRecacheUrl(url)) {
+        return new Promise(resolve => {
+          resolveRecacheForA = () => resolve({ data: staleMetrics });
+        });
+      }
+      return Promise.resolve({ data: freshMetrics });
+    });
+
+    const client = makeClient();
+    const { result, rerender } = renderHook(({ filters }) => useEventMetrics(filters), {
+      wrapper: makeWrapper(client),
+      initialProps: { filters: filtersA },
+    });
+
+    await waitFor(() => expect(result.current.data).toEqual(freshMetrics));
+
+    act(() => {
+      result.current.forceRefresh();
+    });
+
+    await waitFor(() => expect(result.current.isFetching).toBe(true));
+
+    rerender({ filters: filtersB });
+
+    await waitFor(() => expect(client.getQueryData(['event-metrics', filtersB])).toEqual(freshMetrics));
+
+    act(() => {
+      resolveRecacheForA?.();
+    });
+
+    await waitFor(() => expect(client.getQueryData(['event-metrics', filtersA])).toEqual(staleMetrics));
+    expect(client.getQueryData(['event-metrics', filtersB])).toEqual(freshMetrics);
   });
 });

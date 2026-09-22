@@ -127,7 +127,6 @@ const SlackMetricsPage: React.FC = () => {
         onClearFilters={handleClearFilters}
         onSetDateRange={setDateRange}
         onApplyFilters={handleApplyFilters}
-        isLoading={isLoading}
         isFetching={isFetching}
         hideCategoryFilter={true}
       />

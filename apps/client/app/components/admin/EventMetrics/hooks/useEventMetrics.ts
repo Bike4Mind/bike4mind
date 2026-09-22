@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, hashKey } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type { EventMetric } from '../types';
 
@@ -29,9 +29,11 @@ export const fetchEventMetrics = async (filters?: MetricsFilters, recache: boole
   return [];
 };
 
+const metricsQueryKey = (filters?: MetricsFilters) => ['event-metrics', filters];
+
 export const useEventMetrics = (filters?: MetricsFilters) => {
   const queryClient = useQueryClient();
-  const queryKey = ['event-metrics', filters];
+  const queryKey = metricsQueryKey(filters);
 
   const query = useQuery({
     queryKey,
@@ -44,13 +46,16 @@ export const useEventMetrics = (filters?: MetricsFilters) => {
   // hide a failed recache behind stale numbers.
   const recacheMutation = useMutation({
     mutationFn: (recacheFilters?: MetricsFilters) => fetchEventMetrics(recacheFilters, true),
-    onSuccess: metrics => queryClient.setQueryData(queryKey, metrics),
+    // Keyed off the mutation's own variables, not the enclosing queryKey: react-query rebinds a
+    // pending mutation's options on every render, so the closure would otherwise write this
+    // response into whichever filter set is selected by the time it resolves.
+    onSuccess: (metrics, variables) => queryClient.setQueryData(metricsQueryKey(variables), metrics),
   });
 
   // A failed recache stays visible until the next attempt, but it belongs to the filter set it was
   // issued for - a later filter change must not keep showing it above freshly loaded data.
   const recacheFailed =
-    recacheMutation.isError && JSON.stringify(recacheMutation.variables ?? {}) === JSON.stringify(filters ?? {});
+    recacheMutation.isError && hashKey(metricsQueryKey(recacheMutation.variables)) === hashKey(queryKey);
 
   const forceRefresh = () => recacheMutation.mutate(filters);
 

@@ -37,7 +37,6 @@ interface ControlPanelProps {
   onClearFilters: () => void;
   onSetDateRange: (preset: string) => void;
   onApplyFilters: () => void;
-  isLoading: boolean;
   isFetching: boolean;
   hideCategoryFilter?: boolean;
 }
@@ -74,7 +73,6 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
   onClearFilters,
   onSetDateRange,
   onApplyFilters,
-  isLoading,
   isFetching,
   hideCategoryFilter,
 }) => {
@@ -294,13 +292,13 @@ export const ControlPanel: React.FC<ControlPanelProps> = ({
                 variant="outlined"
                 color="neutral"
                 onClick={onClearFilters}
-                disabled={isLoading}
+                disabled={isFetching}
                 data-testid="clear-filters-btn"
               >
                 <ClearIcon />
               </IconButton>
             </Tooltip>
-            <Button variant="solid" onClick={onApplyFilters} disabled={isLoading} data-testid="apply-filters-btn">
+            <Button variant="solid" onClick={onApplyFilters} disabled={isFetching} data-testid="apply-filters-btn">
               Apply Filters
             </Button>
             <Tooltip title="Refresh data">

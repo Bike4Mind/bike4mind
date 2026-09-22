@@ -115,7 +115,6 @@ const EventMetricsTab: React.FC = () => {
         onClearFilters={handleClearFilters}
         onSetDateRange={setDateRange}
         onApplyFilters={handleApplyFilters}
-        isLoading={isLoading}
         isFetching={isFetching}
       />
 
