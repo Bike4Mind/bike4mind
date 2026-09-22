@@ -163,7 +163,9 @@ function mergeContextContent(global: ContextFileResult | null, project: ContextF
  * Load context files from global and project directories
  *
  * Global files are loaded from ~/.bike4mind/
- * Project files are loaded from the project directory (or cwd if null)
+ * Project files are loaded from `projectDir`. When it is null the project layer
+ * is SKIPPED entirely (not defaulted to cwd) - the folder-trust gate passes null
+ * for an untrusted project so its repo context file is never loaded.
  *
  * Returns the first matching file from each layer based on priority order
  */
@@ -172,12 +174,15 @@ export async function loadContextFiles(projectDir: string | null): Promise<Conte
 
   // Determine directories
   const globalDir = path.join(homedir(), '.bike4mind');
-  const projectDirectory = projectDir || process.cwd();
 
-  // Load global and project context files in parallel
+  // Load global and project context files in parallel. A null projectDir means
+  // "no trusted project" - do not fall back to cwd (that would reintroduce the
+  // repo's context file).
   const [globalResult, projectResult] = await Promise.all([
     Promise.resolve(findContextFile(globalDir, GLOBAL_CONTEXT_FILES, 'global')),
-    Promise.resolve(findContextFile(projectDirectory, PROJECT_CONTEXT_FILES, 'project')),
+    Promise.resolve(
+      projectDir ? findContextFile(projectDir, PROJECT_CONTEXT_FILES, 'project') : { result: null, error: null }
+    ),
   ]);
 
   // Collect errors

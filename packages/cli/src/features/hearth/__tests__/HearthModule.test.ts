@@ -120,11 +120,19 @@ describe('HearthModule', () => {
 
     function withTty<T>(isTTY: boolean, run: () => T): T {
       const original = process.stdout.isTTY;
+      const originalNoColor = process.env.NO_COLOR;
+      const originalForceColor = process.env.FORCE_COLOR;
       Object.defineProperty(process.stdout, 'isTTY', { value: isTTY, configurable: true });
+      delete process.env.NO_COLOR;
+      delete process.env.FORCE_COLOR;
       try {
         return run();
       } finally {
         Object.defineProperty(process.stdout, 'isTTY', { value: original, configurable: true });
+        if (originalNoColor === undefined) delete process.env.NO_COLOR;
+        else process.env.NO_COLOR = originalNoColor;
+        if (originalForceColor === undefined) delete process.env.FORCE_COLOR;
+        else process.env.FORCE_COLOR = originalForceColor;
       }
     }
 

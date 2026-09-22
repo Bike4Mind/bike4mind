@@ -98,7 +98,7 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
-import { settleToolCallCredits } from './settleToolCredits';
+import { resolveAggregateToolModel, settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
@@ -168,7 +168,11 @@ import {
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
-import { narrowLakeAccessToSession, type ResolvedLakeAccessSet } from '../dataLakeService/narrowLakeAccessToSession';
+import {
+  narrowLakeAccessToSession,
+  sessionGroundsOnNoLake,
+  type ResolvedLakeAccessSet,
+} from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
@@ -896,6 +900,10 @@ export class ChatCompletionProcess {
   // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
   // than once in a turn bills the sum of every call.
   private toolCreditsMap: Map<string, number[]> = new Map();
+  // Distinct models that charged tool credits this turn (see ToolBuilder.reserveToolCredits).
+  // The quest writes ONE aggregate tool_usage ledger row, so it can only name a model
+  // honestly when this holds exactly one - see the settlement block below.
+  private toolCreditModels: Set<string> = new Set();
   private subagentTelemetryData: SubagentTelemetryData[] = [];
   // Credit reservation tracking (pre-reserve/reconcile pattern)
   private reservedCredits: number = 0;
@@ -2672,6 +2680,7 @@ export class ChatCompletionProcess {
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
         sessionRetrievalTags: session.retrievalTags,
+        sessionLakeScopeExplicit: session.lakeScopeExplicit,
         sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
         storage: this.storage,
@@ -2679,6 +2688,7 @@ export class ChatCompletionProcess {
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
         toolCreditsMap: this.toolCreditsMap,
+        toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
@@ -2895,12 +2905,14 @@ export class ChatCompletionProcess {
         //
         // Mirrors resolveSessionLakeAccess, the one implementation every knowledge tool runs on:
         // owner-wide access narrowed to the session, and nothing at all where the corpus is
-        // personal and the lake arms are suppressed. Fail direction is inherited from
+        // personal or the session grounds on no lake. Both of those are invisible to the narrowing
+        // itself, which reads an empty scope as "no opinion". Fail direction is inherited from
         // getAccessibleDataLakeAccess, which degrades to empty access rather than throwing, so a
         // lake-resolution outage records an empty scope and the replay skips the turn.
-        const lakeScope = this.personalCorpusOnly
-          ? []
-          : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
+        const lakeScope =
+          this.personalCorpusOnly || sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
+            ? []
+            : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
@@ -4117,6 +4129,7 @@ export class ChatCompletionProcess {
             // settleToolCallCredits and billed as its cost. Clear it so only the surviving
             // attempt's delivered tools settle.
             this.toolCreditsMap.clear();
+            this.toolCreditModels.clear();
 
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] === ${
@@ -5212,10 +5225,14 @@ export class ChatCompletionProcess {
                 .filter(fc => fc.creditsUsed && fc.creditsUsed > 0)
                 .map(fc => fc.name)
                 .join(', ');
+              // NOT currentModel.id: the charge belongs to whatever model the tools ran
+              // on. One aggregate row can only name it when a single model charged (see
+              // resolveAggregateToolModel).
+              const toolUsageModel = resolveAggregateToolModel(this.toolCreditModels);
               await subtractCredits(
                 {
                   type: 'tool_usage',
-                  model: currentModel.id,
+                  model: toolUsageModel,
                   sessionId: quest.sessionId,
                   questId: quest.id,
                   ownerId: this.reservedCreditsOwnerId || this.user.id,
@@ -6196,7 +6213,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.logger.log('  - Enabling KnowledgeRetrieval (forced) feature');
       this.features.set(
         'knowledgeRetrieval',
-        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter, preauthorizedLakeIds)
+        new KnowledgeRetrievalFeature(
+          this,
+          retrievalTags,
+          citationStyle,
+          retrievalFilter,
+          preauthorizedLakeIds,
+          lakeScopeExplicit
+        )
       );
 
       // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer

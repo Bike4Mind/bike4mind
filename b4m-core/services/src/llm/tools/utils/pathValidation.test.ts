@@ -145,6 +145,53 @@ describe('pathValidation', () => {
     });
   });
 
+  describe('isPathAllowed with dangling symlinks', () => {
+    let danglingLink: string;
+
+    beforeAll(async () => {
+      // A symlink INSIDE cwd whose target does not exist and is OUTSIDE cwd.
+      // realpathSync throws on it, so a naive "resolve the parent" fallback would
+      // treat it as an in-cwd new file and allow a create that then follows the
+      // link outside the workspace.
+      danglingLink = join(testDir, 'dangling-link');
+      await symlink(join(testDir, '..', 'nonexistent-outside-target', 'evil.txt'), danglingLink);
+    });
+
+    afterAll(async () => {
+      await rm(danglingLink, { force: true }).catch(() => {});
+    });
+
+    it('denies a create against a dangling symlink pointing outside cwd', () => {
+      const result = isPathAllowed('dangling-link');
+      expect(result.allowed).toBe(false);
+    });
+  });
+
+  describe('isPathAllowed with symlink cycles', () => {
+    let linkA: string;
+    let linkB: string;
+
+    beforeAll(async () => {
+      // a -> b -> a: realpathSync throws ELOOP. The resolver must not recurse
+      // through readlink for ever; it degrades to a lexical in-cwd result.
+      linkA = join(testDir, 'cycle-a');
+      linkB = join(testDir, 'cycle-b');
+      await symlink(linkB, linkA);
+      await symlink(linkA, linkB);
+    });
+
+    afterAll(async () => {
+      await rm(linkA, { force: true }).catch(() => {});
+      await rm(linkB, { force: true }).catch(() => {});
+    });
+
+    it('resolves a symlink cycle without infinite recursion', () => {
+      // A cyclic link can never open(), so a lexical verdict is safe; the point is
+      // that this returns at all rather than blowing the stack.
+      expect(() => isPathAllowed('cycle-a')).not.toThrow();
+    });
+  });
+
   describe('isPathAllowed with non-existent paths', () => {
     it('should allow non-existent files within cwd', () => {
       const result = isPathAllowed('does-not-exist.txt');

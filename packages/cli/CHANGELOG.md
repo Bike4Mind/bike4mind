@@ -1,5 +1,19 @@
 # @bike4mind/cli
 
+## 1.1.0
+
+### Minor Changes
+
+- [#3035](https://github.com/Bike4Mind/bike4mind/pull/3035) [`fce5f89`](https://github.com/Bike4Mind/bike4mind/commit/fce5f89e763183642afcce37706252073aa20baf) Thanks [@julsanchez](https://github.com/julsanchez)! - gate repo config, MCP, hooks and skills behind a per-project trust decision
+
+### Patch Changes
+
+- [#2848](https://github.com/Bike4Mind/bike4mind/pull/2848) [`c6c35c3`](https://github.com/Bike4Mind/bike4mind/commit/c6c35c3ac15cf06526b4503bf4a18cef7a929b30) Thanks [@choyno](https://github.com/choyno)! - surface the credit-exhaustion classifier and emit type on both chat surfaces
+
+- [#3058](https://github.com/Bike4Mind/bike4mind/pull/3058) [`c2ff307`](https://github.com/Bike4Mind/bike4mind/commit/c2ff307506fc29e14b7d88fabb0dce89f01a2085) Thanks [@onoya](https://github.com/onoya)! - report omitted research file references
+
+- [#3112](https://github.com/Bike4Mind/bike4mind/pull/3112) [`b9ddc38`](https://github.com/Bike4Mind/bike4mind/commit/b9ddc386391140d6bdd30ee5b00ba8324f68b98a) Thanks [@julsanchez](https://github.com/julsanchez)! - route every model-callable tool through the permission wrapper and shared path validator
+
 ## 1.0.0
 
 ### Major Changes

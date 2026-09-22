@@ -135,11 +135,11 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
   });
 
   // A prefix-arm JOIN needs no manage-rights gate on the membership itself (the read-side
-  // predicate grants it purely on the tag), but recomputeLakeStats's activation side effect
-  // also flips a draft lake to active - a one-way publication change. A shared editor tagging
-  // the OWNER's file with the OWNER's own lake prefix must not be able to force-publish a lake
-  // they have no relationship to. Stats still get corrected (real aggregate, not a mock) so they
-  // don't drift until some other door happens to touch this lake again.
+  // predicate grants it purely on the tag). recomputeLakeStats never flips a draft lake to
+  // active on its own now - publishing is an explicit, separate action (promoteDataLake) - so a
+  // shared editor tagging the OWNER's file with the OWNER's own lake prefix cannot affect the
+  // lake's publication state either way. Stats still get corrected (real aggregate, not a mock)
+  // so they don't drift until some other door happens to touch this lake again.
   it('corrects a draft lake stats without publishing it when a shared editor triggers the join', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
     const file = await makeFile([]);
@@ -156,7 +156,9 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
     expect(persistedLake?.fileCount).toBe(1);
   });
 
-  it('publishes a draft lake when the OWNER triggers the same join', async () => {
+  // The lake OWNER gets no special treatment either: joining a file is not how a lake gets
+  // published, no matter who triggers it. Publishing goes through promoteDataLake alone.
+  it('leaves a draft lake in draft when the OWNER triggers the same join', async () => {
     const lake = await makeLake({ status: 'draft', fileCount: 0, totalSizeBytes: 0 });
     const file = await makeFile([]);
     const owner = { id: ownerId, isAdmin: false } as any;
@@ -168,7 +170,7 @@ describe('reconcileLakeTags (via updateFabFile) against real Mongo', () => {
     );
 
     const persistedLake = await DataLakeModel.findById(lake.id);
-    expect(persistedLake?.status).toBe('active');
+    expect(persistedLake?.status).toBe('draft');
     expect(persistedLake?.fileCount).toBe(1);
   });
 });
