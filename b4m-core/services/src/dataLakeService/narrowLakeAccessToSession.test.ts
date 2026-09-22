@@ -41,7 +41,7 @@ describe('narrowLakeAccessToSession', () => {
   });
 
   /**
-   * #3055 (review onoya): a NARROWED session cannot honestly claim the account-wide count as its
+   * #3055: a NARROWED session cannot honestly claim the account-wide count as its
    * own - the caller can access lake `alpha`, could be excluded from some unrelated lake `zulu`
    * elsewhere in the org, and a session scoped to `alpha` alone must not report `zulu`'s exclusion
    * as if it were in this turn's scope. Dropping to undefined (not measured) is the honest answer;
