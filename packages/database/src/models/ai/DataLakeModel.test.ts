@@ -324,6 +324,39 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
     expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
   });
 
+  // Review onoya (#3055): `createdByUserId` is immutable creator provenance, not current ownership
+  // - a lake whose ownership has since transferred away from its creator must count toward the
+  // creator's exclusion once they hold neither the gate nor another grant. Mirrors
+  // findActiveByUserTagsAndEntitlements's own supersededOwnLakeIds narrowing on the creator arm.
+  it('counts a lake the caller created but whose ownership has since been transferred away (superseded)', async () => {
+    const transferred = await dataLakeRepository.create(
+      baseLake({ slug: 'transferred', organizationId: 'orgA', createdByUserId: 'alice', requiredUserTag: 'medlib' })
+    );
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'alice', {
+        supersededOwnLakeIds: [transferred.id],
+      })
+    ).toBe(1);
+  });
+
+  it('still exempts a creator-owned lake NOT in supersededOwnLakeIds, even when other lakes are superseded', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'still-mine', organizationId: 'orgA', createdByUserId: 'alice', requiredUserTag: 'medlib' })
+    );
+    const someOtherLakeId = (
+      await dataLakeRepository.create(
+        baseLake({ slug: 'unrelated', organizationId: 'orgA', createdByUserId: 'alice', requiredUserTag: 'medlib' })
+      )
+    ).id;
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'alice', {
+        supersededOwnLakeIds: [someOtherLakeId],
+      })
+    ).toBe(1);
+  });
+
   it('never counts a lake the caller reaches by a USER or ORG grant', async () => {
     const byUserGrant = await dataLakeRepository.create(
       baseLake({ slug: 'user-granted', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
