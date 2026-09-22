@@ -1439,5 +1439,37 @@ describe('AgentExecutionRepository', () => {
 
       expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
     });
+
+    it('is idempotent once the caller has advanced status off awaiting_permission, as the real approve handler does', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(true);
+      // `agentExecute.ts` moves status to 'continuing' right after a successful approve
+      // (before invoking the resume Lambda) - that status flip, not a same-value $set
+      // being a Mongo no-op, is what makes a retried approval see modifiedCount 0: the
+      // CAS filter no longer matches. Setting `approved` to `true` again on a document
+      // still `awaiting_permission` is NOT a no-op in MongoDB, so a retry racing ahead of
+      // that status write would re-run the $set - the filter's status clause is load-bearing.
+      await agentExecutionRepository.updateStatus(execution.id, 'continuing' as AgentExecutionStatus);
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
+    });
+
+    it('folds a remembered-tool approval into the same CAS write', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(
+        await agentExecutionRepository.approvePendingPermission(execution.id, { approvedTool: 'image_generation' })
+      ).toBe(true);
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission?.approved).toBe(true);
+      expect(reloaded?.approvedTools).toContain('image_generation');
+    });
   });
 });

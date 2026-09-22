@@ -1412,11 +1412,19 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * executor can still read the withheld calls it has to replay. CAS-guarded on
    * `awaiting_permission` so a duplicate or stale approval cannot re-arm a pause
    * the executor has already consumed; returns whether it landed.
+   *
+   * `approvedTool`, when given, is pushed onto `approvedTools` in the SAME update
+   * as the CAS - a second write here could land after a process death between the
+   * two, leaving a retry's CAS miss with a "remember for session" that never took.
    */
-  async approvePendingPermission(id: string): Promise<boolean> {
+  async approvePendingPermission(id: string, opts?: { approvedTool?: string }): Promise<boolean> {
+    const update: Record<string, unknown> = { $set: { 'pendingPermission.approved': true } };
+    if (opts?.approvedTool) {
+      update.$push = { approvedTools: opts.approvedTool };
+    }
     const res = await this.model.updateOne(
       { _id: id, status: 'awaiting_permission', pendingPermission: { $exists: true } },
-      { $set: { 'pendingPermission.approved': true } }
+      update
     );
     return res.modifiedCount > 0;
   }

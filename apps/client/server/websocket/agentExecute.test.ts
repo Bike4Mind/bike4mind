@@ -131,6 +131,10 @@ describe('handlePermissionResponse', () => {
 
     expect(mockRememberDecision).toHaveBeenCalledWith('user-1', baseExecution.sessionId, 'web_search', 'approved');
     expect(mockUpdateStatus).toHaveBeenCalledWith('exec-1', 'continuing');
+    // approvedTool rides the same CAS write as the approval, not a second one - see
+    // approvePendingPermission.
+    expect(mockApprovePendingPermission).toHaveBeenCalledWith('exec-1', { approvedTool: 'web_search' });
+    expect(mockUpdatePermissionState).not.toHaveBeenCalled();
   });
 
   it('does not remember the approval when rememberForSession is false', async () => {
@@ -191,7 +195,7 @@ describe('handlePermissionResponse', () => {
       noopLogger as any
     );
 
-    expect(mockApprovePendingPermission).toHaveBeenCalledWith('exec-1');
+    expect(mockApprovePendingPermission).toHaveBeenCalledWith('exec-1', { approvedTool: undefined });
     expect(mockUpdatePermissionState).not.toHaveBeenCalled();
   });
 

@@ -60,8 +60,12 @@ export type GatedAction = {
   toolName: string;
   toolInput: unknown;
   verdict: 'denied' | 'needs_approval';
-  /** Provider tool_use id, present when the action came from a pre-execution gate. */
-  toolCallId?: string;
+  /**
+   * Provider tool_use id. Always set by `selectGatedToolCall`, the only producer -
+   * unlike `IPendingPermission.toolCallId`, which stays optional for pauses persisted
+   * before the pre-execution gate existed.
+   */
+  toolCallId: string;
 };
 
 /**
@@ -125,8 +129,102 @@ export function partitionApprovedPause(
   const nowApproved = withheld.filter(
     c => c.id === approvedToolCallId || !shouldWithholdToolCall(c.name, approvedTools, deniedTools)
   );
-  const stillWithheld = withheld.filter(c => !nowApproved.includes(c));
+  const approvedIds = new Set(nowApproved.map(c => c.id));
+  const stillWithheld = withheld.filter(c => !approvedIds.has(c.id));
   return { nowApproved, stillWithheld };
+}
+
+export type ResumeApprovedPauseOutcome =
+  { status: 'replayed' } | { status: 'replay_error' } | { status: 'repaused' } | { status: 'unresolvable' };
+
+/**
+ * Replay an iteration's approved-and-withheld tool calls and settle whatever is left.
+ * This is the whole approve -> replay state machine `agentExecutor.ts` pauses into and
+ * resumes from - extracted so it is unit-testable end to end without a live executor.
+ * Every side effect (replay, checkpoint write, billing, re-pause) lives here; the caller
+ * only decides whether to keep running the iteration loop based on `status`.
+ */
+export async function resumeApprovedPause<TCheckpoint>(
+  params: {
+    executionId: string;
+    iterationIndex: number;
+    withheld: GatedToolCall[];
+    approvedToolCallId: string | undefined;
+    approvedTools: string[];
+    deniedTools: string[];
+  },
+  deps: {
+    executeGatedToolCall: (call: { id: string; name: string; input: unknown }) => Promise<unknown>;
+    toCheckpoint: () => TCheckpoint;
+    updatePermissionState: (executionId: string) => Promise<unknown>;
+    updateCheckpoint: (executionId: string, checkpoint: TCheckpoint) => Promise<unknown>;
+    billIterationIfNeeded: (iterationIndex: number, checkpoint: TCheckpoint) => Promise<void>;
+    settleGatedCall: (gated: GatedAction, withheld: GatedToolCall[]) => Promise<void>;
+    markFailed: (executionId: string, err: { message: string; callerSafe?: boolean }) => Promise<unknown>;
+    sendWs: (event: string, payload: Record<string, unknown>) => Promise<void>;
+    persistRunAsQuest: (message: string) => Promise<void>;
+    logger: { error: (msg: string, meta?: Record<string, unknown>) => void };
+  }
+): Promise<ResumeApprovedPauseOutcome> {
+  const { executionId, iterationIndex, withheld, approvedToolCallId, approvedTools, deniedTools } = params;
+  const { nowApproved, stillWithheld } = partitionApprovedPause(
+    withheld,
+    approvedToolCallId,
+    approvedTools,
+    deniedTools
+  );
+
+  for (const call of nowApproved) {
+    try {
+      await deps.executeGatedToolCall({ id: call.id, name: call.name, input: call.input });
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      // Deliberately does not claim the tool did not run: `executeGatedToolCall` refuses
+      // before invoking the tool when it cannot record the result, but any other throw
+      // here can land after the side effect.
+      deps.logger.error('[Permission] Approved tool call could not be replayed', {
+        executionId,
+        call: call.name,
+        errMsg,
+      });
+      await deps.markFailed(executionId, { message: `Approved tool "${call.name}" did not complete: ${errMsg}` });
+      await deps.sendWs('failed', { executionId, reason: 'gated_replay_error', toolName: call.name });
+      await deps.persistRunAsQuest(`Approved tool "${call.name}" did not complete.`);
+      return { status: 'replay_error' };
+    }
+  }
+
+  const replayCheckpoint = deps.toCheckpoint();
+  await deps.updatePermissionState(executionId);
+  await deps.updateCheckpoint(executionId, replayCheckpoint);
+  // Settle the replayed tools' provider/LLM spend against the iteration that asked for
+  // them. Deferring it to the next iteration's billing would drop it entirely when the
+  // run exits the loop first (ceiling reached), and a provider was genuinely called.
+  // The token delta is zero here, so this charges the tool spend and nothing else.
+  await deps.billIterationIfNeeded(iterationIndex, replayCheckpoint);
+
+  // Everything left is still withheld by construction, so this always selects - the run
+  // must not fall through to the loop with a `GATED_TOOL_OBSERVATION` placeholder the
+  // model would read as "awaiting approval" for the rest of the run.
+  if (stillWithheld.length > 0) {
+    const nextGated = selectGatedToolCall(stillWithheld, approvedTools, deniedTools);
+    if (!nextGated) {
+      deps.logger.error(
+        '[Permission] Withheld calls remain but none classifies as gated - failing rather than stranding them',
+        { executionId, tools: stillWithheld.map(c => c.name) }
+      );
+      await deps.markFailed(executionId, {
+        message: 'Execution stopped: a tool call was left awaiting approval that can no longer be resolved.',
+      });
+      await deps.sendWs('failed', { executionId, reason: 'gated_replay_error' });
+      await deps.persistRunAsQuest('Execution stopped: an approval could not be resolved.');
+      return { status: 'unresolvable' };
+    }
+    await deps.settleGatedCall(nextGated, stillWithheld);
+    return { status: 'repaused' };
+  }
+
+  return { status: 'replayed' };
 }
 
 /**

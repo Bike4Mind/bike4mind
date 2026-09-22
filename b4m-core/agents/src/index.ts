@@ -16,7 +16,7 @@ export {
   DEFAULT_BLOCK_THRESHOLD,
 } from './repeatedCallGuard';
 export type { RepeatedCallGuardOptions, RepeatedCallRecord } from './repeatedCallGuard';
-export { PERSONA_ALLOWED_SUBAGENTS, GATED_TOOL_OBSERVATION } from './types';
+export { PERSONA_ALLOWED_SUBAGENTS } from './types';
 export { isContextLimitError } from './errors';
 export type {
   AgentCheckpoint,
@@ -30,6 +30,7 @@ export type {
   ConversationMessage,
   GatedToolCall,
   IterationResult,
+  RunIterationOptions,
   ServerAgentConfig,
   ServerAgentDefinition,
   SubagentConfig,

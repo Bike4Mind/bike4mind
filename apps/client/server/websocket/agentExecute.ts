@@ -485,7 +485,9 @@ export async function handlePermissionResponse(
   // the gate withheld, and the resumed executor is what finally runs them. The CAS is
   // on `awaiting_permission`, so a duplicate approval for a pause already consumed is
   // dropped here instead of replaying the tool a second time.
-  const marked = await agentExecutionRepository.approvePendingPermission(cmd.executionId);
+  const marked = await agentExecutionRepository.approvePendingPermission(cmd.executionId, {
+    approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
+  });
   if (!marked) {
     logger.warn('[Permission] Approval did not land - the pause was already settled', {
       executionId: cmd.executionId,
@@ -503,7 +505,6 @@ export async function handlePermissionResponse(
     return;
   }
   if (cmd.rememberForSession) {
-    await agentExecutionRepository.updatePermissionState(cmd.executionId, { approvedTool: cmd.toolName });
     await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'approved', logger);
   }
 

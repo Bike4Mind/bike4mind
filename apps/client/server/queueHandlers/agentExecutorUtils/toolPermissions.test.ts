@@ -1,10 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import type { GatedToolCall } from '@bike4mind/agents';
 import {
   classifyToolPermission,
   selectGatedToolCall,
   shouldWithholdToolCall,
   partitionApprovedPause,
+  resumeApprovedPause,
+  type GatedAction,
 } from './toolPermissions';
 
 let nextId = 0;
@@ -202,11 +204,124 @@ describe('partitionApprovedPause', () => {
     expect(stillWithheld).toEqual([first]);
   });
 
-  it('approves everything when a second, unrelated gated tool needs its own card next', () => {
+  it('approves only the named call, leaving a second, unrelated gated tool to raise its own card next', () => {
     const approved = call('send_slack_message', { text: 'hi' });
     const stillGated = call('image_generation', { prompt: 'cat' });
     const { nowApproved, stillWithheld } = partitionApprovedPause([approved, stillGated], approved.id, [], []);
     expect(nowApproved).toEqual([approved]);
     expect(stillWithheld).toEqual([stillGated]);
+  });
+});
+
+describe('resumeApprovedPause', () => {
+  function makeDeps(overrides: Partial<Parameters<typeof resumeApprovedPause>[1]> = {}) {
+    const deps: Parameters<typeof resumeApprovedPause>[1] = {
+      executeGatedToolCall: vi.fn(async () => 'ok'),
+      toCheckpoint: vi.fn(() => ({ iteration: 1 })),
+      updatePermissionState: vi.fn(async () => {}),
+      updateCheckpoint: vi.fn(async () => {}),
+      billIterationIfNeeded: vi.fn(async () => {}),
+      settleGatedCall: vi.fn(async () => {}),
+      markFailed: vi.fn(async () => {}),
+      sendWs: vi.fn(async () => {}),
+      persistRunAsQuest: vi.fn(async () => {}),
+      logger: { error: vi.fn() },
+      ...overrides,
+    };
+    return deps;
+  }
+
+  it('replays the approved call, clears the pause, bills once, and reports replayed', async () => {
+    const approved = call('image_generation', { prompt: 'cat' });
+    const deps = makeDeps();
+
+    const outcome = await resumeApprovedPause(
+      {
+        executionId: 'exec_1',
+        iterationIndex: 2,
+        withheld: [approved],
+        approvedToolCallId: approved.id,
+        approvedTools: [],
+        deniedTools: [],
+      },
+      deps
+    );
+
+    expect(outcome).toEqual({ status: 'replayed' });
+    expect(deps.executeGatedToolCall).toHaveBeenCalledTimes(1);
+    expect(deps.executeGatedToolCall).toHaveBeenCalledWith({
+      id: approved.id,
+      name: approved.name,
+      input: approved.input,
+    });
+    expect(deps.updatePermissionState).toHaveBeenCalledTimes(1);
+    expect(deps.updateCheckpoint).toHaveBeenCalledTimes(1);
+    expect(deps.billIterationIfNeeded).toHaveBeenCalledTimes(1);
+    expect(deps.settleGatedCall).not.toHaveBeenCalled();
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('fails the run on a mid-batch replay throw without clearing the pause', async () => {
+    const approved = call('send_slack_message', { text: 'hi' });
+    const deps = makeDeps({
+      executeGatedToolCall: vi.fn(async () => {
+        throw new Error('provider exploded');
+      }),
+    });
+
+    const outcome = await resumeApprovedPause(
+      {
+        executionId: 'exec_2',
+        iterationIndex: 0,
+        withheld: [approved],
+        approvedToolCallId: approved.id,
+        approvedTools: [],
+        deniedTools: [],
+      },
+      deps
+    );
+
+    expect(outcome).toEqual({ status: 'replay_error' });
+    expect(deps.markFailed).toHaveBeenCalledWith(
+      'exec_2',
+      expect.objectContaining({ message: expect.stringContaining('provider exploded') })
+    );
+    // The pause must stay in place for a retry to see the same withheld call - a
+    // mid-batch throw must not silently clear `pendingPermission`.
+    expect(deps.updatePermissionState).not.toHaveBeenCalled();
+    expect(deps.updateCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it('re-pauses for a second gated call to the same tool with different arguments', async () => {
+    const approvedCall = call('image_generation', { prompt: 'cat' });
+    const secondCall = call('image_generation', { prompt: 'dog' });
+    const deps = makeDeps();
+
+    const outcome = await resumeApprovedPause(
+      {
+        executionId: 'exec_3',
+        iterationIndex: 1,
+        withheld: [approvedCall, secondCall],
+        approvedToolCallId: approvedCall.id,
+        approvedTools: [],
+        deniedTools: [],
+      },
+      deps
+    );
+
+    expect(outcome).toEqual({ status: 'repaused' });
+    expect(deps.executeGatedToolCall).toHaveBeenCalledTimes(1);
+    expect(deps.executeGatedToolCall).toHaveBeenCalledWith(expect.objectContaining({ id: approvedCall.id }));
+    // Cleared and re-billed even though a second card follows: the approved call already
+    // ran and its provider spend must settle against this iteration regardless.
+    expect(deps.updatePermissionState).toHaveBeenCalledTimes(1);
+    expect(deps.billIterationIfNeeded).toHaveBeenCalledTimes(1);
+    expect(deps.settleGatedCall).toHaveBeenCalledTimes(1);
+    const [gatedArg, withheldArg] = (deps.settleGatedCall as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      GatedAction,
+      GatedToolCall[],
+    ];
+    expect(gatedArg.toolCallId).toBe(secondCall.id);
+    expect(withheldArg).toEqual([secondCall]);
   });
 });

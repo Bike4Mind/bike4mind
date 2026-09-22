@@ -11,6 +11,7 @@ import type {
   AgentStep,
   GatedToolCall,
   IterationResult,
+  RunIterationOptions,
 } from './types';
 import { GATED_TOOL_OBSERVATION } from './types';
 import {
@@ -351,11 +352,13 @@ export class ReActAgent extends EventEmitter {
    * @returns Agent result with final answer and all steps
    */
   async run(query: string | MessageContent, options: AgentRunOptions = {}): Promise<AgentResult> {
-    // `run()` has its own tool-execution loop and never consults `toolGate` -
-    // only `runIteration()` does. Silently ignoring it here would be the worst
-    // failure mode for a permission gate (every call runs ungated), so refuse
-    // outright rather than let a caller believe it is gating tool execution.
-    if (options.toolGate) {
+    // `run()` has its own tool-execution loop and never consults `toolGate` - only
+    // `runIteration()` does, and `toolGate` lives on `RunIterationOptions`, not
+    // `AgentRunOptions`, specifically so a TypeScript caller cannot pass one here.
+    // This guard only catches a plain-JS caller (no type checker) smuggling one in;
+    // silently ignoring it would be the worst failure mode for a permission gate
+    // (every call runs ungated), so refuse outright instead.
+    if ((options as RunIterationOptions).toolGate) {
       throw new Error('ReActAgent.run: toolGate is only honored by runIteration(), not run()');
     }
 
@@ -1020,12 +1023,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   }
 
   replaceLastToolResultObservation(toolCallId: string, newObservation: string): void {
-    if (!this.context.llm.replaceLastToolResultObservation) {
+    if (!this.supportsGatedReplay()) {
       throw new Error(
         `ReActAgent.replaceLastToolResultObservation: backend (${this.context.llm.currentModel}) does not implement replaceLastToolResultObservation — cannot resume after subagent handoff`
       );
     }
-    this.context.llm.replaceLastToolResultObservation(this.messages, toolCallId, newObservation);
+    // Non-null by construction: `supportsGatedReplay()` above is this exact typeof check.
+    this.context.llm.replaceLastToolResultObservation!(this.messages, toolCallId, newObservation);
   }
 
   /**
@@ -1132,7 +1136,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * duplicated between run() and runIteration(). Extract into a shared private method
    * once runIteration() is validated in production.
    */
-  async runIteration(query?: string | MessageContent, options: AgentRunOptions = {}): Promise<IterationResult> {
+  async runIteration(query?: string | MessageContent, options: RunIterationOptions = {}): Promise<IterationResult> {
     const maxIterations = options.maxIterations ?? this.context.maxIterations ?? 50;
     const temperature = options.temperature ?? this.context.temperature ?? 0.7;
     const maxTokens = options.maxTokens ?? this.context.maxTokens;
@@ -1786,7 +1790,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     // (gemini, xai, kimi, ollama, ...) do not implement it. Running the tool first and
     // discovering that afterwards would leave the side effect behind with no way to record
     // its result, and report the failure as though the tool had never run.
-    if (!this.context.llm.replaceLastToolResultObservation) {
+    if (!this.supportsGatedReplay()) {
       throw new Error(
         `ReActAgent.executeGatedToolCall: backend (${this.context.llm.currentModel}) cannot record a replayed tool result, so an approval-gated tool cannot be run on it`
       );

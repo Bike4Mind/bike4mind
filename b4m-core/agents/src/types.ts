@@ -257,14 +257,6 @@ export interface AgentRunOptions {
    */
   confidenceGate?: (iterationConfidence: number, iterationIndex: number) => ConfidenceGateDecision;
   /**
-   * Pre-execution permission gate, consulted for every tool call BEFORE it runs.
-   * Returning true withholds the call: the tool function is never invoked, so no
-   * provider is billed and no side effect occurs. The call is reported on
-   * `IterationResult.gatedToolCalls` for the host to approve and replay via
-   * `executeGatedToolCall`. Without this callback every tool runs (prior behavior).
-   */
-  toolGate?: (call: GatedToolCall) => boolean;
-  /**
    * Enable prompt caching for system prompt and tool definitions.
    * Reduces input token cost by ~90% on cached portions across iterations.
    * Defaults to false.
@@ -309,6 +301,25 @@ export interface AgentRunOptions {
    * dedup. Not provided: behavior is unchanged.
    */
   workflowReminder?: () => string | null;
+}
+
+/**
+ * Options for `runIteration()` only. `toolGate` lives here rather than on
+ * `AgentRunOptions` because `run()` has its own tool-execution loop and never
+ * consults it - `run()` throws on a `toolGate` at the JS-caller boundary (see
+ * `ReActAgent.run`), but keeping it off `AgentRunOptions` means that guard is
+ * unreachable for a TypeScript caller: the type itself says `run()` cannot
+ * take one.
+ */
+export interface RunIterationOptions extends AgentRunOptions {
+  /**
+   * Pre-execution permission gate, consulted for every tool call BEFORE it runs.
+   * Returning true withholds the call: the tool function is never invoked, so no
+   * provider is billed and no side effect occurs. The call is reported on
+   * `IterationResult.gatedToolCalls` for the host to approve and replay via
+   * `executeGatedToolCall`. Without this callback every tool runs (prior behavior).
+   */
+  toolGate?: (call: GatedToolCall) => boolean;
 }
 
 /**

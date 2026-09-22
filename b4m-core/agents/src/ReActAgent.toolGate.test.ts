@@ -202,14 +202,24 @@ describe('ReActAgent pre-execution tool gate', () => {
       confidenceGate: () => ({ action: 'wait_for_human', confidence: 0, reason: 'test' }),
     });
 
+    // `isComplete: true` + the "Paused for review" step is what proves the confidence-gate
+    // branch produced this result, not the ordinary end-of-iteration return a few lines
+    // below it in ReActAgent.ts (which sets `isComplete: iterationComplete` - false here,
+    // since the iteration called tools without reaching a final answer). Asserting only
+    // `gatedToolCalls` would pass either way and prove nothing about which branch ran.
+    expect(result.isComplete).toBe(true);
+    expect(result.step.content).toMatch(/^\[Paused for review/);
     expect(result.gatedToolCalls?.map(c => c.name)).toEqual(['send_slack_message']);
   });
 
   it('run() refuses a toolGate rather than silently ignoring it', async () => {
     const agent = new ReActAgent(buildContext([], createMockLlm([])));
 
-    await expect(agent.run('hello', { toolGate: () => true })).rejects.toThrow(
-      /toolGate is only honored by runIteration/
-    );
+    // `toolGate` is intentionally absent from `AgentRunOptions` (it only exists on
+    // `RunIterationOptions`), so a TypeScript caller cannot express this call - the cast
+    // simulates the plain-JS caller the runtime guard in `run()` exists to catch.
+    await expect(
+      agent.run('hello', { toolGate: () => true } as unknown as Parameters<typeof agent.run>[1])
+    ).rejects.toThrow(/toolGate is only honored by runIteration/);
   });
 });
