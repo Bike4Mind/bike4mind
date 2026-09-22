@@ -1132,19 +1132,19 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
   });
 
   /**
-   * #2236 names only the search and forced-retrieval headers, but this is the third channel that
-   * heads retrieved content for the model. A dateless header here would let one turn cite the same
-   * document dated via search and undated via retrieve.
+   * The header must stay undated even for a file that HAS a `createdAt`, which every stored file
+   * does: that timestamp is when the file was uploaded, so heading a decade-old document with it
+   * tells the model the document is recent. Asserting the whole header line rather than just the
+   * absence of ' - dated' keeps this from passing vacuously if the header shape is rewritten.
    */
-  it('heads the document with its date, and omits the clause when it has none', async () => {
-    const dated = await runById(retrievableCtx('body', { createdAt: new Date('2026-08-14T09:30:00.000Z') }));
-    expect(dated).toContain(`### Handbook.pdf (ID: ${FILE_ID}) - dated 2026-08-14`);
-    // The suffix must not create a second header or defang ours.
-    expect(dated.match(/^### /gm)).toHaveLength(1);
+  it('heads the document undated even when the file carries an upload timestamp', async () => {
+    const withUploadTime = await runById(retrievableCtx('body', { createdAt: new Date('2026-08-14T09:30:00.000Z') }));
+    expect(withUploadTime).toContain(`### Handbook.pdf (ID: ${FILE_ID})\nTags:`);
+    expect(withUploadTime).not.toMatch(/dated|2026-08-14/);
+    expect(withUploadTime.match(/^### /gm)).toHaveLength(1);
 
-    const undated = await runById(retrievableCtx('body'));
-    expect(undated).toContain(`### Handbook.pdf (ID: ${FILE_ID})\n`);
-    expect(undated).not.toContain(' - dated');
+    const noUploadTime = await runById(retrievableCtx('body'));
+    expect(noUploadTime).toContain(`### Handbook.pdf (ID: ${FILE_ID})\nTags:`);
   });
 
   it('leaves the retrieved-count line outside the block', async () => {

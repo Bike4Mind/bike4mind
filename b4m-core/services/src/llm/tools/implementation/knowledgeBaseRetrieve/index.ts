@@ -13,7 +13,6 @@ import { satisfiesMembershipScope } from '../../../../dataLakeService/lakeMember
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
-  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
@@ -424,15 +423,13 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
             // Untrusted on every part that comes from the document, not just the body: the file
             // name and tag list are attacker-influenced too, and a newline in either would carry a
-            // forged marker into the header lines. See renderRetrievedContentBlock. The date is the
-            // one part that needs no wrap - documentDateClause emits digits and separators only.
+            // forged marker into the header lines. See renderRetrievedContentBlock.
             //
-            // Placed on the `###` line rather than in the metadata block below so all THREE
-            // retrieval channels carry it in the same relative position (#2236 names only the
-            // other two; a dateless channel here would let one turn cite the same document dated
-            // via search and undated via retrieve).
+            // Undated, as all three retrieval channels are: `file.createdAt` is when the file was
+            // uploaded, and heading a decade-old document with last week's date is a claim the
+            // model has no way to discount. Nothing captures the document's own date yet.
             sections.push(
-              `### ${toContentLabel(file.fileName)} (ID: ${file.id})${documentDateClause(file.createdAt)}\n` +
+              `### ${toContentLabel(file.fileName)} (ID: ${file.id})\n` +
                 `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
                 // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one
