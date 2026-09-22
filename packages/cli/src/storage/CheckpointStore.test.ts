@@ -586,6 +586,38 @@ describe('CheckpointStore repo-trust hardening', () => {
     }
   });
 
+  it('neutralizes a $HOME/.gitconfig commit.gpgsign via GIT_CONFIG_GLOBAL when committing', async () => {
+    // The hooksPath test above stays green even if the GIT_CONFIG_GLOBAL=/dev/null
+    // line is deleted, because git()'s argv `-c core.hooksPath=/dev/null` masks it
+    // (higher precedence). gpgsign is NOT overridden in argv, so it isolates the
+    // env override: with GIT_CONFIG_GLOBAL neutralized the commit succeeds; drop
+    // that line and the ambient `gpgsign = true` makes `git commit` try to sign
+    // (no key), the commit throws, and createCheckpoint returns null.
+    const proj = await createTestProject();
+    const home = await makeBareDir();
+    const saved = { home: process.env.HOME, xdg: process.env.XDG_CONFIG_HOME };
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+
+      await fs.writeFile(path.join(home, '.gitconfig'), `[commit]\n\tgpgsign = true\n`, 'utf-8');
+      process.env.HOME = home;
+      process.env.XDG_CONFIG_HOME = home;
+
+      await fs.writeFile(path.join(proj, 'f.ts'), 'x', 'utf-8');
+      const cp = await store.createCheckpoint('create_file', ['f.ts']);
+
+      expect(cp).not.toBeNull();
+    } finally {
+      const restore = (k: string, v: string | undefined) =>
+        v === undefined ? delete process.env[k] : (process.env[k] = v);
+      restore('HOME', saved.home);
+      restore('XDG_CONFIG_HOME', saved.xdg);
+      await cleanup(proj);
+      await cleanup(home);
+    }
+  });
+
   it('refuses a symlinked .b4m directory at init', async () => {
     const proj = await makeBareDir();
     const outside = await makeBareDir();
@@ -635,6 +667,58 @@ describe('CheckpointStore repo-trust hardening', () => {
       const reopened = new CheckpointStore(proj);
       await reopened.init('sess');
       expect(reopened.listCheckpoints()).toHaveLength(1);
+    } finally {
+      await cleanup(proj);
+    }
+  });
+
+  it('does not lose subsequent checkpoints when checkpoints.json has a non-object (array) root', async () => {
+    // A hostile clone commits `[]` as the root. Before the container guard,
+    // this.metadata became that array; saveMetadata re-serialized `[]`, so every
+    // checkpoint created afterward was silently lost on restart (a loud failure
+    // turned silent). The guard coerces a bad root to a valid empty container.
+    const proj = await createTestProject();
+    try {
+      await fs.mkdir(path.join(proj, '.b4m'), { recursive: true });
+      await fs.writeFile(path.join(proj, '.b4m', 'checkpoints.json'), '[]', 'utf-8');
+
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+      await fs.writeFile(path.join(proj, 'f.ts'), 'v1', 'utf-8');
+      const cp = await store.createCheckpoint('edit_local_file', ['f.ts']);
+      expect(cp).not.toBeNull();
+
+      // Restart: the checkpoint created above must still be there.
+      const reopened = new CheckpointStore(proj);
+      await reopened.init('sess');
+      expect(reopened.listCheckpoints()).toHaveLength(1);
+    } finally {
+      await cleanup(proj);
+    }
+  });
+
+  it('drops a committed entry whose filePaths is not an array (would throw on restore/list)', async () => {
+    // A sha-like id passes the id gate, but a non-array filePaths makes
+    // restoreCheckpoint/getCheckpointDiff throw `filePaths is not iterable` and
+    // /checkpoints read `.length` of a non-array. Drop it at parse time instead.
+    const proj = await createTestProject();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+      await fs.writeFile(path.join(proj, 'f.ts'), 'v1', 'utf-8');
+      const cp = await store.createCheckpoint('edit_local_file', ['f.ts']);
+      expect(cp).not.toBeNull();
+
+      const metaPath = path.join(proj, '.b4m', 'checkpoints.json');
+      const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+      meta.checkpoints[0].filePaths = null; // id stays valid; sessionId still matches
+      await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+
+      const reopened = new CheckpointStore(proj);
+      await reopened.init('sess');
+      // Dropped at load, so no sink ever iterates a non-array filePaths.
+      expect(reopened.listCheckpoints()).toHaveLength(0);
+      await expect(reopened.restoreCheckpoint(1)).rejects.toThrow(/not found/);
     } finally {
       await cleanup(proj);
     }

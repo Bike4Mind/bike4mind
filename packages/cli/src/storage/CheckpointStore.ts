@@ -47,6 +47,28 @@ function isValidCheckpointId(id: unknown): id is string {
   return typeof id === 'string' && CHECKPOINT_ID_PATTERN.test(id);
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * A committed `.b4m/checkpoints.json` is attacker-controlled, so accept an entry
+ * only when every field a sink reads is well-typed. isValidCheckpointId blocks the
+ * git option-injection through `id`; the rest guard the sinks that iterate or read
+ * `.length` on the entry (restoreCheckpoint/getCheckpointDiff/listCheckpoints),
+ * which would otherwise throw `filePaths is not iterable` on a non-array filePaths.
+ */
+function isValidCheckpointEntry(cp: unknown): cp is Checkpoint {
+  return (
+    isPlainObject(cp) &&
+    isValidCheckpointId(cp.id) &&
+    Array.isArray(cp.filePaths) &&
+    typeof cp.sessionId === 'string' &&
+    typeof cp.name === 'string' &&
+    typeof cp.timestamp === 'string'
+  );
+}
+
 /**
  * True when `realTarget` is `realRoot` itself or nested beneath it. Both must
  * already be symlink-resolved (realpath) absolute paths.
@@ -599,12 +621,16 @@ export class CheckpointStore {
     try {
       if (existsSync(this.metadataPath)) {
         const data = await fs.readFile(this.metadataPath, 'utf-8');
-        this.metadata = JSON.parse(data) as CheckpointMetadata;
-        // Drop any entry whose id is not a plain sha (see CHECKPOINT_ID_PATTERN):
-        // it would otherwise reach `git show <id>:<path>` as an option-injection.
-        // Use cp?.id: a null/non-object array element (a hostile clone can commit
-        // one) must be dropped, not throw and reset the whole valid history.
-        this.metadata.checkpoints = (this.metadata.checkpoints ?? []).filter(cp => isValidCheckpointId(cp?.id));
+        const parsed: unknown = JSON.parse(data);
+        // A hostile clone can commit any JSON here. A non-object root (e.g. `[]`)
+        // must NOT become this.metadata: saveMetadata would re-serialize it and
+        // every checkpoint created afterward is silently lost on restart (a loud
+        // failure turned silent). Coerce to a valid container, then keep only
+        // well-formed entries (id/filePaths/sessionId/name/timestamp).
+        const rawCheckpoints = isPlainObject(parsed) && Array.isArray(parsed.checkpoints) ? parsed.checkpoints : [];
+        const createdAt =
+          isPlainObject(parsed) && typeof parsed.createdAt === 'string' ? parsed.createdAt : new Date().toISOString();
+        this.metadata = { checkpoints: rawCheckpoints.filter(isValidCheckpointEntry), createdAt };
       } else {
         this.metadata = {
           checkpoints: [],
