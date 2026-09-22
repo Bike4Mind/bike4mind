@@ -106,7 +106,7 @@ describe('PermissionCard', () => {
 
     fireEvent.click(screen.getByTestId(`permission-approve-${EXECUTION_ID}`));
 
-    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', true, false);
+    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', true, false, undefined);
     // Optimistic clear fires alongside dispatch
     expect(mocks.setPendingPermission).toHaveBeenCalledWith(EXECUTION_ID, undefined);
   });
@@ -121,7 +121,7 @@ describe('PermissionCard', () => {
 
     fireEvent.click(screen.getByTestId(`permission-allow-session-${EXECUTION_ID}`));
 
-    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', true, true);
+    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', true, true, undefined);
     expect(mocks.setPendingPermission).toHaveBeenCalledWith(EXECUTION_ID, undefined);
   });
 
@@ -161,7 +161,7 @@ describe('PermissionCard', () => {
 
     fireEvent.click(screen.getByTestId(`permission-deny-${EXECUTION_ID}`));
 
-    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', false, false);
+    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', false, false, undefined);
     expect(mocks.setPendingPermission).toHaveBeenCalledWith(EXECUTION_ID, undefined);
   });
 
@@ -182,7 +182,7 @@ describe('PermissionCard', () => {
     fireEvent.click(screen.getByTestId(`permission-deny-${EXECUTION_ID}`));
 
     expect(mocks.respondToPermission).toHaveBeenCalledTimes(1);
-    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', true, false);
+    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', true, false, undefined);
   });
 
   it('resets the double-click guard between iterations (regression)', () => {

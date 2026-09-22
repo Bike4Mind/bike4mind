@@ -159,6 +159,33 @@ describe('ReActAgent pre-execution tool gate', () => {
     expect(checkpoint.steps.at(-1)).toMatchObject({ type: 'observation', content: 'result:image_generation' });
   });
 
+  it('takeIterationConfidence reads and clears the score a replayed call pushed', async () => {
+    // The bug this pins: `runIteration()` clears `iterationConfidences` at its own
+    // start, and the replay happens OUTSIDE any `runIteration()` call, so a failed
+    // replay's low confidence would otherwise vanish before anything gates on it.
+    const calls: string[] = [];
+    const tool = createTool('image_generation', calls);
+    const agent = new ReActAgent(
+      buildContext([tool], createMockLlm([{ name: 'image_generation', arguments: '{}', id: 'toolu_1' }]))
+    );
+
+    expect(agent.takeIterationConfidence()).toBeNull();
+
+    const gatedResult = await agent.runIteration('draw a cat', { toolGate: () => true });
+    // `runIteration` itself cleared `iterationConfidences` on entry and the withheld
+    // call never ran, so nothing has been scored yet.
+    expect(agent.takeIterationConfidence()).toBeNull();
+
+    tool.toolFn.mockResolvedValueOnce('Error: provider failed');
+    await agent.executeGatedToolCall(gatedResult.gatedToolCalls![0]);
+
+    // Deterministic error scoring (see `scoreToolResult`) - low enough to trip a
+    // 0.6 confidence-gate threshold.
+    expect(agent.takeIterationConfidence()).toBeCloseTo(0.1);
+    // Reading it again returns null - it was cleared, not just snapshotted.
+    expect(agent.takeIterationConfidence()).toBeNull();
+  });
+
   it('refuses to replay before running the tool when the backend cannot record the result', async () => {
     const calls: string[] = [];
     const tool = createTool('image_generation', calls);

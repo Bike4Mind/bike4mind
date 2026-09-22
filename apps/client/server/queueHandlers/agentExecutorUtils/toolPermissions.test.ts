@@ -7,6 +7,7 @@ import {
   shouldWithholdToolCall,
   partitionApprovedPause,
   resumeApprovedPause,
+  gateReplayConfidence,
   resolveHandoffConflict,
   settleGatedCall,
   type GatedAction,
@@ -388,6 +389,84 @@ describe('resolveHandoffConflict', () => {
 
   it('conflicts when several withheld calls land alongside a DAG handoff', () => {
     expect(resolveHandoffConflict(2, true)).toBe('conflict');
+  });
+});
+
+describe('gateReplayConfidence', () => {
+  function makeDeps(overrides: Partial<Parameters<typeof gateReplayConfidence>[1]> = {}) {
+    const deps: Parameters<typeof gateReplayConfidence>[1] = {
+      recordIterationConfidence: vi.fn(async () => {}),
+      setPendingGate: vi.fn(async () => true),
+      recordGateEmitted: vi.fn(async () => {}),
+      sendWs: vi.fn(async () => {}),
+      logger: { info: vi.fn() },
+      ...overrides,
+    };
+    return deps;
+  }
+
+  it('proceeds without touching the DB when nothing was replayed', async () => {
+    const deps = makeDeps();
+    const outcome = await gateReplayConfidence(
+      { executionId: 'exec-1', iterationIndex: 2, confidence: null, confidenceGateThreshold: 0.6 },
+      deps
+    );
+    expect(outcome).toEqual({ status: 'proceed' });
+    expect(deps.recordIterationConfidence).not.toHaveBeenCalled();
+    expect(deps.setPendingGate).not.toHaveBeenCalled();
+  });
+
+  it('proceeds when the replayed confidence clears the threshold', async () => {
+    const deps = makeDeps();
+    const outcome = await gateReplayConfidence(
+      { executionId: 'exec-1', iterationIndex: 2, confidence: 0.7, confidenceGateThreshold: 0.6 },
+      deps
+    );
+    expect(outcome).toEqual({ status: 'proceed' });
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec-1', 0.7);
+    expect(deps.setPendingGate).not.toHaveBeenCalled();
+  });
+
+  it('pauses for review when a replayed tool failure scores below the threshold', async () => {
+    // The concrete regression: an approved gated tool whose replay errors scores 0.1
+    // (deterministic error scoring), which must still trip the same gate an ordinary
+    // iteration would have hit - not silently continue because it ran via replay.
+    const deps = makeDeps();
+    const outcome = await gateReplayConfidence(
+      { executionId: 'exec-1', iterationIndex: 3, confidence: 0.1, confidenceGateThreshold: 0.6 },
+      deps
+    );
+    expect(outcome).toEqual({ status: 'paused' });
+    expect(deps.setPendingGate).toHaveBeenCalledWith('exec-1', {
+      iteration: 2,
+      confidence: 0.1,
+      reason: expect.stringContaining('10%'),
+      requestedAt: expect.any(Date),
+    });
+    expect(deps.recordGateEmitted).toHaveBeenCalledWith('exec-1');
+    expect(deps.sendWs).toHaveBeenCalledWith('confidence_gate', expect.objectContaining({ executionId: 'exec-1' }));
+    expect(deps.sendWs).toHaveBeenCalledWith('progress', { executionId: 'exec-1', status: 'paused' });
+  });
+
+  it('never pauses when the profile threshold is 0 (unattended loops)', async () => {
+    const deps = makeDeps();
+    const outcome = await gateReplayConfidence(
+      { executionId: 'exec-1', iterationIndex: 3, confidence: 0.1, confidenceGateThreshold: 0 },
+      deps
+    );
+    expect(outcome).toEqual({ status: 'proceed' });
+    expect(deps.setPendingGate).not.toHaveBeenCalled();
+  });
+
+  it('reports aborted and sends a failed event when setPendingGate loses the race to a concurrent abort', async () => {
+    const deps = makeDeps({ setPendingGate: vi.fn(async () => false) });
+    const outcome = await gateReplayConfidence(
+      { executionId: 'exec-1', iterationIndex: 3, confidence: 0.1, confidenceGateThreshold: 0.6 },
+      deps
+    );
+    expect(outcome).toEqual({ status: 'aborted' });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', { executionId: 'exec-1', reason: 'aborted' });
+    expect(deps.recordGateEmitted).not.toHaveBeenCalled();
   });
 });
 

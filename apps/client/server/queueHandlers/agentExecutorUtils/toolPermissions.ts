@@ -236,6 +236,66 @@ export async function resumeApprovedPause<TCheckpoint>(
   return { status: 'replayed' };
 }
 
+export type ReplayConfidenceOutcome = { status: 'proceed' } | { status: 'paused' } | { status: 'aborted' };
+
+/**
+ * Apply the confidence gate to a batch of just-replayed approval calls, mirroring the
+ * pause-for-review check `agentExecutor.ts` runs after every ordinary `runIteration()` -
+ * see `ReActAgent.takeIterationConfidence` for why the replay path needs its own call
+ * into the same decision instead of falling out of the regular post-iteration check.
+ *
+ * `confidence: null` means nothing was replayed (or nothing scored) - proceed without
+ * touching the DB. A `confidenceGateThreshold` of 0 (an unattended-loop profile override)
+ * always proceeds too, since a real confidence score is never negative.
+ */
+export async function gateReplayConfidence(
+  params: {
+    executionId: string;
+    iterationIndex: number;
+    confidence: number | null;
+    confidenceGateThreshold: number;
+  },
+  deps: {
+    recordIterationConfidence: (executionId: string, confidence: number) => Promise<void>;
+    setPendingGate: (
+      executionId: string,
+      gate: { iteration: number; confidence: number; reason: string; requestedAt: Date }
+    ) => Promise<boolean>;
+    recordGateEmitted: (executionId: string) => Promise<void>;
+    sendWs: (event: string, payload: Record<string, unknown>) => Promise<void>;
+    logger: { info: (msg: string, meta?: Record<string, unknown>) => void };
+  }
+): Promise<ReplayConfidenceOutcome> {
+  const { executionId, iterationIndex, confidence, confidenceGateThreshold } = params;
+  if (confidence === null) return { status: 'proceed' };
+
+  // Telemetry parity with the ordinary per-iteration gate check: every evaluated
+  // iteration is recorded, not just the ones that pause.
+  await deps.recordIterationConfidence(executionId, confidence);
+  if (confidence >= confidenceGateThreshold) return { status: 'proceed' };
+
+  // Same 0-indexed wire convention as `settleGatedCall`'s `permission_request` emit.
+  const wireIteration = Math.max(0, iterationIndex - 1);
+  const reason = `Iteration confidence ${(confidence * 100).toFixed(0)}% below threshold ${(confidenceGateThreshold * 100).toFixed(0)}%`;
+  const gatePayload = { iteration: wireIteration, confidence, reason };
+  deps.logger.info('[ConfidenceGate] Pausing execution for human review after a replayed approval', {
+    executionId,
+    ...gatePayload,
+  });
+
+  const paused = await deps.setPendingGate(executionId, { ...gatePayload, requestedAt: new Date() });
+  if (!paused) {
+    // Raced by a concurrent abort between the read that got us here and this write -
+    // bail without overwriting the aborted doc, same as the ordinary gate check does.
+    await deps.sendWs('failed', { executionId, reason: 'aborted' });
+    return { status: 'aborted' };
+  }
+  await deps.recordGateEmitted(executionId);
+  await deps.sendWs('confidence_gate', { executionId, ...gatePayload });
+  await deps.sendWs('progress', { executionId, status: 'paused' });
+  return { status: 'paused' };
+}
+
 /**
  * What the executor should do about a gated action.
  *
@@ -407,6 +467,9 @@ export async function settleGatedCall(
     // ran, so subtract 1 here so `PermissionCard`'s `pending.iteration + 1` display
     // lines up with the iteration the user is actually approving.
     iteration: Math.max(0, iterationIndex - 1),
+    // The client echoes this back on `permission_response` - see
+    // `handlePermissionResponse`'s toolCallId identity check.
+    toolCallId: gated.toolCallId,
   });
 
   // Lambda exits - client sends permission_response via WebSocket, which

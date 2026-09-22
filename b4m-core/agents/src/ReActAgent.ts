@@ -1806,6 +1806,29 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   }
 
   /**
+   * Read and clear the average confidence of every observation pushed since the
+   * last call (or the last `runIteration()`, whichever is more recent) - `null`
+   * if nothing has been scored yet.
+   *
+   * Exists for the approval-replay path: `executeGatedToolCall` pushes onto
+   * `iterationConfidences` the same way an ordinary tool call does, but that
+   * happens OUTSIDE any `runIteration()` call, so the confidence gate the host
+   * runs at the end of an iteration never sees it - and `runIteration()` clears
+   * `iterationConfidences` at its own start regardless, discarding the score
+   * before anything reads it. The host calls this right after replaying an
+   * approved batch (see `resumeApprovedPause` / `gateReplayConfidence`) so a
+   * replayed tool that failed still gets the same low-confidence pause a normal
+   * iteration would have gotten - resetting `iterationConfidences` here is a
+   * no-op for the next `runIteration()`, which resets it again anyway.
+   */
+  takeIterationConfidence(): number | null {
+    if (this.iterationConfidences.length === 0) return null;
+    const avg = this.iterationConfidences.reduce((a, b) => a + b, 0) / this.iterationConfidences.length;
+    this.iterationConfidences = [];
+    return avg;
+  }
+
+  /**
    * Execute a tool and return the result as a string.
    * Checks observation queue first for backward compatibility.
    */

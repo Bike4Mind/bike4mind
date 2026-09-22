@@ -1421,6 +1421,13 @@ export const PermissionRequestAction = z.object({
   toolName: z.string(),
   toolInput: z.unknown(),
   iteration: z.number(),
+  /**
+   * Provider tool_use id of the specific gated call this card is asking about.
+   * The client echoes it back on `permission_response` so the server can bind
+   * the answer to THIS pause rather than the latest one that happens to share
+   * a tool name - see `handlePermissionResponse`'s toolCallId check.
+   */
+  toolCallId: z.string().optional(),
 });
 
 /**
@@ -1492,6 +1499,9 @@ export const ReconnectResultAction = z.object({
       toolName: z.string(),
       toolInput: z.unknown(),
       requestedAt: z.union([z.string(), z.date()]),
+      // Carried through reconnect so a client that refreshes mid-pause still
+      // has the identity `permission_response` needs - see `PermissionRequestAction`.
+      toolCallId: z.string().optional(),
     })
     .optional(),
   totalCreditsUsed: z.number().optional(),

@@ -145,6 +145,11 @@ const PermissionResponseSchema = BaseMessageSchema.extend({
   command: z.literal('permission_response'),
   executionId: z.string(),
   toolName: z.string(),
+  // Echoed from the `permission_request`/`reconnect_result` this card rendered. Optional
+  // for a client that reconnected before this field existed; when present it is what
+  // `handlePermissionResponse` binds the response to instead of `toolName` alone - see
+  // that function's identity check for why a name match is not enough.
+  toolCallId: z.string().optional(),
   approved: z.boolean(),
   rememberForSession: z.boolean().optional().default(false),
 });
@@ -428,6 +433,32 @@ async function rememberToolDecision(
   }
 }
 
+/**
+ * Flip the execution to `continuing` and re-invoke the executor Lambda. Idempotent
+ * enough to call twice: `updateStatus` to the same value is a no-op, and a duplicate
+ * Lambda dispatch is caught by `processExecution`'s own CAS claim on pickup (see
+ * `agentExecutor.ts`'s "Atomic CAS - prevent duplicate Lambda execution"), so retrying
+ * this after a failed first attempt cannot double-run the resumed work.
+ *
+ * Note: checkpointDepth is not carried here - it lives in the SQS message from the
+ * previous Lambda handoff, not in the AgentExecution document, so this handler cannot
+ * read it. The resumed Lambda starts at depth 0. This is safe on two counts: permission
+ * pauses are user-driven, not loop-driven, so they cannot self-dispatch a runaway on
+ * their own; and the resume runs as status `continuing`, which the executor still
+ * bounds via the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a
+ * counter the message payload cannot reset.
+ */
+async function dispatchPermissionResume(executionId: string, connectionId: string): Promise<void> {
+  await agentExecutionRepository.updateStatus(executionId, 'continuing');
+  await lambdaClient.send(
+    new InvokeCommand({
+      FunctionName: Resource.AgentExecutor.name,
+      InvocationType: 'Event',
+      Payload: Buffer.from(JSON.stringify({ executionId, connectionId })),
+    })
+  );
+}
+
 export async function handlePermissionResponse(
   cmd: z.infer<typeof PermissionResponseSchema>,
   userId: string,
@@ -439,8 +470,23 @@ export async function handlePermissionResponse(
   if (!execution || execution.userId !== userId) return;
   if (execution.status !== 'awaiting_permission') return;
 
-  // Validate toolName matches the pending permission request
-  if (execution.pendingPermission && execution.pendingPermission.toolName !== cmd.toolName) {
+  // Bind the response to the SPECIFIC pause it answers, not just its tool name. One
+  // iteration can withhold two calls to the same tool with different arguments: the
+  // first approval's replay can re-pause on the second under the same `toolName`,
+  // and a still-open card for the first (or a reconnect echoing stale state) would
+  // otherwise still match here and approve/deny the wrong call's arguments.
+  const pendingCallId = execution.pendingPermission?.toolCallId;
+  if (pendingCallId) {
+    if (cmd.toolCallId !== pendingCallId) {
+      logger.warn('[Permission] toolCallId mismatch - ignoring stale response', {
+        executionId: cmd.executionId,
+        expected: pendingCallId,
+        received: cmd.toolCallId,
+      });
+      return;
+    }
+  } else if (execution.pendingPermission && execution.pendingPermission.toolName !== cmd.toolName) {
+    // Fallback for a pause persisted before `toolCallId` existed on `IPendingPermission`.
     logger.warn('[Permission] toolName mismatch — ignoring', {
       expected: execution.pendingPermission.toolName,
       received: cmd.toolName,
@@ -459,6 +505,7 @@ export async function handlePermissionResponse(
     await agentExecutionRepository.updatePermissionState(cmd.executionId, {
       pendingPermission: null,
       deniedTool: cmd.rememberForSession ? cmd.toolName : undefined,
+      matchToolCallId: pendingCallId,
     });
     if (cmd.rememberForSession) {
       await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'denied', logger);
@@ -487,8 +534,34 @@ export async function handlePermissionResponse(
   // dropped here instead of replaying the tool a second time.
   const marked = await agentExecutionRepository.approvePendingPermission(cmd.executionId, {
     approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
+    toolCallId: pendingCallId,
   });
   if (!marked) {
+    // The CAS can lose for two different reasons that need different answers. Tell
+    // them apart by re-reading the doc: if THIS exact pause is already marked
+    // approved, the CAS lost to an earlier call of this same handler (a retry after
+    // `updateStatus`/the Lambda invoke below failed, or the response simply arrived
+    // twice) - the resume dispatch just never happened, so drive it again. Anything
+    // else (a different pause entirely, or one already past `awaiting_permission`) is
+    // a genuinely stale response with nothing left to resume.
+    const current = await agentExecutionRepository.findById(cmd.executionId);
+    const sameApprovedPauseStuck =
+      current?.status === 'awaiting_permission' &&
+      current.pendingPermission?.approved === true &&
+      (!pendingCallId || current.pendingPermission?.toolCallId === pendingCallId);
+
+    if (sameApprovedPauseStuck) {
+      logger.warn('[Permission] Approval landed but the resume dispatch did not - retrying', {
+        executionId: cmd.executionId,
+        toolName: cmd.toolName,
+      });
+      await dispatchPermissionResume(cmd.executionId, connectionId);
+      logger.info('[Permission] Approved - Lambda re-invoked (recovered retry)', {
+        executionId: cmd.executionId,
+      });
+      return;
+    }
+
     logger.warn('[Permission] Approval did not land - the pause was already settled', {
       executionId: cmd.executionId,
       toolName: cmd.toolName,
@@ -496,7 +569,6 @@ export async function handlePermissionResponse(
     // The card that sent this approval is waiting on a reply, and no resume is coming.
     // Send whatever the run's status actually is now so the UI leaves its spinner
     // instead of hanging until the stale sweep - the deny path always answers too.
-    const current = await agentExecutionRepository.findById(cmd.executionId);
     await sendAgentEvent(connectionId, endpoint, {
       action: 'progress',
       executionId: cmd.executionId,
@@ -508,27 +580,7 @@ export async function handlePermissionResponse(
     await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'approved', logger);
   }
 
-  // Re-invoke Lambda to resume execution.
-  // Note: checkpointDepth is not carried here - it lives in the SQS message from the previous
-  // Lambda handoff, not in the AgentExecution document, so this handler cannot read it.
-  // The resumed Lambda starts at depth 0. This is safe on two counts: permission pauses are
-  // user-driven, not loop-driven, so they cannot self-dispatch a runaway on their own; and the
-  // resume runs as status `continuing`, which the executor still bounds via the persisted
-  // `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a counter the message payload cannot reset.
-  await agentExecutionRepository.updateStatus(cmd.executionId, 'continuing');
-
-  await lambdaClient.send(
-    new InvokeCommand({
-      FunctionName: Resource.AgentExecutor.name,
-      InvocationType: 'Event',
-      Payload: Buffer.from(
-        JSON.stringify({
-          executionId: cmd.executionId,
-          connectionId,
-        })
-      ),
-    })
-  );
+  await dispatchPermissionResume(cmd.executionId, connectionId);
 
   logger.info('[Permission] Approved — Lambda re-invoked', {
     executionId: cmd.executionId,
@@ -710,6 +762,7 @@ async function handleReconnect(
           toolName: execution.pendingPermission.toolName,
           toolInput: execution.pendingPermission.toolInput,
           requestedAt: execution.pendingPermission.requestedAt,
+          toolCallId: execution.pendingPermission.toolCallId,
         }
       : undefined,
     // Confidence-gate state - clients re-render the gate UI when

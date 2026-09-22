@@ -120,6 +120,7 @@ import {
   selectGatedToolCall,
   shouldWithholdToolCall,
   resumeApprovedPause,
+  gateReplayConfidence,
   resolveHandoffConflict,
   settleGatedCall as settleGatedCallImpl,
   type GatedAction,
@@ -2414,6 +2415,30 @@ async function processExecution(
         }
       );
       if (outcome.status !== 'replayed') return;
+
+      // The replayed calls' confidence never flows through the ordinary post-iteration
+      // gate check below: they ran outside any `runIteration()` call, and the next one
+      // clears `iterationConfidences` at its own start regardless. Gate on it explicitly
+      // here so a replayed tool that failed still pauses for review instead of silently
+      // continuing - see `ReActAgent.takeIterationConfidence`.
+      const replayConfidence = agent.takeIterationConfidence();
+      const confidenceOutcome = await gateReplayConfidence(
+        {
+          executionId,
+          iterationIndex,
+          confidence: replayConfidence,
+          confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+        },
+        {
+          recordIterationConfidence: (id, confidence) =>
+            agentExecutionRepository.recordIterationConfidence(id, confidence),
+          setPendingGate: (id, gate) => agentExecutionRepository.setPendingGate(id, gate),
+          recordGateEmitted: id => agentExecutionRepository.recordGateEmitted(id),
+          sendWs,
+          logger,
+        }
+      );
+      if (confidenceOutcome.status !== 'proceed') return;
     }
 
     while (iterationIndex < maxIterations) {

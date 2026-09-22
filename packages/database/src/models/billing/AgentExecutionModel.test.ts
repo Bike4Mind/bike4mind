@@ -1483,5 +1483,79 @@ describe('AgentExecutionRepository', () => {
       expect(reloaded?.pendingPermission?.approved).toBe(true);
       expect(reloaded?.approvedTools).toContain('image_generation');
     });
+
+    it('does not land when toolCallId names a different pause than the one persisted', async () => {
+      // Two withheld calls to the same tool: cat's approval must not land against
+      // a since-replaced pause on dog just because the tool name still matches.
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id, { toolCallId: 'toolu_cat' })).toBe(
+        false
+      );
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission?.approved).toBeUndefined();
+    });
+
+    it('lands when toolCallId matches the persisted pause', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id, { toolCallId: 'toolu_dog' })).toBe(
+        true
+      );
+    });
+  });
+
+  describe('updatePermissionState matchToolCallId', () => {
+    const pause = () => ({
+      toolName: 'image_generation',
+      toolInput: { prompt: 'cat' },
+      toolCallId: 'toolu_1',
+      gatedToolCalls: [{ id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' }],
+      requestedAt: new Date(),
+    });
+
+    it('does not clear the pause when matchToolCallId names a different one than the one persisted', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: null,
+        matchToolCallId: 'toolu_cat',
+      });
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission).toBeDefined();
+    });
+
+    it('clears the pause when matchToolCallId matches the persisted one', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: null,
+        matchToolCallId: 'toolu_dog',
+      });
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission).toBeUndefined();
+    });
   });
 });

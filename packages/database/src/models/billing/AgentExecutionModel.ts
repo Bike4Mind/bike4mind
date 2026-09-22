@@ -1421,21 +1421,28 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * repeat "remember for session" cannot duplicate the entry) in the SAME update as
    * the CAS - a second write here could land after a process death between the two,
    * leaving a retry's CAS miss with a "remember for session" that never took.
+   *
+   * `toolCallId`, when given, is filtered on too: a name-only CAS accepts a stale
+   * response for a since-replaced pause on the same tool (two withheld calls to
+   * the same tool with different arguments re-pause one after the other under the
+   * same `toolName`), which would let the wrong call's arguments run unapproved.
+   * Omitted only for a pause persisted before this field existed.
    */
-  async approvePendingPermission(id: string, opts?: { approvedTool?: string }): Promise<boolean> {
+  async approvePendingPermission(id: string, opts?: { approvedTool?: string; toolCallId?: string }): Promise<boolean> {
     const update: Record<string, unknown> = { $set: { 'pendingPermission.approved': true } };
     if (opts?.approvedTool) {
       update.$addToSet = { approvedTools: opts.approvedTool };
     }
-    const res = await this.model.updateOne(
-      {
-        _id: id,
-        status: 'awaiting_permission',
-        pendingPermission: { $exists: true },
-        'pendingPermission.approved': { $ne: true },
-      },
-      update
-    );
+    const filter: Record<string, unknown> = {
+      _id: id,
+      status: 'awaiting_permission',
+      pendingPermission: { $exists: true },
+      'pendingPermission.approved': { $ne: true },
+    };
+    if (opts?.toolCallId) {
+      filter['pendingPermission.toolCallId'] = opts.toolCallId;
+    }
+    const res = await this.model.updateOne(filter, update);
     return res.modifiedCount > 0;
   }
 
@@ -1450,6 +1457,14 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     update: {
       pendingPermission?: IPendingPermission | null;
       deniedTool?: string;
+      /**
+       * Filters the write onto the pause the caller actually read, the same
+       * identity guard `approvePendingPermission` applies to approval - without
+       * it, a deny read against one pause could land after a replay already
+       * re-paused on a different withheld call for the same tool, clearing that
+       * one out from under an approval that was about to land for it.
+       */
+      matchToolCallId?: string;
     }
   ): Promise<void> {
     const setOps: Record<string, unknown> = {};
@@ -1472,7 +1487,11 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     if (Object.keys(unsetOps).length > 0) ops.$unset = unsetOps;
 
     if (Object.keys(ops).length > 0) {
-      await this.model.updateOne({ _id: id }, ops);
+      const filter: Record<string, unknown> = { _id: id };
+      if (update.matchToolCallId) {
+        filter['pendingPermission.toolCallId'] = update.matchToolCallId;
+      }
+      await this.model.updateOne(filter, ops);
     }
   }
 

@@ -118,6 +118,7 @@ interface AgentExecutePermissionResponse {
   command: 'permission_response';
   executionId: string;
   toolName: string;
+  toolCallId?: string;
   approved: boolean;
   rememberForSession?: boolean;
 }
@@ -405,6 +406,7 @@ export function useAgentExecutionSubscriptions(): void {
           toolInput: msg.toolInput,
           iteration: msg.iteration,
           requestedAt: Date.now(),
+          toolCallId: msg.toolCallId,
         });
       })
     );
@@ -509,6 +511,7 @@ export function useAgentExecutionSubscriptions(): void {
                   msg.pendingPermission.requestedAt instanceof Date
                     ? msg.pendingPermission.requestedAt.getTime()
                     : new Date(msg.pendingPermission.requestedAt).getTime(),
+                toolCallId: msg.pendingPermission.toolCallId,
               }
             : undefined,
         });
@@ -728,12 +731,19 @@ export function useAgentExecutionDispatch() {
         sendJsonMessage({ action: 'agent_execute', command: 'abort', executionId } as unknown as Parameters<
           typeof sendJsonMessage
         >[0]),
-      respondToPermission: (executionId: string, toolName: string, approved: boolean, rememberForSession?: boolean) =>
+      respondToPermission: (
+        executionId: string,
+        toolName: string,
+        approved: boolean,
+        rememberForSession?: boolean,
+        toolCallId?: string
+      ) =>
         sendJsonMessage({
           action: 'agent_execute',
           command: 'permission_response',
           executionId,
           toolName,
+          toolCallId,
           approved,
           rememberForSession,
         } as unknown as Parameters<typeof sendJsonMessage>[0]),

@@ -92,12 +92,15 @@ import { handlePermissionResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
 
-const baseCmd = (overrides: Partial<{ approved: boolean; rememberForSession: boolean; toolName: string }> = {}) => ({
+const baseCmd = (
+  overrides: Partial<{ approved: boolean; rememberForSession: boolean; toolName: string; toolCallId: string }> = {}
+) => ({
   accessToken: 'token',
   action: 'agent_execute' as const,
   command: 'permission_response' as const,
   executionId: 'exec-1',
   toolName: 'web_search',
+  toolCallId: 'call-1',
   approved: true,
   rememberForSession: false,
   ...overrides,
@@ -108,7 +111,7 @@ const baseExecution = {
   userId: 'user-1',
   sessionId: 'session-1',
   status: 'awaiting_permission',
-  pendingPermission: { toolName: 'web_search' },
+  pendingPermission: { toolName: 'web_search', toolCallId: 'call-1' },
 };
 
 describe('handlePermissionResponse', () => {
@@ -133,7 +136,10 @@ describe('handlePermissionResponse', () => {
     expect(mockUpdateStatus).toHaveBeenCalledWith('exec-1', 'continuing');
     // approvedTool rides the same CAS write as the approval, not a second one - see
     // approvePendingPermission.
-    expect(mockApprovePendingPermission).toHaveBeenCalledWith('exec-1', { approvedTool: 'web_search' });
+    expect(mockApprovePendingPermission).toHaveBeenCalledWith('exec-1', {
+      approvedTool: 'web_search',
+      toolCallId: 'call-1',
+    });
     expect(mockUpdatePermissionState).not.toHaveBeenCalled();
   });
 
@@ -195,8 +201,53 @@ describe('handlePermissionResponse', () => {
       noopLogger as any
     );
 
-    expect(mockApprovePendingPermission).toHaveBeenCalledWith('exec-1', { approvedTool: undefined });
+    expect(mockApprovePendingPermission).toHaveBeenCalledWith('exec-1', {
+      approvedTool: undefined,
+      toolCallId: 'call-1',
+    });
     expect(mockUpdatePermissionState).not.toHaveBeenCalled();
+  });
+
+  it('ignores a response naming a stale toolCallId, even when the tool name still matches', async () => {
+    // The concrete regression: one iteration withholds image_generation(cat) and
+    // image_generation(dog). Client A approves cat; the executor replays it and
+    // re-pauses on dog under the same toolName. Client B's still-open cat card then
+    // submits its (now stale) approval - it must not be accepted for dog.
+    mockFindById.mockResolvedValue({
+      ...baseExecution,
+      pendingPermission: { toolName: 'image_generation', toolCallId: 'call-dog' },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: true, toolName: 'image_generation', toolCallId: 'call-cat' }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockApprovePendingPermission).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockLambdaSend).not.toHaveBeenCalled();
+    expect(noopLogger.warn).toHaveBeenCalled();
+  });
+
+  it('ignores a deny naming a stale toolCallId, so it cannot clear a different pause', async () => {
+    mockFindById.mockResolvedValue({
+      ...baseExecution,
+      pendingPermission: { toolName: 'image_generation', toolCallId: 'call-dog' },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: false, toolName: 'image_generation', toolCallId: 'call-cat' }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockUpdatePermissionState).not.toHaveBeenCalled();
+    expect(mockMarkFailed).not.toHaveBeenCalled();
   });
 
   it('does not resume when the approval loses the CAS - the pause was already settled', async () => {
@@ -219,6 +270,52 @@ describe('handlePermissionResponse', () => {
     expect(sent.input.Data.toString()).toContain('"action":"progress"');
   });
 
+  it('retries the resume dispatch when the CAS lost to an earlier already-approved instance of the same pause', async () => {
+    // Repro: a prior call of this handler won the CAS (pendingPermission.approved
+    // flipped true) but died before updateStatus/the Lambda invoke landed - e.g. the
+    // process crashed, or the client never saw the ack and resent the same response.
+    // The re-read below has to see that already-approved state to know this is a
+    // recoverable retry, not a genuinely stale response.
+    mockApprovePendingPermission.mockResolvedValueOnce(false);
+    mockFindById.mockResolvedValueOnce(baseExecution).mockResolvedValueOnce({
+      ...baseExecution,
+      pendingPermission: { toolName: 'web_search', toolCallId: 'call-1', approved: true },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: true, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockUpdateStatus).toHaveBeenCalledWith('exec-1', 'continuing');
+    expect(mockLambdaSend).toHaveBeenCalled();
+    // No progress event this time - the resume itself was driven, not just reported.
+    expect(mockApiGwSend).not.toHaveBeenCalled();
+  });
+
+  it('does not retry the resume dispatch when the CAS lost to a different, unrelated pause', async () => {
+    mockApprovePendingPermission.mockResolvedValueOnce(false);
+    mockFindById.mockResolvedValueOnce(baseExecution).mockResolvedValueOnce({
+      ...baseExecution,
+      pendingPermission: { toolName: 'web_search', toolCallId: 'call-2', approved: true },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: true, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockLambdaSend).not.toHaveBeenCalled();
+    expect(mockApiGwSend).toHaveBeenCalled();
+  });
+
   it('clears the pending permission on deny, discarding the withheld calls unrun', async () => {
     await handlePermissionResponse(
       baseCmd({ approved: false, rememberForSession: false }),
@@ -231,6 +328,7 @@ describe('handlePermissionResponse', () => {
     expect(mockUpdatePermissionState).toHaveBeenCalledWith('exec-1', {
       pendingPermission: null,
       deniedTool: undefined,
+      matchToolCallId: 'call-1',
     });
     expect(mockApprovePendingPermission).not.toHaveBeenCalled();
   });
