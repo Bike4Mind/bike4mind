@@ -182,12 +182,18 @@ async function main() {
   const federatedIdp = resolveFederatedIdp(clientId);
   const clientType = resolveClientType();
 
+  // A federated client mints per-user ai:generate keys via /api/oauth/ai-token, and that exchange now
+  // requires the user to have approved the billable ai:generate scope (a client-identity grant is not
+  // spend authorization). So the scope must be requestable at /authorize; a non-federated client
+  // gets identity scopes only.
+  const allowedScopes = federatedIdp ? ['openid', 'email', 'profile', 'ai:generate'] : ['openid', 'email', 'profile'];
+
   await OAuthClient.create({
     clientId,
     clientSecretHash,
     name: clientName,
     redirectUris,
-    allowedScopes: ['openid', 'email', 'profile'],
+    allowedScopes,
     tokenEndpointAuthMethod: 'client_secret_post',
     clientType,
     isActive: true,

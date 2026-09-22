@@ -138,10 +138,14 @@ const handler = baseApi({ auth: false })
     }
 
     // 5.5. Grant gate (SECURITY) - relying-party clients only. Require the durable (user, client)
-    //      authorization grant recorded by the authorize flow (code.ts). Closes the core hole: a
-    //      pool-signed token - including a forged identities[] entry from a compromised pool - for a
-    //      user who never authorized this client. The pool cannot forge a B4M grant row. Reads the
-    //      SAME OAuthGrant that token.ts enforces, per that model's contract.
+    //      authorization grant recorded by the authorize flow (code.ts), AND that the grant covers
+    //      the billable scope. Closes two holes:
+    //        (a) a pool-signed token - including a forged identities[] entry from a compromised pool
+    //            - for a user who never authorized this client. The pool cannot forge a B4M grant.
+    //        (b) an identity-only grant (openid/email/profile) being treated as spend authorization.
+    //            A client-identity grant is not permission to bill the user's credits, so minting a
+    //            billable ai:generate key requires the user to have explicitly approved that scope.
+    //      Reads the SAME OAuthGrant that token.ts enforces, per that model's contract.
     //
     //      Scoped to relying-party clients: a first-party / pre-existing federated client is trusted
     //      (B4M controls the pool) and never went through code.ts's consent flow, so it has no grant
@@ -157,29 +161,54 @@ const handler = baseApi({ auth: false })
     //      OAUTH_AI_TOKEN_ENFORCE_GRANT=true; the lever is plumbed through infra (deploy-contract.json
     //      + infra/web.ts), per the API_KEY_SCOPE_STAGING precedent.
     if (client.clientType === 'relying-party') {
+      const enforce = process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT === 'true';
       let grant: Awaited<ReturnType<typeof oauthGrantRepository.findGrant>> | undefined;
       let lookupFailed = false;
       try {
         grant = await oauthGrantRepository.findGrant(b4mUserId, client_id);
       } catch (err) {
-        // A transient store error must not 500 a mint every other gate already passed; degrade to
-        // grace (log-only) rather than blocking. The grant gate is defense-in-depth behind client
-        // -secret auth, ID-token verification, and the consent gate below - not the sole guard.
         lookupFailed = true;
         req.logger.warn(
           `[OAUTH_AI_TOKEN] grant lookup failed for user ${b4mUserId} via client ${client_id}: ${String(err)}`
         );
       }
-      if (!grant && !lookupFailed) {
-        if (process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT === 'true') {
+
+      const hasBillableScope = !!grant && (grant.scopes ?? []).includes(ApiKeyScope.AI_GENERATE);
+
+      if (enforce) {
+        // Fail closed: an unreadable grant is UNKNOWN, not absent. Minting anyway would defeat the
+        // gate on exactly the transient error an attacker could induce. 503 so the caller retries.
+        if (lookupFailed) {
+          return res.status(503).json({
+            error: 'temporarily_unavailable',
+            error_description: 'Grant lookup failed; cannot verify authorization',
+          });
+        }
+        if (!grant) {
           return res
             .status(403)
             .json({ error: 'access_denied', error_description: 'User has not authorized this client' });
         }
-        req.logger.warn(
-          `[OAUTH_AI_TOKEN] would-reject: no grant for user ${b4mUserId} via client ${client_id} ` +
-            `(grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
-        );
+        if (!hasBillableScope) {
+          return res.status(403).json({
+            error: 'access_denied',
+            error_description: 'User has not authorized AI generation for this client',
+          });
+        }
+      } else if (!lookupFailed) {
+        // Grace: surface would-rejects so operators see what enforcement would block. (A lookup
+        // failure is already logged above.)
+        if (!grant) {
+          req.logger.warn(
+            `[OAUTH_AI_TOKEN] would-reject: no grant for user ${b4mUserId} via client ${client_id} ` +
+              `(grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
+          );
+        } else if (!hasBillableScope) {
+          req.logger.warn(
+            `[OAUTH_AI_TOKEN] would-reject: grant for user ${b4mUserId} via client ${client_id} lacks the ` +
+              `${ApiKeyScope.AI_GENERATE} scope (grace mode; set OAUTH_AI_TOKEN_ENFORCE_GRANT=true to enforce)`
+          );
+        }
       }
     }
 

@@ -104,8 +104,13 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     mockCreateUserApiKey.mockResolvedValue({ id: 'key-1', key: 'b4m_live_deadbeef', scopes: ['ai:generate'] });
     mockAuditCreate.mockResolvedValue({});
     mockRevokeUserApiKey.mockResolvedValue(undefined);
-    // Default: user has an active grant for the client (realistic happy path).
-    mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid'] });
+    // Default: user has an active grant covering the billable scope (realistic happy path). The
+    // billable ai:generate scope - not mere grant existence - is what authorizes the mint.
+    mockFindGrant.mockResolvedValue({
+      userId: 'b4m-user-1',
+      clientId: 'client-1',
+      scopes: ['openid', 'ai:generate'],
+    });
   });
 
   afterEach(() => {
@@ -125,13 +130,37 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(mockAuditCreate).not.toHaveBeenCalled();
   });
 
-  it('grant gate (enforce): active grant -> mints normally', async () => {
+  it('grant gate (enforce): grant covering the billable scope -> mints normally', async () => {
     process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
     const { req, res } = makeReq();
     await handler(req as any, res as any);
 
     expect(res._getStatusCode()).toBe(200);
     expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+  });
+
+  it('billable-scope gate (enforce): identity-only grant (no ai:generate) -> 403, no mint', async () => {
+    // A client-identity grant is not spend authorization: an openid-only grant must not authorize a
+    // billable ai:generate key the user never approved.
+    process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid'] });
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getJSONData().error).toBe('access_denied');
+    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    expect(mockAuditCreate).not.toHaveBeenCalled();
+  });
+
+  it('billable-scope gate (grace): identity-only grant still mints but logs a would-reject warning', async () => {
+    mockFindGrant.mockResolvedValue({ userId: 'b4m-user-1', clientId: 'client-1', scopes: ['openid'] });
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateUserApiKey).toHaveBeenCalledTimes(1);
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('lacks the ai:generate scope'));
   });
 
   it('grant gate (grace, default): no grant still mints but logs a would-reject warning', async () => {
@@ -159,8 +188,22 @@ describe('POST /api/oauth/ai-token — federated AI-token exchange', () => {
     expect(mockFindGrant).not.toHaveBeenCalled();
   });
 
-  it('grant gate (enforce): a transient grant-lookup error degrades to grace (mints, no 500) instead of blocking', async () => {
+  it('grant gate (enforce): a grant-lookup error fails closed (503, no mint) - an unreadable grant is not "no grant"', async () => {
+    // In enforcement mode an unreadable grant is UNKNOWN, not absent; minting anyway would defeat the
+    // gate on exactly the transient error an attacker could induce.
     process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT = 'true';
+    mockFindGrant.mockRejectedValue(new Error('mongo unavailable'));
+    const { req, res } = makeReq();
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(503);
+    expect(res._getJSONData().error).toBe('temporarily_unavailable');
+    expect(mockCreateUserApiKey).not.toHaveBeenCalled();
+    expect(mockAuditCreate).not.toHaveBeenCalled();
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('grant lookup failed'));
+  });
+
+  it('grant gate (grace, default): a grant-lookup error degrades to grace (mints, no 500)', async () => {
     mockFindGrant.mockRejectedValue(new Error('mongo unavailable'));
     const { req, res } = makeReq();
     await handler(req as any, res as any);
