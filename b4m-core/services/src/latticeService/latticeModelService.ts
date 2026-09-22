@@ -122,23 +122,20 @@ export function canReadModel(model: Pick<ILatticeModel, 'userId' | 'organization
 // SERVICE IMPLEMENTATION
 
 /**
- * Create a new Lattice model
+ * The document every newly created model starts from: ownership, org membership, session/project
+ * scoping, and the empty three-layer skeleton.
+ *
+ * Exported because `lattice_create_model` cannot go through `createModel` - it persists a model
+ * together with its entities and rules in a single insert - and hand-rolling its own document is
+ * exactly how it came to omit `organizationId` and `sessionId`. A chat-created model was therefore
+ * invisible to the session-scoped list and unshareable with the organization no matter what the
+ * read gate said. Both paths build from here so they cannot drift apart again.
  */
-export async function createModel(
-  user: LatticeModelUser,
-  options: CreateModelOptions,
-  deps: LatticeModelServiceDeps
-): Promise<ILatticeModel> {
+export function buildNewModel(user: LatticeModelUser, options: CreateModelOptions): Partial<ILatticeModel> {
   const { name, description, modelType = 'custom', sessionId, projectId } = options;
-
-  // Validate name
-  if (!name || name.trim().length === 0) {
-    throw new Error('Model name is required');
-  }
-
-  // Create model with defaults
   const now = new Date();
-  const modelData: Partial<ILatticeModel> = {
+
+  return {
     name: name.trim(),
     description: description?.trim(),
     modelType,
@@ -163,8 +160,21 @@ export async function createModel(
     createdAt: now,
     updatedAt: now,
   };
+}
 
-  return deps.db.latticeModels.create(modelData);
+/**
+ * Create a new Lattice model
+ */
+export async function createModel(
+  user: LatticeModelUser,
+  options: CreateModelOptions,
+  deps: LatticeModelServiceDeps
+): Promise<ILatticeModel> {
+  if (!options.name || options.name.trim().length === 0) {
+    throw new Error('Model name is required');
+  }
+
+  return deps.db.latticeModels.create(buildNewModel(user, options));
 }
 
 /**

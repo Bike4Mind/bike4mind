@@ -9,7 +9,7 @@ import { Logger } from '@bike4mind/observability';
 
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
-import { isModelOwner } from '../../../../latticeService/latticeModelService';
+import { buildNewModel, isModelOwner } from '../../../../latticeService/latticeModelService';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
 
 // Shared types
@@ -67,43 +67,6 @@ interface LatticeExplainParams {
 
 // Tool: create model
 
-/**
- * Create model data structure (used when database is not available)
- */
-function createModelData(
-  name: string,
-  modelType: string,
-  userId: string,
-  description?: string,
-  sessionId?: string
-): Partial<ILatticeModel> {
-  const now = new Date();
-
-  return {
-    name,
-    description: description || '',
-    modelType: modelType as ILatticeModel['modelType'],
-    userId,
-    sessionId,
-    data: { entities: [], relationships: [] },
-    rules: { rules: [], rulesets: [] },
-    views: { views: [] },
-    settings: {
-      currency: 'USD',
-      fiscalYearStart: '01-01',
-      periodGrain: 'quarter',
-      defaultDecimalPlaces: 2,
-      negativeFormat: 'parentheses',
-    },
-    scenarios: [],
-    operations: [],
-    operationIndex: -1,
-    version: 1,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
 export const latticeCreateModelTool: ToolDefinition = {
   name: 'lattice_create_model',
   implementation: (context: Omit<ToolContext, 'config'>) => ({
@@ -119,7 +82,14 @@ export const latticeCreateModelTool: ToolDefinition = {
         ruleCount: initialData?.rules?.length || 0,
       });
 
-      const modelData = createModelData(name, modelType, context.userId, description);
+      // Built by the service so a chat-created model carries the same `organizationId` and
+      // `sessionId` as an API-created one. Omitting either silently un-shares the model: without
+      // an org id `canReadModel` can never match a colleague, and without a session id the
+      // session-scoped list cannot find it.
+      const modelData = buildNewModel(
+        { id: context.userId, organizationId: context.user?.organizationId },
+        { name, description, modelType: modelType as ILatticeModel['modelType'], sessionId: context.sessionId }
+      );
 
       if (initialData?.entities && modelData.data) {
         const now = new Date();

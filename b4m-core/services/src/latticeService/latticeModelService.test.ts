@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Types } from 'mongoose';
 import {
+  buildNewModel,
+  canReadModel,
   getModel,
   listModels,
   updateModel,
@@ -231,5 +233,42 @@ describe('latticeModelService org-shared read access across id types', () => {
   it('still refuses a write from the same-org non-owner it now admits for reads', async () => {
     await expect(updateModel(colleague, 'model-1', { name: 'Hijacked' }, deps)).resolves.toBeNull();
     expect(deps.db.latticeModels.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `buildNewModel` is the single scaffold behind both create paths - the HTTP route via
+ * `createModel`, and `lattice_create_model`, which inserts entities and rules in the same write
+ * and so cannot call `createModel`. These pin the fields whose absence silently un-shares a model.
+ */
+describe('buildNewModel', () => {
+  it('normalizes an ObjectId organizationId to the string the schema path stores', () => {
+    const orgId = new Types.ObjectId();
+    const built = buildNewModel({ id: 'owner-id', organizationId: orgId }, { name: 'Org Share Test' });
+    expect(built.organizationId).toBe(orgId.toHexString());
+  });
+
+  it('carries session and project scoping through', () => {
+    const built = buildNewModel(
+      { id: 'owner-id', organizationId: 'org-1' },
+      { name: 'Scoped', sessionId: 'session-1', projectId: 'project-1' }
+    );
+    expect(built).toMatchObject({ sessionId: 'session-1', projectId: 'project-1' });
+  });
+
+  it('leaves an org-less creator org-less rather than stamping an empty id', () => {
+    const built = buildNewModel({ id: 'owner-id' }, { name: 'Private' });
+    expect(built.organizationId).toBeUndefined();
+    // And the read gate must not let another org-less user in through that pair of undefineds.
+    expect(canReadModel(built as { userId: string; organizationId?: string }, { id: 'stranger' })).toBe(false);
+  });
+
+  it('builds a model its creator can read', () => {
+    const orgId = new Types.ObjectId();
+    const built = buildNewModel({ id: 'owner-id', organizationId: orgId }, { name: 'Org Share Test' });
+    expect(canReadModel(built as { userId: string; organizationId?: string }, { id: 'owner-id' })).toBe(true);
+    expect(
+      canReadModel(built as { userId: string; organizationId?: string }, { id: 'colleague-id', organizationId: orgId })
+    ).toBe(true);
   });
 });
