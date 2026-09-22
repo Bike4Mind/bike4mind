@@ -29,16 +29,32 @@ export const InsufficientCreditsNotice = ({ message }: InsufficientCreditsNotice
       variant="soft"
       color="warning"
       startDecorator={<WarningAmberRoundedIcon />}
-      sx={{ alignItems: 'flex-start', gap: 1.5 }}
+      sx={{ alignItems: 'center', gap: 1.5, p: '16px' }}
     >
-      <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 1 }}>
-        <Typography level="body-sm" data-testid="insufficient-credits-message">
+      {/* Message and actions on one row, the actions trailing - as on every card that carries
+          both. Wraps on a narrow pane rather than squeezing the buttons. */}
+      <Box
+        sx={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 1.5,
+          width: '100%',
+        }}
+      >
+        <Typography
+          level="body-sm"
+          textColor="text.secondary"
+          sx={{ flex: 1, minWidth: '240px' }}
+          data-testid="insufficient-credits-message"
+        >
           {message}
         </Typography>
         {canPurchaseCredits && (
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }} data-testid="insufficient-credits-actions">
-            <SubscribeButton />
+          <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }} data-testid="insufficient-credits-actions">
             <SessionCreditsButton />
+            <SubscribeButton />
           </Box>
         )}
       </Box>
