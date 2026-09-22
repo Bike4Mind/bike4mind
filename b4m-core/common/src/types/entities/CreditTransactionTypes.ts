@@ -177,7 +177,14 @@ export const RealtimeVoiceUsageTransaction = BaseCreditTransaction.extend({
 
 export const ToolUsageTransaction = BaseCreditTransaction.extend({
   type: z.literal('tool_usage'),
-  model: z.string(),
+  /**
+   * The model that actually incurred the tool cost (e.g. 'gpt-image-2'), NOT the chat
+   * model of the quest that ran the tool. The row is one aggregate over every charging
+   * tool call in the quest, so this is set only when exactly one model charged; a quest
+   * that charged on two or more models leaves it unset rather than naming one of them.
+   * Per-call attribution always lives on the `feature: 'tool'` UsageEventModel rows.
+   */
+  model: z.string().optional(),
   questId: z.string(),
   sessionId: z.string(),
 });
