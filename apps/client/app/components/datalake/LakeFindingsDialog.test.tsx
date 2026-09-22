@@ -52,6 +52,9 @@ const listing = (rows: IDataLakeFindingDocument[], over: Record<string, unknown>
   isLoading: false,
   error: null,
   isForbidden: false,
+  hasMore: false,
+  loadMore: vi.fn(),
+  isLoadingMore: false,
   ...over,
 });
 
@@ -218,11 +221,31 @@ describe('LakeFindingsDialog', () => {
     expect(screen.queryByTestId('lake-findings-error')).not.toBeInTheDocument();
   });
 
-  it('says a full page is a lower bound', () => {
-    h.findings.mockReturnValue(listing(Array.from({ length: 50 }, (_, i) => finding({ id: `finding-${i}` }))));
+  it('offers to load more when the route says there is another page', () => {
+    h.findings.mockReturnValue(
+      listing(
+        Array.from({ length: 50 }, (_, i) => finding({ id: `finding-${i}` })),
+        { hasMore: true }
+      )
+    );
     renderDialog();
 
-    expect(screen.getByTestId('lake-findings-truncated')).toBeInTheDocument();
+    expect(screen.getByTestId('lake-findings-load-more')).toBeInTheDocument();
+  });
+
+  it('fetches the next page when load more is pressed', () => {
+    const loadMore = vi.fn();
+    h.findings.mockReturnValue(
+      listing(
+        Array.from({ length: 50 }, (_, i) => finding({ id: `finding-${i}` })),
+        { hasMore: true, loadMore }
+      )
+    );
+    renderDialog();
+
+    fireEvent.click(screen.getByTestId('lake-findings-load-more'));
+
+    expect(loadMore).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -268,6 +291,17 @@ describe('LakeFindingsChip', () => {
 
     expect(screen.queryByTestId('datalake-findings-chip-lake-1')).not.toBeInTheDocument();
     expect(screen.getByTestId('lake-findings-dialog')).toBeInTheDocument();
+  });
+
+  it('reads a fetched page as a lower bound when the route says there is more', () => {
+    h.findings.mockReturnValue(listing([finding()], { hasMore: true }));
+    render(
+      <TestWrapper>
+        <LakeFindingsChip lakeId="lake-1" lakeName="Acme Policies" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('1+ to review');
   });
 
   it('counts open findings and opens the review surface', () => {

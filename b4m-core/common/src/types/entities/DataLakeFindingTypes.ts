@@ -151,6 +151,8 @@ export interface ListLakeFindingsOptions {
   kind?: InconsistencyKind;
   detector?: LakeFindingDetector;
   limit?: number;
+  /** How many matching rows to skip before `limit` takes over. Pairs with `limit` for load-more paging. */
+  offset?: number;
 }
 
 export interface IDataLakeFindingRepository extends IBaseRepository<IDataLakeFindingDocument> {
@@ -166,7 +168,11 @@ export interface IDataLakeFindingRepository extends IBaseRepository<IDataLakeFin
    * reopening under the curator who closed it.
    */
   recordDetected(input: RecordLakeFindingInput): Promise<IDataLakeFindingDocument>;
-  /** One lake's findings, most recently seen first, narrowed by any combination of filters. */
+  /**
+   * One lake's findings, most recently seen first (ties broken by `_id` for a stable page
+   * boundary - findings from one detection run commonly share `lastSeenAt`), narrowed by any
+   * combination of filters and paged via `limit`/`offset`.
+   */
   listByLake(lakeId: string, options?: ListLakeFindingsOptions): Promise<IDataLakeFindingDocument[]>;
   /**
    * Atomically move an OPEN finding to a terminal status, stamping the resolver. Returns the

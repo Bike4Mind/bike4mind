@@ -107,7 +107,7 @@ function FindingRow({ finding, onOpen }: { finding: IDataLakeFindingDocument; on
         {finding.subject}
       </Typography>
       <Typography level="body-xs" textColor="text.tertiary">
-        {`${finding.documentCount} document(s) · ${FINDING_DETECTOR_LABEL[finding.detector]} · last seen ${formatFindingDate(finding.lastSeenAt)}`}
+        {`${finding.documentCount} document(s) \u00b7 ${FINDING_DETECTOR_LABEL[finding.detector]} \u00b7 last seen ${formatFindingDate(finding.lastSeenAt)}`}
       </Typography>
     </Box>
   );
@@ -136,7 +136,7 @@ function FindingDetail({ finding, onBack }: { finding: IDataLakeFindingDocument;
           {FINDING_KIND_HINT[finding.kind]}
         </Typography>
         <Typography level="body-xs" textColor="text.tertiary">
-          {`${FINDING_DETECTOR_LABEL[finding.detector]} · first seen ${formatFindingDate(finding.firstSeenAt)} · last seen ${formatFindingDate(finding.lastSeenAt)} · reaches ${finding.documentCount} document(s)`}
+          {`${FINDING_DETECTOR_LABEL[finding.detector]} \u00b7 first seen ${formatFindingDate(finding.firstSeenAt)} \u00b7 last seen ${formatFindingDate(finding.lastSeenAt)} \u00b7 reaches ${finding.documentCount} document(s)`}
         </Typography>
       </Box>
 
@@ -193,6 +193,9 @@ export function LakeFindingsDialog({
     isLoading,
     error,
     isForbidden,
+    hasMore,
+    loadMore,
+    isLoadingMore,
   } = useDataLakeFindings(dataLakeId, { status, kind, limit: FINDINGS_PAGE_LIMIT }, { enabled: open });
 
   // Derived from the live list rather than held as a snapshot, so a refetch that drops or updates
@@ -281,10 +284,17 @@ export function LakeFindingsDialog({
                   {findings.map(finding => (
                     <FindingRow key={finding.id} finding={finding} onOpen={() => setSelectedId(finding.id)} />
                   ))}
-                  {findings.length >= FINDINGS_PAGE_LIMIT && (
-                    <Typography level="body-xs" textColor="text.tertiary" data-testid="lake-findings-truncated">
-                      Showing the {FINDINGS_PAGE_LIMIT} most recently seen. Narrow the filters to see the rest.
-                    </Typography>
+                  {hasMore && (
+                    <Button
+                      size="sm"
+                      variant="plain"
+                      color="neutral"
+                      loading={isLoadingMore}
+                      onClick={() => loadMore()}
+                      data-testid="lake-findings-load-more"
+                    >
+                      Load more
+                    </Button>
                   )}
                 </Box>
               )}
@@ -313,7 +323,7 @@ export default function LakeFindingsChip({
   canManage: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const { data: findings } = useDataLakeFindings(
+  const { data: findings, hasMore } = useDataLakeFindings(
     lakeId,
     { status: 'open', limit: FINDINGS_PAGE_LIMIT },
     {
@@ -338,7 +348,7 @@ export default function LakeFindingsChip({
             data-testid={`datalake-findings-chip-${lakeId}`}
           >
             {/* A full page is a lower bound, so it reads `50+` rather than claiming an exact count. */}
-            {`${count}${count >= FINDINGS_PAGE_LIMIT ? '+' : ''} to review`}
+            {`${count}${hasMore ? '+' : ''} to review`}
           </Chip>
         </Tooltip>
       )}

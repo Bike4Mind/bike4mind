@@ -19,7 +19,11 @@ import MarkdownViewer, { UnmarkedCitedPassage } from '@client/app/components/Kno
  */
 export default function FindingSourcePane({ source }: { source: LakeFindingSource }) {
   const { data: file, isLoading: fileLoading, isError: fileError } = useGetFabFile(source.fabFileId);
-  const { data: content, isLoading: contentLoading, isError: contentError } = useGetFabFileContent(file ?? null);
+  const {
+    data: content,
+    isLoading: contentLoading,
+    isError: contentError,
+  } = useGetFabFileContent(file ?? null, { strict: true });
 
   // The finding's own `fileName` first: it is what the detector saw, so it names the document even
   // when the file read fails or the document has since been renamed out from under the quote.

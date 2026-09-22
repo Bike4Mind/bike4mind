@@ -21,6 +21,9 @@ const ListQuery = z.object({
   // reason it swallows the array, and why it will not sit on the right of this pipe. A
   // non-numeric string lands NaN, which `z.number()` rejects.
   limit: z.union([z.string(), z.number()]).transform(Number).pipe(z.number().int().min(1).max(200)).optional(),
+  // Same scalar-first coercion as `limit`, and for the same reason: a repeated `offset` must be a
+  // 400, not silently coerced or NaN'd.
+  offset: z.union([z.string(), z.number()]).transform(Number).pipe(z.number().int().min(0)).optional(),
 });
 
 /** Bounds one page of the queue when a caller does not ask for a size. */
@@ -43,21 +46,26 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
-    const { status, kind, detector, limit } = ListQuery.parse(req.query);
+    const { status, kind, detector, limit, offset } = ListQuery.parse(req.query);
     const ctx = await toAccessContext(req);
 
     const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
+    const pageLimit = limit ?? DEFAULT_LIMIT;
+    // Fetched one row past the page so `hasMore` reflects the queue, not a guess from `data.length
+    // === pageLimit` - a queue that ends exactly on a page boundary would otherwise read as having
+    // more.
     const findings = await dataLakeFindingRepository.listByLake(lake.id, {
       status,
       kind,
       detector,
-      limit: limit ?? DEFAULT_LIMIT,
+      limit: pageLimit + 1,
+      offset: offset ?? 0,
     });
 
-    return res.json({ data: findings });
+    return res.json({ data: findings.slice(0, pageLimit), hasMore: findings.length > pageLimit });
   });
 
 export const config = { api: { externalResolver: true } };

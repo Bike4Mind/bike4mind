@@ -41,7 +41,7 @@ import type {
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -2206,22 +2206,40 @@ export function useDataLakeFindings(
   filters?: LakeFindingFilters,
   opts?: { enabled?: boolean }
 ) {
-  const query = useQuery({
+  const query = useInfiniteQuery({
     queryKey: dataLakeKeys.findings(dataLakeId, filters),
-    queryFn: async () => {
-      const { data } = await api.get<{ data: IDataLakeFindingDocument[] }>(`/api/data-lakes/${dataLakeId}/findings`, {
-        params: filters,
-      });
-      return data.data;
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const { data } = await api.get<{ data: IDataLakeFindingDocument[]; hasMore: boolean }>(
+        `/api/data-lakes/${dataLakeId}/findings`,
+        { params: { ...filters, offset: pageParam } }
+      );
+      return data;
     },
+    // Next offset = how many rows are loaded so far; undefined once the route says there is
+    // nothing left, so a queue that ends exactly on a page boundary does not draw a phantom
+    // "load more".
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.hasMore ? allPages.reduce((n, page) => n + page.data.length, 0) : undefined,
     enabled: !!dataLakeId && (opts?.enabled ?? true),
     retry: false,
     staleTime: 1000 * 60,
     // Switching a filter re-keys the query, and without this the list blanks to a spinner on every
     // switch - the rows are a queue a curator is scanning, not a page they navigated away from.
-    placeholderData: keepPreviousData,
+    // Scoped to the same lake: `LakeInfoPanel` reuses this hook across lake selections, and an
+    // unscoped `keepPreviousData` would carry lake A's rows over while lake B's page is loading.
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === dataLakeId ? previousData : undefined,
   });
-  return { ...query, isForbidden: isPermissionRejection(query.error) };
+  const findings = useMemo(() => query.data?.pages.flatMap(page => page.data), [query.data]);
+  return {
+    ...query,
+    data: findings,
+    isForbidden: isPermissionRejection(query.error),
+    hasMore: query.hasNextPage,
+    loadMore: query.fetchNextPage,
+    isLoadingMore: query.isFetchingNextPage,
+  };
 }
 
 /** How often the run list re-reads while a run is queued or running. */
