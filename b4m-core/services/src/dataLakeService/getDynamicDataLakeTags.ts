@@ -232,6 +232,11 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
    * query means "not measured", never a false "nothing excluded". A rebuild that forgets this
    * field degrades to "say nothing", which is the safe direction - there is no safe default number
    * (0 would under-report a real outage as a clean turn).
+   *
+   * "Not measured" also covers a failed grant-exemption or supersession read upstream of the count
+   * (#3055) - both are inputs the count trusts, so a degraded input produces a confidently WRONG
+   * number rather than an honest failure; see `excludedByAccessCountPrerequisitesComplete` at this
+   * function's call site for the two failure directions this guards against.
    */
   excludedByAccessCount?: number;
   /**
@@ -287,6 +292,18 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // DEGRADES OPEN (stays empty) when the grant read fails or no grant repo is wired, matching
   // `supersededOwnLakeIdsFor` - the floor is then today's behavior, never worse.
   let supersededOwnLakeIds = new Set<string>();
+  // Tracks the exclusion COUNT's own prerequisites separately from `lakeViewComplete` above,
+  // because the two flags gate opposite failure directions for the same reads (#3055). A failed
+  // grant-exemption read degrading `reach` to empty makes the count OVER-count (a lake actually
+  // exempted by a grant now looks excluded); a failed supersession read degrading
+  // `supersededOwnLakeIds` to empty makes it UNDER-count (a lake that should have lost its
+  // owner-bypass exemption still gets one). `lakeViewComplete` only tracks the first direction
+  // (matching its own "lakes may be MISSING" contract) and is deliberately left untouched by the
+  // second (see the supersession catch below) - so neither flag alone can gate the count safely.
+  // Stays `true` when a read is simply unwired (no grant repo): an absent adapter has nothing to
+  // fail, so `reach`/`supersededOwnLakeIds` staying at their empty defaults is a complete answer,
+  // not a degraded one.
+  let excludedByAccessCountPrerequisitesComplete = true;
   if (context.db.dataLakes) {
     // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
     // legible error naming the missing adapter. Resolved only on this branch - a static-registry-
@@ -334,6 +351,9 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         // resulting absence as proof of unreachability. See lakeViewComplete.
         context.logger?.warn('[dataLakes] access-grant lookup failed; resolving lakes without the grant arm', err);
         lakeViewComplete = false;
+        // Also a count prerequisite (#3055): `reach` just fell back to empty, so a lake actually
+        // exempted by that grant would otherwise be miscounted as excluded below.
+        excludedByAccessCountPrerequisitesComplete = false;
       }
       // The other half of the same access model: `findActiveByUserTagsAndEntitlements`'s creator arm
       // is bare provenance, and `createdByUserId` is immutable, so a creator transferred or departed
@@ -364,6 +384,10 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
           '[dataLakes] ownership-supersession lookup failed; creator arm left at bare provenance',
           err
         );
+        // Also a count prerequisite (#3055), in the OPPOSITE direction from the grant-read catch
+        // above: `supersededOwnLakeIds` just fell back to empty, so a lake that should have LOST
+        // its owner-bypass exemption would otherwise be miscounted as NOT excluded below.
+        excludedByAccessCountPrerequisitesComplete = false;
       }
     }
     // The repo silently drops an unusable dataLakeId from its `_id` arms instead of failing, so a
@@ -432,18 +456,28 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     // from a query that could not run. Guarded separately from the block above: a host that wired
     // `findActiveByUserTagsAndEntitlements` but not this newer method must not lose lake access
     // entirely over one missing capability.
-    try {
-      excludedByAccessCount = await context.db.dataLakes.countGateExcludedLakes(
-        userTags,
-        entitlementKeys,
-        organizationIds,
-        userId,
-        // supersededOwnLakeIds (#3055): withholds the owner-bypass exemption from a lake
-        // whose ownership has since moved off the caller - see countGateExcludedLakes's own doc.
-        { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
+    // A complete `reach`/`supersededOwnLakeIds` is a prerequisite for a TRUSTWORTHY count, not just
+    // a successful query - see `excludedByAccessCountPrerequisitesComplete`'s own doc for why
+    // running the count on a degraded input would produce a confidently wrong number in either
+    // direction rather than the honest "unknown" this field's contract requires.
+    if (excludedByAccessCountPrerequisitesComplete) {
+      try {
+        excludedByAccessCount = await context.db.dataLakes.countGateExcludedLakes(
+          userTags,
+          entitlementKeys,
+          organizationIds,
+          userId,
+          // supersededOwnLakeIds (#3055): withholds the owner-bypass exemption from a lake
+          // whose ownership has since moved off the caller - see countGateExcludedLakes's own doc.
+          { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
+        );
+      } catch (err) {
+        context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
+      }
+    } else {
+      context.logger?.warn(
+        '[dataLakes] gate-excluded-lake count skipped; a grant-exemption or supersession prerequisite read failed this turn'
       );
-    } catch (err) {
-      context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
     }
   }
   const accessibleLakes = getAccessibleDataLakes(userTags, dynamicDataLakes, entitlementKeys);
@@ -563,7 +597,11 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
  * Reuses the SAME per-turn-memoized organizationIds/grant-reach/supersession as
  * `getDynamicDataLakeAccess` (both are keyed on the identity of `context`), so calling this
  * after that resolver already ran for the turn costs one extra count query, not a second
- * membership or grant read.
+ * membership or grant read - PROVIDED the caller passes the SAME `context` object both times
+ * (#3055 review). A caller that builds a fresh object per call defeats this silently: the memos
+ * miss on identity, not on field equality, and the two reads can then observe different
+ * snapshots. See `ChatCompletionProcess.getDataLakeAccessContext` for the one production caller
+ * that holds this invariant.
  *
  * Returns 0 without a query for an empty `identityTags` list - nothing was named by
  * identity, so nothing can be excluded by identity (a session can only reference an
