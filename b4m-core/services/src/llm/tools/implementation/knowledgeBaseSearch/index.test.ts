@@ -1187,25 +1187,20 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
   });
 
   /**
-   * #2236. The date rides after the existing parenthetical, so the header's leading `<n>. **`
-   * shape - what defangRetrievedContent matches and the forged-header test above counts - is
-   * unchanged by its presence.
+   * Passage headers carry no date. `SemanticChunkResult` no longer has a field to put one in, so
+   * the compiler is the real guard here; this pins the rendered shape so a re-added date would have
+   * to break a visible assertion rather than slip in after the parenthetical.
    */
-  it('heads a passage with its document date, and omits the clause when the document has none', async () => {
+  it('heads every passage undated', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
-      results: [
-        { ...hitOf('dated passage'), fileCreatedAt: new Date('2026-08-14T09:30:00.000Z') },
-        { ...hitOf('undated passage', 'Undated.pdf'), chunkId: 'c2', fileId: 'f2' },
-      ],
+      results: [hitOf('first passage'), { ...hitOf('second passage', 'Other.pdf'), chunkId: 'c2', fileId: 'f2' }],
       scan: { ...scan, filesMatching: 2, filesScoped: 2, filesScanned: 2, chunksScanned: 2 },
     });
     const out = await run(delimiterCtx());
-    expect(out).toContain('1. **Handbook** (ID: f1, relevance 0.81) - dated 2026-08-14');
-    // No createdAt: the clause is absent entirely, not empty and not stringified.
-    expect(out).toContain('2. **Undated** (ID: f2, relevance 0.81)\n');
-    expect(out).not.toContain('dated undefined');
-    expect(out).not.toContain('dated null');
-    // Still exactly two real headers: the added suffix must not create or defang one.
+    expect(out).toContain('1. **Handbook** (ID: f1, relevance 0.81)\n');
+    expect(out).toContain('2. **Other** (ID: f2, relevance 0.81)\n');
+    expect(out).not.toMatch(/dated/);
+    // Still exactly two real headers.
     expect(out.match(/^\d+\. \*\*/gm)).toHaveLength(2);
   });
 
@@ -2197,7 +2192,6 @@ describe('search_knowledge_base injected volume', () => {
     fileTags: [],
     chunkText: 'pto accrues monthly',
     score: 0.81,
-    fileCreatedAt: null,
     ...over,
   });
 

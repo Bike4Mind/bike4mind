@@ -26,7 +26,7 @@ const SlackMetricsPage: React.FC = () => {
     eventCategoryFilter: 'Slack',
   };
 
-  const { data: metrics = [], isLoading, isError, error, forceRefresh } = useEventMetrics(filtersForApi);
+  const { data: metrics = [], isLoading, isFetching, isError, error, forceRefresh } = useEventMetrics(filtersForApi);
 
   const {
     // Filter states
@@ -127,7 +127,7 @@ const SlackMetricsPage: React.FC = () => {
         onClearFilters={handleClearFilters}
         onSetDateRange={setDateRange}
         onApplyFilters={handleApplyFilters}
-        isLoading={isLoading}
+        isFetching={isFetching}
         hideCategoryFilter={true}
       />
 

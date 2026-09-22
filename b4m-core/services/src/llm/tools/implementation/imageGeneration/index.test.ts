@@ -50,7 +50,7 @@ vi.mock('../../../../apiKeyService', async importOriginal => {
 // Imported after the mocks so `processAndStoreImages` and the Gemini branch pick up the fakes.
 const { processAndStoreImages, imageGenerationTool } = await import('./index');
 
-// 1x1 transparent PNG - downloadImage() short-circuits data: URLs with no network call.
+// 1x1 transparent PNG - downloadImageAsBuffer() short-circuits data: URLs with no network call.
 const PNG_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 

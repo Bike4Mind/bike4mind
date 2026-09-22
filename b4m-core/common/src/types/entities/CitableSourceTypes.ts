@@ -107,6 +107,17 @@ export interface CitableSource {
      * These persist with the quest, so they are a small but real addition to every stored web hit.
      */
     images?: string[];
+    /**
+     * Ids of the other cited sources this one provably disagrees with, from the retrieval-time
+     * conflict detector (#3041, buildRetrievalConflictSignal). Present only on the chips of a
+     * witness pair, and only for the kinds classified as able to ASSERT disagreement - the rest
+     * are "worth a human's eye", so the UI must present even these as heuristic rather than proven.
+     *
+     * Ids, never excerpts: these are `fabFileId`s already carried unredacted at `citables[].id`, so
+     * this stays out of the owner-only egress list that `fullContext` sits on. Adding prose evidence
+     * here later would change that classification - see promptMetaRedaction.ts.
+     */
+    conflictsWith?: string[];
     [key: string]: unknown;
   };
 }
