@@ -5,29 +5,31 @@ import type {
   ILakeMembershipRemovalRepository,
 } from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
-import { removeFileFromLake, type MembershipActor } from './lakeMembership';
+import { removeFileFromLake, type MembershipActor, type MembershipOriginOptions } from './lakeMembership';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
+import type { LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 
 /** How long a removal's restore record stays live - see `lakeMembershipRemovals` below. */
 const REMOVAL_RECORD_TTL_MS = 30 * 60 * 1000;
 
-export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters {
+export interface RemoveFileFromDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
   // Matches the three sibling recompute callers (see archiveDataLake). The audit repos are declared
   // rather than merely spread at the route because the type is the only place the requirement is
   // visible at all: TS skips excess-property checks on SPREAD properties, so `...lakeConfigAuditDb`
   // at the call site is never checked against this shape and dropping it still compiles. The route
   // test is what actually catches that; this keeps the contract honest for a reader.
-  db: LakeConfigAuditAdapters['db'] & {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
-    fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
-    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-    // REQUIRED, not optional like `dataLakeAccessGrants`: there is exactly one caller (this door),
-    // so there is no blast radius, and an optional adapter would create a silent "Undo does
-    // nothing" mode for #2248's restore - the record this write mints is that restore's entire
-    // authorization (see the load-bearing note on lakeMembership.ts's `!inLake` refusal).
-    lakeMembershipRemovals: Pick<ILakeMembershipRemovalRepository, 'upsertRemoval'>;
-  };
+  db: LakeConfigAuditAdapters['db'] &
+    LakeMembershipAuditAdapters['db'] & {
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'setStats' | 'activateIfDraft'>;
+      fabFiles: Pick<IFabFileRepository, 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'>;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      // REQUIRED, not optional like `dataLakeAccessGrants`: there is exactly one caller (this door),
+      // so there is no blast radius, and an optional adapter would create a silent "Undo does
+      // nothing" mode for #2248's restore - the record this write mints is that restore's entire
+      // authorization (see the load-bearing note on lakeMembership.ts's `!inLake` refusal).
+      lakeMembershipRemovals: Pick<ILakeMembershipRemovalRepository, 'upsertRemoval'>;
+    };
 }
 
 /**
@@ -102,14 +104,15 @@ export const removeFileFromDataLake = async (
   actor: MembershipActor,
   dataLakeId: string,
   fabFileId: string,
-  { db, logger }: RemoveFileFromDataLakeAdapters
+  { db, logger }: RemoveFileFromDataLakeAdapters,
+  opts: MembershipOriginOptions = {}
 ): Promise<{ success: true; fileCount: number; totalSizeBytes: number; restoreTokenMinted: boolean }> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
     throw new NotFoundError('Data lake not found');
   }
 
-  const { contentTags } = await removeFileFromLake(actor, lake, fabFileId, { db });
+  const { contentTags } = await removeFileFromLake(actor, lake, fabFileId, { db, logger }, opts);
 
   // The restore (#2248) authorization token: an upsert, so a remove -> undo -> remove cycle
   // leaves exactly one live row, carrying the LATEST removal's tags. Best-effort - wrapped so a
