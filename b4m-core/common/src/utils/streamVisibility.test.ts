@@ -50,6 +50,22 @@ describe('visibleReplyText', () => {
     // Trimming here welds the next slot onto this one: 'Here is the table:| a | b |'.
     expect(visibleReplyText('Here is the table:\n\n')).toBe('Here is the table:\n\n');
   });
+
+  it('keeps a nested open hidden until its matching close, not the first close it sees', () => {
+    // Reasoning text is provider-authored and can itself contain marker-shaped substrings.
+    // A naive non-greedy pair match strips only "<think>outer<think>inner</think>" and lets
+    // "tail" leak into the transcript; depth tracking keeps it hidden until the outer block
+    // actually closes.
+    expect(visibleReplyText('<think>outer<think>inner</think>tail</think>answer')).toBe('answer');
+  });
+
+  it('does not let an inner close end the outer block early', () => {
+    expect(visibleReplyText('before<think>a<think>b</think>c</think>after')).toBe('beforeafter');
+  });
+
+  it('treats an unmatched trailing close as ordinary text rather than hiding a phantom block', () => {
+    expect(visibleReplyText('answer</think>more')).toBe('answer</think>more');
+  });
 });
 
 describe('hasVisibleReplyText', () => {

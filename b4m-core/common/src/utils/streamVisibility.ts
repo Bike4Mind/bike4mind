@@ -12,8 +12,8 @@
 export const THINK_OPEN_TAG = '<think>';
 export const THINK_CLOSE_TAG = '</think>';
 
-/** Every closed thinking block, non-greedy so adjacent blocks stay separate. */
-const CLOSED_THINKING_SPAN = /<think>[\s\S]*?<\/think>/g;
+/** Splits on the marker tokens, keeping them in the result so a scan can track nesting depth. */
+const THINK_TAG_TOKENS = /(<think>|<\/think>)/g;
 
 /**
  * The visible remainder of one reply slot, with hidden reasoning removed.
@@ -31,16 +31,33 @@ const CLOSED_THINKING_SPAN = /<think>[\s\S]*?<\/think>/g;
  * has already watched stream in. An unclosed trailing marker hides everything after it, so a
  * reopened block does not render its raw marker while it streams.
  *
+ * Markers are tracked by nesting depth rather than matched pairwise, because reasoning text
+ * is provider-authored and can itself contain marker-shaped substrings (a model reasoning
+ * about the `<think>` protocol, say). A naive non-greedy pair match on
+ * `<think>outer<think>inner</think>tail</think>answer` would strip only the innermost pair
+ * and let `tail` leak into the transcript; walking depth instead keeps everything between an
+ * open and its matching close hidden regardless of what markers appear in between, and an
+ * unmatched trailing `</think>` (depth already zero) is treated as ordinary text rather than
+ * closing something that was never open.
+ *
  * Interior whitespace is preserved: callers concatenate slots with no separator, so trimming
  * every slot would weld a heading onto the table beneath it.
  */
 export function visibleReplyText(part: string | null | undefined): string {
   if (!part || !part.trim()) return '';
 
-  const withoutClosedBlocks = part.replace(CLOSED_THINKING_SPAN, '');
-
-  const openIndex = withoutClosedBlocks.indexOf(THINK_OPEN_TAG);
-  const visible = openIndex === -1 ? withoutClosedBlocks : withoutClosedBlocks.slice(0, openIndex);
+  let depth = 0;
+  let visible = '';
+  for (const token of part.split(THINK_TAG_TOKENS)) {
+    if (token === THINK_OPEN_TAG) {
+      depth += 1;
+    } else if (token === THINK_CLOSE_TAG) {
+      if (depth > 0) depth -= 1;
+      else visible += token;
+    } else if (depth === 0) {
+      visible += token;
+    }
+  }
 
   return visible.trim() ? visible : '';
 }
