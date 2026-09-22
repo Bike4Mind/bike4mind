@@ -20,6 +20,10 @@ const handler = baseApi().post(async (req, res) => {
   // own configs: this bypasses the eligibility gates (activeHours/minIntervalHours) the cron
   // path enforces, so it must never let a session write-sharee force ANOTHER user's config to
   // fire and spend that user's LLM keys/credits on demand - only your own can be triggered here.
+  // Side effect: config.ts's PUT re-stamps userId to whoever last edited a config, so once a
+  // sharee edits one, the original owner can no longer trigger it here even though they still
+  // own the session/agent - intentional (this route follows current authorship, not ownership),
+  // and the cron path is unaffected since it fires every enabled config regardless of owner.
   const allConfigs = await sessionAgentConfigRepository.findBySessionId(sessionId);
   const enabledConfigs = allConfigs.filter(
     config => config.proactiveMessaging.enabled && config.userId === req.user!.id
