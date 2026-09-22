@@ -39,7 +39,15 @@ const member = (id: string) => ({ id, userId: OWNER, tags: [{ name: 'datalake:la
 
 const actor = { userId: OWNER, isAdmin: false };
 
-function makeDeps(over: { lake?: unknown; finding?: unknown; files?: Record<string, unknown> } = {}) {
+function makeDeps(
+  over: {
+    lake?: unknown;
+    finding?: unknown;
+    files?: Record<string, unknown>;
+    /** Other dynamic lakes owned by OWNER, keyed by id - what `findIdsCreatedBy` returns. */
+    otherLakes?: Record<string, unknown>;
+  } = {}
+) {
   const record = vi.fn(async (input: unknown) => input);
   const setLakeSupersession = vi.fn(async () => true);
   const clearLakeSupersession = vi.fn(async () => true);
@@ -47,13 +55,19 @@ function makeDeps(over: { lake?: unknown; finding?: unknown; files?: Record<stri
     'doc-a': member('doc-a'),
     'doc-b': member('doc-b'),
   };
+  const theLake = (over.lake ?? lake()) as { id: string };
   return {
     record,
     setLakeSupersession,
     clearLakeSupersession,
     deps: {
       db: {
-        dataLakes: { findById: vi.fn(async () => over.lake ?? lake()) },
+        dataLakes: {
+          findById: vi.fn(async (id: string) =>
+            id === theLake.id ? theLake : ((over.otherLakes as Record<string, unknown> | undefined)?.[id] ?? null)
+          ),
+          findIdsCreatedBy: vi.fn(async () => Object.keys(over.otherLakes ?? {})),
+        },
         dataLakeAccessGrants: { listByLake: vi.fn(async () => []) },
         fabFiles: {
           findById: vi.fn(async (id: string) => files[id] ?? null),
@@ -179,6 +193,55 @@ describe('applyCorpusAction supersede', () => {
     );
     await expect(promise).rejects.toThrow(/belongs to more than one data lake/);
     expect(setLakeSupersession).not.toHaveBeenCalled();
+  });
+
+  it(
+    'refuses to retire a document ambiguous only by the dynamic-lake prefix arm - a second tag ' +
+      'carries no `datalake:<slug>` meta-tag, only a content prefix matching another lake OWNER owns',
+    async () => {
+      const otherLakeId = 'lake2';
+      const otherLake = lake({
+        id: otherLakeId,
+        datalakeTag: 'datalake:lake2',
+        fileTagPrefix: 'legal:',
+        createdByUserId: OWNER,
+      });
+      // Only ONE datalake:<slug> meta-tag - `memberOfMoreThanOneLakeByMetaTag` alone would miss this.
+      // The second tag matches lake2's prefix, and lake2 is owned by the same user as the file, so
+      // the dynamic-lake prefix arm resolves it too - exactly the gap the prefix-arm check closes.
+      const prefixAmbiguousDoc = {
+        ...member('doc-b'),
+        tags: [
+          { name: 'datalake:lake1', strength: 1 },
+          { name: 'legal:contract', strength: 1 },
+        ],
+      };
+      const { promise, setLakeSupersession } = run(
+        { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+        { files: { 'doc-a': member('doc-a'), 'doc-b': prefixAmbiguousDoc }, otherLakes: { [otherLakeId]: otherLake } }
+      );
+      await expect(promise).rejects.toThrow(/belongs to more than one data lake/);
+      expect(setLakeSupersession).not.toHaveBeenCalled();
+    }
+  );
+
+  it('allows a retiring document whose content tag matches only a prefix the file owner does not own a lake for', async () => {
+    // 'legal:contract' looks structurally like it could match a prefix, but no lake owned by this
+    // file's owner (nor the static registry) carries that prefix, so it is not a real attribution
+    // signal - matching what `attributeFileToLakeIds` itself would resolve at collapse time.
+    const singleLakeDoc = {
+      ...member('doc-b'),
+      tags: [
+        { name: 'datalake:lake1', strength: 1 },
+        { name: 'legal:contract', strength: 1 },
+      ],
+    };
+    const { promise, setLakeSupersession } = run(
+      { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+      { files: { 'doc-a': member('doc-a'), 'doc-b': singleLakeDoc } }
+    );
+    await promise;
+    expect(setLakeSupersession).toHaveBeenCalled();
   });
 
   it('refuses a write that would close a supersession cycle', async () => {

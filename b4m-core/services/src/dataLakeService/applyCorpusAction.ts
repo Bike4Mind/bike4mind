@@ -3,6 +3,7 @@ import type {
   IDataLakeCorpusActionRepository,
   IDataLakeFindingDocument,
   IDataLakeFindingRepository,
+  IDataLakeRepository,
   IFabFileRepository,
   LakeAuditPrincipal,
   LakeCorpusAction,
@@ -10,12 +11,15 @@ import type {
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import type { IDataLakeDocument } from '@bike4mind/common';
+import { DATA_LAKES } from '@bike4mind/common';
 import { assertLakeWritable } from './assertLakeAccess';
 import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { canManageLake, resolveLakeManageRung } from './manageRule';
 import { lakeMembershipSignals, type MembershipActor } from './lakeMembership';
 import { removeFileFromDataLake, type RemoveFileFromDataLakeAdapters } from './removeFileFromDataLake';
 import { setDataLakeFileTags, type SetDataLakeFileTagsAdapters } from './setDataLakeFileTags';
+import { attributeFileToLakeIds, type AttributableLake } from './attributeAccessedLakes';
+import { lakeMembershipScope } from './lakeMembershipScope';
 import { datalakeTagsFrom } from './getDataLakePrompts';
 
 /**
@@ -88,6 +92,8 @@ export interface ApplyCorpusActionAdapters {
       // Required here, though the shared interface declares them optional (see the field's own
       // doc comment in FabFileTypes.ts) - this door cannot function without a real implementation.
       fabFiles: Required<Pick<IFabFileRepository, 'setLakeSupersession' | 'clearLakeSupersession'>>;
+      // Widens the multi-lake ambiguity guard beyond meta-tags - see `candidateAttributionLakes`.
+      dataLakes: Pick<IDataLakeRepository, 'findIdsCreatedBy'>;
       dataLakeFindings: Pick<IDataLakeFindingRepository, 'findById'>;
       dataLakeCorpusActions: Pick<IDataLakeCorpusActionRepository, 'record'>;
     };
@@ -166,17 +172,78 @@ function nameFor(finding: IDataLakeFindingDocument, fabFileId: string): string |
 }
 
 /**
- * How many distinct lakes this file's own meta-tags name. Mirrors the ambiguity check
- * `partitionBySupersession` makes with `attributeFileToLakeIds`, but scoped to what a single tag
- * list can say on its own: a file carrying more than one `datalake:<slug>` tag is a member of more
- * than one lake by meta-tag alone, so a ruling attributed to any ONE of them resolves to `lakeId:
- * null` at the collapse (`lakeIds.length === 1 ? lakeIds[0] : null`) and is never honored. Does not
- * catch the dynamic-lake prefix-only arm of ambiguity, which needs every other lake's prefix to
- * evaluate and this module has no reason to load - a narrower, local proxy for the same fact.
+ * How many distinct lakes this file's own meta-tags name, unconditionally - a file carrying more
+ * than one `datalake:<slug>` tag is a member of more than one lake regardless of whether either
+ * lake is in `candidateAttributionLakes`' pool (that pool cannot enumerate every OTHER curator's
+ * dynamic lake, only the ones this file's own owner could reach), so this stays a separate,
+ * unscoped check rather than folding into `soleAttributedLakeId`.
  */
 function memberOfMoreThanOneLakeByMetaTag(file: { tags?: { name?: string }[] }): boolean {
   const names = (file.tags ?? []).map(t => t.name).filter((n): n is string => typeof n === 'string');
   return datalakeTagsFrom(names).length > 1;
+}
+
+/**
+ * Every lake a retiring file's tags could structurally attribute to, covering the same three arms
+ * `partitionBySupersession` resolves at collapse time via `attributeFileToLakeIds`: this lake
+ * itself, every static-registry lake's open prefix (`DATA_LAKES` is a compile-time constant, so
+ * this arm costs no read), and every OTHER dynamic lake the file's OWNER created - the only pool
+ * the ownership-anchored prefix arm can ever match (see `attributeFileToLakeIds`'s ownership
+ * conjunct). This is a write-time correctness guard, not a retrieval-scope walk, so it only needs
+ * to enumerate lakes that COULD match the file, not ones a particular caller is authorized to read.
+ */
+async function candidateAttributionLakes(
+  lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
+  ownerUserId: string | undefined,
+  db: { dataLakes: Pick<IDataLakeRepository, 'findIdsCreatedBy' | 'findById'> }
+): Promise<AttributableLake[]> {
+  const registryLakes: AttributableLake[] = DATA_LAKES.map(l => ({
+    id: l.id,
+    datalakeTag: l.datalakeTag,
+    fileTagPrefix: l.fileTagPrefix,
+  }));
+
+  const dynamicLakes: AttributableLake[] = [
+    {
+      id: lake.id,
+      datalakeTag: lake.datalakeTag,
+      fileTagPrefix: lake.fileTagPrefix,
+      membership: lakeMembershipScope(lake),
+    },
+  ];
+
+  if (ownerUserId) {
+    const ownedIds = (await db.dataLakes.findIdsCreatedBy(ownerUserId)).filter(id => id !== lake.id);
+    const ownedLakes = await Promise.all(ownedIds.map(id => db.dataLakes.findById(id)));
+    for (const doc of ownedLakes) {
+      if (!doc) continue;
+      dynamicLakes.push({
+        id: doc.id,
+        datalakeTag: doc.datalakeTag,
+        fileTagPrefix: doc.fileTagPrefix,
+        membership: lakeMembershipScope(doc),
+      });
+    }
+  }
+
+  return [...registryLakes, ...dynamicLakes];
+}
+
+/**
+ * The single lake id a retiring file attributes to, or `null` if it is ambiguous (attributes to
+ * more than one lake) or unattributed (attributes to none) - both of which resolve to `lakeId:
+ * null` at the collapse (`lakeIds.length === 1 ? lakeIds[0] : null`) and leave a ruling silently
+ * unhonored on retrieval.
+ */
+async function soleAttributedLakeId(
+  file: { userId?: string; tags?: { name?: string }[] },
+  lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
+  db: { dataLakes: Pick<IDataLakeRepository, 'findIdsCreatedBy' | 'findById'> }
+): Promise<string | null> {
+  const names = (file.tags ?? []).map(t => t.name).filter((n): n is string => typeof n === 'string');
+  const candidates = await candidateAttributionLakes(lake, file.userId, db);
+  const attributed = attributeFileToLakeIds(names, candidates, file.userId);
+  return attributed.length === 1 ? attributed[0] : null;
 }
 
 /** Bounds the cycle walk below so a malformed or very long chain cannot spin. */
@@ -361,10 +428,18 @@ export const applyCorpusAction = async (
       if (fabFileId === request.retireFabFileId) retiringFile = file;
     }
 
-    // The retiring document must attribute to THIS lake alone. A document tagged into several
-    // lakes resolves to `lakeId: null` at the collapse - the ruling would be written, reported as a
-    // success, and never once honored on retrieval. See `memberOfMoreThanOneLakeByMetaTag`.
-    if (retiringFile && memberOfMoreThanOneLakeByMetaTag(retiringFile)) {
+    // The retiring document must attribute to THIS lake alone. A document that is unattributed or
+    // ambiguously multi-attributed resolves to `lakeId: null` at the collapse - the ruling would be
+    // written, reported as a success, and never once honored on retrieval. Two independent checks,
+    // because neither alone covers both ambiguity arms: `memberOfMoreThanOneLakeByMetaTag` catches
+    // a second `datalake:<slug>` tag naming any lake at all, even one this file's owner cannot
+    // reach; `soleAttributedLakeId` catches the content-tag-prefix arm, but only within the lakes
+    // it can enumerate (see its own doc comment).
+    if (
+      retiringFile &&
+      (memberOfMoreThanOneLakeByMetaTag(retiringFile) ||
+        (await soleAttributedLakeId(retiringFile, lake, db)) !== lake.id)
+    ) {
       throw new BadRequestError(
         'This document belongs to more than one data lake, so a ruling here would never be honored ' +
           'on retrieval. Retag it into this lake alone before superseding it.'
