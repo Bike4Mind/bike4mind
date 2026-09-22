@@ -9,6 +9,7 @@ import {
   dataLakeBatchRepository,
   fabFileChunkRepository,
   fabFileRepository,
+  lakeMembershipChangeEventRepository,
   orgGoogleDriveConnectionRepository,
   scopedSettingsRepository,
   sessionRepository,
@@ -877,6 +878,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     // was authorized by an org owner/manager at connect time (verifyOrgAccess). Pass the resolved lake
     // itself (not a hand-projection) so `organizationId` reaches the org-manageable manage rung.
     const membershipActor = { userId: connection.connectedBy, isAdmin: true };
+    // Every membership write in this handler is the Drive connector sync itself, not a person at
+    // a keyboard - see LakeMembershipChangeOrigin's own doc comment for why that has to be stated
+    // explicitly here rather than inferred from `membershipActor`, which carries a real user id.
+    const membershipAuditDb = { lakeMembershipChangeEvents: lakeMembershipChangeEventRepository };
     const recomputeStats = () =>
       dataLakeService.recomputeLakeStats(lake, {
         db: { dataLakes: dataLakeRepository, fabFiles: fabFileRepository },
@@ -973,9 +978,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
      */
     const retireSupersededCopy = async (staleCopy: (typeof existingDocs)[number], replacementFabFileId: string) => {
       // Per-lake by construction: clears this lake's meta-tag and prefixed content tags, nothing else.
-      await dataLakeService.removeFileFromLake(membershipActor, lake, staleCopy.id, {
-        db: { fabFiles: fabFileRepository },
-      });
+      await dataLakeService.removeFileFromLake(
+        membershipActor,
+        lake,
+        staleCopy.id,
+        { db: { fabFiles: fabFileRepository, ...membershipAuditDb }, logger },
+        { origin: 'connector' }
+      );
 
       // Re-read AFTER the unpick, so the gate runs against the tags that actually SURVIVE it. The
       // question a hard delete must answer is "now that this file has left THIS lake, does any other
@@ -1055,12 +1064,20 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             fabFileChunks: fabFileChunkRepository,
             users: userRepository,
             sessions: sessionRepository,
+            dataLakes: dataLakeRepository,
+            ...membershipAuditDb,
           },
           storage: getFilesStorage(),
           onDeleteComplete: async (_fabFile, size) => {
             reclaimedBytesByUserId.set(ownerId, (reclaimedBytesByUserId.get(ownerId) ?? 0) + size);
           },
           searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+          logger,
+          // This is the sole-lake-copy hard delete, reached only after removeFileFromLake above
+          // already unpicked it from `lake` and confirmed no other lake claims it - so this
+          // normally finds zero remaining membership. Wired anyway so a future claim this poll
+          // does not yet know about still gets a 'removed' row instead of a silent gap.
+          origin: 'connector',
         }
       );
       if (action !== 'deleted') {
@@ -1137,9 +1154,13 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     //    membership-only unpick loses nothing (the FabFile stays in the owner's Files, chunks untouched).
     //    Stats recompute is deferred to the end so it also reflects the stale copies retired in the loop.
     for (const doc of removed) {
-      await dataLakeService.removeFileFromLake(membershipActor, lake, doc.id, {
-        db: { fabFiles: fabFileRepository },
-      });
+      await dataLakeService.removeFileFromLake(
+        membershipActor,
+        lake,
+        doc.id,
+        { db: { fabFiles: fabFileRepository, ...membershipAuditDb }, logger },
+        { origin: 'connector' }
+      );
     }
 
     let retired = 0;
@@ -1396,6 +1417,15 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             driveConnectionId: connectionId,
           },
           ability
+        );
+
+        // This door stamps the lake's meta-tag directly into `tags` at creation (above) rather than
+        // going through `addFileToLake` - there is no FabFile yet for that door to gate on when the
+        // tags are decided - so the membership event has to be recorded explicitly here instead of
+        // riding along inside that shared write.
+        await dataLakeService.recordLakeMembershipChange(
+          { actor: membershipActor, lake, fabFileId: fabFile.id, action: 'added', origin: 'connector' },
+          { db: membershipAuditDb, logger }
         );
 
         // Manifest entry BEFORE the bytes land - the upload fires objectCreated synchronously and its

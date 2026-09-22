@@ -42,6 +42,7 @@ export * from './constants/convergenceProvenance';
 export * from './constants/lakeAccessAudit';
 export * from './constants/feedbackRetention';
 export * from './constants/lakeConfigAudit';
+export * from './constants/lakeMembershipChangeAudit';
 export * from './constants/forcedRetrieval';
 export * from './constants/embeddingSpaceFloors';
 export * from './constants/lakeMemory';

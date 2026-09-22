@@ -15,6 +15,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 import { sendToQueue } from '@server/utils/sqs';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
@@ -134,6 +135,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             dataLakeAccessGrants: dataLakeAccessGrantRepository,
             fabFiles: fabFileRepository,
             ...lakeConfigAuditDb,
+            // A restore puts the lake's files back inside every lake read, which is a membership
+            // join the change log has to carry - the delete side already logged their removals.
+            ...lakeMembershipAuditDb,
           },
           enableDriveConnection: async ({ dataLakeId }) => {
             await enableDriveConnectionForLake(dataLakeId);
@@ -151,6 +155,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
             fabFiles: fabFileRepository,
             fabFileChunks: fabFileChunkRepository,
             ...lakeConfigAuditDb,
+            // The teardown's soft delete takes every member file out of every lake read, which is
+            // a membership departure - the restore door records the matching rejoins.
+            ...lakeMembershipAuditDb,
           },
           retrievalIndex: retrievalIndex(),
           disableDriveConnection: async ({ dataLakeId }) => {

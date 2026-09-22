@@ -1152,7 +1152,7 @@ describe('FabFile data lake lifecycle membership', () => {
       await fabFileRepository.softDeleteByDataLakeTag(scope);
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope);
 
-      expect(restored).toBe(2);
+      expect(restored).toHaveLength(2);
       expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt ?? null).toBeNull();
     });
 
@@ -1162,8 +1162,50 @@ describe('FabFile data lake lifecycle membership', () => {
 
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [rows.prefixOwned._id.toString()]);
 
-      expect(restored).toBe(1);
+      expect(restored).toHaveLength(1);
       expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt).not.toBeNull();
+    });
+
+    // The restore door records one membership `added` per id this returns, so an id it never
+    // actually flipped would mint a join that a concurrent restore had already recorded.
+    it('omits a row a concurrent restore already revived', async () => {
+      const stamp = new Date('2026-07-01T00:00:00.000Z');
+      const rows = await seedLakeRows();
+      await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
+      // The losing half's view: the row is enumerated, then someone else clears deletedAt before
+      // this write reaches it, so the conditional update matches nothing.
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { deletedAt: null } });
+
+      const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], stamp);
+
+      expect(restored).not.toContain(rows.prefixOwned._id.toString());
+      expect(restored).toContain(rows.metaTagged._id.toString());
+    });
+
+    // The teardown door mints one permanent membership `removed` per id this returns, so an id it
+    // did not stamp itself would double-report a departure another delete door already recorded.
+    // The window is between the enumeration and the write, which is why it takes an injection to
+    // reach: a plain pre-existing soft delete is already excluded by the enumeration itself.
+    it('omits a row another door claimed between the read and the write', async () => {
+      const stamp = new Date('2026-07-01T00:00:00.000Z');
+      const rows = await seedLakeRows();
+      const updateMany = FabFile.updateMany.bind(FabFile);
+      const spy = vi.spyOn(FabFile, 'updateMany').mockImplementation((async (
+        filter: unknown,
+        update: unknown,
+        options?: unknown
+      ) => {
+        spy.mockRestore();
+        await FabFile.updateOne(
+          { _id: rows.prefixOwned._id },
+          { $set: { deletedAt: new Date('2026-06-30T00:00:00.000Z') } }
+        );
+        return updateMany(filter as never, update as never, options as never);
+      }) as never);
+
+      const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
+
+      expect(flipped).toEqual([rows.metaTagged._id.toString()]);
     });
 
     it('finds soft-deleted members for the restore dedup pass', async () => {
@@ -1216,7 +1258,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
 
-        expect(restored).toBe(1);
+        expect(restored).toHaveLength(1);
         expect((await readRaw(rows.metaTagged._id.toString()))?.deletedAt ?? null).toBeNull();
         expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(EARLIER.getTime());
       });
@@ -1227,7 +1269,7 @@ describe('FabFile data lake lifecycle membership', () => {
         await seedLakeRows();
         await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
 
-        expect(await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP)).toBe(2);
+        expect(await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP)).toHaveLength(2);
       });
 
       it('leaves a member deleted DURING the window deleted', async () => {
@@ -1244,7 +1286,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
 
-        expect(restored).toBe(2);
+        expect(restored).toHaveLength(2);
         expect((await readRaw(laterMember._id.toString()))?.deletedAt?.getTime()).toBe(LATER.getTime());
         for (const id of rows.memberIds) {
           expect((await readRaw(id))?.deletedAt ?? null).toBeNull();
@@ -1256,7 +1298,7 @@ describe('FabFile data lake lifecycle membership', () => {
         await deleteIndependently(rows.prefixOwned._id, EARLIER);
         await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
 
-        expect(await fabFileRepository.undeleteByDataLakeTag(scope)).toBe(2);
+        expect(await fabFileRepository.undeleteByDataLakeTag(scope)).toHaveLength(2);
       });
 
       it('narrows the dedup read to the batch', async () => {
@@ -1276,7 +1318,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [rows.prefixOwned._id.toString()], STAMP);
 
-        expect(restored).toBe(1);
+        expect(restored).toHaveLength(1);
         expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(STAMP.getTime());
       });
     });
@@ -1304,7 +1346,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
-        expect(restored).toBe(2);
+        expect(restored).toHaveLength(2);
         for (const id of rows.memberIds) {
           const row = await readRaw(id);
           expect(row?.deletedAt ?? null).toBeNull();
@@ -1324,7 +1366,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
-        expect(restored).toBe(2);
+        expect(restored).toHaveLength(2);
         const matched = await readRaw(rows.metaTagged._id.toString());
         expect(matched?.deletedAt ?? null).toBeNull();
         expect(matched?.archivedAt ?? null).toBeNull();
@@ -1333,26 +1375,32 @@ describe('FabFile data lake lifecycle membership', () => {
         expect(diverged?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
       });
 
-      it('sends the $ne bound to Mongo on the non-matching partition, not just an end-state that could pass by resolution-order luck', async () => {
-        // An end-state assertion alone does not reliably catch this: removing partition B's `$ne`
-        // bound (replacing it with the bare base filter) makes the two updateMany calls race on
-        // shared rows against a real DB, so this file's row-level tests fail only intermittently
-        // under that mutation, not every run - easy to write off as flakiness rather than catch.
-        // Spying on the actual filter sent to Mongo asserts the predicate itself, not what it
-        // happens to produce this run, so it fails deterministically.
+      it('sends the stamp bound and the conditional archive clear to Mongo, per row', async () => {
+        // An end-state assertion alone does not reliably catch a dropped bound: with the archive
+        // clear made unconditional, this file's row-level tests fail only for the rows a given run
+        // happens to produce. Spying on what actually reaches Mongo asserts the predicate itself.
+        //
+        // One conditional write per row, not one updateMany per archive-stamp partition: the
+        // restore door mints a durable per-file membership event from the ids this returns, and an
+        // aggregate modified count cannot say which rows moved.
         await seedLakeRows();
         await fabFileRepository.archiveByDataLakeTag(scope, ARCHIVE_STAMP);
         await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
-        const spy = vi.spyOn(FabFile, 'updateMany');
+        const spy = vi.spyOn(FabFile, 'updateOne');
 
-        await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
+        const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
-        expect(spy).toHaveBeenCalledTimes(2);
-        const filters = spy.mock.calls.map(call => call[0] as Record<string, unknown>);
-        // Partition A: bare equality. Partition B: $ne - both must be present as sent to Mongo,
-        // not merely implied by the rows this run happened to produce.
-        expect(filters.some(f => f.archivedAt === ARCHIVE_STAMP)).toBe(true);
-        expect(filters.some(f => JSON.stringify(f.archivedAt) === JSON.stringify({ $ne: ARCHIVE_STAMP }))).toBe(true);
+        expect(spy).toHaveBeenCalledTimes(restored.length);
+        for (const call of spy.mock.calls) {
+          const filter = call[0] as Record<string, unknown>;
+          // The bound that keeps a row another restore already flipped, or a delete this lake does
+          // not own, out of this write - and out of the returned ids.
+          expect(filter.deletedAt).toBe(STAMP);
+          expect(filter._id).toBeDefined();
+          // The archive clear stays conditional on THIS lake's own stamp, so a prefix-sharing
+          // sibling's independently-archived file is only un-deleted.
+          expect(JSON.stringify(call[1])).toContain(JSON.stringify({ $eq: ['$archivedAt', ARCHIVE_STAMP] }));
+        }
         spy.mockRestore();
       });
 
@@ -1365,7 +1413,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
-        expect(restored).toBe(2);
+        expect(restored).toHaveLength(2);
         const row = await readRaw(rows.metaTagged._id.toString());
         expect(row?.deletedAt ?? null).toBeNull();
         expect(row?.archivedAt?.getTime()).toBe(OTHER_STAMP.getTime());
@@ -1378,7 +1426,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP);
 
-        expect(restored).toBe(2);
+        expect(restored).toHaveLength(2);
         for (const id of rows.memberIds) {
           const row = await readRaw(id);
           expect(row?.deletedAt ?? null).toBeNull();
@@ -1398,7 +1446,7 @@ describe('FabFile data lake lifecycle membership', () => {
           ARCHIVE_STAMP
         );
 
-        expect(restored).toBe(1);
+        expect(restored).toHaveLength(1);
         const excluded = await readRaw(rows.prefixOwned._id.toString());
         expect(excluded?.deletedAt).not.toBeNull();
         expect(excluded?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());
@@ -1414,7 +1462,7 @@ describe('FabFile data lake lifecycle membership', () => {
         const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], STAMP, ARCHIVE_STAMP);
 
         // Only prefixOwned matched the teardown's stamp; metaTagged kept its own earlier one.
-        expect(restored).toBe(1);
+        expect(restored).toHaveLength(1);
         const independentlyDeleted = await readRaw(rows.metaTagged._id.toString());
         expect(independentlyDeleted?.deletedAt?.getTime()).toBe(EARLIER.getTime());
         expect(independentlyDeleted?.archivedAt?.getTime()).toBe(ARCHIVE_STAMP.getTime());

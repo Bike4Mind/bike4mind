@@ -15,6 +15,10 @@ import { couldMatchTagPrefixArmLoosely, loadPrefixArmCandidateLakes } from '../d
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { foldTagName, isDataLakeTagName, normalizeTagName } from './tagName';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
+import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
+import { recordMembershipTransitions } from '../dataLakeService/recordMembershipTransitions';
+import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
+import { claimBulkTagRewrite } from './claimBulkTagRewrite';
 
 const tagUpdateSchema = z.object({
   id: z.string(),
@@ -29,8 +33,8 @@ export type TagUpdateParams = z.infer<typeof tagUpdateSchema>;
 /** Exactly what this service hands to `tags.update` - see the note on TagUpdateAdapters. */
 type TagUpdateWrite = TagUpdateParams & { updatedAt: Date };
 
-interface TagUpdateAdapters {
-  db: {
+interface TagUpdateAdapters extends LakeMembershipAuditAdapters {
+  db: LakeMembershipAuditAdapters['db'] & {
     // `update` is spelled out rather than picked off ITagRepository, deliberately. IBaseRepository
     // declares it as a property-syntax function type, so strictFunctionTypes checks its parameter
     // contravariantly and a `Partial<IBaseTag>` one refuses the IFileTag-typed repository the
@@ -43,7 +47,10 @@ interface TagUpdateAdapters {
     };
     // computeDataLakeStats stays in this Pick even though this file never calls it directly:
     // recomputeLakeStats below forwards this same `db` object and requires it on `fabFiles`.
-    fabFiles: Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
+    fabFiles: Pick<
+      IFabFileRepository,
+      'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats' | 'claimTagRewriteByUserId'
+    >;
     dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
     // The config-audit repos, OPTIONAL and forwarded straight to recomputeLakeStats below: a
     // prefix-arm rename or delete can flip a draft lake to active, and without these that
@@ -62,10 +69,8 @@ interface TagUpdateAdapters {
    */
   logger?: LakeConfigAuditAdapters['logger'];
   /**
-   * Accepted for route back-compat and otherwise unused: this used to ride on the actor
-   * handed to recomputeLakeStats' auto-activate audit row. That flip no longer happens here -
-   * publishing is now the explicit `promoteDataLake` door - so there is nothing left for this to
-   * attribute.
+   * Names the principal on the membership rows this door records, so a key-driven bulk rewrite
+   * attributes the key rather than the human who minted it. Optional, like the audit repos above.
    */
   auditPrincipal?: LakeAuditPrincipal;
   /**
@@ -104,7 +109,7 @@ interface TagUpdateAdapters {
  * lakes' stats.
  */
 export const update = async (userId: string, params: TagUpdateParams, adapters: TagUpdateAdapters) => {
-  const { db, logger, assertWriteScope } = adapters;
+  const { db, logger, assertWriteScope, auditPrincipal } = adapters;
   const { id, ...rest } = secureParameters(params, tagUpdateSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -142,16 +147,49 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
   // Resolved and gated BEFORE the file rewrite below, not alongside the recompute after it: this
   // service is not transactional, and a 403 raised after the files were already renamed would
   // report failure while leaving the join/leave applied.
-  const affectedLakes =
-    renaming && (tag.name.includes(':') || newName.includes(':'))
-      ? (await loadPrefixArmCandidateLakes([userId], { db })).filter(
-          lake =>
-            couldMatchTagPrefixArmLoosely(tag.name, lake.fileTagPrefix) ||
-            couldMatchTagPrefixArmLoosely(newName, lake.fileTagPrefix)
-        )
-      : [];
+  const couldMatchPrefix = renaming && (tag.name.includes(':') || newName.includes(':'));
+  const matchesEitherSide = (fileTagPrefix: string | undefined | null) =>
+    couldMatchTagPrefixArmLoosely(tag.name, fileTagPrefix) ||
+    (newName !== undefined && couldMatchTagPrefixArmLoosely(newName, fileTagPrefix));
+  const affectedLakes = couldMatchPrefix
+    ? (await loadPrefixArmCandidateLakes([userId], { db })).filter(lake => matchesEitherSide(lake.fileTagPrefix))
+    : [];
+  // The registry lakes separately, and ONLY for the audit enumeration below: they have no document,
+  // so `loadPrefixArmCandidateLakes` (owner-anchored) cannot return one and the stats recompute
+  // must never be handed one. Renaming into or out of `opti:` is a real prefix-arm transition all
+  // the same - the destination side of it is what the admin gate above refuses to a non-admin.
+  const affectedRegistryLakes = couldMatchPrefix
+    ? registryCandidateLakes().filter(lake => matchesEitherSide(lake.fileTagPrefix))
+    : [];
+  const auditedLakes = [...affectedLakes, ...affectedRegistryLakes];
 
   if (affectedLakes.length > 0) assertWriteScope?.();
+
+  // Claimed one file at a time, BEFORE the bulk rewrite below, so each recorded transition is one
+  // this request's own write produced - `updateTagsByUserId` reports an aggregate count, from which
+  // two concurrent renames would each synthesize the same per-file events. Confined to the
+  // prefix-candidate path, so a rename that cannot touch a lake pays no extra query.
+  //
+  // Each claim's membership row is recorded through `onClaimed`, inside the loop, rather than from
+  // the returned array afterwards: the rewrite has already landed on that file, so a later claim
+  // throwing must not take the fact down with it - nothing can reconstruct it once the source tag
+  // is gone. Per (lake, file), unlike the recompute further down which can afford to be
+  // approximate. Both directions are live here - renaming a tag INTO a lake's prefix is a join,
+  // out of it a leave - and a file that also carries the lake's meta-tag stays a member through
+  // either.
+  if (auditedLakes.length > 0 && newName !== undefined) {
+    await claimBulkTagRewrite(userId, tag.name, newName, {
+      db,
+      onClaimed: file =>
+        recordMembershipTransitions(
+          { userId, isAdmin: false, auditPrincipal },
+          auditedLakes,
+          [file],
+          { db, logger },
+          { origin: 'person' }
+        ),
+    });
+  }
 
   if (renaming) {
     const colliders = (await db.tags.findAllByUserId(userId)).filter(
@@ -163,6 +201,8 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
     // Renaming the document first strands them - the next attempt reads the new name and has
     // nothing left to search for. Not wrapped in a transaction: the rename can touch thousands of
     // files and would hold locks against the 16MB/60s ceiling, and every write here is idempotent.
+    // Still runs after the claims above: it is a no-op over what they took, and it is the only pass
+    // that reaches soft-deleted files and `primaryTag`.
     await db.fabFiles.updateTagsByUserId(userId, tag.name, newName);
 
     // Renaming in place is what creates a duplicate, on any file that already carried the target

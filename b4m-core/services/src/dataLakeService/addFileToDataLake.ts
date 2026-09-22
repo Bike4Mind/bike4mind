@@ -16,30 +16,36 @@ import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
 import { createDataLakeFallbackTagger, UNCATEGORIZED_TAG_SUFFIX } from './fallbackLakeTags';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
+import type { LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 
-interface AddFileToDataLakeAdapters extends LakeConfigAuditAdapters {
-  db: LakeConfigAuditAdapters['db'] & {
-    dataLakes: Pick<IDataLakeRepository, 'findById' | 'findByDatalakeTag' | 'find' | 'setStats' | 'activateIfDraft'>;
-    fabFiles: Pick<
-      IFabFileRepository,
-      'findById' | 'pushTagsByFabFileId' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
-    >;
-    // REQUIRED, unlike `AddMembershipAdapters` (lakeMembership.ts) which leaves it optional for
-    // high-fan-in file-creation paths. Optional here degrades to `[]` (loadActiveLakeGrants), so a
-    // curator-granted manager would pass this door's own manage gate below and then be denied two
-    // lines later inside `addFileToLake` - a 400-after-yes for the exact persona this issue is
-    // about, which TS cannot catch (spread properties skip excess-property checks).
-    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-    // The restore lookup (#2248 step 0.2) - REQUIRED, the same reasoning as
-    // `removeFileFromDataLake`'s adapter: one caller, no blast radius, and an optional adapter
-    // would make "restore silently falls to cold-add" a real (and silent) failure mode.
-    lakeMembershipRemovals: Pick<ILakeMembershipRemovalRepository, 'findLive'>;
-    // The admission contract's lever (#1680) resolves from these - required so this door cannot
-    // quietly opt out of it, mirroring toggleTags' adapter (the gate itself reads nothing unless a
-    // lake being joined declares a required passage size).
-    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
-  };
+interface AddFileToDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] &
+    LakeMembershipAuditAdapters['db'] & {
+      dataLakes: Pick<IDataLakeRepository, 'findById' | 'findByDatalakeTag' | 'find' | 'setStats' | 'activateIfDraft'>;
+      fabFiles: Pick<
+        IFabFileRepository,
+        | 'findById'
+        | 'pushTagsByFabFileId'
+        | 'pushTagReturningPriorState'
+        | 'pullTagsByFabFileId'
+        | 'computeDataLakeStats'
+      >;
+      // REQUIRED, unlike `AddMembershipAdapters` (lakeMembership.ts) which leaves it optional for
+      // high-fan-in file-creation paths. Optional here degrades to `[]` (loadActiveLakeGrants), so a
+      // curator-granted manager would pass this door's own manage gate below and then be denied two
+      // lines later inside `addFileToLake` - a 400-after-yes for the exact persona this issue is
+      // about, which TS cannot catch (spread properties skip excess-property checks).
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      // The restore lookup (#2248 step 0.2) - REQUIRED, the same reasoning as
+      // `removeFileFromDataLake`'s adapter: one caller, no blast radius, and an optional adapter
+      // would make "restore silently falls to cold-add" a real (and silent) failure mode.
+      lakeMembershipRemovals: Pick<ILakeMembershipRemovalRepository, 'findLive'>;
+      // The admission contract's lever (#1680) resolves from these - required so this door cannot
+      // quietly opt out of it, mirroring toggleTags' adapter (the gate itself reads nothing unless a
+      // lake being joined declares a required passage size).
+      adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+      scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+    };
 }
 
 /**
@@ -160,8 +166,8 @@ export const addFileToDataLake = async (
   // policy tightened, from a button labelled "Undo".
   await assertLakeAdmission([lake], [member], { db, logger }, { forceReportOnly: isRestore });
 
-  // Idempotent (pushTagsByFabFileId), so a double-click or a retry converges.
-  await addFileToLake(actor, lake, fabFileId, { db });
+  // Idempotent (the meta-tag push is filtered on absence), so a double-click or a retry converges.
+  await addFileToLake(actor, lake, fabFileId, { db, logger });
 
   if (isRestore && liveRemoval) {
     const validated = validateRestoreContentTags(liveRemoval.contentTags, lake.fileTagPrefix);

@@ -27,30 +27,37 @@ import {
 } from '../dataLakeService/prefixArmMembership';
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
+import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
 
 const fabFileToggleTagsSchema = z.object({
   ids: z.array(z.string()),
   tags: z.array(z.string()),
 });
 
-interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters {
-  db: LakeConfigAuditAdapters['db'] & {
-    fabFiles: Pick<
-      IFabFileRepository,
-      'shareable' | 'findById' | 'pullTagsByFabFileId' | 'pushTagsByFabFileId' | 'computeDataLakeStats'
-    >;
-    fileTags: Pick<IFileTagRepository, 'touchLastActivityBy'>;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
-    // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
-    users: { findById: (id: string) => Promise<IUserDocument | null> };
-    // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
-    // door cannot quietly opt out of the contract by omitting it; the gate itself still reads
-    // nothing unless a lake being JOINED declares a required passage size. `scopedSettings` is
-    // optional - without it the lever resolves to its platform value rather than failing.
-    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
-  };
+interface FabFileToggleTagsAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] &
+    LakeMembershipAuditAdapters['db'] & {
+      fabFiles: Pick<
+        IFabFileRepository,
+        | 'shareable'
+        | 'findById'
+        | 'pullTagsByFabFileId'
+        | 'pushTagsByFabFileId'
+        | 'pushTagReturningPriorState'
+        | 'computeDataLakeStats'
+      >;
+      fileTags: Pick<IFileTagRepository, 'touchLastActivityBy'>;
+      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+      // Optional: absent -> manage falls back to createdByUserId + org rung (see loadActiveLakeGrants).
+      dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
+      users: { findById: (id: string) => Promise<IUserDocument | null> };
+      // The admission contract's lever (#1680) resolves from these. `adminSettings` is REQUIRED so a
+      // door cannot quietly opt out of the contract by omitting it; the gate itself still reads
+      // nothing unless a lake being JOINED declares a required passage size. `scopedSettings` is
+      // optional - without it the lever resolves to its platform value rather than failing.
+      adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+      scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+    };
   /** Forwarded to the fallback tagger's skip-path diagnostics; never fails the write on its own. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
   /**
@@ -371,10 +378,10 @@ export const toggleTags = async (
       // This branch, and only this branch, makes the file a MEMBER - but the admission contract
       // (#1680) it must satisfy is graded in the pre-write pass above, not here, so a refusal cannot
       // land after earlier files in the batch have already joined. This function stays write-only.
-      await addFileToLake(actor, lake, file.id, { db });
+      await addFileToLake(actor, lake, file.id, { db, logger });
     } else {
       try {
-        await removeFileFromLake(actor, lake, file.id, { db });
+        await removeFileFromLake(actor, lake, file.id, { db, logger });
       } catch (error) {
         // A concurrent removal landing between the read above and this write leaves nothing to
         // remove, which is the state the caller asked for anyway.
@@ -422,7 +429,7 @@ export const toggleTags = async (
       // up front (see the loop above resolving prefixLeavesByFile), before this ever runs.
       touchedLakes.set(lake.id, lake);
       try {
-        await removeFileFromLake(actor, lake, file.id, { db });
+        await removeFileFromLake(actor, lake, file.id, { db, logger });
       } catch (error) {
         // The toggle loop above already pulled the tag, so "nothing to remove" is the NORMAL
         // outcome here, not a race - this still runs to sweep a signal a concurrent writer

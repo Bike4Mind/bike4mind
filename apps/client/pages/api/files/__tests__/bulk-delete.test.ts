@@ -159,8 +159,11 @@ describe('bulk-delete - data-lake stats', () => {
     await run([owned.id, shared.id], res);
 
     // The unshared file's lake must not be dragged into the recompute: its membership never moved.
-    expect(h.findByDatalakeTag).toHaveBeenCalledTimes(1);
+    // Asserted by which tag is looked up, not by a call count: an owned delete now resolves its
+    // own member lakes a second time to record the membership `removed` event.
     expect(h.findByDatalakeTag).toHaveBeenCalledWith(LAKE.datalakeTag);
+    expect(h.findByDatalakeTag).not.toHaveBeenCalledWith('datalake:orga:other-lake');
+    expect(h.setStats).toHaveBeenCalledTimes(1);
   });
 });
 

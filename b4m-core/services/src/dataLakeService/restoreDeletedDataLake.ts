@@ -5,29 +5,31 @@ import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { diffLakeConfig } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
+import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import type { UnarchiveResult } from './unarchiveDataLake';
 import { bestEffortSetDriveConnectionEnabled, type DriveConnectionEnablePort } from './ports';
 
-interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters {
+interface RestoreDeletedDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
   // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
   // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
   // per service), so nothing is spared by making it optional and a route that forgot to wire it
   // would go dark silently - the one failure mode an audit must not have. Required here turns
   // that into a compile error.
-  db: LakeConfigAuditAdapters['db'] & {
-    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<
-      IDataLakeRepository,
-      'findById' | 'settleLifecycleStatus' | 'setStats' | 'activateIfDraft' | 'claimRestoring'
-    >;
-    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-    fabFiles: Pick<
-      IFabFileRepository,
-      'findDeletedByDataLakeTag' | 'findByContentHashesInDataLake' | 'undeleteByDataLakeTag' | 'computeDataLakeStats'
-    >;
-  };
+  db: LakeConfigAuditAdapters['db'] &
+    LakeMembershipAuditAdapters['db'] & {
+      lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
+      dataLakes: Pick<
+        IDataLakeRepository,
+        'findById' | 'settleLifecycleStatus' | 'setStats' | 'activateIfDraft' | 'claimRestoring'
+      >;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      fabFiles: Pick<
+        IFabFileRepository,
+        'findDeletedByDataLakeTag' | 'findByContentHashesInDataLake' | 'undeleteByDataLakeTag' | 'computeDataLakeStats'
+      >;
+    };
   /** Re-enable the lake's Drive connection, reversing archive/delete's disable. See ports.ts. */
   enableDriveConnection?: DriveConnectionEnablePort;
 }
@@ -111,7 +113,21 @@ export const restoreDeletedDataLake = async (
   // The batch this lake's own archive recorded, if any. undefined for a lake with no mark
   // (archived before the field existed, or never archived), which leaves archivedAt untouched.
   const archiveStampToClear = existing.filesArchivedAt ?? undefined;
-  const restoredCount = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds, stampedAt, archiveStampToClear);
+  const restoredIds = await db.fabFiles.undeleteByDataLakeTag(scope, duplicateIds, stampedAt, archiveStampToClear);
+  const restoredCount = restoredIds.length;
+
+  // A restore puts these files back inside every lake read, which is a membership JOIN that no
+  // add door recorded - the delete side logged a `removed` for each of them, so without this a
+  // reader replaying the log has them still gone. Ids, not the pre-read batch: each row moved
+  // under its own conditional write, so two restores re-entering 'restoring' concurrently split
+  // the batch rather than both claiming all of it. Best-effort, like every other membership
+  // recorder - the undelete has already landed by the time this runs.
+  for (const fabFileId of restoredIds) {
+    await recordLakeMembershipChange(
+      { actor, lake: existing, fabFileId, action: 'added', origin: 'person' },
+      { db, logger }
+    );
+  }
 
   // Explicit null, not undefined, which mongoose would drop and leave the spent mark in place.
   // Terminal transition only - see the note on archiveDataLake's settle step.

@@ -1189,6 +1189,33 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   ): Promise<{ namespace: string; fileCount: number }[]>;
 
   /**
+   * Claim ONE live file a user owns that still carries `tag`, rewrite that tag on it (renamed to
+   * `newTag`, or stripped when `newTag` is null), and return the file as it looked BEFORE the
+   * rewrite. Null when no unclaimed file is left.
+   *
+   * The claim shape the bulk tag doors need to keep their membership audit honest. `removeTagByUserId`
+   * and `updateTagsByUserId` report one aggregate count for the whole user, so two concurrent
+   * rename/delete requests reading the same snapshot would each mint the same per-file membership
+   * events even though only one of them moved anything. Here the write itself picks the file, so a
+   * returned pre-image is a transition this caller actually caused.
+   *
+   * Matches the WHOLE name case-insensitively, by the SAME anchored/escaped regex those two writes
+   * use, so a claim loop and the bulk mop-up behind it cannot act on different file sets. Excludes
+   * soft-deleted files, unlike those writes: one is already outside every lake read, so an event for
+   * it would double-report against the delete door's own.
+   *
+   * `excludeIds` is what bounds the caller's loop - a case-only rename (`foo:` -> `Foo:`) still
+   * matches the case-insensitive filter after the rewrite, so the caller must exclude what it has
+   * already claimed. Projected to the fields the membership predicate reads.
+   */
+  claimTagRewriteByUserId(
+    userId: string,
+    tag: string,
+    newTag: string | null,
+    excludeIds?: readonly string[]
+  ): Promise<Pick<IFabFileDocument, 'id' | 'userId' | 'tags'> | null>;
+
+  /**
    * Strip one tag name off every file a user owns, so deleting a tag document cannot leave the
    * name orphaned on the files that carried it. Matches the WHOLE name, case-insensitively, and
    * removes every occurrence - including a name a file carries twice.
@@ -1242,8 +1269,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Passing a user's `foo` against a stored `Foo` removes nothing and reports no error.
    * @param fabFileId - The ID of the file.
    * @param tagNames - The exact tag names to remove. Empty is a no-op.
-   * @returns Documents modified by the pull. The schema has timestamps, so this can be 1
-   * even when no tag matched - do not read it as "a tag was removed".
+   * @returns 1 when a named tag was actually present and removed, 0 otherwise - the write is
+   * filtered on the tag being there, so an unmatched pull neither reports a modification nor
+   * moves `updatedAt`. Callers may read this as "a tag was removed"; the lake membership audit
+   * trail does, to tell a real removal from the losing half of two concurrent ones.
    */
   pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number>;
 
@@ -1268,6 +1297,25 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * name already present fails its filter, so it neither counts nor bumps updatedAt.
    */
   pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength?: number): Promise<number>;
+
+  /**
+   * The single-name variant of `pushTagsByFabFileId` that returns the PRE-IMAGE of the file the
+   * push landed on, or null when the name was already present (the filtered push matched nothing).
+   *
+   * Exists because a count cannot answer the question the lake membership audit asks. `1` says the
+   * lake's meta-tag was absent and is now there; it does NOT say the file joined the lake, because
+   * a creator-owned file carrying a tag under the lake's `fileTagPrefix` is already a member
+   * through that arm. Only the document the winning write saw settles that, and reading it in a
+   * separate query would race a concurrent writer.
+   *
+   * Same exact-name, case-SENSITIVE presence test and the same non-lowercasing store as the
+   * multi-name half - read its note on why case-insensitivity here would be wrong.
+   */
+  pushTagReturningPriorState(
+    fabFileId: string,
+    tagName: string,
+    strength?: number
+  ): Promise<Pick<IFabFileDocument, 'userId' | 'tags'> | null>;
 
   /**
    * Bulk-writes each file's full tags array in a single round trip via bulkWrite, instead of
@@ -1752,15 +1800,27 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * Reverse soft-delete for member files stamped `stampedAt`, minus `excludeIds` (discarded
    * duplicates). When `archiveStampToClear` is given, also clears `archivedAt` on the subset of
    * the restored batch whose archivedAt equals it (the batch this lake's own archive wrote) -
-   * everything else keeps its archive marker untouched. Returns count restored.
+   * everything else keeps its archive marker untouched.
+   *
+   * Returns the ids it actually flipped, not a count: each row moves under its own conditional
+   * write, so the restore door can record one membership `added` per file it genuinely revived
+   * rather than per file it hoped to. Two restores re-entering the transitional 'restoring' state
+   * concurrently therefore split the batch between them instead of both claiming all of it.
    */
   undeleteByDataLakeTag(
     scope: DataLakeMembershipScope,
     excludeIds?: string[],
     stampedAt?: Date,
     archiveStampToClear?: Date
-  ): Promise<number>;
-  /** Soft-delete (phase 1) all member files, stamped `at`. Returns affected file ids. */
+  ): Promise<string[]>;
+  /**
+   * Soft-delete (phase 1) all member files, stamped `at`.
+   *
+   * Returns the ids this call itself stamped, matched back by stamp equality - not the ids it
+   * selected. A row another delete door claimed in between carries a different stamp and is left
+   * out, so the teardown records one membership departure per file it genuinely took out of the
+   * lake rather than one per file it hoped to.
+   */
   softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<string[]>;
   /**
    * Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent.

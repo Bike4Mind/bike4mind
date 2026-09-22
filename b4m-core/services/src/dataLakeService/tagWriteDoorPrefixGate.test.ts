@@ -42,7 +42,7 @@ type DataLakesSlice = Pick<
 >;
 type FabFilesSlice = Pick<
   IFabFileRepository,
-  'findById' | 'pushTagsByFabFileId' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
+  'findById' | 'pushTagsByFabFileId' | 'pushTagReturningPriorState' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
 >;
 type GrantsSlice = Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
 
@@ -112,6 +112,7 @@ const makeFabFilesAdapter = (): FabFilesSlice =>
   ({
     findById: vi.fn(async () => MEMBER_FILE),
     pushTagsByFabFileId: vi.fn(async () => 1),
+    pushTagReturningPriorState: vi.fn(async () => ({ userId: 'owner', tags: [] })),
     pullTagsByFabFileId: vi.fn(async () => 0),
     computeDataLakeStats: vi.fn(async () => ({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 })),
   }) as unknown as FabFilesSlice;
