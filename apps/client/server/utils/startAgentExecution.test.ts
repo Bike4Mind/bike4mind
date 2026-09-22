@@ -380,6 +380,7 @@ describe('container startup transport', () => {
         executionId: 'exec1',
         message: expect.stringContaining('could not be confirmed'),
       });
+      expect(result).toMatchObject({ message: expect.stringContaining('exec1') });
       expect(accepted).toHaveLength(1);
       expect(accepted[0].executionId).toBe('exec1');
       expect(mockQuestDeleteOne).not.toHaveBeenCalled();

@@ -385,7 +385,7 @@ export async function startAgentExecution(
       return {
         ok: false,
         reason: 'dispatch_failed',
-        message: 'Execution dispatch could not be confirmed. Check this execution before starting another run.',
+        message: `Execution ${executionId} dispatch could not be confirmed. Check it before starting another run.`,
         executionId,
       };
     }
