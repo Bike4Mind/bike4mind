@@ -110,6 +110,7 @@ import {
   lakeMembershipsFrom,
   measureIdentityNamedExclusion,
   warnIfManyLakeMemberships,
+  type DataLakeAccessContext,
 } from '../dataLakeService/getDynamicDataLakeTags';
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import {
@@ -169,12 +170,14 @@ import {
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
-import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
+import {
+  unionPreauthorizedLakeAccess,
+  type ResolvedLakeAccessSetWithAdmissions,
+} from '../dataLakeService/unionPreauthorizedLakeAccess';
 import {
   narrowLakeAccessToSession,
   sessionGroundsOnNoLake,
   sessionNamesALake,
-  type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
@@ -866,7 +869,17 @@ export class ChatCompletionProcess {
    * the retrieval seed's `lakeScope`, so none of them can disagree - it is the SAME access the
    * knowledge tool resolves with.
    */
-  private accessibleDataLakeAccessMemo: ResolvedLakeAccessSet | undefined;
+  private accessibleDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
+  /**
+   * The SAME `DataLakeAccessContext` object for the whole turn (#3055), so every call into
+   * `getDynamicDataLakeTags.ts`'s per-turn memos (membershipOrgIdsForTurn, grantedLakeReachForTurn,
+   * supersededOwnLakeIdsForTurn - see scopedAsyncMemo's WeakMap-on-identity doc) shares one
+   * membership/grant/supersession snapshot. A second call site building its own object literal with
+   * the same field VALUES still misses every one of those memos on object IDENTITY, forcing a second
+   * read that can observe a different snapshot (e.g. a grant revoked between the two reads) and
+   * disagree with the first about what this caller can reach.
+   */
+  private dataLakeAccessContextMemo: DataLakeAccessContext | undefined;
   /**
    * This turn's VETTED `session.preauthorizedLakeIds` (see vetPreauthorizedLakeIds), captured on a
    * field because `getAccessibleDataLakeAccess` is a session-less private method and its consumers
@@ -996,23 +1009,35 @@ export class ChatCompletionProcess {
   }
 
   /**
+   * The one `DataLakeAccessContext` object for the turn (#3055) - built once, reused by every
+   * caller that needs to share `getDynamicDataLakeTags.ts`'s per-turn memos with
+   * `getAccessibleDataLakeAccess`'s own resolution. See `dataLakeAccessContextMemo`'s doc for why
+   * identity, not field equality, is what those memos key on.
+   */
+  private async getDataLakeAccessContext(): Promise<DataLakeAccessContext> {
+    if (this.dataLakeAccessContextMemo === undefined) {
+      this.dataLakeAccessContextMemo = {
+        db: this.db,
+        user: this.user,
+        entitlementKeys: await this.resolveEntitlementKeys(),
+        // Without this, a countGateExcludedLakes failure warns into a void: the resolver
+        // swallows it internally (never throws), so this call's own try/catch never sees it.
+        logger: this.logger,
+      };
+    }
+    return this.dataLakeAccessContextMemo;
+  }
+
+  /**
    * The caller's resolved data-lake access (owned + org + shared/entitlement-gated lakes they can
    * reach), memoized per turn. This is the SAME resolver the knowledge tool executes with, so the
    * tool-offer and the inline-defer decisions can never disagree. Fail-safe: any error degrades to
    * empty access (treated as "no lake"), never breaks the turn.
    */
-  private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
+  private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSetWithAdmissions> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
-        const entitlementKeys = await this.resolveEntitlementKeys();
-        const resolved = await getDynamicDataLakeAccess({
-          db: this.db,
-          user: this.user,
-          entitlementKeys,
-          // Without this, a countGateExcludedLakes failure warns into a void: the resolver
-          // swallows it internally (never throws), so this call's own try/catch never sees it.
-          logger: this.logger,
-        });
+        const resolved = await getDynamicDataLakeAccess(await this.getDataLakeAccessContext());
         // Same union the retrieval and tool doors run, so all three agree on what this session can
         // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
         // un-widened exactly as it would have before the admission.
@@ -1033,6 +1058,7 @@ export class ChatCompletionProcess {
           lakes: [],
           // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
           // shaped anything is unknown, not "nothing was excluded" (#3055).
+          admittedPreauthorizedTags: new Set(),
         };
       }
     }
@@ -2928,17 +2954,23 @@ export class ChatCompletionProcess {
         // rather than something narrowLakeAccessToSession itself can answer. The no-op path
         // (session names no lake) skips the targeted query entirely and keeps the account-wide
         // number, since nothing was narrowed away from it.
+        //
+        // Passes the SAME `DataLakeAccessContext` object `getAccessibleDataLakeAccess` (called just
+        // above, via `accessForSeed`) already resolved with, not a fresh literal - the two calls
+        // share getDynamicDataLakeTags.ts's per-turn membership/grant/supersession memos only on
+        // object identity, so a second object here would silently re-read on a second snapshot.
+        //
+        // Excludes any tag THIS TURN successfully admitted via preauthorization
+        // (`admittedPreauthorizedTags`, #3055 review) - never the raw session-named tags. A
+        // preauthorized "Test this lake" session names its own lake by identity, and
+        // `measureIdentityNamedExclusion`'s underlying gate query has no notion of that admission,
+        // so left unfiltered it reports a lake the turn actually searched as excluded.
+        const identityTagsToMeasure = datalakeTagsFrom(session.retrievalTags ?? []).filter(
+          tag => !accessForSeed?.admittedPreauthorizedTags.has(tag)
+        );
         const excludedByAccessCount =
           accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
-            ? await measureIdentityNamedExclusion(
-                {
-                  db: this.db,
-                  user: this.user,
-                  entitlementKeys: await this.resolveEntitlementKeys(),
-                  logger: this.logger,
-                },
-                datalakeTagsFrom(session.retrievalTags ?? [])
-              )
+            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure)
             : narrowedAccess?.excludedByAccessCount;
         // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
         // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
