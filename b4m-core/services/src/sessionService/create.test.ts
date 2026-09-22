@@ -370,6 +370,18 @@ describe('createSession summaryTrigger validation', () => {
   });
 
   /**
+   * 'throttling' is in the enum but is the one member no document may carry: shouldSummarizeSession
+   * returns it as the reason it DECLINED to summarize. It stays assignable here because
+   * ISessionDocument types the field with it, so only a runtime check can keep it off a write.
+   */
+  it('rejects the throttling trigger, which names a summarization that never happened', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      createSession(user, { name: 'ok', summary: 'the gist', summaryTrigger: 'throttling' }, adapters)
+    ).rejects.toThrow(UnprocessableEntityError);
+  });
+
+  /**
    * Unlike `taggedAt`, an unpaired trigger is deliberately NOT scrubbed: `summaryAt` has no such
    * guard either, and a guard on one member of the trio alone would make the three inconsistent.
    */
