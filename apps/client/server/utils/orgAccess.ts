@@ -60,6 +60,41 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 }
 
 /**
+ * Verify the caller OWNS the organization, returning the organization document.
+ *
+ * The strictest of the three tiers in this file - owner only, where `verifyOrgAccess` also admits
+ * the manager and `verifyOrgMembership` admits any member. Reserved for billing writes, where the
+ * caller is committing the org to a charge or changing what it pays: the org's billing owner is the
+ * only party who has agreed to that, and a manager has not.
+ *
+ * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer
+ * NotFoundError, so the route cannot be used to enumerate which organization ids exist.
+ *
+ * Two routes still spell the same bar out inline: `subscriptions/update-seats.ts` and
+ * `stripe/portal.ts`. Both answer ForbiddenError / BadRequestError after an unconditional lookup,
+ * so unlike this helper they do leak which org ids exist. Left alone here only because changing
+ * the status they return is a visible API change; if you touch either, move it onto this helper
+ * rather than copying the inline form again.
+ */
+export async function verifyOrgOwner(user: { id: string; isAdmin: boolean }, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  const org = await organizationRepository.findById(orgId);
+  if (!org) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  // Platform admins pass through, matching every other gate in this file.
+  if (!user.isAdmin && org.userId !== user.id) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  return org;
+}
+
+/**
  * Verify the caller BELONGS to the organization, returning the organization document.
  *
  * The membership-level sibling of `verifyOrgAccess`: use this for org-scoped READS a plain member

@@ -1,5 +1,5 @@
 import { organizationRepository } from '@bike4mind/database';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError } from '@bike4mind/utils';
 import {
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
   ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
@@ -16,6 +16,7 @@ import Stripe from 'stripe';
 import { z } from 'zod';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
@@ -38,6 +39,19 @@ const handler = baseApi()
     if (!isAllowedCallbackOrigin(callbackUrl)) {
       throw new BadRequestError('callbackUrl must point to the deployed application origin');
     }
+
+    // IDOR guard: only the org's billing owner (or a platform admin) may put an existing org on a
+    // paid plan. `organizationId` arrives in the request body, so without this any authenticated
+    // caller could name another tenant's org and have this route stamp a Stripe customer onto that
+    // org's document, read its headcount back off the returned checkout page, and open a session
+    // against its subscription. Deliberately the FIRST thing that touches the org: every lookup,
+    // createCustomer and repository write below is downstream of it, so a rejected caller leaves
+    // nothing behind. Owner-only matches subscriptions/update-seats.ts and stripe/portal.ts -
+    // buying seats is at least as consequential as changing how many you already have.
+    //
+    // No id means "create a new org" (the organizationData branch): there is no existing tenant to
+    // authorize against, so the gate does not apply.
+    const organization = organizationId ? await verifyOrgOwner(req.user, organizationId) : null;
 
     // Refuse a second live subscription for the org. This read used to be active-only, so an org
     // whose subscription was past_due - invisible to the guard - could start a second checkout
@@ -66,10 +80,7 @@ const handler = baseApi()
 
     let customerId: string | undefined;
     let customer: undefined | Stripe.Customer;
-    if (organizationId) {
-      const organization = await organizationRepository.findById(organizationId);
-      if (!organization) throw new NotFoundError('Organization not found');
-
+    if (organization) {
       if (!organization.stripeCustomerId) {
         customer = await createCustomer({
           email: organization.billingContact,

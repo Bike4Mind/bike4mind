@@ -20,7 +20,7 @@ vi.mock('../resolveActiveOrg', () => ({
   resolveActiveOrg: (...a: unknown[]) => mockResolveActiveOrg(...a),
 }));
 
-import { verifyOrgAccess, verifyOrgMembership, resolveBillingOrgId } from '../orgAccess';
+import { verifyOrgAccess, verifyOrgOwner, verifyOrgMembership, resolveBillingOrgId } from '../orgAccess';
 
 // Valid 24-hex ObjectId strings (pass Types.ObjectId round-trip validation).
 const ORG = '650000000000000000000abc';
@@ -34,6 +34,60 @@ const org = { id: ORG, userId: OWNER, managerId: MANAGER };
 // verifyOrgMembership takes a full IUserDocument because the shareable ACL it delegates to is
 // declared that way; only id/groups/isAdmin are ever read, so the fixtures supply those and cast.
 const asUser = (u: { id: string; groups: string[]; isAdmin: boolean }) => u as unknown as IUserDocument;
+
+describe('verifyOrgOwner', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFindById.mockResolvedValue(org);
+  });
+
+  it('rejects an invalid ObjectId without touching the DB', async () => {
+    await expect(verifyOrgOwner({ id: OWNER, isAdmin: false }, 'not-an-object-id')).rejects.toBeInstanceOf(
+      BadRequestError
+    );
+    expect(mockFindById).not.toHaveBeenCalled();
+  });
+
+  it('grants the org owner', async () => {
+    const result = await verifyOrgOwner({ id: OWNER, isAdmin: false }, ORG);
+    expect(result).toBe(org);
+  });
+
+  it('grants an admin any org', async () => {
+    const result = await verifyOrgOwner({ id: STRANGER, isAdmin: true }, ORG);
+    expect(result).toBe(org);
+  });
+
+  // The tier boundary, and the only assertion that distinguishes this gate from verifyOrgAccess:
+  // the manager passes there and must not pass here. Deleting the owner check would leave every
+  // other test in this block green.
+  it('404s the team manager, who passes verifyOrgAccess but does not own the billing', async () => {
+    await expect(verifyOrgOwner({ id: MANAGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+    await expect(verifyOrgAccess({ id: MANAGER, isAdmin: false }, ORG)).resolves.toBe(org);
+  });
+
+  it('404s a non-owner (same error as missing, to prevent enumeration)', async () => {
+    await expect(verifyOrgOwner({ id: STRANGER, isAdmin: false }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+  });
+
+  // Non-oracular: an outsider must not be able to tell "org exists, not yours" from "no such org".
+  it('answers a missing org with the same error a non-owner gets', async () => {
+    mockFindById.mockResolvedValue(null);
+    const missing = await verifyOrgOwner({ id: STRANGER, isAdmin: false }, OTHER_ORG).catch(e => e);
+
+    mockFindById.mockResolvedValue(org);
+    const forbidden = await verifyOrgOwner({ id: STRANGER, isAdmin: false }, ORG).catch(e => e);
+
+    expect(missing.constructor).toBe(forbidden.constructor);
+    expect(missing.message).toBe(forbidden.message);
+    expect(missing.statusCode).toBe(forbidden.statusCode);
+  });
+
+  it('404s an admin when the org does not exist', async () => {
+    mockFindById.mockResolvedValue(null);
+    await expect(verifyOrgOwner({ id: STRANGER, isAdmin: true }, ORG)).rejects.toBeInstanceOf(NotFoundError);
+  });
+});
 
 describe('verifyOrgAccess', () => {
   beforeEach(() => {

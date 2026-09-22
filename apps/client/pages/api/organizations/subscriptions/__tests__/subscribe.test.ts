@@ -28,15 +28,25 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
 // 400, which lets the rejection test assert the status the client would actually receive
 // rather than only the message. Imported from @bike4mind/common, the sole declaration site -
 // @bike4mind/utils is a @deprecated re-export (same class identity, non-canonical path).
-import { BadRequestError, HttpStatus } from '@bike4mind/common';
+import { BadRequestError, NotFoundError, HttpStatus } from '@bike4mind/common';
 
-const mockOrgFindById = vi.fn();
+// The route reads the org through verifyOrgOwner and only WRITES through the repository, so
+// `update` is the whole surface it still uses here. Resist re-adding a findById stub: a route
+// that reads the org outside the gate is the defect this file guards against.
 const mockOrgUpdate = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   organizationRepository: {
-    findById: (...args: unknown[]) => mockOrgFindById(...args),
     update: (...args: unknown[]) => mockOrgUpdate(...args),
   },
+}));
+
+// The owner gate. Mocked because the real one imports @bike4mind/database/infra (a different
+// specifier than the mock above, so it would reach the real mongoose models); its own owner /
+// non-owner / admin / bad-id behaviour is pinned in server/utils/__tests__/orgAccess.test.ts.
+// Here it stands in for "the caller owns this org", and its rejection stands in for "they do not".
+const mockVerifyOrgOwner = vi.fn();
+vi.mock('@server/utils/orgAccess', () => ({
+  verifyOrgOwner: (...args: unknown[]) => mockVerifyOrgOwner(...args),
 }));
 
 const mockFindNonTerminalSubscriptionsByOwner = vi.fn();
@@ -96,7 +106,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     // organizationRepository.update, which is what makes the "no side effect on rejection"
     // assertions below capable of failing. With a customer id pre-set the route skipped that
     // whole branch, so those assertions held whether the guard ran or not.
-    mockOrgFindById.mockResolvedValue({
+    mockVerifyOrgOwner.mockResolvedValue({
       id: 'org_1',
       name: 'Org One',
       billingContact: 'billing@example.com',
@@ -134,7 +144,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
 
     expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
-    expect(mockOrgFindById).not.toHaveBeenCalled();
+    expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
     expect(mockCreateCustomer).not.toHaveBeenCalled();
     expect(mockOrgUpdate).not.toHaveBeenCalled(); // the DB write the guard now provably precedes
     expect(mockSessionsCreate).not.toHaveBeenCalled();
@@ -179,7 +189,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
       why: 'ceiling clamps at MAX so minimum can never exceed maximum (#1424 wedge)',
     },
   ])('clamps the adjustable-quantity floor: $why', async ({ members, expected }) => {
-    mockOrgFindById.mockResolvedValue({
+    mockVerifyOrgOwner.mockResolvedValue({
       id: 'org_1',
       name: 'Org One',
       billingContact: 'billing@example.com',
@@ -215,7 +225,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
 
     await (handler as HandlerFn)(req, res);
 
-    expect(mockOrgFindById).not.toHaveBeenCalled();
+    expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
     expect(mockOrgUpdate).not.toHaveBeenCalled();
     expect(mockCreateCustomer).toHaveBeenCalledTimes(1);
     const args = mockSessionsCreate.mock.calls[0][0] as {
@@ -241,7 +251,7 @@ describe('POST /api/organizations/subscriptions/subscribe - duplicate subscripti
     vi.clearAllMocks();
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
-    mockOrgFindById.mockResolvedValue({
+    mockVerifyOrgOwner.mockResolvedValue({
       id: 'org_1',
       name: 'Org One',
       billingContact: 'billing@example.com',
@@ -309,6 +319,110 @@ describe('POST /api/organizations/subscriptions/subscribe - duplicate subscripti
 
     expect(mockFindNonTerminalSubscriptionsByOwner).toHaveBeenCalledWith(SubscriptionOwnerType.Organization, 'org_1');
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+/**
+ * The route took `organizationId` off the request body and never checked the caller's relationship
+ * to it. Any authenticated caller could name another tenant's org and have this handler stamp a
+ * Stripe customer onto that org's document (a durable cross-tenant write that costs the attacker
+ * nothing), read its headcount back off the checkout page's adjustable-quantity floor, and open a
+ * session against its subscription. The gate is what closes that, and its POSITION is half the fix:
+ * every assertion below is about what must NOT have happened by the time it rejects.
+ */
+describe('POST /api/organizations/subscriptions/subscribe - organization owner gate', () => {
+  // The real gate answers NotFoundError for a non-owner and for a missing org alike, so the route
+  // cannot be used to tell the two apart. Reproduced here so the status this route returns to a
+  // non-owner is asserted, not assumed.
+  const notOwner = () => new NotFoundError('Organization not found');
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
+    mockVerifyOrgOwner.mockResolvedValue({
+      id: 'org_1',
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      users: [{ userId: 'user_1' }],
+    });
+    mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it('gates on the caller and the body-supplied org id', async () => {
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    // The pair is the point: gating the wrong org id, or on something other than the
+    // authenticated caller, would still satisfy a bare "was it called" assertion.
+    expect(mockVerifyOrgOwner).toHaveBeenCalledTimes(1);
+    expect(mockVerifyOrgOwner).toHaveBeenCalledWith(req.user, 'org_1');
+  });
+
+  it('refuses a caller who does not own the organization', async () => {
+    mockVerifyOrgOwner.mockRejectedValue(notOwner());
+    const { req, res } = makeReq();
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: NotFoundError,
+      statusCode: HttpStatus.NotFound,
+      message: 'Organization not found',
+    });
+  });
+
+  it('leaves no trace on the target org when the caller is refused', async () => {
+    // The zero-cost half of the finding. createCustomer + update are the durable cross-tenant
+    // write; findNonTerminalSubscriptionsByOwner is the subscription-status oracle; the checkout
+    // session is the headcount disclosure. None may be reachable by a non-owner.
+    mockVerifyOrgOwner.mockRejectedValue(notOwner());
+    const { req, res } = makeReq();
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
+
+    expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockOrgUpdate).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  it('reads the org exactly once, through the gate', async () => {
+    // Re-reading the org after the gate would be harmless today but is how this class of defect
+    // grows back: the second read is the one a later edit forgets to authorize. The org the
+    // session is built from must be the one the gate returned - asserted via a member count the
+    // default fixture does not produce.
+    mockVerifyOrgOwner.mockResolvedValue({
+      id: 'org_1',
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      users: Array.from({ length: 7 }, (_, i) => ({ userId: `user_${i}` })),
+    });
+    const { req, res } = makeReq();
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockVerifyOrgOwner).toHaveBeenCalledTimes(1);
+    const args = mockSessionsCreate.mock.calls[0][0] as {
+      line_items: { adjustable_quantity: { minimum: number } }[];
+    };
+    expect(args.line_items[0].adjustable_quantity.minimum).toBe(8);
+  });
+
+  it('does not gate the new-organization branch, which has no tenant to authorize against', async () => {
+    const { req, res } = createMocks({ method: 'POST' });
+    (req as Record<string, unknown>).body = {
+      priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+      quantity: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+      organizationData: { name: 'Brand New Org' },
+      callbackUrl: CALLBACK_URL,
+    };
+    (req as Record<string, unknown>).user = { id: 'user_1', email: 'buyer@example.com', name: 'Buyer' };
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
   });
 });
