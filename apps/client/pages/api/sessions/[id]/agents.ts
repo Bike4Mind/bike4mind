@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { sessionRepository, agentRepository, sessionAgentConfigRepository } from '@bike4mind/database';
+import { sessionRepository, agentRepository, sessionAgentConfigRepository, withTransaction } from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { refreshAgentAvatarUrls } from '@server/utils/refreshAgentAvatarUrls';
 import { assertSessionAccess } from '@server/utils/sessionAccess';
@@ -69,11 +69,14 @@ const handler = baseApi()
 
       await assertSessionAccess(sessionId, req.user!.id, 'write', req.user!.groups ?? []);
 
-      const updatedSession = await sessionRepository.detachAgent(sessionId, agentId);
-      // Otherwise the config row for this pairing survives detachment: the proactive-messaging
-      // worker's own attachment guard stops it firing, but the cron keeps queuing a job for it
-      // with nothing left to clean it up.
-      await sessionAgentConfigRepository.deleteBySessionAndAgent(sessionId, agentId);
+      // Detach and config cleanup must land together: a transient failure on either write must
+      // not leave the agent detached with its config row orphaned (the eligibility scan below is
+      // the backstop for a config re-created by a racing PUT, but this keeps the common case atomic).
+      const updatedSession = await withTransaction(async () => {
+        const session = await sessionRepository.detachAgent(sessionId, agentId);
+        await sessionAgentConfigRepository.deleteBySessionAndAgent(sessionId, agentId);
+        return session;
+      });
 
       res.json({ session: redactSessionForClient(updatedSession) });
     })
