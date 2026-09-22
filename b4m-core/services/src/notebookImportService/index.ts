@@ -585,6 +585,10 @@ export class NotebookImportService {
           summaryAt: notebook.summaryAt ? new Date(notebook.summaryAt) : null,
           tags: notebook.tags || [],
           taggedAt: notebook.taggedAt ? new Date(notebook.taggedAt) : null,
+          // Cleared for the same reason, one gate along: the import replaces the content tagging
+          // reads, so a backoff earned by the target's old content must not hold off the re-tag.
+          // Not carried from the file - it is this deployment's billing state, not the notebook's.
+          tagLastAttemptAt: null,
           // Not `?? null` like the pairs above: no gate keys off this field, so clearing a target's
           // last-used model because an older file omits it loses information for no gain. Omitting
           // the key means "leave it", which is what the dropped-`undefined` behaviour did anyway.

@@ -279,6 +279,9 @@ describe('notebook import: an overwrite writes what the file owns, and clears th
     // `toBeNull`, never `toBeUndefined`: the key has to carry a clearable value, because mongoose
     // drops an `undefined` from the `$set` and the target's stamp then survives the write.
     expect(payload.taggedAt).toBeNull();
+    // The retry backoff is a gate on the same content, so it clears with the pair. Left behind, a
+    // stamp the target earned before the import holds off the re-tag the `taggedAt: null` enables.
+    expect(payload.tagLastAttemptAt).toBeNull();
   });
 
   it('carries the file stamp when it has one, so the spider need not pay to re-tag', async () => {
@@ -304,7 +307,7 @@ describe('notebook import: an overwrite writes what the file owns, and clears th
 
     expect(Object.values(payload)).not.toContain(undefined);
     expect(Object.keys(payload)).toEqual(
-      expect.arrayContaining(['lastUpdated', 'summary', 'summaryAt', 'tags', 'taggedAt'])
+      expect.arrayContaining(['lastUpdated', 'summary', 'summaryAt', 'tags', 'taggedAt', 'tagLastAttemptAt'])
     );
   });
 

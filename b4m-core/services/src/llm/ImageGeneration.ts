@@ -78,6 +78,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import {
+  OMITTED_QUALITY_TIER,
   OpenAICostInput,
   OpenAIGPTImageInput,
   OpenAIImageCostCalculator,
@@ -90,9 +91,25 @@ import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
 
-/** Maps quality for GPT Image models: standard -> medium, hd -> high; returns quality unchanged for other models. */
+/**
+ * The tier a GPT-Image request is both billed at and rendered at: standard -> medium,
+ * hd -> high, and an omitted tier pinned to OMITTED_QUALITY_TIER. Quality is returned
+ * unchanged for every other model family, none of which has a tier concept.
+ *
+ * Both callers below read this one function - validateUserCredits (the charge) and the
+ * openaiParams dispatch (the render) - so the two cannot disagree.
+ *
+ * Pinning an omitted tier is the #3007 fix. Left undefined, the parameter is dropped from
+ * the OpenAI call entirely, OpenAI applies its own 'auto' and can render at high effort,
+ * while the calculator has already held the medium price - and image credits are held once,
+ * before the call, with no reconciliation pass to correct it. Pinning moves nobody's bill
+ * (the pin IS the billed tier); a caller who wants OpenAI's dynamic effort asks for it with
+ * an explicit 'auto', which bills at the ceiling. Do not restore the undefined here without
+ * repricing the omitted case in OpenAIImageCostCalculator.normalizeInput.
+ */
 function mapQualityForModel(model: string, quality: OpenAIGPTImageInput['quality']): OpenAIGPTImageInput['quality'] {
-  if (!isGPTImageModel(model) || !quality) return quality;
+  if (!isGPTImageModel(model)) return quality;
+  if (!quality) return OMITTED_QUALITY_TIER;
   return quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
 }
 
@@ -1293,8 +1310,10 @@ export class ImageGenerationService {
 
         // Filter parameters based on model type
         if (isGPTImageModel(model)) {
-          // GPT-Image models don't support 'style' or 'response_format' parameters
-          // Use mapped quality (standard -> medium, hd -> high)
+          // GPT-Image models don't support 'style' or 'response_format' parameters.
+          // Same mapping validateUserCredits billed against, so the render matches the charge -
+          // including the omitted case, which mapQualityForModel pins rather than dropping.
+          // The truthiness guard is kept for the unrecognized-value case only.
           const mappedQuality = mapQualityForModel(model, quality);
           if (mappedQuality) {
             openaiParams.quality = mappedQuality;
