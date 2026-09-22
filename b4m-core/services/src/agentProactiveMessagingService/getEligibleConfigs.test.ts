@@ -25,7 +25,7 @@ const BASE_CONFIG = {
   },
 };
 
-describe('getEligibleConfigs - stale config cleanup', () => {
+describe('getEligibleConfigs - stale config handling', () => {
   let mockConfigRepo: ISessionAgentConfigRepository;
   let mockSessionRepo: ISessionRepository;
 
@@ -35,10 +35,11 @@ describe('getEligibleConfigs - stale config cleanup', () => {
     (mockConfigRepo.findAllWithProactiveMessagingEnabled as Mock).mockResolvedValue([BASE_CONFIG]);
   });
 
-  // A detach + cleanup race (or a session tombstoned outside the transactional detach path) can
-  // leave an enabled row with no session behind it; this is the backstop that keeps it from being
-  // rescanned forever with nothing to clear it.
-  it('deletes a config whose session no longer exists', async () => {
+  // Skips rather than deletes: this scan's view of session/attachment state can be stale by the
+  // time it would act on it (e.g. a reattach + PUT landing right after this read), so deleting by
+  // (sessionId, agentId) risks destroying a config that became valid again in between. The worker
+  // independently revalidates access before executing, so a truly orphaned row is inert.
+  it('skips a config whose session no longer exists without deleting it', async () => {
     (mockSessionRepo.findById as Mock).mockResolvedValue(null);
 
     const eligible = await getEligibleConfigs({
@@ -47,10 +48,10 @@ describe('getEligibleConfigs - stale config cleanup', () => {
     });
 
     expect(eligible).toEqual([]);
-    expect(mockConfigRepo.deleteBySessionAndAgent).toHaveBeenCalledWith('session-1', 'agent-1');
+    expect(mockConfigRepo.deleteBySessionAndAgent).not.toHaveBeenCalled();
   });
 
-  it('deletes a config whose session is soft-deleted', async () => {
+  it('skips a config whose session is soft-deleted without deleting it', async () => {
     (mockSessionRepo.findById as Mock).mockResolvedValue({ id: 'session-1', deletedAt: new Date() });
 
     const eligible = await getEligibleConfigs({
@@ -59,14 +60,10 @@ describe('getEligibleConfigs - stale config cleanup', () => {
     });
 
     expect(eligible).toEqual([]);
-    expect(mockConfigRepo.deleteBySessionAndAgent).toHaveBeenCalledWith('session-1', 'agent-1');
+    expect(mockConfigRepo.deleteBySessionAndAgent).not.toHaveBeenCalled();
   });
 
-  // The closes-the-race case: a config PUT can recreate an enabled row for an agent that was just
-  // detached (assertAgentAttached passes on the session's own agentIds before the PUT lands, the
-  // detach route's cleanup already ran and saw nothing to delete). The next scan still catches it,
-  // since it re-derives attachment from the session itself rather than trusting the row's existence.
-  it('deletes a config for an agent no longer attached to its session', async () => {
+  it('skips a config for an agent no longer attached to its session without deleting it', async () => {
     (mockSessionRepo.findById as Mock).mockResolvedValue({ id: 'session-1', deletedAt: null });
     (mockSessionRepo.getAttachedAgents as Mock).mockResolvedValue([]);
 
@@ -76,7 +73,7 @@ describe('getEligibleConfigs - stale config cleanup', () => {
     });
 
     expect(eligible).toEqual([]);
-    expect(mockConfigRepo.deleteBySessionAndAgent).toHaveBeenCalledWith('session-1', 'agent-1');
+    expect(mockConfigRepo.deleteBySessionAndAgent).not.toHaveBeenCalled();
   });
 
   it('leaves a live, attached config alone', async () => {
