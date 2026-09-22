@@ -326,6 +326,22 @@ export function wireReservedCommandNames(store: ReservedNameSink, registry: Feat
   store.pruneReservedProjectCommands();
 }
 
+/** The slice of CLI state the re-wire touches. Structural so this module needn't
+ *  import the index.tsx state type. */
+interface CommandStoreState {
+  customCommandStore: ReservedNameSink;
+}
+
+/**
+ * Re-wire a CLI state's command store to a feature registry. Both index.tsx
+ * wiring sites (bootstrap and plugin hot-reload) call this with the live `state`,
+ * so the store-extraction step is pinned by a unit test instead of living
+ * untested inline at each call site (no test imports index.tsx).
+ */
+export function rewireReservedNames(state: CommandStoreState, registry: FeatureCommandRegistry): void {
+  wireReservedCommandNames(state.customCommandStore, registry);
+}
+
 /**
  * Converts a CustomCommand to a CommandDefinition for unified handling
  * @param customCommand - Custom command to convert

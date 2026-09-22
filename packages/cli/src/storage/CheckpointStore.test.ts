@@ -724,6 +724,103 @@ describe('CheckpointStore repo-trust hardening', () => {
     }
   });
 
+  it('drops a committed entry whose filePaths holds a non-string element (partial-restore guard)', async () => {
+    // A sha-like id and an array filePaths pass the coarse checks, but a null
+    // element would restore the first file, then throw in validatePathWithinProject
+    // mid-loop - a partial restore from a half-typed entry. The per-element string
+    // check drops it at parse. Removing that check (the reviewer's mutation) leaves
+    // the entry, so listCheckpoints returns it -> this fails.
+    const proj = await createTestProject();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+      await fs.writeFile(path.join(proj, 'f.ts'), 'v1', 'utf-8');
+      expect(await store.createCheckpoint('edit_local_file', ['f.ts'])).not.toBeNull();
+
+      const metaPath = path.join(proj, '.b4m', 'checkpoints.json');
+      const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+      meta.checkpoints[0].filePaths = ['f.ts', null];
+      await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+
+      const reopened = new CheckpointStore(proj);
+      await reopened.init('sess');
+      expect(reopened.listCheckpoints()).toHaveLength(0);
+    } finally {
+      await cleanup(proj);
+    }
+  });
+
+  it.each(['name', 'timestamp'] as const)('drops a committed entry whose %s is not a string', async field => {
+    // Deleting the `typeof cp.%s === 'string'` guard leaves the tampered entry
+    // in the set (listCheckpoints does not filter on this field), so it appears
+    // -> this fails. (sessionId is additionally backstopped by listCheckpoints'
+    // string-equality filter, so it is covered separately below.)
+    const proj = await createTestProject();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+      await fs.writeFile(path.join(proj, 'f.ts'), 'v1', 'utf-8');
+      expect(await store.createCheckpoint('edit_local_file', ['f.ts'])).not.toBeNull();
+
+      const metaPath = path.join(proj, '.b4m', 'checkpoints.json');
+      const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+      meta.checkpoints[0][field] = 42; // non-string
+      await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+
+      const reopened = new CheckpointStore(proj);
+      await reopened.init('sess');
+      expect(reopened.listCheckpoints()).toHaveLength(0);
+    } finally {
+      await cleanup(proj);
+    }
+  });
+
+  it('drops a committed entry whose sessionId is not a string', async () => {
+    const proj = await createTestProject();
+    try {
+      const store = new CheckpointStore(proj);
+      await store.init('sess');
+      await fs.writeFile(path.join(proj, 'f.ts'), 'v1', 'utf-8');
+      expect(await store.createCheckpoint('edit_local_file', ['f.ts'])).not.toBeNull();
+
+      const metaPath = path.join(proj, '.b4m', 'checkpoints.json');
+      const meta = JSON.parse(await fs.readFile(metaPath, 'utf-8'));
+      meta.checkpoints[0].sessionId = 42;
+      await fs.writeFile(metaPath, JSON.stringify(meta, null, 2), 'utf-8');
+
+      const reopened = new CheckpointStore(proj);
+      await reopened.init('sess');
+      expect(reopened.listCheckpoints()).toHaveLength(0);
+    } finally {
+      await cleanup(proj);
+    }
+  });
+
+  it.each(['null', '42', '"x"'])(
+    'does not lose subsequent checkpoints when checkpoints.json root is the non-object %s',
+    async root => {
+      // The array-root case (`[]`) is covered above; a hostile clone can commit any
+      // non-object root. The container guard coerces each to a valid empty container
+      // so a checkpoint created afterward survives a restart instead of being lost.
+      const proj = await createTestProject();
+      try {
+        await fs.mkdir(path.join(proj, '.b4m'), { recursive: true });
+        await fs.writeFile(path.join(proj, '.b4m', 'checkpoints.json'), root, 'utf-8');
+
+        const store = new CheckpointStore(proj);
+        await store.init('sess');
+        await fs.writeFile(path.join(proj, 'f.ts'), 'v1', 'utf-8');
+        expect(await store.createCheckpoint('edit_local_file', ['f.ts'])).not.toBeNull();
+
+        const reopened = new CheckpointStore(proj);
+        await reopened.init('sess');
+        expect(reopened.listCheckpoints()).toHaveLength(1);
+      } finally {
+        await cleanup(proj);
+      }
+    }
+  );
+
   it('refuses a write whose ancestor is a dangling symlink', async () => {
     // A live symlink ancestor is caught because realpath resolves it outside the
     // root. A DANGLING one is the gap: existsSync follows and reports false, so an

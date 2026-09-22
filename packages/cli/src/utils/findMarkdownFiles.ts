@@ -1,6 +1,7 @@
 import type { Dirent } from 'fs';
 import fs from 'fs/promises';
 import path from 'path';
+import { isPathWithin } from './pathWithin.js';
 
 type EntryKind = 'file' | 'directory' | 'other';
 
@@ -101,10 +102,7 @@ async function walkMarkdown(
       } catch {
         continue; // Unresolvable target - skip.
       }
-      // A root of `/` already ends in the separator; appending another yields `//`,
-      // which no real path starts with, so it would refuse everything.
-      const prefix = realRoot.endsWith(path.sep) ? realRoot : realRoot + path.sep;
-      if (realEntry !== realRoot && !realEntry.startsWith(prefix)) {
+      if (!isPathWithin(realEntry, realRoot)) {
         console.warn(`Skipping ${fullPath}: symlink target escapes ${realRoot}`);
         continue;
       }

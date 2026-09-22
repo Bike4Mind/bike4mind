@@ -66,10 +66,15 @@ describe('AgentStore frontmatter is inert', () => {
     delete (globalThis as Record<string, unknown>).__frontmatterPwned;
   });
 
-  it('does not evaluate a `---js` frontmatter block when loading an agent file', async () => {
+  it('does not evaluate a `---js` frontmatter block, and keeps scanning valid siblings', async () => {
     // parseAgentFile must route through parseFrontmatter, not gray-matter's raw
     // matter() (which eval()s a `---js` engine). Reverting AgentStore.ts to
-    // `matter(content)` runs this payload at load time -> this test fails.
+    // `matter(content)` runs this payload at load time -> the pwned flag is set.
+    // A `---js` fence yields empty frontmatter, which fails the required-description
+    // schema, so the hostile file is REJECTED (not loaded) rather than eval'd. The
+    // valid sibling makes this two-sided: a no-op scanner regression (which would
+    // ALSO leave the flag unset) fails to load `real`, so this no longer passes on
+    // a broken scanner - only on an inert-but-working one.
     // Global source bypasses the folder-trust gate, so no setProjectTrusted needed.
     const globalAgents = path.join(fakeHome, '.claude', 'agents');
     await fs.mkdir(globalAgents, { recursive: true });
@@ -78,10 +83,13 @@ describe('AgentStore frontmatter is inert', () => {
       '---js\nglobalThis.__frontmatterPwned = true\n---\n\nbody',
       'utf-8'
     );
+    await fs.writeFile(path.join(globalAgents, 'real.md'), VALID_AGENT, 'utf-8');
 
     const store = new AgentStore(builtinDir, projectRoot);
     await store.loadAgents();
 
     expect((globalThis as Record<string, unknown>).__frontmatterPwned).toBeUndefined();
+    expect(store.hasAgent('real')).toBe(true); // scan ran to completion
+    expect(store.hasAgent('pwn')).toBe(false); // empty frontmatter -> rejected, not eval'd
   });
 });

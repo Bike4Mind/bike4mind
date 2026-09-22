@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import { existsSync, readFileSync, writeFileSync, unlinkSync, lstatSync, realpathSync, type Stats } from 'fs';
 import { execFileSync } from 'child_process';
 import path from 'path';
+import { isPathWithin } from '../utils/pathWithin.js';
 
 /**
  * A checkpoint represents a snapshot of file state before a tool modification
@@ -57,24 +58,20 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * git option-injection through `id`; the rest guard the sinks that iterate or read
  * `.length` on the entry (restoreCheckpoint/getCheckpointDiff/listCheckpoints),
  * which would otherwise throw `filePaths is not iterable` on a non-array filePaths.
+ * The per-element string check on filePaths blocks a mixed array (e.g.
+ * `["good.ts", null]`) that restores the first file, then throws mid-loop in
+ * validatePathWithinProject - a partial restore from a half-typed entry.
  */
 function isValidCheckpointEntry(cp: unknown): cp is Checkpoint {
   return (
     isPlainObject(cp) &&
     isValidCheckpointId(cp.id) &&
     Array.isArray(cp.filePaths) &&
+    cp.filePaths.every(p => typeof p === 'string') &&
     typeof cp.sessionId === 'string' &&
     typeof cp.name === 'string' &&
     typeof cp.timestamp === 'string'
   );
-}
-
-/**
- * True when `realTarget` is `realRoot` itself or nested beneath it. Both must
- * already be symlink-resolved (realpath) absolute paths.
- */
-function isRealpathWithin(realTarget: string, realRoot: string): boolean {
-  return realTarget === realRoot || realTarget.startsWith(realRoot + path.sep);
 }
 
 /**
@@ -515,7 +512,7 @@ export class CheckpointStore {
       const realProject = await fs.realpath(this.projectDir);
       const realB4m = await fs.realpath(b4mDir);
       const base = path.join(realProject, '.b4m');
-      if (!isRealpathWithin(realB4m, base)) {
+      if (!isPathWithin(realB4m, base)) {
         throw new Error(`Checkpoint dir escaped project: ${realB4m}`);
       }
     } catch (err) {
@@ -581,7 +578,7 @@ export class CheckpointStore {
       throw new Error(`Refusing checkpoint path outside sandbox: ${target}`);
     }
     const realTarget = path.join(realExisting, ...tail);
-    if (!isRealpathWithin(realTarget, realRoot)) {
+    if (!isPathWithin(realTarget, realRoot)) {
       throw new Error(`Refusing checkpoint path outside sandbox: ${target}`);
     }
   }

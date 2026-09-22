@@ -8,6 +8,7 @@ import { createResumeAgentTool } from './resumeAgentTool.js';
 import { PermissionManager } from '../utils/PermissionManager.js';
 import { runShellCommand } from '../utils/shellRunner.js';
 import { createSkillTool } from '../tools/skillTool.js';
+import { buildSkillsPromptSection } from '../core/skillsPrompt.js';
 import { generateCliTools } from '../utils/toolsAdapter.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 
@@ -20,6 +21,13 @@ vi.mock('../utils/shellRunner.js', () => ({ runShellCommand: vi.fn() }));
 vi.mock('../tools/skillTool.js', async importOriginal => {
   const actual = await importOriginal<typeof import('../tools/skillTool.js')>();
   return { ...actual, createSkillTool: vi.fn(actual.createSkillTool) };
+});
+
+// Spy on the skills-prompt builder so a test can assert WHICH command set the
+// orchestrator advertises (model-reachable, not the raw getAllCommands set).
+vi.mock('../core/skillsPrompt.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../core/skillsPrompt.js')>();
+  return { ...actual, buildSkillsPromptSection: vi.fn(actual.buildSkillsPromptSection) };
 });
 
 // Stub tool generation so a real run needs no live apiClient/permission wiring.
@@ -408,5 +416,27 @@ describe('SubagentOrchestrator hook-permission wiring', () => {
     const deps = vi.mocked(createSkillTool).mock.calls[0][0];
     expect(deps.permission.permissionManager).toBeDefined();
     expect(deps.permission.promptFn).toBeDefined();
+  });
+
+  it('advertises the model-reachable command set (not getAllCommands) in the skills prompt', async () => {
+    vi.mocked(buildSkillsPromptSection).mockClear();
+    // Distinct returns from the two accessors. Reverting SubagentOrchestrator's
+    // getModelReachableCommands() to getAllCommands() would feed `all` - which
+    // carries a reserved-named shadow the dispatch chokepoint refuses - into the
+    // prompt instead of `reachable`, so this fails.
+    const reachable = [{ name: 'reachable', description: 'ok', body: 'b', source: 'project', filePath: '/p/r.md' }];
+    const all = [{ name: 'shadow', description: 'x', body: 'b', source: 'project', filePath: '/p/s.md' }, ...reachable];
+    const store = { getModelReachableCommands: () => reachable, getAllCommands: () => all };
+    const { orchestrator } = createHookOrchestrator('allow-once', store);
+
+    await orchestrator.delegateToAgent({
+      task: 'do it',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: inlineAgent(),
+    });
+
+    expect(buildSkillsPromptSection).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(buildSkillsPromptSection).mock.calls[0][0]).toBe(reachable);
   });
 });

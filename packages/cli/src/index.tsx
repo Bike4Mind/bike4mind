@@ -144,7 +144,7 @@ import packageJson from '../package.json';
 import type { ICreditTransactionResponse, ModelInfo } from '@bike4mind/common';
 import { CREDIT_DEDUCT_TRANSACTION_TYPES } from '@bike4mind/common';
 import { USAGE_DAYS, MODEL_NAME_COLUMN_WIDTH, USAGE_CACHE_TTL } from './config/constants';
-import { mergeCommands, wireReservedCommandNames } from './config/commands.js';
+import { mergeCommands, rewireReservedNames } from './config/commands.js';
 import { SubagentOrchestrator } from './agents/SubagentOrchestrator.js';
 import { AgentStore } from './agents/AgentStore.js';
 import { createAgentDelegateTool } from './agents/delegateTool.js';
@@ -1017,7 +1017,7 @@ function CliApp() {
       // drop any project command that loaded (pre-registry, above) under a name a
       // runtime plugin command now owns - so load, display, and dispatch all share
       // one reserved-name source.
-      wireReservedCommandNames(state.customCommandStore, featureRegistry);
+      rewireReservedNames(state, featureRegistry);
 
       // Register feature module tool names with ToolRouter so they route as local tools
       const featureModuleToolNames = featureRegistry.getAllToolNames();
@@ -3106,9 +3106,11 @@ function CliApp() {
       }
 
       case 'commands': {
-        const customCommands = state.customCommandStore.getAllCommands();
-        const globalCommands = state.customCommandStore.getCommandsBySource('global');
-        const projectCommands = state.customCommandStore.getCommandsBySource('project');
+        // Model-reachable set: display matches dispatch, so a reserved-named
+        // command the dispatch chokepoint would refuse is not listed here.
+        const customCommands = state.customCommandStore.getModelReachableCommands();
+        const globalCommands = customCommands.filter(cmd => cmd.source === 'global');
+        const projectCommands = customCommands.filter(cmd => cmd.source === 'project');
 
         console.log('\n📝 Custom Commands:\n');
 
@@ -3686,7 +3688,7 @@ function CliApp() {
       // and re-prune, mirroring the bootstrap wiring. Without this the store's
       // reserved source stays pinned to the boot registry, so a project command
       // shadowing a plugin enabled at runtime survives load, display, and dispatch.
-      wireReservedCommandNames(state.customCommandStore, rebuiltRegistry);
+      rewireReservedNames(state, rebuiltRegistry);
 
       for (const skippedPlugin of rebuilt.skipped) {
         console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);

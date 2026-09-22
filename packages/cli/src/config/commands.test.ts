@@ -2,12 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
-import {
-  mergeCommands,
-  isReservedCommandName,
-  wireReservedCommandNames,
-  RESERVED_FEATURE_COMMANDS,
-} from './commands.js';
+import { mergeCommands, isReservedCommandName, rewireReservedNames, RESERVED_FEATURE_COMMANDS } from './commands.js';
 import type { CustomCommand, CliConfig } from '../storage/types.js';
 import type { CommandDefinition } from './commands.js';
 import { createBuiltinModules } from '../features/createBuiltinModules.js';
@@ -78,11 +73,12 @@ describe('RESERVED_FEATURE_COMMANDS drift guard', () => {
   });
 });
 
-describe('wireReservedCommandNames', () => {
+describe('rewireReservedNames', () => {
   // The two index.tsx wiring sites (bootstrap + plugin hot-reload) route through
-  // this helper; index.tsx is imported by no test, so the helper is what pins the
-  // re-wire. Deleting its body (the reviewer's mutation) leaves a shadowing project
-  // command served from BOTH getCommand and getModelReachableCommand -> fails here.
+  // this state-taking wrapper; index.tsx is imported by no test, so the wrapper is
+  // what pins the re-wire. Deleting its body (the reviewer's mutation) leaves a
+  // shadowing project command served from BOTH getCommand and getModelReachableCommand
+  // -> fails here. It also transitively pins wireReservedCommandNames, which it calls.
   let projectRoot: string;
   let fakeHome: string;
 
@@ -103,25 +99,32 @@ describe('wireReservedCommandNames', () => {
     for (const d of [projectRoot, fakeHome]) await fs.rm(d, { recursive: true, force: true }).catch(() => {});
   });
 
-  it('points the store gate at the registry and prunes a project command that shadows a plugin', async () => {
+  it('points the store gate at the registry, prunes a shadowing project command, and keeps a non-reserved one', async () => {
     const cmdDir = path.join(projectRoot, '.claude', 'commands');
     await fs.mkdir(cmdDir, { recursive: true });
     // 'greet' is not statically reserved; only the live registry names it, so it
     // loads at boot (before the registry is wired), exactly as in production.
     await fs.writeFile(path.join(cmdDir, 'greet.md'), '# greet\n\nhijacked', 'utf-8');
+    // A non-reserved project command must SURVIVE the re-wire (two-sided: a
+    // prune-everything regression would drop this and fail).
+    await fs.writeFile(path.join(cmdDir, 'keep.md'), '# keep\n\nlegit', 'utf-8');
 
     const store = new CustomCommandStore(projectRoot);
     store.setProjectTrusted(true);
     await store.loadCommands();
     expect(store.getCommand('greet')?.source).toBe('project');
+    expect(store.getCommand('keep')?.source).toBe('project');
 
-    // A registry whose commands include a plugin named 'greet'.
-    wireReservedCommandNames(store, { getAllCommands: () => [{ name: 'greet' }] });
+    // Drive the wrapper with a fake `state` and a registry whose commands include
+    // a plugin named 'greet' (mirrors index.tsx passing the live state).
+    rewireReservedNames({ customCommandStore: store }, { getAllCommands: () => [{ name: 'greet' }] });
 
     // Both the dispatch sink (getCommand, post-prune) and the model-reachable sink
-    // (live reserved gate) must now refuse it.
+    // (live reserved gate) must now refuse the shadow while keeping the benign one.
     expect(store.getCommand('greet')).toBeUndefined();
     expect(store.getModelReachableCommand('greet')).toBeUndefined();
+    expect(store.getCommand('keep')?.source).toBe('project');
+    expect(store.getModelReachableCommand('keep')?.source).toBe('project');
   });
 });
 

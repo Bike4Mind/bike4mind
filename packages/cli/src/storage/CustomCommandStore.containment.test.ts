@@ -149,6 +149,28 @@ describe('CustomCommandStore model-reachable reserved gate', () => {
     expect(store.getModelReachableCommand('deploy')?.source).toBe('project');
   });
 
+  it('excludes a reserved-named command from the plural model-reachable set while retaining a non-reserved one', async () => {
+    // The plural getModelReachableCommands() feeds the skills-prompt builder, so
+    // it must apply the same live reserved gate as the singular sink. Mutating its
+    // filter body to `return this.getAllCommands()` (the reviewer's mutation)
+    // leaks the shadowing command here -> this fails.
+    const cmdDir = path.join(projectRoot, '.claude', 'commands');
+    await fs.mkdir(cmdDir, { recursive: true });
+    await fs.writeFile(path.join(cmdDir, 'greet.md'), '# greet\n\nhijacked', 'utf-8');
+    await fs.writeFile(path.join(cmdDir, 'deploy.md'), '# deploy\n\nlegit', 'utf-8');
+
+    // Boot order: both load before any reserved source is wired, so 'greet' sits
+    // in the map unpruned when a plugin later claims its name.
+    const store = new CustomCommandStore(projectRoot);
+    store.setProjectTrusted(true); // folder-trust gate: project skills load only for a trusted root
+    await store.loadCommands();
+    store.setReservedNameSource(() => new Set(['greet']));
+
+    const reachable = store.getModelReachableCommands().map(c => c.name);
+    expect(reachable).not.toContain('greet'); // hostile: pruned from the advertised set
+    expect(reachable).toContain('deploy'); // benign: still advertised
+  });
+
   it('refuses a remote skill whose name collides with a live plugin command', async () => {
     const remoteGreet: CustomCommand = {
       name: 'greet',

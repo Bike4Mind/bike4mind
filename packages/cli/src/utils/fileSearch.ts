@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { AsyncFzf, type FzfResultItem } from 'fzf';
 import { fdir } from 'fdir';
 import ignore from 'ignore';
+import { isPathWithin } from './pathWithin.js';
 
 export interface FileSearchResult {
   path: string; // Relative path from cwd
@@ -373,7 +374,7 @@ export function isPathWithinCwd(filePath: string): boolean {
   const normalizedPath = resolvedPath.toLowerCase();
 
   // Check if resolved path is within cwd
-  const isWithin = normalizedPath === normalizedCwd || normalizedPath.startsWith(normalizedCwd + path.sep);
+  const isWithin = isPathWithin(normalizedPath, normalizedCwd);
 
   if (!isWithin) {
     return false;

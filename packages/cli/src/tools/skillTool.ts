@@ -204,8 +204,10 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
       const command = customCommandStore.getModelReachableCommand(skillName);
 
       if (!command) {
+        // List the model-reachable set so "available skills" matches what this
+        // chokepoint would actually run (no reserved-named entry advertised).
         const available = customCommandStore
-          .getAllCommands()
+          .getModelReachableCommands()
           .map(c => c.name)
           .join(', ');
         throw new Error(`skill: "${skillName}" not found. Available skills: ${available || 'none'}`);

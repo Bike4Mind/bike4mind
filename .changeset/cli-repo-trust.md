@@ -12,3 +12,5 @@ Behavior changes (all user-visible effects of hardening the CLI against an untru
 - A `--session-id`/`--resume` value outside the strict session-id charset is now rejected up front rather than used as a filesystem path component.
 - A project skill/command/agent whose file is a symlink escaping the project root is refused when loading from an untrusted checkout.
 - A `global` or `remote` skill whose name is reserved (a built-in or live feature/plugin command) is no longer advertised to the model or invokable, matching the dispatch gate.
+- Agent lifecycle hooks (PreToolUse/PostToolUse/Stop and friends) that previously ran their shell command unprompted are now gated through the same permission prompt as any other shell command, and can be denied. Trusting the project folder loads the hook definitions; it no longer pre-authorizes the commands they carry.
+- A `.b4m/checkpoints.json` whose root is not an object (e.g. a committed `[]`) no longer overwrites the metadata container, so checkpoints created after such a file is read are kept across restarts instead of being silently discarded.
