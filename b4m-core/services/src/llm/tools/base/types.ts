@@ -120,6 +120,9 @@ export interface ToolContext {
       IDataLakeRepository,
       | 'findActiveByUserTags'
       | 'findActiveByUserTagsAndEntitlements'
+      // #3055's count-only companion query - see getDynamicDataLakeTags.ts's DataLakeAccessContext,
+      // which this type must satisfy at every knowledge-tool call site.
+      | 'countGateExcludedLakes'
       | 'findByDatalakeTag'
       | 'findById'
       | 'find'

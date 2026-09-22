@@ -81,6 +81,14 @@ describe('withStaticRegistryBypass', () => {
     expect(withStaticRegistryBypass(scopeOf({ lakeViewComplete: true }), REGISTRY).lakeViewComplete).toBe(true);
   });
 
+  // #3055: same reason as lakeViewComplete above - widening a privileged caller's reach via the
+  // static registry says nothing about how many DB lakes their own org/tags surfaced but
+  // couldn't pass the gate for.
+  it('carries excludedByAccessCount through the widening unchanged, including unmeasured (undefined)', () => {
+    expect(withStaticRegistryBypass(scopeOf({ excludedByAccessCount: 3 }), REGISTRY).excludedByAccessCount).toBe(3);
+    expect(withStaticRegistryBypass(scopeOf(), REGISTRY).excludedByAccessCount).toBeUndefined();
+  });
+
   it('returns scopedTagPrefixes byte-identical - privilege never promotes a dynamic prefix', () => {
     const scoped = ['tenantx:'];
     const out = withStaticRegistryBypass(scopeOf({ scopedTagPrefixes: scoped }), REGISTRY);

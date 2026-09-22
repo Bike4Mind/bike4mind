@@ -28,6 +28,7 @@ import {
   fetchAndConvertFabFiles,
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
 import type { FabFileNotice } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
@@ -416,6 +417,52 @@ describe('ChatCompletionProcess', () => {
 
         expect(await service.userHasAccessibleKnowledgeLake()).toBe(false);
       });
+    });
+  });
+
+  // #3055 (review): getAccessibleDataLakeAccess and the promptMeta seed's targeted measurement
+  // (measureIdentityNamedExclusion) must resolve against the SAME DataLakeAccessContext object,
+  // or getDynamicDataLakeTags.ts's per-turn membership/grant/supersession memos (WeakMap keyed on
+  // object identity) miss and re-read on a second snapshot - see dataLakeAccessContextMemo's own
+  // doc on the field.
+  describe('getDataLakeAccessContext (#3055 review - shared per-turn identity)', () => {
+    it('returns the same object across repeated calls within a turn', async () => {
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+      (service as any).db = { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } };
+
+      const first = await (service as any).getDataLakeAccessContext();
+      const second = await (service as any).getDataLakeAccessContext();
+
+      expect(first).toBe(second);
+    });
+
+    it('is the object getAccessibleDataLakeAccess already resolved with, so a later targeted measurement reads membership/grants only once total', async () => {
+      const listByPrincipal = vi.fn().mockResolvedValue([]);
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).db = {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes: vi.fn().mockResolvedValue(0),
+        },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        dataLakeAccessGrants: { listByPrincipal, listActiveByLakes: vi.fn().mockResolvedValue([]) },
+      };
+      (service as any).user = { ...(service as any).user, id: 'alice', tags: [] };
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+
+      await (service as any).getAccessibleDataLakeAccess();
+      const contextAfter = await (service as any).getDataLakeAccessContext();
+      await measureIdentityNamedExclusion(contextAfter, ['datalake:x']);
+
+      // One call, not two: had the second call built its own context object, this memo
+      // (keyed on object identity) would miss and read a second time.
+      expect(listByPrincipal).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1009,6 +1056,33 @@ describe('ChatCompletionProcess', () => {
       expect(findMembershipOrgIds).toHaveBeenCalled();
       // Remove the catch and this call rejects instead of returning the ownership-only shape.
       expect(access).toEqual({ lakeMemberships: [], dataLakeTags: [], dataLakeTagPrefixes: [] });
+    });
+
+    it('#3055: a countGateExcludedLakes rejection warns via the process logger, and excludedByAccessCount stays absent', async () => {
+      // Distinct from the resolver-wide failure above: findMembershipOrgIds and
+      // findActiveByUserTagsAndEntitlements both succeed here - only the count query rejects.
+      // getDynamicDataLakeAccess catches that internally and warns via its OWN `logger` param;
+      // without wiring `this.logger` through at this call site, the warn went nowhere and the
+      // count failure was indistinguishable from success.
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).logger = { warn: vi.fn() };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes: vi.fn().mockRejectedValue(new Error('count query timed out')),
+        },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      const access = await (service as any).getAccessibleDataLakeAccess();
+
+      expect(access.excludedByAccessCount).toBeUndefined();
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('gate-excluded-lake count failed'),
+        expect.any(Error)
+      );
     });
 
     it('getAttachedKnowledgeFiles forwards the resolved lakeAccess as the getAccessibleFiles third argument', async () => {
@@ -2907,11 +2981,29 @@ describe('ChatCompletionProcess', () => {
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
       retrievalTags?: string[];
+      // #3055: undefined (the default) means "not seeded here" - distinct from 0, which asserts a
+      // genuine measured zero. Mirrors excludedByAccessCount's own contract on the resolver.
+      excludedByAccessCount?: number;
+      // #3055 (review): wires mockDb.dataLakes.countGateExcludedLakes so a test can drive the
+      // targeted, session-scoped measurement (measureIdentityNamedExclusion) that fires when
+      // retrievalTags names a lake by identity - distinct from excludedByAccessCount above, which
+      // only ever feeds the ACCOUNT-WIDE, no-op-path number.
+      countGateExcludedLakesImpl?: (
+        userTags: string[],
+        entitlementKeys: string[],
+        organizationIds: string[] | undefined,
+        userId: string | undefined,
+        opts?: { restrictToTags?: string[] }
+      ) => number;
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
       skipAutoOffers?: boolean;
       fabPromptMessages?: IMessage[];
       fabFileNotices?: FabFileNotice[];
+      // #3055 (review): datalake tags this turn admitted via preauthorization (the manage-recheck
+      // widening), so a test can pin that the targeted exclusion measurement excludes exactly
+      // these tags rather than the raw session-named list - see admittedPreauthorizedTags's own doc.
+      admittedPreauthorizedTags?: string[];
     }) => {
       mockSession.knowledgeIds = opts.knowledgeIds ?? [];
       mockSession.retrievalTags = opts.retrievalTags ?? [];
@@ -2919,6 +3011,9 @@ describe('ChatCompletionProcess', () => {
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
       mockDb.fabfiles = { getAccessibleFiles };
+      if (opts.countGateExcludedLakesImpl) {
+        mockDb.dataLakes = { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) };
+      }
       // Seed the lake-access memo directly (same pattern as the resolveCorpusInlinePlan suite)
       // so this test controls the lake signal without exercising the DB-backed resolver.
       (service as any).accessibleDataLakeAccessMemo = {
@@ -2926,6 +3021,8 @@ describe('ChatCompletionProcess', () => {
         dataLakeTagPrefixes: [],
         scopedTagPrefixes: [],
         lakes: [],
+        admittedPreauthorizedTags: new Set(opts.admittedPreauthorizedTags ?? []),
+        ...(opts.excludedByAccessCount !== undefined ? { excludedByAccessCount: opts.excludedByAccessCount } : {}),
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
 
@@ -3310,6 +3407,111 @@ describe('ChatCompletionProcess', () => {
             retrievalTags: ['datalake:not-mine'],
           });
           expect(retrieval).toMatchObject({ mode: 'optional', lakeScope: [] });
+        });
+
+        // #3055: excludedLakes travels with the same seed as lakeScope. These pin the presence
+        // contract (RetrievalSummarySchema.excludedLakes) that a hand-rolled unit fixture cannot -
+        // this is the one real writer, and its own memo fixture used to omit the field entirely
+        // (`as any`), which let the seed's `> 0` guard ship untested against a false 0-vs-absent
+        // conflation (see promptMeta.ts's own doc on this field).
+        it('records the count explicitly, including a genuine zero', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            excludedByAccessCount: 0,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('records a nonzero count', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            excludedByAccessCount: 2,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 2, reason: 'access' } });
+        });
+
+        it('leaves excludedLakes absent - not a false zero - when the count was never measured', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+          });
+          expect(retrieval && 'excludedLakes' in retrieval).toBe(false);
+        });
+
+        // #3055 (review): a REAL narrowing (the session names a lake by identity) must measure
+        // exclusion against exactly the requested lake(s), not the account-wide number - which
+        // can describe a lake outside this turn's selection entirely in either direction. Both
+        // cases share one simulated world (lake 'b' is gate-excluded, 'a' is not) and differ only
+        // in which lake the session names, proving restrictToTags is what separates them - a
+        // version that ignored the restriction would return the SAME count for both.
+        const countExcludingOnlyLakeB = vi
+          .fn()
+          .mockImplementation(
+            (
+              _userTags: string[],
+              _entitlementKeys: string[],
+              _orgIds: string[] | undefined,
+              _userId: string | undefined,
+              opts?: { restrictToTags?: string[] }
+            ) => (opts?.restrictToTags?.includes('datalake:b') ? 1 : 0)
+          );
+
+        it('ignores an unrelated excluded lake when the session narrows to a different, accessible one', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:a'],
+            retrievalTags: ['datalake:a'],
+            countGateExcludedLakesImpl: countExcludingOnlyLakeB,
+          });
+          // Account-wide, lake b's exclusion would report `excluded: 1` - the whole point is that
+          // THIS turn (narrowed to a) must not carry that number forward.
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('counts the specific excluded lake the session narrows to, not an unrelated one', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:a'],
+            retrievalTags: ['datalake:b'],
+            countGateExcludedLakesImpl: countExcludingOnlyLakeB,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
+        });
+
+        // #3055 (review): a preauthorized "Test this lake" session names its own admitted lake by
+        // identity, so it would otherwise take the SAME branch as an ordinary narrowing above and
+        // ask the underlying gate query about a lake it has no notion was admitted. Both cases
+        // share the same gate-excludes-everything-named world and differ only in whether this
+        // turn's admission covers the named lake.
+        const countExcludingEverythingNamed = vi
+          .fn()
+          .mockImplementation(
+            (
+              _userTags: string[],
+              _entitlementKeys: string[],
+              _orgIds: string[] | undefined,
+              _userId: string | undefined,
+              opts?: { restrictToTags?: string[] }
+            ) => (opts?.restrictToTags?.length ? 1 : 0)
+          );
+
+        it('does not count a preauthorized lake this turn successfully admitted, even though the underlying gate excludes it', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:managed'],
+            retrievalTags: ['datalake:managed'],
+            admittedPreauthorizedTags: ['datalake:managed'],
+            countGateExcludedLakesImpl: countExcludingEverythingNamed,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('counts a preauthorized lake whose admission was not renewed this turn', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            // A non-empty, unrelated dataLakeTags keeps the knowledge tool offered - this turn's
+            // OWN access is fine, it is only the named lake's admission that lapsed.
+            dataLakeTags: ['datalake:other'],
+            retrievalTags: ['datalake:managed'],
+            admittedPreauthorizedTags: [],
+            countGateExcludedLakesImpl: countExcludingEverythingNamed,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
         });
       });
 
