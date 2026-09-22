@@ -97,8 +97,10 @@ export { toSingleLine as toContentLabel };
  * NOT an ingestion or index timestamp. `createdAt` is when the file was uploaded and `updatedAt`
  * moves on vectorization progress, tag writes and convergence; feeding either one here tells the
  * model a document written years ago is from the day it was loaded, which is worse than telling it
- * nothing. Both were tried - see the history of this file - and both are wrong for the same reason:
- * they date the row, not the document.
+ * nothing. Both were tried and both are wrong for the same reason: they date the row, not the
+ * document. `updatedAt` is the worse of the two and was measured so - on an affected lake, ordering
+ * on it put 34 older rows above 14 newer ones, because every vectorization and tag write rewrites
+ * it. `createdAt` at least holds still, but it is upload time, not authorship.
  *
  * No field captures a real authored date yet, so nothing currently calls this. It is kept as the
  * single formatting seam the channels share, so that whatever captures that date wires it in one

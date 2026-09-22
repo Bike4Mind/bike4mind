@@ -30,8 +30,10 @@ export interface LakeBeliefRecall {
   sources: string[];
   /**
    * `YYYY-MM-DD` of the source document, when it is known. Always absent today: nothing captures a
-   * document's own date, and production wires no dates resolver (see `resolveSourceDates`). Renders
-   * as unknown rather than as a guess.
+   * document's own date, and production wires no dates resolver (see `resolveSourceDates`). With no
+   * resolver wired no belief carries a date, so `buildLakeMemoryContext` omits the date line
+   * altogether - its `dated` gate gives the "unknown" rendering only once some fact in the batch
+   * does carry one.
    */
   sourceDate?: string;
 }
