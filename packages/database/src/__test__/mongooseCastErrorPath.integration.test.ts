@@ -21,9 +21,8 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from './createMongoServer';
  * the parent schema, so it cannot leak between models - `subpathCacheSchema` below demonstrates it
  * in isolation. Nothing under `apps/`, `b4m-core/` or `packages/` casts such a subpath today (the
  * only dotted `_id` uses in src are projections, an `$exists` guard, and migration scripts on the
- * raw `.collection` driver, none of which cast), so this is latent rather than live - but the
- * comment on the `CastError` branch in errorHandler.ts states the leaf form unconditionally, which
- * is true only until something does.
+ * raw `.collection` driver, none of which cast), so this is latent rather than live. The comment
+ * on the `CastError` branch in errorHandler.ts carries the same caveat; keep the two in sync.
  *
  * This is the half of the contract that `errorHandler.test.ts` cannot cover: that suite
  * hand-constructs the CastError, so it pins how a given `path` is treated but never what Mongoose
