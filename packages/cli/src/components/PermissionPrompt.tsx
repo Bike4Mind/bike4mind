@@ -3,9 +3,21 @@ import { Box, Text, useInput } from 'ink';
 
 export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always' | 'deny';
 
+/**
+ * Escape terminal control characters (carriage return, ESC/ANSI, other C0
+ * controls, DEL) into a visible `\xHH` form. The preview is model-authored;
+ * rendering it raw would let a `\r` or ESC sequence rewrite what the user sees,
+ * so the approved text could differ from what actually runs. Tab and newline are
+ * left intact (newline is already the line delimiter).
+ */
+export function escapeTerminalControlChars(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, ch => `\\x${ch.charCodeAt(0).toString(16).padStart(2, '0')}`);
+}
+
 /** Render a diff/preview string, color-coding each line by its prefix (see per-branch comments below). */
 function renderDiffPreview(preview: string): React.ReactNode {
-  const lines = preview.split('\n');
+  const lines = escapeTerminalControlChars(preview).split('\n');
 
   return lines.map((line, index) => {
     // Sandbox block header

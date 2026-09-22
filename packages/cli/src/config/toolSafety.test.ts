@@ -24,3 +24,22 @@ describe('getToolCategory hook namespaces', () => {
     expect(getToolCategory('some_unknown_tool')).toBe('prompt_default');
   });
 });
+
+describe('getToolCategory MCP and skill defaults', () => {
+  it('classifies MCP tools and skill as prompt_always (opaque power -> always prompt)', () => {
+    expect(getToolCategory('mcp__github__create_issue')).toBe('prompt_always');
+    expect(getToolCategory('mcp__anything__whatever')).toBe('prompt_always');
+    expect(getToolCategory('skill')).toBe('prompt_always');
+
+    expect(canTrustTool('mcp__github__create_issue')).toBe(false);
+    expect(canTrustTool('skill')).toBe(false);
+  });
+
+  it('lets an operator relax a specific MCP tool via a custom category', () => {
+    // The mcp__ default runs AFTER custom categories, so a trusted server can be
+    // explicitly downgraded (unlike the hook namespaces, which cannot).
+    expect(getToolCategory('mcp__manifold__read_board', { mcp__manifold__read_board: 'auto_approve' })).toBe(
+      'auto_approve'
+    );
+  });
+});

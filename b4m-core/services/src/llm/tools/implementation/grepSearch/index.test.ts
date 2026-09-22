@@ -322,6 +322,20 @@ export const Button = ({ onClick }) => {
     });
   });
 
+  describe('flag-like patterns (option-injection hardening)', () => {
+    it('treats a leading-dash pattern as a literal search, not a ripgrep flag', async () => {
+      // Without the `--` argv separator, ripgrep parses `--pre=rm` as the --pre
+      // preprocessor flag (which would run `rm`), never as a search pattern.
+      await writeFile(join(testDir, 'flags.txt'), 'this line contains --pre=rm literally');
+      const tool = grepSearchTool.implementation(mockContext);
+      const result = await tool.toolFn({ pattern: '--pre=rm' });
+
+      expect(result).toContain('flags.txt');
+      expect(result).toContain('--pre=rm');
+      await rm(join(testDir, 'flags.txt'), { force: true });
+    });
+  });
+
   describe('tool schema', () => {
     it('should have correct tool name', () => {
       expect(grepSearchTool.name).toBe('grep_search');

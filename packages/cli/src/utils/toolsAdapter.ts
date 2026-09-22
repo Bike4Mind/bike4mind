@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { rmSync } from 'fs';
+import { rmSync, realpathSync } from 'fs';
 import path from 'path';
 import { Logger } from '@bike4mind/observability';
 import { BaseStorage } from '@bike4mind/fab-pipeline';
@@ -33,6 +33,15 @@ import { matchesAnyPattern } from '../agents/toolFilter.js';
 import { getProcessHooks } from './processHooks.js';
 import { clampInteractionMode } from '../agents/interactionModeClamp.js';
 import type { InteractionMode } from '../bootstrap/types.js';
+
+/**
+ * What a permission prompt is asking about. 'tool' is a normal tool-call gate;
+ * 'directory-grant' is a request to widen the filesystem allow-list, which is a
+ * separate decision (deny-by-default in headless, never inheriting the tool's
+ * own verdict). Passed as an optional 4th arg so existing 3-arg prompt callbacks
+ * remain valid; a headless callback reads it to fail closed on scope widening.
+ */
+export type PermissionPromptKind = 'tool' | 'directory-grant';
 
 /**
  * Tool-name patterns auto-approved without a permission prompt, from `--allowedTools`
@@ -117,7 +126,7 @@ interface AgentContext {
 /**
  * Wrap a tool with permission checking, server routing, and observation tracking.
  */
-function wrapToolWithPermission(
+export function wrapToolWithPermission(
   tool: ICompletionOptionTools,
   permissionManager: PermissionManager,
   showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>,
@@ -198,7 +207,10 @@ function wrapToolWithPermission(
           if (!isPathAccessDenial(msg)) throw err;
           result = msg;
         }
-        cleanupSandboxFiles(effectiveArgs?._sandboxCleanup);
+        // Only clean up paths THIS wrapper set on sandboxedArgs. When unsandboxed,
+        // effectiveArgs === the raw model args, so a model-supplied `_sandboxCleanup`
+        // must never reach rmSync(recursive, force).
+        cleanupSandboxFiles(isSandboxed ? sandboxedArgs?._sandboxCleanup : undefined);
         await captureViolations(isSandboxed, result, args?.command, sandboxOrchestrator);
         result = await retrySandboxFailure(
           isSandboxed,
@@ -310,6 +322,44 @@ function wrapToolWithPermission(
 }
 
 /**
+ * Collaborators the permission wrapper needs. Bundled so the several entrypoints
+ * that build raw tool lists (MCP tools, skill, get_file_structure, find_definition)
+ * can route them through the ONE wrapper without repeating its long argument list.
+ */
+export interface WrapToolDeps {
+  permissionManager: PermissionManager;
+  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>;
+  agentContext: AgentContext;
+  configStore: any; // ConfigStore instance (no shared interface)
+  apiClient: ApiClient;
+  sandboxOrchestrator?: SandboxOrchestrator;
+  /** Live, mutable allow-list shared with the core tool context (see wrapToolWithPermission). */
+  allowedDirectories?: string[];
+  interactionModeOverride?: InteractionMode;
+}
+
+/**
+ * Route a set of otherwise-raw tools through the permission wrapper. This is the
+ * single choke-point every tool the model can call must pass through; anything
+ * constructed outside generateCliTools is wrapped here before it reaches the agent.
+ */
+export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): ICompletionOptionTools[] {
+  return tools.map(tool =>
+    wrapToolWithPermission(
+      tool,
+      deps.permissionManager,
+      deps.showPermissionPrompt,
+      deps.agentContext,
+      deps.configStore,
+      deps.apiClient,
+      deps.sandboxOrchestrator,
+      deps.allowedDirectories,
+      deps.interactionModeOverride
+    )
+  );
+}
+
+/**
  * Detect whether a tool result indicates a sandbox-specific runtime failure.
  * Returns true for errors originating from sandbox-exec (macOS) or bwrap (Linux).
  */
@@ -395,23 +445,41 @@ async function retryPathAccessDenial(
   configStore: any,
   apiClient: ApiClient,
   originalFn: (args: unknown) => Promise<string>,
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>
+  showPermissionPrompt: (
+    toolName: string,
+    args: unknown,
+    preview?: string,
+    kind?: PermissionPromptKind
+  ) => Promise<{ action: PermissionResponse }>
 ): Promise<string> {
   if (!allowedDirectories || !isPathAccessDenial(result)) return result;
 
   const grantDir = deriveGrantDirectory(toolName, args);
   if (!grantDir) return result;
+  // Grant the realpath, not the lexical string: the core validator resolves
+  // symlinks (realpathSync) before matching, so a lexical entry for a symlinked
+  // dir would never match and the grant would silently fail to unblock.
+  let resolvedGrantDir = grantDir;
+  try {
+    resolvedGrantDir = realpathSync(grantDir);
+  } catch {
+    // Not-yet-resolvable path: fall back to the lexical dir.
+  }
   // Already granted - return the result rather than re-prompting in a loop.
-  if (allowedDirectories.includes(grantDir)) return result;
+  if (allowedDirectories.includes(resolvedGrantDir)) return result;
 
   const preview =
     `🔒 DIRECTORY ACCESS — "${toolName}" needs a path outside the current workspace.\n\n` +
     `- Grant access to this directory:\n` +
-    `  ${grantDir}\n` +
+    `  ${resolvedGrantDir}\n` +
     `- "Allow for this session" grants access until the CLI exits.\n` +
     `- "Always allow" also saves it to your config so it persists across sessions.`;
 
-  const response = await showPermissionPrompt(toolName, args, preview);
+  // Prompt as a 'directory-grant', NOT as the originating tool: widening the
+  // filesystem allow-list is its own decision. In headless this must be
+  // deny-by-default rather than inheriting the tool's policy verdict (a policy
+  // allowing `file_read` must not silently widen scope to any directory).
+  const response = await showPermissionPrompt(toolName, args, preview, 'directory-grant');
   if (response.action === 'deny') return result;
 
   // Grant into the live allow-list the core tool context reads on each call.
@@ -420,11 +488,11 @@ async function retryPathAccessDenial(
   // shortcut. `allow-session` and `allow-always` keep the grant for the rest
   // of the run; `allow-always` also persists it to config.
   const oneShot = response.action === 'allow-once';
-  allowedDirectories.push(grantDir);
+  allowedDirectories.push(resolvedGrantDir);
 
   if (response.action === 'allow-always') {
     try {
-      await configStore.addDirectory(grantDir);
+      await configStore.addDirectory(resolvedGrantDir);
     } catch {
       // Best-effort persistence - the session grant above is already applied.
     }
@@ -441,7 +509,7 @@ async function retryPathAccessDenial(
     // for the rest of the session. Only remove the entry we added (guard
     // against a concurrent grant of the same dir having persisted it).
     if (oneShot) {
-      const idx = allowedDirectories.lastIndexOf(grantDir);
+      const idx = allowedDirectories.lastIndexOf(resolvedGrantDir);
       if (idx !== -1) allowedDirectories.splice(idx, 1);
     }
   }
@@ -506,7 +574,7 @@ async function generateToolPreview(
 ): Promise<string | undefined> {
   try {
     if (toolName === 'edit_local_file' && args?.path && args?.old_string && typeof args?.new_string === 'string') {
-      return generateEditLocalFilePreview({
+      return await generateEditLocalFilePreview({
         path: args.path as string,
         old_string: args.old_string as string,
         new_string: args.new_string,
