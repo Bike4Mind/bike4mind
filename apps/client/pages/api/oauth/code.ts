@@ -39,7 +39,17 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
     return res.status(400).json({ error: 'invalid_request', error_description: parsed.error.message });
   }
 
-  const { client_id, redirect_uri, scope, code_challenge, nonce, consent, prompt } = parsed.data;
+  const { client_id, redirect_uri, scope, code_challenge, code_challenge_method, nonce, consent, prompt } = parsed.data;
+
+  // Discovery advertises only S256, so a code_challenge without an explicit code_challenge_method=S256
+  // is rejected rather than silently treated as S256 (RFC 7636 4.3): the client and server must agree
+  // on the method, not have the server assume one.
+  if (code_challenge && code_challenge_method !== 'S256') {
+    return res.status(400).json({
+      error: 'invalid_request',
+      error_description: 'code_challenge_method=S256 is required when code_challenge is present',
+    });
+  }
 
   const client = await validateClient(client_id, redirect_uri);
   if (!client) {
@@ -78,7 +88,9 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
       requestedScopes,
       grantedScopes: grant?.scopes ?? null,
       consentGiven: consent === true,
-      forceConsent: prompt === 'consent',
+      // `prompt` is a space-delimited set (OIDC Core 3.1.2.1), so e.g. `prompt=login consent` must
+      // still force consent - a bare `=== 'consent'` would skip it.
+      forceConsent: (prompt?.split(/\s+/).filter(Boolean) ?? []).includes('consent'),
     });
 
     if (decision === 'consent_required') {
@@ -87,13 +99,13 @@ const handler = baseApi({ auth: true }).post(async (req, res) => {
     }
 
     if (consent === true) {
-      // Persist the decision, widening (never shrinking) any prior grant so a re-consent for a
-      // subset does not drop scopes the user already approved.
-      const merged = Array.from(new Set([...(grant?.scopes ?? []), ...requestedScopes]));
+      // Persist the decision. upsertGrant widens atomically ($addToSet), so a re-consent for a subset
+      // never drops previously approved scopes and two concurrent tabs can't lose-update each other -
+      // hence we hand it the requested scopes, not a caller-computed union.
       await oauthGrantRepository.upsertGrant({
         userId: user.id,
         clientId: client_id,
-        scopes: merged,
+        scopes: requestedScopes,
         source: 'authorize',
       });
     }

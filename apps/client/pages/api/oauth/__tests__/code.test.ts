@@ -104,6 +104,22 @@ describe('POST /api/oauth/code PKCE hardening', () => {
     expect(h.generateAuthCode).toHaveBeenCalledOnce();
   });
 
+  it('rejects a code_challenge sent without code_challenge_method=S256 (400 invalid_request)', async () => {
+    // Discovery advertises only S256, so a challenge with no explicit method must be rejected rather
+    // than silently assumed S256. A non-S256 method is already rejected by the zod literal at parse.
+    (h.validateClient as Mock).mockResolvedValue({
+      tokenEndpointAuthMethod: 'none',
+      allowedScopes: ['openid', 'email', 'profile'],
+    });
+
+    const res = await call({ ...baseBody, code_challenge: 'a-challenge' });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body?.error).toBe('invalid_request');
+    expect(res.body?.error_description).toMatch(/S256/);
+    expect(h.generateAuthCode).not.toHaveBeenCalled();
+  });
+
   it('mints a code for a confidential client with no code_challenge', async () => {
     (h.validateClient as Mock).mockResolvedValue({
       tokenEndpointAuthMethod: 'client_secret_post',
@@ -161,25 +177,45 @@ describe('POST /api/oauth/code relying-party consent gate', () => {
     expect(h.upsertGrant).not.toHaveBeenCalled();
   });
 
-  it('on Allow, widens (unions) the stored grant and then mints the code', async () => {
+  it('on Allow, records the grant with the requested scopes and mints the code', async () => {
     (h.validateClient as Mock).mockResolvedValue(relyingParty);
     (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid'] });
-    (h.decideConsent as Mock).mockReturnValue('ok');
+    (h.decideConsent as Mock).mockReturnValue('mint');
 
     const res = await call({ ...baseBody, scope: 'openid email', consent: true });
 
-    expect(h.upsertGrant).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: 'u1',
-        clientId: 'client-1',
-        scopes: expect.arrayContaining(['openid', 'email']),
-        source: 'authorize',
-      })
-    );
-    // Never shrinks: a re-consent for a subset keeps the previously approved scope.
-    const merged = (h.upsertGrant as Mock).mock.calls[0][0].scopes as string[];
-    expect(merged).toContain('openid');
+    // The caller hands upsertGrant the requested scopes verbatim; unioning with the prior grant
+    // (widen, never shrink) is the repo's atomic $addToSet job, not a caller-side read-merge-write
+    // that could lose-update between two tabs. That behavior is pinned in OAuthGrantModel.test.ts.
+    expect(h.upsertGrant).toHaveBeenCalledWith({
+      userId: 'u1',
+      clientId: 'client-1',
+      scopes: ['openid', 'email'],
+      source: 'authorize',
+    });
     expect(res.body?.code).toBe('the-code');
     expect(h.generateAuthCode).toHaveBeenCalledOnce();
+  });
+
+  it('parses prompt as a space-delimited set: "login consent" still forces consent', async () => {
+    // OIDC Core 3.1.2.1: prompt is a space-delimited set. A bare `prompt === "consent"` would skip
+    // forced consent for `prompt=login consent`.
+    (h.validateClient as Mock).mockResolvedValue(relyingParty);
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid', 'email'] });
+    (h.decideConsent as Mock).mockReturnValue('consent_required');
+
+    await call({ ...baseBody, scope: 'openid email', prompt: 'login consent' });
+
+    expect(h.decideConsent).toHaveBeenCalledWith(expect.objectContaining({ forceConsent: true }));
+  });
+
+  it('does not force consent when prompt lacks the consent token', async () => {
+    (h.validateClient as Mock).mockResolvedValue(relyingParty);
+    (h.findGrant as Mock).mockResolvedValue({ scopes: ['openid', 'email'] });
+    (h.decideConsent as Mock).mockReturnValue('mint');
+
+    await call({ ...baseBody, scope: 'openid email', prompt: 'login' });
+
+    expect(h.decideConsent).toHaveBeenCalledWith(expect.objectContaining({ forceConsent: false }));
   });
 });
