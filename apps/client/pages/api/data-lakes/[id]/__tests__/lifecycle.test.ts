@@ -63,6 +63,7 @@ vi.mock('@bike4mind/database', () => ({
   // omitted because the mock replaces the whole module: a missing export is an import-time
   // failure, not a silent undefined.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {
     findBySettingNames: vi.fn().mockResolvedValue([]),
     findAll: vi.fn().mockResolvedValue([]),

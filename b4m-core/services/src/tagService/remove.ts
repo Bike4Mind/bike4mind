@@ -5,6 +5,10 @@ import { couldMatchTagPrefixArmLoosely, loadPrefixArmCandidateLakes } from '../d
 import { recomputeLakeStats } from '../dataLakeService/recomputeLakeStats';
 import { isDataLakeTagName } from './tagName';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
+import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
+import { recordMembershipTransitions } from '../dataLakeService/recordMembershipTransitions';
+import { registryCandidateLakes } from '../dataLakeService/registryCandidateLakes';
+import { claimBulkTagRewrite } from './claimBulkTagRewrite';
 
 const tagRemoveSchema = z.object({
   id: z.string(),
@@ -12,10 +16,10 @@ const tagRemoveSchema = z.object({
 
 type TagRemoveParams = z.infer<typeof tagRemoveSchema>;
 
-interface TagRemoveAdapters {
-  db: {
+interface TagRemoveAdapters extends LakeMembershipAuditAdapters {
+  db: LakeMembershipAuditAdapters['db'] & {
     tags: Pick<ITagRepository, 'findByIdAndUserId' | 'delete'>;
-    fabFiles: Pick<IFabFileRepository, 'removeTagByUserId' | 'computeDataLakeStats'>;
+    fabFiles: Pick<IFabFileRepository, 'removeTagByUserId' | 'computeDataLakeStats' | 'claimTagRewriteByUserId'>;
     dataLakes: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
     // The config-audit repos, OPTIONAL and forwarded straight to recomputeLakeStats below: a
     // prefix-arm rename or delete can flip a draft lake to active, and without these that
@@ -32,10 +36,8 @@ interface TagRemoveAdapters {
    */
   logger?: LakeConfigAuditAdapters['logger'];
   /**
-   * Accepted for route back-compat and otherwise unused: this used to ride on the actor
-   * handed to recomputeLakeStats' auto-activate audit row. That flip no longer happens here -
-   * publishing is now the explicit `promoteDataLake` door - so there is nothing left for this to
-   * attribute.
+   * Names the principal on the membership rows this door records, so a key-driven bulk rewrite
+   * attributes the key rather than the human who minted it. Optional, like the audit repos above.
    */
   auditPrincipal?: LakeAuditPrincipal;
   /**
@@ -67,7 +69,7 @@ interface TagRemoveAdapters {
  * the bulk strip below does NOT do on its own is recompute the affected lakes' stats.
  */
 export const remove = async (userId: string, params: TagRemoveParams, adapters: TagRemoveAdapters) => {
-  const { db, logger, assertWriteScope } = adapters;
+  const { db, logger, assertWriteScope, auditPrincipal } = adapters;
   const { id } = secureParameters(params, tagRemoveSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -85,18 +87,54 @@ export const remove = async (userId: string, params: TagRemoveParams, adapters: 
   // the write below (not after, alongside the recompute) so a denied key never sees the strip
   // applied - this call is not transactional, and a 403 that follows the mutation would report
   // failure while leaving the file evicted from the lake.
-  const affectedLakes = tag.name.includes(':')
+  const couldMatchPrefix = tag.name.includes(':');
+  const affectedLakes = couldMatchPrefix
     ? (await loadPrefixArmCandidateLakes([userId], { db })).filter(lake =>
         couldMatchTagPrefixArmLoosely(tag.name, lake.fileTagPrefix)
       )
     : [];
+  // The registry lakes separately, and ONLY for the audit enumeration below: they have no document,
+  // so `loadPrefixArmCandidateLakes` (owner-anchored) cannot return one and the stats recompute
+  // must never be handed one. Stripping a tag under `opti:` is a real prefix-arm leave all the same.
+  const affectedRegistryLakes = couldMatchPrefix
+    ? registryCandidateLakes().filter(lake => couldMatchTagPrefixArmLoosely(tag.name, lake.fileTagPrefix))
+    : [];
+  const auditedLakes = [...affectedLakes, ...affectedRegistryLakes];
 
   if (affectedLakes.length > 0) assertWriteScope?.();
+
+  // Claimed one file at a time, BEFORE the bulk strip, so each recorded leave is one this request's
+  // own write produced - a snapshot read plus `removeTagByUserId` reports an aggregate count, from
+  // which two concurrent deletes would each synthesize the same per-file events. Confined to the
+  // prefix-candidate path so the common plain-tag delete pays nothing extra.
+  // Each claim's membership row is recorded through `onClaimed`, inside the loop, rather than from
+  // the returned array afterwards: the rewrite has already landed on that file, so a later claim
+  // throwing must not take the fact down with it - nothing can reconstruct it once the source tag
+  // is gone. Per (lake, file) rather than per lake: the stats recompute below can afford to be
+  // approximate, but the change log is what a reader reconstructs membership FROM. Only leaves are
+  // reachable here (a delete can only cost a file a signal), but the direction is derived from the
+  // flip anyway - a file that also carries the lake's meta-tag stays a member and emits nothing.
+  const claimed =
+    auditedLakes.length > 0
+      ? await claimBulkTagRewrite(userId, tag.name, null, {
+          db,
+          onClaimed: file =>
+            recordMembershipTransitions(
+              { userId, isAdmin: false, auditPrincipal },
+              auditedLakes,
+              [file],
+              { db, logger },
+              { origin: 'person' }
+            ),
+        })
+      : [];
 
   // Files first, tag document second. This order converges under retry: if the delete below fails,
   // the document still names the tag, so re-running the same request finds the stragglers. The
   // reverse order strands them - the name is gone from the only record that could locate them.
-  const filesUpdated = await db.fabFiles.removeTagByUserId(userId, tag.name);
+  // Still runs after the claims above: it is a no-op over what they took, and it is the only pass
+  // that reaches soft-deleted files and `primaryTag`.
+  const filesUpdated = claimed.length + (await db.fabFiles.removeTagByUserId(userId, tag.name));
 
   await db.tags.delete(tag.id);
 
