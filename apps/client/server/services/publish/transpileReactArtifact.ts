@@ -226,6 +226,10 @@ export function rewriteImportsToRequire(rawSource: string): string {
  * on scanImportStatements - a check sharing the scanner could never catch a gap in it. Each
  * statement is bounded by the first `;` or quote after it and the cursor only advances, so this
  * stays linear on the `from`-less input that made the original regexes quadratic.
+ *
+ * Known blind spot: a survivor that isn't line-initial (e.g. after a `;` on the same line) escapes
+ * this pattern. Narrow in practice - scanImportStatements has no line anchor and already rewrites
+ * those, so this only misses one if the scanner has separately failed on that input.
  */
 function findSurvivingEsmImport(code: string): string | null {
   const lineInitialImport = /^[ \t]*import\s/gm;

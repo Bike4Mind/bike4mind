@@ -221,8 +221,11 @@ describe('vacuity control: the removed 2000-char clause bound', () => {
   });
 
   it('diverges from the original regexes, so the differential above can fail', () => {
+    // Scoped to LONG_CASES, not the whole CORPUS: the bounded regex also diverges from
+    // the original on plenty of short, unrelated cases, so a whole-corpus missing > 0
+    // would still pass with every LONG_CASES entry deleted.
     const bounded: Directions = { missing: 0, extra: 0, examples: [] };
-    for (const source of CORPUS) {
+    for (const source of LONG_CASES) {
       compare(
         oracleRecords(originalStatement(), source, m => [m[2]]),
         oracleRecords(boundedStatement(), source, m => [m[1]]),

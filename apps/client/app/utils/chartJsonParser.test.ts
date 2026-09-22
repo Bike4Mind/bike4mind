@@ -37,6 +37,13 @@ describe('chartJsonParser - code fence regex growth', () => {
   it('stays linear on an unclosed ```json fence with trailing spaces per line', () => {
     assertLinearGrowth(n => '```json\n' + ' \n'.repeat(n), 2000);
   });
+
+  it('stays linear on an unclosed ```json fence padded with spaces and no newline', () => {
+    // The newline-bearing cases above never reached the horizontal-whitespace consumer
+    // that used to sit before the body: only a run with no newline in it made that
+    // consumer give back one character at a time, rescanning to end on each step.
+    assertLinearGrowth(n => '```json' + ' '.repeat(n) + 'x', 40000);
+  });
 });
 
 describe('chartJsonParser - fence extraction correctness', () => {

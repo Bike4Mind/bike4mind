@@ -372,10 +372,11 @@ export function extractPythonPackages(content: string): string[] {
 
 /**
  * A self-closing tag, e.g. `<path d="..."/>`, as `/<[a-z]+[^>]*\/>/` matched it. That
- * pattern re-scans to the end of the input from every `<`, so this scans each character
- * of `code` once instead: `[^>]*` cannot cross a `>`, so a candidate can only end at the
- * first `>` after its own opening, and a cached `close` at or past `at + 2` is still that
- * first `>` (a nearer one would have been found when the cursor was set).
+ * pattern re-scans to the first `>` after every `<` - to the end of input when none
+ * follows - so this scans each character of `code` once instead: `[^>]*` cannot cross a
+ * `>`, so a candidate can only end at the first `>` after its own opening, and a cached
+ * `close` at or past `at + 2` is still that first `>` (a nearer one would have been found
+ * when the cursor was set).
  */
 export function hasSelfClosingTag(code: string): boolean {
   let close = -1;

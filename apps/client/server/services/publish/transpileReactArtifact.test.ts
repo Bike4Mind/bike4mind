@@ -612,6 +612,19 @@ describe('rewriteImportsToRequire ESM survivor backstop', () => {
       mod.rewriteImportsToRequire(`const a = 1;\nimport Chart from 'chartjs'\nimport Grid from 'gridjs';`)
     ).toThrow(/import Chart from 'chartjs'/);
   });
+
+  it('is blind to a non-line-initial survivor - a documented, narrow gap', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    const call = () => mod.rewriteImportsToRequire(`const a = 1; import { useState } from 'react';`);
+    expect(call).not.toThrow();
+  });
 });
 
 /** Verbatim origin/main implementation: the oracle for the two brace regexes `braceSpan` replaced. */

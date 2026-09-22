@@ -68,10 +68,10 @@ function extractJSONFromText(text: string): string | null {
   }
 
   // Strip markdown code blocks (```json ... ``` or ``` ... ```)
-  // A single whitespace consumer before the body (no \s* + \n? + lazy-body overlap)
-  // keeps this linear; the capture is trimmed below so no trailing whitespace consumer
-  // before the closing fence is needed.
-  const codeBlockMatch = trimmed.match(/```(?:json|recharts)?[^\S\n]*\n?([\s\S]*?)```/);
+  // No whitespace consumer may sit beside the lazy body: any such overlap backtracks
+  // character by character on an unclosed fence, rescanning to end each time. The
+  // capture is trimmed below, so the padding it now includes makes no difference.
+  const codeBlockMatch = trimmed.match(/```(?:json|recharts)?([\s\S]*?)```/);
   if (codeBlockMatch) {
     const inner = codeBlockMatch[1].trim();
     try {

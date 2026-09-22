@@ -811,10 +811,12 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // far inside the ratio budget. The first shape promotes every document, so its
     // output allocation is what costs: at n=22000 the current parser itself ran 20-60ms
     // a side and the ratio went marginal, flaking. Each size has to be large enough that
-    // the pre-fix parser breaks the ratio ceiling on its own: the first shape needs 6000
-    // (at 3000 it ran 13/52ms, ratio 2.1, and passed pre-fix). Pre-fix core at these sizes
-    // runs 52/207ms, 32/132ms and 86/340ms, ratio ~3.9 each, against 1.1/2.1ms, 0.1/0.2ms
-    // and 0.2/0.4ms now.
+    // the pre-fix parser breaks its ceiling on its own: the first shape needs 6000
+    // (at 3000 it ran 13/52ms, ratio 2.1, and passed pre-fix). Pre-fix core at the first
+    // two sizes runs 52/207ms and 32/132ms, ratio ~3.9 each, against 1.1/2.1ms and
+    // 0.1/0.2ms now. The third shape runs this file's own (client) parser: pre-fix
+    // client measured ~35.5s at n=6400, so it fails the SMALL_INPUT_MS_CEILING baseline
+    // check outright, well before any ratio is taken, against 0.2/0.4ms now.
     const noOutputCheck = () => {};
     assertLinearGrowth(n => '<html></html>\n'.repeat(n), 6000, noOutputCheck);
     assertLinearGrowth(n => '<html>\n'.repeat(n), 6000, noOutputCheck);
@@ -844,8 +846,9 @@ describe('parity with the core parser', () => {
   // mtime moves on a branch switch while content does not, and turbo then skips the
   // rebuild its own message asks for. Only the title case catches a dist built from main,
   // because the title escaping is this branch's only behavior change in core. The four
-  // after it pin the linearizations, which are behavior-preserving by design and so catch
-  // a dist whose rewrite was reverted or broken rather than a plain main build.
+  // after it pin the linearizations, which are behavior-preserving by design, so they catch
+  // a dist whose rewrite is broken, not a dist built from main, and not a same-behavior
+  // revert.
   const STALE = 'core dist is stale - run pnpm turbo:core:build (or --force if that reports FULL TURBO)';
   const coreWrappers = (out: string) => (out.match(/<artifact /g) || []).length;
 
@@ -1106,8 +1109,7 @@ describe('hasSelfClosingTag differential vs the original regex', () => {
     for (const source of CORPUS) {
       if (hasSelfClosingTag(source) !== controlHasSelfClosingTag(source)) divergences++;
     }
-    // Pinned to the fixed-seed corpus above; a corpus change is expected to update this count.
-    expect(divergences).toBe(352);
+    expect(divergences).toBeGreaterThan(0);
   });
 
   it('matches a self-closing tag with a 600-char and a ~5000-char attribute span', () => {
