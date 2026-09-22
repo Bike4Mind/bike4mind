@@ -545,3 +545,76 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       }),
   };
 }
+
+/**
+ * #3055 (scope-accounting follow-up): how many of the SPECIFIC lakes a session names by
+ * IDENTITY tag (`datalake:x`, e.g. from `datalakeTagsFrom(session.retrievalTags)`) are
+ * gate-excluded for this caller - the per-turn-scoped sibling of `excludedByAccessCount`
+ * above, for exactly the case that function's own account-wide count cannot answer.
+ *
+ * Why a separate function rather than teaching `narrowLakeAccessToSession` this: that
+ * function is a pure, synchronous filter reused by callers with no DB access, and it must
+ * stay that way (see its own doc). This runs the same targeted `countGateExcludedLakes`
+ * query `getDynamicDataLakeAccess` already runs, restricted to `identityTags` via
+ * `restrictToTags`, so it answers "of exactly these lakes, how many are excluded" instead of
+ * "how many are excluded account-wide" - the two diverge exactly when a session narrows to
+ * one lake while an unrelated lake is what's actually gated.
+ *
+ * Reuses the SAME per-turn-memoized organizationIds/grant-reach/supersession as
+ * `getDynamicDataLakeAccess` (both are keyed on the identity of `context`), so calling this
+ * after that resolver already ran for the turn costs one extra count query, not a second
+ * membership or grant read.
+ *
+ * Returns 0 without a query for an empty `identityTags` list - nothing was named by
+ * identity, so nothing can be excluded by identity (a session can only reference an
+ * inaccessible lake by its identity tag; a prefix reference is only ever matched against
+ * lakes the caller can already see, per `narrowLakeAccessToSession`). Returns `undefined`
+ * (not measured), never a false 0, on any failure or when the dataLakes repo or the
+ * organizations reader is unwired - same absence contract as `excludedByAccessCount`.
+ * Deliberately a single top-level try/catch rather than per-arm degradation like the main
+ * resolver above: this is a narrower, telemetry-only path (it never gates real retrieval),
+ * so "any failure means unknown" is the simpler and equally safe contract.
+ */
+export async function measureIdentityNamedExclusion(
+  context: DataLakeAccessContext,
+  identityTags: string[]
+): Promise<number | undefined> {
+  if (identityTags.length === 0) return 0;
+  if (!context.db.dataLakes || typeof context.db.organizations?.findMembershipOrgIds !== 'function') {
+    return undefined;
+  }
+  const userTags = context.user.tags || [];
+  const entitlementKeys = context.entitlementKeys ?? [];
+  const userId = context.user.id ? String(context.user.id) : undefined;
+  try {
+    const organizationIds = userId ? await membershipOrgIdsForTurn(context, userId, context.db.organizations) : [];
+    let reach: LakeGrantReach = { grantedLakeIds: [], orgGrantedLakes: {} };
+    let supersededOwnLakeIds = new Set<string>();
+    if (userId && context.db.dataLakeAccessGrants) {
+      const includeReaders = await resolveEnforceReadGrants(context.db.adminSettings, context.logger, context);
+      reach = await grantedLakeReachForTurn(
+        context,
+        userId,
+        organizationIds,
+        context.db.dataLakeAccessGrants,
+        includeReaders
+      );
+      supersededOwnLakeIds = new Set(
+        await supersededOwnLakeIdsForTurn(
+          context,
+          { userId, isAdmin: false },
+          context.db.dataLakes,
+          context.db.dataLakeAccessGrants
+        )
+      );
+    }
+    return await context.db.dataLakes.countGateExcludedLakes(userTags, entitlementKeys, organizationIds, userId, {
+      ...reach,
+      supersededOwnLakeIds: [...supersededOwnLakeIds],
+      restrictToTags: identityTags,
+    });
+  } catch (err) {
+    context.logger?.warn('[dataLakes] scoped gate-excluded-lake count failed; reporting as unknown', err);
+    return undefined;
+  }
+}
