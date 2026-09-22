@@ -107,7 +107,7 @@ function settlesFreeForAnyVolume(modelInfo: ModelInfo): boolean {
 
 /**
  * Resolved through the same `getOperationsModel()` the handlers themselves call
- * (sessionSummarization.ts:64, sessionTagging.ts:115) so the gate and the charge cannot disagree
+ * (sessionSummarization.ts:64, sessionTagging.ts:135) so the gate and the charge cannot disagree
  * about which model is in play.
  *
  * Imported dynamically and reached only on a would-be refusal: it reads an admin setting and
