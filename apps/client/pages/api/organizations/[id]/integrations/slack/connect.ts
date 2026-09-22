@@ -12,9 +12,9 @@ initializeSlackPackage();
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { organizationRepository } from '@bike4mind/database/infra';
 import { orgSlackWorkspaceRepository } from '@bike4mind/database/infra';
-import { BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { BadRequestError } from '@bike4mind/utils';
+import { verifyOrgOwner } from '@server/utils/orgAccess';
 import {
   getSystemSlackAppCredentials,
   generateOrgSlackConnectStateToken,
@@ -27,15 +27,10 @@ const handler = baseApi().post(
     const orgId = req.query.id!;
     const user = req.user!;
 
-    // Only org owner or system admin
-    if (!user.isAdmin) {
-      const org = await organizationRepository.findById(orgId);
-      if (!org) throw new NotFoundError('Organization not found');
-      if (org.userId !== user.id) throw new NotFoundError('Organization not found');
-    } else {
-      const org = await organizationRepository.findById(orgId);
-      if (!org) throw new NotFoundError('Organization not found');
-    }
+    // Owner-only, matching the sibling index.ts arms: connecting a workspace wires Slack to the
+    // whole tenant. Behaviour is identical to the inline check this replaces apart from a
+    // malformed id now answering 400 rather than 404.
+    await verifyOrgOwner(user, orgId);
 
     const existing = await orgSlackWorkspaceRepository.findByOrganizationId(orgId);
     if (existing) {

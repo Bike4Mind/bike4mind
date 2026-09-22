@@ -1,4 +1,3 @@
-import { organizationRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import {
   ORGANIZATION_SUBSCRIPTION_MAX_SEATS,
@@ -12,11 +11,11 @@ import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
 import { Request } from 'express';
-import Stripe from 'stripe';
 import { z } from 'zod';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { verifyOrgOwner } from '@server/utils/orgAccess';
+import { attachOrgStripeCustomer } from '@server/integrations/stripe/attachOrgStripeCustomer';
 
 const handler = baseApi()
   .use(requireStripeWebhook())
@@ -60,14 +59,22 @@ const handler = baseApi()
     // billing-attribution bug, not an authorization one, and this gate does not widen it.
     const organization = organizationId ? await verifyOrgOwner(req.user, organizationId) : null;
 
+    // Everything below keys off the CANONICAL id from the gated document, never the raw body
+    // string. `isValidObjectId` accepts uppercase hex and findById casts it, so an owner could
+    // send an uppercase spelling of their own org id, miss the byte-exact `ownerId` match in the
+    // duplicate-subscription guard below (rows are written from `org.id`, always lowercase - see
+    // Subscription.ts and lib/userSubscriptions/serverUtils.ts) and open a second checkout
+    // session: a double charge with only one entitlement. Same reason the Stripe metadata uses it.
+    const gatedOrganizationId = organization?.id;
+
     // Refuse a second live subscription for the org. This read used to be active-only, so an org
     // whose subscription was past_due - invisible to the guard - could start a second checkout
     // while the first kept retrying the card and emailing. Non-terminal rows block; a terminal
     // row (canceled, incomplete_expired) does not, so a lapsed org can still subscribe again.
-    if (organizationId) {
+    if (gatedOrganizationId) {
       const liveSubscriptions = await subscriptionRepository.findNonTerminalSubscriptionsByOwner(
         SubscriptionOwnerType.Organization,
-        organizationId
+        gatedOrganizationId
       );
 
       // The price is pinned to ORGANIZATION_SUBSCRIPTION_PRICE_ID above, so for an org this is
@@ -86,19 +93,13 @@ const handler = baseApi()
     let minSeats = ORGANIZATION_SUBSCRIPTION_MIN_SEATS;
 
     let customerId: string | undefined;
-    let customer: undefined | Stripe.Customer;
     if (organization) {
-      if (!organization.stripeCustomerId) {
-        customer = await createCustomer({
-          email: organization.billingContact,
-          name: organization.name,
-          type: CustomerType.Organization,
-        });
-
-        organization.stripeCustomerId = customer.id;
-
-        await organizationRepository.update(organization);
-      }
+      // Race-safe: a plain `organizationRepository.update(organization)` here was last-writer-wins,
+      // so two concurrent owner requests each created a Stripe customer and the loser's write
+      // orphaned the winner's. The gate now reads the org one round trip earlier than the old
+      // inline findById did, which widens that window, so the conditional update is what keeps it
+      // closed. See attachOrgStripeCustomer for the full argument.
+      customerId = await attachOrgStripeCustomer(organization);
 
       // Clamp at the ceiling so an over-cap org's checkout minimum can't exceed the maximum (#1424) -
       // without this, minimum > maximum makes Stripe reject the session and the self-serve checkout wedges.
@@ -106,9 +107,8 @@ const handler = baseApi()
         Math.max(ORGANIZATION_SUBSCRIPTION_MIN_SEATS, organization.users.length + 1),
         ORGANIZATION_SUBSCRIPTION_MAX_SEATS
       );
-      customerId = organization.stripeCustomerId;
     } else {
-      customer = await createCustomer({
+      const customer = await createCustomer({
         email: req.user.email!,
         name: organizationData?.name ?? req.user.email!,
         type: CustomerType.Organization,
@@ -124,7 +124,10 @@ const handler = baseApi()
       ...(organizationData
         ? { newOrganizationName: organizationData.name }
         : {
-            organizationId: organizationId,
+            // The gated document's canonical id, not the body string - this value becomes the
+            // subscription row's `ownerId` via the invoice webhook, and the duplicate guard above
+            // matches on it byte-for-byte.
+            organizationId: gatedOrganizationId,
           }),
     });
 

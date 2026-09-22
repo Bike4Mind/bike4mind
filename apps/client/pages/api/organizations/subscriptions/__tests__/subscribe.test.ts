@@ -30,14 +30,16 @@ vi.mock('@server/middlewares/requireStripeWebhook', () => ({
 // @bike4mind/utils is a @deprecated re-export (same class identity, non-canonical path).
 import { BadRequestError, NotFoundError, HttpStatus } from '@bike4mind/common';
 
-// The route reads the org through verifyOrgOwner and only WRITES through the repository, so
-// `update` is the whole surface it still uses here. Resist re-adding a findById stub: a route
-// that reads the org outside the gate is the defect this file guards against.
-const mockOrgUpdate = vi.fn();
-vi.mock('@bike4mind/database', () => ({
-  organizationRepository: {
-    update: (...args: unknown[]) => mockOrgUpdate(...args),
-  },
+// The route reads the org through verifyOrgOwner and, on the org path, writes only through
+// attachOrgStripeCustomer - which owns both the Stripe customer creation and the conditional
+// persist. So this one mock is the entire durable-side-effect surface of the org branch, and the
+// "leaves no trace" assertions below key off it. Its own race semantics are pinned in
+// server/integrations/stripe/attachOrgStripeCustomer.test.ts.
+// Resist re-adding a findById or organizationRepository stub: a route that reads or writes the
+// org outside the gate is the defect this file guards against.
+const mockAttachOrgStripeCustomer = vi.fn();
+vi.mock('@server/integrations/stripe/attachOrgStripeCustomer', () => ({
+  attachOrgStripeCustomer: (...args: unknown[]) => mockAttachOrgStripeCustomer(...args),
 }));
 
 // The owner gate. Mocked because the real one imports @bike4mind/database/infra (a different
@@ -102,10 +104,9 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     vi.clearAllMocks();
     mockIsAllowedCallbackOrigin.mockReturnValue(true);
     mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]); // no live org subscription
-    // No stripeCustomerId: the route must therefore run createCustomer AND persist via
-    // organizationRepository.update, which is what makes the "no side effect on rejection"
-    // assertions below capable of failing. With a customer id pre-set the route skipped that
-    // whole branch, so those assertions held whether the guard ran or not.
+    // No stripeCustomerId: the route must therefore reach attachOrgStripeCustomer, which is what
+    // makes the "no side effect on rejection" assertions below capable of failing. With a customer
+    // id pre-set the route skipped that branch, so those assertions held whether the guard ran or not.
     mockVerifyOrgOwner.mockResolvedValue({
       id: 'org_1',
       name: 'Org One',
@@ -113,6 +114,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
       users: [{ userId: 'user_1' }],
     });
     mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+    mockAttachOrgStripeCustomer.mockResolvedValue('cus_org');
     mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
   });
 
@@ -146,7 +148,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
     expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
     expect(mockCreateCustomer).not.toHaveBeenCalled();
-    expect(mockOrgUpdate).not.toHaveBeenCalled(); // the DB write the guard now provably precedes
+    expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled(); // the DB write the guard now provably precedes
     expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
 
@@ -156,9 +158,13 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     await (handler as HandlerFn)(req, res);
 
     expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith(CALLBACK_URL);
-    expect(mockCreateCustomer).toHaveBeenCalledTimes(1);
-    expect(mockOrgUpdate).toHaveBeenCalledTimes(1);
+    // The org path creates its Stripe customer inside attachOrgStripeCustomer, never directly.
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockAttachOrgStripeCustomer).toHaveBeenCalledTimes(1);
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
+    // The session must be opened against the customer the org document actually points at - the
+    // helper's return value, not a locally created one.
+    expect((mockSessionsCreate.mock.calls[0][0] as { customer: string }).customer).toBe('cus_org');
     expect(res.statusCode).toBe(200);
     expect(res._getJSONData()).toEqual({ sessionUrl: 'https://checkout.stripe/session' });
   });
@@ -226,7 +232,7 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     await (handler as HandlerFn)(req, res);
 
     expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
-    expect(mockOrgUpdate).not.toHaveBeenCalled();
+    expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
     expect(mockCreateCustomer).toHaveBeenCalledTimes(1);
     const args = mockSessionsCreate.mock.calls[0][0] as {
       customer: string;
@@ -258,6 +264,7 @@ describe('POST /api/organizations/subscriptions/subscribe - duplicate subscripti
       users: [{ userId: 'user_1' }],
     });
     mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+    mockAttachOrgStripeCustomer.mockResolvedValue('cus_org');
     mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
   });
 
@@ -277,7 +284,7 @@ describe('POST /api/organizations/subscriptions/subscribe - duplicate subscripti
       // The guard sits above createCustomer and the org write, so a refused duplicate
       // leaves no Stripe customer behind either.
       expect(mockCreateCustomer).not.toHaveBeenCalled();
-      expect(mockOrgUpdate).not.toHaveBeenCalled();
+      expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
     }
   );
 
@@ -348,6 +355,7 @@ describe('POST /api/organizations/subscriptions/subscribe - organization owner g
       users: [{ userId: 'user_1' }],
     });
     mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+    mockAttachOrgStripeCustomer.mockResolvedValue('cus_org');
     mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
   });
 
@@ -384,7 +392,7 @@ describe('POST /api/organizations/subscriptions/subscribe - organization owner g
 
     expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
     expect(mockCreateCustomer).not.toHaveBeenCalled();
-    expect(mockOrgUpdate).not.toHaveBeenCalled();
+    expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
     expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
 
@@ -424,5 +432,118 @@ describe('POST /api/organizations/subscriptions/subscribe - organization owner g
 
     expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
+  });
+});
+
+/**
+ * Branches around the gate that carry money or identity but had no coverage. The canonical-id
+ * cases are the ones with teeth: everything downstream of the gate keys off the id on the GATED
+ * DOCUMENT, never the raw body string, because `isValidObjectId` accepts uppercase hex while the
+ * subscription rows are written from the always-lowercase `org.id`.
+ */
+describe('POST /api/organizations/subscriptions/subscribe - request-shape and id-canonicalisation branches', () => {
+  function makeBody(body: Record<string, unknown>) {
+    const { req, res } = createMocks({ method: 'POST' });
+    (req as Record<string, unknown>).body = {
+      priceId: ORGANIZATION_SUBSCRIPTION_PRICE_ID,
+      quantity: ORGANIZATION_SUBSCRIPTION_MIN_SEATS,
+      callbackUrl: CALLBACK_URL,
+      ...body,
+    };
+    (req as Record<string, unknown>).user = { id: 'user_1', email: 'buyer@example.com', name: 'Buyer' };
+    return { req, res };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindNonTerminalSubscriptionsByOwner.mockResolvedValue([]);
+    mockCreateCustomer.mockResolvedValue({ id: 'cus_new' });
+    mockAttachOrgStripeCustomer.mockResolvedValue('cus_org');
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  // An owner may spell their own org id in uppercase hex: it passes isValidObjectId and findById
+  // casts it, so the gate returns the right document. Keying the duplicate guard off the raw
+  // string then misses the byte-exact ownerId match and lets a second checkout through - a double
+  // charge against one entitlement. Both the guard and the Stripe metadata must use org.id.
+  it('uses the gated document id, not the body spelling, for the guard and the metadata', async () => {
+    const CANONICAL = '650000000000000000000abc';
+    mockVerifyOrgOwner.mockResolvedValue({
+      id: CANONICAL,
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      users: [{ userId: 'user_1' }],
+    });
+    const { req, res } = makeBody({ organizationId: CANONICAL.toUpperCase() });
+
+    await (handler as HandlerFn)(req, res);
+
+    // The gate still receives what the caller sent - it is the thing that resolves it.
+    expect(mockVerifyOrgOwner).toHaveBeenCalledWith(req.user, CANONICAL.toUpperCase());
+    expect(mockFindNonTerminalSubscriptionsByOwner).toHaveBeenCalledWith(SubscriptionOwnerType.Organization, CANONICAL);
+    const args = mockSessionsCreate.mock.calls[0][0] as {
+      subscription_data: { metadata: Record<string, unknown> };
+    };
+    expect(args.subscription_data.metadata.organizationId).toBe(CANONICAL);
+    expect(res.statusCode).toBe(200);
+  });
+
+  // The refine only asks that the key be present, so "" used to parse, read as falsy, and skip
+  // BOTH the gate and the duplicate guard - creating a customer and a checkout session stamped
+  // with metadata.organizationId === ''. Rejected at the schema now.
+  it('rejects an empty organizationId at the schema, before the gate', async () => {
+    const { req, res } = makeBody({ organizationId: '' });
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
+
+    expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
+    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  // A malformed id reaches the gate, which answers 400 - the documented status delta from the
+  // 404 the CastError remap used to produce. Nothing downstream may run.
+  it('propagates the gate 400 for a malformed org id and leaves nothing behind', async () => {
+    mockVerifyOrgOwner.mockRejectedValue(new BadRequestError('Invalid organization ID'));
+    const { req, res } = makeBody({ organizationId: 'not-an-object-id' });
+
+    await expect((handler as HandlerFn)(req, res)).rejects.toMatchObject({
+      constructor: BadRequestError,
+      statusCode: HttpStatus.BadRequest,
+      message: 'Invalid organization ID',
+    });
+
+    expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
+    expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
+    expect(mockSessionsCreate).not.toHaveBeenCalled();
+  });
+
+  // Both fields together parse (the refine wants at least one, not exactly one). The id branch
+  // wins for the gate and the customer while the metadata keys off organizationData - so the
+  // invoice webhook runs its create-a-new-org path against THIS org's Stripe customer. Pinned as
+  // the behaviour that exists, not the behaviour that is wanted; tracked separately as a
+  // billing-attribution bug. If a fix lands, this test is the one to change.
+  it('gates on the id but still tags the metadata as a new org when both fields are sent', async () => {
+    mockVerifyOrgOwner.mockResolvedValue({
+      id: 'org_1',
+      name: 'Org One',
+      billingContact: 'billing@example.com',
+      users: [{ userId: 'user_1' }],
+    });
+    const { req, res } = makeBody({ organizationId: 'org_1', organizationData: { name: 'Brand New Org' } });
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(mockVerifyOrgOwner).toHaveBeenCalledWith(req.user, 'org_1');
+    expect(mockAttachOrgStripeCustomer).toHaveBeenCalledTimes(1);
+    const args = mockSessionsCreate.mock.calls[0][0] as {
+      customer: string;
+      subscription_data: { metadata: Record<string, unknown> };
+    };
+    expect(args.customer).toBe('cus_org');
+    expect(args.subscription_data.metadata).toMatchObject({ newOrganizationName: 'Brand New Org' });
+    expect(args.subscription_data.metadata).not.toHaveProperty('organizationId');
   });
 });

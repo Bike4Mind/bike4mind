@@ -4,10 +4,15 @@
  * Shared utility for verifying user access to organization resources.
  * Used by org-scoped API endpoints (webhooks, GitHub connection, etc.)
  *
+ * Three tiers, widest last. State which one you mean at every call site; picking the wrong one
+ * either leaks across a tenant boundary or breaks a members' screen:
+ * - `verifyOrgOwner`      - owner only
+ * - `verifyOrgAccess`     - owner or manager
+ * - `verifyOrgMembership` - any member (shareable ACL)
+ *
  * Security:
  * - Returns NotFoundError for both missing and unauthorized (prevents enumeration)
  * - Admin users have access to all organizations
- * - Non-admin users must be owner or manager
  */
 
 import { organizationRepository } from '@bike4mind/database/infra';
@@ -63,18 +68,20 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
  * Verify the caller OWNS the organization, returning the organization document.
  *
  * The strictest of the three tiers in this file - owner only, where `verifyOrgAccess` also admits
- * the manager and `verifyOrgMembership` admits any member. Reserved for billing writes, where the
- * caller is committing the org to a charge or changing what it pays: the org's billing owner is the
- * only party who has agreed to that, and a manager has not.
+ * the manager and `verifyOrgMembership` admits any member. Use it wherever only the party that
+ * owns the org may act: billing writes (committing the org to a charge, or changing what it pays)
+ * and org-level integration wiring (`integrations/slack/*`, where connecting or disconnecting a
+ * workspace acts for the whole tenant). A manager has agreed to neither.
  *
  * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer
  * NotFoundError, so the route cannot be used to enumerate which organization ids exist.
  *
- * Two routes still spell the same bar out inline: `subscriptions/update-seats.ts` and
- * `stripe/portal.ts`. Both answer ForbiddenError / BadRequestError after an unconditional lookup,
- * so unlike this helper they do leak which org ids exist. Left alone here only because changing
- * the status they return is a visible API change; if you touch either, move it onto this helper
- * rather than copying the inline form again.
+ * Two routes still spell the same bar out inline, and they are the complete list - every other
+ * `org.userId !== user.id` in `pages/api` guards a user-owned resource, not an org:
+ * `subscriptions/update-seats.ts` and `stripe/portal.ts`. Both answer ForbiddenError /
+ * BadRequestError after an unconditional lookup, so unlike this helper they do leak which org ids
+ * exist. Left alone only because changing the status they return is a visible API change; if you
+ * touch either, move it onto this helper rather than copying the inline form again.
  */
 export async function verifyOrgOwner(user: { id: string; isAdmin: boolean }, orgId: string) {
   if (!orgId || !isValidObjectId(orgId)) {

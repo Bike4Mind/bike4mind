@@ -41,10 +41,15 @@ describe('verifyOrgOwner', () => {
     mockFindById.mockResolvedValue(org);
   });
 
-  it('rejects an invalid ObjectId without touching the DB', async () => {
-    await expect(verifyOrgOwner({ id: OWNER, isAdmin: false }, 'not-an-object-id')).rejects.toBeInstanceOf(
-      BadRequestError
-    );
+  // Both arms of `!orgId || !isValidObjectId(orgId)`. The falsy arm is not theoretical: the Slack
+  // routes source the id from `req.query.id`, which is `string | undefined` on a shape Next.js
+  // will happily route, so the helper has to answer it rather than query on undefined.
+  it.each([
+    { orgId: 'not-an-object-id', why: 'malformed string' },
+    { orgId: '', why: 'empty string' },
+    { orgId: undefined as unknown as string, why: 'absent, as req.query.id can be' },
+  ])('rejects an invalid org id without touching the DB: $why', async ({ orgId }) => {
+    await expect(verifyOrgOwner({ id: OWNER, isAdmin: false }, orgId)).rejects.toBeInstanceOf(BadRequestError);
     expect(mockFindById).not.toHaveBeenCalled();
   });
 
