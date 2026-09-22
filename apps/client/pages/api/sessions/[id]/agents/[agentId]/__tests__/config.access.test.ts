@@ -18,10 +18,18 @@ import { createMocks } from 'node-mocks-http';
 import type { Request, Response } from 'express';
 import { NotFoundError, BadRequestError } from '@bike4mind/utils';
 
+type RouteHandler = (req: Request, res: Response) => unknown;
+
+interface MockChain {
+  get: (fn: RouteHandler) => MockChain;
+  put: (fn: RouteHandler) => MockChain;
+  delete: (fn: RouteHandler) => MockChain;
+}
+
 const mockRefs = vi.hoisted(() => ({
-  getHandler: null as null | ((req: any, res: any) => unknown),
-  putHandler: null as null | ((req: any, res: any) => unknown),
-  deleteHandler: null as null | ((req: any, res: any) => unknown),
+  getHandler: null as null | RouteHandler,
+  putHandler: null as null | RouteHandler,
+  deleteHandler: null as null | RouteHandler,
   sessionFindById: vi.fn(),
   agentFindAccessibleById: vi.fn(),
   getAttachedAgents: vi.fn(),
@@ -32,16 +40,16 @@ const mockRefs = vi.hoisted(() => ({
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
-    get: (fn: any) => {
+  const chain: MockChain = {
+    get: fn => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    put: (fn: any) => {
+    put: fn => {
       mockRefs.putHandler = fn;
       return chain;
     },
-    delete: (fn: any) => {
+    delete: fn => {
       mockRefs.deleteHandler = fn;
       return chain;
     },
