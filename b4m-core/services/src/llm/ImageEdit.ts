@@ -306,9 +306,9 @@ export class ImageEditService {
   /**
    * Resolves explicit gpt-image style anchors for the edit path, in the caller's order.
    *
-   * Access-scoped via findAccessibleInIds - deliberately NOT the unscoped findAllInIds this
-   * file still uses for the mask lookup, which predates it. A reference the caller named but
-   * we cannot serve is an error rather than a silent drop: these ids were asked for by name,
+   * Access-scoped via findAccessibleInIds, as the mask lookup in `process` now is too. A
+   * reference the caller named but we cannot serve is an error rather than a silent drop
+   * (where an unreachable mask is only dropped): these ids were asked for by name,
    * and quietly rendering fewer anchors bills for an image the user did not describe.
    * Mirrors ImageGenerationService.resolveReferenceImages - keep the two in step.
    */
@@ -405,6 +405,13 @@ export class ImageEditService {
     ]);
     if (!user) throw new NotFoundError('User not found');
 
+    // Owner-wide lake access for scoping every fabFile lookup on this path - the mask below and
+    // the anchors further down. Absent resolver (or a resolution outage) degrades to
+    // owner/share/global-read only - never widens, never fails the run. Resolved unconditionally,
+    // mirroring ImageGenerationService: the mask lookup runs on every edit, so there is no
+    // anchor-free mainline left to spare the roundtrip.
+    const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
+
     const settings = await getSettingsMap(this.db);
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
@@ -423,7 +430,16 @@ export class ImageEditService {
 
     const clientMessageSender = new ClientMessageSender(this.db, logger);
     const wsEndpoint = this.wsHttpsUrl;
-    const fabFiles = await this.db.fabFiles.findAllInIds(fabFileIds || []);
+    // Access-scoped: a caller-supplied mask id the caller cannot reach is dropped here, never
+    // presigned and never fed to a provider as an alpha channel. Lenient on purpose (a dropped
+    // id yields no mask rather than an error), matching ImageGenerationService.selectInputImage;
+    // the anchor lookup below is the strict one. The `finally` cleanup reads this same list, so
+    // an unreachable id also stops reaching deleteFabFile - which already refused it.
+    const fabFiles = await this.db.fabFiles.findAccessibleInIds(
+      fabFileIds || [],
+      { userId, userGroups: user.groups ?? undefined },
+      lakeAccess
+    );
 
     // Persist status='running' + heartbeat updatedAt so a hung/killed edit is recoverable by the
     // check-timeout endpoint. Disposer is cleared in the finally below. See startQuestHeartbeat.
@@ -538,18 +554,6 @@ export class ImageEditService {
       // `signedUrl` was just minted above from `fabFileStorage.getSignedUrl` - trusted provenance.
       const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl, true) : undefined;
 
-      // Owner-wide lake access, mirroring ImageGenerationService: a lake-only anchor the
-      // workbench admitted must still resolve. Absent resolver degrades to
-      // owner/share/global-read only - never widens, never fails the run.
-      //
-      // Resolved only when anchors were actually requested. Unlike ImageGenerationService,
-      // which needs lake arms for the primary-image lookup on every run, this path uses them
-      // for anchors alone - so an unconditional call would add a lake-membership roundtrip to
-      // every edit, including the mask-only mainline that had none before this feature.
-      const lakeAccess =
-        referenceImageFabFileIds?.length && this.resolveLakeAccess
-          ? await this.resolveLakeAccess(user, logger)
-          : undefined;
       const referenceImages = await this.resolveReferenceImages({
         referenceImageFabFileIds,
         userId,
