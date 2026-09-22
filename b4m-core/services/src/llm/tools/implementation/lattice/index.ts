@@ -9,6 +9,7 @@ import { Logger } from '@bike4mind/observability';
 
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
+import { isModelOwner } from '../../../../latticeService/latticeModelService';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
 
 // Shared types
@@ -400,8 +401,9 @@ export const latticeAddEntityTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
-          if (model && model.userId === context.userId) {
+          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
+          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
+          if (model && isModelOwner(model, { id: context.userId })) {
             // Check if entity already exists
             const existingIndex = model.data.entities.findIndex(e => e.id === entityId);
             if (existingIndex >= 0) {
@@ -553,8 +555,9 @@ export const latticeSetValueTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
-          if (model && model.userId === context.userId) {
+          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
+          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
+          if (model && isModelOwner(model, { id: context.userId })) {
             // Find the entity
             const entity = model.data.entities.find(e => e.id === entityId || e.name === entityName);
             if (entity) {
@@ -708,8 +711,9 @@ export const latticeCreateRuleTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
-          if (model && model.userId === context.userId) {
+          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
+          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
+          if (model && isModelOwner(model, { id: context.userId })) {
             // Check if output entity exists, if not create it
             const outputEntityExists = model.data.entities.some(
               e => e.id === outputEntityId || e.name.toLowerCase() === parsedRule.outputEntity.toLowerCase()

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Types } from 'mongoose';
 import { latticeAddEntityTool, latticeSetValueTool, latticeCreateRuleTool } from './index';
 
 // 24-hex id so the persistence path's `isObjectIdShaped` gate is satisfied.
@@ -111,5 +112,49 @@ describe('Lattice tools - owner-only object-level authz', () => {
     });
     expect(update).toHaveBeenCalledOnce();
     expect(JSON.parse(result).success).toBe(true);
+  });
+});
+
+/**
+ * These tools share `isModelOwner` with `latticeModelService.getModelForWrite` rather than
+ * comparing raw, so a same-org non-owner - who CAN now read the model over HTTP - still cannot
+ * make the subagent write to it.
+ */
+describe('Lattice tools - org sharing does not confer write authority', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const makeOrgContext = () => {
+    const orgId = new Types.ObjectId();
+    const update = vi.fn().mockResolvedValue(null);
+    const context = {
+      userId: 'colleague',
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      db: {
+        latticeModels: {
+          findById: vi.fn().mockResolvedValue({
+            id: MODEL_ID,
+            userId: 'owner',
+            organizationId: orgId.toHexString(),
+            data: { entities: [{ id: 'revenue', name: 'Revenue', attributes: [] }], relationships: [] },
+            rules: { rules: [], rulesets: [] },
+          }),
+          update,
+        },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal tool context for this unit test
+    } as any;
+    return { context, update };
+  };
+
+  it('lattice_set_value refuses a same-org non-owner', async () => {
+    const { context, update } = makeOrgContext();
+    const result = await latticeSetValueTool.implementation(context).toolFn({
+      modelId: MODEL_ID,
+      entityName: 'Revenue',
+      attributeKey: 'value',
+      value: '999',
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(JSON.parse(result).success).toBe(false);
   });
 });
