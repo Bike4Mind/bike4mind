@@ -40,7 +40,7 @@ export const process = async ({ db, logger, handlers }: SchedulerProcessAdapters
 
       // Cast through a generic payload signature: the handler-union parameter types don't
       // narrow against taskSchedule.payload, so a direct call would be a type error.
-      (handler as (payload: unknown) => Promise<void>)(taskSchedule.payload);
+      await (handler as (payload: unknown) => Promise<void>)(taskSchedule.payload);
 
       taskSchedule.status = TaskScheduleStatus.COMPLETED;
       taskSchedule.statusCompletedAt = new Date();

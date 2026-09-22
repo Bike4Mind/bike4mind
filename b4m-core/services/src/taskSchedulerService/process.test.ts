@@ -72,6 +72,73 @@ describe('taskSchedulerService/process', () => {
     );
   });
 
+  it('keeps a schedule pending until its asynchronous handler resolves', async () => {
+    const task = makeTask();
+    db.taskSchedules.findAllStatusPendingByProcessDateLessThan.mockResolvedValue([task]);
+    let resolveHandler!: () => void;
+    mockHandler.mockReturnValueOnce(
+      new Promise<void>(resolve => {
+        resolveHandler = resolve;
+      })
+    );
+
+    const processing = process({ db, logger: mockLogger, handlers });
+    await vi.waitFor(() => expect(mockHandler).toHaveBeenCalledOnce());
+    expect(task.status).toBe(TaskScheduleStatus.PENDING);
+    expect(db.taskSchedules.update).not.toHaveBeenCalled();
+    expect(mockLogger.info).not.toHaveBeenCalledWith('Finished processing task schedules');
+
+    resolveHandler();
+    await processing;
+    expect(db.taskSchedules.update).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        status: TaskScheduleStatus.COMPLETED,
+        statusCompletedAt: now,
+      })
+    );
+  });
+
+  it('persists asynchronous failure and continues to the next due schedule', async () => {
+    const task = makeTask();
+    const nextTask = { ...makeTask(), id: 'task-2' };
+    const error = new Error('Queue unavailable');
+    db.taskSchedules.findAllStatusPendingByProcessDateLessThan.mockResolvedValue([task, nextTask]);
+    mockHandler.mockRejectedValueOnce(error).mockResolvedValueOnce(undefined);
+
+    await process({ db, logger: mockLogger, handlers });
+
+    expect(db.taskSchedules.update).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        id: 'task-1',
+        status: TaskScheduleStatus.FAILED,
+        statusFailedAt: now,
+        statusFailedReason: 'Queue unavailable',
+        expireAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+      })
+    );
+    expect(task).not.toHaveProperty('statusCompletedAt');
+    expect(db.taskSchedules.update).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        id: 'task-2',
+        status: TaskScheduleStatus.COMPLETED,
+      })
+    );
+    expect(mockLogger.error).toHaveBeenCalledWith('Error processing task schedule: task-1', error);
+  });
+
+  it('still completes a handler that returns synchronously', async () => {
+    db.taskSchedules.findAllStatusPendingByProcessDateLessThan.mockResolvedValue([makeTask()]);
+    mockHandler.mockReturnValueOnce(undefined);
+    await process({ db, logger: mockLogger, handlers });
+    expect(db.taskSchedules.update).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        status: TaskScheduleStatus.COMPLETED,
+      })
+    );
+  });
+
   it('does nothing if there are no pending tasks', async () => {
     db.taskSchedules.findAllStatusPendingByProcessDateLessThan.mockResolvedValue([]);
     await process({ db, logger: mockLogger, handlers });
