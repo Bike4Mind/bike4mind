@@ -7,6 +7,7 @@ import {
   convertCodeBlocksToArtifacts,
   extractReactDependencies,
   hasCompleteOpeningTag,
+  hasSelfClosingTag,
   parseArtifactsWithFallback,
   isSvgGraphicallyEmpty,
   shouldWarnElidedArtifact,
@@ -943,5 +944,174 @@ describe('parity with the core parser', () => {
       content: a.content,
     });
     expect(clientResult.artifacts.map(pick)).toEqual(coreResult.artifacts.map(pick));
+  });
+});
+
+describe('hasSelfClosingTag differential vs the original regex', () => {
+  // Oracle: the regex `hasSelfClosingTag` replaced (origin/main, inlined in `hasJSXSyntax`).
+  // Copied verbatim so a behavior change shows up as a diff against this line, not this test.
+  const originalHasSelfClosingTag = (code: string): boolean => /<[a-z]+[^>]*\/>/.test(code);
+
+  // Vacuity control: same cached-cursor scan, but `close` is only ever sought once (the
+  // `at + 2` refresh check is replaced with `< 0`), so a later candidate reuses a stale
+  // cursor. Must diverge from the real implementation, or the corpus below proves nothing.
+  const controlHasSelfClosingTag = (code: string): boolean => {
+    let close = -1;
+    for (let at = code.indexOf('<'); at >= 0; at = code.indexOf('<', at + 1)) {
+      const nameChar = code.charCodeAt(at + 1);
+      if (nameChar < 97 || nameChar > 122) continue;
+      if (close < 0) {
+        close = code.indexOf('>', at + 2);
+        if (close < 0) return false;
+      }
+      if (close >= at + 3 && code[close - 1] === '/') return true;
+    }
+    return false;
+  };
+
+  // Deterministic PRNG (mulberry32, fixed seed) so the corpus is identical on every run.
+  function mulberry32(seed: number): () => number {
+    let s = seed;
+    return () => {
+      s |= 0;
+      s = (s + 0x6d2b79f5) | 0;
+      let t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  const rand = mulberry32(0xc0ffee);
+  const pickOne = <T>(arr: readonly T[]): T => arr[Math.floor(rand() * arr.length)];
+  const randInt = (min: number, max: number): number => min + Math.floor(rand() * (max - min + 1));
+
+  const tagOpeners = ['<a', '<div', '<path', '<A', '<h1', '<1a'] as const;
+  const closers = ['/>', '>', ' />', '/ >'] as const;
+  const junkChars = ['x', 'y', ' ', '-', '_', '.', ',', ':', ';', '(', ')', '{', '}', '\n', '\t'] as const;
+
+  function randomAttrRun(withEmbeddedGt: boolean): string {
+    let s = '';
+    const n = randInt(0, 3);
+    for (let i = 0; i < n; i++) {
+      const quote = pickOne(['"', "'"] as const);
+      let val = '';
+      const vlen = randInt(0, 6);
+      for (let j = 0; j < vlen; j++) val += pickOne(junkChars);
+      if (withEmbeddedGt && rand() < 0.5) val += '>';
+      s += ` attr${randInt(0, 9)}=${quote}${val}${quote}`;
+    }
+    return s;
+  }
+
+  function longAttrSpan(len: number): string {
+    const unit = 'M0 0 L1 1 ';
+    let s = '';
+    while (s.length < len) s += unit;
+    return s.slice(0, len);
+  }
+
+  function randomUnmatchedLtRun(): string {
+    let s = '';
+    const n = randInt(1, 8);
+    for (let i = 0; i < n; i++) s += '<' + pickOne(['a', 'b', 'z', '1', ' '] as const);
+    return s + '>';
+  }
+
+  function buildCase(): string {
+    const kind = randInt(0, 12);
+    switch (kind) {
+      case 0:
+        return '';
+      case 1: {
+        let s = '';
+        const n = randInt(0, 40);
+        for (let j = 0; j < n; j++) s += pickOne([...junkChars, 'a', 'b', 'c', '>', '/'] as const);
+        return s;
+      }
+      case 2:
+        return randomUnmatchedLtRun();
+      case 3:
+        return pickOne(tagOpeners) + randomAttrRun(rand() < 0.4) + pickOne(closers);
+      case 4: {
+        let s = '';
+        const n = randInt(1, 5);
+        for (let j = 0; j < n; j++) {
+          s += pickOne(junkChars);
+          s += pickOne(tagOpeners) + randomAttrRun(rand() < 0.3) + pickOne(closers);
+        }
+        return s;
+      }
+      case 5:
+        return `${pickOne(['<path', '<a', '<div'] as const)} d="${longAttrSpan(600)}"/>`;
+      case 6:
+        return `${pickOne(['<path', '<a', '<div'] as const)} d="${longAttrSpan(5000)}"/>`;
+      case 7:
+        return `${pickOne(tagOpeners)} d="${longAttrSpan(randInt(400, 700))}">`;
+      case 8:
+        return pickOne(tagOpeners) + randomAttrRun(true) + '>';
+      case 9: {
+        let s = '';
+        const n = randInt(5, 60);
+        for (let j = 0; j < n; j++) s += pickOne(['<', '>', '/', 'a', ' ', 'Z', '9'] as const);
+        return s;
+      }
+      case 10:
+        return (
+          pickOne(junkChars) +
+          '<9bad>' +
+          pickOne(junkChars) +
+          pickOne(tagOpeners) +
+          randomAttrRun(false) +
+          pickOne(closers)
+        );
+      case 11:
+        return '<1a>' + '<A>' + pickOne(tagOpeners) + randomAttrRun(rand() < 0.3) + pickOne(closers);
+      default: {
+        let s = '';
+        const n = randInt(0, 80);
+        for (let j = 0; j < n; j++)
+          s += pickOne(['<', '>', '/', ' ', 'a', 'b', 'c', 'A', '1', '"', "'", '\n'] as const);
+        return s;
+      }
+    }
+  }
+
+  const CORPUS_SIZE = 20000;
+  const case600 = `<path d="${longAttrSpan(600)}"/>`;
+  const case5000 = `<path d="${longAttrSpan(5000)}"/>`;
+  const CORPUS: string[] = Array.from({ length: CORPUS_SIZE }, () => buildCase());
+  CORPUS.push(case600, case5000);
+
+  interface Directions {
+    missing: number; // oracle-true cases the implementation did not catch
+    extra: number; // implementation-true cases the oracle did not have
+    examples: string[];
+  }
+
+  it('reproduces the original regex verdict on every corpus case, in both directions', () => {
+    const directions: Directions = { missing: 0, extra: 0, examples: [] };
+    for (const source of CORPUS) {
+      const actual = hasSelfClosingTag(source);
+      const expected = originalHasSelfClosingTag(source);
+      if (actual !== expected) {
+        if (expected && !actual) directions.missing++;
+        else directions.extra++;
+        if (directions.examples.length < 5) directions.examples.push(JSON.stringify(source));
+      }
+    }
+    expect(directions).toEqual({ missing: 0, extra: 0, examples: [] });
+  });
+
+  it('diverges from the no-refresh control, so the corpus above is not vacuous', () => {
+    let divergences = 0;
+    for (const source of CORPUS) {
+      if (hasSelfClosingTag(source) !== controlHasSelfClosingTag(source)) divergences++;
+    }
+    // Pinned to the fixed-seed corpus above; a corpus change is expected to update this count.
+    expect(divergences).toBe(352);
+  });
+
+  it('matches a self-closing tag with a 600-char and a ~5000-char attribute span', () => {
+    expect(hasSelfClosingTag(case600)).toBe(true);
+    expect(hasSelfClosingTag(case5000)).toBe(true);
   });
 });

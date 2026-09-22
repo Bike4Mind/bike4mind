@@ -377,7 +377,7 @@ export function extractPythonPackages(content: string): string[] {
  * first `>` after its own opening, and a cached `close` at or past `at + 2` is still that
  * first `>` (a nearer one would have been found when the cursor was set).
  */
-function hasSelfClosingTag(code: string): boolean {
+export function hasSelfClosingTag(code: string): boolean {
   let close = -1;
   for (let at = code.indexOf('<'); at >= 0; at = code.indexOf('<', at + 1)) {
     const nameChar = code.charCodeAt(at + 1);
