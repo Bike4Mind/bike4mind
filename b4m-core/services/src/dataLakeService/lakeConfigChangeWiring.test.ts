@@ -561,7 +561,7 @@ describe('lifecycle services', () => {
     batches: { findActiveByDataLakeId: vi.fn().mockResolvedValue([]), markTerminalIfActive: vi.fn() },
     fabFiles: {
       archiveByDataLakeTag: vi.fn().mockResolvedValue(0),
-      softDeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      softDeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
       findIdsByDataLakeTag: vi.fn().mockResolvedValue([]),
       hasArchivedMemberExclusiveToDataLakeTag: vi.fn().mockResolvedValue(false),
@@ -569,7 +569,7 @@ describe('lifecycle services', () => {
       findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
       unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(0),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([]),
       deleteManyInIds: vi.fn().mockResolvedValue(0),
     },
   });

@@ -29,6 +29,7 @@ import { resolveAuditPrincipal } from '@server/dataLakes/resolveAuditPrincipal';
 import { Request } from 'express';
 import { isValidObjectId } from '@server/utils/objectId';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { assertDataLakeTagWriteScope, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 
@@ -172,6 +173,7 @@ const handler = baseApi()
               // `lakeConfigAuditDb` carries `adminSettings`, which is also what the admission
               // contract's lever resolves from; only `scopedSettings` is additional here.
               ...lakeConfigAuditDb,
+              ...lakeMembershipAuditDb,
               scopedSettings: scopedSettingsRepository,
             },
             // `reconcileLakeTags` re-gates every lake this write JOINS, so its actor has to stay as
@@ -252,12 +254,18 @@ const handler = baseApi()
             users: userRepository,
             sessions: sessionRepository,
             fabFileChunks: fabFileChunkRepository,
+            dataLakes: dataLakeRepository,
+            ...lakeMembershipAuditDb,
           },
           storage: getFilesStorage(),
           onDeleteComplete: async (_fabFile, size) => {
             sizeToDeduct = size;
           },
           searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+          logger: req.logger,
+          // Same reason the tag-write handler above attaches one: this route accepts a `b4m_live_`
+          // key, and the resulting 'removed' rows must name the key, not the human it acts for.
+          auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
         }
       );
 

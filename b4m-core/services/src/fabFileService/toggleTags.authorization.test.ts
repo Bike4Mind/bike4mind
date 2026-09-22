@@ -33,6 +33,7 @@ describe('toggleTags authorization', () => {
             shareable: createShareableFake([file as never]),
             findById: vi.fn().mockResolvedValue(file),
             pushTagsByFabFileId,
+            pushTagReturningPriorState: vi.fn().mockResolvedValue({ userId: file.userId, tags: [] }),
             pullTagsByFabFileId,
             computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
           },
@@ -112,14 +113,18 @@ describe('toggleTags - joining a lake with someone else"s file', () => {
 
   const adaptersFor = (file: ReturnType<typeof fileOwnedBy>, actorId: string) => {
     const pushTagsByFabFileId = vi.fn().mockResolvedValue(1);
+    // The membership door's own write, which is what a lake JOIN goes through.
+    const pushTagReturningPriorState = vi.fn().mockResolvedValue({ userId: file.userId, tags: [] });
     return {
       pushTagsByFabFileId,
+      pushTagReturningPriorState,
       adapters: {
         db: {
           fabFiles: {
             shareable: createShareableFake([file as never]),
             findById: vi.fn().mockResolvedValue(file),
             pushTagsByFabFileId,
+            pushTagReturningPriorState,
             pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
             computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
           },
@@ -138,7 +143,7 @@ describe('toggleTags - joining a lake with someone else"s file', () => {
 
   it('refuses a sharee stamping their own lake meta-tag on the owner file, and writes no tag', async () => {
     const file = fileOwnedBy(OWNER);
-    const { adapters, pushTagsByFabFileId } = adaptersFor(file, SHAREE);
+    const { adapters, pushTagsByFabFileId, pushTagReturningPriorState } = adaptersFor(file, SHAREE);
 
     await expect(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -148,6 +153,7 @@ describe('toggleTags - joining a lake with someone else"s file', () => {
     // All-or-nothing: the refusal is graded before any write, so the file does not end up with the
     // membership tag stamped and the failure reported afterwards.
     expect(pushTagsByFabFileId).not.toHaveBeenCalled();
+    expect(pushTagReturningPriorState).not.toHaveBeenCalled();
     expect(file.tags).toEqual([]);
   });
 
@@ -155,11 +161,11 @@ describe('toggleTags - joining a lake with someone else"s file', () => {
   // the file's owner changes, so nothing about the lake or the tag is being rejected outright.
   it('allows that same actor to join a file they own to that same lake', async () => {
     const file = fileOwnedBy(SHAREE);
-    const { adapters, pushTagsByFabFileId } = adaptersFor(file, SHAREE);
+    const { adapters, pushTagReturningPriorState } = adaptersFor(file, SHAREE);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await toggleTags(SHAREE, { ids: ['file-1'], tags: [LAKE_TAG] }, adapters as any);
 
-    expect(pushTagsByFabFileId).toHaveBeenCalled();
+    expect(pushTagReturningPriorState).toHaveBeenCalled();
   });
 });
