@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
+import type { Request, Response } from 'express';
 import { NotFoundError } from '@bike4mind/utils';
 
 const mockRefs = vi.hoisted(() => ({
@@ -44,10 +45,14 @@ vi.mock('@bike4mind/database', () => ({
 // Import after mocks so the chain captures the handler; exercises the real assertSessionAccess.
 import '../configs';
 
-function invoke(userId: string) {
+// node-mocks-http's mock doesn't structurally satisfy Express's Request/Response (the real
+// handler signature, per baseApi's Req/Res generics) - one cast is unavoidable, kept to this
+// single helper so every call site gets the real types back instead of `any`.
+function invoke(userId: string): { req: Request; res: Response } {
   const { req, res } = createMocks({ method: 'GET', query: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa' } });
-  (req as any).user = { id: userId, groups: [] };
-  return { req: req as any, res: res as any };
+  const typedReq = req as unknown as Request;
+  typedReq.user = { id: userId, groups: [] } as Request['user'];
+  return { req: typedReq, res: res as unknown as Response };
 }
 
 const CONFIG_A = { id: 'config-a', agentId: 'agent-a', proactiveMessaging: {} };
