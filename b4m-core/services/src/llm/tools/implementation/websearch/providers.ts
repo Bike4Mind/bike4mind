@@ -71,8 +71,8 @@ const SEARCH_TIMEOUT_MS = 60_000;
 const MAX_IMAGES_PER_RESULT = 4;
 
 /**
- * Images are hotlinked straight from the origin by the browser, so only absolute https URLs are
- * usable: http:// is blocked as mixed content, and a data: URI would bloat every stored citable.
+ * Only absolute https URLs are usable: the client reads these through /api/search-image, whose
+ * SSRF guard rejects anything but https, and a data: URI would bloat every stored citable.
  */
 function safeImageUrl(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value) return undefined;

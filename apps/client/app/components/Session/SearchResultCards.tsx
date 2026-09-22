@@ -1,29 +1,66 @@
-import { FC, useMemo, useState } from 'react';
+import { FC, useEffect, useMemo, useState } from 'react';
 import { Box, Typography } from '@mui/joy';
+import { api } from '@client/app/contexts/apiClient';
 import { parseSearchResultCards, type SearchResultCard, type SearchResultCardImage } from './parseSearchResultCards';
 
 /**
  * Renders the `b4m_cards` fence the model emits inline in a reply, as a horizontally scrollable row
  * of entity cards: a collage of attributed pictures, the model's own prose, and a footer line.
  *
- * Every image is hotlinked straight from its origin. We deliberately do NOT route these through
- * /api/external-image: that proxy is admin-only and caches permanently to S3, which is the wrong
- * shape for transient, per-conversation thumbnails fetched on behalf of every user. `no-referrer`
- * keeps the app origin and the conversation URL out of those third-party hosts' logs.
+ * Images come from arbitrary search-result hosts, which the app's CSP `img-src` allowlist
+ * (apps/client/proxy.ts) will never contain, so a direct hotlink is blocked by the browser. They
+ * are read through /api/search-image, a same-origin, non-caching proxy added for exactly this - see
+ * that route for why /api/external-image is not the one used.
  */
+
+/** The same-origin proxy path for a third-party image URL. */
+export const proxiedImageSrc = (url: string) => `/api/search-image?url=${encodeURIComponent(url)}`;
+
+/**
+ * Load a proxied image through the authenticated API client and hand back a blob: URL.
+ *
+ * A bare `<img src="/api/search-image?...">` cannot work: the proxy authenticates with a bearer
+ * JWT that only the axios interceptor attaches, and the browser sends no Authorization header on
+ * an image request - every tile would 401. Fetching the bytes ourselves keeps the route behind
+ * normal auth, and `blob:` is already on the CSP `img-src` allowlist.
+ */
+function useProxiedImage(url: string): { src?: string; failed: boolean } {
+  const [src, setSrc] = useState<string>();
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let objectUrl: string | undefined;
+    let cancelled = false;
+
+    setSrc(undefined);
+    setFailed(false);
+
+    api
+      .get(proxiedImageSrc(url), { responseType: 'blob' })
+      .then(({ data }) => {
+        if (cancelled) return;
+        objectUrl = URL.createObjectURL(data as Blob);
+        setSrc(objectUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [url]);
+
+  return { src, failed };
+}
 
 const CARD_WIDTH = 300;
 const COLLAGE_HEIGHT = 200;
 
-const IMAGE_PROPS = {
-  loading: 'lazy',
-  referrerPolicy: 'no-referrer',
-  decoding: 'async',
-} as const;
-
 /** One picture, replaced in place by a caption when the origin refuses to serve it. */
 const CollageTile: FC<{ image: SearchResultCardImage; flex?: string }> = ({ image, flex }) => {
-  const [failed, setFailed] = useState(false);
+  const { src, failed } = useProxiedImage(image.url);
 
   return (
     <Box
@@ -46,15 +83,16 @@ const CollageTile: FC<{ image: SearchResultCardImage; flex?: string }> = ({ imag
         </Typography>
       ) : (
         <>
-          <Box
-            component="img"
-            src={image.url}
-            alt=""
-            onError={() => setFailed(true)}
-            {...IMAGE_PROPS}
-            sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
-          />
-          {image.source && (
+          {src && (
+            <Box
+              component="img"
+              src={src}
+              alt=""
+              decoding="async"
+              sx={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+            />
+          )}
+          {src && image.source && (
             <Typography
               level="body-xs"
               sx={{
