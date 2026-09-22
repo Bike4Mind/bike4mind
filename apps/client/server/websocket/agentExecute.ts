@@ -483,6 +483,17 @@ export async function handlePermissionResponse(
         expected: pendingCallId,
         received: cmd.toolCallId,
       });
+      // A pause created by the current code always carries a toolCallId (see
+      // `PermissionRequestAction`/`settleGatedCall`), so an omitted `cmd.toolCallId`
+      // here is a genuinely stale tab, not just a name collision - and a silent
+      // return would leave it waiting on a reply that never comes. Send the
+      // current status like the "approval did not land" branch below does, so the
+      // UI can leave its spinner instead of hanging until the stale sweep.
+      await sendAgentEvent(connectionId, endpoint, {
+        action: 'progress',
+        executionId: cmd.executionId,
+        status: execution.status,
+      });
       return;
     }
   } else if (execution.pendingPermission && execution.pendingPermission.toolName !== cmd.toolName) {
@@ -545,8 +556,14 @@ export async function handlePermissionResponse(
     // else (a different pause entirely, or one already past `awaiting_permission`) is
     // a genuinely stale response with nothing left to resume.
     const current = await agentExecutionRepository.findById(cmd.executionId);
+    // `continuing` covers a throw during the Lambda dispatch itself: `updateStatus`
+    // above already flipped the status before the invoke that threw, so a retry
+    // landing here must recognize that window too, not just a crash before the flip.
+    // Resuming twice is safe regardless - `claimExecution`'s CAS in agentExecutor.ts
+    // (around the "Atomic CAS - prevent duplicate Lambda execution" comment) de-dupes
+    // the actual replay.
     const sameApprovedPauseStuck =
-      current?.status === 'awaiting_permission' &&
+      (current?.status === 'awaiting_permission' || current?.status === 'continuing') &&
       current.pendingPermission?.approved === true &&
       (!pendingCallId || current.pendingPermission?.toolCallId === pendingCallId);
 

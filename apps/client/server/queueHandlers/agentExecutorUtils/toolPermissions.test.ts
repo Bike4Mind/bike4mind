@@ -7,8 +7,10 @@ import {
   shouldWithholdToolCall,
   partitionApprovedPause,
   resumeApprovedPause,
+  resumeApprovedPauseAndGateConfidence,
   gateReplayConfidence,
   resolveHandoffConflict,
+  handleWithheldToolCalls,
   settleGatedCall,
   type GatedAction,
 } from './toolPermissions';
@@ -374,6 +376,131 @@ describe('resumeApprovedPause', () => {
   });
 });
 
+describe('resumeApprovedPauseAndGateConfidence', () => {
+  function makeDeps(overrides: Partial<Parameters<typeof resumeApprovedPauseAndGateConfidence>[1]> = {}) {
+    const deps: Parameters<typeof resumeApprovedPauseAndGateConfidence>[1] = {
+      executeGatedToolCall: vi.fn(async () => 'ok'),
+      toCheckpoint: vi.fn(() => ({ iteration: 1 })),
+      updatePermissionState: vi.fn(async () => {}),
+      updateCheckpoint: vi.fn(async () => {}),
+      billIterationIfNeeded: vi.fn(async () => {}),
+      settleGatedCall: vi.fn(async () => {}),
+      markFailed: vi.fn(async () => {}),
+      sendWs: vi.fn(async () => {}),
+      persistRunAsQuest: vi.fn(async () => {}),
+      logger: { error: vi.fn(), info: vi.fn() },
+      takeIterationConfidence: vi.fn(() => 0.9),
+      recordIterationConfidence: vi.fn(async () => {}),
+      setPendingGate: vi.fn(async () => true),
+      recordGateEmitted: vi.fn(async () => {}),
+      ...overrides,
+    };
+    return deps;
+  }
+
+  it('reads takeIterationConfidence only after the replay completes, and proceeds above threshold', async () => {
+    const approved = call('image_generation', { prompt: 'cat' });
+    const callOrder: string[] = [];
+    const deps = makeDeps({
+      executeGatedToolCall: vi.fn(async () => {
+        callOrder.push('executeGatedToolCall');
+        return 'ok';
+      }),
+      takeIterationConfidence: vi.fn(() => {
+        callOrder.push('takeIterationConfidence');
+        return 0.9;
+      }),
+    });
+
+    const outcome = await resumeApprovedPauseAndGateConfidence(
+      {
+        executionId: 'exec_1',
+        iterationIndex: 2,
+        withheld: [approved],
+        approvedToolCallId: approved.id,
+        approvedTools: [],
+        deniedTools: [],
+        confidenceGateThreshold: 0.6,
+      },
+      deps
+    );
+
+    expect(outcome).toEqual({ proceed: true });
+    expect(callOrder).toEqual(['executeGatedToolCall', 'takeIterationConfidence']);
+    expect(deps.recordIterationConfidence).toHaveBeenCalledWith('exec_1', 0.9);
+  });
+
+  it('stops without reading confidence when the replay itself errors', async () => {
+    const approved = call('send_slack_message', { text: 'hi' });
+    const deps = makeDeps({
+      executeGatedToolCall: vi.fn(async () => {
+        throw new Error('provider exploded');
+      }),
+    });
+
+    const outcome = await resumeApprovedPauseAndGateConfidence(
+      {
+        executionId: 'exec_2',
+        iterationIndex: 0,
+        withheld: [approved],
+        approvedToolCallId: approved.id,
+        approvedTools: [],
+        deniedTools: [],
+        confidenceGateThreshold: 0.6,
+      },
+      deps
+    );
+
+    expect(outcome).toEqual({ proceed: false });
+    expect(deps.takeIterationConfidence).not.toHaveBeenCalled();
+  });
+
+  it('stops the loop when the replayed confidence pauses the run for review', async () => {
+    const approved = call('image_generation', { prompt: 'cat' });
+    const deps = makeDeps({ takeIterationConfidence: vi.fn(() => 0.1) });
+
+    const outcome = await resumeApprovedPauseAndGateConfidence(
+      {
+        executionId: 'exec_3',
+        iterationIndex: 3,
+        withheld: [approved],
+        approvedToolCallId: approved.id,
+        approvedTools: [],
+        deniedTools: [],
+        confidenceGateThreshold: 0.6,
+      },
+      deps
+    );
+
+    expect(outcome).toEqual({ proceed: false });
+    expect(deps.setPendingGate).toHaveBeenCalledWith('exec_3', expect.objectContaining({ confidence: 0.1 }));
+  });
+
+  it('stops the loop when the confidence gate aborts on a concurrent abort race', async () => {
+    const approved = call('image_generation', { prompt: 'cat' });
+    const deps = makeDeps({
+      takeIterationConfidence: vi.fn(() => 0.1),
+      setPendingGate: vi.fn(async () => false),
+    });
+
+    const outcome = await resumeApprovedPauseAndGateConfidence(
+      {
+        executionId: 'exec_4',
+        iterationIndex: 3,
+        withheld: [approved],
+        approvedToolCallId: approved.id,
+        approvedTools: [],
+        deniedTools: [],
+        confidenceGateThreshold: 0.6,
+      },
+      deps
+    );
+
+    expect(outcome).toEqual({ proceed: false });
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', { executionId: 'exec_4', reason: 'aborted' });
+  });
+});
+
 describe('resolveHandoffConflict', () => {
   it('proceeds when nothing was withheld this turn, even with a handoff signal set', () => {
     expect(resolveHandoffConflict(0, true)).toBe('proceed');
@@ -467,6 +594,68 @@ describe('gateReplayConfidence', () => {
     expect(outcome).toEqual({ status: 'aborted' });
     expect(deps.sendWs).toHaveBeenCalledWith('failed', { executionId: 'exec-1', reason: 'aborted' });
     expect(deps.recordGateEmitted).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleWithheldToolCalls', () => {
+  function makeDeps(overrides: Partial<Parameters<typeof handleWithheldToolCalls>[1]> = {}) {
+    const deps: Parameters<typeof handleWithheldToolCalls>[1] = {
+      settleGatedCall: vi.fn(async () => {}),
+      markFailed: vi.fn(async () => {}),
+      sendWs: vi.fn(async () => {}),
+      persistRunAsQuest: vi.fn(async () => {}),
+      logger: { error: vi.fn() },
+      ...overrides,
+    };
+    return deps;
+  }
+
+  it('reports none and settles nothing when the turn withheld no calls', async () => {
+    const deps = makeDeps();
+    const outcome = await handleWithheldToolCalls(
+      { executionId: 'exec_1', withheldCalls: [], approvedTools: [], deniedTools: [], hasHandoffSignal: true },
+      deps
+    );
+    expect(outcome).toEqual({ status: 'none' });
+    expect(deps.settleGatedCall).not.toHaveBeenCalled();
+    expect(deps.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('settles the gated call when there is no handoff signal this turn', async () => {
+    const withheld = [call('send_slack_message', { text: 'hi' })];
+    const deps = makeDeps();
+    const outcome = await handleWithheldToolCalls(
+      { executionId: 'exec_2', withheldCalls: withheld, approvedTools: [], deniedTools: [], hasHandoffSignal: false },
+      deps
+    );
+    expect(outcome).toEqual({ status: 'settled' });
+    expect(deps.settleGatedCall).toHaveBeenCalledWith(
+      expect.objectContaining({ toolCallId: withheld[0].id }),
+      withheld
+    );
+  });
+
+  // Pins the actual call-site argument: `resolveHandoffConflict` must see this turn's
+  // real withheld-call count, not a hardcoded stand-in - a fixture with two withheld
+  // calls proves the count threading through rather than merely truthiness.
+  it('fails the run instead of settling when a withheld call lands alongside a handoff signal', async () => {
+    const withheld = [call('send_slack_message', { text: 'first' }), call('image_generation', { prompt: 'cat' })];
+    const deps = makeDeps();
+    const outcome = await handleWithheldToolCalls(
+      { executionId: 'exec_3', withheldCalls: withheld, approvedTools: [], deniedTools: [], hasHandoffSignal: true },
+      deps
+    );
+    expect(outcome).toEqual({ status: 'handoff_conflict' });
+    expect(deps.settleGatedCall).not.toHaveBeenCalled();
+    expect(deps.markFailed).toHaveBeenCalledWith(
+      'exec_3',
+      expect.objectContaining({ message: expect.stringContaining('subagent/DAG handoff') })
+    );
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec_3',
+      reason: 'gated_handoff_conflict',
+      toolName: withheld[0].name,
+    });
   });
 });
 
@@ -577,7 +766,7 @@ describe('settleGatedCall', () => {
     // 0-indexed: iterationIndex 3 -> displayed iteration 2 (see the field's doc comment).
     expect(deps.sendWs).toHaveBeenCalledWith(
       'permission_request',
-      expect.objectContaining({ executionId: 'exec_4', iteration: 2 })
+      expect.objectContaining({ executionId: 'exec_4', iteration: 2, toolCallId: 'toolu_2' })
     );
     expect(deps.markFailed).not.toHaveBeenCalled();
   });

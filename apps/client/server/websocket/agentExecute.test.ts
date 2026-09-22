@@ -232,6 +232,31 @@ describe('handlePermissionResponse', () => {
     expect(noopLogger.warn).toHaveBeenCalled();
   });
 
+  it('answers with a progress frame instead of hanging when the response omits toolCallId on a pause that has one', async () => {
+    // A pause created by the current code always carries a toolCallId, so an omitted
+    // `cmd.toolCallId` here is a genuinely stale tab (old cached client), not a
+    // same-tool-different-args race. Silently returning would leave that tab waiting
+    // on a reply that never comes.
+    mockFindById.mockResolvedValue({
+      ...baseExecution,
+      pendingPermission: { toolName: 'web_search', toolCallId: 'call-1' },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: true, toolName: 'web_search', toolCallId: undefined }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockApprovePendingPermission).not.toHaveBeenCalled();
+    expect(mockUpdateStatus).not.toHaveBeenCalled();
+    expect(mockApiGwSend).toHaveBeenCalled();
+    const [sent] = mockApiGwSend.mock.calls[0];
+    expect(sent.input.Data.toString()).toContain('"action":"progress"');
+  });
+
   it('ignores a deny naming a stale toolCallId, so it cannot clear a different pause', async () => {
     mockFindById.mockResolvedValue({
       ...baseExecution,
@@ -293,6 +318,30 @@ describe('handlePermissionResponse', () => {
     expect(mockUpdateStatus).toHaveBeenCalledWith('exec-1', 'continuing');
     expect(mockLambdaSend).toHaveBeenCalled();
     // No progress event this time - the resume itself was driven, not just reported.
+    expect(mockApiGwSend).not.toHaveBeenCalled();
+  });
+
+  it('retries the resume dispatch when the earlier call already flipped status to continuing before dying', async () => {
+    // Repro: the earlier call's `updateStatus` succeeded but it threw during the
+    // Lambda dispatch that followed (not before `updateStatus`, which the
+    // `awaiting_permission` case above covers) - so status is already `continuing`
+    // when this retry lands, not `awaiting_permission`.
+    mockApprovePendingPermission.mockResolvedValueOnce(false);
+    mockFindById.mockResolvedValueOnce(baseExecution).mockResolvedValueOnce({
+      ...baseExecution,
+      status: 'continuing',
+      pendingPermission: { toolName: 'web_search', toolCallId: 'call-1', approved: true },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: true, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockLambdaSend).toHaveBeenCalled();
     expect(mockApiGwSend).not.toHaveBeenCalled();
   });
 

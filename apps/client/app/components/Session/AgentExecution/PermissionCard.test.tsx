@@ -54,6 +54,7 @@ const PENDING: PendingPermission = {
   toolInput: JSON.stringify({ agent: 'Research', task: 'Summarize X' }),
   iteration: 1,
   requestedAt: Date.now(),
+  toolCallId: 'toolu_pending_1',
 };
 
 describe('PermissionCard', () => {
@@ -106,7 +107,13 @@ describe('PermissionCard', () => {
 
     fireEvent.click(screen.getByTestId(`permission-approve-${EXECUTION_ID}`));
 
-    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', true, false, undefined);
+    expect(mocks.respondToPermission).toHaveBeenCalledWith(
+      EXECUTION_ID,
+      'delegate_to_agent',
+      true,
+      false,
+      'toolu_pending_1'
+    );
     // Optimistic clear fires alongside dispatch
     expect(mocks.setPendingPermission).toHaveBeenCalledWith(EXECUTION_ID, undefined);
   });
@@ -121,7 +128,13 @@ describe('PermissionCard', () => {
 
     fireEvent.click(screen.getByTestId(`permission-allow-session-${EXECUTION_ID}`));
 
-    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', true, true, undefined);
+    expect(mocks.respondToPermission).toHaveBeenCalledWith(
+      EXECUTION_ID,
+      'delegate_to_agent',
+      true,
+      true,
+      'toolu_pending_1'
+    );
     expect(mocks.setPendingPermission).toHaveBeenCalledWith(EXECUTION_ID, undefined);
   });
 
@@ -161,7 +174,13 @@ describe('PermissionCard', () => {
 
     fireEvent.click(screen.getByTestId(`permission-deny-${EXECUTION_ID}`));
 
-    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', false, false, undefined);
+    expect(mocks.respondToPermission).toHaveBeenCalledWith(
+      EXECUTION_ID,
+      'delegate_to_agent',
+      false,
+      false,
+      'toolu_pending_1'
+    );
     expect(mocks.setPendingPermission).toHaveBeenCalledWith(EXECUTION_ID, undefined);
   });
 
@@ -182,7 +201,13 @@ describe('PermissionCard', () => {
     fireEvent.click(screen.getByTestId(`permission-deny-${EXECUTION_ID}`));
 
     expect(mocks.respondToPermission).toHaveBeenCalledTimes(1);
-    expect(mocks.respondToPermission).toHaveBeenCalledWith(EXECUTION_ID, 'delegate_to_agent', true, false, undefined);
+    expect(mocks.respondToPermission).toHaveBeenCalledWith(
+      EXECUTION_ID,
+      'delegate_to_agent',
+      true,
+      false,
+      'toolu_pending_1'
+    );
   });
 
   it('resets the double-click guard between iterations (regression)', () => {
@@ -212,11 +237,14 @@ describe('PermissionCard', () => {
       </TestWrapper>
     );
 
-    // Iteration 2 permission arrives with a fresh requestedAt
+    // Iteration 2 permission arrives with a fresh requestedAt and its own toolCallId -
+    // a distinct id from iteration 1's proves the guard reset threads the NEW
+    // permission's identity through, not a stale one left over from iteration 1.
     mocks.pendingPermission = {
       ...PENDING,
       iteration: 2,
       requestedAt: PENDING.requestedAt + 1000,
+      toolCallId: 'toolu_pending_2',
     };
     rerender(
       <TestWrapper>
@@ -227,6 +255,14 @@ describe('PermissionCard', () => {
     // Iteration 2: approve must fire (guard reset on new requestedAt)
     fireEvent.click(screen.getByTestId(`permission-approve-${EXECUTION_ID}`));
     expect(mocks.respondToPermission).toHaveBeenCalledTimes(2);
+    expect(mocks.respondToPermission).toHaveBeenNthCalledWith(
+      2,
+      EXECUTION_ID,
+      'delegate_to_agent',
+      true,
+      false,
+      'toolu_pending_2'
+    );
   });
 
   it('falls back to raw string when toolInput is not valid JSON', () => {

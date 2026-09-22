@@ -297,6 +297,76 @@ export async function gateReplayConfidence(
 }
 
 /**
+ * Compose `resumeApprovedPause` with the post-replay confidence gate - the exact
+ * `agentExecutor.ts` sequence that resumes a Lambda after an approval: replay the
+ * approved calls, THEN read `takeIterationConfidence()` (the replay is what populates
+ * it), THEN gate on it, and stop the loop on anything but `proceed`. Extracted so this
+ * ordering - and the fact that a paused/aborted gate outcome actually stops the run
+ * instead of falling through to the iteration loop - is unit-tested directly, rather
+ * than only provable by reading `agentExecutor.ts`.
+ */
+export async function resumeApprovedPauseAndGateConfidence<TCheckpoint>(
+  params: {
+    executionId: string;
+    iterationIndex: number;
+    withheld: GatedToolCall[];
+    approvedToolCallId: string | undefined;
+    approvedTools: string[];
+    deniedTools: string[];
+    confidenceGateThreshold: number;
+  },
+  deps: {
+    executeGatedToolCall: (call: { id: string; name: string; input: unknown }) => Promise<unknown>;
+    toCheckpoint: () => TCheckpoint;
+    updatePermissionState: (executionId: string) => Promise<unknown>;
+    updateCheckpoint: (executionId: string, checkpoint: TCheckpoint) => Promise<unknown>;
+    billIterationIfNeeded: (iterationIndex: number, checkpoint: TCheckpoint) => Promise<void>;
+    settleGatedCall: (gated: GatedAction, withheld: GatedToolCall[]) => Promise<void>;
+    markFailed: (executionId: string, err: { message: string; callerSafe?: boolean }) => Promise<unknown>;
+    sendWs: (event: string, payload: Record<string, unknown>) => Promise<void>;
+    persistRunAsQuest: (message: string) => Promise<void>;
+    logger: {
+      error: (msg: string, meta?: Record<string, unknown>) => void;
+      info: (msg: string, meta?: Record<string, unknown>) => void;
+    };
+    // Reads and clears the replay's confidence score - must run AFTER `resumeApprovedPause`
+    // resolves, never before, or it observes nothing.
+    takeIterationConfidence: () => number | null;
+    recordIterationConfidence: (executionId: string, confidence: number) => Promise<void>;
+    setPendingGate: (
+      executionId: string,
+      gate: { iteration: number; confidence: number; reason: string; requestedAt: Date }
+    ) => Promise<boolean>;
+    recordGateEmitted: (executionId: string) => Promise<void>;
+  }
+): Promise<{ proceed: boolean }> {
+  const outcome = await resumeApprovedPause(
+    {
+      executionId: params.executionId,
+      iterationIndex: params.iterationIndex,
+      withheld: params.withheld,
+      approvedToolCallId: params.approvedToolCallId,
+      approvedTools: params.approvedTools,
+      deniedTools: params.deniedTools,
+    },
+    deps
+  );
+  if (outcome.status !== 'replayed') return { proceed: false };
+
+  const replayConfidence = deps.takeIterationConfidence();
+  const confidenceOutcome = await gateReplayConfidence(
+    {
+      executionId: params.executionId,
+      iterationIndex: params.iterationIndex,
+      confidence: replayConfidence,
+      confidenceGateThreshold: params.confidenceGateThreshold,
+    },
+    deps
+  );
+  return { proceed: confidenceOutcome.status === 'proceed' };
+}
+
+/**
  * What the executor should do about a gated action.
  *
  * - `denied` - the tool is on the execution's deny list; fail the run.
@@ -340,6 +410,58 @@ export function resolveGateDisposition(verdict: GatedAction['verdict'], connecti
  */
 export function resolveHandoffConflict(withheldCount: number, hasHandoffSignal: boolean): 'conflict' | 'proceed' {
   return withheldCount > 0 && hasHandoffSignal ? 'conflict' : 'proceed';
+}
+
+export type HandleWithheldToolCallsOutcome =
+  { status: 'none' } | { status: 'handoff_conflict' } | { status: 'settled' };
+
+/**
+ * What `agentExecutor.ts`'s iteration loop does with a fresh iteration's withheld
+ * calls: select the one to act on, fail the run if it conflicts with a same-turn
+ * subagent/DAG handoff (see `resolveHandoffConflict`), otherwise settle it (pause or
+ * fail). Extracted so the handoff-conflict branch's actual call-site argument -
+ * `withheldCalls.length`, not just the predicate's own standalone behavior - is
+ * unit-tested.
+ */
+export async function handleWithheldToolCalls(
+  params: {
+    executionId: string;
+    withheldCalls: GatedToolCall[];
+    approvedTools: string[];
+    deniedTools: string[];
+    hasHandoffSignal: boolean;
+  },
+  deps: {
+    settleGatedCall: (gated: GatedAction, withheld: GatedToolCall[]) => Promise<void>;
+    markFailed: (executionId: string, err: { message: string; callerSafe?: boolean }) => Promise<unknown>;
+    sendWs: (event: string, payload: Record<string, unknown>) => Promise<void>;
+    persistRunAsQuest: (message: string) => Promise<void>;
+    logger: { error: (msg: string, meta?: Record<string, unknown>) => void };
+  }
+): Promise<HandleWithheldToolCallsOutcome> {
+  const { executionId, withheldCalls, approvedTools, deniedTools, hasHandoffSignal } = params;
+  const gated = withheldCalls.length > 0 ? selectGatedToolCall(withheldCalls, approvedTools, deniedTools) : null;
+  if (!gated) return { status: 'none' };
+
+  if (resolveHandoffConflict(withheldCalls.length, hasHandoffSignal) === 'conflict') {
+    deps.logger.error(
+      '[Permission] A gated tool call landed in the same turn as a subagent/DAG handoff - failing rather than discarding the handoff',
+      { executionId, toolName: gated.toolName }
+    );
+    const gatedToolDescription =
+      gated.verdict === 'denied' ? 'a tool that is not permitted' : 'a tool requiring approval';
+    const conflictMessage =
+      `Execution stopped: ${gatedToolDescription} was called in the same turn as a ` +
+      'subagent/DAG handoff (delegate_to_agent or coordinate_task), which cannot be safely ' +
+      'resumed together. Avoid combining a delegation tool with an approval-gated tool in one turn.';
+    await deps.markFailed(executionId, { message: conflictMessage, callerSafe: true });
+    await deps.sendWs('failed', { executionId, reason: 'gated_handoff_conflict', toolName: gated.toolName });
+    await deps.persistRunAsQuest(conflictMessage);
+    return { status: 'handoff_conflict' };
+  }
+
+  await deps.settleGatedCall(gated, withheldCalls);
+  return { status: 'settled' };
 }
 
 /**
