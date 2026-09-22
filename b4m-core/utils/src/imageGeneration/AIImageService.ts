@@ -35,6 +35,13 @@ export interface AIImageGenerationOptions {
   image_prompt_strength?: number;
   webhook_url?: string | null;
   webhook_secret?: string | null;
+  /**
+   * Asserts that `imagePrompt`/`referenceImages` (when URLs, not data URLs) were freshly produced
+   * by `BaseStorage.getSignedUrl` in this same request - never set from a caller- or
+   * provider-supplied string. Only OpenAIImageService reads it, to let those URLs through the
+   * self-host storage-origin exemption in `downloadImageAsBuffer`. See that function's doc comment.
+   */
+  trustConfiguredStorageOrigin?: boolean;
 }
 
 /**
