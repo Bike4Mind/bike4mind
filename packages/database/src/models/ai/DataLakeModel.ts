@@ -724,7 +724,7 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * excluded regardless of its gate, so they are subtracted here via `_id: $nin` instead of
    * counted as visible.
    *
-   * The owner-bypass exemption (review onoya): a lake is withheld from the count for its CREATOR
+   * The owner-bypass exemption (#3055): a lake is withheld from the count for its CREATOR
    * only when ownership has not since moved off them - `createdByUserId` is immutable, so without
    * `supersededOwnLakeIds` a transferred-away creator would still report a false zero for a lake
    * they can no longer reach via the owner bypass. Mirrors `findActiveByUserTagsAndEntitlements`'s
