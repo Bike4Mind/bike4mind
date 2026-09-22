@@ -26,6 +26,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: {},
   dataLakeFindingRepository: {},
+  dataLakeCorpusActionRepository: {},
   dataLakeResearchConfigRepository: {},
   dataLakeResearchRunRepository: {},
   lakeMembershipDecisionRepository: {},
