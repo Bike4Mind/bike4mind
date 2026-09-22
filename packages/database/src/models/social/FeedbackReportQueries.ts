@@ -42,6 +42,10 @@ const emptyCounts = () => ({
   byType: [],
   byStatus: [],
   byTag: [],
+  // Explicitly false, never left off: absence of this key is the contract's marker for a report
+  // serialized before the field existed, and the summary worker copies it straight into an S3
+  // artifact that no later producer fix can repair.
+  byTagTruncated: false,
   byMember: [],
 });
 

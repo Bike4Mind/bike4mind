@@ -127,6 +127,30 @@ describe('runOrgFeedbackSummary', () => {
     expect(frames().map(f => f.status)).toEqual(['processing', 'processing', 'completed']);
   });
 
+  it('serializes byTagTruncated: false rather than dropping the key on an empty population', async () => {
+    h.orgFeedbackReport.mockResolvedValue({
+      range: { from: message.startDate, to: message.endDate },
+      totals: { count: 0 },
+      byDay: [],
+      bySubject: [],
+      byType: [],
+      byStatus: [],
+      byTag: [],
+      byTagTruncated: false,
+      byMember: [],
+      membership: { memberCount: 0, aclOnly: [], stampOnly: [] },
+    });
+
+    await run();
+
+    // Asserted after the JSON round-trip the upload actually performs: JSON.stringify omits an
+    // undefined value entirely, and an absent key is what the artifact contract reserves for one
+    // written before the field existed. Reading the in-memory object would miss that.
+    const { counts } = JSON.parse(h.upload.mock.calls[0][0] as string);
+    expect('byTagTruncated' in counts).toBe(true);
+    expect(counts.byTagTruncated).toBe(false);
+  });
+
   it('resolves and keeps the completed status when only the completion frame rejects', async () => {
     h.sendToClient.mockImplementation(async (_userId: unknown, _endpoint: unknown, payload: { status: string }) => {
       if (payload.status === 'completed') throw new Error('websocket gone');

@@ -174,6 +174,9 @@ describe('orgFeedbackReport', () => {
     expect(report.byDay).toEqual([]);
     expect(report.byMember).toEqual([]);
     expect(report.membership.memberCount).toBe(0);
+    // toBe(false), not toBeFalsy(): undefined is what the contract reserves for an artifact
+    // written before the field existed, so the empty path has to answer false out loud.
+    expect(report.byTagTruncated).toBe(false);
   });
 
   it('resolves every display name from one findByIds call, not one per list', async () => {
