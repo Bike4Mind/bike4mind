@@ -15,7 +15,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { NotFoundError } from '@bike4mind/utils';
+import type { Request, Response } from 'express';
+import { NotFoundError, BadRequestError } from '@bike4mind/utils';
 
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
@@ -67,11 +68,15 @@ vi.mock('@bike4mind/database', () => ({
 // Import after mocks so the chain captures the handlers; exercises the real assertSessionAccess.
 import '../config';
 
-function invoke(method: string, userId: string, body: unknown = {}) {
+// node-mocks-http's mock doesn't structurally satisfy Express's Request/Response (the real
+// handler signature, per baseApi's Req/Res generics) - one cast is unavoidable, kept to this
+// single helper so every call site gets the real types back instead of `any`.
+function invoke(method: string, userId: string, body: unknown = {}): { req: Request; res: Response } {
   const { req, res } = createMocks({ method, query: { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', agentId: 'agent-1' } });
-  (req as any).user = { id: userId, groups: [] };
-  (req as any).body = body;
-  return { req: req as any, res: res as any };
+  const typedReq = req as unknown as Request;
+  typedReq.user = { id: userId, groups: [] } as Request['user'];
+  typedReq.body = body;
+  return { req: typedReq, res: res as unknown as Response };
 }
 
 const OWNED_SESSION = { id: 'aaaaaaaaaaaaaaaaaaaaaaaa', userId: 'owner', users: [] };
@@ -132,6 +137,14 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       await expect(mockRefs.getHandler!(req, res)).rejects.toThrow(NotFoundError);
       expect(mockRefs.findBySessionAndAgent).not.toHaveBeenCalled();
     });
+
+    it('400s (not 404s) when the agent is accessible but not attached to this session', async () => {
+      mockRefs.sessionFindById.mockResolvedValue(OWNED_SESSION);
+      mockRefs.getAttachedAgents.mockResolvedValue([]);
+      const { req, res } = invoke('GET', 'owner');
+      await expect(mockRefs.getHandler!(req, res)).rejects.toThrow(BadRequestError);
+      expect(mockRefs.findBySessionAndAgent).not.toHaveBeenCalled();
+    });
   });
 
   describe('PUT (write-level)', () => {
@@ -168,6 +181,24 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       await expect(mockRefs.putHandler!(req, res)).rejects.toThrow(NotFoundError);
       expect(mockRefs.update).not.toHaveBeenCalled();
     });
+
+    it('400s (not 404s) when the agent is accessible but not attached to this session', async () => {
+      mockRefs.sessionFindById.mockResolvedValue(OWNED_SESSION);
+      mockRefs.getAttachedAgents.mockResolvedValue([]);
+      const { req, res } = invoke('PUT', 'owner', body);
+      await expect(mockRefs.putHandler!(req, res)).rejects.toThrow(BadRequestError);
+      expect(mockRefs.update).not.toHaveBeenCalled();
+    });
+
+    it('allows an update-permission sharee to create a new config, stamped with their own userId', async () => {
+      mockRefs.sessionFindById.mockResolvedValue(UPDATE_SHARED_SESSION);
+      mockRefs.findBySessionAndAgent.mockResolvedValue(null);
+      mockRefs.create.mockResolvedValue({ id: 'config-2', userId: 'editor', proactiveMessaging: {} });
+      const { req, res } = invoke('PUT', 'editor', body);
+      await mockRefs.putHandler!(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockRefs.create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'editor' }));
+    });
   });
 
   describe('DELETE (write-level)', () => {
@@ -178,6 +209,23 @@ describe('/api/sessions/[id]/agents/[agentId]/config', () => {
       expect(res._getStatusCode()).toBe(200);
       expect(res._getJSONData()).toEqual({ success: true });
       expect(mockRefs.deleteBySessionAndAgent).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa', 'agent-1');
+    });
+
+    it('allows an update-permission sharee who can reach the agent', async () => {
+      mockRefs.sessionFindById.mockResolvedValue(UPDATE_SHARED_SESSION);
+      const { req, res } = invoke('DELETE', 'editor');
+      await mockRefs.deleteHandler!(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(res._getJSONData()).toEqual({ success: true });
+      expect(mockRefs.deleteBySessionAndAgent).toHaveBeenCalledWith('aaaaaaaaaaaaaaaaaaaaaaaa', 'agent-1');
+    });
+
+    it('400s (not 404s) when the agent is accessible but not attached to this session', async () => {
+      mockRefs.sessionFindById.mockResolvedValue(OWNED_SESSION);
+      mockRefs.getAttachedAgents.mockResolvedValue([]);
+      const { req, res } = invoke('DELETE', 'owner');
+      await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(BadRequestError);
+      expect(mockRefs.deleteBySessionAndAgent).not.toHaveBeenCalled();
     });
 
     it('404s a read-only sharee', async () => {
