@@ -1,9 +1,18 @@
-import { describe, it, expect } from 'vitest';
-import { mergeCommands, isReservedCommandName, RESERVED_FEATURE_COMMANDS } from './commands.js';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { promises as fs } from 'fs';
+import path from 'path';
+import os from 'os';
+import {
+  mergeCommands,
+  isReservedCommandName,
+  wireReservedCommandNames,
+  RESERVED_FEATURE_COMMANDS,
+} from './commands.js';
 import type { CustomCommand, CliConfig } from '../storage/types.js';
 import type { CommandDefinition } from './commands.js';
 import { createBuiltinModules } from '../features/createBuiltinModules.js';
 import type { ApiClient } from '../auth/ApiClient.js';
+import { CustomCommandStore } from '../storage/CustomCommandStore.js';
 
 function custom(name: string): CustomCommand {
   return {
@@ -66,6 +75,53 @@ describe('RESERVED_FEATURE_COMMANDS drift guard', () => {
     for (const name of featureNames) {
       expect(isReservedCommandName(name)).toBe(true);
     }
+  });
+});
+
+describe('wireReservedCommandNames', () => {
+  // The two index.tsx wiring sites (bootstrap + plugin hot-reload) route through
+  // this helper; index.tsx is imported by no test, so the helper is what pins the
+  // re-wire. Deleting its body (the reviewer's mutation) leaves a shadowing project
+  // command served from BOTH getCommand and getModelReachableCommand -> fails here.
+  let projectRoot: string;
+  let fakeHome: string;
+
+  async function mkTmp(prefix: string): Promise<string> {
+    const dir = path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    await fs.mkdir(dir, { recursive: true });
+    return dir;
+  }
+
+  beforeEach(async () => {
+    projectRoot = await mkTmp('b4m-wire-proj');
+    fakeHome = await mkTmp('b4m-wire-home');
+    vi.spyOn(os, 'homedir').mockReturnValue(fakeHome);
+  });
+
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    for (const d of [projectRoot, fakeHome]) await fs.rm(d, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('points the store gate at the registry and prunes a project command that shadows a plugin', async () => {
+    const cmdDir = path.join(projectRoot, '.claude', 'commands');
+    await fs.mkdir(cmdDir, { recursive: true });
+    // 'greet' is not statically reserved; only the live registry names it, so it
+    // loads at boot (before the registry is wired), exactly as in production.
+    await fs.writeFile(path.join(cmdDir, 'greet.md'), '# greet\n\nhijacked', 'utf-8');
+
+    const store = new CustomCommandStore(projectRoot);
+    store.setProjectTrusted(true);
+    await store.loadCommands();
+    expect(store.getCommand('greet')?.source).toBe('project');
+
+    // A registry whose commands include a plugin named 'greet'.
+    wireReservedCommandNames(store, { getAllCommands: () => [{ name: 'greet' }] });
+
+    // Both the dispatch sink (getCommand, post-prune) and the model-reachable sink
+    // (live reserved gate) must now refuse it.
+    expect(store.getCommand('greet')).toBeUndefined();
+    expect(store.getModelReachableCommand('greet')).toBeUndefined();
   });
 });
 

@@ -582,10 +582,10 @@ export interface HookWrapperContext {
   cwd: string;
   /**
    * Permission collaborators used to gate each agent lifecycle hook's shell
-   * command before it runs. Threaded to executeHooks; every production caller
-   * supplies it.
+   * command before it runs. Threaded to executeHooks; required so a caller that
+   * forgets to wire it is a type error, never a silent unprompted bypass.
    */
-  permission?: ShellCommandPermissionDeps;
+  permission: ShellCommandPermissionDeps;
 }
 
 /**
@@ -609,6 +609,9 @@ export function wrapToolWithHooks(
 
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
+  // Keep permission out of the buildHookContext spread (it is not a hook-context
+  // field); thread it to executeHooks as the required perm instead.
+  const { permission, ...baseCtx } = hookContext;
 
   return {
     ...tool,
@@ -620,12 +623,12 @@ export function wrapToolWithHooks(
         const preResult = await executeHooks(
           hooks.PreToolUse,
           buildHookContext({
-            ...hookContext,
+            ...baseCtx,
             hookEventName: 'PreToolUse',
             toolName,
             toolInput: args as Record<string, unknown>,
           }),
-          hookContext.permission
+          permission
         );
 
         if (preResult.decision === 'deny') {
@@ -654,13 +657,13 @@ export function wrapToolWithHooks(
           await executeHooks(
             hooks.PostToolUseFailure,
             buildHookContext({
-              ...hookContext,
+              ...baseCtx,
               hookEventName: 'PostToolUseFailure',
               toolName,
               toolInput: finalArgs as Record<string, unknown>,
               error: error.message,
             }),
-            hookContext.permission
+            permission
           );
         }
         throw err;
@@ -671,13 +674,13 @@ export function wrapToolWithHooks(
         const postResult = await executeHooks(
           hooks.PostToolUse,
           buildHookContext({
-            ...hookContext,
+            ...baseCtx,
             hookEventName: 'PostToolUse',
             toolName,
             toolInput: finalArgs as Record<string, unknown>,
             toolResult: observation,
           }),
-          hookContext.permission
+          permission
         );
 
         if (postResult.decision === 'block') {

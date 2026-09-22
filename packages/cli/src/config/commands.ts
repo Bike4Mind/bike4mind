@@ -302,6 +302,30 @@ export function isReservedCommandName(name: string, featureCommandNames?: Readon
   );
 }
 
+/** A store whose reserved-name gate can be re-pointed and re-pruned. Structural
+ *  so this module needn't import CustomCommandStore (which imports this one). */
+interface ReservedNameSink {
+  setReservedNameSource(getNames: () => ReadonlySet<string>): void;
+  pruneReservedProjectCommands(): void;
+}
+
+/** A built feature registry, as far as reserved-name wiring cares. */
+interface FeatureCommandRegistry {
+  getAllCommands(): { name: string }[];
+}
+
+/**
+ * Point a command store's reserved-name gate at a feature registry's live
+ * command names, then prune any project command that loaded (pre-registry)
+ * under a name the registry now owns. Both index.tsx wiring sites (bootstrap and
+ * plugin hot-reload) call this, so load, display, and dispatch share one
+ * reserved-name source and the wiring is unit-testable in isolation.
+ */
+export function wireReservedCommandNames(store: ReservedNameSink, registry: FeatureCommandRegistry): void {
+  store.setReservedNameSource(() => new Set(registry.getAllCommands().map(c => c.name)));
+  store.pruneReservedProjectCommands();
+}
+
 /**
  * Converts a CustomCommand to a CommandDefinition for unified handling
  * @param customCommand - Custom command to convert
@@ -341,7 +365,7 @@ export function mergeCommands(
   const conflicts = customCommands.filter(cmd => isReserved(cmd.name));
   if (conflicts.length > 0) {
     console.warn(
-      'Warning: The following custom commands have names that conflict with built-in commands and will be ignored:',
+      'Warning: The following custom commands have reserved names (a built-in or feature/plugin command) and will be ignored:',
       conflicts.map(cmd => cmd.name).join(', ')
     );
   }

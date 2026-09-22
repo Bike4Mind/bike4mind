@@ -2,9 +2,23 @@ import { describe, it, expect, vi } from 'vitest';
 import type { ICompletionBackend, CompletionInfo, ICompletionOptions } from '@bike4mind/llm-adapters';
 import type { IMessage } from '@bike4mind/common';
 import { SubagentOrchestrator, type OrchestratorDependencies, type SpawnAgentOptions } from './SubagentOrchestrator.js';
-import { MAX_SUBAGENT_DEPTH } from './types.js';
+import { MAX_SUBAGENT_DEPTH, type AgentHooks } from './types.js';
 import { AgentHistoryStore } from './AgentHistoryStore.js';
 import { createResumeAgentTool } from './resumeAgentTool.js';
+import { PermissionManager } from '../utils/PermissionManager.js';
+import { runShellCommand } from '../utils/shellRunner.js';
+import { createSkillTool } from '../tools/skillTool.js';
+
+// A denied hook must never reach the shell; mock it to observe (and to let the
+// allow path complete without spawning a real process).
+vi.mock('../utils/shellRunner.js', () => ({ runShellCommand: vi.fn() }));
+
+// Spy on the skill-tool factory so a test can assert the orchestrator threads the
+// permission collaborators into it (keeps the real implementation).
+vi.mock('../tools/skillTool.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('../tools/skillTool.js')>();
+  return { ...actual, createSkillTool: vi.fn(actual.createSkillTool) };
+});
 
 // Stub tool generation so a real run needs no live apiClient/permission wiring.
 // The depth-cap tests below never reach this call (they throw at the agent
@@ -274,5 +288,77 @@ describe('resume_agent end-to-end through the real orchestrator', () => {
     expect(resumedMessages.filter(c => c === 'acknowledged').length).toBe(1);
     expect(resumedMessages.filter(c => c.startsWith('You are a test agent.')).length).toBe(1);
     expect(out).toContain('acknowledged');
+  });
+});
+
+describe('SubagentOrchestrator hook-permission wiring', () => {
+  /** Orchestrator whose Stop-hook permission prompt returns `action`. */
+  function createHookOrchestrator(action: 'deny' | 'allow-once', customCommandStore?: unknown) {
+    const showPermissionPrompt = vi.fn(async () => ({ action }) as { action: 'deny' | 'allow-once' });
+    const deps = {
+      userId: 'test-user',
+      llm: createOneShotLlm('done'),
+      logger: { debug() {}, info() {}, warn() {}, error() {} },
+      permissionManager: new PermissionManager(),
+      showPermissionPrompt,
+      configStore: { get: async () => ({}) },
+      apiClient: {},
+      agentStore: { getAgent: () => undefined, getAgentNames: () => [] },
+      historyStore: new AgentHistoryStore(),
+      customCommandStore,
+    } as unknown as OrchestratorDependencies;
+    return { orchestrator: new SubagentOrchestrator(deps), showPermissionPrompt };
+  }
+
+  function agentWithStopHook(): SpawnAgentOptions['agentDefinition'] {
+    const hooks: AgentHooks = { Stop: [{ hooks: [{ type: 'command', command: 'echo pwned' }] }] };
+    // inlineAgent() is typed `| undefined` (the field is optional), so spreading
+    // it bare widens the required fields; assert non-null to keep them.
+    return { ...inlineAgent()!, hooks };
+  }
+
+  it('does not run a Stop-hook shell command when the permission prompt denies', async () => {
+    // Reverting the orchestrator's permission arg (or toolsAdapter's) to undefined
+    // disables this gate; here the denied prompt must keep the shell from running.
+    const { orchestrator, showPermissionPrompt } = createHookOrchestrator('deny');
+    await orchestrator.delegateToAgent({
+      task: 'do it',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: agentWithStopHook(),
+    });
+
+    expect(showPermissionPrompt).toHaveBeenCalledWith('agent_hook:Stop', expect.anything(), expect.anything());
+    expect(vi.mocked(runShellCommand)).not.toHaveBeenCalled();
+  });
+
+  it('runs a Stop-hook shell command when the permission prompt allows', async () => {
+    vi.mocked(runShellCommand).mockResolvedValue({ exitCode: 0, stdout: '', stderr: '', timedOut: false });
+    const { orchestrator } = createHookOrchestrator('allow-once');
+    await orchestrator.delegateToAgent({
+      task: 'do it',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: agentWithStopHook(),
+    });
+
+    expect(vi.mocked(runShellCommand)).toHaveBeenCalledTimes(1);
+  });
+
+  it('threads the permission collaborators into the embedded skill tool', async () => {
+    vi.mocked(createSkillTool).mockClear();
+    const store = { getModelReachableCommands: () => [], getAllCommands: () => [] };
+    const { orchestrator } = createHookOrchestrator('allow-once', store);
+    await orchestrator.delegateToAgent({
+      task: 'do it',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: inlineAgent(),
+    });
+
+    expect(createSkillTool).toHaveBeenCalledTimes(1);
+    const deps = vi.mocked(createSkillTool).mock.calls[0][0];
+    expect(deps.permission.permissionManager).toBeDefined();
+    expect(deps.permission.promptFn).toBeDefined();
   });
 });

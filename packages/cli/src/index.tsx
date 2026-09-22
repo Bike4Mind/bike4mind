@@ -143,7 +143,7 @@ import packageJson from '../package.json';
 import type { ICreditTransactionResponse, ModelInfo } from '@bike4mind/common';
 import { CREDIT_DEDUCT_TRANSACTION_TYPES } from '@bike4mind/common';
 import { USAGE_DAYS, MODEL_NAME_COLUMN_WIDTH, USAGE_CACHE_TTL } from './config/constants';
-import { mergeCommands, isReservedCommandName } from './config/commands.js';
+import { mergeCommands, wireReservedCommandNames } from './config/commands.js';
 import { SubagentOrchestrator } from './agents/SubagentOrchestrator.js';
 import { AgentStore } from './agents/AgentStore.js';
 import { createAgentDelegateTool } from './agents/delegateTool.js';
@@ -930,8 +930,7 @@ function CliApp() {
             subagentOrchestrator: orchestrator,
             sessionId: newSession.id,
             // Gate skill lifecycle hook shell commands through permission.
-            permissionManager,
-            promptFn,
+            permission: { permissionManager, promptFn },
           })
         : null;
 
@@ -996,8 +995,7 @@ function CliApp() {
       // drop any project command that loaded (pre-registry, above) under a name a
       // runtime plugin command now owns - so load, display, and dispatch all share
       // one reserved-name source.
-      state.customCommandStore.setReservedNameSource(() => new Set(featureRegistry.getAllCommands().map(c => c.name)));
-      state.customCommandStore.pruneReservedProjectCommands();
+      wireReservedCommandNames(state.customCommandStore, featureRegistry);
 
       // Register feature module tool names with ToolRouter so they route as local tools
       const featureModuleToolNames = featureRegistry.getAllToolNames();
@@ -2122,13 +2120,10 @@ function CliApp() {
     // Check if this is a custom command first. A reserved name (built-in or
     // feature command) must never be served from the custom store - a repo-planted
     // `.claude/commands/help.md` would otherwise hijack dispatch, since this lookup
-    // runs before any built-in/feature handling. mergeCommands filters the display
-    // list; this is the same gate at the point that actually executes. Union the
-    // live plugin command names so a repo command cannot shadow a runtime plugin.
-    const reservedFeatureNames = new Set((state.featureRegistry?.getAllCommands() ?? []).map(c => c.name));
-    const customCommand = isReservedCommandName(command, reservedFeatureNames)
-      ? undefined
-      : state.customCommandStore.getCommand(command);
+    // runs before any built-in/feature handling. getModelReachableCommand applies
+    // the same live reserved-name gate mergeCommands uses for the display list, at
+    // the point that actually executes - one derivation of the reserved set, not two.
+    const customCommand = state.customCommandStore.getModelReachableCommand(command);
     if (customCommand) {
       try {
         // Show that the command is being executed
@@ -2935,7 +2930,7 @@ function CliApp() {
         const variantForCount = state.config?.preferences.promptVariant ?? 'current';
         const corePromptTokens = tokenCounter.countTokens(buildSystemPrompt(variantForCount));
         const projectContextTokens = state.contextContent ? tokenCounter.countTokens(state.contextContent) : 0;
-        const commands = state.customCommandStore.getAllCommands();
+        const commands = state.customCommandStore.getModelReachableCommands();
         const skillsSection = buildSkillsPromptSection(commands);
         const skillsTokens = skillsSection ? tokenCounter.countTokens(skillsSection) : 0;
         const agentDirectoryTokens = state.agentStore
@@ -3669,9 +3664,7 @@ function CliApp() {
       // and re-prune, mirroring the bootstrap wiring. Without this the store's
       // reserved source stays pinned to the boot registry, so a project command
       // shadowing a plugin enabled at runtime survives load, display, and dispatch.
-      // Capture in a const so the closure keeps the non-null narrowing.
-      state.customCommandStore.setReservedNameSource(() => new Set(rebuiltRegistry.getAllCommands().map(c => c.name)));
-      state.customCommandStore.pruneReservedProjectCommands();
+      wireReservedCommandNames(state.customCommandStore, rebuiltRegistry);
 
       for (const skippedPlugin of rebuilt.skipped) {
         console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
@@ -3704,7 +3697,7 @@ function CliApp() {
         buildSystemPrompt(updatedConfig.preferences.promptVariant ?? 'current', {
           contextContent: state.contextContent,
           agentStore: state.agentStore || undefined,
-          customCommands: state.customCommandStore.getAllCommands(),
+          customCommands: state.customCommandStore.getModelReachableCommands(),
           enableSkillTool: updatedConfig.preferences.enableSkillTool !== false,
           enableDynamicAgentCreation: updatedConfig.preferences.enableDynamicAgentCreation === true,
           additionalDirectories: state.additionalDirectories,

@@ -4,6 +4,14 @@ import os from 'os';
 import path from 'path';
 import { parseArguments, createSkillTool } from './skillTool.js';
 import { CustomCommandStore } from '../storage/CustomCommandStore.js';
+import type { ShellCommandPermissionDeps } from '../utils/commandPermission.js';
+
+// These cases never reach a lifecycle hook, so the permission is unused - but it
+// is now a required dep, so pass a never-prompt stub.
+const NOOP_PERM = {
+  permissionManager: { needsPermission: () => false },
+  promptFn: async () => ({ action: 'allow-once' as const }),
+} as unknown as ShellCommandPermissionDeps;
 
 describe('skillTool', () => {
   describe('parseArguments', () => {
@@ -168,7 +176,7 @@ describe('skillTool', () => {
       // store was NOT re-pruned. Removing the sink gate makes this execute.
       store.setReservedNameSource(() => new Set(['greet']));
 
-      const tool = createSkillTool({ customCommandStore: store });
+      const tool = createSkillTool({ customCommandStore: store, permission: NOOP_PERM });
       await expect(tool.toolFn({ skill: 'greet' })).rejects.toThrow(/not found/);
     });
 
@@ -180,7 +188,7 @@ describe('skillTool', () => {
       store.setReservedNameSource(() => new Set(['greet']));
       await store.loadCommands();
 
-      const tool = createSkillTool({ customCommandStore: store });
+      const tool = createSkillTool({ customCommandStore: store, permission: NOOP_PERM });
       const result = await tool.toolFn({ skill: 'deploy' });
       expect(String(result)).toContain('ship it');
     });

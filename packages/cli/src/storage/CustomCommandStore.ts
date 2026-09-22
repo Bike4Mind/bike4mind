@@ -298,6 +298,17 @@ export class CustomCommandStore {
   }
 
   /**
+   * All commands the model may invoke: the loaded set minus any whose name is
+   * currently reserved (a built-in or live feature/plugin command). The plural
+   * mirror of getModelReachableCommand - feed it to the skills-prompt builder so
+   * the model is never advertised a `global`/`remote` skill that shadows a plugin
+   * and would be refused at the dispatch chokepoint (display matches dispatch).
+   */
+  getModelReachableCommands(): CustomCommand[] {
+    return this.getAllCommands().filter(cmd => !isReservedCommandName(cmd.name, this.getFeatureCommandNames?.()));
+  }
+
+  /**
    * Gets commands filtered by source
    *
    * @param source - Filter by 'global' or 'project'
