@@ -552,7 +552,7 @@ describe('setDataLakeFileTags', () => {
       ],
     };
 
-    it("corrects lake B's stats without activating it when the actor does not manage lake B", async () => {
+    it("corrects lake B's stats even when the actor does not manage lake B", async () => {
       const { db, logger, dataLakes } = makeAdapters({
         file: fileFixture,
         lakes: [lake, lakeB],
@@ -563,7 +563,6 @@ describe('setDataLakeFileTags', () => {
 
       expect(result.success).toBe(true);
       expect(dataLakes.setStats).toHaveBeenCalledWith('lakeB', expect.anything());
-      expect(dataLakes.activateIfDraft).not.toHaveBeenCalledWith('lakeB');
     });
 
     // Positive control on step 11's admission block. Without a lake DECLARING a passage policy,
@@ -597,7 +596,7 @@ describe('setDataLakeFileTags', () => {
       expect(fabFiles._state.tags.map(t => t.name)).toContain('lk:fresh:doc');
     });
 
-    it('activates lake B too when the actor DOES manage it (a platform admin)', async () => {
+    it("still corrects lake B's stats when the actor DOES manage it (a platform admin)", async () => {
       const { db, logger, dataLakes } = makeAdapters({
         file: fileFixture,
         lakes: [lake, { ...lakeB, status: 'draft' }],
@@ -605,7 +604,7 @@ describe('setDataLakeFileTags', () => {
 
       await setDataLakeFileTags(admin, 'lake1', 'f1', ['lk:fresh:doc'], { db, logger });
 
-      expect(dataLakes.activateIfDraft).toHaveBeenCalledWith('lakeB');
+      expect(dataLakes.setStats).toHaveBeenCalledWith('lakeB', expect.anything());
     });
   });
 });

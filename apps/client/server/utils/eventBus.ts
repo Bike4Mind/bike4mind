@@ -7,6 +7,7 @@ import { QuestStartBodySchema } from '@bike4mind/services/llm/questStartBody';
 import {
   ContextTelemetrySchema,
   ContextTelemetryAlertsSchema,
+  SESSION_SUMMARY_TRIGGERS,
   SRE_ANALYSIS_COMPLETED_EVENT,
   type SreFixRequest,
 } from '@bike4mind/common';
@@ -158,7 +159,7 @@ export const SessionEvents = {
       sessionId: z.string(),
       userId: z.string().optional(),
       callTagging: z.boolean().optional(),
-      trigger: z.enum(['manual', 'project', 'earlyMilestone', 'contentGrowth', 'throttling']).optional(),
+      trigger: z.enum(SESSION_SUMMARY_TRIGGERS).optional(),
     })
   ),
   Tag: event(

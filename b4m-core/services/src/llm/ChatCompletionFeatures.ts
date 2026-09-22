@@ -74,6 +74,7 @@ import {
 } from '../dataLakeService/getDynamicDataLakeTags';
 import {
   narrowLakeAccessToSession,
+  sessionGroundsOnNoLake,
   sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
@@ -108,6 +109,7 @@ import {
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
 import { buildRetrievalConflictNote, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
+import { clipToCodePointBoundary } from './tools/implementation/knowledgeBaseSearch/tokenBudget';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
 import {
@@ -1934,13 +1936,16 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
    * for the full contract. Absent/empty = no widening.
    */
   private preauthorizedLakeIds: string[];
+  /** `session.lakeScopeExplicit` - see sessionGroundsOnNoLake for why an empty scope needs it. */
+  private lakeScopeExplicit: boolean | undefined;
 
   constructor(
     chatCompletion: ChatCompletionContext,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
     retrievalFilter?: RetrievalExclusionOptions,
-    preauthorizedLakeIds?: string[]
+    preauthorizedLakeIds?: string[],
+    lakeScopeExplicit?: boolean
   ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
@@ -1948,6 +1953,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     this.citationStyle = citationStyle === 'indexed' ? 'indexed' : 'named';
     this.retrievalFilter = retrievalFilter ?? {};
     this.preauthorizedLakeIds = Array.isArray(preauthorizedLakeIds) ? preauthorizedLakeIds : [];
+    this.lakeScopeExplicit = lakeScopeExplicit;
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -2474,6 +2480,24 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       return [];
     }
 
+    // The session deliberately grounds on NO lake, so there is nothing to force retrieval against.
+    // Skipping is the whole handling: narrowing to nothing and running anyway would either search
+    // the caller's entire personal library (`restrictToDataLake` is gated on `lakeScoped`, which is
+    // false here) or, with it on, abstain through the `no_lakes` exit and stamp an outcome that
+    // reads as a broken lake rather than a chosen scope. The model can still call
+    // search_knowledge_base for the caller's own files; its lake arms are empty for the same
+    // reason (resolveSessionLakeAccess).
+    //
+    // Checked BEFORE personalCorpusOnly below: that check's remedy ("ask again without the
+    // attachment") assumes the session would otherwise ground on a lake, which is never true once
+    // the scope itself says none. A session that is both no-lake-scoped AND holds only personal
+    // attachments must record the scope as the reason, not the attachment.
+    if (sessionGroundsOnNoLake(this.retrievalTags, this.lakeScopeExplicit)) {
+      this.logger.log('\u{1F512} Forced retrieval: skipped (session is scoped to no data lake)');
+      this.recordForcedSkip(quest, 'no_lake_scope');
+      return [];
+    }
+
     // Same rule as the per-turn skip above, at SESSION altitude: when everything attached to this
     // notebook is a personal file rather than lake content, the question is about those documents
     // and grounding against every reachable lake is what put an unrelated product's documents into
@@ -2924,6 +2948,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Fed the budget-sliced text below, so detection sees exactly what is injected.
       const conflictPassages: RetrievalPassage[] = [];
       const sourceFileIds: string[] = [];
+      // The passage each file's citation chip deep-links to. `scored` is score-descending, so the
+      // chunk recorded on a file's FIRST appearance is its best-scoring one - the same chunk the
+      // file-level dedup below keeps, and the one whose text leads that file's injected section.
+      const citedChunkByFile = new Map<string, { chunkId: string; passage: string }>();
       const injectedChunkIds: string[] = [];
       const injectedScores: number[] = [];
       // `scored` has cleared the absolute floor (in the scan) and the relative floor (just above),
@@ -2939,7 +2967,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // `used` counts and overshoot the char budget. Slicing the defanged string keeps `used`
         // equal to what is actually injected.
         const defanged = defangRetrievedContent(candidate.text);
-        const text = defanged.length > remaining ? defanged.slice(0, remaining) : defanged;
+        // Code-point safe, matching the search arm's own clip: a raw slice can land between the
+        // halves of a surrogate pair and emit a lone surrogate into both the injected prompt and
+        // the citable's fullContext, which then fails to match the document when the viewer
+        // locates it. Never returns MORE than `remaining`, so the budget accounting below holds.
+        const text = defanged.length > remaining ? clipToCodePointBoundary(defanged, remaining) : defanged;
         const name = file?.fileName || candidate.fabFileId;
         // Distinct-file first-appearance order IS the citation index order: the
         // citables emitted below follow sourceFileIds, so [N] -> citables[N-1].
@@ -2947,6 +2979,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         if (fileIdx === -1) {
           sourceFileIds.push(candidate.fabFileId);
           fileIdx = sourceFileIds.length - 1;
+          // `text`, not `candidate.text`: the budget-sliced, defanged passage is what the model was
+          // actually given, and the reader should be shown that extent, not a longer stored chunk.
+          citedChunkByFile.set(candidate.fabFileId, { chunkId: candidate.id, passage: text });
         }
         // Untrusted on every content-derived part, exactly as the two knowledge tools do - this is
         // the THIRD injection site for retrieved content and the only always-on one. toContentLabel
@@ -3093,6 +3128,7 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
       const citables: CitableSource[] = sourceFileIds.map((fid, index) => {
         const file = fileById.get(fid);
+        const cited = citedChunkByFile.get(fid);
         const tagDesc = (file?.tags?.map(t => t.name) || [])
           .filter(t => !t.startsWith('datalake:'))
           .slice(0, 4)
@@ -3109,6 +3145,11 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             sourceSystem: 'knowledge_base',
             tags: file?.tags?.map(t => t.name) || [],
             relevanceScore: 1 - index * 0.1,
+            // Spread rather than assigned: every fid in sourceFileIds was recorded in the same
+            // walk, so `cited` is always present - but an absent key must leave the fields off
+            // entirely, since an empty-string anchor would make the reader chase a passage that
+            // does not exist rather than showing the whole document.
+            ...(cited ? { chunkId: cited.chunkId, fullContext: cited.passage } : {}),
           },
         };
       });

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { narrowLakeAccessToSession, type ResolvedLakeAccessSet } from './narrowLakeAccessToSession';
+import {
+  narrowLakeAccessToSession,
+  sessionGroundsOnNoLake,
+  type ResolvedLakeAccessSet,
+} from './narrowLakeAccessToSession';
 
 const lake = (id: string, source: 'registry' | 'dynamic') => ({
   id,
@@ -153,5 +157,27 @@ describe('narrowLakeAccessToSession prefix identity', () => {
   it('unions identity and prefix matches rather than letting identity win alone', () => {
     const out = narrowLakeAccessToSession(access(), ['datalake:alpha', 'beta:']);
     expect(out.lakes.map(l => l.datalakeTag).sort()).toEqual(['datalake:alpha', 'datalake:beta']);
+  });
+});
+
+/**
+ * The third state. Every row that is NOT the deliberate empty scope must answer false, because a
+ * false here sends the caller down the narrowing - which no-ops on an empty list and hands back
+ * the caller's whole owner-wide lake access. Getting any of these backwards either grounds a chat
+ * on every entitled lake while the UI says it grounds on none, or silently blinds a session that
+ * only ever had a tag derived for it.
+ */
+describe('sessionGroundsOnNoLake', () => {
+  it.each([
+    ['empty tags, marked explicit - the deliberate no-lake scope', [] as string[] | undefined, true, true],
+    ['absent tags, marked explicit - same state; Mongoose hydrates an unset array to []', undefined, true, true],
+    ['empty tags, unmarked - no opinion, falls back to every reachable lake', [], undefined, false],
+    ['empty tags, explicitly unmarked', [], false, false],
+    ['absent tags, unmarked', undefined, undefined, false],
+    ['tags present and marked - a real scope, the narrowing handles it', ['datalake:alpha'], true, false],
+    ['tags present, unmarked - a derived scope, still a real one', ['datalake:alpha'], undefined, false],
+    ['a non-lake tag with the marker - still names something, not nothing', ['course-2026'], true, false],
+  ])('%s', (_label, tags, explicit, expected) => {
+    expect(sessionGroundsOnNoLake(tags as string[] | undefined, explicit as boolean | undefined)).toBe(expected);
   });
 });

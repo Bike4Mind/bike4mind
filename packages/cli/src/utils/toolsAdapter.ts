@@ -21,6 +21,7 @@ import { generateFileDiffPreview, generateFileDeletePreview, generateEditLocalFi
 import { executeTool } from '../llm/ToolRouter';
 import type { ApiClient } from '../auth/ApiClient';
 import { executeHooks, buildHookContext } from '../agents/hookExecutor.js';
+import type { ShellCommandPermissionDeps } from './commandPermission';
 import type { AgentHooks } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
@@ -540,8 +541,14 @@ async function generateToolPreview(
 
 /**
  * Persist an "allow-always" trust decision to project-local or global config.
+ *
+ * Only writes the repo's project-local layer when the folder is TRUSTED. An
+ * untrusted root never re-reads those layers (computeMerged gates on trust), so
+ * persisting there would silently lose the decision on the next launch AND drop a
+ * .bike4mind/local.json into a repo the user just declined to trust. Untrusted
+ * (the default) falls back to the global layer, which is always honored.
  */
-async function persistToolTrust(
+export async function persistToolTrust(
   toolName: string,
   permissionManager: PermissionManager,
   configStore: any // any: ConfigStore has dynamic shape, no shared interface
@@ -550,7 +557,7 @@ async function persistToolTrust(
   if (!canTrust) return;
 
   const projectDir = configStore.getProjectConfigDir();
-  if (projectDir) {
+  if (projectDir && configStore.isProjectTrusted()) {
     try {
       await configStore.initProjectConfig();
       const existingLocal = (await configStore.loadRawProjectLocalConfig()) || {};
@@ -558,13 +565,12 @@ async function persistToolTrust(
         ...existingLocal,
         trustedTools: [...(existingLocal.trustedTools || []), toolName],
       });
+      return;
     } catch {
-      // Fall back to global if local fails
-      await configStore.trustTool(toolName);
+      // Fall back to global if local persistence fails.
     }
-  } else {
-    await configStore.trustTool(toolName);
   }
+  await configStore.trustTool(toolName);
 }
 
 /**
@@ -574,6 +580,12 @@ export interface HookWrapperContext {
   sessionId: string;
   agentName: string;
   cwd: string;
+  /**
+   * Permission collaborators used to gate each agent lifecycle hook's shell
+   * command before it runs. Threaded to executeHooks; every production caller
+   * supplies it.
+   */
+  permission?: ShellCommandPermissionDeps;
 }
 
 /**
@@ -612,7 +624,8 @@ export function wrapToolWithHooks(
             hookEventName: 'PreToolUse',
             toolName,
             toolInput: args as Record<string, unknown>,
-          })
+          }),
+          hookContext.permission
         );
 
         if (preResult.decision === 'deny') {
@@ -646,7 +659,8 @@ export function wrapToolWithHooks(
               toolName,
               toolInput: finalArgs as Record<string, unknown>,
               error: error.message,
-            })
+            }),
+            hookContext.permission
           );
         }
         throw err;
@@ -662,7 +676,8 @@ export function wrapToolWithHooks(
             toolName,
             toolInput: finalArgs as Record<string, unknown>,
             toolResult: observation,
-          })
+          }),
+          hookContext.permission
         );
 
         if (postResult.decision === 'block') {

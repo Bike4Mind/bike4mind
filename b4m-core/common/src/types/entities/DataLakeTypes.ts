@@ -8,10 +8,16 @@ import type { ILakeUsageSummary } from './UsageEventTypes';
 /**
  * Lake lifecycle. Stable states (draft/active/archived/deleted) plus transitional
  * states (archiving/unarchiving/restoring/deleting/purging) that exist to drive UI and make a crashed
- * mid-operation observable. draft -> active is one-way. It happens implicitly once the lake
- * holds its first member file (see `activateIfDraft` below), and unconditionally when an
- * archived or deleted lake is restored, which is how an empty lake can end up active.
+ * mid-operation observable.
  *
+ * draft <-> active is a DELIBERATE, two-way move: `promoteDataLake` publishes a draft (the only
+ * door onto `activateIfDraft` below) and `demoteDataLake` reverses it. Neither fires as a side
+ * effect of adding content - a draft lake that fills up with files stays a draft, excluded from
+ * grounding, until an owner or admin explicitly promotes it. Restoring an archived or
+ * deleted lake still lands unconditionally on `active`, which is how an empty lake can end up
+ * active without ever passing through an explicit promote.
+ *
+
  * `purging` is the one transitional state that is NOT recoverable by retrying the same action:
  * it is claimed the moment a phase-2 hard delete is ACCEPTED (#1744), before the background
  * sweep runs, so that `listDeletedDataLakes` stops offering Restore on a lake whose
@@ -358,17 +364,17 @@ export interface IDataLake {
    * `updatedAt` and no field says by whom.
    *
    * Written by every CONFIG-write service - updateDataLake, setLakeVisibility,
-   * transferLakeOwnership, and the archive/unarchive + delete/restore lifecycle pairs - so the
-   * answer holds for the whole config surface, not just the metadata PUT. Lifecycle stamps only on
+   * transferLakeOwnership, promoteDataLake/demoteDataLake, and the archive/unarchive +
+   * delete/restore lifecycle pairs - so the answer holds for the whole config surface, not just
+   * the metadata PUT. Lifecycle stamps only on
    * the TERMINAL transition, one stamp per operator action rather than one per intermediate hop.
    *
    * Deliberately NOT stamped: createDataLake already records its actor as createdByUserId, and a
    * lake nobody has reconfigured should read as exactly that rather than as self-updated; file
    * membership (addFileToLake/removeFileFromDataLake) changes the lake's CONTENT rather than its
    * configuration and is attributed per file; recomputeLakeStats is UNATTRIBUTED BY DESIGN rather
-   * than operator-free (a tag edit, a file toggle or a batch completion drives it, and it can flip
-   * status via activateIfDraft - it takes an optional actor only to attribute the config-change
-   * event that flip emits, and deliberately never writes this stamp); the lake-memory
+   * than operator-free (a tag edit, a file toggle or a batch completion drives it, it moves only
+   * the cached counts, and it deliberately never writes this stamp); the lake-memory
    * lease is genuine headless bookkeeping; and resetEmbeddingSpend moves a cost meter, not an
    * answering behavior. So this reads as "who last changed how this lake is configured", never
    * "who last touched this lake in any way".
@@ -423,6 +429,14 @@ export interface IDataLake {
   embeddingSpendMicroUsd?: number;
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
+  /**
+   * Last time the scheduled lake health sweep graded this lake (`lakeHealthSweep`), stamped
+   * whether the grading succeeded or failed. Doubles as the sweep's fairness key: it scans
+   * `status: 'active'` lakes oldest-checked-first (null/never-checked sorts first), so a fleet
+   * larger than one run's cap drains across runs instead of the same prefix by `_id` being
+   * regraded forever while the tail is never reached. Not touched by anything else.
+   */
+  lastHealthCheckedAt?: Date | null;
   /**
    * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
    * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
@@ -717,12 +731,30 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    */
   resetEmbeddingSpend(id: string): Promise<boolean>;
   /**
-   * One-way draft -> active, the transition that makes a lake reachable from `findPublicLakes`
-   * and the `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale
-   * copy of the document cannot resurrect an archived or deleted lake. Returns whether this call
-   * was the one that flipped it.
+   * draft -> active, the transition that makes a lake reachable from `findPublicLakes` and the
+   * `findActive*` retrieval arms. Guarded inside the query, so a caller holding a stale copy of
+   * the document cannot resurrect an archived or deleted lake. Returns whether this call was the
+   * one that flipped it.
+   *
+   * The ONLY caller is `promoteDataLake`, which gates it on `canManageLake` - this method itself
+   * checks no authorization, matching every other `claim*`/lifecycle primitive on this interface.
+   * Nothing else may call it: the automatic flip that used to run on every membership write
+   * (`recomputeLakeStats`) is gone - a draft lake with files stays draft until an owner or
+   * admin promotes it on purpose.
+   *
+   * `extra` carries the actor's write stamp (`lastUpdatedByUserId`) so the single conditional
+   * update also attributes the write, without a second round trip - there is no side effect to
+   * sequence between a claim and a settle here, unlike archive/unarchive.
    */
-  activateIfDraft(id: string): Promise<boolean>;
+  activateIfDraft(id: string, extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>): Promise<boolean>;
+  /**
+   * The reverse of `activateIfDraft`: active -> draft, guarded the same way (conditional in the
+   * query, so a stale caller cannot demote a lake some other transition already moved on). The
+   * only caller is `demoteDataLake`. Draft is excluded from grounding at query time (`status ===
+   * 'active'` is checked live on every retrieval, never cached), so this takes effect on the next
+   * lookup - there is nothing "in flight" to reconcile.
+   */
+  demoteToDraft(id: string, extra?: Pick<LakeSettleFields, 'lastUpdatedByUserId'>): Promise<boolean>;
   /**
    * Claim `filesDeletedAt` for a phase-1 teardown: writes `at` only if the lake carries no stamp,
    * and returns the stamp now in force - the existing one when a concurrent teardown or a crashed
@@ -828,6 +860,31 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   setLakeMemoryCursor(id: string, cursor: string | null): Promise<void>;
   /** Advance the cursor only while the purge fence still matches `fenceAt`; false means it moved. */
   setLakeMemoryCursorIfFenceUnmoved(id: string, cursor: string | null, fenceAt: Date | null): Promise<boolean>;
+  /**
+   * Stamp `lastHealthCheckedAt` for the lake health sweep's staleness ordering - see the field's
+   * own doc comment. Called for every lake the sweep ATTEMPTS, success or failure, so a lake that
+   * keeps failing does not sort first forever and starve the rest of the fleet.
+   */
+  markHealthChecked(id: string, at: Date): Promise<void>;
+  /**
+   * One page of the health sweep's staleness-ordered scan of active lakes: oldest/never-checked
+   * first, keyset-paged on (lastHealthCheckedAt, _id). `excludeCheckedAt` is the stamp the calling
+   * run writes as it grades, and excluding it is load-bearing rather than an optimization - the
+   * scan sorts on the same field the run mutates, so without it every lake already graded this run
+   * re-enters the candidate set behind an older cursor and is graded twice.
+   */
+  findDueForHealthCheck(params: {
+    cursor: { lastHealthCheckedAt: Date | null; id: string } | null;
+    limit: number;
+    excludeCheckedAt: Date;
+    projection: Record<string, 0 | 1>;
+  }): Promise<IDataLakeDocument[]>;
+  /** Whether any candidate remains behind `cursor`, so a run can tell a deferred remainder from a
+   * last page that merely landed on the cap. */
+  hasMoreDueForHealthCheck(
+    cursor: { lastHealthCheckedAt: Date | null; id: string } | null,
+    excludeCheckedAt: Date
+  ): Promise<boolean>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────

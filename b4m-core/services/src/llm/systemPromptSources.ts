@@ -341,6 +341,22 @@ export const PROMPT_SOURCE_METADATA: Record<
 };
 
 /**
+ * The prompt sources carrying lake-sourced content: forced retrieval (`knowledge_retrieval`) and the
+ * lake-memory hot card (`lake_memory`). One product concept - "what the lake put into this turn" - so
+ * they share one token bucket; the Layers table still itemizes them apart for anyone needing the split.
+ */
+export const LAKE_CONTENT_SOURCES: PromptSourceId[] = ['knowledgeRetrieval', 'lakeMemory'];
+
+/**
+ * The telemetry row NAMES those sources report as, derived from the metadata table rather than
+ * hand-copied (the same derivation SHAREABLE_PREFIX_SOURCES and DELIVERED_DETAIL_ORDER use), so
+ * renaming a source cannot leave the bucket summing a stale name.
+ */
+export const LAKE_CONTENT_LAYER_NAMES: string[] = LAKE_CONTENT_SOURCES.map(
+  source => PROMPT_SOURCE_METADATA[source].name
+);
+
+/**
  * The leading run of sources whose text is identical for every caller on this deployment -
  * `origin` of `hardcoded` or `admin`. Anything `user`/`session`/`org`/`project` ends the run,
  * because a prompt cache matches on a PREFIX: one per-caller block in front of shared content
@@ -381,6 +397,24 @@ export function markShareablePrefixBoundary(tagged: TaggedSystemMessage[]): void
 
 /** The canonical telemetry row shape; sourced from common so the two cannot drift. */
 export type SystemPromptDetail = z.infer<typeof SystemPromptDetailSchema>;
+
+/**
+ * Tokens the lake layers ACTUALLY delivered this turn, read off the per-source rows the write site
+ * already computed - never a second count of the lake messages. Conserving the total this way is what
+ * lets the caller move the tokens out of the `systemPrompts` residual without re-measuring, and a lake
+ * block the budget dropped is automatically not billed because the rows encode delivery in
+ * `wasIncluded`.
+ *
+ * `undefined` when `details` is undefined - the derivation failed, so the volume is UNKNOWN - and a
+ * number otherwise, where `0` is a real zero. That distinction is load-bearing: an absent bucket must
+ * never be read as "no lake content".
+ */
+export function lakeContentTokens(details: SystemPromptDetail[] | undefined): number | undefined {
+  if (!details) return undefined;
+  return details
+    .filter(detail => detail.wasIncluded && LAKE_CONTENT_LAYER_NAMES.includes(detail.name))
+    .reduce((sum, detail) => sum + detail.tokenCount, 0);
+}
 
 /**
  * Roll the tagged stack up into the per-source telemetry breakdown, one row per source that

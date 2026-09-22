@@ -62,6 +62,21 @@ describe('buildContextOverflowMessage', () => {
     expect(msg).not.toMatch(/detach/i);
   });
 
+  it('labels a lake-retrieval bucket, and gives it generic guidance when it dominates', () => {
+    const msg = buildContextOverflowMessage({
+      ...base,
+      // A new bucket must render as a readable label, not as its camelCase key.
+      tokensBySource: { lakeRetrieval: 200_000, fabFiles: 5_000, systemPrompts: 1_068 },
+    });
+
+    expect(msg).toContain('• Lake Retrieval: ~200,000 tokens');
+    expect(msg.indexOf('Lake Retrieval')).toBeLessThan(msg.indexOf('Fab Files'));
+    // Lake content is not user-trimmable, so it deliberately has no remediation of its own and
+    // falls back to the generic hint rather than naming a source the user cannot act on.
+    expect(msg).toMatch(/reduce/i);
+    expect(msg).not.toMatch(/detach/i);
+  });
+
   it('still produces an actionable message when the breakdown is unavailable', () => {
     const msg = buildContextOverflowMessage({
       ...base,

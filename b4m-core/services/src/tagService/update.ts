@@ -62,10 +62,10 @@ interface TagUpdateAdapters {
    */
   logger?: LakeConfigAuditAdapters['logger'];
   /**
-   * The resolved audit principal for an API-key caller (undefined for a session caller) - see
-   * `lakeConfigAuditPrincipal`. Rides on the actor handed to recomputeLakeStats, so a key-driven
-   * rename that flips a draft lake to active names the key rather than the human it acts for,
-   * matching every other audited config-write door (#1917).
+   * Accepted for route back-compat and otherwise unused: this used to ride on the actor
+   * handed to recomputeLakeStats' auto-activate audit row. That flip no longer happens here -
+   * publishing is now the explicit `promoteDataLake` door - so there is nothing left for this to
+   * attribute.
    */
   auditPrincipal?: LakeAuditPrincipal;
   /**
@@ -104,7 +104,7 @@ interface TagUpdateAdapters {
  * lakes' stats.
  */
 export const update = async (userId: string, params: TagUpdateParams, adapters: TagUpdateAdapters) => {
-  const { db, logger, auditPrincipal, assertWriteScope } = adapters;
+  const { db, logger, assertWriteScope } = adapters;
   const { id, ...rest } = secureParameters(params, tagUpdateSchema);
 
   const tag = await db.tags.findByIdAndUserId(id, userId);
@@ -194,12 +194,7 @@ export const update = async (userId: string, params: TagUpdateParams, adapters: 
     // possible join) - recompute covers both directions without needing to know which files
     // actually crossed the boundary, matching tagService/remove's reasoning. Independent
     // per-lake recomputes, so run them concurrently rather than one at a time.
-    // See tagService/remove: the tag owner is the principal, and the rung stays `system`.
-    await Promise.all(
-      affectedLakes.map(lake =>
-        recomputeLakeStats(lake, { db, logger }, { actor: { userId, isAdmin: false, auditPrincipal } })
-      )
-    );
+    await Promise.all(affectedLakes.map(lake => recomputeLakeStats(lake, { db, logger })));
   }
 
   return buildData;
