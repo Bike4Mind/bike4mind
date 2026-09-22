@@ -876,6 +876,38 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+/**
+ * Lake Health Sweep - scheduled counterpart to the on-demand GET /api/data-lakes/:id/health.
+ * Computes computeLakeHealth for every active lake and persists one row per lake per day, so a
+ * degrading lake is visible as a trend instead of only when someone opens it.
+ *
+ * Schedule: daily, after dataLakeBatchReconcile (5am UTC) so a batch that reconciler just forced
+ * terminal is reflected in the same day's health.
+ */
+const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
+  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/lakeHealthSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -906,4 +938,5 @@ export {
   spendReconciliationCron,
   driveLakeResyncPollCron,
   helpDatalakeIngestCron,
+  lakeHealthSweepCron,
 };

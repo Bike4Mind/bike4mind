@@ -159,44 +159,20 @@ describe('POST /api/files/tags/toggle - lake write authorization', () => {
   });
 
   /**
-   * The end-to-end half of #1964, through the REAL service and recompute to the audit repo - the
-   * shape #2124 established for the file-write doors. toggle.test.ts pins what the ROUTE resolves
-   * and toggleTags.test.ts pins what the SERVICE records; only this one proves the two halves
-   * actually meet on a live draft-lake activation.
+   * The end-to-end half of this fix, through the REAL service and recompute: a toggle that joins a
+   * draft lake corrects its stats but never publishes it - toggleTags.test.ts pins the same
+   * invariant at the service layer; this proves the route's real chain agrees.
    */
-  it('records the API key on the auto-activate row a key-driven toggle triggers', async () => {
+  it("corrects a draft lake's stats on a key-driven toggle without publishing it", async () => {
     h.administeredOrgIds = ['org-1'];
     h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
-    h.activateIfDraft.mockResolvedValue(true);
     const { res } = makeRes();
 
-    // A real API key always carries scopes; this test is about the auto-activate audit record,
-    // not the scope gate, so it holds the write scope the meta-tag toggle requires.
+    // A real API key always carries scopes; this test is about the recompute wiring, not the
+    // scope gate, so it holds the write scope the meta-tag toggle requires.
     await call({ ids: ['f1'], tags: [META] }, res, { keyId: 'key-abc', scopes: ['datalake:write'] });
 
-    expect(h.recordConfigChange).toHaveBeenCalledWith(
-      expect.objectContaining({
-        action: 'auto-activate',
-        principalKind: 'apiKey',
-        principalId: 'key-abc',
-        onBehalfOfUserId: 'u2',
-        // Unchanged by the principal: activateIfDraft authorizes nothing (see recomputeLakeStats).
-        manageRung: 'system',
-      })
-    );
-  });
-
-  it('records the session user on that same row when no key is involved', async () => {
-    h.administeredOrgIds = ['org-1'];
-    h.findByDatalakeTag.mockResolvedValue({ ...LAKE, status: 'draft' });
-    h.activateIfDraft.mockResolvedValue(true);
-    const { res } = makeRes();
-
-    await call({ ids: ['f1'], tags: [META] }, res);
-
-    expect(h.recordConfigChange).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: 'u2' })
-    );
-    expect('onBehalfOfUserId' in h.recordConfigChange.mock.calls[0][0]).toBe(false);
+    expect(h.activateIfDraft).not.toHaveBeenCalled();
+    expect(h.recordConfigChange).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'auto-activate' }));
   });
 });

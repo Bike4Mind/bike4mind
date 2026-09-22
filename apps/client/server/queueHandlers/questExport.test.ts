@@ -87,11 +87,19 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsByNames: vi.fn(),
 }));
 
-vi.mock('@bike4mind/common', () => ({
-  ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku' },
-  ORG_FEEDBACK_SUMMARY_JOB_TYPE: 'orgFeedbackSummary',
-  isImageServeable: (f: { moderationStatus?: string } | null) => f?.moderationStatus === 'clean',
-}));
+// The thinking-tag exports come through real: reply extraction runs on them, and a hand-rolled
+// stub here would assert against the stub instead of the rule the chat transcript renders by.
+vi.mock('@bike4mind/common', async () => {
+  const actual = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku' },
+    ORG_FEEDBACK_SUMMARY_JOB_TYPE: 'orgFeedbackSummary',
+    isImageServeable: (f: { moderationStatus?: string } | null) => f?.moderationStatus === 'clean',
+    THINK_OPEN_TAG: actual.THINK_OPEN_TAG,
+    THINK_CLOSE_TAG: actual.THINK_CLOSE_TAG,
+    visibleReplyText: actual.visibleReplyText,
+  };
+});
 
 // No summary model available -> generateSummary short-circuits to null (no LLM call).
 vi.mock('@bike4mind/llm-adapters', () => ({
@@ -250,6 +258,85 @@ describe('questExport owner-arm readability', () => {
     const markdown = exportedMarkdown();
     expect(markdown).toContain(SECRET_REPLY);
     expect(markdown).not.toContain('_Response content unavailable._');
+  });
+});
+
+/**
+ * Regression guard for the empty sub-task bodies: the chat pipeline streams the assistant answer
+ * into `replies[]` and leaves the scalar `reply` null on a successful turn, so reading `reply`
+ * alone emitted a heading followed by nothing for every completed task. Extraction must match the
+ * chat transcript - prefer the array, keep hidden reasoning out, and still honour a legacy
+ * `reply`-only document.
+ */
+describe('questExport reply extraction', () => {
+  const REPLY_SESSION_ID = '507f191e810c19729de860eb';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.sessionFindAllByIds.mockImplementation(async (ids: string[]) =>
+      ids.filter(id => id === REPLY_SESSION_ID).map(id => ({ id, _id: id, userId: h.OWNER_ID, users: [] }))
+    );
+  });
+
+  const exportQuest = async (quest: Record<string, unknown>) => {
+    h.questFind.mockReturnValue({
+      lean: async () => [{ _id: 'q-reply', sessionId: REPLY_SESSION_ID, images: [], ...quest }],
+    });
+    h.planFindById.mockResolvedValue({
+      userId: h.OWNER_ID,
+      sharedWith: [],
+      goal: 'Reply Plan',
+      state: 'active',
+      quests: [
+        {
+          title: 'Q',
+          description: 'd',
+          complexity: 'simple',
+          subQuests: [{ title: 'sq', status: 'completed', questId: 'q-reply' }],
+        },
+      ],
+    });
+    const event = {
+      Records: [{ body: JSON.stringify({ exportJobId: 'job-3', planId: 'plan-3', userId: h.OWNER_ID }) }],
+    };
+    await dispatch(event as never, {} as never, makeLogger() as never);
+    expect(h.createZipBuffer).toHaveBeenCalledTimes(1);
+    const [markdown] = h.createZipBuffer.mock.calls[0] as unknown as [string];
+    return markdown;
+  };
+
+  it('exports the streamed answer from replies[] when the scalar reply is null', async () => {
+    const markdown = await exportQuest({ reply: null, replies: ['The streamed answer.'] });
+    expect(markdown).toContain('The streamed answer.');
+  });
+
+  it('exports the answer slot of a multi-slot replies array without the hidden reasoning', async () => {
+    const markdown = await exportQuest({
+      reply: null,
+      replies: ['<think>weighing the options</think>', 'The answer is 42.'],
+    });
+    expect(markdown).toContain('The answer is 42.');
+    expect(markdown).not.toContain('weighing the options');
+  });
+
+  it('prefers replies[] over the stale prefix the rapid-reply handoff leaves in the scalar', async () => {
+    const markdown = await exportQuest({
+      reply: 'Rapid prefix. ',
+      replies: ['Rapid prefix. The rest of the streamed answer.'],
+    });
+    expect(markdown).toContain('Rapid prefix. The rest of the streamed answer.');
+    expect(markdown.match(/Rapid prefix\./g)).toHaveLength(1);
+  });
+
+  it('still exports a legacy quest that only populated the scalar reply', async () => {
+    const markdown = await exportQuest({ reply: 'Legacy flat reply.', replies: [] });
+    expect(markdown).toContain('Legacy flat reply.');
+  });
+
+  it('marks a turn with no visible text instead of emitting a blank section', async () => {
+    const markdown = await exportQuest({ reply: null, replies: ['<think>still thinking</think>'] });
+    expect(markdown).toContain('_No response content._');
+    expect(markdown).not.toContain('still thinking');
   });
 });
 

@@ -1,6 +1,7 @@
 import { isAxiosError } from 'axios';
 import { ApiClient } from '../auth/ApiClient.js';
 import type { ConfigStore } from '../storage/ConfigStore.js';
+import type { ChatHistoryItemType, QuestErrorCode } from '@bike4mind/common';
 
 /**
  * A Bike4Mind notebook (session) as returned by the REST API. Only the fields the
@@ -31,6 +32,11 @@ export interface ChatWaitResponse {
   // The wait path returns the reply in `responses`; the scalar `response` is null.
   response?: string | null;
   responses?: string[];
+  // Failure classifier. A failed turn still resolves 200 with the explanation in the reply
+  // text, so `type: 'error'` is the only reliable failure signal; `errorCode` names the reason
+  // only for the billing failures that have one and its absence never means success.
+  type?: ChatHistoryItemType;
+  errorCode?: QuestErrorCode;
   [key: string]: unknown;
 }
 
@@ -39,6 +45,10 @@ export interface QuestResponse {
   status: string;
   sessionId: string;
   reply?: string;
+  // Same classifier as ChatWaitResponse, on the polled surface - both carry it, so one branch
+  // reads either.
+  type?: ChatHistoryItemType;
+  errorCode?: QuestErrorCode;
   [key: string]: unknown;
 }
 

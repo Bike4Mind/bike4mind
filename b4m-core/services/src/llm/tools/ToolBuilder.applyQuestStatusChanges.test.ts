@@ -66,6 +66,50 @@ describe('applyQuestStatusChanges', () => {
       expect(quest.promptMeta?.citables?.map(c => c.id)).toEqual(['1', '2']);
     });
 
+    it('prefers the chip carrying a passage anchor when the same file arrives twice (#3038)', () => {
+      // The same file can be cited by a file-level arm and a chunk-level one on the same turn.
+      // First-wins would drop the anchored chip and with it the deep link into the passage.
+      const quest = makeQuest({
+        promptMeta: {
+          citables: [
+            { id: 'file-1', url: 'u1', title: 't1' },
+            { id: 'file-2', url: 'u2', title: 't2' },
+          ],
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            citables: [{ id: 'file-1', url: 'u1', title: 't1', metadata: { chunkId: 'c1', fullContext: 'passage' } }],
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
+      // Position is the real assertion alongside the win: a citation marker [N] indexes this array,
+      // so appending the winner instead of replacing in place would repoint every marker after it.
+      expect(quest.promptMeta?.citables?.map(c => c.id)).toEqual(['file-1', 'file-2']);
+      expect(quest.promptMeta?.citables?.[0].metadata?.fullContext).toBe('passage');
+    });
+
+    it('keeps the anchored chip when it arrives FIRST and a plain duplicate follows', () => {
+      // The other arrival order - the anchored entry must not be overwritten by the later plain one.
+      const quest = makeQuest({
+        promptMeta: {
+          citables: [{ id: 'file-1', url: 'u1', title: 't1', metadata: { chunkId: 'c1', fullContext: 'passage' } }],
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: { citables: [{ id: 'file-1', url: 'u1', title: 't1' }] },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
+      expect(quest.promptMeta?.citables?.map(c => c.id)).toEqual(['file-1']);
+      expect(quest.promptMeta?.citables?.[0].metadata?.fullContext).toBe('passage');
+    });
+
     it('sets promptMeta when the quest had none', () => {
       const quest = makeQuest();
       applyQuestStatusChanges(

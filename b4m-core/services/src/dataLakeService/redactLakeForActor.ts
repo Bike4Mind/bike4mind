@@ -119,6 +119,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // for whoever curates the lake, not information a consumer of it acts on.
   inconsistencyReport: 'withheld',
   inconsistencyComputedAt: 'withheld',
+  // Health-sweep bookkeeping (see IDataLake.lastHealthCheckedAt), same class as the lake-memory
+  // lease above: internal to the sweep's own scan ordering, not a property a reader needs.
+  lastHealthCheckedAt: 'withheld',
 };
 
 /**

@@ -36,9 +36,12 @@ import {
   isGeminiImageModel,
   isImageServeable,
   isKontextModel,
+  MAX_REFERENCE_IMAGES,
   requiresImageInput,
   insufficientCreditsError,
   getQuestErrorCode,
+  resolveImageDimensions,
+  BFL_DIMENSION_BOUNDS,
   ImageOutputFormatSchema,
   toNonWebpOutputFormat,
 } from '@bike4mind/common';
@@ -107,6 +110,10 @@ export const ImageGenerationBodySchema = OpenAIImageGenerationInput.extend({
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).optional(),
+  // Must be declared here as well as on GenerateImageIvokeParamsSchema: invoke() parses the
+  // queue payload through this schema, and an undeclared key is stripped before it ever
+  // reaches process() on the other side of SQS.
+  referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   /** Resolved by the API route. Defaults to 'fresh' if absent. */
   intent: PromptIntentSchema.optional(),
 });
@@ -518,6 +525,7 @@ export class ImageGenerationService {
   private async selectInputImage({
     sessionId,
     fabFileIds,
+    referenceImageFabFileIds,
     userId,
     userGroups,
     lakeAccess,
@@ -528,6 +536,7 @@ export class ImageGenerationService {
   }: {
     sessionId: string;
     fabFileIds?: string[];
+    referenceImageFabFileIds?: string[];
     userId: string;
     userGroups?: string[];
     lakeAccess?: AttachmentLakeAccess;
@@ -538,11 +547,21 @@ export class ImageGenerationService {
   }): Promise<{
     fileImage?: SelectedImage;
     imageSource: 'workbench' | 'message_history' | 'notebook_attachment';
+    referenceImages: SelectedImage[];
   }> {
     // Access-scoped: a caller-supplied fabFileId the caller cannot access is dropped here,
     // never presigned or fed to a provider (owner/share/group/global-read only).
     const fabFiles = await this.db.fabFiles.findAccessibleInIds(fabFileIds || [], { userId, userGroups }, lakeAccess);
     const workbenchImage = fabFiles.find(file => file.mimeType.startsWith('image'));
+
+    const referenceImages = await this.resolveReferenceImages({
+      referenceImageFabFileIds,
+      userId,
+      userGroups,
+      lakeAccess,
+      model,
+      logger,
+    });
 
     // An explicit workbench upload must not be fed into generation while it's held (pending
     // scan) or blocked - checked once here before any per-model getSignedUrl branch.
@@ -639,9 +658,81 @@ export class ImageGenerationService {
       imageSource,
       imageId: fileImage?.id,
       fileName: fileImage?.fileName,
+      referenceImageCount: referenceImages.length,
     });
 
-    return { fileImage, imageSource };
+    return { fileImage, imageSource, referenceImages };
+  }
+
+  /**
+   * Resolves explicit gpt-image style anchors, in the caller's order.
+   *
+   * Strict where selectInputImage's other branches are lenient: a reference the caller named
+   * but we cannot serve is a BadRequestError, not a silent drop. The lenient branches guess
+   * (carry-forward, a stray workbench attachment) so dropping one loses nothing, but these ids
+   * were asked for by name - rendering three of four anchors would bill the user for an image
+   * they did not describe, with nothing in the response to say why it looks wrong.
+   *
+   * Anchors are never carried forward from session history; only this explicit field produces
+   * them. Non-gpt-image providers get none - OpenAI's edit endpoint is the only one wired for
+   * a multi-image array here.
+   */
+  private async resolveReferenceImages({
+    referenceImageFabFileIds,
+    userId,
+    userGroups,
+    lakeAccess,
+    model,
+    logger,
+  }: {
+    referenceImageFabFileIds?: string[];
+    userId: string;
+    userGroups?: string[];
+    lakeAccess?: AttachmentLakeAccess;
+    model: string;
+    logger: Logger;
+  }): Promise<SelectedImage[]> {
+    if (!referenceImageFabFileIds?.length) {
+      return [];
+    }
+
+    if (!isGPTImageModel(model)) {
+      logger.debug('Dropping reference images for a model that cannot carry them', {
+        model,
+        requested: referenceImageFabFileIds.length,
+      });
+      return [];
+    }
+
+    // A repeated id would occupy an anchor slot and pay OpenAI's per-image input cost twice
+    // for bytes the model has already seen. First occurrence wins, so the caller's ordering
+    // survives de-duplication.
+    const uniqueIds = [...new Set(referenceImageFabFileIds)];
+
+    // Belt-and-braces: the request schemas cap this, but process() is also reachable from the
+    // queue, where a stale in-flight payload predates the cap. Counted after de-duplication,
+    // because the cap exists to bound how many images we actually pay to send.
+    if (uniqueIds.length > MAX_REFERENCE_IMAGES) {
+      throw new BadRequestError(`At most ${MAX_REFERENCE_IMAGES} reference images may be supplied`);
+    }
+
+    const files = await this.db.fabFiles.findAccessibleInIds(uniqueIds, { userId, userGroups }, lakeAccess);
+    const byId = new Map(files.filter(file => !!file.id).map(file => [file.id as string, file]));
+
+    // Mapped over the requested ids rather than over `files`, so the provider receives the
+    // anchors in the order the caller listed them.
+    return uniqueIds.map(id => {
+      const file = byId.get(id);
+      if (!file) throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
+      if (!file.mimeType.startsWith('image')) throw new BadRequestError(`Reference image ${id} is not an image`);
+      if (!isImageServeable(file)) {
+        throw new BadRequestError(`Reference image ${id} is not available (moderation pending or blocked)`);
+      }
+      // Without a storage path there is nothing to presign. An error rather than a skip, so a
+      // half-rendered set can never reach the provider through this path either.
+      if (!file.filePath) throw new BadRequestError(`Reference image ${id} has no stored file`);
+      return file;
+    });
   }
 
   public async process({ body, logger }: { body: z.infer<typeof ImageGenerationBodySchema>; logger: Logger }) {
@@ -665,6 +756,7 @@ export class ImageGenerationService {
       background,
       aspect_ratio,
       fabFileIds,
+      referenceImageFabFileIds,
       organizationId,
       intent = 'fresh',
     } = ImageGenerationBodySchema.parse(body);
@@ -818,9 +910,10 @@ export class ImageGenerationService {
         statusMessage: 'Now painting...',
       });
 
-      const { fileImage, imageSource } = await this.selectInputImage({
+      const { fileImage, imageSource, referenceImages } = await this.selectInputImage({
         sessionId,
         fabFileIds,
+        referenceImageFabFileIds,
         userId,
         userGroups: user.groups ?? undefined,
         lakeAccess,
@@ -1132,8 +1225,7 @@ export class ImageGenerationService {
         } else {
           // For regular Pro models, use width and height
           images = await service.generate(truncatedPrompt, {
-            width: width || 1024,
-            height: height || 768,
+            ...resolveImageDimensions({ width, height, size: effectiveSize }, BFL_DIMENSION_BOUNDS),
             user: userId,
             model: model as any,
             safety_tolerance,
@@ -1171,6 +1263,22 @@ export class ImageGenerationService {
           );
         }
 
+        // Always fabFile-backed (resolveReferenceImages only yields fabFiles), so they sign
+        // against fabFileStorage unconditionally - unlike the primary, which may be a
+        // generated image living in `this.storage`.
+        const referenceImageUrls = await Promise.all(
+          referenceImages.map(reference => this.fabFileStorage.getSignedUrl(reference.filePath as string))
+        );
+
+        // Style anchors with no source image is the main use case (anchors + a prompt, no
+        // subject to edit). generate() only reaches the multi-image edit endpoint when
+        // `imagePrompt` is set, so the first anchor becomes the primary and the rest trail
+        // it - to OpenAI that is the same flat `image[]` array either way, since generation
+        // sends no mask and nothing else binds to element 0.
+        if (!imageUrl && referenceImageUrls.length) {
+          imageUrl = referenceImageUrls.shift();
+        }
+
         // Prepare OpenAI parameters with proper filtering for GPT-Image-1
         const openaiParams: any = {
           model: model as any,
@@ -1203,10 +1311,14 @@ export class ImageGenerationService {
         }
 
         openaiParams.imagePrompt = imageUrl;
+        if (referenceImageUrls.length) {
+          openaiParams.referenceImages = referenceImageUrls;
+        }
 
         Logger.globalInstance.debug(`[DEBUG] OpenAI API call parameters:`, {
           model,
           hasImagePrompt: !!imageUrl,
+          referenceImageCount: referenceImageUrls.length,
           generationType: imageUrl ? 'image variation' : 'text-to-image',
           size: openaiParams.size,
           quality: openaiParams.quality,
