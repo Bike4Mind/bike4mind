@@ -38,12 +38,25 @@ const localStorageMock = (() => {
 })();
 Object.defineProperty(window, 'localStorage', { value: localStorageMock });
 
+function clearCookies() {
+  for (const entry of document.cookie.split('; ')) {
+    const name = entry.split('=')[0];
+    if (name) document.cookie = `${name}=; max-age=0`;
+  }
+}
+
+/** The region hint the marketing site pins to the parent domain. */
+function setRegion(region: 'eu' | 'row') {
+  document.cookie = `b4m-region=${region}`;
+}
+
 describe('CookieConsentBanner', () => {
   beforeEach(() => {
     localStorageMock.clear();
     mockGtag.mockClear();
     mockLoadRedditPixel.mockClear();
     mockLoadMetaPixel.mockClear();
+    clearCookies();
   });
 
   it('shows banner when no consent is stored', () => {
@@ -168,5 +181,83 @@ describe('CookieConsentBanner', () => {
 
     expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
     expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
+  });
+
+  // The cross-host case this gate exists for: the marketing site already
+  // auto-allowed this visitor and showed them nothing, so a banner here would
+  // be one journey asking twice - and would floor every conversion the app
+  // reports at whatever share of people click Accept a second time.
+  describe('outside the opt-in region', () => {
+    it('shows no banner and grants by default', () => {
+      setRegion('row');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
+      expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'granted' });
+      expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
+    });
+
+    // Auto-allow is a fact about where the visitor is, not a decision they
+    // made: persisting it would freeze the answer for someone who travels.
+    it('does not record the auto-allow as a stored decision', () => {
+      setRegion('row');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(localStorageMock.getItem('cookie_consent')).toBeNull();
+    });
+
+    it('still honors an explicit decline', () => {
+      setRegion('row');
+      localStorageMock.setItem('cookie_consent', 'denied');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
+      expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'denied' });
+      expect(mockLoadRedditPixel).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('inside the opt-in region', () => {
+    it('shows the banner and grants nothing up front', () => {
+      setRegion('eu');
+
+      render(
+        <TestWrapper>
+          <CookieConsentBanner />
+        </TestWrapper>
+      );
+
+      expect(screen.getByTestId('cookie-consent-accept-btn')).toBeInTheDocument();
+      expect(mockGtag).not.toHaveBeenCalled();
+      expect(mockLoadRedditPixel).not.toHaveBeenCalled();
+    });
+  });
+
+  // A fork, or any deployment with no marketing site in front of it, never
+  // sees the cookie. Unknown has to mean "ask".
+  it('shows the banner when no region cookie is present', () => {
+    render(
+      <TestWrapper>
+        <CookieConsentBanner />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('cookie-consent-accept-btn')).toBeInTheDocument();
+    expect(mockLoadRedditPixel).not.toHaveBeenCalled();
   });
 });
