@@ -71,11 +71,7 @@ vi.mock('@bike4mind/services', async importOriginal => {
 });
 
 import { cacheRepository } from '@bike4mind/database';
-import handler from '@pages/api/users/report';
-
-// Mirrors DAILY_REPORT_RATE_LIMIT in the route; the route owns the value, this is the count of
-// requests the test has to issue to reach it.
-const ROUTE_LIMIT = 5;
+import handler, { DAILY_REPORT_RATE_LIMIT as ROUTE_LIMIT } from '@pages/api/users/report';
 
 // The route's own window, and the ceiling Retry-After has to fall under.
 const ONE_MINUTE_MS = 60 * 1000;

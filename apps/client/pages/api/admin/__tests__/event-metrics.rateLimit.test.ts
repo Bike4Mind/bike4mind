@@ -72,11 +72,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 }));
 
 import { cacheRepository } from '@bike4mind/database';
-import handler from '@pages/api/admin/event-metrics';
-
-// Mirrors EVENT_METRICS_RATE_LIMIT in the route; the route owns the value, this is the count of
-// requests the test has to issue to reach it.
-const ROUTE_LIMIT = 30;
+import handler, { EVENT_METRICS_RATE_LIMIT as ROUTE_LIMIT } from '@pages/api/admin/event-metrics';
 
 // The route's own window, and the ceiling Retry-After has to fall under.
 const ONE_MINUTE_MS = 60 * 1000;

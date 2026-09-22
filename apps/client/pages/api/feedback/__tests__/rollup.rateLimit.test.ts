@@ -60,11 +60,7 @@ vi.mock('@bike4mind/database', async importOriginal => ({
 }));
 
 import { executeFacetCompatible } from '@bike4mind/database';
-import handler from '@pages/api/feedback/rollup';
-
-// Mirrors FEEDBACK_ROLLUP_RATE_LIMIT in the route; the route owns the value, this is the
-// count of requests the test has to issue to reach it.
-const ROUTE_LIMIT = 10;
+import handler, { FEEDBACK_ROLLUP_RATE_LIMIT as ROUTE_LIMIT } from '@pages/api/feedback/rollup';
 
 // The route's own window, and the ceiling Retry-After has to fall under.
 const ONE_MINUTE_MS = 60 * 1000;

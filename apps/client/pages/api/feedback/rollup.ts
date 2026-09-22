@@ -40,7 +40,7 @@ const ONE_MINUTE_MS = 60 * 1000;
 // and this pipeline adds a per-document $lookup ahead of $facet. The interactive date-window picker
 // is the only caller and it refetches on a window change, not on a timer (the query sets no
 // refetchInterval and the app's QueryClient disables retry and focus/reconnect refetch).
-const FEEDBACK_ROLLUP_RATE_LIMIT = 10;
+export const FEEDBACK_ROLLUP_RATE_LIMIT = 10;
 
 const handler = baseApi({ auth: 'jwtOnly' })
   .use(rateLimit({ limit: FEEDBACK_ROLLUP_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'feedback-rollup' }))

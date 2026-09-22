@@ -178,7 +178,7 @@ const ONE_MINUTE_MS = 60 * 1000;
 // maxWeeks = 4, the daily report is a single request for the whole range, and the grid is one
 // request per distinct filter behind a 5-minute staleTime. A session doing all of that in one
 // minute lands near 40, so 60 leaves headroom; no caller refetches on a timer.
-const COUNTER_LOGS_RATE_LIMIT = 60;
+export const COUNTER_LOGS_RATE_LIMIT = 60;
 
 // requiredScopes: an API key reaching this route gets its CASL ability rebuilt from `user.isAdmin`
 // (server/middlewares/apiKeyAuth.ts), so the `Permission.read` check below passes for any

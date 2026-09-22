@@ -14,7 +14,7 @@ const ONE_MINUTE_MS = 60 * 1000;
 // single `date` - and the report is uncached, joining a user onto every counter log for that
 // date, so the only multi-request pattern is a walk over consecutive dates. 5/min covers a work
 // week walked inside one minute; a longer backfill has to honor the Retry-After this returns.
-const DAILY_REPORT_RATE_LIMIT = 5;
+export const DAILY_REPORT_RATE_LIMIT = 5;
 
 // Same two-part gate as the sibling users/counterLogs.ts: this report aggregates every user's
 // activity, so the scope gate keeps a narrow API key narrow and the ability check covers JWTs.

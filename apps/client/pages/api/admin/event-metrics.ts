@@ -143,7 +143,7 @@ const ONE_MINUTE_MS = 60 * 1000;
 // refetchInterval, and the app's QueryClient disables retry and focus/reconnect refetch
 // (app/providers.tsx). An admin tuning filters and refreshing on both dashboards at once lands
 // near 10 in a minute, so 30 leaves headroom while still bounding the uncached recache path.
-const EVENT_METRICS_RATE_LIMIT = 30;
+export const EVENT_METRICS_RATE_LIMIT = 30;
 
 // Chained after baseApi so auth has run and the limiter keys on req.user.id rather than the
 // client IP. It also runs ahead of the isAdmin check below, so a non-admin who empties their own
