@@ -72,7 +72,8 @@ describe('sessionService - delete', () => {
   });
 
   // Otherwise an enabled row survives its session forever - the worker's own deletedAt guard
-  // stops it firing, but the cron keeps queuing a job for it with nothing left to clean it up.
+  // stops it firing, but the cron's eligibility scan re-checks it on every pass with nothing
+  // left to stop clearing it.
   it('deletes the session-agent-configs for a deleted session', async () => {
     const session = { id: sessionId, userId: ownerId, deletedAt: null };
 
@@ -83,6 +84,22 @@ describe('sessionService - delete', () => {
     await deleteSession(ownerId, { id: sessionId }, adapters);
 
     expect(mockSessionAgentConfigRepo.deleteBySessionId).toHaveBeenCalledWith(sessionId);
+  });
+
+  // sessionAgentConfigs is optional on the published adapters shape (a patch-released signature,
+  // re-exported as @bike4mind/services) so an existing caller built against the pre-cleanup shape
+  // keeps compiling and running - the cleanup is just skipped for that caller.
+  it('completes without sessionAgentConfigs on the adapters', async () => {
+    const session = { id: sessionId, userId: ownerId, deletedAt: null };
+    const { sessionAgentConfigs: _omitted, ...dbWithoutConfigs } = adapters.db;
+
+    (mockSessionRepo.findByIdAndUserId as Mock).mockResolvedValue(session);
+    (mockFabFileRepo.find as Mock).mockResolvedValue([]);
+    (mockSessionRepo.findRecentlyUpdatedByUserId as Mock).mockResolvedValue(null);
+
+    await expect(deleteSession(ownerId, { id: sessionId }, { db: dbWithoutConfigs })).resolves.not.toThrow();
+
+    expect(mockSessionAgentConfigRepo.deleteBySessionId).not.toHaveBeenCalled();
   });
 
   // A grant row records its source. Deleting a session may drop only the rows tagged with that
