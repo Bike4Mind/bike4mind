@@ -13,16 +13,22 @@ import { createMocks } from 'node-mocks-http';
 import type { Request, Response } from 'express';
 import { NotFoundError } from '@bike4mind/utils';
 
+type RouteHandler = (req: Request, res: Response) => unknown;
+
+interface MockChain {
+  get: (fn: RouteHandler) => MockChain;
+}
+
 const mockRefs = vi.hoisted(() => ({
-  getHandler: null as null | ((req: any, res: any) => unknown),
+  getHandler: null as null | RouteHandler,
   findById: vi.fn(),
   findBySessionId: vi.fn(),
   findAllAccessibleByIds: vi.fn(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => {
-  const chain: any = {
-    get: (fn: any) => {
+  const chain: MockChain = {
+    get: fn => {
       mockRefs.getHandler = fn;
       return chain;
     },
@@ -31,7 +37,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@server/middlewares/asyncHandler', () => ({
-  asyncHandler: (fn: any) => fn,
+  asyncHandler: (fn: RouteHandler) => fn,
 }));
 
 vi.mock('@bike4mind/database', () => ({
