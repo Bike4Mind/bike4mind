@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels, IMAGES_PER_EDIT_REQUEST, type GenerateImageToolCall } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
@@ -42,6 +42,19 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 vi.mock('../../../../apiKeyService', () => ({
   getEffectiveApiKey: vi.fn().mockResolvedValue('fake-openai-key'),
 }));
+
+// Only for the self-host storage-provenance tests below - `downloadImageAsBuffer` runs for
+// real (it is not part of the `@bike4mind/utils` mock above), so its HTTP fetch must be
+// intercepted here rather than hitting the network. `isAxiosError` and everything else on the
+// module stay real so `imageUrlToBase64`'s error-mapping catch keeps working.
+const { mockAxiosGet } = vi.hoisted(() => ({ mockAxiosGet: vi.fn() }));
+vi.mock('axios', async importOriginal => {
+  const actual = await importOriginal<typeof import('axios')>();
+  return {
+    ...actual,
+    default: { ...actual.default, get: mockAxiosGet },
+  };
+});
 
 // Imported after the mocks so `processAndStoreImage` and `imageEditTool` pick up the mocked services.
 const { processAndStoreImage, getImageFromFileId, imageEditTool } = await import('./index');
@@ -141,17 +154,33 @@ describe('getImageFromFileId serveability guard (sibling of the upload/edit agen
     );
   });
 
-  it('resolves a signed URL for a clean image', async () => {
+  it('resolves a signed URL for a clean image, marked as trusted storage provenance', async () => {
     const context = createFakeContextWithFabFile({
       mimeType: 'image/png',
       moderationStatus: 'clean',
       filePath: 'clean.png',
     });
 
-    const url = await getImageFromFileId(VALID_FILE_ID, context);
+    const resolved = await getImageFromFileId(VALID_FILE_ID, context);
 
-    expect(url).toBe('https://signed.example/image.png');
+    expect(resolved).toEqual({ url: 'https://signed.example/image.png', trustConfiguredStorageOrigin: true });
     expect(context.storage.getSignedUrl).toHaveBeenCalledWith('clean.png');
+  });
+
+  it('resolves an unsigned fileUrl fallback as untrusted', async () => {
+    const context = createFakeContextWithFabFile({
+      mimeType: 'image/png',
+      moderationStatus: 'clean',
+      fileUrl: 'https://external.example/already-hosted.png',
+    });
+
+    const resolved = await getImageFromFileId(VALID_FILE_ID, context);
+
+    expect(resolved).toEqual({
+      url: 'https://external.example/already-hosted.png',
+      trustConfiguredStorageOrigin: false,
+    });
+    expect(context.storage.getSignedUrl).not.toHaveBeenCalled();
   });
 });
 
@@ -369,5 +398,95 @@ describe('imageEditTool - credit reservation counts the image that renders', () 
     const { properties } = toolSchema.parameters as { properties: Record<string, unknown> };
 
     expect(properties).not.toHaveProperty('n');
+  });
+});
+
+// Regression for the self-host storage-provenance gap a reviewer found in this tool's own
+// resolution layer: `resolveImageInputUrl` must carry whether a URL was freshly minted by
+// `getSignedUrl()` through to `downloadImageAsBuffer`, and a literal caller-supplied URL that
+// merely shares the configured storage origin must never inherit that trust.
+describe('imageEditTool - self-host storage provenance (source and mask)', () => {
+  const VALID_FILE_ID = 'b'.repeat(24);
+
+  beforeEach(() => {
+    process.env.AWS_ENDPOINT_URL_S3 = 'http://minio:9000';
+    mockAxiosGet.mockReset();
+    mockEditSpy.mockReset();
+    // Stop right after dispatch - these assertions are about whether the download/provider
+    // stage was reached, not about the post-edit moderation/storage pipeline.
+    mockEditSpy.mockRejectedValue(new Error('stop-after-dispatch'));
+  });
+
+  afterEach(() => {
+    delete process.env.AWS_ENDPOINT_URL_S3;
+  });
+
+  it('blocks a literal URL on the configured storage origin used directly as the source image', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_1_5,
+    } as GenerateImageToolCall);
+
+    await expect(toolFn({ image: 'http://minio:9000/admin/health', prompt: 'x' })).rejects.toThrow(
+      /blocked for security reasons/
+    );
+    expect(mockAxiosGet).not.toHaveBeenCalled();
+    expect(mockEditSpy).not.toHaveBeenCalled();
+  });
+
+  it('blocks a literal URL on the configured storage origin used directly as the mask', async () => {
+    const context = createFakeContext();
+    context.onStart = vi.fn();
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_1_5,
+    } as GenerateImageToolCall);
+
+    await expect(toolFn({ image: PNG_DATA_URL, mask: 'http://minio:9000/admin/health', prompt: 'x' })).rejects.toThrow(
+      /blocked for security reasons/
+    );
+    expect(mockAxiosGet).not.toHaveBeenCalled();
+    expect(mockEditSpy).not.toHaveBeenCalled();
+  });
+
+  it('allows a self-host signed URL resolved from a fabFile id as the source image', async () => {
+    mockAxiosGet.mockResolvedValue({ status: 200, headers: {}, data: Buffer.from('png-bytes') });
+    const context = createFakeContextWithFabFile({
+      mimeType: 'image/png',
+      moderationStatus: 'clean',
+      filePath: 'clean.png',
+    });
+    context.storage.getSignedUrl = vi.fn().mockResolvedValue('http://minio:9000/bucket/clean.png?X-Amz-Signature=abc');
+    context.onStart = vi.fn();
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_1_5,
+    } as GenerateImageToolCall);
+
+    // The OpenAI branch catches the provider error and returns it as a string result rather
+    // than rejecting - the assertion below just needs proof the download (and provider call)
+    // was reached, not a particular error-handling shape.
+    await expect(toolFn({ image: VALID_FILE_ID, prompt: 'make it warmer' })).resolves.toMatch(/stop-after-dispatch/);
+
+    expect(mockAxiosGet).toHaveBeenCalled();
+    expect(mockEditSpy).toHaveBeenCalled();
+  });
+
+  it('allows a self-host signed URL resolved from a generated-image key as the mask', async () => {
+    mockAxiosGet.mockResolvedValue({ status: 200, headers: {}, data: Buffer.from('png-bytes') });
+    const context = createFakeContext();
+    context.imageGenerateStorage.getSignedUrl = vi
+      .fn()
+      .mockResolvedValue('http://minio:9000/bucket/generated-key.png?X-Amz-Signature=abc');
+    context.onStart = vi.fn();
+    const { toolFn } = imageEditTool.implementation(context, {
+      model: ImageModels.GPT_IMAGE_1_5,
+    } as GenerateImageToolCall);
+
+    await expect(toolFn({ image: PNG_DATA_URL, mask: 'generated-key.png', prompt: 'make it warmer' })).resolves.toMatch(
+      /stop-after-dispatch/
+    );
+
+    expect(mockAxiosGet).toHaveBeenCalled();
+    expect(mockEditSpy).toHaveBeenCalled();
   });
 });

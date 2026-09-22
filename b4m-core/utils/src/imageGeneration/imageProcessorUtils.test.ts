@@ -260,11 +260,13 @@ describe('downloadImageAsBuffer log redaction', () => {
     const logSpy = vi.spyOn(Logger.globalInstance, 'log').mockImplementation(() => undefined);
     mockAxiosGet.mockResolvedValue({ status: 200, headers: {}, data: Buffer.from('image') });
 
-    await downloadImageAsBuffer(`${PUBLIC_HOST}/i?token=super-secret#frag`);
+    const [scheme, rest] = PUBLIC_HOST.split('://');
+    await downloadImageAsBuffer(`${scheme}://creds-user:creds-pass@${rest}/i?token=super-secret#frag`);
 
     const loggedArgs = logSpy.mock.calls.flatMap(call => call.map(arg => String(arg)));
     expect(loggedArgs.some(arg => arg.includes('super-secret'))).toBe(false);
     expect(loggedArgs.some(arg => arg.includes('#frag'))).toBe(false);
+    expect(loggedArgs.some(arg => arg.includes('creds-user') || arg.includes('creds-pass'))).toBe(false);
     logSpy.mockRestore();
   });
 
