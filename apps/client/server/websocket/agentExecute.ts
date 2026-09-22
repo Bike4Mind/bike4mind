@@ -23,8 +23,11 @@ import { startAgentExecution } from '@server/utils/startAgentExecution';
 import { resolveAndPublishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { decideInlineBudgets } from '@server/websocket/reconnectBudget';
 import { verifyJwtToken, checkRateLimit, verifyApiKey, checkApiKeyRateLimitOrThrow } from '@server/cli/auth';
-import { Resource } from 'sst';
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
+import {
+  dispatchAgentExecution,
+  resolveAgentExecutorTarget,
+  AgentExecutorRejectedError,
+} from '@server/utils/dispatchAgentExecution';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { z } from 'zod';
@@ -164,8 +167,6 @@ const ReconnectCommandSchema = BaseMessageSchema.extend({
 // ---------------------------------------------------------------------------
 // Cached resources
 // ---------------------------------------------------------------------------
-
-const lambdaClient = new LambdaClient({});
 
 // ---------------------------------------------------------------------------
 // Handler
@@ -480,36 +481,42 @@ export async function handlePermissionResponse(
     return;
   }
 
-  // Approved: record (optionally remembering it for the session) and resume.
-  await agentExecutionRepository.updatePermissionState(cmd.executionId, {
-    pendingPermission: null,
-    approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
-  });
-  if (cmd.rememberForSession) {
-    await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'approved', logger);
+  const executorTarget = resolveAgentExecutorTarget();
+  if (!executorTarget) throw new Error('Agent execution is not configured');
+
+  if (!(await agentExecutionRepository.claimExecution(cmd.executionId, ['awaiting_permission'], 'continuing'))) return;
+
+  let dispatchAttempted = false;
+  try {
+    // Approved: record (optionally remembering it for the session) and resume.
+    await agentExecutionRepository.updatePermissionState(cmd.executionId, {
+      pendingPermission: null,
+      approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
+    });
+    if (cmd.rememberForSession) {
+      await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'approved', logger);
+    }
+
+    // Re-invoke Lambda to resume execution.
+    // Note: checkpointDepth is not carried here - it lives in the SQS message from the previous
+    // Lambda handoff, not in the AgentExecution document, so this handler cannot read it.
+    // The resumed Lambda starts at depth 0. This is safe on two counts: permission pauses are
+    // user-driven, not loop-driven, so they cannot self-dispatch a runaway on their own; and the
+    // resume runs as status `continuing`, which the executor still bounds via the persisted
+    // `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a counter the message payload cannot reset.
+
+    dispatchAttempted = true;
+    await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);
+  } catch (error) {
+    // A lost ACK may still have queued work. Only an explicit rejection permits rollback.
+    if (!dispatchAttempted || error instanceof AgentExecutorRejectedError) {
+      await agentExecutionRepository.restoreRejectedResume(cmd.executionId, {
+        status: 'awaiting_permission',
+        pendingPermission: execution.pendingPermission,
+      });
+    }
+    throw error;
   }
-
-  // Re-invoke Lambda to resume execution.
-  // Note: checkpointDepth is not carried here - it lives in the SQS message from the previous
-  // Lambda handoff, not in the AgentExecution document, so this handler cannot read it.
-  // The resumed Lambda starts at depth 0. This is safe on two counts: permission pauses are
-  // user-driven, not loop-driven, so they cannot self-dispatch a runaway on their own; and the
-  // resume runs as status `continuing`, which the executor still bounds via the persisted
-  // `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a counter the message payload cannot reset.
-  await agentExecutionRepository.updateStatus(cmd.executionId, 'continuing');
-
-  await lambdaClient.send(
-    new InvokeCommand({
-      FunctionName: Resource.AgentExecutor.name,
-      InvocationType: 'Event',
-      Payload: Buffer.from(
-        JSON.stringify({
-          executionId: cmd.executionId,
-          connectionId,
-        })
-      ),
-    })
-  );
 
   logger.info('[Permission] Approved — Lambda re-invoked', {
     executionId: cmd.executionId,
@@ -530,7 +537,7 @@ export async function handlePermissionResponse(
  * gate responses for executions not in `paused` to defend against stale
  * client retries.
  */
-async function handleGateResponse(
+export async function handleGateResponse(
   cmd: z.infer<typeof GateResponseSchema>,
   userId: string,
   connectionId: string,
@@ -596,6 +603,9 @@ async function handleGateResponse(
     return;
   }
 
+  const executorTarget = resolveAgentExecutorTarget();
+  if (!executorTarget) throw new Error('Agent execution is not configured');
+
   // decision === 'continue' - clear the gate and resume.
   const cleared = await agentExecutionRepository.clearPendingGate(cmd.executionId);
   if (!cleared) {
@@ -612,18 +622,18 @@ async function handleGateResponse(
   // Note: checkpointDepth is not carried here - same limitation as the permission_response
   // path above. Gate resumes are user-driven and cannot cause a runaway loop on their own, and
   // are likewise bounded by the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS).
-  await lambdaClient.send(
-    new InvokeCommand({
-      FunctionName: Resource.AgentExecutor.name,
-      InvocationType: 'Event',
-      Payload: Buffer.from(
-        JSON.stringify({
-          executionId: cmd.executionId,
-          connectionId,
-        })
-      ),
-    })
-  );
+  try {
+    await dispatchAgentExecution({ executionId: cmd.executionId, connectionId }, executorTarget);
+  } catch (error) {
+    // A lost ACK may still have queued work. Only an explicit rejection permits rollback.
+    if (error instanceof AgentExecutorRejectedError) {
+      await agentExecutionRepository.restoreRejectedResume(cmd.executionId, {
+        status: 'paused',
+        pendingGate: execution.pendingGate,
+      });
+    }
+    throw error;
+  }
 
   logger.info('[Gate] Continue — Lambda re-invoked', { executionId: cmd.executionId });
 }

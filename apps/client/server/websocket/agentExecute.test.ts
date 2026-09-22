@@ -12,6 +12,9 @@ const mockFindById = vi.fn();
 const mockUpdatePermissionState = vi.fn();
 const mockMarkFailed = vi.fn();
 const mockUpdateStatus = vi.fn();
+const mockRestoreRejectedResume = vi.fn();
+const mockClearPendingGate = vi.fn();
+const mockClaimExecution = vi.fn().mockResolvedValue(true);
 const mockRememberDecision = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
@@ -21,6 +24,9 @@ vi.mock('@bike4mind/database', () => ({
     updatePermissionState: (...args: unknown[]) => mockUpdatePermissionState(...args),
     markFailed: (...args: unknown[]) => mockMarkFailed(...args),
     updateStatus: (...args: unknown[]) => mockUpdateStatus(...args),
+    restoreRejectedResume: (...args: unknown[]) => mockRestoreRejectedResume(...args),
+    clearPendingGate: (...args: unknown[]) => mockClearPendingGate(...args),
+    claimExecution: (...args: unknown[]) => mockClaimExecution(...args),
   },
   sessionToolApprovalRepository: {
     rememberDecision: (...args: unknown[]) => mockRememberDecision(...args),
@@ -86,7 +92,7 @@ vi.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
   },
 }));
 
-import { handlePermissionResponse } from './agentExecute';
+import { handlePermissionResponse, handleGateResponse } from './agentExecute';
 
 const noopLogger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), updateMetadata: vi.fn() };
 
@@ -127,7 +133,7 @@ describe('handlePermissionResponse', () => {
     );
 
     expect(mockRememberDecision).toHaveBeenCalledWith('user-1', baseExecution.sessionId, 'web_search', 'approved');
-    expect(mockUpdateStatus).toHaveBeenCalledWith('exec-1', 'continuing');
+    expect(mockClaimExecution).toHaveBeenCalledWith('exec-1', ['awaiting_permission'], 'continuing');
   });
 
   it('does not remember the approval when rememberForSession is false', async () => {
@@ -140,7 +146,7 @@ describe('handlePermissionResponse', () => {
     );
 
     expect(mockRememberDecision).not.toHaveBeenCalled();
-    expect(mockUpdateStatus).toHaveBeenCalledWith('exec-1', 'continuing');
+    expect(mockClaimExecution).toHaveBeenCalledWith('exec-1', ['awaiting_permission'], 'continuing');
   });
 
   it('still resumes the run and logs a warning when rememberDecision rejects', async () => {
@@ -155,7 +161,7 @@ describe('handlePermissionResponse', () => {
     );
 
     expect(noopLogger.warn).toHaveBeenCalled();
-    expect(mockUpdateStatus).toHaveBeenCalledWith('exec-1', 'continuing');
+    expect(mockClaimExecution).toHaveBeenCalledWith('exec-1', ['awaiting_permission'], 'continuing');
     expect(mockLambdaSend).toHaveBeenCalled();
   });
 
@@ -177,5 +183,110 @@ describe('handlePermissionResponse', () => {
     expect(sentCommand.input.Data.toString()).toContain('"action":"failed"');
     expect(mockUpdateStatus).not.toHaveBeenCalled();
     expect(noopLogger.warn).not.toHaveBeenCalled();
+  });
+});
+
+describe('container resume rejection', () => {
+  it.each([401, 503])('restores permission only for definitive rejection HTTP %s', async status => {
+    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status })));
+    mockFindById.mockResolvedValue(baseExecution);
+    mockRestoreRejectedResume.mockClear();
+    try {
+      await expect(
+        handlePermissionResponse(baseCmd(), 'user-1', 'conn-1', 'http://ws', noopLogger as never)
+      ).rejects.toThrow(String(status));
+      if (status === 401)
+        expect(mockRestoreRejectedResume).toHaveBeenCalledWith('exec-1', {
+          status: 'awaiting_permission',
+          pendingPermission: baseExecution.pendingPermission,
+        });
+      else expect(mockRestoreRejectedResume).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('container confidence resume', () => {
+  it('routes through HTTP and atomically restores a rejected gate', async () => {
+    const pendingGate = { iteration: 1, confidence: 0.1, reason: 'test', requestedAt: new Date() };
+    mockFindById.mockResolvedValue({ ...baseExecution, status: 'paused', pendingGate });
+    mockClearPendingGate.mockResolvedValue(true);
+    mockRestoreRejectedResume.mockClear();
+    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('', { status: 401 })));
+    try {
+      await expect(
+        handleGateResponse(
+          {
+            accessToken: 'token',
+            action: 'agent_execute',
+            command: 'gate_response',
+            executionId: 'exec-1',
+            decision: 'continue',
+          },
+          'user-1',
+          'conn-1',
+          'http://ws',
+          noopLogger as never
+        )
+      ).rejects.toThrow('401');
+      expect(mockRestoreRejectedResume).toHaveBeenCalledWith('exec-1', { status: 'paused', pendingGate });
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('concurrent permission approvals', () => {
+  it('allows only the approval that claimed the pause to dispatch or roll back', async () => {
+    mockFindById.mockResolvedValue(baseExecution);
+    mockClaimExecution.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    mockRestoreRejectedResume.mockClear();
+    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+    const fetch = vi
+      .fn()
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValueOnce(new Response('', { status: 202 }));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const results = await Promise.allSettled(
+        [1, 2].map(() => handlePermissionResponse(baseCmd(), 'user-1', 'conn-1', 'http://ws', noopLogger as never))
+      );
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+      expect(mockRestoreRejectedResume).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe('permission resume preparation failure', () => {
+  it('restores a claimed pause when preparation fails before dispatch and permits retry', async () => {
+    mockFindById.mockResolvedValue(baseExecution);
+    mockClaimExecution.mockResolvedValue(true);
+    mockUpdatePermissionState
+      .mockRejectedValueOnce(new Error('temporary DB write failure'))
+      .mockResolvedValue(undefined);
+    mockRestoreRejectedResume.mockClear();
+    mockLambdaSend.mockClear();
+    await expect(
+      handlePermissionResponse(baseCmd(), 'user-1', 'conn-1', 'http://ws', noopLogger as never)
+    ).rejects.toThrow('temporary DB');
+    expect(mockRestoreRejectedResume).toHaveBeenCalledWith('exec-1', {
+      status: 'awaiting_permission',
+      pendingPermission: baseExecution.pendingPermission,
+    });
+    expect(mockLambdaSend).not.toHaveBeenCalled();
+    await handlePermissionResponse(baseCmd(), 'user-1', 'conn-1', 'http://ws', noopLogger as never);
+    expect(mockLambdaSend).toHaveBeenCalledTimes(1);
   });
 });

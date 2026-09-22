@@ -860,3 +860,26 @@ Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Que
 Python artifacts execute in the browser via Pyodide (WebAssembly), fetched by default from the public jsDelivr CDN - so a fully air-gapped box cannot run them out of the box. To run them offline, mirror the Pyodide v0.25.1 "full" distribution on a server you control and set `PYODIDE_BASE_URL` in `.env.selfhost` to that base (a trailing slash is added automatically if you omit it). A cross-origin mirror must send permissive CORS headers; its origin is added to the app CSP automatically. See the `PYODIDE_BASE_URL` block in `.env.selfhost.example` for what to mirror. Leave it unset to use the CDN.
 
 Need help? Ask in [Discussions](https://github.com/bike4mind/bike4mind/discussions).
+
+### Agent execution service
+
+Build the app and executor from the same revision when adopting the container agent transport:
+
+```sh
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost build app agentexecutor
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
+```
+
+Set `AGENT_EXECUTOR_SERVICE=http://agentexecutor:8080` and generate an `AGENT_EXECUTOR_INTERNAL_SECRET` with `openssl rand -hex 32`. Both services load the same `.env.selfhost`. The executor also requires `MONGODB_URI`, `AGENT_CONTINUATION_QUEUE`, the SQS endpoint/credentials, and the same model and storage settings as the app. Its internal port is not published on the host. Hosted deployments continue using their linked Lambda function when `AGENT_EXECUTOR_SERVICE` is absent.
+
+The executor validates its required configuration at startup. `/health` is ready only after Mongo and the configured queue are reachable. Check it inside the service:
+
+```sh
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost exec agentexecutor node -e 'fetch("http://localhost:8080/health").then(async r=>{console.log(r.status,await r.text());process.exit(r.ok?0:1)})'
+```
+
+HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the same service consumes starts, permission/confidence resumes, continuations, and dispatched children. Queue persistence is required for broker recreation recovery. Each consumer takes one message, supplies a decreasing 13-minute execution budget, and leaves unsuccessful deliveries for redelivery after 16 minutes. `AGENT_EXECUTOR_CONCURRENCY` defaults to 8 (range 2-64), allowing child work alongside parents. Shutdown stops admission and waits up to 13.5 minutes; Compose allows 14 minutes.
+
+An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
+
+Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.

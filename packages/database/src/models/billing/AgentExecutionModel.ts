@@ -1373,6 +1373,21 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     await this.model.updateOne({ _id: id }, { $set: { resolvedMementoGates: gates } });
   }
 
+  async restoreRejectedResume(
+    id: string,
+    state: {
+      status: 'awaiting_permission' | 'paused';
+      pendingPermission?: IPendingPermission;
+      pendingGate?: IPendingGate;
+    }
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: 'continuing', abortedAt: { $exists: false } },
+      { $set: state }
+    );
+    return result.modifiedCount > 0;
+  }
+
   async updatePermissionState(
     id: string,
     update: {
