@@ -1,7 +1,8 @@
 import { cacheRepository } from '@bike4mind/database';
-import { isExecutableUploadMimeType } from '@bike4mind/common';
+import { isExecutableUploadMimeType, verifyImageUrlSignature } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { Config } from '@server/utils/config';
 import { BadRequestError, TooManyRequestsError } from '@server/utils/errors';
 import { safeFetch, SsrfError } from '@server/utils/ssrfProtection';
 import { streamWithSizeLimit } from '@server/utils/streamWithSizeLimit';
@@ -24,10 +25,16 @@ import { z } from 'zod';
  * client can attach, so SearchResultCards reads this through `api` and renders the bytes as a
  * blob: URL. jwtOnly because an API key cannot be in play on that path at all.
  *
- * `url` is unconstrained beyond the SSRF guard - nothing proves it came from a search result - so
- * this is an arbitrary-URL fetcher for any signed-in user. The per-user minute cap below is what
- * bounds it as an egress-amplification and request-laundering surface; /api/external-image's
- * answer to the same problem was to admit only admins.
+ * `url` must carry a valid HMAC signature (verifyImageUrlSignature, checked first below) before anything
+ * else runs. Without that, this would be an arbitrary-URL fetcher for any signed-in user: the
+ * `b4m_cards` fence is model-authored, and nothing stops a hostile page's snippet text from
+ * steering the model into writing an attacker-controlled URL with exfiltrated conversation data in
+ * the query string - which this route would then fetch server-side as a beacon. The signature is
+ * applied to every image URL where it's first shown to the model (websearch/index.ts's `Images:`
+ * lines), using the same SECRET_ENCRYPTION_KEY as ChatCompletionFeatures.telemetryHmacSecret, so
+ * only a URL that genuinely came from a search result can verify here. The per-user minute cap
+ * below is a second, independent bound against egress-amplification abuse of the vetted URLs
+ * themselves.
  */
 
 const SearchImageQuery = z.object({
@@ -38,14 +45,22 @@ const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 8_000;
 const BROWSER_CACHE_SECONDS = 3600;
 const MINUTE_IN_MS = 60_000;
-// A card row is at most ~8 cards x 3 tiles; this leaves room for a few rows a minute per user
-// while keeping a scripted loop from turning the app into someone's download service.
+// A card row is at most 8 cards x 4 images = ~32 requests (~3 rows/minute); this leaves room for
+// a few rows a minute per user while keeping a scripted loop from turning the app into someone's
+// download service.
 const REQUESTS_PER_MINUTE = 120;
 
 const handler = baseApi({ auth: 'jwtOnly' }).get(
   asyncHandler(async (req, res) => {
     const { url: rawUrl } = SearchImageQuery.parse(req.query);
     const brand = process.env.APP_NAME || '';
+
+    if (!verifyImageUrlSignature(rawUrl, Config.SECRET_ENCRYPTION_KEY || '')) {
+      // No host/reason in the log: an unsigned or tampered URL is exactly the shape a scripted
+      // probe would send, and this is reachable by every signed-in user.
+      req.logger.warn('Rejected unsigned image URL on /api/search-image');
+      throw new BadRequestError('Image URL is not allowed');
+    }
 
     const quota = await cacheRepository.tryIncrementWithinLimitFixedWindow(
       `search-image-rate-limit:${req.user.id}:minute`,
@@ -101,7 +116,18 @@ const handler = baseApi({ auth: 'jwtOnly' }).get(
         throw new BadRequestError('Response is not an image');
       }
 
-      const buffer = await streamWithSizeLimit(response, MAX_IMAGE_BYTES);
+      let buffer: Buffer;
+      try {
+        buffer = await streamWithSizeLimit(response, MAX_IMAGE_BYTES);
+      } catch (e) {
+        // The timeout is armed across this read too (see the comment on `timeoutId` above), so a
+        // slow-drip upstream aborts here, not in safeFetch - map it the same way, rather than
+        // letting a bare AbortError escape as a 500 and page on-call.
+        if (e instanceof Error && e.name === 'AbortError') {
+          throw new BadRequestError('Image fetch timed out');
+        }
+        throw e;
+      }
 
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Length', String(buffer.byteLength));

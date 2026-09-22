@@ -7,10 +7,21 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
+import { createCodeComponent, ReplyCompleteContext } from './PromptReplies';
+import { getMarkdownSyntaxTheme } from './markdown/syntaxTheme';
+
+const defaultSyntaxTheme = getMarkdownSyntaxTheme('dark');
 
 // Tiles are fetched through the authenticated API client and rendered as blob: URLs - a bare
 // <img src="/api/search-image?..."> would 401, since the bearer JWT only rides on axios.
-vi.mock('@client/app/contexts/apiClient', () => ({ api: { get: vi.fn() } }));
+//
+// Importing PromptReplies (for the real createCodeComponent, below) pulls in ApiContext
+// transitively, which registers `api.interceptors.response.use(...)` at module scope against
+// this same mocked `api` - so the mock needs a stand-in `interceptors`, not just `get`.
+vi.mock('@client/app/contexts/apiClient', () => ({
+  api: { get: vi.fn(), interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } } },
+  isPublicPath: () => false,
+}));
 import { api } from '@client/app/contexts/apiClient';
 
 const apiGet = vi.mocked(api.get);
@@ -205,26 +216,19 @@ describe('SearchResultCards', () => {
  * regex and plugins, so a language rename that breaks the capture fails here.
  */
 describe('the markdown fence seam', () => {
-  // Mirrors PromptReplies.createCodeComponent: same capture, same plugins, same dispatch.
+  // Drives the actual dispatch code, not a reimplementation of it - a fence-language typo or a
+  // wrong `completed` wire-up here is exactly the kind of regression a mirrored `code` component
+  // would stay green through.
   const CAPTURE_LANGUAGE = /language-(\w+)/;
 
   const renderMarkdown = (markdown: string, replyComplete = false) =>
     render(
       <CssVarsProvider theme={appTheme}>
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            code: ({ className, children }) => {
-              const language = CAPTURE_LANGUAGE.exec(className || '')?.[1];
-              if (language === SEARCH_RESULT_CARDS_LANGUAGE) {
-                return <SearchResultCards content={String(children)} replyComplete={replyComplete} />;
-              }
-              return <code className={className}>{children}</code>;
-            },
-          }}
-        >
-          {markdown}
-        </ReactMarkdown>
+        <ReplyCompleteContext.Provider value={replyComplete}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: createCodeComponent(defaultSyntaxTheme) }}>
+            {markdown}
+          </ReactMarkdown>
+        </ReplyCompleteContext.Provider>
       </CssVarsProvider>
     );
 

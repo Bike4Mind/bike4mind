@@ -1,9 +1,21 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolDefinition, ToolContext } from '../../base/types';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
-import { CitableSource } from '@bike4mind/common';
+import { CitableSource, signImageUrl } from '@bike4mind/common';
 import { resolveWebSearchProvider, type WebSearchImageResult, type WebSearchProviderResult } from './providers';
 import { WEB_SEARCH_CARDS_PROMPT } from '../../../prompts';
+
+/** Config `generateTools()` threads in for this tool alone - see toolGenerators.ts's `config` arg. */
+export interface WebSearchToolConfig {
+  /**
+   * Signs every image URL shown to the model so `/api/search-image` can verify one came from an
+   * actual search result before fetching it server-side, rather than trusting the model's copy of
+   * it unconditionally. Reuses SECRET_ENCRYPTION_KEY (see ChatCompletionFeatures.telemetryHmacSecret
+   * for the same pattern) - no dedicated secret needed. A caller that leaves this unset gets images
+   * that fail verification and render as "Image unavailable" rather than an insecure fallback.
+   */
+  imageUrlSigningSecret?: string;
+}
 
 // serpApiSearch lives in providers.ts (alongside the provider abstraction) but is re-exported here
 // so its external import path (`.../websearch`) and the existing tests stay stable.
@@ -47,15 +59,16 @@ export function shouldIncludeImages(
   return results.filter(r => !!r.thumbnail).length + imageResults.length >= MIN_IMAGE_RESULTS;
 }
 
-/** The image pool, rendered for the model as one line per picture. */
-export function formatImageResults(images: WebSearchImageResult[]): string {
+/** The image pool, rendered for the model as one line per picture. `imageUrlSigningSecret` signs
+ *  each URL so the proxy can verify it later - see WebSearchToolConfig. */
+export function formatImageResults(images: WebSearchImageResult[], imageUrlSigningSecret = ''): string {
   return [
     'Images found for this search (use these to build cards; each is already attributed to its own page):',
     '',
     ...images.map(
       (image, index) =>
         `${index + 1}. ${image.title || image.source}\n` +
-        `   image: ${image.url}\n` +
+        `   image: ${signImageUrl(image.url, imageUrlSigningSecret)}\n` +
         `   source: ${image.source}\n` +
         `   page: ${image.pageUrl}`
     ),
@@ -73,7 +86,8 @@ export const WEB_SEARCH_NOT_CONFIGURED_MSG =
 
 export async function performWebSearch(
   adapters: GetEffectiveApiKeyAdapters,
-  params: WebSearchParams
+  params: WebSearchParams,
+  imageUrlSigningSecret = ''
 ): Promise<WebSearchResult> {
   Logger.globalInstance.log('🔍 WebSearch Tool: Starting search for query:', params.query);
 
@@ -117,7 +131,10 @@ export async function performWebSearch(
 
     const formattedResults = results
       .map((result, index) => {
-        const imageLine = withImages && result.images?.length ? `Images: ${result.images.join(' | ')}\n` : '';
+        const imageLine =
+          withImages && result.images?.length
+            ? `Images: ${result.images.map(url => signImageUrl(url, imageUrlSigningSecret)).join(' | ')}\n`
+            : '';
         return (
           `${index + 1}. **${result.title}**\n${result.snippet}\n` +
           imageLine +
@@ -126,7 +143,8 @@ export async function performWebSearch(
       })
       .join('\n');
 
-    const imageSection = withImages && imageResults.length ? `\n${formatImageResults(imageResults)}\n` : '';
+    const imageSection =
+      withImages && imageResults.length ? `\n${formatImageResults(imageResults, imageUrlSigningSecret)}\n` : '';
 
     const formattedOutput = formattedResults
       ? `Here's what I found from searching the web:\n\n${formattedResults}` +
@@ -143,11 +161,15 @@ export async function performWebSearch(
 
 export const webSearchTool: ToolDefinition = {
   name: 'web_search',
-  implementation: (context: ToolContext) => ({
+  implementation: (context: ToolContext, toolConfig?: WebSearchToolConfig) => ({
     toolFn: async value => {
       const params = value as WebSearchParams;
       await context.onStart?.('web_search', params);
-      const { formattedResults, citables } = await performWebSearch({ db: context.db }, params);
+      const { formattedResults, citables } = await performWebSearch(
+        { db: context.db },
+        params,
+        toolConfig?.imageUrlSigningSecret
+      );
 
       // statusUpdate Object.assigns this partial onto the quest, so citables must be nested
       // under promptMeta; the receiver is responsible for merging promptMeta.citables.

@@ -100,6 +100,7 @@ export * from './utils/answerDiagnosis';
 export * from './utils/requestId';
 export * from './utils/inviteToken';
 export * from './utils/anonymousSessionId';
+export * from './utils/signedImageUrl';
 export * from './utils/sanitizeTelemetryError';
 export * from './utils/sessionRedaction';
 export * from './utils/promptMetaRedaction';
