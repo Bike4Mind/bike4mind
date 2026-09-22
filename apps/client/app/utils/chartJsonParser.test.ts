@@ -42,7 +42,13 @@ describe('chartJsonParser - code fence regex growth', () => {
     // The newline-bearing cases above never reached the horizontal-whitespace consumer
     // that used to sit before the body: only a run with no newline in it made that
     // consumer give back one character at a time, rescanning to end on each step.
-    assertLinearGrowth(n => '```json' + ' '.repeat(n) + 'x', 40000);
+    // n must clear the 500ms ceiling on the pre-fix regex without letting a regression
+    // hang past the test timeout: the ceiling check runs only after measure(small)
+    // returns, and the parser blocks the single JS thread, so vitest's testTimeout
+    // cannot preempt it mid-measure. Measured directly against the old pattern
+    // (/```(?:json|recharts)?\s*\n?([\s\S]*?)\n?\s*```/) at n=2500: median 2763ms
+    // (runs 3121/2763/2664ms) - well over the ceiling, but seconds, not hours.
+    assertLinearGrowth(n => '```json' + ' '.repeat(n) + 'x', 2500);
   });
 });
 

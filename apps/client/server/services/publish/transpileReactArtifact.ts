@@ -67,23 +67,109 @@ function getBabel(): Promise<typeof import('@babel/standalone')> {
   return babelPromise;
 }
 
-// Any relative reference (import/export-from, side-effect import, require) points at a sibling
-// file the single-file bundle can't resolve - reject like the in-app sandbox does.
-const REL_IMPORT_PATTERNS: readonly RegExp[] = [
-  /(?:import|export)\b[^;'"]*\bfrom\s*['"](\.\.?\/[^'"]+)['"]/,
-  /\bimport\s*['"](\.\.?\/[^'"]+)['"]/,
-  /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/,
-];
+const WS = /\s/;
+const WORD = /\w/;
 
-function findRelativeImport(source: string): string | null {
-  for (const pattern of REL_IMPORT_PATTERNS) {
-    const m = source.match(pattern);
-    if (m) return m[1];
+// Any relative reference (import/export-from, side-effect import, require) points at a sibling
+// file the single-file bundle can't resolve - reject like the in-app sandbox does. The match set
+// belongs to the sandbox preview (apps/client/pages/api/react-artifact-sandbox.ts), which still
+// ships these three patterns to the browser and must keep finding exactly what this file finds:
+//   /(?:import|export)\b[^;'"]*\bfrom\s*['"](\.\.?\/[^'"]+)['"]/  -> findRelativeImportFrom below
+//   /\bimport\s*['"](\.\.?\/[^'"]+)['"]/                          -> RELATIVE_SIDE_EFFECT_IMPORT
+//   /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/                  -> RELATIVE_REQUIRE
+// Only the first was super-linear. The other two stay regexes: a start position can only reach the
+// one quote adjacent to it, so their backtracking runs are disjoint and total work is linear
+// (measured flat under a millisecond at 32k keywords, where the first pattern took 3.1s).
+const RELATIVE_SIDE_EFFECT_IMPORT = /\bimport\s*['"](\.\.?\/[^'"]+)['"]/;
+const RELATIVE_REQUIRE = /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/;
+
+/** `['"](\.\.?\/[^'"]+)['"]` anchored at `quoteAt`: a quote, `./` or `../`, then a non-empty run
+ *  to the next quote of EITHER kind - the two quote classes are independent in the patterns above,
+ *  so a mismatched pair (`'./x"`) matches and must keep matching. */
+function relativeSpecifierAt(source: string, quoteAt: number): { specifier: string; end: number } | null {
+  const quote = source[quoteAt];
+  if (quote !== "'" && quote !== '"') return null;
+  let p = quoteAt + 1;
+  if (source[p] !== '.') return null;
+  if (source[++p] === '.') p++;
+  if (source[p] !== '/') return null;
+  const contentStart = ++p;
+  while (p < source.length && source[p] !== "'" && source[p] !== '"') p++;
+  if (p === contentStart || p >= source.length) return null;
+  return { specifier: source.slice(quoteAt + 1, p), end: p + 1 };
+}
+
+/** First `;` or quote at or after `from`: where a greedy `[^;'"]*` has to stop. */
+function nextClauseTerminator(source: string, from: number): number {
+  for (let p = from; p < source.length; p++) {
+    const c = source[p];
+    if (c === ';' || c === "'" || c === '"') return p;
+  }
+  return -1;
+}
+
+/** The `\bfrom\s*` tail that must sit immediately before the opening quote at `at`, with the
+ *  relative specifier it opens. `\s*` can only end where the quote begins, so `from` is at one
+ *  fixed offset: the start of the whitespace run before the quote, minus its own length. */
+function relativeFromTail(source: string, at: number): { fromAt: number; specifier: string } | null {
+  const spec = relativeSpecifierAt(source, at);
+  if (!spec) return null;
+  let wsStart = at;
+  while (wsStart > 0 && WS.test(source[wsStart - 1])) wsStart--;
+  const fromAt = wsStart - 4;
+  if (fromAt < 0 || !source.startsWith('from', fromAt)) return null;
+  if (fromAt > 0 && WORD.test(source[fromAt - 1])) return null; // the `\b` before `from`
+  return { fromAt, specifier: spec.specifier };
+}
+
+/**
+ * `/(?:import|export)\b[^;'"]*\bfrom\s*['"](\.\.?\/[^'"]+)['"]/` without its per-keyword rescan of
+ * the rest of the file (3.1s on 32k keywords, quadratic). The greedy `[^;'"]*` cannot cross a `;`
+ * or a quote and the pattern's own opening quote has to follow `from\s*`, so that first terminator
+ * IS the opening quote and `from` sits at one fixed offset before it: one candidate per keyword
+ * instead of one per position. Leftmost keyword that completes the shape wins, as in the regex.
+ */
+function findRelativeImportFrom(source: string): string | null {
+  let importAt = source.indexOf('import');
+  let exportAt = source.indexOf('export');
+  let terminator = -1;
+  let tailFor = -1;
+  let tail: { fromAt: number; specifier: string } | null = null;
+  while (importAt !== -1 || exportAt !== -1) {
+    let at: number;
+    if (exportAt === -1 || (importAt !== -1 && importAt < exportAt)) {
+      at = importAt;
+      importAt = source.indexOf('import', at + 1);
+    } else {
+      at = exportAt;
+      exportAt = source.indexOf('export', at + 1);
+    }
+    const afterKeyword = at + 6;
+    if (WORD.test(source[afterKeyword] ?? '')) continue; // the `\b` after import/export
+    // Both lookups are monotone in `afterKeyword`, so each one advances at most once per keyword.
+    if (terminator < afterKeyword) {
+      terminator = nextClauseTerminator(source, afterKeyword);
+      if (terminator === -1) return null; // no `;`/quote left: no later keyword can match either
+    }
+    if (tailFor !== terminator) {
+      tailFor = terminator;
+      tail = relativeFromTail(source, terminator);
+    }
+    // `[^;'"]*` starts at the keyword, so a `from` before it belongs to an earlier statement.
+    if (tail && tail.fromAt >= afterKeyword) return tail.specifier;
   }
   return null;
 }
 
-const WS = /\s/;
+/** Exported for unit tests (differential vs the original patterns). */
+export function findRelativeImport(source: string): string | null {
+  const importFrom = findRelativeImportFrom(source);
+  if (importFrom !== null) return importFrom;
+  const sideEffect = source.match(RELATIVE_SIDE_EFFECT_IMPORT);
+  if (sideEffect) return sideEffect[1];
+  const required = source.match(RELATIVE_REQUIRE);
+  return required ? required[1] : null;
+}
 
 function replaceImportStatements(
   source: string,
@@ -115,8 +201,10 @@ function braceSpan(text: string, greedy = false): { open: number; close: number 
  * and dependency scan below are regex passes that run BEFORE Babel's typescript preset, so they'd
  * otherwise emit broken `const { type Foo } = ...` or gate a type-only package as a missing runtime
  * dep. Runs on the raw source so the whole pipeline (relative-import guard, dep gating, rewrite)
- * sees value imports only. Idempotent. Kept in sync with the sandbox preview
- * (react-artifact-sandbox.ts).
+ * sees value imports only. Idempotent. Only the MATCH SET is kept in sync with the sandbox preview
+ * (react-artifact-sandbox.ts): that copy still emits the original regexes into the browser, so it
+ * strips the same imports by a different implementation and keeps the super-linear behavior this
+ * scanner replaced.
  *
  * Handles: whole-clause `import type { X } from 'm'` / `import type X from 'm'` (dropped), and
  * inline `import { type X, y } from 'm'` -> `import { y } from 'm'`. A binding literally named
@@ -227,12 +315,15 @@ export function rewriteImportsToRequire(rawSource: string): string {
  * statement is bounded by the first `;` or quote after it and the cursor only advances, so this
  * stays linear on the `from`-less input that made the original regexes quadratic.
  *
+ * The leading class is the one assertPublishableDependencies uses: every whitespace character
+ * except a line terminator, so an import indented with \f or U+00A0 is still line-initial here.
+ *
  * Known blind spot: a survivor that isn't line-initial (e.g. after a `;` on the same line) escapes
  * this pattern. Narrow in practice - scanImportStatements has no line anchor and already rewrites
  * those, so this only misses one if the scanner has separately failed on that input.
  */
 function findSurvivingEsmImport(code: string): string | null {
-  const lineInitialImport = /^[ \t]*import\s/gm;
+  const lineInitialImport = /^[^\S\n\r\u2028\u2029]*import\s/gm;
   let m: RegExpExecArray | null;
   while ((m = lineInitialImport.exec(code)) !== null) {
     const importEnd = m.index + m[0].length - 1; // the mandatory whitespace char after `import`
@@ -276,7 +367,11 @@ export function assertPublishableDependencies(source: string): void {
   // Bare side-effect imports (`import 'x';`) match neither extractImportedModules nor the rewrite,
   // so they would survive into the classic inline <script> and blank the page (parse error before
   // the render try/catch). Reject cleanly instead.
-  if (/^\s*import\s+['"]/m.test(source)) {
+  // The leading run excludes line terminators rather than spelling out [ \t]: /m already anchors
+  // ^ at every line start, so a run that crossed one only re-reached a position ^ matches anyway,
+  // and excluding them is what stops a file of bare newlines from rescanning to end at each start.
+  // Every other \s character stays in, so \f, \v and \u00a0 before an import still match.
+  if (/^[^\S\n\r\u2028\u2029]*import\s+['"]/m.test(source)) {
     throw new ReactArtifactTranspileError(
       'Side-effect imports (import "...") are not supported. Import a default or named binding, or inline the code.'
     );

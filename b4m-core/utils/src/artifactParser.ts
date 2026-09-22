@@ -30,9 +30,10 @@ export interface ArtifactParseResult {
  * Drops every complete `<!--...-->`, leaving an unterminated `<!--` where it is.
  * A cursor pair rather than /<!--[\s\S]*?-->/g, whose lazy body re-scans to the end of
  * the input from every opening that never finds a closer: quadratic on a run of bare
- * `<!--` tokens. MUST STAY IN SYNC with the twin in apps/client/app/utils/artifactParser.ts.
+ * `<!--` tokens. Exported so apps/client/app/utils/artifactParser.ts imports this copy
+ * instead of keeping its own.
  */
-function stripHtmlComments(value: string): string {
+export function stripHtmlComments(value: string): string {
   let out = '';
   let cursor = 0;
   for (;;) {
@@ -175,12 +176,12 @@ function hasReactComponentLine(code: string): boolean {
   return false;
 }
 
-// The next two are duplicated in apps/client/app/utils/artifactParser.ts (hasReactComponentLine
-// above is not: the client splits that decision across per-language predicates).
-// MUST STAY IN SYNC with that copy.
+// The next two are exported for apps/client/app/utils/artifactParser.ts to import
+// (hasReactComponentLine above is not shared: the client splits that decision across
+// per-language predicates).
 
 // A full HTML document: a <!DOCTYPE ...> followed later by a closing </html>.
-function hasFullHtmlDocument(code: string): boolean {
+export function hasFullHtmlDocument(code: string): boolean {
   const lower = code.toLowerCase();
   const doctype = lower.indexOf('<!doctype');
   if (doctype < 0) return false;
@@ -188,11 +189,80 @@ function hasFullHtmlDocument(code: string): boolean {
 }
 
 // A complete SVG: an opening <svg followed later by a closing </svg>.
-function hasCompleteSvg(code: string): boolean {
+export function hasCompleteSvg(code: string): boolean {
   const lower = code.toLowerCase();
   const open = lower.indexOf('<svg');
   if (open < 0) return false;
   return lower.indexOf('</svg>', open + '<svg'.length) >= 0;
+}
+
+const MERMAID_FENCE_OPEN = /```mermaid/gi;
+const MERMAID_WS = /\s/;
+
+/** CR, LINE SEPARATOR, PARAGRAPH SEPARATOR: the three characters `.` and `\n` together miss. */
+function isMermaidBodyBreak(code: number): boolean {
+  return code === 0x0d || code === 0x2028 || code === 0x2029;
+}
+
+/**
+ * Mermaid fences, as `/```mermaid\s*((?:.*\n)*?)```/gi` matched them - the regex shipped on
+ * main; the differential suite pins the scanner against it and against the tightened
+ * `((?:\S(?:.|\n)*?\n)??)` body this branch passed through on the way here. But without the
+ * per-fence rescan: an unclosed fence used to send a fresh lazy scan to the end of the input for
+ * every later fence, which is quadratic in the number of fences. Leading whitespace stays OUTSIDE
+ * the body exactly as the old `\s*` had it, and an empty body still wins over a later closer
+ * because the old group was lazily optional.
+ *
+ * The body could only ever end at a newline sitting directly before a closing fence, and - the
+ * constraint no reader would guess from the fence syntax - the body was built out of `.` and `\n`
+ * alone, so it could never contain a CR, a LINE SEPARATOR or a PARAGRAPH SEPARATOR.
+ * Both position sets are indexed once and walked with cursors that only move forward, since each
+ * fence's body starts past the previous one's. A fence whose nearest closer sits past one of
+ * those break characters fails outright instead of reaching for a later closer: every later
+ * closer is further right, so it would cross the same character.
+ */
+export function scanMermaidFences(source: string): { start: number; end: number; body: string }[] {
+  const closers: number[] = [];
+  for (let at = source.indexOf('\n```'); at !== -1; at = source.indexOf('\n```', at + 1)) closers.push(at);
+  const breaks: number[] = [];
+  for (let at = 0; at < source.length; at++) if (isMermaidBodyBreak(source.charCodeAt(at))) breaks.push(at);
+
+  const fences: { start: number; end: number; body: string }[] = [];
+  let closerAt = 0;
+  let breakAt = 0;
+  MERMAID_FENCE_OPEN.lastIndex = 0;
+  for (let open = MERMAID_FENCE_OPEN.exec(source); open; open = MERMAID_FENCE_OPEN.exec(source)) {
+    const start = open.index;
+    let body = start + open[0].length;
+    while (body < source.length && MERMAID_WS.test(source[body])) body++;
+    if (source.startsWith('```', body)) {
+      fences.push({ start, end: body + 3, body: '' });
+      MERMAID_FENCE_OPEN.lastIndex = body + 3;
+      continue;
+    }
+    // A body needs at least its leading non-whitespace character, so the closer has to sit past it.
+    while (closerAt < closers.length && closers[closerAt] <= body) closerAt++;
+    // Nothing left to close this fence, and any later fence starts further right, so none either.
+    if (closerAt === closers.length) continue;
+    while (breakAt < breaks.length && breaks[breakAt] < body) breakAt++;
+    const close = closers[closerAt];
+    if (breakAt < breaks.length && breaks[breakAt] < close) continue;
+    fences.push({ start, end: close + 4, body: source.slice(body, close + 1) });
+    MERMAID_FENCE_OPEN.lastIndex = close + 4;
+  }
+  return fences;
+}
+
+function replaceMermaidFences(source: string, replace: (fullMatch: string, body: string) => string): string {
+  const fences = scanMermaidFences(source);
+  if (!fences.length) return source;
+  let out = '';
+  let at = 0;
+  for (const fence of fences) {
+    out += source.slice(at, fence.start) + replace(source.slice(fence.start, fence.end), fence.body);
+    at = fence.end;
+  }
+  return out + source.slice(at);
 }
 
 /**
@@ -275,17 +345,8 @@ ${codeContent.trim()}
 </artifact>`;
   });
 
-  // Detect Mermaid code blocks and mixed content. The body used to be a repeated
-  // (?:.*\n)*? group that the greedy \s* could backtrack into, so an unclosed fence
-  // after a long whitespace run cost time quadratic in the run. One lazy group with
-  // an explicit non-whitespace first character leaves \s* nothing to give back. The
-  // match set is unchanged: (?:.|\n) spans exactly the characters the old body could
-  // cross, the body still starts at the first non-whitespace character and still has to
-  // end on a newline, and the group is lazily optional so a closer sitting right after
-  // the whitespace run still wins over a later one.
-  const mermaidCodeBlockRegex = /```mermaid\s*((?:\S(?:.|\n)*?\n)??)```/gi;
-
-  content = content.replace(mermaidCodeBlockRegex, (fullMatch, codeContent) => {
+  // Detect Mermaid code blocks and mixed content.
+  content = replaceMermaidFences(content, (fullMatch, codeContent) => {
     // Clean and validate the Mermaid syntax
     const { isValid, cleanedContent, errors } = validateMermaidSyntax(codeContent);
 

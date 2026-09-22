@@ -6,6 +6,7 @@ import {
   mapMimeTypeToArtifactType,
 } from '@bike4mind/common';
 import { detectElidedContent } from '@bike4mind/utils/artifactElision';
+import { stripHtmlComments, hasFullHtmlDocument, hasCompleteSvg } from '@bike4mind/utils/artifactParser';
 import { tryParseChartJSON } from './chartJsonParser';
 import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
 
@@ -32,27 +33,6 @@ export interface ParsedArtifact {
 export interface ArtifactParseResult {
   artifacts: ParsedArtifact[];
   cleanedContent: string; // Content with artifact tags removed
-}
-
-/**
- * Drops every complete `<!--...-->`, leaving an unterminated `<!--` where it is.
- * A cursor pair rather than /<!--[\s\S]*?-->/g, whose lazy body re-scans to the end of
- * the input from every opening that never finds a closer: quadratic on a run of bare
- * `<!--` tokens. MUST STAY IN SYNC with the twin in b4m-core/utils/src/artifactParser.ts.
- */
-function stripHtmlComments(value: string): string {
-  let out = '';
-  let cursor = 0;
-  for (;;) {
-    const open = value.indexOf('<!--', cursor);
-    if (open < 0) break;
-    const close = value.indexOf('-->', open + '<!--'.length);
-    // Closers only move forward, so no later opening has one either.
-    if (close < 0) break;
-    out += value.slice(cursor, open);
-    cursor = close + '-->'.length;
-  }
-  return cursor === 0 ? value : out + value.slice(cursor);
 }
 
 /**
@@ -488,9 +468,6 @@ export function validateArtifactContent(
 }
 
 /**
- * Detects tool outputs (JSON responses from tools) and converts them to artifact syntax
- */
-/**
  * Removes double quotes from model-controlled text bound for a title="..." attribute.
  * The artifact attribute parser (ATTRIBUTE_REGEX) has no escape mechanism, so one would
  * truncate the attribute and leave the rest to be read as further attributes.
@@ -503,6 +480,9 @@ function stripTitleQuotes(title: unknown): string {
   return String(title ?? '').replace(/"/g, '');
 }
 
+/**
+ * Detects tool outputs (JSON responses from tools) and converts them to artifact syntax
+ */
 function convertToolOutputsToArtifacts(content: string): string {
   // Look for any JSON-like structure that contains type field with our target types
   // This approach is more forgiving of escaping variations
@@ -659,25 +639,6 @@ ${toolOutput.content}
 // untruncated body, and an indicator past the window leaves the fence a plain code block.
 const MAX_FENCE_SCAN_CHARS = 256000;
 
-// Linear anchor checks for the html and svg fence detectors, mirroring the twins in
-// b4m-core/utils/src/artifactParser.ts. MUST STAY IN SYNC with that copy.
-
-// A full HTML document: a <!DOCTYPE ...> followed later by a closing </html>.
-function hasFullHtmlDocument(code: string): boolean {
-  const lower = code.toLowerCase();
-  const doctype = lower.indexOf('<!doctype');
-  if (doctype < 0) return false;
-  return lower.indexOf('</html>', doctype + '<!doctype'.length) >= 0;
-}
-
-// A complete SVG: an opening <svg followed later by a closing </svg>.
-function hasCompleteSvg(code: string): boolean {
-  const lower = code.toLowerCase();
-  const open = lower.indexOf('<svg');
-  if (open < 0) return false;
-  return lower.indexOf('</svg>', open + '<svg'.length) >= 0;
-}
-
 /**
  * Post-processes AI responses to detect code blocks that should be artifacts
  * and converts them to proper artifact syntax as a fallback
@@ -689,9 +650,9 @@ export function convertCodeBlocksToArtifacts(content: string): string {
   // Then process code blocks
   // The fence patterns below put no \s* in front of the body group: it is greedy over
   // characters the lazy body matches anyway, so a fence label followed by a long
-  // whitespace run and no closer backtracks quadratically. Every callback trims. (The
-  // core twin's mermaid fence keeps its \s*, safe there because that body starts with
-  // \S; there is no mermaid fence here.)
+  // whitespace run and no closer backtracks quadratically. Every callback trims. (There is
+  // no mermaid fence here; core has one, and its match set depends on the \s* skip between
+  // label and body, so core walks that fence by index instead of dropping the \s*.)
   // Detect React component code blocks - use stricter matching
   // Match tsx/jsx explicitly, or javascript/typescript with React patterns
   const reactCodeBlockRegex = /```(tsx?|jsx|javascript|typescript)([\s\S]*?)```/gi;
@@ -745,6 +706,10 @@ ${codeContent.trim()}
   // anchors are checked in the callback. With <!DOCTYPE and </html> anchored inside
   // the pattern, two lazy multi-line groups had to split the body between them, so a
   // fence that never closed and repeated </html> cost time quadratic in body size.
+  // The two-tier split is the original behavior; what changed is that two adjacent `html`
+  // fences are now two artifacts, where the old regex merged them into one. A body carrying
+  // a CR, U+2028 or U+2029 is also accepted now, where the old `.`/`\n`-built pattern could
+  // not reach across one - the core parser has always matched those bodies.
   const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
@@ -773,7 +738,9 @@ ${codeContent.trim()}
   });
 
   // Detect SVG code blocks. Same shape as the HTML pass above: match the fence,
-  // then check for a complete <svg> element in the callback.
+  // then check for a complete <svg> element in the callback. Same accepted widening: a body
+  // carrying a CR, U+2028 or U+2029 is promoted here where the old `.`/`\n`-built pattern left
+  // it a code block, and there is no svg fragment pass behind this one to catch it.
   const svgCodeBlockRegex = /```svg([\s\S]*?)```/gi;
 
   content = content.replace(svgCodeBlockRegex, (match, codeContent) => {

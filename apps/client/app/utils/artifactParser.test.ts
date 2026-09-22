@@ -603,6 +603,23 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
 
+  // The two cases below pin a deliberate deviation from the pre-change regexes, which built
+  // their bodies from `.` and `\n` and so could never cross a CR, a U+2028 or a U+2029.
+  // `[\s\S]*?` can, which is what the core parser already did.
+
+  it('promotes an svg fence whose body carries a CR, which the pre-change pattern refused', () => {
+    const out = convertCodeBlocksToArtifacts('```svg\n<svg>\r</svg>\n```');
+    expect(out).toContain('type="image/svg+xml"');
+    expect(out).not.toContain('```svg');
+  });
+
+  it('titles a CRLF doctype html fence as a document, where the pre-change pattern left it a snippet', () => {
+    const out = convertCodeBlocksToArtifacts('```html\n<!DOCTYPE html>\r\n<html><body>hi</body></html>\n```');
+    expect(out).toContain('title="HTML Page"');
+    expect(out).toContain('identifier="html-page"');
+    expect(out).not.toContain('HTML Snippet');
+  });
+
   // Mirrors MAX_FENCE_SCAN_CHARS in the source file (not exported). The five React
   // indicator predicates are regex-based and read only the first 256000 chars of a
   // fence body, so indicators sitting past that window leave the fence a plain code
@@ -621,6 +638,14 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   it('promotes the same react fence when its indicators sit inside the scan window', () => {
     const indicators = "import React from 'react';\nconst x = useState(0);\nreturn (\n<Foo />";
     const input = '```javascript\n' + indicators + '\n' + 'x'.repeat(MAX_FENCE_SCAN_CHARS + 50000) + '\n```';
+    expect(convertCodeBlocksToArtifacts(input)).toContain('type="application/vnd.ant.react"');
+  });
+
+  it('promotes a react fence whose indicators sit just inside the scan window', () => {
+    // Pins the window from below: without this, lowering MAX_FENCE_SCAN_CHARS would silently
+    // de-promote real fences while both of the cases above still passed.
+    const indicators = "import React from 'react';\nconst x = useState(0);\nreturn (\n<Foo />";
+    const input = '```javascript\n' + 'x'.repeat(MAX_FENCE_SCAN_CHARS - 1000) + '\n' + indicators + '\n```';
     expect(convertCodeBlocksToArtifacts(input)).toContain('type="application/vnd.ant.react"');
   });
 
@@ -810,17 +835,24 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // Sizes are set by the widest old-vs-new gap that still leaves the current parser
     // far inside the ratio budget. The first shape promotes every document, so its
     // output allocation is what costs: at n=22000 the current parser itself ran 20-60ms
-    // a side and the ratio went marginal, flaking. Each size has to be large enough that
-    // the pre-fix parser breaks its ceiling on its own: the first shape needs 6000
-    // (at 3000 it ran 13/52ms, ratio 2.1, and passed pre-fix). Pre-fix core at the first
-    // two sizes runs 52/207ms and 32/132ms, ratio ~3.9 each, against 1.1/2.1ms and
-    // 0.1/0.2ms now. The third shape runs this file's own (client) parser: pre-fix
-    // client measured ~35.5s at n=6400, so it fails the SMALL_INPUT_MS_CEILING baseline
-    // check outright, well before any ratio is taken, against 0.2/0.4ms now.
+    // a side and the ratio went marginal, flaking. Each size has to be large enough
+    // that pre-fix trips one of the two checks - which check differs per shape.
+    // Shapes 1 and 2 trip the ratio, not the ceiling: their pre-fix baselines stay
+    // well under 500ms, so only the doubled call fails them. The first shape needs
+    // 6000 (at 3000 it ran 13/52ms, ratio 2.1, and passed pre-fix). Pre-fix client
+    // (this suite's own convertCodeBlocksToArtifacts - assertLinearGrowth's run
+    // param defaults to it, not the core parser exercised below) at the first two
+    // sizes runs 52/209ms and 32/127ms, ratio ~4.0 and ~3.9, against 1.0/1.9ms and
+    // 0.05/0.09ms now. The third shape also runs the client parser, but trips the
+    // ceiling itself: pre-fix client measured ~1.16s per call at n=2000 (median of
+    // 1155/1157/1154ms), over double the 500ms ceiling alone. measure()'s
+    // best-of-three still runs all 3 attempts before that assertion can fire, so
+    // real time-to-failure is roughly 3x the per-call cost - measured directly at
+    // ~3.5s total (median of 3492/3482/3520ms), against 0.03/0.06ms now.
     const noOutputCheck = () => {};
     assertLinearGrowth(n => '<html></html>\n'.repeat(n), 6000, noOutputCheck);
     assertLinearGrowth(n => '<html>\n'.repeat(n), 6000, noOutputCheck);
-    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 6400, noOutputCheck);
+    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 2000, noOutputCheck);
   });
 });
 

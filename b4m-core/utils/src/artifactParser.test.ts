@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { convertCodeBlocksToArtifacts, parseArtifacts, isSvgGraphicallyEmpty } from './artifactParser';
+import {
+  convertCodeBlocksToArtifacts,
+  parseArtifacts,
+  isSvgGraphicallyEmpty,
+  scanMermaidFences,
+} from './artifactParser';
 
 // The baseline-vs-SMALL_INPUT_MS_CEILING check below is the real regression guard: it
 // fails fast instead of letting a hang run out the clock. The ratio check is secondary
@@ -564,6 +569,14 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
       const input = '```mermaid\ngraph TD' + LINE_SEPARATOR + '  A-->B\n```';
       expect(convertCodeBlocksToArtifacts(input)).toBe(input);
     });
+
+    it('stays linear on a long run of mermaid openers that never close, scaling linearly', () => {
+      // One opener every 11 characters and no closer anywhere: the old regex started a fresh
+      // lazy scan to the end of the input from each one. Measured on this shape it runs 781ms
+      // at n=10000 and 3153ms at 20000, so the baseline alone breaks the ceiling pre-fix and
+      // fails fast instead of wedging the shard; the index scan is 0.85ms and 1.54ms.
+      assertLinearGrowth(n => '```mermaidZ'.repeat(n), 10000);
+    });
   });
 });
 
@@ -696,5 +709,181 @@ describe('convertCodeBlocksToArtifacts - linear rewrite of the fenced-code detec
     // it is not promoted even though it uses hooks - preserving prior behavior.
     const plain = `${F}jsx\nconst Widget = () => {\n  const [x] = useState(0);\n  return <p>{x}</p>;\n};\n${F}`;
     expect(convertCodeBlocksToArtifacts(plain)).toBe(plain);
+  });
+});
+
+/**
+ * The mermaid fence is the one detector found by an index scan instead of a regex, so the regex
+ * it replaced is the oracle for its match set: anything the scanner finds, drops or spans
+ * differently is a behavior change. Two oracles, both run by the differential below:
+ * `mainMermaidFence` is the literal shipped on main, and `originalMermaidFence` is the tightened
+ * equivalent this branch carried before the scanner replaced it.
+ */
+const mainMermaidFence = () => /```mermaid\s*((?:.*\n)*?)```/gi;
+const originalMermaidFence = () => /```mermaid\s*((?:\S(?:.|\n)*?\n)??)```/gi;
+
+/**
+ * The same pattern with the body's `(?:.|\n)` widened to `[\s\S]`, which drops exactly the
+ * constraint the scanner's break-character rule keeps. Stand-in for a scanner without that rule.
+ */
+const mermaidFenceWithoutBreakRule = () => /```mermaid\s*((?:\S[\s\S]*?\n)??)```/gi;
+
+/**
+ * One record per match: span plus the captured body. The RegExp is rebuilt per input by every
+ * caller below, never shared: a `/gi` object carries `lastIndex` across inputs, and a leaked one
+ * reports no match at all on the next input, which reads as an over-match by the scanner.
+ */
+function fenceRecords(re: RegExp, source: string): string[] {
+  const out: string[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    out.push(JSON.stringify([m.index, m.index + m[0].length, m[1]]));
+    if (m[0].length === 0) re.lastIndex++;
+  }
+  return out;
+}
+
+const scannerRecords = (source: string): string[] =>
+  scanMermaidFences(source).map(f => JSON.stringify([f.start, f.end, f.body]));
+
+interface Directions {
+  /** Oracle matches the implementation under test did not produce. */
+  missing: number;
+  /** Matches the implementation produced that the oracle does not have. */
+  extra: number;
+  examples: string[];
+}
+
+function compareFences(expected: string[], actual: string[], source: string, into: Directions): void {
+  const missing = expected.filter(r => !actual.includes(r));
+  const extra = actual.filter(r => !expected.includes(r));
+  into.missing += missing.length;
+  into.extra += extra.length;
+  if ((missing.length || extra.length) && into.examples.length < 5) {
+    into.examples.push(`${JSON.stringify(source)} missing=${missing.join('')} extra=${extra.join('')}`);
+  }
+}
+
+/** Deterministic LCG (Numerical Recipes constants) so CI generates the identical corpus every run. */
+function lcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+/**
+ * Pieces the generator splices into fence-shaped cases. The three characters the old body could
+ * not cross are in here alone and glued to a closer, since they are the point of the differential.
+ */
+const FENCE_ATOMS: readonly string[] = [
+  '`',
+  '``',
+  '```',
+  '````',
+  'm',
+  'M',
+  'e',
+  'r',
+  'a',
+  'i',
+  'd',
+  'Z',
+  '-',
+  '>',
+  'mermaid',
+  'MERMAID',
+  'Mermaid',
+  'mermai',
+  'ermaid',
+  '\n',
+  '\r',
+  '\r\n',
+  '\t',
+  ' ',
+  '  ',
+  String.fromCharCode(0x2028),
+  String.fromCharCode(0x2029),
+  '```mermaid',
+  '```mermaid\n',
+  '\n```',
+  'graph TD',
+  'A-->B',
+  '',
+  String.fromCharCode(0x2028) + '```',
+  '\r\n```',
+  '```\n',
+];
+
+const FENCE_CORPUS: readonly string[] = (() => {
+  const build = (count: number, seed: number, maxAtoms: number): string[] => {
+    const rand = lcg(seed);
+    const cases: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const atoms = 1 + Math.floor(rand() * maxAtoms);
+      let text = '';
+      for (let j = 0; j < atoms; j++) text += FENCE_ATOMS[Math.floor(rand() * FENCE_ATOMS.length)];
+      cases.push(text);
+    }
+    return cases;
+  };
+  // Two lengths: the short cases concentrate opener/closer/break interactions, the long ones
+  // reach the multi-fence paths where a rejected fence still has to leave both cursors usable.
+  return [...build(20000, 0x5eed1234, 14), ...build(4000, 0xc0ffee, 40)];
+})();
+
+describe('scanMermaidFences differential vs the pre-change regexes', () => {
+  it.each([
+    ['the regex shipped on main', mainMermaidFence],
+    ['the tightened form this branch replaced', originalMermaidFence],
+  ])('reproduces every match of %s, and produces no match it did not have', (_label, oracle) => {
+    const fences: Directions = { missing: 0, extra: 0, examples: [] };
+    for (const source of FENCE_CORPUS) {
+      compareFences(fenceRecords(oracle(), source), scannerRecords(source), source, fences);
+    }
+    expect(fences).toEqual({ missing: 0, extra: 0, examples: [] });
+  });
+
+  it('exercises the corpus rather than passing vacuously', () => {
+    const withMatches = FENCE_CORPUS.filter(s => scanMermaidFences(s).length > 0).length;
+    expect(withMatches).toBeGreaterThan(3000);
+  });
+
+  it('matches a body that is one unbroken run, which a leaked lastIndex hides', () => {
+    // This input is why the oracle is rebuilt per case: a shared `/gi` whose lastIndex was left
+    // past 35 by the previous case returns nothing here, and the difference reads as the
+    // scanner inventing a match. Both sides agree; only the leak disagreed.
+    const source = ' graph TD  ```MERMAIDmermaid ``\n```';
+    expect(scannerRecords(source)).toEqual(fenceRecords(mainMermaidFence(), source));
+    expect(scannerRecords(source)).toEqual(fenceRecords(originalMermaidFence(), source));
+    expect(scanMermaidFences(source)).toEqual([{ start: 11, end: 35, body: 'mermaid ``\n' }]);
+  });
+});
+
+/**
+ * Control: the characters `(?:.|\n)` leaves out of the body. Widening it to `[\s\S]` lets a body
+ * run across a CR or a Unicode separator and reach a closer the original never could - the
+ * over-match the scanner's break-character rule exists to refuse.
+ */
+describe('mutation control: the body characters the original regex could not cross', () => {
+  it('reaches a closer past a CR that neither the original nor the scanner accepts', () => {
+    const source = '```mermaidgraph\r\nTD\n```';
+    expect(fenceRecords(mainMermaidFence(), source)).toEqual([]);
+    expect(fenceRecords(originalMermaidFence(), source)).toEqual([]);
+    expect(scanMermaidFences(source)).toEqual([]);
+    expect(fenceRecords(mermaidFenceWithoutBreakRule(), source)).toHaveLength(1);
+  });
+
+  it('diverges from the original regex and from the scanner, so the differential can fail', () => {
+    const vsOriginal: Directions = { missing: 0, extra: 0, examples: [] };
+    const vsScanner: Directions = { missing: 0, extra: 0, examples: [] };
+    for (const source of FENCE_CORPUS) {
+      const widened = fenceRecords(mermaidFenceWithoutBreakRule(), source);
+      compareFences(fenceRecords(originalMermaidFence(), source), widened, source, vsOriginal);
+      compareFences(scannerRecords(source), widened, source, vsScanner);
+    }
+    expect(vsOriginal.extra).toBeGreaterThan(1000);
+    expect(vsScanner.extra).toBeGreaterThan(1000);
   });
 });

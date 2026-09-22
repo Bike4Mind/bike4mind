@@ -5,6 +5,7 @@ import {
   rewriteImportsToRequire,
   stripTypeOnlyImports,
   assertPublishableDependencies,
+  findRelativeImport,
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
@@ -599,6 +600,24 @@ describe('rewriteImportsToRequire ESM survivor backstop', () => {
     expect(call).toThrow(/Could not rewrite an ESM import/);
   });
 
+  it('catches a survivor indented with whitespace that is neither a space nor a tab', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    // NBSP and form feed: whitespace that a [ \t] leading class would walk straight past,
+    // leaving the survivor unreported. The side-effect-import guard admits both.
+    for (const indent of [String.fromCharCode(0x00a0), String.fromCharCode(0x0c)]) {
+      const call = () => mod.rewriteImportsToRequire(`${indent}import { useState } from 'react';`);
+      expect(call).toThrow(mod.ReactArtifactTranspileError);
+      expect(call).toThrow(/Could not rewrite an ESM import/);
+    }
+  });
+
   it('reports the surviving statement, not just the first line of the file', async () => {
     vi.resetModules();
     vi.doMock('@client/app/utils/importStatements', async () => ({
@@ -685,4 +704,318 @@ describe('stripTypeOnlyImports differential vs the original brace regexes', () =
   it('is not vacuous: the pass actually rewrites most of these', () => {
     expect(CASES.filter(src => stripTypeOnlyImports(src) !== src).length).toBeGreaterThan(10);
   });
+});
+
+/**
+ * Verbatim origin/main implementation: the oracle for the three relative-import patterns the
+ * scanner replaced. Pattern [0] rescanned the rest of the file from every `import`/`export`
+ * (quadratic: ~0.8s at 16k keywords, ~3.1s at 32k); [1] and [2] are still regexes in the source
+ * and are here so the differential pins the whole match set, not just the rewritten third of it.
+ */
+const originalRelativePatterns = (): readonly RegExp[] => [
+  /(?:import|export)\b[^;'"]*\bfrom\s*['"](\.\.?\/[^'"]+)['"]/,
+  /\bimport\s*['"](\.\.?\/[^'"]+)['"]/,
+  /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/,
+];
+
+/** First pattern to match wins and yields its specifier - the order `findRelativeImport` keeps. */
+function findWith(patterns: readonly RegExp[], source: string): string | null {
+  for (const pattern of patterns) {
+    const m = source.match(pattern);
+    if (m) return m[m.length - 1];
+  }
+  return null;
+}
+
+/** Deterministic LCG (Numerical Recipes constants) so CI generates the identical corpus every run. */
+function lcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+const REL_CORPUS: readonly string[] = (() => {
+  // Heads/mids include the near misses that decide the match: a keyword inside an identifier (no
+  // `\b` before `import` in pattern [0], one in [1]/[2]), `from` glued to a word or a brace, a `;`
+  // that closes the clause early, and `\u00a0` as the whitespace before `from`.
+  const HEADS = [
+    'import',
+    'export',
+    'require(',
+    'aimport',
+    'importx',
+    'exportz',
+    'my_require(',
+    'from',
+    'xfrom',
+    'reexport',
+  ];
+  const MIDS = [
+    '',
+    ' ',
+    '  ',
+    '\n',
+    '\t',
+    ' a ',
+    ' Foo, { bar } ',
+    ' * as ns ',
+    ';',
+    ' ; ',
+    ' from',
+    'from',
+    ' from ',
+    '  from  ',
+    'nsfrom ',
+    '}from',
+    ' from\n',
+    '\u00a0from\u00a0',
+    'a from ',
+    ' from;',
+    '{a}from',
+  ];
+  const QUOTES = ["'", '"'];
+  const SPECS = ['./a', '../b/c', './', '.', '..', './x.js', 'react', '/abs', './a b', '.././', './..', ''];
+  const TAILS = [';', '', ')', ' )', '\n', ' ;', '  )', '\t)', ')\n', '"'];
+  const NOISE = [
+    '',
+    'const a = 1;\n',
+    'var x = "y";\n',
+    '// c\n',
+    '\n\n',
+    'require(',
+    'from ',
+    "'",
+    '"',
+    ';',
+    'import ',
+    'export ',
+  ];
+  const rand = lcg(0x5eed1234);
+  const pick = (arr: readonly string[]): string => arr[Math.floor(rand() * arr.length)];
+  const cases: string[] = [];
+  for (let i = 0; i < 12000; i++) {
+    let text = pick(NOISE);
+    const n = 1 + Math.floor(rand() * 3);
+    for (let j = 0; j < n; j++) {
+      text += pick(HEADS) + pick(MIDS) + pick(QUOTES) + pick(SPECS) + pick(QUOTES) + pick(TAILS) + pick(NOISE);
+    }
+    cases.push(text);
+  }
+  return cases;
+})();
+
+describe('findRelativeImport differential vs the original relative-import regexes', () => {
+  it('returns what the original patterns returned on every case, in both directions', () => {
+    const missed: string[] = []; // oracle found a reference the scanner does not report
+    const invented: string[] = []; // scanner reports one the oracle does not have
+    const differed: string[] = []; // both found one, but not the same specifier
+    for (const source of REL_CORPUS) {
+      const expected = findWith(originalRelativePatterns(), source);
+      const actual = findRelativeImport(source);
+      if (expected === actual) continue;
+      const bucket = expected === null ? invented : actual === null ? missed : differed;
+      if (bucket.length < 5) bucket.push(`${JSON.stringify(source)} oracle=${expected} scanner=${actual}`);
+      else bucket.push('');
+    }
+    expect({ missed: missed.length, invented: invented.length, differed: differed.length }).toEqual({
+      missed: 0,
+      invented: 0,
+      differed: 0,
+    });
+    expect([...missed, ...invented, ...differed].slice(0, 5)).toEqual([]);
+  });
+
+  it('is not vacuous: every one of the three patterns fires somewhere in the corpus', () => {
+    const perPattern = [0, 0, 0];
+    for (const source of REL_CORPUS) {
+      const patterns = originalRelativePatterns();
+      for (let i = 0; i < patterns.length; i++) {
+        if (patterns[i].test(source)) {
+          perPattern[i]++;
+          break;
+        }
+      }
+    }
+    expect(perPattern[0]).toBeGreaterThan(500);
+    expect(perPattern[1]).toBeGreaterThan(50);
+    expect(perPattern[2]).toBeGreaterThan(50);
+    expect(REL_CORPUS.filter(s => findRelativeImport(s) !== null).length).toBeGreaterThan(1000);
+  });
+
+  it('mutation control: the differential fails on a near-miss change to any of the three patterns', () => {
+    const base = originalRelativePatterns();
+    const MUTANTS: readonly [string, readonly RegExp[]][] = [
+      [
+        'import-from: no \\b before `from`',
+        [/(?:import|export)\b[^;'"]*from\s*['"](\.\.?\/[^'"]+)['"]/, base[1], base[2]],
+      ],
+      [
+        'import-from: quote kinds must match',
+        [/(?:import|export)\b[^;'"]*\bfrom\s*(['"])(\.\.?\/[^'"]+)\1/, base[1], base[2]],
+      ],
+      [
+        'import-from: clause may cross a quote or `;`',
+        [/(?:import|export)\b[\s\S]*?\bfrom\s*['"](\.\.?\/[^'"]+)['"]/, base[1], base[2]],
+      ],
+      ['side-effect: no \\b before `import`', [base[0], /import\s*['"](\.\.?\/[^'"]+)['"]/, base[2]]],
+      ['require: no whitespace after `(`', [base[0], base[1], /\brequire\(['"](\.\.?\/[^'"]+)['"]\s*\)/]],
+    ];
+    const caught = MUTANTS.map(([label, patterns]) => {
+      const disagreements = REL_CORPUS.filter(s => findWith(patterns, s) !== findRelativeImport(s)).length;
+      return `${label}: ${disagreements > 0 ? 'caught' : 'MISSED'}`;
+    });
+    expect(caught).toEqual(MUTANTS.map(([label]) => `${label}: caught`));
+  });
+});
+
+// Ceiling-first near-linear-scaling guard, as in b4m-core/utils/src/artifactParser.test.ts: a
+// fixed budget only fails after the synchronous scan returns, so a quadratic regression would
+// wedge the CI shard for minutes instead of failing. Every `small` below is chosen so the
+// pre-change implementation blows the ceiling on the FIRST measurement.
+const MIN_BASELINE_MS = 25;
+const GROWTH_RATIO_CEILING = 3;
+const SMALL_INPUT_MS_CEILING = 250;
+
+function assertLinearGrowth(build: (n: number) => string, small: number, run: (input: string) => unknown): void {
+  // Best of three: a GC pause in one window is worth more than the whole budget here, while a
+  // genuinely super-linear scan is slow on every attempt.
+  const measure = (n: number): number => {
+    const input = build(n);
+    let bestMs = Infinity;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const startedAt = performance.now();
+      run(input);
+      bestMs = Math.min(bestMs, performance.now() - startedAt);
+    }
+    return bestMs;
+  };
+  const baselineMs = measure(small);
+  expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+  const doubledMs = measure(small * 2);
+  expect(doubledMs / Math.max(baselineMs, MIN_BASELINE_MS)).toBeLessThan(GROWTH_RATIO_CEILING);
+}
+
+describe('findRelativeImport scales linearly on the shapes the regexes rescanned', () => {
+  // A keyword run with no `;` and no quote is the worst case: the greedy `[^;'"]*` ran to the end
+  // of the file from every keyword. 16000 keywords cost the original 0.79s, past the ceiling.
+  it('scans a bare import keyword run in near-linear time', () => {
+    assertLinearGrowth(n => 'import '.repeat(n), 16000, findRelativeImport);
+  });
+
+  it('scans a bare export keyword run in near-linear time', () => {
+    assertLinearGrowth(n => 'export '.repeat(n), 16000, findRelativeImport);
+  });
+
+  it('scans keyword runs that do reach a quote in near-linear time', () => {
+    assertLinearGrowth(n => 'import '.repeat(n) + '"', 16000, findRelativeImport);
+    assertLinearGrowth(n => 'import "./'.repeat(n), 16000, findRelativeImport);
+    assertLinearGrowth(n => 'require("./'.repeat(n), 16000, findRelativeImport);
+  });
+});
+
+/**
+ * The side-effect-import guard's leading run. `/m` re-anchors `^` after every line terminator, so
+ * excluding the terminators from the run cannot change the predicate - which is what the oracle
+ * below pins - but it is what stops a file of bare terminators from rescanning to the end at each
+ * one. That exclusion is therefore only observable in the growth guards, and the original was
+ * quadratic on all four axes (`\n`, `\r`, `\u2028`, `\u2029`), not just the first.
+ */
+const ORIGINAL_SIDE_EFFECT_IMPORT = /^\s*import\s+['"]/m;
+
+function sideEffectGuardFires(source: string): boolean {
+  try {
+    assertPublishableDependencies(source);
+    return false;
+  } catch (e) {
+    // The guard runs before the dependency scan, so any other rejection means it did not fire.
+    return e instanceof ReactArtifactTranspileError && /Side-effect imports/.test(e.message);
+  }
+}
+
+describe('side-effect import guard leading-whitespace run', () => {
+  // Every `\s` character that is not a line terminator has to stay in the match set: `[ \t]*`
+  // would silently drop these and let the bare ESM import through into the bundle.
+  const INDENTS: readonly [string, string][] = [
+    ['space', ' '],
+    ['tab', '\t'],
+    ['form feed', '\f'],
+    ['vertical tab', '\v'],
+    ['no-break space', '\u00a0'],
+    ['byte order mark', '\ufeff'],
+    ['ideographic space', '\u3000'],
+  ];
+  for (const [label, ws] of INDENTS) {
+    it(`fires for an import indented with ${label}`, () => {
+      expect(sideEffectGuardFires(`${ws}${ws}import './side-effect';`)).toBe(true);
+      expect(() => assertPublishableDependencies(`${ws}import 'polyfill';`)).toThrow(/Side-effect imports/);
+    });
+  }
+
+  const TERMINATORS: readonly [string, string][] = [
+    ['LF', '\n'],
+    ['CR', '\r'],
+    ['CRLF', '\r\n'],
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ];
+  for (const [label, term] of TERMINATORS) {
+    it(`fires on the line after a ${label}, and does not read the ${label} as leading whitespace`, () => {
+      expect(sideEffectGuardFires(`const a = 1;${term}import 'polyfill';`)).toBe(true);
+      // Same shape with non-whitespace before the import: the run cannot bridge the terminator to
+      // reach it, and neither could `\s*`, because `^` never anchors mid-line.
+      expect(sideEffectGuardFires(`const a = 1;${term}const b = 2; import 'polyfill';`)).toBe(false);
+      expect(sideEffectGuardFires(`x${term}${term}y import 'polyfill';`)).toBe(false);
+    });
+  }
+
+  const WS_CORPUS: readonly string[] = (() => {
+    const WS_CHARS = [' ', '  ', '\t', '\f', '\v', '\u00a0', '\ufeff', '\u3000', '\u2000', '\u205f', '', ' \t'];
+    const TERMS = ['\n', '\r', '\r\n', '\u2028', '\u2029'];
+    const HEADS = ['import', 'import ', 'import\t', 'importx', 'xximport', 'export', 'export '];
+    const BODIES = ["'./a';", '"pkg";', "'react'", 'X from "react";', '{ a } from "m";', "x from './a'", ';', ''];
+    const rand = lcg(0x1eaf00d);
+    const pick = (arr: readonly string[]): string => arr[Math.floor(rand() * arr.length)];
+    const cases: string[] = [];
+    for (let i = 0; i < 4000; i++) {
+      const lines: string[] = [];
+      const n = 1 + Math.floor(rand() * 4);
+      for (let j = 0; j < n; j++) lines.push(pick(WS_CHARS) + pick(HEADS) + pick(BODIES));
+      let text = lines[0];
+      for (let j = 1; j < lines.length; j++) text += pick(TERMS) + lines[j];
+      cases.push(text);
+    }
+    return cases;
+  })();
+
+  it('agrees with the original /^\\s*import\\s+/m guard on every whitespace and terminator shape', () => {
+    const disagreements = WS_CORPUS.filter(s => sideEffectGuardFires(s) !== ORIGINAL_SIDE_EFFECT_IMPORT.test(s));
+    expect({ count: disagreements.length, examples: disagreements.slice(0, 5).map(s => JSON.stringify(s)) }).toEqual({
+      count: 0,
+      examples: [],
+    });
+  });
+
+  it('is not vacuous: the corpus fires the guard and also leaves plenty of cases unflagged', () => {
+    const fired = WS_CORPUS.filter(sideEffectGuardFires).length;
+    expect(fired).toBeGreaterThan(200);
+    expect(WS_CORPUS.length - fired).toBeGreaterThan(200);
+  });
+
+  it('mutation control: the equivalence above fails for a run that drops non-terminator whitespace', () => {
+    const narrowed = /^[ \t]*import\s+['"]/m; // the tempting fix; drops \f, \v, \u00a0 and friends
+    const disagreements = WS_CORPUS.filter(s => narrowed.test(s) !== ORIGINAL_SIDE_EFFECT_IMPORT.test(s));
+    expect(disagreements.length).toBeGreaterThan(0);
+  });
+
+  // The original guard was quadratic on each of these: `\s*` swallowed the terminators, so every
+  // line start rescanned the rest of the file. 32768 terminators cost it 0.44s (LF/CR) to 0.72s
+  // (U+2028/U+2029), past the ceiling; the current guard stays under a tenth of a millisecond.
+  for (const [label, term] of TERMINATORS) {
+    if (term === '\r\n') continue; // half as many line starts per char; the single-char axes cover it
+    it(`scales linearly on a file of bare ${label} line terminators`, () => {
+      assertLinearGrowth(n => term.repeat(n), 32768, assertPublishableDependencies);
+    });
+  }
 });
