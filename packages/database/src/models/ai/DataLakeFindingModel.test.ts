@@ -328,4 +328,55 @@ describe('DataLakeFindingRepository', () => {
     expect(await repo.listByLake('lake-1')).toHaveLength(0);
     expect(await repo.listByLake('lake-2')).toHaveLength(1);
   });
+
+  describe('listDismissedKeys (#3045)', () => {
+    it('returns only the dismissed keys for that lake and detector', async () => {
+      const dismiss = async (over: Partial<RecordLakeFindingInput>) => {
+        const row = await repo.recordDetected(input(over));
+        await repo.resolveFinding(row.lakeId, row.id, {
+          status: 'dismissed',
+          resolvedByUserId: 'u1',
+          resolvedAt: SEEN_LATER,
+        });
+      };
+
+      await dismiss({ subject: 'uptime' });
+      await dismiss({ subject: 'other lake', lakeId: 'lake-2' });
+      await dismiss({ subject: 'model detector', detector: 'model' });
+      await repo.recordDetected(input({ subject: 'still open' }));
+      const resolved = await repo.recordDetected(input({ subject: 'was resolved' }));
+      await repo.resolveFinding(resolved.lakeId, resolved.id, {
+        status: 'resolved',
+        resolvedByUserId: 'u1',
+        resolvedAt: SEEN_LATER,
+      });
+
+      const keys = await repo.listDismissedKeys('lake-1', 'lexical');
+
+      // `resolved` is absent deliberately: that problem recurring is exactly what a curator has to
+      // see, where a dismissed one recurring tells them nothing they did not already rule on.
+      expect(keys).toEqual([{ kind: 'metric-disagreement', subject: 'uptime' }]);
+    });
+
+    it("returns the key halves alone, never the row's excerpts", async () => {
+      const row = await repo.recordDetected(input());
+      await repo.resolveFinding(row.lakeId, row.id, {
+        status: 'dismissed',
+        resolvedByUserId: 'u1',
+        resolvedAt: SEEN_LATER,
+      });
+
+      const [key] = await repo.listDismissedKeys('lake-1', 'lexical');
+
+      // This is read on every detection run, so carrying `sources` would pull each dismissed row's
+      // document excerpts across purely to discard them.
+      expect(Object.keys(key).sort()).toEqual(['kind', 'subject']);
+    });
+
+    it('is empty for a lake with nothing dismissed', async () => {
+      await repo.recordDetected(input());
+
+      expect(await repo.listDismissedKeys('lake-1', 'lexical')).toEqual([]);
+    });
+  });
 });

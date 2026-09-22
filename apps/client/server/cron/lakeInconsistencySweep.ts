@@ -126,8 +126,12 @@ interface ScanOutcome {
 }
 
 async function scanLake(lake: SweepLake, nowYear: number, computedAt: Date): Promise<ScanOutcome> {
-  const report = await dataLakeService.detectLakeInconsistencies(lake, nowYear, {
-    db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository },
+  const { report, suppressed } = await dataLakeService.detectLakeInconsistencies(lake, nowYear, {
+    db: {
+      fabFiles: fabFileRepository,
+      fabFileChunks: fabFileChunkRepository,
+      dataLakeFindings: dataLakeFindingRepository,
+    },
     logger,
   });
 
@@ -135,10 +139,13 @@ async function scanLake(lake: SweepLake, nowYear: number, computedAt: Date): Pro
   // used to do. The rows are the record now; the summary is the run's own footnote. So a summary
   // that is dated while its rows are missing would be the misleading half - `inconsistencyComputedAt`
   // is what a surface reads as "detection ran", and it must not outrun the findings it summarizes.
+  //
+  // Suppressed findings (#3045 - a curator dismissed them) are recorded alongside the reported ones
+  // so the row behind a dismissal keeps tracking new evidence even though it stays out of the report.
   const { recorded, failed } = await dataLakeService.recordLakeFindings(
     lake.id,
-    report.findings,
-    { detector: 'lexical', seenAt: computedAt },
+    [...report.findings, ...suppressed],
+    { detector: dataLakeService.INCONSISTENCY_DETECTOR, seenAt: computedAt },
     { db: { dataLakeFindings: dataLakeFindingRepository }, logger }
   );
 

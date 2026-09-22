@@ -62,6 +62,7 @@ vi.mock('@bike4mind/services', () => ({
     detectLakeInconsistencies: h.detectLakeInconsistencies,
     recordLakeFindings: h.recordLakeFindings,
     INCONSISTENCY_FINDINGS_CAP: 200,
+    INCONSISTENCY_DETECTOR: 'lexical',
   },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -97,6 +98,12 @@ const invoke = (body: Record<string, unknown> = {}, method = 'POST') => {
   };
 };
 
+/** The detector's result envelope: the stored report plus the dismissals it kept out of it. */
+const result = (over: Record<string, unknown> = {}, suppressed: unknown[] = []) => ({
+  report: report(over),
+  suppressed,
+});
+
 const report = (over: Record<string, unknown> = {}) => ({
   findings: [],
   countsByKind: { 'superlative-conflict': 0, 'metric-disagreement': 0, 'relationship-conflict': 0, 'expired-claim': 0 },
@@ -110,7 +117,7 @@ const report = (over: Record<string, unknown> = {}) => ({
 beforeEach(() => {
   vi.clearAllMocks();
   h.assertLakeWriteAccess.mockResolvedValue(lake);
-  h.detectLakeInconsistencies.mockResolvedValue(report());
+  h.detectLakeInconsistencies.mockResolvedValue(result());
   h.update.mockResolvedValue(lake);
   h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
   h.listByLake.mockResolvedValue([]);
@@ -132,7 +139,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     // run-level half - the findings are rows, and a copy here would be an unkeyed duplicate of every
     // one of them plus a document excerpt nothing can ever sweep.
     h.detectLakeInconsistencies.mockResolvedValue(
-      report({ findings: [{ kind: 'expired-claim', subject: 's', evidence: [], documentCount: 2 }] })
+      result({ findings: [{ kind: 'expired-claim', subject: 's', evidence: [], documentCount: 2 }] })
     );
 
     const { done } = invoke();
@@ -153,6 +160,9 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
 
     expect(h.detectLakeInconsistencies.mock.calls[0][0]).toBe(lake);
     expect(typeof h.detectLakeInconsistencies.mock.calls[0][1]).toBe('number');
+    // Without this adapter the detector has no way to see what a curator dismissed, and every run
+    // re-reports it (#3045).
+    expect(h.detectLakeInconsistencies.mock.calls[0][2].db.dataLakeFindings).toBeDefined();
   });
 
   it('stores what the detector returned without re-capping it', async () => {
@@ -169,7 +179,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
       documentCount: 2,
     }));
     h.detectLakeInconsistencies.mockResolvedValue(
-      report({ findings, truncated: true, countsByKind: { 'expired-claim': 250, 'metric-disagreement': 100 } })
+      result({ findings, truncated: true, countsByKind: { 'expired-claim': 250, 'metric-disagreement': 100 } })
     );
 
     const { json, done } = invoke();
@@ -343,7 +353,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
   ];
 
   it('emits every finding the run produced as a durable row', async () => {
-    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
 
     const { done } = invoke();
     await done;
@@ -351,14 +361,34 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
     expect(h.recordLakeFindings).toHaveBeenCalledTimes(1);
     const [lakeId, passed, options] = h.recordLakeFindings.mock.calls[0];
     expect(lakeId).toBe('lakeDoc1');
-    expect(passed).toBe(findings);
+    expect(passed).toEqual(findings);
     expect(options.detector).toBe('lexical');
+  });
+
+  it('records what a dismissal suppressed, so the row behind it does not freeze', async () => {
+    // Suppressed from the REPORT, current in the ROW. A dismissal keys on kind and subject, so the
+    // evidence under one can change into a worse contradiction with the row as its only trace.
+    const dismissedFinding = {
+      kind: 'superlative-conflict',
+      subject: 'crm',
+      evidence: [],
+      documentCount: 2,
+    };
+    h.detectLakeInconsistencies.mockResolvedValue(result({ findings }, [dismissedFinding]));
+
+    const { done } = invoke();
+    await done;
+
+    const [, passed] = h.recordLakeFindings.mock.calls[0];
+    expect(passed).toEqual([...findings, dismissedFinding]);
+    // ...and never into the summary, which carries no findings at all any more.
+    expect(h.update.mock.calls[0][0].inconsistencyReport).not.toHaveProperty('findings');
   });
 
   it('stamps the rows with the SAME instant it stamped the report', async () => {
     // A run's rows and its report have to agree on one instant. Were the clock read twice they would
     // drift by the write latency, and nothing downstream could line a report up with its findings.
-    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
 
     const { done } = invoke();
     await done;
@@ -372,7 +402,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
     // rows ARE the record, and `inconsistencyComputedAt` is what a surface reads as "detection
     // ran" - so a dated summary standing over findings that were never written is the misleading
     // half.
-    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
     const order: string[] = [];
     h.update.mockImplementation(async () => void order.push('summary'));
     h.recordLakeFindings.mockImplementation(async () => (order.push('findings'), { recorded: 2, failed: 0 }));
@@ -389,7 +419,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
     // two writes is not on its own a guard: without an explicit gate the handler sails past N
     // failures and stamps a fresh computedAt and a full countsByKind over zero persisted rows.
     // Since GET selects findings by that date, the result is counts with no findings beside them.
-    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
     h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 2 });
 
     const { done } = invoke();
@@ -407,7 +437,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
     // summary dated over a subset of rows overstates what a curator can actually open. Retrying is
     // safe - recordDetected is an idempotent upsert - and the last COMPLETE run's summary stays
     // correctly dated meanwhile.
-    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
     h.recordLakeFindings.mockResolvedValue({ recorded: 1, failed: 1 });
 
     const { done } = invoke();
@@ -422,7 +452,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
     // rendered by the same component as "show me the last run", and nothing it just found could be
     // resolved or assigned without a refetch.
     const row = { id: 'finding-9', kind: 'expired-claim', subject: 'roadmap', status: 'open', sources: [] };
-    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
     h.recordLakeFindings.mockResolvedValue({ recorded: 2, failed: 0 });
     h.listByLake.mockResolvedValue([row]);
 
@@ -436,7 +466,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
   });
 
   it('stays quiet when every finding was recorded', async () => {
-    h.detectLakeInconsistencies.mockResolvedValue(report({ findings }));
+    h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
     h.recordLakeFindings.mockResolvedValue({ recorded: 2, failed: 0 });
 
     const { done } = invoke();

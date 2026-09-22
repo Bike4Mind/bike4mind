@@ -134,8 +134,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     // The year is passed in rather than read inside the detector so the same corpus always produces
     // the same report - a stored result an owner already reviewed has to be comparable to the next.
-    const report = await dataLakeService.detectLakeInconsistencies(lake, new Date().getUTCFullYear(), {
-      db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository },
+    const { report, suppressed } = await dataLakeService.detectLakeInconsistencies(lake, new Date().getUTCFullYear(), {
+      db: {
+        fabFiles: fabFileRepository,
+        fabFileChunks: fabFileChunkRepository,
+        dataLakeFindings: dataLakeFindingRepository,
+      },
       logger: req.logger,
     });
 
@@ -149,13 +153,19 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // found refreshes that row rather than minting a second one - which is what makes the scheduled
     // sweep (`lakeInconsistencySweep`) repeatable rather than a duplicate factory.
     //
+    // Findings a curator DISMISSED are absent from `report` (#3045) but are recorded here too, along
+    // with everything the report kept: suppressed from what a curator is shown, current in the row
+    // behind it, so the evidence under a dismissal can change into a worse contradiction without the
+    // row freezing.
+    //
     // `computedAt` is passed as `seenAt` so a run's rows and its summary agree on one instant rather
     // than drifting by the write's latency - and so `renderStoredReport` below can use the summary's
     // own date to select the rows this run saw.
+    const allFindings = [...report.findings, ...suppressed];
     const { failed } = await dataLakeService.recordLakeFindings(
       lake.id,
-      report.findings,
-      { detector: 'lexical', seenAt: computedAt },
+      allFindings,
+      { detector: dataLakeService.INCONSISTENCY_DETECTOR, seenAt: computedAt },
       { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
     );
 
@@ -173,9 +183,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       req.logger?.warn('Lake findings partially recorded; summary not stored', {
         dataLakeId: lake.id,
         failed,
-        total: report.findings.length,
+        total: allFindings.length,
       });
-      throw new Error(`Recorded ${report.findings.length - failed} of ${report.findings.length} findings`);
+      throw new Error(`Recorded ${allFindings.length - failed} of ${allFindings.length} findings`);
     }
 
     // The SUMMARY only - `toScanSummary` drops the findings. Storing them here as well is what used

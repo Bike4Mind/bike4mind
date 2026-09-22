@@ -13,7 +13,7 @@ vi.mock('@bike4mind/database', () => ({
     markInconsistencyScanned: (...args: unknown[]) => mockMarkScanned(...args),
     update: (...args: unknown[]) => mockUpdateLake(...args),
   },
-  dataLakeFindingRepository: {},
+  dataLakeFindingRepository: { listDismissedKeys: vi.fn().mockResolvedValue([]) },
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
@@ -24,6 +24,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     detectLakeInconsistencies: (...args: unknown[]) => mockDetect(...args),
     recordLakeFindings: (...args: unknown[]) => mockRecordFindings(...args),
+    INCONSISTENCY_DETECTOR: 'lexical',
   },
 }));
 
@@ -82,6 +83,12 @@ const report = (overrides: Record<string, unknown> = {}) => ({
   ...overrides,
 });
 
+/** The detector's result envelope: the stored report plus the dismissals it kept out of it. */
+const detectResult = (overrides: Record<string, unknown> = {}, suppressed: unknown[] = []) => ({
+  report: report(overrides),
+  suppressed,
+});
+
 const metricValue = (name: string) => mockEmitMetric.mock.calls.find(call => call[1] === name)?.[2];
 
 describe('lakeInconsistencySweep cron', () => {
@@ -91,7 +98,7 @@ describe('lakeInconsistencySweep cron', () => {
     vi.resetAllMocks();
     mockFindDue.mockResolvedValue([]);
     mockHasMoreDue.mockResolvedValue(false);
-    mockDetect.mockResolvedValue(report());
+    mockDetect.mockResolvedValue(detectResult());
     mockRecordFindings.mockResolvedValue({ recorded: 1, failed: 0 });
     mockUpdateLake.mockResolvedValue(undefined);
     mockMarkScanned.mockResolvedValue(undefined);
@@ -187,7 +194,7 @@ describe('lakeInconsistencySweep cron', () => {
 
   it('isolates a per-lake failure so the rest of the run still completes', async () => {
     mockFindDue.mockResolvedValueOnce([lake({ id: 'lake-fail' }), lake({ id: 'lake-ok' })]).mockResolvedValueOnce([]);
-    mockDetect.mockRejectedValueOnce(new Error('chunk read blew up')).mockResolvedValue(report());
+    mockDetect.mockRejectedValueOnce(new Error('chunk read blew up')).mockResolvedValue(detectResult());
 
     const result = await handler();
 

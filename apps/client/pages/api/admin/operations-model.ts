@@ -68,8 +68,8 @@ const handler = baseApi()
           activeModel: {
             id: result.modelId,
             name: result.modelInfo.name,
-            imageModelId: result.imageModelId,
-            imageModelName: result.imageModelInfo.name,
+            imageModelId: result.imageModelId ?? config.imageModelId,
+            imageModelName: result.imageModelInfo?.name ?? config.imageModelId,
             speechModelId: config.speechModelId, // Use the saved config, not the result
             speechModelName: speechModelInfo?.name || config.speechModelId,
           },
