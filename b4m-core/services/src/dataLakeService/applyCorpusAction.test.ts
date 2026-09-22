@@ -1,9 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import {
-  applyCorpusAction,
-  type ApplyCorpusActionAdapters,
-  type CorpusActionRequest,
-} from './applyCorpusAction';
+import { applyCorpusAction, type ApplyCorpusActionAdapters, type CorpusActionRequest } from './applyCorpusAction';
 
 const removeFileFromDataLake = vi.hoisted(() => vi.fn());
 const setDataLakeFileTags = vi.hoisted(() => vi.fn());
@@ -122,6 +118,15 @@ describe('applyCorpusAction merge', () => {
     const { promise } = run({ action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-a'] });
     await expect(promise).rejects.toThrow(/cannot both keep and retire/);
   });
+
+  it('refuses when the kept document has since left the lake - a stale finding citing it is not proof', async () => {
+    const { promise } = run(
+      { action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b'] },
+      { files: { 'doc-a': { id: 'doc-a', userId: OWNER, tags: [] }, 'doc-b': member('doc-b') } }
+    );
+    await expect(promise).rejects.toThrow(/document to keep is not a member/);
+    expect(removeFileFromDataLake).not.toHaveBeenCalled();
+  });
 });
 
 describe('applyCorpusAction supersede', () => {
@@ -158,6 +163,40 @@ describe('applyCorpusAction supersede', () => {
   it('refuses a self-supersede', async () => {
     const { promise } = run({ action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-a' });
     await expect(promise).rejects.toThrow(/cannot supersede itself/);
+  });
+
+  it('refuses to retire a document that belongs to more than one lake by meta-tag - the ruling would never be honored', async () => {
+    const multiLakeDoc = {
+      ...member('doc-b'),
+      tags: [
+        { name: 'datalake:lake1', strength: 1 },
+        { name: 'datalake:other-lake', strength: 1 },
+      ],
+    };
+    const { promise, setLakeSupersession } = run(
+      { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+      { files: { 'doc-a': member('doc-a'), 'doc-b': multiLakeDoc } }
+    );
+    await expect(promise).rejects.toThrow(/belongs to more than one data lake/);
+    expect(setLakeSupersession).not.toHaveBeenCalled();
+  });
+
+  it('refuses a write that would close a supersession cycle', async () => {
+    // doc-b (the document this request wants to KEEP) is already ruled superseded-by doc-a for
+    // this lake. Writing "doc-a superseded by doc-b" on top would close a 2-cycle: doc-a's new
+    // entry points to doc-b, doc-b's existing entry points to doc-a.
+    const keepAlreadyRuledBehindRetire = {
+      ...member('doc-b'),
+      supersededInLakes: [
+        { dataLakeId: LAKE_ID, supersededByFabFileId: 'doc-a', decidedByUserId: OWNER, decidedAt: new Date() },
+      ],
+    };
+    const { promise, setLakeSupersession } = run(
+      { action: 'supersede', keepFabFileId: 'doc-b', retireFabFileId: 'doc-a' },
+      { files: { 'doc-a': member('doc-a'), 'doc-b': keepAlreadyRuledBehindRetire } }
+    );
+    await expect(promise).rejects.toThrow(/already ruled superseded/);
+    expect(setLakeSupersession).not.toHaveBeenCalled();
   });
 });
 
@@ -210,6 +249,75 @@ describe('applyCorpusAction guards', () => {
     );
     await expect(promise).rejects.toThrow(/already been ruled on/);
     expect(removeFileFromDataLake).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the lake does not exist', async () => {
+    const { deps } = makeDeps();
+    deps.db.dataLakes.findById = vi.fn(async () => null);
+    await expect(
+      applyCorpusAction(
+        actor,
+        LAKE_ID,
+        'finding-1',
+        { action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b'] },
+        deps
+      )
+    ).rejects.toThrow(/Data lake not found/);
+  });
+
+  it('refuses to act on a fallback (static-registry) lake before reading any finding', async () => {
+    const { deps, record } = makeDeps({ lake: lake({ id: 'opti-knowledge', createdByUserId: '' }) });
+    await expect(
+      applyCorpusAction(
+        { userId: OWNER, isAdmin: true },
+        'opti-knowledge',
+        'finding-1',
+        { action: 'merge', keepFabFileId: 'doc-a', retireFabFileIds: ['doc-b'] },
+        deps
+      )
+    ).rejects.toThrow(/built into the platform/);
+    expect(deps.db.dataLakeFindings.findById).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('refuses a supersede when setLakeSupersession finds nothing to write (the file vanished between read and write)', async () => {
+    const { deps, record } = makeDeps();
+    deps.db.fabFiles.setLakeSupersession = vi.fn(async () => false);
+    await expect(
+      applyCorpusAction(
+        actor,
+        LAKE_ID,
+        'finding-1',
+        { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+        deps
+      )
+    ).rejects.toThrow(/File not found in this data lake/);
+    expect(record).not.toHaveBeenCalled();
+  });
+
+  it('retries a failing audit write before giving up, and still throws once retries are exhausted', async () => {
+    const { deps, record } = makeDeps();
+    (deps.db.dataLakeCorpusActions.record as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('write boom'));
+    await expect(
+      applyCorpusAction(actor, LAKE_ID, 'finding-1', { action: 'retag', fabFileId: 'doc-a', tags: [] }, deps)
+    ).rejects.toThrow('write boom');
+    expect(record).toHaveBeenCalledTimes(3);
+  });
+
+  it('recovers from a transient audit-write failure without losing the outcome', async () => {
+    const { deps, record } = makeDeps();
+    (deps.db.dataLakeCorpusActions.record as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error('transient'))
+      .mockResolvedValueOnce({});
+    const result = await applyCorpusAction(
+      actor,
+      LAKE_ID,
+      'finding-1',
+      { action: 'retag', fabFileId: 'doc-a', tags: [] },
+      deps
+    );
+    expect(result.action).toBe('retag');
+    expect(record).toHaveBeenCalledTimes(2);
   });
 
   it('refuses an actor with no manage rung on the lake', async () => {

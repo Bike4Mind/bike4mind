@@ -3460,6 +3460,15 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
         if (ret.mimeType === 'application/pdf') {
           delete ret.content;
         }
+        // Curator ruling metadata (who ruled, when, which lake) is control-plane, not something
+        // any client renders, and every raw-file read route (GET /api/files/:id, byIds, the
+        // shared-lake fallback above) otherwise hands it to whoever can merely READ the file -
+        // no lake-manage check gates those routes. The audit trail (DataLakeCorpusActionModel)
+        // is the durable, permission-checked home for this fact; internal collapse/service code
+        // reads the field straight off repository queries, never through this JSON transform.
+        if (ret.supersededInLakes) {
+          delete ret.supersededInLakes;
+        }
       },
     },
     toObject: {

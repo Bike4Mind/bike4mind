@@ -1345,9 +1345,14 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * a ruling whose winner is not in the scoped set. Both matter: the door refuses a bad ruling at
    * write time, the collapse refuses to act on one that went bad afterwards.
    */
-  setLakeSupersession(fabFileId: string, entry: LakeSupersession): Promise<boolean>;
+  // Optional, unlike the rest of this interface's mutation methods: IFabFileRepository is
+  // exported, and an external implementer written before #3046 has no reason to have these two.
+  // Marking them optional keeps that implementer source-compatible - every internal caller that
+  // actually needs them (applyCorpusAction) requires them locally via `Required<Pick<...>>`
+  // instead of leaning on this interface being universally implemented.
+  setLakeSupersession?(fabFileId: string, entry: LakeSupersession): Promise<boolean>;
   /** Drop one lake's ruling, restoring the file to ranking. Returns whether a ruling was removed. */
-  clearLakeSupersession(fabFileId: string, dataLakeId: string): Promise<boolean>;
+  clearLakeSupersession?(fabFileId: string, dataLakeId: string): Promise<boolean>;
 
   /**
    * The single-name variant of `pushTagsByFabFileId` that returns the PRE-IMAGE of the file the

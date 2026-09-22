@@ -79,6 +79,10 @@ describe('dataLakeCleanup consumer', () => {
           // documents the lake teardown destroys globally, including those quoted by findings that
           // belong to a DIFFERENT lake sharing the file.
           dataLakeFindings: expect.anything(),
+          // And this lake's curator corpus-action trail (#3046), reached through `?.` for the same
+          // reason once more: an unwired repo here would leave the trail behind every purge with no
+          // symptom, since the sweep call itself is a silent no-op on a missing port.
+          dataLakeCorpusActions: expect.anything(),
         }),
         logger,
       })

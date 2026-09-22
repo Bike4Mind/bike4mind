@@ -4,8 +4,8 @@ import { FabFile, fabFileRepository as repo } from './FabFileModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 /**
- * The curator supersession marker (#3046) against real Mongo. The write is a pull-then-push pair
- * rather than a positional update, and the properties that buys - first ruling and re-ruling on one
+ * The curator supersession marker (#3046) against real Mongo. The write is an update-then-insert
+ * pair rather than a single positional update, and the properties that buys - first ruling and re-ruling on one
  * code path, at most one entry per lake, no cross-lake interference - are exactly the ones a mocked
  * repository cannot show.
  */
@@ -79,5 +79,13 @@ describe('FabFileRepository lake supersession', () => {
 
   it('reports false when the file does not exist', async () => {
     expect(await repo.setLakeSupersession('64b7f9c2d1e4a5b6c7d8e9f0', ruling())).toBe(false);
+  });
+
+  it('never serializes the ruling to a client, even though it is stored', async () => {
+    await repo.setLakeSupersession(fileId, ruling());
+
+    expect(await stored()).not.toEqual([]);
+    const doc = await FabFile.findById(fileId);
+    expect(doc?.toJSON()).not.toHaveProperty('supersededInLakes');
   });
 });

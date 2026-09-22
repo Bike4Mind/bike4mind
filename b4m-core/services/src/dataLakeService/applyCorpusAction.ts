@@ -16,6 +16,7 @@ import { canManageLake, resolveLakeManageRung } from './manageRule';
 import { lakeMembershipSignals, type MembershipActor } from './lakeMembership';
 import { removeFileFromDataLake, type RemoveFileFromDataLakeAdapters } from './removeFileFromDataLake';
 import { setDataLakeFileTags, type SetDataLakeFileTagsAdapters } from './setDataLakeFileTags';
+import { datalakeTagsFrom } from './getDataLakePrompts';
 
 /**
  * The corpus half of finding triage (#3046): a curator who has decided which of two conflicting
@@ -75,10 +76,7 @@ export interface RetagCorpusAction {
 }
 
 export type CorpusActionRequest = (
-  | MergeCorpusAction
-  | SupersedeCorpusAction
-  | UnsupersedeCorpusAction
-  | RetagCorpusAction
+  MergeCorpusAction | SupersedeCorpusAction | UnsupersedeCorpusAction | RetagCorpusAction
 ) & {
   /** The curator's note, recorded on the audit row. */
   note?: string;
@@ -87,12 +85,21 @@ export type CorpusActionRequest = (
 export interface ApplyCorpusActionAdapters {
   db: RemoveFileFromDataLakeAdapters['db'] &
     SetDataLakeFileTagsAdapters['db'] & {
-      fabFiles: Pick<IFabFileRepository, 'setLakeSupersession' | 'clearLakeSupersession'>;
+      // Required here, though the shared interface declares them optional (see the field's own
+      // doc comment in FabFileTypes.ts) - this door cannot function without a real implementation.
+      fabFiles: Required<Pick<IFabFileRepository, 'setLakeSupersession' | 'clearLakeSupersession'>>;
       dataLakeFindings: Pick<IDataLakeFindingRepository, 'findById'>;
       dataLakeCorpusActions: Pick<IDataLakeCorpusActionRepository, 'record'>;
     };
-  logger?: { warn?: (msg: string, ...args: unknown[]) => void; log?: (msg: string, ...args: unknown[]) => void };
+  logger?: {
+    warn?: (msg: string, ...args: unknown[]) => void;
+    log?: (msg: string, ...args: unknown[]) => void;
+    error?: (msg: string, ...args: unknown[]) => void;
+  };
 }
+
+/** How many times the audit write is retried before the failure is surfaced. */
+const AUDIT_RECORD_ATTEMPTS = 3;
 
 export interface ApplyCorpusActionResult {
   action: LakeCorpusAction;
@@ -158,6 +165,51 @@ function nameFor(finding: IDataLakeFindingDocument, fabFileId: string): string |
   return finding.sources.find(s => s.fabFileId === fabFileId)?.fileName ?? null;
 }
 
+/**
+ * How many distinct lakes this file's own meta-tags name. Mirrors the ambiguity check
+ * `partitionBySupersession` makes with `attributeFileToLakeIds`, but scoped to what a single tag
+ * list can say on its own: a file carrying more than one `datalake:<slug>` tag is a member of more
+ * than one lake by meta-tag alone, so a ruling attributed to any ONE of them resolves to `lakeId:
+ * null` at the collapse (`lakeIds.length === 1 ? lakeIds[0] : null`) and is never honored. Does not
+ * catch the dynamic-lake prefix-only arm of ambiguity, which needs every other lake's prefix to
+ * evaluate and this module has no reason to load - a narrower, local proxy for the same fact.
+ */
+function memberOfMoreThanOneLakeByMetaTag(file: { tags?: { name?: string }[] }): boolean {
+  const names = (file.tags ?? []).map(t => t.name).filter((n): n is string => typeof n === 'string');
+  return datalakeTagsFrom(names).length > 1;
+}
+
+/** Bounds the cycle walk below so a malformed or very long chain cannot spin. */
+const SUPERSESSION_CYCLE_WALK_LIMIT = 64;
+
+/**
+ * True when `keepFabFileId` already carries a ruling chain, for this lake, that eventually names
+ * `retireFabFileId` as ITS winner. Writing `retire -> superseded by keep` on top of that closes a
+ * cycle: `retire`'s new entry says "superseded by keep" and the existing chain says keep is (perhaps
+ * transitively) "superseded by retire" - the exact shape `resolveRuling`'s walk then declines for
+ * every file in the loop, silently dropping the whole subject from ranking. Refusing the WRITE that
+ * would close it is cheaper than detecting it after the fact.
+ */
+async function wouldCloseSupersessionCycle(
+  keepFabFileId: string,
+  retireFabFileId: string,
+  lakeId: string,
+  db: { fabFiles: Pick<IFabFileRepository, 'findById'> }
+): Promise<boolean> {
+  const seen = new Set<string>([retireFabFileId]);
+  let current: string | undefined = keepFabFileId;
+  for (let step = 0; current && step < SUPERSESSION_CYCLE_WALK_LIMIT; step += 1) {
+    if (seen.has(current)) return false; // a cycle not involving retireFabFileId - not this write's problem
+    seen.add(current);
+    const file = await db.fabFiles.findById(current);
+    const winner = file?.supersededInLakes?.find(r => r.dataLakeId === lakeId)?.supersededByFabFileId;
+    if (!winner) return false;
+    if (winner === retireFabFileId) return true;
+    current = winner;
+  }
+  return false;
+}
+
 export const applyCorpusAction = async (
   actor: CorpusActionActor,
   dataLakeId: string,
@@ -208,14 +260,36 @@ export const applyCorpusAction = async (
       rung,
       at,
     };
-    await db.dataLakeCorpusActions.record(event);
-    logger?.log?.('[dataLakes] curator corpus action applied', {
+    // The mutation above has already committed by the time this runs, so a rejected write here
+    // is not "the action failed" - it is "the action happened and its audit row did not". Retried
+    // a few times before that gap is surfaced, since a transient write hiccup is the likeliest
+    // cause and every attempt after the first is cheap insurance against exactly the failure this
+    // module exists to prevent: a corpus change with nothing recording who made it.
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= AUDIT_RECORD_ATTEMPTS; attempt += 1) {
+      try {
+        await db.dataLakeCorpusActions.record(event);
+        logger?.log?.('[dataLakes] curator corpus action applied', {
+          dataLakeId: lake.id,
+          findingId: finding.id,
+          action: request.action,
+          rung,
+          targets,
+        });
+        return;
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    logger?.error?.('[dataLakes] curator corpus action applied but its audit record failed to write', {
       dataLakeId: lake.id,
       findingId: finding.id,
       action: request.action,
       rung,
       targets,
+      err: lastError,
     });
+    throw lastError;
   };
 
   let targets: LakeCorpusActionTarget[];
@@ -228,6 +302,15 @@ export const applyCorpusAction = async (
       throw new BadRequestError('A merge cannot both keep and retire the same document');
     }
     assertCited(finding, [request.keepFabFileId, ...retire]);
+
+    // The finding cites the kept document, but a citation is historical - the finding may be
+    // stale and the kept file may since have left the lake itself. Without this check a merge on
+    // a stale finding would remove every retired member and leave nothing standing, then audit a
+    // "kept" document that was never actually a member at merge time.
+    const keepFile = await db.fabFiles.findById(request.keepFabFileId);
+    if (!keepFile || keepFile.deletedAt || !lakeMembershipSignals(lake, keepFile).inLake) {
+      throw new NotFoundError('The document to keep is not a member of this data lake');
+    }
 
     // Sequential, not concurrent: each removal recomputes the lake's stats, and two of those
     // interleaving would race each other to write a count neither of them read.
@@ -269,11 +352,31 @@ export const applyCorpusAction = async (
     // BOTH must be live members of THIS lake. The winner especially: a ruling naming a non-member
     // is inert (`partitionBySupersession` declines a winner that is not in the scoped set), so
     // writing one would report success for a suppression that will never happen.
+    let retiringFile: Awaited<ReturnType<IFabFileRepository['findById']>> | null = null;
     for (const fabFileId of [request.keepFabFileId, request.retireFabFileId]) {
       const file = await db.fabFiles.findById(fabFileId);
       if (!file || file.deletedAt || !lakeMembershipSignals(lake, file).inLake) {
         throw new NotFoundError('File not found in this data lake');
       }
+      if (fabFileId === request.retireFabFileId) retiringFile = file;
+    }
+
+    // The retiring document must attribute to THIS lake alone. A document tagged into several
+    // lakes resolves to `lakeId: null` at the collapse - the ruling would be written, reported as a
+    // success, and never once honored on retrieval. See `memberOfMoreThanOneLakeByMetaTag`.
+    if (retiringFile && memberOfMoreThanOneLakeByMetaTag(retiringFile)) {
+      throw new BadRequestError(
+        'This document belongs to more than one data lake, so a ruling here would never be honored ' +
+          'on retrieval. Retag it into this lake alone before superseding it.'
+      );
+    }
+
+    // Refuse a write that would close a cycle - see `wouldCloseSupersessionCycle`.
+    if (await wouldCloseSupersessionCycle(request.keepFabFileId, request.retireFabFileId, lake.id, db)) {
+      throw new BadRequestError(
+        'The document to keep is already ruled superseded, directly or transitively, by the document ' +
+          'to retire. Applying this ruling would create a cycle that suppresses both.'
+      );
     }
 
     const wrote = await db.fabFiles.setLakeSupersession(request.retireFabFileId, {

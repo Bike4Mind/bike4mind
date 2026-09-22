@@ -25,10 +25,10 @@ import type { LakeAuditPrincipal, LakeManageRung } from './LakeConfigChangeEvent
  * What the curator did to the corpus.
  *
  * Each delegates to the door that already owns that mutation rather than reimplementing it, which
- * is why the vocabulary is this short: these are the three shapes a finding can be acted on in, not
+ * is why the vocabulary is this short: these are the four shapes a finding can be acted on in, not
  * three new ways to write to a lake.
  *
- * - `merge`   - keep one document, drop the others' MEMBERSHIP of this lake (`removeFileFromLake`,
+ * - `merge`   - keep one document, drop the others' MEMBERSHIP of this lake (`removeFileFromDataLake`,
  *               so each removal mints the usual 30-minute restore record and stays undoable).
  * - `supersede` - keep both documents in the corpus, but retire one from RANKING behind the other
  *               (`IFabFile.supersededInLakes`, honored by `partitionBySupersession`).

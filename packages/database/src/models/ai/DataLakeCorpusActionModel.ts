@@ -43,8 +43,10 @@ const DataLakeCorpusActionSchema = new Schema<IDataLakeCorpusActionDocument>(
     detail: { type: Schema.Types.Mixed, default: null },
     note: { type: String, default: null },
     actorUserId: { type: String, required: true },
-    // Flattened rather than a sub-schema so the principal reads the same way here as on both
-    // sibling audit models, which store the three fields at the top level too.
+    // Nested, unlike the sibling audit models, which flatten the same three fields at the top
+    // level - kept as its own sub-document here because `IDataLakeCorpusAction.principal` is
+    // already a `LakeAuditPrincipal` object on the shared type, and flattening it would mean
+    // reassembling that object on every read instead of storing it in the shape callers use it in.
     principal: {
       type: new Schema(
         {
@@ -69,8 +71,12 @@ const DataLakeCorpusActionSchema = new Schema<IDataLakeCorpusActionDocument>(
 
 // The two ways this is read: a lake's whole history, and one finding's. The `findingId` term is
 // optional in `listByLake`, so a lake-only listing seeks on the prefix and still gets its sort.
-DataLakeCorpusActionSchema.index({ lakeId: 1, at: -1 });
-DataLakeCorpusActionSchema.index({ lakeId: 1, findingId: 1, at: -1 });
+// `_id` breaks ties on `at`, matching the sort below: `at` is a caller-supplied Date, so two
+// actions in the same millisecond (a bulk merge, a scripted retag) would otherwise order however
+// the storage engine happens to return them, which a `limit`-ed listing can observe as instability
+// across calls.
+DataLakeCorpusActionSchema.index({ lakeId: 1, at: -1, _id: -1 });
+DataLakeCorpusActionSchema.index({ lakeId: 1, findingId: 1, at: -1, _id: -1 });
 
 export const DataLakeCorpusActionModel: IDataLakeCorpusActionModel =
   (mongoose.models[ModelName] as IDataLakeCorpusActionModel) ||
@@ -96,7 +102,7 @@ class DataLakeCorpusActionRepository
         ...(options?.findingId ? { findingId: options.findingId } : {}),
         ...(options?.action ? { action: options.action } : {}),
       })
-      .sort({ at: -1 });
+      .sort({ at: -1, _id: -1 });
     if (options?.limit) query.limit(options.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as IDataLakeCorpusActionDocument);

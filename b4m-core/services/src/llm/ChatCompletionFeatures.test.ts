@@ -3226,6 +3226,26 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
     expect(recordedInput()?.filesSupersededCollapsed).toBeUndefined();
   });
 
+  it('excludes a curator suppression from the DERIVED count even while the collapse is running', async () => {
+    // The one combination the test above cannot show: with the setting ON, `collapseRan` is true
+    // and `auditSupersededCollapsed` is a NUMBER rather than `undefined` - so this is the only case
+    // that can catch the filter silently dropping (`e.tier !== CURATOR_SUPERSESSION_TIER` deleted
+    // would make this suite pass under `collapseEnabled: false` alone, since that path never
+    // evaluates the filter at all).
+    const ruled = {
+      ...generation('old', '2024-01-01'),
+      supersededInLakes: [
+        { dataLakeId: 'lakeZ', supersededByFabFileId: 'new', decidedByUserId: 'curator-1', decidedAt: new Date() },
+      ],
+    };
+    await run(makeCtx({ files: [ruled, generation('new', '2025-01-01')], collapseEnabled: true }));
+
+    expect(recordedInput()?.fileIds).toEqual(['new']);
+    // 0, not 1: the collapse ran and found nothing of its OWN (a curator ruling is not a derived
+    // generation match), so the field reports what it actually looked for and found.
+    expect(recordedInput()?.filesSupersededCollapsed).toBe(0);
+  });
+
   it('writes a zero row when the corpus was searched and nothing cleared the similarity floor', async () => {
     const ctx = makeCtx({ files: [generation('only', '2025-01-01')], score: 0.1 });
     const messages = await run(ctx, ['datalake:z']);

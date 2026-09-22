@@ -19,7 +19,7 @@ import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 /**
- * The three corpus actions, as a discriminated union rather than a partial patch: they touch
+ * The four corpus actions, as a discriminated union rather than a partial patch: they touch
  * different documents in different ways and share no field but the note, so a body that could carry
  * two of them would have to answer what happens when one half succeeds.
  */
