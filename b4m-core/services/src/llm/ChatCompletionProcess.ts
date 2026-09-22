@@ -108,8 +108,10 @@ import { LATTICE_TOOL_NAMES } from './tools';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
+  measureIdentityNamedExclusion,
   warnIfManyLakeMemberships,
 } from '../dataLakeService/getDynamicDataLakeTags';
+import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -171,6 +173,7 @@ import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthori
 import {
   narrowLakeAccessToSession,
   sessionGroundsOnNoLake,
+  sessionNamesALake,
   type ResolvedLakeAccessSet,
 } from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
@@ -2909,21 +2912,41 @@ export class ChatCompletionProcess {
         // itself, which reads an empty scope as "no opinion". Fail direction is inherited from
         // getAccessibleDataLakeAccess, which degrades to empty access rather than throwing, so a
         // lake-resolution outage records an empty scope and the replay skips the turn.
-        const narrowedAccess =
+        const accessForSeed =
           this.personalCorpusOnly || sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
             ? undefined
-            : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags);
+            : await this.getAccessibleDataLakeAccess();
+        const narrowedAccess =
+          accessForSeed === undefined ? undefined : narrowLakeAccessToSession(accessForSeed, session.retrievalTags);
         const lakeScope = narrowedAccess?.dataLakeTags ?? [];
-        // Access-excluded count travels with the same resolution as lakeScope (#3055). Written
-        // whenever the count was actually measured - INCLUDING a genuine zero, per this field's
-        // own absence contract (RetrievalSummarySchema.excludedLakes: absent means not recorded,
-        // never "nothing excluded"). A personal-corpus turn, a turn that grounds on no lake, or a
-        // failed count query (excludedByAccessCount undefined) all correctly stay unrecorded rather
-        // than reporting a zero that was never measured.
+        // Access-excluded count travels with the same resolution as lakeScope (#3055), but a REAL
+        // narrowing (the session named a specific lake) cannot reuse the account-wide count
+        // narrowLakeAccessToSession deliberately clears in that case: the account-wide number can
+        // describe an unrelated lake outside this turn's selection. Instead, measure precisely
+        // which of the session's OWN identity-named lakes (if any) are gate-excluded - see
+        // measureIdentityNamedExclusion's own doc for why this is a separate, targeted query
+        // rather than something narrowLakeAccessToSession itself can answer. The no-op path
+        // (session names no lake) skips the targeted query entirely and keeps the account-wide
+        // number, since nothing was narrowed away from it.
+        const excludedByAccessCount =
+          accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
+            ? await measureIdentityNamedExclusion(
+                {
+                  db: this.db,
+                  user: this.user,
+                  entitlementKeys: await this.resolveEntitlementKeys(),
+                  logger: this.logger,
+                },
+                datalakeTagsFrom(session.retrievalTags ?? [])
+              )
+            : narrowedAccess?.excludedByAccessCount;
+        // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
+        // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
+        // recorded, never "nothing excluded"). A personal-corpus turn, a turn that grounds on no
+        // lake, or a failed count query (excludedByAccessCount undefined) all correctly stay
+        // unrecorded rather than reporting a zero that was never measured.
         const excludedLakes =
-          narrowedAccess?.excludedByAccessCount !== undefined
-            ? { count: narrowedAccess.excludedByAccessCount, reason: 'access' as const }
-            : undefined;
+          excludedByAccessCount !== undefined ? { count: excludedByAccessCount, reason: 'access' as const } : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
