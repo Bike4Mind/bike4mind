@@ -1,4 +1,9 @@
-import { IFabFileRepository, IProjectRepository, ISessionRepository } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  IProjectRepository,
+  ISessionRepository,
+  ISessionAgentConfigRepository,
+} from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -14,6 +19,7 @@ interface DeleteSessionAdapters {
     sessions: ISessionRepository;
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
+    sessionAgentConfigs: ISessionAgentConfigRepository;
   };
 }
 
@@ -81,6 +87,11 @@ export const deleteSession = async (
   await db.projects.removeSession(session.id);
 
   await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));
+
+  // Otherwise an enabled row lingers forever: the proactive-messaging worker's own
+  // session.deletedAt guard stops it firing, but the cron keeps queuing a job for it on every
+  // pass with nothing left to clean it up.
+  await db.sessionAgentConfigs.deleteBySessionId(session.id);
 
   const mostRecent = await db.sessions.findRecentlyUpdatedByUserId(userId);
 
