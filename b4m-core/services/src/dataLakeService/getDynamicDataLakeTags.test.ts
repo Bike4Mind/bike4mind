@@ -449,6 +449,78 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
       expect.objectContaining({ supersededOwnLakeIds: ['lake-transferred'] })
     );
   });
+
+  // #3055 (review): a completed count built on a degraded input is not "measured" in the sense
+  // this field's own contract requires - it is a confidently wrong number. Both prerequisite reads
+  // gate the count independently and in opposite directions (see
+  // excludedByAccessCountPrerequisitesComplete's own doc): a failed grant-exemption read would
+  // otherwise OVER-count (a grant-exempted lake looks excluded), a failed supersession read would
+  // otherwise UNDER-count (a lake that lost its owner-bypass exemption still gets one).
+  describe('count-prerequisite completeness', () => {
+    it('skips the count and reports unknown when the grant-exemption read fails', async () => {
+      const countGateExcludedLakes = vi.fn().mockResolvedValue(5);
+      const logger = { warn: vi.fn() } as never;
+      const res = await getDynamicDataLakeAccess({
+        db: {
+          dataLakes: {
+            findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+            countGateExcludedLakes,
+            findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+          } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+          dataLakeAccessGrants: {
+            listByPrincipal: vi.fn().mockRejectedValue(new Error('grants down')),
+            listActiveByLakes: vi.fn().mockResolvedValue([]),
+          } as never,
+        },
+        user: { id: 'alice', tags: [] },
+        logger,
+      });
+      expect(countGateExcludedLakes).not.toHaveBeenCalled();
+      expect(res.excludedByAccessCount).toBeUndefined();
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('gate-excluded-lake count skipped'));
+    });
+
+    it('skips the count and reports unknown when the supersession read fails', async () => {
+      const countGateExcludedLakes = vi.fn().mockResolvedValue(5);
+      const logger = { warn: vi.fn() } as never;
+      const res = await getDynamicDataLakeAccess({
+        db: {
+          dataLakes: {
+            findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+            countGateExcludedLakes,
+            findIdsCreatedBy: vi.fn().mockRejectedValue(new Error('creator lookup down')),
+          } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+          dataLakeAccessGrants: {
+            listByPrincipal: vi.fn().mockResolvedValue([]),
+            listActiveByLakes: vi.fn().mockResolvedValue([]),
+          } as never,
+        },
+        user: { id: 'alice', tags: [] },
+        logger,
+      });
+      expect(countGateExcludedLakes).not.toHaveBeenCalled();
+      expect(res.excludedByAccessCount).toBeUndefined();
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('gate-excluded-lake count skipped'));
+    });
+
+    it('still runs the count when no grant repo is wired at all - unwired is complete, not degraded', async () => {
+      const countGateExcludedLakes = vi.fn().mockResolvedValue(0);
+      const res = await getDynamicDataLakeAccess({
+        db: {
+          dataLakes: {
+            findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+            countGateExcludedLakes,
+          } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        },
+        user: { id: 'alice', tags: [] },
+      });
+      expect(countGateExcludedLakes).toHaveBeenCalledTimes(1);
+      expect(res.excludedByAccessCount).toBe(0);
+    });
+  });
 });
 
 describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the count above', () => {
