@@ -138,7 +138,12 @@ export class OperationsModelService {
 
     while (next && !tried.has(next.id)) {
       tried.add(next.id);
-      const llm = getLlmByModel(apiKeyTable, { modelInfo: next, logger: this.logger });
+      let llm: ICompletionBackend | null = null;
+      try {
+        llm = getLlmByModel(apiKeyTable, { modelInfo: next, logger: this.logger });
+      } catch (err) {
+        this.logger.warn(`Failed to initialize ${logLabel} image model ${next.id}`, err);
+      }
       if (llm) {
         return { imageModelInfo: next, imageLlm: llm };
       }

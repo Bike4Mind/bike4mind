@@ -52,6 +52,7 @@ const { OperationsModelService } = await import('./operationsModelService');
 const model = (id: string, type: string, backend: ModelBackend): ModelInfo => ({ id, type, backend }) as ModelInfo;
 
 const IMAGE = model('flux-pro-1.1', 'image', ModelBackend.BFL);
+const IMAGE2 = model('gpt-image-2', 'image', ModelBackend.OpenAI);
 const BEDROCK_TEXT = model('claude-5-sonnet-bedrock', 'text', ModelBackend.Bedrock);
 const GPT_MINI = model('gpt-4o-mini', 'text', ModelBackend.OpenAI);
 const OLLAMA_CHAT = model('qwen2.5-coder:7b', 'text', ModelBackend.Ollama);
@@ -172,5 +173,47 @@ describe('OperationsModelService optional image model', () => {
     expect(result.imageModelId).toBeNull();
     expect(result.imageModelInfo).toBeNull();
     expect(result.imageLlm).toBeNull();
+  });
+
+  it('retries down the priority order and resolves the next candidate when the first fails to build', async () => {
+    primeDefaults([IMAGE, IMAGE2, GPT_MINI]);
+    // getDefaultImageModel is mocked; make it honor excludeIds like the real one does,
+    // so the retry loop actually exercises the exclusion path instead of looping on IMAGE.
+    mockGetDefaultImageModel.mockImplementation((models: ModelInfo[], excludeIds?: Set<string> | string[]) => {
+      const tried = excludeIds instanceof Set ? excludeIds : new Set(excludeIds ?? []);
+      return models.find(m => m.type === 'image' && !tried.has(m.id));
+    });
+    const imageLlm = { complete: vi.fn() };
+    mockGetLlmByModel.mockImplementation((_apiKeyTable: unknown, opts: { modelInfo: ModelInfo }) => {
+      if (opts.modelInfo.id === IMAGE.id) return null; // first candidate fails to build
+      if (opts.modelInfo.id === IMAGE2.id) return imageLlm;
+      return { complete: vi.fn() };
+    });
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+    expect(result.imageModelId).toBe(IMAGE2.id);
+    expect(result.imageLlm).toBe(imageLlm);
+  });
+
+  it('treats a throwing candidate (e.g. an expired key) as unusable and retries the next one', async () => {
+    primeDefaults([IMAGE, IMAGE2, GPT_MINI]);
+    mockGetDefaultImageModel.mockImplementation((models: ModelInfo[], excludeIds?: Set<string> | string[]) => {
+      const tried = excludeIds instanceof Set ? excludeIds : new Set(excludeIds ?? []);
+      return models.find(m => m.type === 'image' && !tried.has(m.id));
+    });
+    const imageLlm = { complete: vi.fn() };
+    mockGetLlmByModel.mockImplementation((_apiKeyTable: unknown, opts: { modelInfo: ModelInfo }) => {
+      if (opts.modelInfo.id === IMAGE.id) throw new Error('OpenAI API key is expired');
+      if (opts.modelInfo.id === IMAGE2.id) return imageLlm;
+      return { complete: vi.fn() };
+    });
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe('gpt-4o-mini');
+    expect(result.imageModelId).toBe(IMAGE2.id);
+    expect(result.imageLlm).toBe(imageLlm);
   });
 });
