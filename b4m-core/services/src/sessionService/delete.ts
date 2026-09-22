@@ -92,9 +92,9 @@ export const deleteSession = async (
   await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));
 
   // Otherwise an enabled row lingers forever: the proactive-messaging worker's own
-  // session.deletedAt guard stops it firing, but the cron's eligibility scan re-checks this same
-  // session on every pass with nothing left to stop clearing it. Optional so a caller on the
-  // pre-cleanup adapter shape still compiles and runs; the cron scan is the backstop either way.
+  // session.deletedAt guard stops it firing, but the cron's eligibility scan only skips a
+  // stale row on session-not-found/deleted, it never deletes it (see getEligibleConfigs.ts).
+  // Optional so a caller on the pre-cleanup adapter shape still compiles and runs.
   await db.sessionAgentConfigs?.deleteBySessionId(session.id);
 
   const mostRecent = await db.sessions.findRecentlyUpdatedByUserId(userId);
