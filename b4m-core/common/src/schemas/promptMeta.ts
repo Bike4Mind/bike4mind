@@ -736,11 +736,16 @@ export const RetrievalSummarySchema = z.object({
    *
    * 'access' is the only reason today: the caller's org membership or the lake's public listing
    * surfaced it as a candidate (they could see it exists) but they hold neither its own
-   * gate/entitlement nor an ownership or grant exception for it. Counted BEFORE the
-   * preauthorized-admission union (unionPreauthorizedLakeAccess), so a session-preauthorized lake
-   * that was gate-dropped can in principle be counted here and still appear in `lakeScope` - narrow
-   * in practice, since a manage-but-not-member lake is rarely also org-visible or public to begin
-   * with.
+   * gate/entitlement nor an ownership or grant exception for it.
+   *
+   * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
+   * this account-wide count is corrected, not merely narrow: the seed's targeted measurement
+   * (measureIdentityNamedExclusion, ChatCompletionProcess's promptMeta seed) excludes exactly the
+   * tags this turn successfully admitted via preauthorization before running the gate query, so an
+   * admitted-and-searched lake never reports here as excluded. This account-wide number itself
+   * (excludedByAccessCount on getDynamicDataLakeAccess) is still computed before that union and is
+   * NOT corrected the same way - only the per-turn targeted measurement is, which is what a
+   * preauthorized session's own narrowing always uses (see sessionNamesALake's call site).
    */
   excludedLakes: z
     .object({
