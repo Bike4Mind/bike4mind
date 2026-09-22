@@ -10,6 +10,7 @@ import type {
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../utils/Logger.js';
+import { resolveLoopbackListenerUid } from './peerOwner.js';
 
 /**
  * Local tavern presence for the B4M CLI.
@@ -91,6 +92,10 @@ export class BridgePresence {
   /** Cached start() inputs so the retry loop can announce without the caller
    *  having to re-invoke start(). Written once; never reassigned. */
   private startOpts: StartOptions | null = null;
+  /** Latch so the "untrusted peer" warning logs once per untrusted state, not
+   *  on every backed-off announce/reconnect probe. Reset on a trusted check
+   *  and in stop(). ponytail: a boolean latch, not a rate limiter. */
+  private peerWarned = false;
   private pendingWorkspaceName: string | null = null;
   private pendingCapabilities: ICcAgentCapability[] | null = null;
   private pendingSource: ICcAgentSource | null = null;
@@ -143,12 +148,47 @@ export class BridgePresence {
     return this.attemptAnnounce();
   }
 
+  /**
+   * Confirm the process holding the bridge port is owned by the same UID as
+   * this CLI, BEFORE any secret leaves the process. Over loopback TCP the
+   * peer is whoever holds the port; the secret file is plaintext and per-user,
+   * so a same-UID peer is already trusted (it could read the file directly),
+   * and a different-UID (or sandboxed) peer is the adversary this gate stops.
+   *
+   * Fail-closed: false when getuid is unavailable (Windows), when the owner
+   * cannot be determined, or when it mismatches.
+   */
+  private async isPeerTrusted(): Promise<boolean> {
+    if (typeof process.getuid !== 'function') return false;
+    const port = this.config?.port ?? DEFAULT_PORT;
+    const ownerUid = await resolveLoopbackListenerUid(port);
+    const trusted = ownerUid !== null && ownerUid === process.getuid();
+    if (trusted) this.peerWarned = false;
+    return trusted;
+  }
+
+  /** Log the untrusted-peer warning once per untrusted state. */
+  private warnUntrustedPeerOnce(): void {
+    if (this.peerWarned) return;
+    this.peerWarned = true;
+    logger.warn('[tavern] bridge port owner is not this user; not disclosing secret or handling commands');
+  }
+
   /** One announce attempt. Schedules a retry on failure; wires up the
    *  command WS + initial status on success. Idempotent: re-entering after
    *  a successful announce short-circuits at the instanceId guard. */
   private async attemptAnnounce(): Promise<boolean> {
     if (this.stopped || !this.config || !this.startOpts) return false;
     if (this.instanceId) return true;
+
+    // Verify the port owner before the secret leaves the process. An
+    // untrusted squatter may be replaced by the real bridge later, so route
+    // into the retry loop rather than latching offline.
+    if (!(await this.isPeerTrusted())) {
+      this.warnUntrustedPeerOnce();
+      this.scheduleAnnounceRetry();
+      return false;
+    }
 
     const instanceId = uuidv4();
     const workspaceName = this.pendingWorkspaceName!;
@@ -170,7 +210,7 @@ export class BridgePresence {
     this.instanceId = instanceId;
     this.announceAttempts = 0;
     logger.info(`[tavern] announced ${workspaceName} to cc-bridge on 127.0.0.1:${this.config.port ?? DEFAULT_PORT}`);
-    this.connectCommandWs();
+    void this.connectCommandWs();
     // Initial status so the sprite doesn't sit at the default 'running'
     // forever if the user doesn't type anything - make it explicit.
     void this.emitEvent({ type: 'status', status: 'idle' });
@@ -256,6 +296,7 @@ export class BridgePresence {
     this.pendingSource = null;
     this.announceAttempts = 0;
     this.reconnectAttempts = 0;
+    this.peerWarned = false;
     // Reset the strict-ordered emit queue so a restart within the same CLI run
     // doesn't chain its first event onto a settled/failed promise from the
     // prior session (which could delay or reorder startup events).
@@ -293,8 +334,22 @@ export class BridgePresence {
     }
   }
 
-  private connectCommandWs(): void {
+  private async connectCommandWs(): Promise<void> {
     if (this.stopped || !this.config || !this.instanceId) return;
+
+    // Re-verify ownership before the WS URL (which also carries the secret) is
+    // built, and because its frames drive the callbacks. Checking here covers
+    // both callers - the announce-success path and the reconnect timer -
+    // rather than one guard per caller.
+    // ponytail: TOCTOU ceiling - owner is re-checked per connect to keep the
+    // window small, but a rogue that kills the bridge and rebinds between this
+    // check and connect could still be reached. A continuous guarantee needs
+    // the server or an OS primitive; out of scope for a CLI-only fix.
+    if (!(await this.isPeerTrusted())) {
+      this.warnUntrustedPeerOnce();
+      this.scheduleReconnect();
+      return;
+    }
 
     const port = this.config.port ?? DEFAULT_PORT;
     const url = `ws://127.0.0.1:${port}/commands?instanceId=${encodeURIComponent(
@@ -351,7 +406,7 @@ export class BridgePresence {
     const delay = Math.min(500 * 2 ** (this.reconnectAttempts - 1), 10_000);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      this.connectCommandWs();
+      void this.connectCommandWs();
     }, delay);
   }
 
