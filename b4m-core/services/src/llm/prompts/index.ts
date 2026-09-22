@@ -148,7 +148,7 @@ The system will automatically add Confirm/Cancel buttons and format the preview.
  * apps/client/app/components/Session/parseSearchResultCards.ts; the fence language is shared.
  */
 export const WEB_SEARCH_CARDS_PROMPT = [
-  'The results above include image URLs, so you can illustrate your answer. When you name specific',
+  'The results above include images, so illustrate your answer - do not wait to be asked. When you name specific',
   `things the user would want to SEE, emit a \`\`\`${SEARCH_RESULT_CARDS_LANGUAGE} fenced block inline in your reply, placed`,
   'exactly where the pictures belong - right after the sentence that introduces them, not at the end.',
   'The block is a single JSON object:',
@@ -161,10 +161,11 @@ export const WEB_SEARCH_CARDS_PROMPT = [
   '```',
   '',
   'Rules: `name` and at least one `images` entry are required. Every image `url` must be copied verbatim',
-  'from an Images line above, never invented or guessed, and `source` is the hostname of the result it',
-  'came from, so each picture is attributed. `note` is YOUR prose about the thing, not the',
+  "from an `image:` or Images line above, never invented or guessed, and `source` is that entry's own",
+  '`source`/hostname, so each picture is attributed. Prefer the "Images found for this search" pool:',
+  'those carry their own page and publisher. `note` is YOUR prose about the thing, not the',
   'search snippet. `meta` is a short footer such as a price or key spec. `url` is where the card links.',
   'Two to six cards is the useful range. Keep writing normally around the block - it replaces neither',
-  'your explanation nor your citations. Omit the block entirely if the results have no images worth',
-  'showing.',
+  'your explanation nor your citations. Omit the block only if the results genuinely have no images',
+  'worth showing; never tell the user you could show pictures if they asked - just show them.',
 ].join('\n');

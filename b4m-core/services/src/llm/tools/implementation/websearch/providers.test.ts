@@ -149,7 +149,9 @@ describe('createSerpApiProvider', () => {
     expect(results[0]).toMatchObject({ thumbnail: 'https://img/x.jpg', images: ['https://img/x.jpg'] });
   });
 
-  it('attaches inline_images and shopping_results by exact link match only', async () => {
+  // `inline_images` names the owning page `source`, NOT `link` - reading `link` here matched
+  // nothing against a live SerpAPI response, so every inline image was silently discarded.
+  it('attaches inline_images by their `source` page and shopping_results by their `link`', async () => {
     mockGetSerperKey.mockResolvedValue('serp-key');
     fetchMock.mockResolvedValue(
       jsonRes({
@@ -157,7 +159,7 @@ describe('createSerpApiProvider', () => {
           { title: 'A', link: 'https://a.com/p', snippet: '' },
           { title: 'B', link: 'https://b.com/p', snippet: '' },
         ],
-        inline_images: [{ link: 'https://a.com/p', thumbnail: 'https://img/a1.jpg' }],
+        inline_images: [{ source: 'https://a.com/p', original: 'https://img/a1.jpg', thumbnail: 'https://tbn/a1.jpg' }],
         shopping_results: [
           { link: 'https://a.com/p', original: 'https://img/a2.jpg' },
           // Same host, different path: must NOT be borrowed by https://b.com/p.
@@ -171,6 +173,98 @@ describe('createSerpApiProvider', () => {
     expect(results[0].images).toEqual(['https://img/a1.jpg', 'https://img/a2.jpg']);
     expect(results[1].images).toBeUndefined();
     expect(results[1].thumbnail).toBeUndefined();
+  });
+
+  // The organic thumbnail is a ~92px preview and becomes the card's HERO tile (the one scaled up
+  // the most) if it sorts first, which is exactly backwards.
+  it('orders the full-size images ahead of the low-resolution organic thumbnail', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        organic_results: [{ title: 'A', link: 'https://a.com/p', snippet: '', thumbnail: 'https://tbn/tiny.jpg' }],
+        inline_images: [{ source: 'https://a.com/p', original: 'https://img/full.jpg' }],
+      })
+    );
+
+    const results = await createSerpApiProvider(adapters).search('q', 3);
+
+    expect(results[0].images).toEqual(['https://img/full.jpg', 'https://tbn/tiny.jpg']);
+    expect(results[0].thumbnail).toBe('https://img/full.jpg');
+  });
+
+  // The gstatic `thumbnail` is ~100px and visibly pixelates once a card tile scales it up.
+  it('prefers the full-size `original` over the low-resolution `thumbnail`', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        organic_results: [{ title: 'A', link: 'https://a.com/p', snippet: '' }],
+        inline_images: [
+          { source: 'https://a.com/p', original: 'https://img/full.jpg', thumbnail: 'https://tbn/small.jpg' },
+          // No usable `original`: the low-res thumbnail is better than dropping the picture.
+          { source: 'https://a.com/p', original: 'http://insecure/full.jpg', thumbnail: 'https://tbn/only.jpg' },
+        ],
+      })
+    );
+
+    const results = await createSerpApiProvider(adapters).search('q', 3);
+
+    expect(results[0].images).toEqual(['https://img/full.jpg', 'https://tbn/only.jpg']);
+  });
+
+  describe('searchImages (the google_images engine)', () => {
+    it('maps each picture to its own page and publisher, preferring the full-size original', async () => {
+      mockGetSerperKey.mockResolvedValue('serp-key');
+      fetchMock.mockResolvedValue(
+        jsonRes({
+          images_results: [
+            {
+              title: 'A Watch',
+              link: 'https://a.com/post',
+              source: 'Alpha',
+              original: 'https://cdn.a.com/full.jpg',
+              thumbnail: 'https://tbn/small.jpg',
+            },
+            // No page: it cannot be linked or attributed, which is the point of a card.
+            { title: 'Orphan', source: 'Beta', original: 'https://cdn.b.com/x.jpg' },
+            // Duplicate file already taken from the first entry.
+            { title: 'Dupe', link: 'https://c.com/p', source: 'Gamma', original: 'https://cdn.a.com/full.jpg' },
+          ],
+        })
+      );
+
+      const images = await createSerpApiProvider(adapters).searchImages!('q');
+
+      expect(images).toEqual([
+        { url: 'https://cdn.a.com/full.jpg', pageUrl: 'https://a.com/post', title: 'A Watch', source: 'Alpha' },
+      ]);
+      expect(fetchMock.mock.calls[0][0]).toContain('engine=google_images');
+    });
+
+    it('falls back to the page host when the provider names no publisher', async () => {
+      mockGetSerperKey.mockResolvedValue('serp-key');
+      fetchMock.mockResolvedValue(
+        jsonRes({ images_results: [{ link: 'https://shop.example.com/p', original: 'https://cdn/x.jpg' }] })
+      );
+
+      const images = await createSerpApiProvider(adapters).searchImages!('q');
+
+      expect(images[0].source).toBe('shop.example.com');
+    });
+
+    // Missing pictures degrade the reply to prose; they must never fail the search itself.
+    it('resolves to no images when the provider errors, rather than throwing', async () => {
+      mockGetSerperKey.mockResolvedValue('serp-key');
+      fetchMock.mockRejectedValue(new Error('network down'));
+
+      await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
+    });
+
+    it('returns nothing when no key is configured', async () => {
+      mockGetSerperKey.mockResolvedValue(null);
+
+      await expect(createSerpApiProvider(adapters).searchImages!('q')).resolves.toEqual([]);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
   });
 
   it('drops non-https image URLs rather than emitting an unrenderable thumbnail', async () => {

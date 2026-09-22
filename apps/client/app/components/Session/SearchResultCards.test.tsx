@@ -163,6 +163,37 @@ describe('SearchResultCards', () => {
     await waitFor(() => expect(container.querySelectorAll('img')).toHaveLength(1));
     expect(screen.getByText('Solo')).toBeInTheDocument();
   });
+
+  // The card is a fixed width and the copy is whatever the model felt like writing, so every text
+  // line is clamped; without this a long note stretches its card past its neighbours and an
+  // unbroken token runs out through the border.
+  it('clamps the name, note and meta so long model copy cannot overflow the card', () => {
+    renderCards(
+      block([
+        {
+          name: 'A name so long it would wrap well past two lines on a three-hundred pixel card',
+          note: `Lengthy prose about the entity. ${'More detail follows. '.repeat(40)}`,
+          meta: 'https://example.com/an/extremely/long/unbroken/path/that/cannot/wrap/anywhere',
+          images: ['https://cdn.example.com/a.jpg'],
+        },
+      ])
+    );
+
+    const clamped = [
+      screen.getByText(/A name so long it would wrap/),
+      screen.getByText(/^Lengthy prose about the entity\./),
+      screen.getByText(/an\/extremely\/long\/unbroken/),
+    ];
+    for (const el of clamped) {
+      const style = getComputedStyle(el);
+      expect(style.overflow).toBe('hidden');
+      expect(style.getPropertyValue('-webkit-line-clamp')).not.toBe('');
+      expect(style.overflowWrap).toBe('anywhere');
+      // The reply body renders with `white-space: pre`; inheriting it stops the copy wrapping at
+      // all, so the clamp silently does nothing and the text clips mid-word on one line.
+      expect(style.whiteSpace).toBe('normal');
+    }
+  });
 });
 
 /**

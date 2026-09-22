@@ -4,6 +4,7 @@ import {
   serpApiSearch,
   performWebSearch,
   shouldIncludeImages,
+  formatImageResults,
   WEB_SEARCH_NOT_CONFIGURED_MSG,
 } from './index';
 
@@ -68,6 +69,31 @@ describe('shouldIncludeImages', () => {
 
   it('is true once the model asked and a real cluster of pictures came back', () => {
     expect(shouldIncludeImages([hit('https://i/1.jpg'), hit('https://i/2.jpg'), hit()], true)).toBe(true);
+  });
+
+  // A plain web search frequently carries NO usable images, so the dedicated image search is where
+  // nearly every picture comes from - ignoring it here would gate the cards off on exactly the
+  // visual queries the feature exists for.
+  it('counts the dedicated image search, so pictures still show when no hit carries a thumbnail', () => {
+    const image = (url: string) => ({ url, pageUrl: 'https://p.com/a', title: 't', source: 'p.com' });
+
+    expect(shouldIncludeImages([hit(), hit()], true, [image('https://i/1.jpg')])).toBe(false);
+    expect(shouldIncludeImages([hit(), hit()], true, [image('https://i/1.jpg'), image('https://i/2.jpg')])).toBe(true);
+    expect(shouldIncludeImages([hit(), hit()], false, [image('https://i/1.jpg'), image('https://i/2.jpg')])).toBe(
+      false
+    );
+  });
+});
+
+describe('formatImageResults', () => {
+  it('gives each picture its own page and publisher, so a card can attribute it correctly', () => {
+    const output = formatImageResults([
+      { url: 'https://cdn.a.com/x.jpg', pageUrl: 'https://a.com/post', title: 'A Watch', source: 'Alpha' },
+    ]);
+
+    expect(output).toContain('image: https://cdn.a.com/x.jpg');
+    expect(output).toContain('source: Alpha');
+    expect(output).toContain('page: https://a.com/post');
   });
 });
 

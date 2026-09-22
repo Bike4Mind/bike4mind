@@ -2,13 +2,13 @@ import { Logger } from '@bike4mind/observability';
 import { ToolDefinition, ToolContext } from '../../base/types';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import { CitableSource } from '@bike4mind/common';
-import { resolveWebSearchProvider, type WebSearchProviderResult } from './providers';
+import { resolveWebSearchProvider, type WebSearchImageResult, type WebSearchProviderResult } from './providers';
 import { WEB_SEARCH_CARDS_PROMPT } from '../../../prompts';
 
 // serpApiSearch lives in providers.ts (alongside the provider abstraction) but is re-exported here
 // so its external import path (`.../websearch`) and the existing tests stay stable.
 export { serpApiSearch, resolveWebSearchProvider, recencyBucket } from './providers';
-export type { WebSearchProvider, WebSearchProviderResult, WebSearchOptions } from './providers';
+export type { WebSearchProvider, WebSearchProviderResult, WebSearchImageResult, WebSearchOptions } from './providers';
 
 export function safeHostname(url: string): string {
   try {
@@ -35,11 +35,31 @@ const MIN_IMAGE_RESULTS = 2;
 
 /**
  * Whether this result set is worth showing the model as images: the model asked, and the provider
- * actually returned enough pictures to build a card row from.
+ * actually returned enough pictures to build a card row from. Counts the dedicated image search too,
+ * which is where nearly all of them come from - a plain web search often carries none at all.
  */
-export function shouldIncludeImages(results: WebSearchProviderResult[], includeImages?: boolean): boolean {
+export function shouldIncludeImages(
+  results: WebSearchProviderResult[],
+  includeImages?: boolean,
+  imageResults: WebSearchImageResult[] = []
+): boolean {
   if (!includeImages) return false;
-  return results.filter(r => !!r.thumbnail).length >= MIN_IMAGE_RESULTS;
+  return results.filter(r => !!r.thumbnail).length + imageResults.length >= MIN_IMAGE_RESULTS;
+}
+
+/** The image pool, rendered for the model as one line per picture. */
+export function formatImageResults(images: WebSearchImageResult[]): string {
+  return [
+    'Images found for this search (use these to build cards; each is already attributed to its own page):',
+    '',
+    ...images.map(
+      (image, index) =>
+        `${index + 1}. ${image.title || image.source}\n` +
+        `   image: ${image.url}\n` +
+        `   source: ${image.source}\n` +
+        `   page: ${image.pageUrl}`
+    ),
+  ].join('\n');
 }
 
 interface WebSearchResult {
@@ -70,7 +90,14 @@ export async function performWebSearch(
     const results = await provider.search(params.query, params.num_results);
     Logger.globalInstance.log(`📊 WebSearch Tool: ${provider.name} found ${results.length} results`);
 
-    const withImages = shouldIncludeImages(results, params.include_images);
+    // Only on a visual query: this is a second paid provider call, so it stays behind the model's
+    // own `include_images` flag and never runs on an ordinary search.
+    const imageResults = params.include_images ? ((await provider.searchImages?.(params.query)) ?? []) : [];
+    if (imageResults.length) {
+      Logger.globalInstance.log(`🖼️ WebSearch Tool: ${provider.name} found ${imageResults.length} images`);
+    }
+
+    const withImages = shouldIncludeImages(results, params.include_images, imageResults);
 
     const citables: CitableSource[] = results.map((result, index) => ({
       id: result.url, // Use URL as unique identifier
@@ -99,8 +126,11 @@ export async function performWebSearch(
       })
       .join('\n');
 
+    const imageSection = withImages && imageResults.length ? `\n${formatImageResults(imageResults)}\n` : '';
+
     const formattedOutput = formattedResults
       ? `Here's what I found from searching the web:\n\n${formattedResults}` +
+        imageSection +
         (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '')
       : 'No results found from web search.';
 
@@ -155,7 +185,7 @@ export const webSearchTool: ToolDefinition = {
           include_images: {
             type: 'boolean',
             description:
-              'Set true only when the answer is visual - products, places, hardware, people, anything the user would want to SEE. Adds image URLs to the results so you can illustrate your reply with a b4m_cards block. Leave unset otherwise; the URLs are junk tokens on a conceptual question.',
+              'Set true whenever the answer is about things worth SEEING - products, watches, gear, places, buildings, plants, animals, people, cars, art, food, anything with a look. Decide this yourself from the subject matter: the user will NOT ask for pictures, and an answer that describes a physical object without showing it is a worse answer. Adds a set of attributed images so you can illustrate your reply with a b4m_cards block. Leave unset only for genuinely non-visual questions - code, math, definitions, policy - where images would be junk tokens.',
           },
         },
         required: ['query'],

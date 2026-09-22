@@ -58,6 +58,24 @@ function useProxiedImage(url: string): { src?: string; failed: boolean } {
 const CARD_WIDTH = 300;
 const COLLAGE_HEIGHT = 200;
 
+/**
+ * Clamp model-authored copy to a fixed number of lines. The card is a fixed 300px wide and the
+ * model writes as much prose as it likes, so without this one long `note` stretches its card far
+ * past its neighbours and a single unbroken token (a URL, a model number) escapes the border.
+ */
+const clampLines = (lines: number) => ({
+  // `&&` doubles specificity: Joy's own Typography root sets `display`, and its class otherwise
+  // wins over sx, leaving the clamp inert with the text on a single clipped line.
+  '&&': { display: '-webkit-box' },
+  WebkitBoxOrient: 'vertical' as const,
+  WebkitLineClamp: lines,
+  overflow: 'hidden',
+  overflowWrap: 'anywhere' as const,
+  // The reply body renders with `white-space: pre`, which a card inherits - without resetting it
+  // the copy never wraps and the clamp has no second line to clamp to.
+  whiteSpace: 'normal' as const,
+});
+
 /** One picture, replaced in place by a caption when the origin refuses to serve it. */
 const CollageTile: FC<{ image: SearchResultCardImage; flex?: string }> = ({ image, flex }) => {
   const { src, failed } = useProxiedImage(image.url);
@@ -148,8 +166,10 @@ const Card: FC<{ card: SearchResultCard }> = ({ card }) => (
     sx={{
       flex: `0 0 ${CARD_WIDTH}px`,
       width: CARD_WIDTH,
+      minWidth: 0,
       display: 'flex',
       flexDirection: 'column',
+      alignItems: 'stretch',
       gap: 1,
       p: 1,
       borderRadius: 'sm',
@@ -163,16 +183,16 @@ const Card: FC<{ card: SearchResultCard }> = ({ card }) => (
     }}
   >
     <Collage images={card.images} />
-    <Typography level="title-sm" sx={{ color: 'text.primary' }}>
+    <Typography level="title-sm" sx={{ color: 'text.primary', ...clampLines(2) }}>
       {card.name}
     </Typography>
     {card.note && (
-      <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
+      <Typography level="body-sm" sx={{ color: 'text.secondary', ...clampLines(4) }}>
         {card.note}
       </Typography>
     )}
     {card.meta && (
-      <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 'auto' }}>
+      <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 'auto', ...clampLines(1) }}>
         {card.meta}
       </Typography>
     )}

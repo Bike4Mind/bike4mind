@@ -35,10 +35,33 @@ export interface WebSearchOptions {
   recencyDays?: number;
 }
 
+/**
+ * One picture found by a dedicated image search, carrying its OWN page and publisher. Attribution is
+ * correct by construction here - unlike an image lifted from a sibling array of a web search, this
+ * one is never guessed onto a different result.
+ */
+export interface WebSearchImageResult {
+  /** Full-size image file. */
+  url: string;
+  /** The page the picture appears on, used as the card's click-through. */
+  pageUrl: string;
+  title: string;
+  /** Publisher name as the provider reports it, e.g. "Teddy Baldassarre". */
+  source: string;
+}
+
 /** A web-search backend. `search` never assumes results exist and tolerates malformed responses. */
 export interface WebSearchProvider {
   name: 'serpapi' | 'searxng';
   search(query: string, numResults?: number, options?: WebSearchOptions): Promise<WebSearchProviderResult[]>;
+  /**
+   * Dedicated image search, for a query the model flagged as visual. Optional: a provider without
+   * one simply contributes no pictures. This exists because a plain web search usually carries NO
+   * usable images at all - `organic_results[].thumbnail` is sparse, and `inline_images` belongs to
+   * pages that are mostly absent from the same response - so relying on it alone leaves a visual
+   * question answered in prose.
+   */
+  searchImages?(query: string, limit?: number): Promise<WebSearchImageResult[]>;
 }
 
 /**
@@ -69,6 +92,8 @@ const DEFAULT_NUM_RESULTS = 3;
 const SEARCH_TIMEOUT_MS = 60_000;
 // Citables are persisted with the quest, so keep the per-hit image list bounded.
 const MAX_IMAGES_PER_RESULT = 4;
+// Enough to build a card row from without flooding the model's context with URLs.
+const DEFAULT_IMAGE_RESULTS = 12;
 
 /**
  * Only absolute https URLs are usable: the client reads these through /api/search-image, whose
@@ -94,8 +119,13 @@ interface SerpApiOrganicResult {
   thumbnail?: string;
 }
 
-/** Shape shared by SerpAPI's `inline_images` and `shopping_results` entries. */
+/**
+ * Shape shared by SerpAPI's `inline_images` and `shopping_results` entries. The two spell the page
+ * they belong to differently - `inline_images` uses `source`, `shopping_results` uses `link` - so
+ * both are read; an entry carrying neither cannot be attributed to a hit and is dropped.
+ */
 interface SerpApiImageResult {
+  source?: string;
   link?: string;
   original?: string;
   thumbnail?: string;
@@ -105,6 +135,21 @@ interface SerpApiResponse {
   organic_results?: SerpApiOrganicResult[];
   inline_images?: SerpApiImageResult[];
   shopping_results?: SerpApiImageResult[];
+}
+
+/** An entry of the `google_images` engine's `images_results`. */
+interface SerpApiImagesEngineResult {
+  title?: string;
+  /** The page the image appears on. */
+  link?: string;
+  /** Publisher display name. */
+  source?: string;
+  original?: string;
+  thumbnail?: string;
+}
+
+interface SerpApiImagesResponse {
+  images_results?: SerpApiImagesEngineResult[];
 }
 
 /**
@@ -117,10 +162,14 @@ function indexImagesByLink(...groups: (SerpApiImageResult[] | undefined)[]): Map
   for (const group of groups) {
     if (!Array.isArray(group)) continue;
     for (const entry of group) {
-      if (!entry || typeof entry.link !== 'string' || !entry.link) continue;
-      const image = safeImageUrl(entry.thumbnail) ?? safeImageUrl(entry.original);
+      if (!entry) continue;
+      const pageLink = typeof entry.source === 'string' && entry.source ? entry.source : entry.link;
+      if (typeof pageLink !== 'string' || !pageLink) continue;
+      // `original` is the full-size picture on the publisher's own host; `thumbnail` is a ~100px
+      // gstatic preview that visibly pixelates once a card tile scales it up. Prefer the former.
+      const image = safeImageUrl(entry.original) ?? safeImageUrl(entry.thumbnail);
       if (!image) continue;
-      byLink.set(entry.link, [...(byLink.get(entry.link) ?? []), image]);
+      byLink.set(pageLink, [...(byLink.get(pageLink) ?? []), image]);
     }
   }
   return byLink;
@@ -190,9 +239,81 @@ export async function serpApiSearch(
   return (await response.json()) as SerpApiResponse;
 }
 
+/**
+ * SerpAPI's dedicated image engine. A separate paid call, so it runs ONLY when the model set
+ * `include_images` on a visual query. Failures resolve to [] - missing pictures degrade the reply
+ * to prose, they never fail the search.
+ */
+async function serpApiImageSearch(
+  adapters: GetEffectiveApiKeyAdapters,
+  query: string,
+  limit: number
+): Promise<WebSearchImageResult[]> {
+  const apiKey = await getSerperKey(adapters);
+  if (!apiKey) return [];
+
+  const url = new URL('https://serpapi.com/search');
+  url.search = new URLSearchParams({
+    engine: 'google_images',
+    api_key: apiKey,
+    q: query,
+    location: 'United States',
+    google_domain: 'google.com',
+    gl: 'us',
+    hl: 'en',
+    safe: 'active',
+  }).toString();
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
+    if (!response.ok) {
+      Logger.globalInstance.error('WebSearch Tool: SerpAPI image search failed', { status: response.status });
+      return [];
+    }
+    const data = (await response.json()) as SerpApiImagesResponse;
+    const entries = Array.isArray(data.images_results) ? data.images_results : [];
+
+    const seen = new Set<string>();
+    const images: WebSearchImageResult[] = [];
+    for (const entry of entries) {
+      if (!entry) continue;
+      const image = safeImageUrl(entry.original) ?? safeImageUrl(entry.thumbnail);
+      const pageUrl = typeof entry.link === 'string' ? entry.link : '';
+      // A picture with no page cannot be attributed or linked, which is the whole point of a card.
+      if (!image || !pageUrl || seen.has(image)) continue;
+      seen.add(image);
+      images.push({
+        url: image,
+        pageUrl,
+        title: entry.title ?? '',
+        source: entry.source || safeHost(pageUrl),
+      });
+      if (images.length >= limit) break;
+    }
+    return images;
+  } catch (error) {
+    Logger.globalInstance.error('WebSearch Tool: SerpAPI image search request failed:', error);
+    return [];
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/** Hostname of a URL, or the URL itself when it will not parse. */
+function safeHost(url: string): string {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
 export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): WebSearchProvider {
   return {
     name: 'serpapi',
+    searchImages: (query, limit) => serpApiImageSearch(adapters, query, limit ?? DEFAULT_IMAGE_RESULTS),
     async search(query, numResults, options) {
       const data = await serpApiSearch(adapters, query, numResults, options);
       const organic = Array.isArray(data.organic_results) ? data.organic_results : [];
@@ -200,7 +321,10 @@ export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): Web
       return organic
         .filter((r): r is SerpApiOrganicResult => !!r && typeof r.link === 'string')
         .map(r => {
-          const images = dedupeImages([safeImageUrl(r.thumbnail), ...(extraImages.get(r.link!) ?? [])]);
+          // `inline_images`/`shopping_results` carry the publisher's full-size picture, while
+          // `organic_results[].thumbnail` is a ~92px preview. Order the big ones first so the card's
+          // hero tile - the one scaled up the most - is not the most pixelated image available.
+          const images = dedupeImages([...(extraImages.get(r.link!) ?? []), safeImageUrl(r.thumbnail)]);
           return {
             title: r.title ?? r.link!,
             url: r.link!,
