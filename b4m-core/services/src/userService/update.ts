@@ -27,7 +27,11 @@ export const updateUserSchema = z.object({
   // self-grant gated products/dev bypass. Tag mutation is admin-only -
   // see `adminUpdateUserSchema` in ./adminUpdate.ts. `secureParameters` strips
   // any `tags` field a non-admin sends because it's no longer in this schema.
-  lastCreditsPurchasedAt: z.date().nullable().optional(),
+  //
+  // `lastCreditsPurchasedAt` is intentionally NOT here either: it is server-owned
+  // metadata stamped only by a net credit grant (see `adminUpdateUser`'s `builtParams`
+  // and `addCredits`'s `type === 'purchase'` stamp). Accepting it here would let any
+  // caller (admin or self-service) clear or forge the timestamp via a plain PUT.
   systemFiles: z
     .array(
       z.object({

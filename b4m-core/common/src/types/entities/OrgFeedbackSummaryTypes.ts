@@ -22,6 +22,9 @@ export interface OrgFeedbackSummaryCounts {
   byType: FeedbackCountBucket[];
   byStatus: FeedbackCountBucket[];
   byTag: FeedbackCountBucket[];
+  /** Optional, and load-bearing so: completed artifacts already in S3 carry no such key, and they
+   * are re-parsed with the schema below on every read. */
+  byTagTruncated?: boolean;
 }
 
 /** The JSON artifact the worker writes to S3 and the read route hands back. */
@@ -44,6 +47,7 @@ const orgFeedbackSummaryCountsSchema = z.object({
   byType: z.array(feedbackCountBucketSchema),
   byStatus: z.array(feedbackCountBucketSchema),
   byTag: z.array(feedbackCountBucketSchema),
+  byTagTruncated: z.boolean().optional(),
 }) satisfies z.ZodType<OrgFeedbackSummaryCounts>;
 
 /**
