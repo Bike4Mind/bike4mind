@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { computeHelpCorpusHash } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
@@ -836,7 +836,7 @@ execSync('pnpm --filter @bike4mind/scripts help:build-index', { stdio: 'inherit'
 // it. The computation lives in @bike4mind/infra because nothing imports this file, so that is the
 // only place its failure modes can be tested - see helpCorpusHash.ts for which ones and why.
 const HELP_CORPUS_HASH = computeHelpCorpusHash({
-  readDocsTree: () => execSync('git ls-tree -r HEAD docs-site/docs').toString(),
+  readDocsTree: () => execFileSync('git', ['ls-tree', '-r', 'HEAD', 'docs-site/docs']).toString(),
   readIndex: () => readFileSync('apps/client/app/generated/help-index.json'),
 });
 

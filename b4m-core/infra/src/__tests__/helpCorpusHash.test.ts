@@ -46,6 +46,17 @@ describe('computeHelpCorpusHash', () => {
     expect(() => computeHelpCorpusHash({ readDocsTree: () => TREE, readIndex: missing })).toThrow(/ENOENT/);
   });
 
+  it('propagates a failed git read rather than seeing it as an empty tree', () => {
+    // `git ls-tree` exits non-zero outside a repo, which the caller's exec surfaces as a throw.
+    // The empty-tree guard above must not be what handles that: it would name the wrong cause.
+    const failed = () => {
+      throw new Error('fatal: not a git repository');
+    };
+    expect(() => computeHelpCorpusHash({ readDocsTree: failed, readIndex: () => INDEX })).toThrow(
+      /not a git repository/
+    );
+  });
+
   it('is short enough to read in a stage name and stable in length', () => {
     expect(computeHelpCorpusHash(sources(TREE, INDEX))).toMatch(/^[0-9a-f]{8}$/);
   });
