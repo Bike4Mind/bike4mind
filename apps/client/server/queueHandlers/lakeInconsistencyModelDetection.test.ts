@@ -8,6 +8,7 @@ const h = vi.hoisted(() => ({
   detectLakeInconsistenciesModel: vi.fn(),
   recordLakeFindings: vi.fn(),
   getEffectiveLLMApiKeys: vi.fn(),
+  listGrantsByLake: vi.fn(),
   loggerInfo: vi.fn(),
   loggerWarn: vi.fn(),
   loggerError: vi.fn(),
@@ -28,12 +29,24 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     detectLakeInconsistenciesModel: h.detectLakeInconsistenciesModel,
     recordLakeFindings: h.recordLakeFindings,
+    MODEL_INCONSISTENCY_DETECTOR: 'model',
+    // The real resolver, not a stub: the point of the owner tests below is that this handler routes
+    // spend through the same owner rule as the rest of the lake surface, so stubbing it would assert
+    // only that the handler calls something.
+    resolveEffectiveOwnerIds: (
+      lakeDoc: { createdByUserId: string },
+      grants: { principalType: string; principalId: string; role: string }[] = []
+    ) => {
+      const owners = grants.filter(g => g.principalType === 'user' && g.role === 'owner').map(g => g.principalId);
+      return owners.length > 0 ? owners : [lakeDoc.createdByUserId];
+    },
   },
   apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
 }));
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: { getSettingsValue: h.getSettingsValue },
   apiKeyRepository: {},
+  dataLakeAccessGrantRepository: { listByLake: h.listGrantsByLake },
   dataLakeFindingRepository: {},
   dataLakeRepository: {
     findById: h.findById,
@@ -56,6 +69,8 @@ const emptyResult = {
   batchesFailed: 0,
   batchesUnpersisted: 0,
   subjectsDropped: 0,
+  dismissedSuppressed: 0,
+  subjectsMerged: 0,
   deadlineReached: false,
   truncated: false,
 };
@@ -75,6 +90,7 @@ beforeEach(() => {
   h.detectLakeInconsistenciesModel.mockResolvedValue(emptyResult);
   h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
   h.getEffectiveLLMApiKeys.mockResolvedValue({});
+  h.listGrantsByLake.mockResolvedValue([]);
 });
 
 describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
@@ -83,6 +99,36 @@ describe('lakeInconsistencyModelDetection queue handler (#3057)', () => {
 
     expect(h.detectLakeInconsistenciesModel).toHaveBeenCalledTimes(1);
     expect(h.detectLakeInconsistenciesModel.mock.calls[0][0]).toBe(lake);
+  });
+
+  it('bills the effective owner, not the creator, when the lake has been transferred', async () => {
+    // A transferred lake still carries its original createdByUserId. Charging that is charging the
+    // person it was transferred away from - resolveEffectiveOwnerIds is the rule the rest of the lake
+    // surface already uses to answer who pays, and `endUserId` must carry the same id to the provider.
+    h.listGrantsByLake.mockResolvedValue([{ principalType: 'user', principalId: 'newOwner', role: 'owner' }]);
+
+    await invoke();
+
+    expect(h.getEffectiveLLMApiKeys).toHaveBeenCalledWith('newOwner', expect.anything(), expect.anything());
+    expect(h.detectLakeInconsistenciesModel.mock.calls[0][1].endUserId).toBe('newOwner');
+  });
+
+  it('bills the creator when the lake carries no owner grant', async () => {
+    await invoke();
+
+    expect(h.getEffectiveLLMApiKeys).toHaveBeenCalledWith('owner1', expect.anything(), expect.anything());
+    expect(h.detectLakeInconsistenciesModel.mock.calls[0][1].endUserId).toBe('owner1');
+  });
+
+  it('falls back to the creator rather than stranding a claimed lease when the grant read fails', async () => {
+    // The lease is already held by this point, so throwing here would cost the lake its whole lease
+    // window for a lookup whose own fallback is the creator anyway.
+    h.listGrantsByLake.mockRejectedValue(new Error('mongo blip'));
+
+    await invoke();
+
+    expect(h.getEffectiveLLMApiKeys).toHaveBeenCalledWith('owner1', expect.anything(), expect.anything());
+    expect(h.loggerWarn).toHaveBeenCalledWith(expect.stringContaining('could not read lake grants'), expect.anything());
   });
 
   it('re-checks the kill-switch at consume time, not just at enqueue time', async () => {

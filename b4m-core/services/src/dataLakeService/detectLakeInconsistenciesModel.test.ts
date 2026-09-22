@@ -28,12 +28,17 @@ const lake = {
 type MemberRow = { fabFileId: string; fileName?: string };
 const memberRow = (fabFileId: string, fileName = `${fabFileId}.pdf`): MemberRow => ({ fabFileId, fileName });
 
-const makeAdapters = (members: MemberRow[], textsById: Record<string, string[]> = {}) => {
+const makeAdapters = (
+  members: MemberRow[],
+  textsById: Record<string, string[]> = {},
+  dismissedKeys: { kind: string; subject: string }[] = []
+) => {
   const findChunkTextSample = vi.fn(async (fabFileId: string) => textsById[fabFileId] ?? ['text']);
   return {
     db: {
       fabFiles: { findDataLakeMembershipMembers: vi.fn(async () => members) },
       fabFileChunks: { findChunkTextSample },
+      dataLakeFindings: { listDismissedKeys: vi.fn(async () => dismissedKeys) },
     },
     apiKeyTable: {} as never,
     logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
@@ -60,6 +65,8 @@ describe('detectLakeInconsistenciesModel', () => {
       batchesFailed: 0,
       batchesUnpersisted: 0,
       subjectsDropped: 0,
+      dismissedSuppressed: 0,
+      subjectsMerged: 0,
       deadlineReached: false,
       truncated: false,
     });
@@ -182,11 +189,12 @@ describe('detectLakeInconsistenciesModel', () => {
   });
 
   it('caps findings per run and reports truncation', async () => {
-    // Member/batch counts stay within their own bounds (60 members / 15 per batch = 4 batches); the
-    // cap is exercised by having a single batch report more contradictions than fit in the budget,
-    // not by inflating the member count past what the pass will ever read.
-    const perBatch = Array.from({ length: MODEL_INCONSISTENCY_FINDINGS_CAP }, (_, i) => ({
-      subject: `dup ${i}`,
+    // Member/batch counts stay within their own bounds; the cap is exercised by having a single batch
+    // report more DISTINCT contradictions than fit in the budget, not by inflating the member count
+    // past what the pass will ever read. Distinct matters: duplicates merge rather than accumulate,
+    // so a batch of repeated subjects would never reach the cap at all.
+    const perBatch = Array.from({ length: MODEL_INCONSISTENCY_FINDINGS_CAP + 1 }, (_, i) => ({
+      subject: `subject ${i}`,
       documents: [
         { fabFileId: 'a', excerpt: 'e1' },
         { fabFileId: 'b', excerpt: 'e2' },
@@ -200,6 +208,36 @@ describe('detectLakeInconsistenciesModel', () => {
 
     expect(result.findings.length).toBe(MODEL_INCONSISTENCY_FINDINGS_CAP);
     expect(result.truncated).toBe(true);
+  });
+
+  it('caps what is WRITTEN, not just what is returned', async () => {
+    // The cap has to bind the durable path. `onBatchFindings` fires per batch, before any end-of-run
+    // slice could run, so a cap applied only to the returned array would let several chatty batches
+    // persist far more rows than the constant claims - and the response would still report exactly
+    // MODEL_INCONSISTENCY_FINDINGS_CAP, hiding it.
+    let nextSubject = 0;
+    evaluateMock.mockImplementation(async () =>
+      Array.from({ length: MODEL_INCONSISTENCY_FINDINGS_CAP }, () => ({
+        subject: `subject ${nextSubject++}`,
+        documents: [
+          { fabFileId: 'a', excerpt: 'e1' },
+          { fabFileId: 'b', excerpt: 'e2' },
+        ],
+      }))
+    );
+    const members = Array.from({ length: MODEL_INCONSISTENCY_BATCH_SIZE * 3 }, (_, i) => memberRow(`d${i}`));
+    const adapters = makeAdapters(members);
+    const persisted: unknown[] = [];
+    const onBatchFindings = vi.fn(async (findings: unknown[]) => {
+      persisted.push(...findings);
+    });
+
+    const result = await detectLakeInconsistenciesModel(lake, { ...adapters, onBatchFindings } as never);
+
+    expect(result.batchesRun).toBe(3);
+    expect(result.truncated).toBe(true);
+    expect(persisted).toHaveLength(MODEL_INCONSISTENCY_FINDINGS_CAP);
+    expect(result.findings).toHaveLength(MODEL_INCONSISTENCY_FINDINGS_CAP);
   });
   it('drops a contradiction whose subject normalizes to empty rather than collapsing them onto one row', async () => {
     // `subject` is part of the unique key recordLakeFindings upserts on, so every finding that
@@ -251,9 +289,12 @@ describe('detectLakeInconsistenciesModel', () => {
   });
 
   it('counts a failed persist and keeps running rather than losing the remaining batches too', async () => {
-    evaluateMock.mockResolvedValue([
+    // Distinct subjects per batch on purpose: same-subject findings MERGE, so a fixture that repeated
+    // one would return a single finding and say nothing about the second batch having run at all.
+    let batch = 0;
+    evaluateMock.mockImplementation(async () => [
       {
-        subject: 'refund window',
+        subject: `refund window ${batch++}`,
         documents: [
           { fabFileId: 'a', excerpt: 'e1' },
           { fabFileId: 'b', excerpt: 'e2' },
@@ -272,6 +313,128 @@ describe('detectLakeInconsistenciesModel', () => {
     expect(result.findings).toHaveLength(2);
   });
 
+  it('merges two contradictions that normalize to one subject instead of minting two rows', async () => {
+    // `subject` is part of the unique key recordLakeFindings upserts on, and that upsert $sets
+    // sources - so two findings sharing a normalized subject are one row, and pushing both would have
+    // the second silently replace the first's evidence. Free model text collides far more often than
+    // the lexical pass's bounded vocabulary, which is what makes this reachable.
+    evaluateMock.mockResolvedValue([
+      {
+        subject: 'Refund Window',
+        documents: [
+          { fabFileId: 'a', excerpt: 'thirty days' },
+          { fabFileId: 'b', excerpt: 'sixty days' },
+        ],
+      },
+      {
+        subject: 'refund window',
+        documents: [
+          { fabFileId: 'b', excerpt: 'sixty days' },
+          { fabFileId: 'c', excerpt: 'ninety days' },
+        ],
+      },
+    ]);
+    const adapters = makeAdapters([memberRow('a'), memberRow('b'), memberRow('c')]);
+
+    const result = await detectLakeInconsistenciesModel(lake, adapters as never);
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.subjectsMerged).toBe(1);
+    // Evidence is the UNION, not the second citation overwriting the first.
+    expect(result.findings[0].evidence.map(e => e.fabFileId)).toEqual(['a', 'b', 'c']);
+    // documentCount counts DISTINCT documents - b was cited by both and must not be counted twice.
+    expect(result.findings[0].documentCount).toBe(3);
+  });
+
+  it('suppresses a contradiction a curator has already dismissed', async () => {
+    // Re-detection cannot reopen a dismissed row (recordDetected writes status under $setOnInsert
+    // only). What suppression protects is the curator's ruling being re-reported, and the cap slot
+    // the re-derived finding would otherwise take from a genuinely new one.
+    evaluateMock.mockResolvedValue([
+      {
+        subject: 'refund window',
+        documents: [
+          { fabFileId: 'a', excerpt: 'e1' },
+          { fabFileId: 'b', excerpt: 'e2' },
+        ],
+      },
+      {
+        subject: 'support hours',
+        documents: [
+          { fabFileId: 'a', excerpt: 'e3' },
+          { fabFileId: 'b', excerpt: 'e4' },
+        ],
+      },
+    ]);
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')], {}, [
+      { kind: 'narrative-contradiction', subject: 'refund window' },
+    ]);
+
+    const result = await detectLakeInconsistenciesModel(lake, adapters as never);
+
+    expect(adapters.db.dataLakeFindings.listDismissedKeys).toHaveBeenCalledWith('lake1', 'model');
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].subject).toBe('support hours');
+    expect(result.dismissedSuppressed).toBe(1);
+  });
+
+  it('runs without suppression rather than failing when the dismissal read throws', async () => {
+    // Tolerated, not required: this read is not worth losing a run that would otherwise succeed.
+    evaluateMock.mockResolvedValue([
+      {
+        subject: 'refund window',
+        documents: [
+          { fabFileId: 'a', excerpt: 'e1' },
+          { fabFileId: 'b', excerpt: 'e2' },
+        ],
+      },
+    ]);
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')]);
+    adapters.db.dataLakeFindings.listDismissedKeys = vi.fn(async () => {
+      throw new Error('mongo blip');
+    });
+
+    const result = await detectLakeInconsistenciesModel(lake, adapters as never);
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.dismissedSuppressed).toBe(0);
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not read dismissed findings'));
+  });
+
+  it('resets the consecutive-failure counter after a success, so alternating failures never abort', async () => {
+    // The positive control for the reset. Without it, three non-consecutive failures trip the
+    // systemic-failure abort and the run stops with batches it had every reason to run. A fixture
+    // that fails every batch, or one that never fails twice, leaves the reset untested.
+    // fail, fail, SUCCESS, fail, fail over a full member sample. Without the reset the counter reads
+    // 1, 2, 2, 3 and the run aborts on the FOURTH batch; with it, the success zeroes the counter and
+    // all five run. The two outcomes differ in batchesRun, so this is an exact pin rather than a
+    // fixture that would pass either way.
+    const contradiction = [
+      {
+        subject: 'refund window',
+        documents: [
+          { fabFileId: 'a', excerpt: 'e1' },
+          { fabFileId: 'b', excerpt: 'e2' },
+        ],
+      },
+    ];
+    evaluateMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(contradiction)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    const batchesInAFullRun = Math.ceil(MODEL_INCONSISTENCY_MEMBER_SAMPLE / MODEL_INCONSISTENCY_BATCH_SIZE);
+    const members = Array.from({ length: MODEL_INCONSISTENCY_MEMBER_SAMPLE }, (_, i) => memberRow(`d${i}`));
+    const adapters = makeAdapters(members);
+
+    const result = await detectLakeInconsistenciesModel(lake, adapters as never);
+
+    expect(result.batchesRun).toBe(batchesInAFullRun);
+    expect(result.batchesFailed).toBe(4);
+    expect(adapters.logger.error).not.toHaveBeenCalled();
+  });
+
   it('stops between batches when the wall clock cannot fit another one', async () => {
     // Stopping here is the point: starting a batch that cannot finish bills the LLM call and then
     // throws its findings away when the Lambda is killed mid-call.
@@ -288,13 +451,17 @@ describe('detectLakeInconsistenciesModel', () => {
     const result = await detectLakeInconsistenciesModel(lake, { ...adapters, getRemainingTimeInMillis } as never);
 
     expect(result.deadlineReached).toBe(true);
-    expect(result.batchesRun).toBeLessThan(3);
+    // Exact, not an inequality: the fixture hands out BUDGET*2 then BUDGET then 0, so two batches
+    // fit and the third does not. `toBeLessThan(3)` also passes when `<` loosens to `<=` at the
+    // deadline check, which silently throws away a batch the run had budget for.
+    expect(result.batchesRun).toBe(2);
     expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('not enough wall clock'));
   });
 
   it('reads chunk text with bounded concurrency rather than one member at a time', async () => {
-    // The lexical pass fans out 8 at a time for the same collection; this pass reads 4x the chunks
-    // per member, so serializing it would put up to 60 round trips ahead of the first LLM call.
+    // The lexical pass fans out 8 at a time for the same collection; this pass reads 2.4x the chunks
+    // per member, so serializing it would put up to MODEL_INCONSISTENCY_MEMBER_SAMPLE round trips
+    // ahead of the first LLM call.
     const members = Array.from({ length: 16 }, (_, i) => memberRow(`d${i}`));
     let inFlight = 0;
     let peak = 0;

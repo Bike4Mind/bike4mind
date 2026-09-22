@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import type { ApiKeyTable } from '@bike4mind/llm-adapters';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, EXCERPT_MAX } from '@bike4mind/common';
 
 // Same mocking shape as LakeMemoryExtractionService.test.ts: fake the adapters so evaluate()'s
 // getAvailableModels + getLlmByModel resolve to a backend whose `complete` streams whatever canned
@@ -132,7 +132,9 @@ describe('LakeContradictionReadingService.evaluate', () => {
 
     const result = await service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')] });
 
-    expect(result?.[0].documents[0].excerpt.length).toBeLessThan(longExcerpt.length);
+    // Asserted against EXCERPT_MAX, the constant this test is named for - not merely "shorter than
+    // the input", which any trim at all satisfies and which says nothing about the bound holding.
+    expect(result?.[0].documents[0].excerpt.length).toBeLessThanOrEqual(EXCERPT_MAX);
   });
 
   it('returns an empty array when the model reports no contradictions', async () => {

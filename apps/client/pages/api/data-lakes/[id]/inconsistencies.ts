@@ -60,6 +60,31 @@ const modelInconsistencyRunRateLimit = rateLimit({
   bucket: 'data-lakes/inconsistencies/model',
 });
 
+/**
+ * Model-detection runs per LAKE per hour, enforced alongside the per-caller cap above rather than
+ * instead of it. The two bound different things and neither implies the other: the per-caller cap
+ * stops one person spending without limit, but the cost lands on the LAKE, and N curators with
+ * manage rights each get their own allowance - so the caller cap alone lets a shared lake be billed
+ * N x `MODEL_DETECTION_HOURLY_CAP` full LLM passes an hour. The lease serializes those runs; it does
+ * not limit how many of them happen.
+ *
+ * Higher than the per-caller cap so a lake with several active curators is not throttled by the
+ * first one to click, while still putting a hard ceiling on one lake's hourly spend.
+ */
+const MODEL_DETECTION_HOURLY_CAP_PER_LAKE = 6;
+
+const modelInconsistencyLakeRateLimit = rateLimit({
+  limit: () => (isDevelopment() ? Infinity : MODEL_DETECTION_HOURLY_CAP_PER_LAKE),
+  windowMs: HOUR_MS,
+  bucket: 'data-lakes/inconsistencies/model/lake',
+  // Counted per lake, not per caller. `undefined` for a malformed id falls back to the default
+  // subject, which only ever makes the limit stricter - it can never open the bucket up.
+  subject: req => {
+    const { id } = req.query as { id?: string };
+    return typeof id === 'string' && id ? `lake:${id}` : undefined;
+  },
+});
+
 const isModelDetectorRequest = (req: Request) => req.method === 'POST' && req.query.detector === 'model';
 
 /**
@@ -187,9 +212,17 @@ async function renderStoredReport(
  * `GET /health` alone when it added rows. A model finding is visible via
  * `GET /api/data-lakes/:id/findings?detector=model`, the same door the lexical rows already use.
  *
+ * MUST STAY IN SYNC WITH the findings GET's detector handling. "Unchanged" above is true only while
+ * that GET reads the stored blob. A change that has it render from ROWS instead must filter on
+ * `detector` - `listByLake` applies one only when supplied - or a lake that has run both passes
+ * returns `narrative-contradiction` rows next to a `countsByKind` the lexical pass built with
+ * `'narrative-contradiction': 0`, which is the same mismatch on the detector axis that the status
+ * axis already warns about.
+ *
  * QUEUED, not run inline, and that is the difference between this branch working and not. The pass
- * makes up to four sequential LLM calls over up to 60 documents, each able to take the
- * `SmallLLMService` timeout twice over; this Lambda is capped at 60 seconds (`infra/web.ts`). Run
+ * makes up to `ceil(MODEL_INCONSISTENCY_MEMBER_SAMPLE / MODEL_INCONSISTENCY_BATCH_SIZE)` sequential
+ * LLM calls, each able to take `MODEL_CONTRADICTION_TIMEOUT_MS` twice over; this Lambda is capped at
+ * 60 seconds (`infra/web.ts`). Run
  * here, a normal-sized lake exhausted the request with every call it had already made billed and
  * nothing persisted - a 504, no findings, and one of three hourly attempts spent. So this door does
  * what `POST /lake-memory` does: check the preconditions, take the cap, enqueue, return 202. The
@@ -237,9 +270,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   )
   .use((req, res, next) => {
     if (req.method !== 'POST') return next();
-    return isModelDetectorRequest(req)
-      ? modelInconsistencyRunRateLimit(req, res, next)
-      : inconsistencyRunRateLimit(req, res, next);
+    if (!isModelDetectorRequest(req)) return inconsistencyRunRateLimit(req, res, next);
+    // Caller cap first: a caller already over their own budget must not consume the lake's.
+    return modelInconsistencyRunRateLimit(req, res, err =>
+      err ? next(err) : modelInconsistencyLakeRateLimit(req, res, next)
+    );
   })
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };

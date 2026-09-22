@@ -28,6 +28,14 @@ export const MODEL_CONTRADICTION_DOCUMENTS_CITED = 4;
  * and compares several documents at once.
  */
 export const MODEL_CONTRADICTION_MAX_TOKENS = 4000;
+/**
+ * Per-attempt wall clock for one batch's call, above `SmallLLMService`'s 30s default. This prompt is
+ * unusually large for a small-LLM task - `MODEL_INCONSISTENCY_BATCH_SIZE` documents at
+ * `MODEL_INCONSISTENCY_DOC_CHARS` each, ~48k tokens - and the default was sized for single-document
+ * extractions an order of magnitude smaller. `MODEL_INCONSISTENCY_BATCH_BUDGET_MS` is derived from
+ * this value times its one retry, so the two must move together.
+ */
+export const MODEL_CONTRADICTION_TIMEOUT_MS = 45_000;
 
 const ContradictionSourceSchema = z.object({
   /** Must be one of the ids the batch actually supplied - the caller filters out anything else. */
@@ -209,6 +217,7 @@ export class LakeContradictionReadingService {
         {
           taskType: 'extraction',
           maxTokens: MODEL_CONTRADICTION_MAX_TOKENS,
+          timeoutMs: MODEL_CONTRADICTION_TIMEOUT_MS,
           temperature: 0,
           retries: 1,
         }

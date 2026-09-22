@@ -1,7 +1,9 @@
 import {
   EVIDENCE_MAX,
+  inconsistencyFindingKey,
   normalizeSubject,
   type IDataLakeDocument,
+  type IDataLakeFindingRepository,
   type IFabFileChunkRepository,
   type IFabFileRepository,
   type InconsistencyFinding,
@@ -16,21 +18,51 @@ import { CHUNK_READ_CONCURRENCY } from './detectLakeInconsistencies';
 import { lakeMembershipScope } from './lakeMembershipScope';
 
 /**
+ * The four constants below are ONE budget, not four independent knobs, and they are tuned together
+ * against a single binding constraint: the handler's 10-minute Lambda timeout (infra/queues.ts).
+ *
+ *   members x doc-chars      = text read per run
+ *   ceil(members / batch)    = LLM calls per run
+ *   batch x doc-chars        = prompt chars per call
+ *   calls x batch-budget-ms  = wall clock per run, which must fit 10 minutes
+ *
+ * Today: 40 x 24,000 = 960,000 chars read, over ceil(40 / 8) = 5 calls of 192,000 prompt chars
+ * (~48k tokens on the ~4 chars/token average `chunking.ts` documents for English prose), at up to
+ * {@link MODEL_INCONSISTENCY_BATCH_BUDGET_MS} each = 500s worst case inside a 600s Lambda.
+ *
+ * Raising any one of them without re-deriving the rest is what produced the defect these numbers
+ * replace: a 20-chunk read whose 6,000-char cap discarded seventeen of the twenty chunks, leaving
+ * the paid pass reading 60% of what the free lexical pass reads.
+ */
+
+/**
  * How many members are read per run. Well below the lexical pass's `INCONSISTENCY_MEMBER_SAMPLE`
  * (200) on purpose: this pass reads through an LLM, so its cost scales with both documents AND
  * chars-per-document, where the lexical pass's only costs a regex pass over whatever it reads.
- * Owner-triggered, same as the lexical pass - never on every health read.
+ * This is the breadth half of the trade - see `MODEL_INCONSISTENCY_CHUNKS_PER_MEMBER` for the depth
+ * it is spent on. Owner-triggered, same as the lexical pass - never on every health read.
  */
-export const MODEL_INCONSISTENCY_MEMBER_SAMPLE = 60;
+export const MODEL_INCONSISTENCY_MEMBER_SAMPLE = 40;
 /**
- * Chunks read per member, from the START of the document - 4x the lexical pass's
+ * Chunks read per member, from the START of the document - 2.4x the lexical pass's
  * `INCONSISTENCY_CHUNKS_PER_MEMBER` (5). The whole reason this pass exists is to read MORE deeply
  * than a 5-chunk window, so it deliberately trades member count for depth per member rather than
  * mirroring the lexical pass's shape.
+ *
+ * This number only means anything if {@link MODEL_INCONSISTENCY_DOC_CHARS} can actually hold it:
+ * chunks target `DEFAULT_PASSAGE_TOKEN_TARGET` (512) tokens, so ~2,048 chars each, and 12 of them
+ * is ~24,576 chars. The two MUST be moved together or the cap silently overrides this constant.
  */
-export const MODEL_INCONSISTENCY_CHUNKS_PER_MEMBER = 20;
-/** Chars of joined chunk text sent to the model per document, capping one huge file's own cost. */
-export const MODEL_INCONSISTENCY_DOC_CHARS = 6_000;
+export const MODEL_INCONSISTENCY_CHUNKS_PER_MEMBER = 12;
+/**
+ * Chars of joined chunk text sent to the model per document. Sized to ADMIT
+ * {@link MODEL_INCONSISTENCY_CHUNKS_PER_MEMBER} full-size chunks rather than to bound them, so it
+ * acts as a safety stop for an abnormally large chunk instead of as the real depth limit - which is
+ * what it had become. For reference, the lexical pass reads its 5 chunks uncapped, ~10,240 chars, so
+ * this is ~2.3x that window: the pass now reads deeper per document than the one it supplements,
+ * which is the only thing that justifies its cost.
+ */
+export const MODEL_INCONSISTENCY_DOC_CHARS = 24_000;
 /**
  * Documents compared per LLM call. A contradiction can only be found BETWEEN documents in the same
  * batch - two documents in different batches that actually disagree are invisible to this pass.
@@ -38,8 +70,12 @@ export const MODEL_INCONSISTENCY_DOC_CHARS = 6_000;
  * traded deliberately for cost: one call per `MODEL_INCONSISTENCY_MEMBER_SAMPLE` documents would
  * read as much text but risk a single oversized, slow, all-or-nothing request; this bounds a call's
  * cost and lets one bad batch fail without losing the rest of the run.
+ *
+ * Lowered alongside the depth raise above: with 4x the chars per document, the previous 15 would
+ * have put ~360k prompt chars into a single call, well past what one `MODEL_CONTRADICTION_TIMEOUT_MS`
+ * window can return.
  */
-export const MODEL_INCONSISTENCY_BATCH_SIZE = 15;
+export const MODEL_INCONSISTENCY_BATCH_SIZE = 8;
 /** Abort the run once this many batches fail BACK-TO-BACK - the same systemic-failure guard as
  * `extractLakeMemoryForBatch`'s `MAX_CONSECUTIVE_DOC_FAILURES`, scaled to this pass's unit of work. */
 export const MODEL_INCONSISTENCY_MAX_BATCH_FAILURES = 3;
@@ -51,23 +87,37 @@ export const MODEL_INCONSISTENCY_MAX_BATCH_FAILURES = 3;
  */
 export const MODEL_INCONSISTENCY_FINDINGS_CAP = 100;
 /**
- * Wall clock a single batch may need before the run refuses to start another one: the LLM call's
- * `SmallLLMService` timeout (30s) times its one retry, plus a margin for the findings write the
- * sink does afterwards. Checked BETWEEN batches, so this is what keeps a run from being killed
- * mid-call - the failure mode where the batch is billed and its findings are lost.
+ * Wall clock a single batch may need before the run refuses to start another one:
+ * `MODEL_CONTRADICTION_TIMEOUT_MS` (45s) times its one retry, plus a margin for the findings write
+ * the sink does afterwards. Checked BETWEEN batches, so this is what keeps a run from being killed
+ * mid-call - the failure mode where the batch is billed and its findings are lost. Derived from that
+ * timeout, so raising one without the other reintroduces exactly that failure.
  */
-export const MODEL_INCONSISTENCY_BATCH_BUDGET_MS = 70_000;
+export const MODEL_INCONSISTENCY_BATCH_BUDGET_MS = 100_000;
+
+/**
+ * This pass is the `model` detector. Named here rather than at the call site for the same reason
+ * `INCONSISTENCY_DETECTOR` is: the dismissal lookup below and the row write the caller performs
+ * afterwards have to agree on it, or the suppression keys on one detector, the rows on another, and
+ * a dismissal silently never matches.
+ */
+export const MODEL_INCONSISTENCY_DETECTOR = 'model' as const;
 
 export interface DetectLakeInconsistenciesModelAdapters {
   db: {
     fabFiles: Pick<IFabFileRepository, 'findDataLakeMembershipMembers'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'findChunkTextSample'>;
+    dataLakeFindings: Pick<IDataLakeFindingRepository, 'listDismissedKeys'>;
   };
   apiKeyTable: ApiKeyTable;
   /** Lake owner, threaded through to the LLM call for provider abuse attribution. */
   endUserId?: string;
   /**
-   * Persist the findings from one batch, called after EACH batch rather than once at the end.
+   * Persist the findings one batch created or CHANGED, called after EACH batch rather than once at
+   * the end. Findings are deduped by `kind+subject` across the whole run, so a batch that names a
+   * subject an earlier batch already found hands over the MERGED finding, not that batch's raw view
+   * of it - the sink upserts on that same key, and passing the raw view would have the later write
+   * replace the earlier one's evidence.
    *
    * The point is that spend and persistence advance together. Every batch costs real money the
    * moment it returns, so a run that dies afterwards - Lambda timeout, SQS redelivery, an unhandled
@@ -105,9 +155,21 @@ export interface ModelInconsistencyResult {
   batchesUnpersisted: number;
   /** Contradictions discarded because their subject normalized to the empty string. */
   subjectsDropped: number;
+  /** Contradictions discarded because a curator has already dismissed that kind+subject. */
+  dismissedSuppressed: number;
+  /**
+   * Contradictions that folded into a finding this run had already produced, rather than minting a
+   * second one. Non-zero means the model named the same disagreement more than once - expected from
+   * free text, and the reason the merge below exists.
+   */
+  subjectsMerged: number;
   /** True when the run stopped early on its wall-clock budget with documents still unread. */
   deadlineReached: boolean;
-  /** True when `MODEL_INCONSISTENCY_FINDINGS_CAP` dropped findings. */
+  /**
+   * True when `MODEL_INCONSISTENCY_FINDINGS_CAP` refused a contradiction. The cap is applied as
+   * findings are admitted, not to the returned array, so this means a finding was never written -
+   * not that one was written and hidden from the response.
+   */
   truncated: boolean;
 }
 
@@ -144,6 +206,8 @@ export async function detectLakeInconsistenciesModel(
     batchesFailed: 0,
     batchesUnpersisted: 0,
     subjectsDropped: 0,
+    dismissedSuppressed: 0,
+    subjectsMerged: 0,
     deadlineReached: false,
     truncated: false,
   });
@@ -151,6 +215,30 @@ export async function detectLakeInconsistenciesModel(
   // Same guard as the lexical pass's: an absent datalakeTag would degrade the membership match to
   // "files with no tags" across every tenant, and this reads document TEXT.
   if (!lake.datalakeTag) return empty(false);
+
+  // Loaded before the run, mirroring the lexical pass. Suppression here cannot save the LLM call that
+  // re-derives a dismissed contradiction - the model decides what it finds - but it stops a curator's
+  // ruling being re-reported every run, and stops re-derived findings consuming slots against
+  // `MODEL_INCONSISTENCY_FINDINGS_CAP` that a genuinely new contradiction would otherwise get. On a
+  // heavily-curated lake that is most of the run's budget spent on answers already rejected.
+  //
+  // TOLERATED, not required, for the same reason as the lexical pass's: a transient failure here must
+  // not cost a run that would otherwise have succeeded, and this one has already been paid for by the
+  // time findings exist. Failing open re-reports a dismissal for one run; failing closed throws away
+  // the run.
+  let dismissed: ReadonlySet<string> = new Set();
+  try {
+    dismissed = new Set(
+      (await db.dataLakeFindings.listDismissedKeys(lake.id, MODEL_INCONSISTENCY_DETECTOR)).map(k =>
+        inconsistencyFindingKey(k.kind, k.subject)
+      )
+    );
+  } catch (error) {
+    logger?.warn?.(
+      `[lakeInconsistencyModel] lake ${lake.id}: could not read dismissed findings; running without ` +
+        `suppression, so previously dismissed findings will be reported again: ${error}`
+    );
+  }
 
   const members = await db.fabFiles.findDataLakeMembershipMembers(
     lakeMembershipScope(lake),
@@ -195,11 +283,22 @@ export async function detectLakeInconsistenciesModel(
   if (documents.length < 2) return { ...empty(memberSampled), memberCount: documents.length };
 
   const reader = new LakeContradictionReadingService(logger ?? new Logger());
-  const findings: InconsistencyFinding[] = [];
+  /**
+   * Findings keyed by `inconsistencyFindingKey(kind, subject)` - the SAME identity
+   * `recordLakeFindings` upserts on. A Map rather than an array because two contradictions that
+   * normalize to one subject are one durable row, not two: the upsert `$set`s sources, so pushing
+   * both would have the second silently replace the first's evidence, and a model returning free
+   * text collides far more often than the lexical pass's bounded vocabulary. Insertion order is
+   * preserved, so the returned array keeps the order findings were discovered in.
+   */
+  const findingsByKey = new Map<string, { finding: InconsistencyFinding; documentIds: Set<string> }>();
   let batchesRun = 0;
   let batchesFailed = 0;
   let batchesUnpersisted = 0;
   let subjectsDropped = 0;
+  let dismissedSuppressed = 0;
+  let subjectsMerged = 0;
+  let truncated = false;
   let consecutiveFailures = 0;
   let deadlineReached = false;
 
@@ -236,7 +335,11 @@ export async function detectLakeInconsistenciesModel(
     consecutiveFailures = 0;
 
     const byId = new Map(batch.map(doc => [doc.fabFileId, doc]));
-    const batchFindings: InconsistencyFinding[] = [];
+    // The findings this batch created or changed, by identity - so a batch that names one subject
+    // twice persists it once. Persisting the MERGED finding rather than the raw batch output is what
+    // keeps the durable row consistent with the returned one when a later batch names a subject an
+    // earlier batch already found.
+    const touched = new Set<InconsistencyFinding>();
     for (const contradiction of contradictions) {
       const subject = normalizeSubject(contradiction.subject);
       // Drop rather than persist an empty subject. `subject` is part of the unique key
@@ -254,22 +357,67 @@ export async function detectLakeInconsistenciesModel(
         );
         continue;
       }
-      batchFindings.push({
-        kind: 'narrative-contradiction',
-        subject,
-        evidence: contradiction.documents.slice(0, EVIDENCE_MAX).map(source => ({
-          fabFileId: source.fabFileId,
-          fileName: byId.get(source.fabFileId)?.fileName ?? null,
-          excerpt: source.excerpt,
-        })),
-        documentCount: contradiction.documents.length,
-      });
+      const key = inconsistencyFindingKey('narrative-contradiction', subject);
+
+      // A curator has already ruled on this one. Dropped rather than reported: `recordDetected` writes
+      // `status` only under `$setOnInsert`, so re-detection could never reopen the row - what would be
+      // lost is the suppression itself, plus a cap slot a new contradiction should have had.
+      if (dismissed.has(key)) {
+        dismissedSuppressed += 1;
+        continue;
+      }
+
+      const existing = findingsByKey.get(key);
+      if (!existing) {
+        // The cap bounds what is WRITTEN, not just what is returned. Enforced here, before the row
+        // exists, because `onBatchFindings` fires per batch and a cap applied to the returned array
+        // at the end would let four chatty batches persist far more rows than it claims to allow.
+        if (findingsByKey.size >= MODEL_INCONSISTENCY_FINDINGS_CAP) {
+          truncated = true;
+          continue;
+        }
+        const finding: InconsistencyFinding = {
+          kind: 'narrative-contradiction',
+          subject,
+          evidence: contradiction.documents.slice(0, EVIDENCE_MAX).map(source => ({
+            fabFileId: source.fabFileId,
+            fileName: byId.get(source.fabFileId)?.fileName ?? null,
+            excerpt: source.excerpt,
+          })),
+          documentCount: contradiction.documents.length,
+        };
+        findingsByKey.set(key, {
+          finding,
+          documentIds: new Set(contradiction.documents.map(source => source.fabFileId)),
+        });
+        touched.add(finding);
+        continue;
+      }
+
+      // Same subject seen again: merge rather than mint or overwrite. Evidence grows to EVIDENCE_MAX
+      // with documents not already cited; `documentCount` counts the DISTINCT documents the merged
+      // finding spans, which is why the id set is tracked separately - it must stay honest past the
+      // point evidence stops growing.
+      subjectsMerged += 1;
+      for (const source of contradiction.documents) {
+        if (existing.documentIds.has(source.fabFileId)) continue;
+        existing.documentIds.add(source.fabFileId);
+        if (existing.finding.evidence.length < EVIDENCE_MAX) {
+          existing.finding.evidence.push({
+            fabFileId: source.fabFileId,
+            fileName: byId.get(source.fabFileId)?.fileName ?? null,
+            excerpt: source.excerpt,
+          });
+        }
+      }
+      existing.finding.documentCount = existing.documentIds.size;
+      touched.add(existing.finding);
     }
-    findings.push(...batchFindings);
 
     // Persist before the next batch, so the money this one cost survives whatever kills the run next.
     // Isolated: a write failure is logged and counted, never allowed to abort a run whose remaining
     // batches can still succeed - the same fail-soft posture as a failed batch read above.
+    const batchFindings = Array.from(touched);
     if (onBatchFindings && batchFindings.length > 0) {
       try {
         await onBatchFindings(batchFindings);
@@ -283,15 +431,18 @@ export async function detectLakeInconsistenciesModel(
     }
   }
 
-  const truncated = findings.length > MODEL_INCONSISTENCY_FINDINGS_CAP;
+  // No slice here: the cap is enforced as findings are admitted above, so what was returned and what
+  // was written are the same set. `truncated` says a contradiction was refused, not merely hidden.
   return {
-    findings: truncated ? findings.slice(0, MODEL_INCONSISTENCY_FINDINGS_CAP) : findings,
+    findings: Array.from(findingsByKey.values(), entry => entry.finding),
     memberCount: documents.length,
     memberSampled,
     batchesRun,
     batchesFailed,
     batchesUnpersisted,
     subjectsDropped,
+    dismissedSuppressed,
+    subjectsMerged,
     deadlineReached,
     truncated,
   };

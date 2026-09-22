@@ -3,12 +3,14 @@ import { dataLakeService, apiKeyService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
   apiKeyRepository,
+  dataLakeAccessGrantRepository,
   dataLakeFindingRepository,
   dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
 } from '@bike4mind/database';
-import { MODEL_INCONSISTENCY_RUN_LEASE_MS } from '@bike4mind/common';
+import { MODEL_INCONSISTENCY_RUN_LEASE_MS, type IDataLakeDocument } from '@bike4mind/common';
+import type { Logger } from '@bike4mind/observability';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
 
@@ -17,6 +19,33 @@ const LakeInconsistencyModelPayload = z.object({
   /** The caller who asked for the run. Carried for log correlation only; the run bills the OWNER. */
   userId: z.string(),
 });
+
+/**
+ * Who this run's LLM spend is charged to: the lake's EFFECTIVE owner, which is an explicit user
+ * owner-role grant where one exists and the immutable creator otherwise. Same resolver
+ * `resolveLakeSpendAddressees` uses, so the party billed for a run is the party notified about lake
+ * spend; a lake transferred away from its creator would otherwise keep billing them forever.
+ *
+ * Degrades to the creator rather than throwing. The lease is already claimed by the time this runs,
+ * so a transient grants read failure would otherwise cost the lake its whole lease window for a
+ * lookup whose own fallback is the creator anyway.
+ */
+async function resolveSpendOwnerId(lake: IDataLakeDocument, logger: Logger): Promise<string> {
+  try {
+    const grants = (await dataLakeAccessGrantRepository.listByLake(lake.id, { activeAsOf: new Date() })).map(g => ({
+      principalType: g.principalType,
+      principalId: g.principalId,
+      role: g.role,
+    }));
+    return dataLakeService.resolveEffectiveOwnerIds(lake, grants)[0] ?? lake.createdByUserId;
+  } catch (error) {
+    logger.warn('[lakeInconsistencyModel] could not read lake grants; billing the creator', {
+      dataLakeId: lake.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return lake.createdByUserId;
+  }
+}
 
 /**
  * Background model-driven contradiction detection for a data lake (#3057).
@@ -80,19 +109,31 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     }
 
     try {
+      // The EFFECTIVE owner, not the creator. `resolveEffectiveOwnerIds` prefers an explicit user
+      // owner-role grant and falls back to `createdByUserId`, which is the same resolver
+      // `resolveLakeSpendAddressees` uses to answer who pays for lake work - a transferred lake must
+      // not bill the person it was transferred away from. Falls back to the creator when the grant
+      // read fails: a transient grants blip must not strand a run that has already claimed the lease,
+      // and the creator is exactly what the resolver itself falls back to.
+      const ownerUserId = await resolveSpendOwnerId(lake, logger);
+
       // The LAKE OWNER's keys, not the caller's - the cost belongs to the lake's resource, matching
       // extractLakeMemoryForBatch's attribution. `endUserId` carries the same owner to the provider.
       const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(
-        lake.createdByUserId,
+        ownerUserId,
         { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
         { logger }
       );
 
       const seenAt = new Date();
       const result = await dataLakeService.detectLakeInconsistenciesModel(lake, {
-        db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository },
+        db: {
+          fabFiles: fabFileRepository,
+          fabFileChunks: fabFileChunkRepository,
+          dataLakeFindings: dataLakeFindingRepository,
+        },
         apiKeyTable,
-        endUserId: lake.createdByUserId,
+        endUserId: ownerUserId,
         // Persist each batch as it lands rather than once at the end, so a run killed part-way keeps
         // what it already paid for. The detector absorbs a throw here into `batchesUnpersisted`.
         onBatchFindings: findings =>
@@ -100,7 +141,7 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             .recordLakeFindings(
               lake.id,
               findings,
-              { detector: 'model', seenAt },
+              { detector: dataLakeService.MODEL_INCONSISTENCY_DETECTOR, seenAt },
               { db: { dataLakeFindings: dataLakeFindingRepository }, logger }
             )
             .then(({ failed }) => {
@@ -127,6 +168,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         batchesFailed: result.batchesFailed,
         batchesUnpersisted: result.batchesUnpersisted,
         subjectsDropped: result.subjectsDropped,
+        dismissedSuppressed: result.dismissedSuppressed,
+        subjectsMerged: result.subjectsMerged,
         deadlineReached: result.deadlineReached,
         truncated: result.truncated,
       });

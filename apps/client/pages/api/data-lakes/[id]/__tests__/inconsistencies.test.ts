@@ -471,8 +471,32 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
     expect(limit()).toBe(3);
   });
 
+  it('also bounds spend per LAKE, which the per-caller cap cannot do', async () => {
+    // The caller cap stops one person spending without limit, but the cost lands on the lake: N
+    // curators with manage rights each get their own allowance, so the caller cap alone lets one lake
+    // be billed N x 3 full LLM passes an hour. The lease serializes those runs, it does not limit them.
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model/lake']).toBe(1);
+    const options = h.rateLimitOptionsByBucket['data-lakes/inconsistencies/model/lake'];
+    expect((options?.limit as () => number)()).toBe(6);
+    // Keyed on the lake, not the caller - that IS the fix.
+    const subject = options?.subject as (req: unknown) => string | undefined;
+    expect(subject({ query: { id: 'lake1' } })).toBe('lake:lake1');
+    // A malformed id falls back to the default subject, which can only ever be stricter.
+    expect(subject({ query: {} })).toBeUndefined();
+  });
+
+  it('leaves the per-lake bucket untouched on a lexical run', async () => {
+    const { done } = invoke({}, 'POST');
+    await done;
+
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model/lake']).toBeUndefined();
+  });
+
   it('enqueues the run and returns 202 rather than doing the LLM work in the request', async () => {
-    // The whole point of the queue: four sequential LLM calls cannot fit the 60s frontend Lambda, and
+    // The whole point of the queue: several sequential LLM calls cannot fit the 60s frontend Lambda, and
     // run inline a timeout billed every call while persisting nothing. The route must now do no
     // detection and no findings write of its own.
     const { res, done } = invoke({}, 'POST', { detector: 'model' });
@@ -505,7 +529,12 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
 
     const { done } = invoke({}, 'POST', { detector: 'model' });
 
-    await expect(done).rejects.toThrow(/already in progress/i);
+    // The STATUS, not just the message. Matching on text alone leaves the guard untested: swapping
+    // ConflictError for a plain Error turns a double click into a 500 with this test still green.
+    await expect(done).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/already in progress/i),
+    });
     expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 

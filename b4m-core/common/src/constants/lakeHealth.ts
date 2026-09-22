@@ -635,17 +635,30 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
  * than the Lambda's own 10-minute timeout (infra/queues.ts), so a healthy in-flight run is never
  * stolen; short enough that a crashed run (which never released its lease) is reclaimable on the
  * next attempt without a reconciler.
+ *
+ * KNOWN GAP, deliberately left as-is here: this value also exceeds its queue's 12-minute visibility
+ * timeout, so a crashed extraction's redelivery loses its claim to the dead lease and is dropped as
+ * a duplicate. See {@link MODEL_INCONSISTENCY_RUN_LEASE_MS} below for the full failure mode and the
+ * ordering invariant it now holds. Changing this one moves the lake-memory pass's retry behaviour
+ * and belongs in its own change, not as a side effect of the model pass's.
  */
 export const LAKE_MEMORY_EXTRACTION_LEASE_MS = 15 * 60_000;
 
 /**
  * How long a model-inconsistency run's lease (#3057) is honored. Its own constant rather than a reuse
  * of the lake-memory window: the two passes run on separate queues with separate handler timeouts, so
- * tuning one must not silently move the other. Same rule sets the value - comfortably longer than the
- * handler's 10-minute Lambda timeout (infra/queues.ts) so a healthy run is never stolen, short enough
- * that a crashed run is reclaimable on the next attempt without a reconciler.
+ * tuning one must not silently move the other.
+ *
+ * MUST sit strictly between the handler's Lambda timeout and its queue's visibility timeout
+ * (infra/queues.ts: 10 minutes and 12 minutes). Longer than the Lambda so a healthy in-flight run is
+ * never stolen; SHORTER THAN THE VISIBILITY TIMEOUT so a crashed run is actually retryable. A lease
+ * outliving visibility silently destroys the retry: SQS redelivers at 12 minutes, the redelivered
+ * attempt loses its claim to the dead run's still-live lease, logs "another run holds the lease" and
+ * drops the message as a duplicate. Both retries fall inside that window, `retry: 2` is consumed by
+ * phantoms, and the DLQ never sees the failure - the run is lost with a log line blaming a
+ * concurrent run that does not exist.
  */
-export const MODEL_INCONSISTENCY_RUN_LEASE_MS = 15 * 60_000;
+export const MODEL_INCONSISTENCY_RUN_LEASE_MS = 11 * 60_000;
 
 /**
  * Whether a per-lake run lease is still in force at `now`. `at` is the lease stamp (the lake's
