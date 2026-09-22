@@ -330,6 +330,12 @@ export const CitableSourceSchema = z.object({
       chunkId: z.string().optional(),
       relevanceScore: z.number().optional(),
       fullContext: z.string().optional(),
+      /**
+       * Ids of the other cited sources this one provably disagrees with (#3041). Declared rather
+       * than left to the loose object, for the same reason chunkId/fullContext are: a writer that
+       * stamps the wrong shape should fail here, not render a badge that silently names nobody.
+       */
+      conflictsWith: z.array(z.string()).optional(),
     }) // Allow additional properties
     .optional(),
 });

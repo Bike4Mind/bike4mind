@@ -1457,7 +1457,17 @@ describe('retrieve_knowledge_content cross-document conflict note', () => {
     };
   }
 
-  async function runQuery(byFileId: Record<string, string>) {
+  /** The chips shipped alongside the note - the reader's half of the same signal. */
+  function citablesFrom(ctx: ReturnType<typeof makeContext>) {
+    const calls = (ctx.statusUpdate as ReturnType<typeof vi.fn>).mock.calls;
+    const withCitables = calls.find(([payload]) => payload?.promptMeta?.citables);
+    return (withCitables?.[0].promptMeta.citables ?? []) as Array<{
+      id: string;
+      metadata?: { conflictsWith?: string[] };
+    }>;
+  }
+
+  async function runQueryWithContext(byFileId: Record<string, string>) {
     const ctx = makeContext({
       retrievalFilter: undefined,
       db: {
@@ -1469,8 +1479,30 @@ describe('retrieve_knowledge_content cross-document conflict note', () => {
       data: Object.keys(byFileId).map(id => makeFile({ id, fileName: `${id}.pdf` })),
     });
     const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
-    return (await tool.toolFn({ query: 'uptime' })) as string;
+    return { out: (await tool.toolFn({ query: 'uptime' })) as string, ctx };
   }
+
+  async function runQuery(byFileId: Record<string, string>) {
+    return (await runQueryWithContext(byFileId)).out;
+  }
+
+  it('marks both conflicting documents on the citation chips (#3041)', async () => {
+    // The statusUpdate that ships these chips fires before the note is even assembled, so this also
+    // pins that the detector runs early enough to reach them.
+    const { ctx } = await runQueryWithContext({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 95%.' });
+
+    const citables = citablesFrom(ctx);
+    expect(citables.map(c => c.id)).toEqual(['file-a', 'file-b']);
+    expect(citables.find(c => c.id === 'file-a')?.metadata?.conflictsWith).toEqual(['file-b']);
+    expect(citables.find(c => c.id === 'file-b')?.metadata?.conflictsWith).toEqual(['file-a']);
+  });
+
+  it('leaves the chips unmarked when the documents agree', async () => {
+    const { ctx } = await runQueryWithContext({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 99.9%.' });
+
+    // Absent, not an empty array: a chip carrying `conflictsWith: []` would badge with no partner.
+    for (const citable of citablesFrom(ctx)) expect(citable.metadata?.conflictsWith).toBeUndefined();
+  });
 
   it('keeps the note at column 0, outside the untrusted block', async () => {
     const out = await runQuery({ 'file-a': 'Uptime is 99.9%.', 'file-b': 'Uptime is 95%.' });
