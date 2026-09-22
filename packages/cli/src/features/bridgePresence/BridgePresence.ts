@@ -171,7 +171,9 @@ export class BridgePresence {
   private warnUntrustedPeerOnce(): void {
     if (this.peerWarned) return;
     this.peerWarned = true;
-    logger.warn('[tavern] bridge port owner is not this user; not disclosing secret or handling commands');
+    logger.warn(
+      '[tavern] cannot confirm the bridge port is owned by this user; not disclosing secret or handling commands'
+    );
   }
 
   /** One announce attempt. Schedules a retry on failure; wires up the
