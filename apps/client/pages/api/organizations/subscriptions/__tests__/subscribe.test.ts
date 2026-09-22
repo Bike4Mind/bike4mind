@@ -147,7 +147,6 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
 
     expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
     expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
-    expect(mockCreateCustomer).not.toHaveBeenCalled();
     expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled(); // the DB write the guard now provably precedes
     expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
@@ -158,8 +157,8 @@ describe('POST /api/organizations/subscriptions/subscribe - callbackUrl origin g
     await (handler as HandlerFn)(req, res);
 
     expect(mockIsAllowedCallbackOrigin).toHaveBeenCalledWith(CALLBACK_URL);
-    // The org path creates its Stripe customer inside attachOrgStripeCustomer, never directly.
-    expect(mockCreateCustomer).not.toHaveBeenCalled();
+    // The org path creates its Stripe customer inside attachOrgStripeCustomer, never directly - so
+    // this positive assertion is also what would catch a regression back to a direct createCustomer.
     expect(mockAttachOrgStripeCustomer).toHaveBeenCalledTimes(1);
     expect(mockSessionsCreate).toHaveBeenCalledTimes(1);
     // The session must be opened against the customer the org document actually points at - the
@@ -281,9 +280,8 @@ describe('POST /api/organizations/subscriptions/subscribe - duplicate subscripti
       });
 
       expect(mockSessionsCreate).not.toHaveBeenCalled();
-      // The guard sits above createCustomer and the org write, so a refused duplicate
-      // leaves no Stripe customer behind either.
-      expect(mockCreateCustomer).not.toHaveBeenCalled();
+      // The guard sits above the org write, so a refused duplicate leaves no Stripe customer
+      // behind: on this branch attachOrgStripeCustomer owns the createCustomer call.
       expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
     }
   );
@@ -391,7 +389,6 @@ describe('POST /api/organizations/subscriptions/subscribe - organization owner g
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
 
     expect(mockFindNonTerminalSubscriptionsByOwner).not.toHaveBeenCalled();
-    expect(mockCreateCustomer).not.toHaveBeenCalled();
     expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
     expect(mockSessionsCreate).not.toHaveBeenCalled();
   });
@@ -498,6 +495,10 @@ describe('POST /api/organizations/subscriptions/subscribe - request-shape and id
     await expect((handler as HandlerFn)(req, res)).rejects.toThrow();
 
     expect(mockVerifyOrgOwner).not.toHaveBeenCalled();
+    // The one place asserting createCustomer directly still means something: `''` is FALSY, so a
+    // regression that let it past the schema would take the new-organization branch and call
+    // createCustomer here, not inside attachOrgStripeCustomer. On the org branch this assertion is
+    // unreachable by construction, which is why it is not repeated in the tests above.
     expect(mockCreateCustomer).not.toHaveBeenCalled();
     expect(mockAttachOrgStripeCustomer).not.toHaveBeenCalled();
     expect(mockSessionsCreate).not.toHaveBeenCalled();

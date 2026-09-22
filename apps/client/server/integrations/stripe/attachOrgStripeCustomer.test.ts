@@ -57,11 +57,14 @@ describe('attachOrgStripeCustomer', () => {
 
   // The reason this helper exists rather than an `organizationRepository.update(org)` call: the
   // filter, not the $set. Without `stripeCustomerId: null` in the filter, both racers persist.
-  it('guards the write on stripeCustomerId still being null', async () => {
+  // `deletedAt: null` belongs to the filter for a different reason - softDeletePlugin hooks
+  // find/findOne but not findOneAndUpdate, so without it a delete racing the gate would stamp a
+  // customer onto a dead tenant. Asserted with an exact object so dropping either one fails here.
+  it('guards the write on stripeCustomerId still being null, and on the org being live', async () => {
     await attachOrgStripeCustomer(makeOrg(null));
 
     expect(mockFindOneAndUpdate).toHaveBeenCalledWith(
-      { _id: ORG, stripeCustomerId: null },
+      { _id: ORG, stripeCustomerId: null, deletedAt: null },
       { $set: { stripeCustomerId: 'cus_new' } },
       { new: true }
     );

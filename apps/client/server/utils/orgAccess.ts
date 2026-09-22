@@ -76,12 +76,21 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
  * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer
  * NotFoundError, so the route cannot be used to enumerate which organization ids exist.
  *
- * Two routes still spell the same bar out inline, and they are the complete list - every other
- * `org.userId !== user.id` in `pages/api` guards a user-owned resource, not an org:
- * `subscriptions/update-seats.ts` and `stripe/portal.ts`. Both answer ForbiddenError /
- * BadRequestError after an unconditional lookup, so unlike this helper they do leak which org ids
- * exist. Left alone only because changing the status they return is a visible API change; if you
- * touch either, move it onto this helper rather than copying the inline form again.
+ * Four routes still spell this same bar out inline. All four answer ForbiddenError /
+ * BadRequestError after an unconditional lookup, so unlike this helper they DO leak which org ids
+ * exist; each is left alone only because changing the status it returns is a visible API change.
+ * If you touch one, move it onto this helper rather than copying the inline form again:
+ * - `organizations/subscriptions/update-seats.ts:40`
+ * - `stripe/portal.ts:43`
+ * - `organizations/[id]/admins.ts:27-29`
+ * - `organizations/[id]/manager.ts:28-32` (assign) and `:51-55` (remove)
+ *
+ * Grep for BOTH spellings when re-deriving this list. The last two write `org.userId === user.id`
+ * into an `isOwner` local and negate it later, so a search for the `!==` form alone misses them -
+ * which is how an earlier version of this comment came to call a two-entry list complete.
+ *
+ * Separately, `webhooks/github/subscriptions/index.ts:35-62` is a private copy of
+ * `verifyOrgMembership`, not of this function - fold it into that sibling, not this one.
  */
 export async function verifyOrgOwner(user: { id: string; isAdmin: boolean }, orgId: string) {
   if (!orgId || !isValidObjectId(orgId)) {
