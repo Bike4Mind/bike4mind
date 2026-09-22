@@ -98,7 +98,7 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
-import { settleToolCallCredits } from './settleToolCredits';
+import { resolveAggregateToolModel, settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
@@ -900,6 +900,10 @@ export class ChatCompletionProcess {
   // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
   // than once in a turn bills the sum of every call.
   private toolCreditsMap: Map<string, number[]> = new Map();
+  // Distinct models that charged tool credits this turn (see ToolBuilder.reserveToolCredits).
+  // The quest writes ONE aggregate tool_usage ledger row, so it can only name a model
+  // honestly when this holds exactly one - see the settlement block below.
+  private toolCreditModels: Set<string> = new Set();
   private subagentTelemetryData: SubagentTelemetryData[] = [];
   // Credit reservation tracking (pre-reserve/reconcile pattern)
   private reservedCredits: number = 0;
@@ -2684,6 +2688,7 @@ export class ChatCompletionProcess {
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
         toolCreditsMap: this.toolCreditsMap,
+        toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
@@ -4124,6 +4129,7 @@ export class ChatCompletionProcess {
             // settleToolCallCredits and billed as its cost. Clear it so only the surviving
             // attempt's delivered tools settle.
             this.toolCreditsMap.clear();
+            this.toolCreditModels.clear();
 
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] === ${
@@ -5219,10 +5225,14 @@ export class ChatCompletionProcess {
                 .filter(fc => fc.creditsUsed && fc.creditsUsed > 0)
                 .map(fc => fc.name)
                 .join(', ');
+              // NOT currentModel.id: the charge belongs to whatever model the tools ran
+              // on. One aggregate row can only name it when a single model charged (see
+              // resolveAggregateToolModel).
+              const toolUsageModel = resolveAggregateToolModel(this.toolCreditModels);
               await subtractCredits(
                 {
                   type: 'tool_usage',
-                  model: currentModel.id,
+                  model: toolUsageModel,
                   sessionId: quest.sessionId,
                   questId: quest.id,
                   ownerId: this.reservedCreditsOwnerId || this.user.id,
