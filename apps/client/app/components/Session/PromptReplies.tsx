@@ -51,7 +51,7 @@ import {
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { extractReplies } from '@client/app/utils/replyUtils';
+import { extractReplies, extractThinking } from '@client/app/utils/replyUtils';
 import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
@@ -482,11 +482,11 @@ const PromptReplies: FC<PromptReplyProps> = ({
 
   const replies = useMemo(() => extractReplies(messageData), [messageData]);
 
-  const thoughts = useMemo(() => {
-    // Not startsWith: a turn that answers, calls a tool and thinks again reopens its thinking
-    // inside the slot that already holds the partial answer (see appendStreamedChunk).
-    return (messageData.replies || []).filter(Boolean).filter(r => r.includes('<think>'));
-  }, [messageData.replies]);
+  // extractThinking walks every thinking block across every reply slot (see
+  // appendStreamedChunk: a tool-using turn reopens thinking inside the slot that already
+  // holds the partial answer), so ThoughtBubbles gets parsed reasoning text rather than a
+  // whole slot with the answer and raw <think> markers still in it.
+  const thought = useMemo(() => extractThinking(messageData), [messageData]);
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
@@ -544,7 +544,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={messageData.questMasterReply || replies[0]}
-        thought={thoughts[0]}
+        thought={thought}
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}

@@ -42,6 +42,17 @@ describe('extractThinking', () => {
     );
   });
 
+  it('collects the reopened block from a two-slot accumulator sequence, not just the first slot', () => {
+    // Matches the shape appendStreamedChunk leaves behind: the first thinking block spills
+    // into its own slot once closed, and the second reopens inside the slot holding the
+    // partial answer.
+    expect(
+      extractThinking({
+        replies: ['<think>first reasoning</think>', 'PARTIAL ANSWER <think>second reasoning</think>FINAL ANSWER'],
+      })
+    ).toBe('first reasoning\n\nsecond reasoning');
+  });
+
   it('takes a trailing block that has not closed yet', () => {
     expect(extractThinking({ replies: ['partial <think>still reasoning'] })).toBe('still reasoning');
   });
