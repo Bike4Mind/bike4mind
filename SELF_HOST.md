@@ -860,3 +860,11 @@ Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Que
 Python artifacts execute in the browser via Pyodide (WebAssembly), fetched by default from the public jsDelivr CDN - so a fully air-gapped box cannot run them out of the box. To run them offline, mirror the Pyodide v0.25.1 "full" distribution on a server you control and set `PYODIDE_BASE_URL` in `.env.selfhost` to that base (a trailing slash is added automatically if you omit it). A cross-origin mirror must send permissive CORS headers; its origin is added to the app CSP automatically. See the `PYODIDE_BASE_URL` block in `.env.selfhost.example` for what to mirror. Leave it unset to use the CDN.
 
 Need help? Ask in [Discussions](https://github.com/bike4mind/bike4mind/discussions).
+
+### Batch reconciliation timing
+
+The worker runs its existing stuck-batch reconciliation once at startup and at 05:00 UTC, independent of the host timezone. Startup before 05:00 does not consume that day's scheduled run. Startup after 05:00 waits until tomorrow for the next scheduled run; it does not replay missed days. Startup exactly at 05:00 coalesces with that scheduled slot.
+
+Startup and scheduled reconciliation share one in-flight guard and shutdown drain budget. A scheduled slot that overlaps an active run is skipped, as is an immediate retry after failure. Clock checks occur at most 60 seconds apart: a delayed wake or forward clock jump coalesces missed slots into one run, with at most one scheduled invocation per UTC day in that process. A backward clock adjustment does not replay consumed days. The separate startup run can add one invocation. There is no persistent schedule history or coordination between multiple workers; run one worker for this schedule.
+
+This changes only when `runStuckBatchSweep` runs. Its existing database updates, taxonomy queue/status effects and CloudWatch metric attempts remain unchanged; it is not a Mongo-only maintenance job. It does not enable the full hosted reconciliation handler or other hosted daily maintenance jobs.
