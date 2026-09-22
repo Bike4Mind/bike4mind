@@ -52,6 +52,11 @@ describe('buildPublicSSEEvent', () => {
     expect(buildPublicSSEEvent(['<think>my reasoning</think>the answer']).text).toBe('the answer');
   });
 
+  it('keeps trailing tag-prefix text that no chunk can follow', () => {
+    // Single-shot: nothing comes after, so `<` is prose, not a split sentinel.
+    expect(buildPublicSSEEvent(['the operator is <']).text).toBe('the operator is <');
+  });
+
   it('drops usdCost while keeping creditsUsed', () => {
     const e = buildPublicSSEEvent(['the answer'], { creditsUsed: 2, usdCost: 0.0123 });
     expect(e.credits).toMatchObject({ used: 2 });
@@ -68,9 +73,10 @@ describe('buildPublicSSEEvent', () => {
 });
 
 describe('createPublicSSEEventBuilder', () => {
+  // Models the route end to end: every chunk, then the end-of-stream flush.
   const textOf = (chunks: (string | null | undefined)[][]) => {
-    const build = createPublicSSEEventBuilder();
-    return chunks.map(c => build(c).text).join('');
+    const builder = createPublicSSEEventBuilder();
+    return chunks.map(c => builder.build(c).text).join('') + (builder.flush()?.text ?? '');
   };
 
   it('suppresses reasoning split across chunk boundaries', () => {
@@ -97,9 +103,32 @@ describe('createPublicSSEEventBuilder', () => {
 
   it('keeps each stream independent', () => {
     const a = createPublicSSEEventBuilder();
-    a(['<think>']);
+    a.build(['<think>']);
     // A second stream must not inherit the first one's open block.
-    expect(createPublicSSEEventBuilder()(['the answer']).text).toBe('the answer');
+    expect(createPublicSSEEventBuilder().build(['the answer']).text).toBe('the answer');
+  });
+
+  it('holds a trailing tag prefix until the stream ends, then releases it as prose', () => {
+    const builder = createPublicSSEEventBuilder();
+    // Mid-stream the prefix could still turn into `<think>`, so it stays held back.
+    expect(builder.build(['compare a <']).text).toBe('compare a ');
+    expect(builder.build(['th']).text).toBe('');
+    // Nothing completed the tag, so it was prose all along - the answer would end
+    // `compare a ` without this.
+    expect(builder.flush()?.text).toBe('<th');
+  });
+
+  it('releases nothing at flush inside an unterminated reasoning block', () => {
+    const builder = createPublicSSEEventBuilder();
+    // The held text is a partial `</think>`; fail-closed outranks the flush.
+    builder.build(['<think>reasoning</thi']);
+    expect(builder.flush()).toBeNull();
+  });
+
+  it('emits no trailing event when nothing was held', () => {
+    const builder = createPublicSSEEventBuilder();
+    builder.build(['the answer']);
+    expect(builder.flush()).toBeNull();
   });
 });
 

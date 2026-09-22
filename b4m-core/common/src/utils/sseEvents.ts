@@ -190,11 +190,14 @@ function danglingTagPrefix(text: string, tag: string): string {
  * kimi/xai/deepseek/ollama inline reasoning at the SAME index as the prose wrapped in
  * them. Fails closed: an unterminated block suppresses to end of stream. Non-streaming
  * twin: stripThinkingBlocks in packages/cli/src/llm/streamAccumulator.ts.
+ *
+ * `flush` is not optional for a caller: text held as a possible split sentinel is only
+ * known to be prose once the stream ends, so skipping it truncates the answer.
  */
-function createReasoningStripper(): (chunk: string) => string {
+function createReasoningStripper(): { strip: (chunk: string) => string; flush: () => string } {
   let suppressing = false;
   let held = '';
-  return chunk => {
+  const strip = (chunk: string) => {
     let rest = held + chunk;
     held = '';
     let out = '';
@@ -220,6 +223,15 @@ function createReasoningStripper(): (chunk: string) => string {
     }
     return out;
   };
+  // A held tag prefix that no further chunk completed was never a sentinel - release it
+  // as the prose it is. Inside an unterminated block it IS a partial </think>, and the
+  // fail-closed rule wins, so nothing escapes.
+  const flush = () => {
+    const tail = suppressing ? '' : held;
+    held = '';
+    return tail;
+  };
+  return { strip, flush };
 }
 
 /**
@@ -235,21 +247,24 @@ function createReasoningStripper(): (chunk: string) => string {
  * public surfaces until deliberately surfaced here.
  *
  * Reasoning is stripped from the text itself too - see {@link createReasoningStripper}
- * - which is why this is a stateful builder rather than a pure function.
+ * - which is why this is a stateful builder rather than a pure function. A streaming
+ * caller MUST call `flush` once the completion is done and write any event it returns
+ * before [DONE]: the stripper holds back a trailing partial sentinel, and only the end
+ * of the stream proves that text was prose rather than the start of a `<think>`.
  */
-export function createPublicSSEEventBuilder(): (
-  text: (string | null | undefined)[],
-  info?: CompletionInfo
-) => SSEContentEvent {
-  const stripReasoning = createReasoningStripper();
-  return (text, info) => {
+export function createPublicSSEEventBuilder(): {
+  build: (text: (string | null | undefined)[], info?: CompletionInfo) => SSEContentEvent;
+  flush: () => SSEContentEvent | null;
+} {
+  const reasoning = createReasoningStripper();
+  const build = (text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent => {
     // Resolve the response the way buildSSEEvent does. `text` is indexed by the
     // provider's content-block/choice index - it is NOT [thinking, response]: an
     // ordinary reply lands at index 0 and index 1 exists only when the backend opened
     // a second block, so reading [1] alone dropped the text of every ordinary reply.
     // Prefer [1] when present (an Anthropic text block following a thinking block),
     // else [0]; reasoning is redacted by the <think> sentinels below, not by position.
-    const responseOnly: (string | null | undefined)[] = ['', stripReasoning(text[1] || text[0] || '')];
+    const responseOnly: (string | null | undefined)[] = ['', reasoning.strip(text[1] || text[0] || '')];
     if (!info) return buildSSEEvent(responseOnly, undefined);
     // Allowlist forward (not denylist): explicitly name the fields a public caller may
     // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.
@@ -264,6 +279,11 @@ export function createPublicSSEEventBuilder(): (
     };
     return buildSSEEvent(responseOnly, safeInfo);
   };
+  const flush = () => {
+    const tail = reasoning.flush();
+    return tail ? buildSSEEvent(['', tail]) : null;
+  };
+  return { build, flush };
 }
 
 /**
@@ -272,7 +292,13 @@ export function createPublicSSEEventBuilder(): (
  * chunks, and a fresh stripper per chunk cannot pair them.
  */
 export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  return createPublicSSEEventBuilder()(text, info);
+  const builder = createPublicSSEEventBuilder();
+  const event = builder.build(text, info);
+  // No chunk can follow, so a held tag prefix is prose. Fold it into this event rather
+  // than return a second one a single-shot caller has nowhere to put.
+  const tail = builder.flush();
+  if (tail) event.text += tail.text;
+  return event;
 }
 
 /**

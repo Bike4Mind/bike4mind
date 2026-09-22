@@ -755,6 +755,23 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(await (await post(CHAT)).text()).toContain('hello from the agent');
   });
 
+  it('delivers an answer whose final chunk ends mid-sentinel', async () => {
+    // The stripper holds a trailing `<th` back in case the next chunk completes it into
+    // `<think>`. No chunk follows, so it was prose: the route must release it at end of
+    // stream or the visitor silently loses the tail of the answer.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['use the operator <']);
+        await params.onChunk(['th'], { outputTokens: 5 });
+      }
+    );
+
+    const text = await (await post(CHAT)).text();
+    expect(text).toContain('use the operator ');
+    expect(text).toContain('<th');
+    expect(text.indexOf('<th')).toBeLessThan(text.indexOf('[DONE]'));
+  });
+
   it('a missing key owner runs the completion persona-only instead of failing', async () => {
     hydrateWith();
     mockUserFindById.mockResolvedValue(null);

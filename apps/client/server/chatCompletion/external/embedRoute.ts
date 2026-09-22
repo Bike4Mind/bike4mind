@@ -522,9 +522,13 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             // reports on tool/reasoning turns, and strips <think> reasoning from the
             // text. One builder per request - it carries stripper state across chunks.
             // See its contract in sseEvents.ts.
-            write(serializeSSEEvent(buildPublicEvent(text, info)));
+            write(serializeSSEEvent(buildPublicEvent.build(text, info)));
           },
         });
+        // Release text the stripper held as a possible split <think> sentinel that no
+        // later chunk completed - without this an answer ending mid-tag is truncated.
+        const tail = buildPublicEvent.flush();
+        if (tail) write(serializeSSEEvent(tail));
         write(SSE_DONE_SIGNAL);
       } finally {
         clearInterval(heartbeat);
