@@ -11,6 +11,12 @@ const PROC_NET_TCP6 = `  sl  local_address                         remote_addres
    0: 00000000000000000000000001000000:BE5C 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 65432 1 0000000000000000 100 0 0 10 0
 `;
 
+// Same LISTEN port on a real interface (0501A8C0 == 192.168.1.5), a different
+// UID. A port-only match would mis-attribute this to the loopback peer.
+const PROC_NET_TCP_NONLOOPBACK = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0501A8C0:BE5C 00000000:0000 0A 00000000:00000000 00:00000000 00000000  2000        0 54321 1 0000000000000000 100 0 0 10 0
+`;
+
 describe('parseProcNetForUid', () => {
   it('returns the uid of a LISTEN socket matching the port', () => {
     expect(parseProcNetForUid(PROC_NET_TCP, 48732)).toBe(1000);
@@ -18,6 +24,15 @@ describe('parseProcNetForUid', () => {
 
   it('parses the tcp6 hex layout', () => {
     expect(parseProcNetForUid(PROC_NET_TCP6, 48732)).toBe(1000);
+  });
+
+  it('accepts a wildcard (0.0.0.0) bind on the port', () => {
+    const wildcard = PROC_NET_TCP.replace('0100007F:BE5C', '00000000:BE5C');
+    expect(parseProcNetForUid(wildcard, 48732)).toBe(1000);
+  });
+
+  it('ignores a same-port LISTEN socket on a non-loopback interface', () => {
+    expect(parseProcNetForUid(PROC_NET_TCP_NONLOOPBACK, 48732)).toBeNull();
   });
 
   it('ignores non-LISTEN rows on the same port', () => {
@@ -35,12 +50,20 @@ describe('parseProcNetForUid', () => {
 });
 
 describe('parseLsofForUid', () => {
-  it('extracts the uid field from lsof -Fpu output', () => {
-    expect(parseLsofForUid('p1234\nu501\n')).toBe(501);
+  it('extracts the uid of a loopback listener from lsof -Fpun output', () => {
+    expect(parseLsofForUid('p1234\nu501\nf3\nn127.0.0.1:48732\n')).toBe(501);
+  });
+
+  it('accepts a wildcard listener name', () => {
+    expect(parseLsofForUid('p1234\nu501\nf3\nn*:48732\n')).toBe(501);
+  });
+
+  it('ignores a same-port listener on a non-loopback interface', () => {
+    expect(parseLsofForUid('p1234\nu2000\nf3\nn192.168.1.5:48732\n')).toBeNull();
   });
 
   it('returns null when no uid field is present', () => {
-    expect(parseLsofForUid('p1234\n')).toBeNull();
+    expect(parseLsofForUid('f3\nn127.0.0.1:48732\n')).toBeNull();
   });
 
   it('returns null on empty output', () => {

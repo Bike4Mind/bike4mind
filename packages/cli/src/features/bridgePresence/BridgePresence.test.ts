@@ -125,6 +125,28 @@ describe('BridgePresence peer-ownership gate', () => {
     await presence.stop();
   });
 
+  it('re-checks trust before the command WS and refuses a peer that changed after announce', async () => {
+    // Trusted at announce, mismatched by the time the WS is built - exercises
+    // the per-connect re-check (the TOCTOU-narrowing gate), not just the
+    // announce gate.
+    resolveMock.mockResolvedValueOnce(process.getuid!()).mockResolvedValue(process.getuid!() + 1);
+    const onSendPrompt = vi.fn();
+    const presence = new BridgePresence();
+    presence.setCallbacks({ onSendPrompt });
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+
+    // Announce got through (trusted), but the WS handshake must not - the
+    // secret never rides the /commands URL and no frames can be delivered.
+    await waitFor(() => warn.mock.calls.length > 0);
+    expect(httpRequests.some(u => u.startsWith('/announce'))).toBe(true);
+    expect(wsConnections).toEqual([]);
+    expect(onSendPrompt).not.toHaveBeenCalled();
+
+    await presence.stop();
+  });
+
   it('fails closed when the owner is undeterminable (criterion 3)', async () => {
     resolveMock.mockResolvedValue(null);
     const presence = new BridgePresence();
