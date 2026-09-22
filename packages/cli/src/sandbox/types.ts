@@ -129,7 +129,18 @@ export const DEFAULT_SANDBOX_CONFIG: SandboxConfig = {
   filesystem: {
     writeOnlyToWorkingDir: true,
     allowedReadPaths: ['$HOME/.gitconfig', '$HOME/.npmrc', '$HOME/.node_modules'],
-    deniedPaths: ['$HOME/.ssh', '$HOME/.aws', '$HOME/.gnupg', '$HOME/.env', '/etc/shadow', '/etc/passwd'],
+    deniedPaths: [
+      '$HOME/.ssh',
+      '$HOME/.aws',
+      '$HOME/.gnupg',
+      '$HOME/.env',
+      // CLI credential/config stores - a sandboxed command must not read the
+      // agent's own auth tokens or project trust decisions.
+      '$HOME/.claude',
+      '$HOME/.bike4mind',
+      '/etc/shadow',
+      '/etc/passwd',
+    ],
   },
   network: {
     enabled: false,
