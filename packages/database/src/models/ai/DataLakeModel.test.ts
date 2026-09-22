@@ -324,7 +324,7 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
     expect(await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob')).toBe(0);
   });
 
-  // Review onoya (#3055): `createdByUserId` is immutable creator provenance, not current ownership
+  // #3055: `createdByUserId` is immutable creator provenance, not current ownership
   // - a lake whose ownership has since transferred away from its creator must count toward the
   // creator's exclusion once they hold neither the gate nor another grant. Mirrors
   // findActiveByUserTagsAndEntitlements's own supersededOwnLakeIds narrowing on the creator arm.
