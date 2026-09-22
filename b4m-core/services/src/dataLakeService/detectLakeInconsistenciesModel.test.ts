@@ -15,6 +15,7 @@ const {
   MODEL_INCONSISTENCY_BATCH_SIZE,
   MODEL_INCONSISTENCY_MAX_BATCH_FAILURES,
   MODEL_INCONSISTENCY_FINDINGS_CAP,
+  MODEL_INCONSISTENCY_BATCH_BUDGET_MS,
 } = await import('./detectLakeInconsistenciesModel');
 
 const lake = {
@@ -57,6 +58,9 @@ describe('detectLakeInconsistenciesModel', () => {
       memberSampled: false,
       batchesRun: 0,
       batchesFailed: 0,
+      batchesUnpersisted: 0,
+      subjectsDropped: 0,
+      deadlineReached: false,
       truncated: false,
     });
   });
@@ -196,5 +200,115 @@ describe('detectLakeInconsistenciesModel', () => {
 
     expect(result.findings.length).toBe(MODEL_INCONSISTENCY_FINDINGS_CAP);
     expect(result.truncated).toBe(true);
+  });
+  it('drops a contradiction whose subject normalizes to empty rather than collapsing them onto one row', async () => {
+    // `subject` is part of the unique key recordLakeFindings upserts on, so every finding that
+    // normalized to '' would share a SINGLE durable row per lake, each run overwriting the last.
+    // A subject in a non-Latin script empties out under normalizeSubject's [a-z0-9\s%.-] filter.
+    evaluateMock.mockResolvedValue([
+      {
+        subject: '\u4ed8\u6b3e\u671f\u9650',
+        documents: [
+          { fabFileId: 'a', excerpt: 'e1' },
+          { fabFileId: 'b', excerpt: 'e2' },
+        ],
+      },
+      {
+        subject: 'refund window',
+        documents: [
+          { fabFileId: 'a', excerpt: 'e1' },
+          { fabFileId: 'b', excerpt: 'e2' },
+        ],
+      },
+    ]);
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')]);
+
+    const result = await detectLakeInconsistenciesModel(lake, adapters as never);
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].subject).toBe('refund window');
+    expect(result.subjectsDropped).toBe(1);
+  });
+
+  it('persists each batch as it completes, so a run killed part-way keeps what it paid for', async () => {
+    evaluateMock.mockResolvedValue([
+      {
+        subject: 'refund window',
+        documents: [
+          { fabFileId: 'a', excerpt: 'e1' },
+          { fabFileId: 'b', excerpt: 'e2' },
+        ],
+      },
+    ]);
+    const members = Array.from({ length: MODEL_INCONSISTENCY_BATCH_SIZE * 2 }, (_, i) => memberRow(`d${i}`));
+    const adapters = makeAdapters(members);
+    const onBatchFindings = vi.fn(async () => {});
+
+    await detectLakeInconsistenciesModel(lake, { ...adapters, onBatchFindings } as never);
+
+    expect(onBatchFindings).toHaveBeenCalledTimes(2);
+    expect(onBatchFindings.mock.calls[0][0]).toHaveLength(1);
+  });
+
+  it('counts a failed persist and keeps running rather than losing the remaining batches too', async () => {
+    evaluateMock.mockResolvedValue([
+      {
+        subject: 'refund window',
+        documents: [
+          { fabFileId: 'a', excerpt: 'e1' },
+          { fabFileId: 'b', excerpt: 'e2' },
+        ],
+      },
+    ]);
+    const members = Array.from({ length: MODEL_INCONSISTENCY_BATCH_SIZE * 2 }, (_, i) => memberRow(`d${i}`));
+    const adapters = makeAdapters(members);
+    const onBatchFindings = vi.fn().mockRejectedValueOnce(new Error('write failed')).mockResolvedValue(undefined);
+
+    const result = await detectLakeInconsistenciesModel(lake, { ...adapters, onBatchFindings } as never);
+
+    expect(result.batchesRun).toBe(2);
+    expect(result.batchesUnpersisted).toBe(1);
+    // Still returned, so the caller can see what the failed write would have stored.
+    expect(result.findings).toHaveLength(2);
+  });
+
+  it('stops between batches when the wall clock cannot fit another one', async () => {
+    // Stopping here is the point: starting a batch that cannot finish bills the LLM call and then
+    // throws its findings away when the Lambda is killed mid-call.
+    evaluateMock.mockResolvedValue([]);
+    const members = Array.from({ length: MODEL_INCONSISTENCY_BATCH_SIZE * 3 }, (_, i) => memberRow(`d${i}`));
+    const adapters = makeAdapters(members);
+    let remaining = MODEL_INCONSISTENCY_BATCH_BUDGET_MS * 2;
+    const getRemainingTimeInMillis = () => {
+      const now = remaining;
+      remaining -= MODEL_INCONSISTENCY_BATCH_BUDGET_MS;
+      return now;
+    };
+
+    const result = await detectLakeInconsistenciesModel(lake, { ...adapters, getRemainingTimeInMillis } as never);
+
+    expect(result.deadlineReached).toBe(true);
+    expect(result.batchesRun).toBeLessThan(3);
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('not enough wall clock'));
+  });
+
+  it('reads chunk text with bounded concurrency rather than one member at a time', async () => {
+    // The lexical pass fans out 8 at a time for the same collection; this pass reads 4x the chunks
+    // per member, so serializing it would put up to 60 round trips ahead of the first LLM call.
+    const members = Array.from({ length: 16 }, (_, i) => memberRow(`d${i}`));
+    let inFlight = 0;
+    let peak = 0;
+    const adapters = makeAdapters(members);
+    adapters.db.fabFileChunks.findChunkTextSample = vi.fn(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise(resolve => setImmediate(resolve));
+      inFlight -= 1;
+      return ['text'];
+    });
+
+    await detectLakeInconsistenciesModel(lake, adapters as never);
+
+    expect(peak).toBeGreaterThan(1);
   });
 });

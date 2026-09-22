@@ -639,17 +639,33 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
 export const LAKE_MEMORY_EXTRACTION_LEASE_MS = 15 * 60_000;
 
 /**
- * Whether a lake-memory extraction lease is still in force at `now`. `at` is the lake's
- * `lakeMemoryExtractionAt` - `null`/`undefined` means no run currently holds it (either none ever
- * has, or the last one released cleanly in its `finally`); a stamp older than the lease window is a
- * crashed run's STALE lease, which reads as not-held here for the same reason
- * `claimLakeMemoryExtraction` would let a new run reclaim it.
+ * How long a model-inconsistency run's lease (#3057) is honored. Its own constant rather than a reuse
+ * of the lake-memory window: the two passes run on separate queues with separate handler timeouts, so
+ * tuning one must not silently move the other. Same rule sets the value - comfortably longer than the
+ * handler's 10-minute Lambda timeout (infra/queues.ts) so a healthy run is never stolen, short enough
+ * that a crashed run is reclaimable on the next attempt without a reconciler.
  */
-export function isLeaseHeld(at: Date | string | null | undefined, now: Date): boolean {
+export const MODEL_INCONSISTENCY_RUN_LEASE_MS = 15 * 60_000;
+
+/**
+ * Whether a per-lake run lease is still in force at `now`. `at` is the lease stamp (the lake's
+ * `lakeMemoryExtractionAt`, or `modelInconsistencyRunAt` for the model pass) - `null`/`undefined`
+ * means no run currently holds it (either none ever has, or the last one released cleanly in its
+ * `finally`); a stamp older than `leaseMs` is a crashed run's STALE lease, which reads as not-held
+ * here for the same reason the matching `claim*` call would let a new run reclaim it.
+ *
+ * `leaseMs` defaults to the lake-memory window so existing callers keep their exact behaviour; the
+ * model pass passes {@link MODEL_INCONSISTENCY_RUN_LEASE_MS} rather than duplicating this logic.
+ */
+export function isLeaseHeld(
+  at: Date | string | null | undefined,
+  now: Date,
+  leaseMs: number = LAKE_MEMORY_EXTRACTION_LEASE_MS
+): boolean {
   if (!at) return false;
   const claimedAt = at instanceof Date ? at : new Date(at);
   if (Number.isNaN(claimedAt.getTime())) return false;
-  return claimedAt.getTime() >= now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS;
+  return claimedAt.getTime() >= now.getTime() - leaseMs;
 }
 
 /** The six lake-memory states: the issue's five plus `building`, which the extraction lease makes observable. */

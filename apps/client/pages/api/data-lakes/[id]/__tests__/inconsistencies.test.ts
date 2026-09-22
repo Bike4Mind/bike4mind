@@ -3,15 +3,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   assertLakeWriteAccess: vi.fn(),
   detectLakeInconsistencies: vi.fn(),
-  detectLakeInconsistenciesModel: vi.fn(),
   recordLakeFindings: vi.fn(),
-  getEffectiveLLMApiKeys: vi.fn(),
   update: vi.fn(),
   recordDetected: vi.fn(),
   listByLake: vi.fn(),
   loggerWarn: vi.fn(),
   loggerError: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
+  sendToQueue: vi.fn(),
+  getSourceQueueUrl: vi.fn(() => 'https://sqs.test/lakeInconsistencyModelQueue'),
   // The rate limiter is a middleware, so it is only reachable if the mocked chain below actually
   // RUNS what the route hands to `.use` - see that mock. Model detection uses its own bucket, so
   // calls are recorded per-bucket rather than in one shared counter.
@@ -75,12 +75,10 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeWriteAccess: h.assertLakeWriteAccess,
     detectLakeInconsistencies: h.detectLakeInconsistencies,
-    detectLakeInconsistenciesModel: h.detectLakeInconsistenciesModel,
     recordLakeFindings: h.recordLakeFindings,
     INCONSISTENCY_FINDINGS_CAP: 200,
     INCONSISTENCY_DETECTOR: 'lexical',
   },
-  apiKeyService: { getEffectiveLLMApiKeys: h.getEffectiveLLMApiKeys },
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { update: h.update },
@@ -88,11 +86,12 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeFindingRepository: { recordDetected: h.recordDetected, listByLake: h.listByLake },
   fabFileRepository: {},
   fabFileChunkRepository: {},
-  apiKeyRepository: {},
-  adminSettingsRepository: {},
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 
+import { MODEL_INCONSISTENCY_RUN_LEASE_MS } from '@bike4mind/common';
 import handler from '../inconsistencies';
 
 const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme' };
@@ -104,6 +103,7 @@ const invoke = (body: Record<string, unknown> = {}, method = 'POST', query: Reco
   const { res, json } = makeRes();
   return {
     json,
+    res,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
       {
         method,
@@ -140,15 +140,8 @@ beforeEach(() => {
   h.blockedFeatureKeys = new Set();
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.detectLakeInconsistencies.mockResolvedValue(result());
-  h.detectLakeInconsistenciesModel.mockResolvedValue({
-    findings: [],
-    memberCount: 0,
-    memberSampled: false,
-    batchesRun: 0,
-    batchesFailed: 0,
-    truncated: false,
-  });
-  h.getEffectiveLLMApiKeys.mockResolvedValue({});
+  h.sendToQueue.mockResolvedValue(undefined);
+  h.getSourceQueueUrl.mockReturnValue('https://sqs.test/lakeInconsistencyModelQueue');
   h.update.mockResolvedValue(lake);
   h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
   h.listByLake.mockResolvedValue([]);
@@ -452,7 +445,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
     const { done } = invoke({}, 'POST', { detector: 'model' });
     await done;
 
-    expect(h.detectLakeInconsistenciesModel).not.toHaveBeenCalled();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
     // The feature gate sits AHEAD of the rate limiter, so a disabled-feature caller never burns its
     // (far lower) hourly budget on a request that was always going to 403.
     expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model']).toBeUndefined();
@@ -478,77 +471,65 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
     expect(limit()).toBe(3);
   });
 
-  it('resolves the LAKE OWNER api keys, not the caller, matching extractLakeMemoryForBatch attribution', async () => {
-    const ownedLake = { ...lake, createdByUserId: 'owner1' };
-    h.assertLakeWriteAccess.mockResolvedValue(ownedLake);
+  it('enqueues the run and returns 202 rather than doing the LLM work in the request', async () => {
+    // The whole point of the queue: four sequential LLM calls cannot fit the 60s frontend Lambda, and
+    // run inline a timeout billed every call while persisting nothing. The route must now do no
+    // detection and no findings write of its own.
+    const { res, done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
 
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.recordLakeFindings).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
+  });
+
+  it('sends the resolved lake document id and the calling user, not the route id', async () => {
     const { done } = invoke({}, 'POST', { detector: 'model' });
     await done;
 
-    expect(h.getEffectiveLLMApiKeys.mock.calls[0][0]).toBe('owner1');
+    const [url, message] = h.sendToQueue.mock.calls[0];
+    expect(url).toBe('https://sqs.test/lakeInconsistencyModelQueue');
+    expect(message).toEqual({ dataLakeId: 'lakeDoc1', userId: 'u1' });
   });
 
-  it('runs the model detector and returns its result with a computedAt, leaving the lexical blob untouched', async () => {
-    const findings = [{ kind: 'narrative-contradiction', subject: 'refund window', evidence: [], documentCount: 2 }];
-    h.detectLakeInconsistenciesModel.mockResolvedValue({
-      findings,
-      memberCount: 2,
-      memberSampled: false,
-      batchesRun: 1,
-      batchesFailed: 0,
-      truncated: false,
-    });
-
-    const { json, done } = invoke({}, 'POST', { detector: 'model' });
+  it('leaves the lexical blob and the lexical detector untouched', async () => {
+    const { done } = invoke({}, 'POST', { detector: 'model' });
     await done;
 
     expect(h.detectLakeInconsistencies).not.toHaveBeenCalled();
     expect(h.update).not.toHaveBeenCalled();
-    expect(json.mock.calls[0][0]).toMatchObject({ findings, memberCount: 2 });
-    expect(json.mock.calls[0][0].computedAt).toBeInstanceOf(Date);
   });
 
-  it('records the model findings under detector "model", separately from the lexical rows', async () => {
-    const findings = [{ kind: 'narrative-contradiction', subject: 'refund window', evidence: [], documentCount: 2 }];
-    h.detectLakeInconsistenciesModel.mockResolvedValue({
-      findings,
-      memberCount: 2,
-      memberSampled: false,
-      batchesRun: 1,
-      batchesFailed: 0,
-      truncated: false,
+  it('refuses with a 409 while a run already holds the lease, so two clicks cannot double-spend', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({ ...lake, modelInconsistencyRunAt: new Date() });
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+
+    await expect(done).rejects.toThrow(/already in progress/i);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('treats a lease older than the window as free, so a crashed run does not wedge the lake', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      modelInconsistencyRunAt: new Date(Date.now() - (MODEL_INCONSISTENCY_RUN_LEASE_MS + 60_000)),
     });
 
     const { done } = invoke({}, 'POST', { detector: 'model' });
     await done;
 
-    expect(h.recordLakeFindings).toHaveBeenCalledTimes(1);
-    const [lakeId, passed, options] = h.recordLakeFindings.mock.calls[0];
-    expect(lakeId).toBe('lakeDoc1');
-    expect(passed).toBe(findings);
-    expect(options.detector).toBe('model');
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
   });
 
-  it('still returns the run result when the findings write fails outright', async () => {
-    const findings = [{ kind: 'narrative-contradiction', subject: 'refund window', evidence: [], documentCount: 2 }];
-    h.detectLakeInconsistenciesModel.mockResolvedValue({
-      findings,
-      memberCount: 2,
-      memberSampled: false,
-      batchesRun: 1,
-      batchesFailed: 0,
-      truncated: false,
-    });
-    h.recordLakeFindings.mockRejectedValue(new Error('findings collection unavailable'));
+  it('refuses before enqueuing when the queue url is unconfigured', async () => {
+    // A deployment misconfiguration throws on every attempt, so the caller must not be told the run
+    // was accepted by a door that queued nothing.
+    h.getSourceQueueUrl.mockReturnValue(undefined);
 
-    const { json, done } = invoke({}, 'POST', { detector: 'model' });
-    await done;
+    const { done } = invoke({}, 'POST', { detector: 'model' });
 
-    expect(json.mock.calls[0][0]).toMatchObject({ findings });
-    expect(h.loggerWarn).toHaveBeenCalledWith(
-      'Model lake findings partially recorded',
-      expect.objectContaining({ failed: findings.length })
-    );
+    await expect(done).rejects.toThrow(/queue url not found/i);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 });
 

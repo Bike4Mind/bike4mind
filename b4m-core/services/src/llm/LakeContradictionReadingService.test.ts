@@ -152,4 +152,44 @@ describe('LakeContradictionReadingService.evaluate', () => {
     const result = await service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')] });
     expect(result).toBeNull();
   });
+  it('discards a contradiction that cites the same document twice', async () => {
+    // knownIds proves each id was SUPPLIED; it does not prove two different documents disagree. A
+    // self-contradiction is exactly what the prompt rules out and what the schema doc asserts
+    // against, and unfiltered it would be emitted as cross-document with documentCount: 2.
+    nextResponse = JSON.stringify({
+      contradictions: [
+        {
+          subject: 'refund window',
+          documents: [
+            { fabFileId: 'a', excerpt: '30 days' },
+            { fabFileId: 'a', excerpt: '60 days' },
+          ],
+        },
+      ],
+    });
+
+    const result = await service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')] });
+
+    expect(result).toEqual([]);
+  });
+
+  it('collapses a repeated citation so documentCount cannot overstate the span', async () => {
+    nextResponse = JSON.stringify({
+      contradictions: [
+        {
+          subject: 'refund window',
+          documents: [
+            { fabFileId: 'a', excerpt: '30 days' },
+            { fabFileId: 'a', excerpt: '30 days again' },
+            { fabFileId: 'b', excerpt: '60 days' },
+          ],
+        },
+      ],
+    });
+
+    const result = await service.evaluate({ apiKeyTable, documents: [doc('a'), doc('b')] });
+
+    expect(result).toHaveLength(1);
+    expect(result![0].documents.map(d => d.fabFileId)).toEqual(['a', 'b']);
+  });
 });

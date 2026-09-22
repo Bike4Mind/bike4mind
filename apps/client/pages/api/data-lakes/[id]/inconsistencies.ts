@@ -1,22 +1,27 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeService, apiKeyService } from '@bike4mind/services';
-import { toScanSummary, type IDataLakeDocument } from '@bike4mind/common';
+import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   dataLakeFindingRepository,
   fabFileRepository,
   fabFileChunkRepository,
-  apiKeyRepository,
-  adminSettingsRepository,
 } from '@bike4mind/database';
+import {
+  ConflictError,
+  MODEL_INCONSISTENCY_RUN_LEASE_MS,
+  isLeaseHeld,
+  toScanSummary,
+  type IDataLakeDocument,
+} from '@bike4mind/common';
 import { Request, Response } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { isDevelopment } from '@server/utils/config';
-import { getSettingsByNames } from '@bike4mind/utils';
+import { sendToQueue } from '@server/utils/sqs';
+import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -182,55 +187,42 @@ async function renderStoredReport(
  * `GET /health` alone when it added rows. A model finding is visible via
  * `GET /api/data-lakes/:id/findings?detector=model`, the same door the lexical rows already use.
  *
- * Resolves the LAKE OWNER's API keys, not the caller's - the cost belongs to the lake's resource,
- * matching `extractLakeMemoryForBatch`'s attribution for the same reason.
+ * QUEUED, not run inline, and that is the difference between this branch working and not. The pass
+ * makes up to four sequential LLM calls over up to 60 documents, each able to take the
+ * `SmallLLMService` timeout twice over; this Lambda is capped at 60 seconds (`infra/web.ts`). Run
+ * here, a normal-sized lake exhausted the request with every call it had already made billed and
+ * nothing persisted - a 504, no findings, and one of three hourly attempts spent. So this door does
+ * what `POST /lake-memory` does: check the preconditions, take the cap, enqueue, return 202. The
+ * handler (`queueHandlers/lakeInconsistencyModelDetection`) gets a 10-minute budget, a DLQ and a
+ * retry, and writes findings batch by batch as it goes.
+ *
+ * The response is deliberately NOT the run's result - there is no result yet. Findings arrive at
+ * `GET /api/data-lakes/:id/findings?detector=model`, which is already the read door for these rows.
  */
-async function runModelDetection(
+async function enqueueModelDetection(
   lake: Awaited<ReturnType<typeof dataLakeService.assertLakeWriteAccess>>,
-  req: Request,
+  userId: string,
   res: Response
 ) {
-  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(
-    lake.createdByUserId,
-    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
-    { logger: req.logger }
-  );
-
-  const result = await dataLakeService.detectLakeInconsistenciesModel(lake, {
-    db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository },
-    apiKeyTable,
-    endUserId: lake.createdByUserId,
-    logger: req.logger,
-  });
-
-  const computedAt = new Date();
-  // Same ordering rationale as the lexical branch: isolate a write failure so the caller still gets
-  // back what the run actually found rather than a 500 for a pass that already spent its LLM budget.
-  let failed = 0;
-  try {
-    ({ failed } = await dataLakeService.recordLakeFindings(
-      lake.id,
-      result.findings,
-      { detector: 'model', seenAt: computedAt },
-      { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
-    ));
-  } catch (error) {
-    failed = result.findings.length;
-    req.logger?.error('Model lake findings write failed outright; returning the run result', {
-      dataLakeId: lake.id,
-      total: result.findings.length,
-      error: error instanceof Error ? error.message : 'Unknown error',
-    });
-  }
-  if (failed > 0) {
-    req.logger?.warn('Model lake findings partially recorded', {
-      dataLakeId: lake.id,
-      failed,
-      total: result.findings.length,
-    });
+  // A lease held means a run is already reading this lake. Only a fast, honest rejection for the
+  // human clicking twice - the claim that actually excludes a concurrent run is in the handler,
+  // guarded in the query, because two requests can both read "no lease" before either enqueues.
+  if (isLeaseHeld(lake.modelInconsistencyRunAt, new Date(), MODEL_INCONSISTENCY_RUN_LEASE_MS)) {
+    throw new ConflictError('A model inconsistency run is already in progress for this lake.');
   }
 
-  return res.json({ ...result, computedAt });
+  // A missing queue URL is a deployment misconfiguration, so fail here rather than reporting 202 for
+  // work nothing will ever consume. Note this does NOT save the caller's hourly attempt the way the
+  // lake-memory door's equivalent ordering does: that door consumes its per-lake cap inline, after
+  // this check, whereas the cap here is the rate-limit middleware and is already spent by the time
+  // any handler code runs. Moving it would mean duplicating the bucket accounting in a middleware,
+  // which is not worth it for a fault that is the same on every attempt and visible immediately.
+  const queueUrl = getSourceQueueUrl('lakeInconsistencyModelQueue');
+  if (!queueUrl) throw new Error('Lake model inconsistency queue URL not found');
+
+  await sendToQueue(queueUrl, { dataLakeId: lake.id, userId });
+
+  return res.status(202).json({ ok: true, queued: true });
 }
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
@@ -262,7 +254,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps);
 
-    if (isModelDetectorRequest(req)) return runModelDetection(lake, req, res);
+    if (isModelDetectorRequest(req)) return enqueueModelDetection(lake, ctx.userId, res);
 
     // The year is passed in rather than read inside the detector so the same corpus always produces
     // the same report - a stored result an owner already reviewed has to be comparable to the next.
