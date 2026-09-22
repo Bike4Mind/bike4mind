@@ -7,7 +7,7 @@ vi.mock('aws-jwt-verify', () => ({
   JwtVerifier: { create: (...args: any[]) => mockCreate(...args) },
 }));
 
-import { verifyCognitoIdToken, CognitoIdTokenError, __clearVerifierCache } from './verifyCognitoIdToken';
+import { verifyFederatedIdToken, FederatedIdTokenError, __clearVerifierCache } from './verifyFederatedIdToken';
 
 const IDP = {
   issuer: 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_pool',
@@ -15,7 +15,7 @@ const IDP = {
   providerName: 'B4M',
 };
 
-describe('verifyCognitoIdToken', () => {
+describe('verifyFederatedIdToken', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreate.mockImplementation(() => ({ verify: mockVerify }));
@@ -28,7 +28,7 @@ describe('verifyCognitoIdToken', () => {
       identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
     });
 
-    const result = await verifyCognitoIdToken('tok', IDP);
+    const result = await verifyFederatedIdToken('tok', IDP);
 
     expect(result.b4mUserId).toBe('b4m-user-123');
     expect(mockCreate).toHaveBeenCalledWith({ issuer: IDP.issuer, audience: IDP.audience });
@@ -40,7 +40,7 @@ describe('verifyCognitoIdToken', () => {
       identities: JSON.stringify([{ userId: 'b4m-user-str', providerName: 'B4M' }]),
     });
 
-    const result = await verifyCognitoIdToken('tok', IDP);
+    const result = await verifyFederatedIdToken('tok', IDP);
     expect(result.b4mUserId).toBe('b4m-user-str');
   });
 
@@ -48,13 +48,13 @@ describe('verifyCognitoIdToken', () => {
     mockVerify.mockResolvedValue({ token_use: 'id', identities: [{ userId: 'u', providerName: 'B4M' }] });
     const jwksUri = 'https://example.com/keys';
 
-    await verifyCognitoIdToken('tok', { ...IDP, jwksUri });
+    await verifyFederatedIdToken('tok', { ...IDP, jwksUri });
     expect(mockCreate).toHaveBeenCalledWith({ issuer: IDP.issuer, audience: IDP.audience, jwksUri });
   });
 
   it('throws when signature/claim verification fails', async () => {
     mockVerify.mockRejectedValue(new Error('signature invalid'));
-    await expect(verifyCognitoIdToken('tok', IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it("rejects a non-'id' token_use (e.g. an access token)", async () => {
@@ -62,7 +62,7 @@ describe('verifyCognitoIdToken', () => {
       token_use: 'access',
       identities: [{ userId: 'u', providerName: 'B4M' }],
     });
-    await expect(verifyCognitoIdToken('tok', IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it('rejects when no identity matches the configured providerName', async () => {
@@ -70,19 +70,19 @@ describe('verifyCognitoIdToken', () => {
       token_use: 'id',
       identities: [{ userId: 'u', providerName: 'SomeOtherIdp' }],
     });
-    await expect(verifyCognitoIdToken('tok', IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it('rejects when the identities claim is absent', async () => {
     mockVerify.mockResolvedValue({ token_use: 'id' });
-    await expect(verifyCognitoIdToken('tok', IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it('caches one verifier per trust config (no re-fetch of JWKS across calls)', async () => {
     mockVerify.mockResolvedValue({ token_use: 'id', identities: [{ userId: 'u', providerName: 'B4M' }] });
 
-    await verifyCognitoIdToken('tok1', IDP);
-    await verifyCognitoIdToken('tok2', IDP);
+    await verifyFederatedIdToken('tok1', IDP);
+    await verifyFederatedIdToken('tok2', IDP);
 
     expect(mockCreate).toHaveBeenCalledTimes(1);
   });
@@ -97,7 +97,7 @@ const B4M_IDP = {
   subjectSource: 'sub' as const,
 };
 
-describe('verifyCognitoIdToken - B4M-issued ID token (subjectSource: sub)', () => {
+describe('verifyFederatedIdToken - B4M-issued ID token (subjectSource: sub)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreate.mockImplementation(() => ({ verify: mockVerify }));
@@ -113,7 +113,7 @@ describe('verifyCognitoIdToken - B4M-issued ID token (subjectSource: sub)', () =
       name: 'u',
     });
 
-    const result = await verifyCognitoIdToken('tok', B4M_IDP);
+    const result = await verifyFederatedIdToken('tok', B4M_IDP);
 
     expect(result.b4mUserId).toBe('b4m-user-777');
     expect(mockCreate).toHaveBeenCalledWith({
@@ -129,30 +129,30 @@ describe('verifyCognitoIdToken - B4M-issued ID token (subjectSource: sub)', () =
       identities: [{ userId: 'someone-else', providerName: 'B4M' }],
     });
 
-    const result = await verifyCognitoIdToken('tok', B4M_IDP);
+    const result = await verifyFederatedIdToken('tok', B4M_IDP);
     expect(result.b4mUserId).toBe('b4m-user-777');
   });
 
   it('rejects a wrong-issuer / wrong-audience / expired token (verifier throws)', async () => {
     mockVerify.mockRejectedValue(new Error('Issuer not allowed'));
-    await expect(verifyCognitoIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it('rejects a B4M session access token presented as an ID token', async () => {
     // AuthTokenGeneratorService.signAccessToken's payload shape. In production such a
     // token never reaches this check (HS256, no iss/aud), so this guards the guard.
     mockVerify.mockResolvedValue({ id: 'b4m-user-777', sub: 'b4m-user-777', tokenVersion: 0, typ: 'access' });
-    await expect(verifyCognitoIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it('rejects a refresh token presented as an ID token', async () => {
     mockVerify.mockResolvedValue({ sub: 'b4m-user-777', typ: 'refresh' });
-    await expect(verifyCognitoIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it('rejects a token with no usable sub', async () => {
     mockVerify.mockResolvedValue({ iss: B4M_IDP.issuer, aud: B4M_IDP.audience });
-    await expect(verifyCognitoIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', B4M_IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it("an explicit subjectSource: 'identities' behaves exactly like an absent one", async () => {
@@ -162,7 +162,7 @@ describe('verifyCognitoIdToken - B4M-issued ID token (subjectSource: sub)', () =
       identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
     });
 
-    const result = await verifyCognitoIdToken('tok', { ...IDP, subjectSource: 'identities' as const });
+    const result = await verifyFederatedIdToken('tok', { ...IDP, subjectSource: 'identities' as const });
     // sub is the Cognito pool's own subject, NOT the B4M user - the identities entry wins.
     expect(result.b4mUserId).toBe('b4m-user-123');
   });
@@ -170,11 +170,11 @@ describe('verifyCognitoIdToken - B4M-issued ID token (subjectSource: sub)', () =
   it("rejects an 'identities' client whose trust config is missing providerName", async () => {
     mockVerify.mockResolvedValue({ token_use: 'id', identities: [{ userId: 'u', providerName: 'B4M' }] });
     const { providerName: _omitted, ...withoutProvider } = IDP;
-    await expect(verifyCognitoIdToken('tok', withoutProvider)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', withoutProvider)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 });
 
-describe('verifyCognitoIdToken - staged subjectSource=sub requirement (OAUTH_AI_TOKEN_REQUIRE_SUB)', () => {
+describe('verifyFederatedIdToken - staged subjectSource=sub requirement (OAUTH_AI_TOKEN_REQUIRE_SUB)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockCreate.mockImplementation(() => ({ verify: mockVerify }));
@@ -191,7 +191,7 @@ describe('verifyCognitoIdToken - staged subjectSource=sub requirement (OAUTH_AI_
       token_use: 'id',
       identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
     });
-    await expect(verifyCognitoIdToken('tok', IDP)).rejects.toBeInstanceOf(CognitoIdTokenError);
+    await expect(verifyFederatedIdToken('tok', IDP)).rejects.toBeInstanceOf(FederatedIdTokenError);
   });
 
   it('grace mode (flag unset) still resolves an identities-source client but logs a would-reject', async () => {
@@ -201,7 +201,7 @@ describe('verifyCognitoIdToken - staged subjectSource=sub requirement (OAUTH_AI_
       identities: [{ userId: 'b4m-user-123', providerName: 'B4M' }],
     });
 
-    const result = await verifyCognitoIdToken('tok', IDP);
+    const result = await verifyFederatedIdToken('tok', IDP);
 
     expect(result.b4mUserId).toBe('b4m-user-123');
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('would-reject'));
@@ -212,7 +212,7 @@ describe('verifyCognitoIdToken - staged subjectSource=sub requirement (OAUTH_AI_
     process.env.OAUTH_AI_TOKEN_REQUIRE_SUB = 'true';
     mockVerify.mockResolvedValue({ sub: 'b4m-user-777' });
 
-    const result = await verifyCognitoIdToken('tok', B4M_IDP);
+    const result = await verifyFederatedIdToken('tok', B4M_IDP);
     expect(result.b4mUserId).toBe('b4m-user-777');
   });
 });

@@ -23,10 +23,10 @@ import { JwtVerifier } from 'aws-jwt-verify';
 import type { IOAuthClientFederatedIdp } from '@bike4mind/database/auth';
 
 /** Thrown for any verification/extraction failure. The route maps this to `invalid_grant`. */
-export class CognitoIdTokenError extends Error {
+export class FederatedIdTokenError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
     super(message, options);
-    this.name = 'CognitoIdTokenError';
+    this.name = 'FederatedIdTokenError';
   }
 }
 
@@ -91,7 +91,7 @@ function extractB4mUserId(payload: Record<string, unknown>, providerName: string
   return typeof userId === 'string' && userId.length > 0 ? userId : undefined;
 }
 
-export interface VerifiedCognitoIdentity {
+export interface VerifiedFederatedIdentity {
   /** B4M user id: the matching `identities[]` entry's `userId`, or the token's `sub`. */
   b4mUserId: string;
   /** The verified token claims (for logging/diagnostics). */
@@ -108,30 +108,30 @@ export interface VerifiedCognitoIdentity {
  */
 function extractSubUserId(claims: Record<string, unknown>): string {
   if (claims.typ === 'access' || claims.typ === 'refresh') {
-    throw new CognitoIdTokenError(`Expected an ID token, got a session token (typ='${String(claims.typ)}')`);
+    throw new FederatedIdTokenError(`Expected an ID token, got a session token (typ='${String(claims.typ)}')`);
   }
   const sub = claims.sub;
   if (typeof sub !== 'string' || sub.length === 0) {
-    throw new CognitoIdTokenError('Token carries no usable sub claim');
+    throw new FederatedIdTokenError('Token carries no usable sub claim');
   }
   return sub;
 }
 
 /**
  * Verify a federated ID token against the client's trust config and resolve the B4M
- * user id it represents. Throws {@link CognitoIdTokenError} on any failure - bad
+ * user id it represents. Throws {@link FederatedIdTokenError} on any failure - bad
  * signature, wrong issuer/audience, expired, wrong token type, or no resolvable
  * B4M identity.
  */
-export async function verifyCognitoIdToken(
+export async function verifyFederatedIdToken(
   idToken: string,
   idp: IOAuthClientFederatedIdp
-): Promise<VerifiedCognitoIdentity> {
+): Promise<VerifiedFederatedIdentity> {
   let claims: Record<string, unknown>;
   try {
     claims = (await getVerifier(idp).verify(idToken)) as Record<string, unknown>;
   } catch (cause) {
-    throw new CognitoIdTokenError('ID token failed signature/claim verification', { cause });
+    throw new FederatedIdTokenError('ID token failed signature/claim verification', { cause });
   }
 
   if (idp.subjectSource === 'sub') {
@@ -146,7 +146,7 @@ export async function verifyCognitoIdToken(
   // every live client is on `sub`. Retire this whole branch (and extractB4mUserId) once
   // enforcement is on everywhere.
   if (process.env.OAUTH_AI_TOKEN_REQUIRE_SUB === 'true') {
-    throw new CognitoIdTokenError(
+    throw new FederatedIdTokenError(
       "Federated client must present a B4M-issued ID token (subjectSource='sub'); the self-asserted identities path is no longer accepted"
     );
   }
@@ -156,18 +156,20 @@ export async function verifyCognitoIdToken(
   );
 
   if (claims.token_use !== 'id') {
-    throw new CognitoIdTokenError(`Expected an ID token (token_use='id'), got token_use='${String(claims.token_use)}'`);
+    throw new FederatedIdTokenError(
+      `Expected an ID token (token_use='id'), got token_use='${String(claims.token_use)}'`
+    );
   }
 
   // Unreachable for a validly registered client (the model requires providerName
   // whenever subjectSource is not 'sub'), but the field is optional in the type.
   if (!idp.providerName) {
-    throw new CognitoIdTokenError("Client trust config has no providerName for the 'identities' subject source");
+    throw new FederatedIdTokenError("Client trust config has no providerName for the 'identities' subject source");
   }
 
   const b4mUserId = extractB4mUserId(claims, idp.providerName);
   if (!b4mUserId) {
-    throw new CognitoIdTokenError(`No '${idp.providerName}' identity with a userId found in the token`);
+    throw new FederatedIdTokenError(`No '${idp.providerName}' identity with a userId found in the token`);
   }
 
   return { b4mUserId, claims };
