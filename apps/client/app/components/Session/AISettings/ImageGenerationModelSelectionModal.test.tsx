@@ -166,6 +166,78 @@ describe('ImageGenerationModelSelectionModal — handleModelChange size reset', 
   });
 });
 
+describe('ImageGenerationModelSelectionModal - gpt-image-2 size handling', () => {
+  beforeEach(() => {
+    mockSetLLM.mockClear();
+    capturedSetModel = null;
+  });
+
+  afterEach(() => {
+    mockImageModel = ImageModels.FLUX_PRO_1_1;
+    mockSize = '1024x1024';
+  });
+
+  it('keeps a gpt-image-2 preset when switching to gpt-image-2', async () => {
+    mockSize = '2048x2048'; // a gpt-image-2 preset, and not a gpt-image-1 size
+
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {
+      capturedSetModel!(ImageModels.GPT_IMAGE_2 as ModelName);
+    });
+
+    const lastCall = mockSetLLM.mock.calls[mockSetLLM.mock.calls.length - 1][0];
+    expect(lastCall).not.toHaveProperty('size');
+  });
+
+  it('keeps a custom size gpt-image-2 supports, and offers it in the size picker', async () => {
+    // 1280x960 is the BFL default: it is not a gpt-image-2 preset but it does satisfy the
+    // constraints, so it survives the switch. It must still be renderable, or the Select
+    // shows blank and the user cannot see what they are about to generate.
+    mockSize = '1280x960';
+    mockImageModel = ImageModels.GPT_IMAGE_2;
+
+    const { getByTestId } = render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {
+      capturedSetModel!(ImageModels.GPT_IMAGE_2 as ModelName);
+    });
+
+    const lastCall = mockSetLLM.mock.calls[mockSetLLM.mock.calls.length - 1][0];
+    expect(lastCall).not.toHaveProperty('size');
+    expect(getByTestId('image-setting-size-select')).toHaveTextContent('1280x960');
+  });
+
+  it('resets a size gpt-image-2 rejects', async () => {
+    mockSize = '1440x810'; // 810 is not a multiple of 16, so gpt-image-2 will not take it
+
+    render(
+      <TestWrapper>
+        <ImageGenerationModelSelectionModal open={true} onClose={vi.fn()} />
+      </TestWrapper>
+    );
+
+    await act(async () => {
+      capturedSetModel!(ImageModels.GPT_IMAGE_2 as ModelName);
+    });
+
+    expect(mockSetLLM).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageModel: ImageModels.GPT_IMAGE_2,
+        size: IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.defaultSize,
+      })
+    );
+  });
+});
+
 describe('ImageGenerationModelSelectionModal — safety_tolerance hard cap', () => {
   it('does not offer safety_tolerance values above the hard cap', () => {
     const { getByTestId, queryByText } = render(

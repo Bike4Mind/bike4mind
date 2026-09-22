@@ -1,4 +1,4 @@
-import { ImageModels } from '@bike4mind/common';
+import { GPTImage1Size, IMAGE_SIZE_CONSTRAINTS, ImageModels } from '@bike4mind/common';
 import { CostCalculator } from './types';
 
 export type OpenAIModel =
@@ -14,13 +14,15 @@ export interface BaseOpenAIInput {
 export interface OpenAIGPTImageInput extends BaseOpenAIInput {
   model: OpenAIModel;
   quality?: 'standard' | 'hd' | 'low' | 'medium' | 'high' | 'auto';
-  size?: '1024x1024' | '1024x1536' | '1536x1024' | (string & {}) | null;
+  size?: GPTImage1Size | (string & {}) | null;
 }
 
 export type OpenAICostInput = OpenAIGPTImageInput;
 
 type Tier = 'low' | 'medium' | 'high';
-type KnownSize = '1024x1024' | '1024x1536' | '1536x1024';
+// The priced sizes are exactly the gpt-image-1 tier's. Widening that list breaks the
+// PriceKey-keyed tables below until a price is supplied for each new size, which is the point.
+type KnownSize = GPTImage1Size;
 type PriceKey = `${Tier}_${KnownSize}`;
 
 const DEFAULT_TIER: Tier = 'medium';
@@ -30,15 +32,19 @@ const DEFAULT_TIER: Tier = 'medium';
 // (the credit hold is set once, before the call, and never reconciled); over-billing an
 // 'auto' request the user opted into is the survivable side of that trade.
 const AUTO_TIER: Tier = 'high';
-const DEFAULT_SIZE: KnownSize = '1024x1024';
+const DEFAULT_SIZE: KnownSize = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.defaultSize;
 
 /**
  * The only sizes with a real price row; anything else is estimated at DEFAULT_SIZE.
  * The image_generation tool schema advertises exactly this set to the model so the
  * ledger is never asked to price a size it does not know - must stay in sync with
  * `resolveImageArgs` / the tool's `size` enum, which import it from here.
+ *
+ * Read from the gpt-image-1 tier rather than retyped, so that sync is enforced rather than
+ * just asked for: a size added to the tier widens PriceKey, and GPT_IMAGE_1_PRICES stops
+ * type-checking until it gets a price.
  */
-export const PRICEABLE_IMAGE_SIZES: readonly KnownSize[] = ['1024x1024', '1024x1536', '1536x1024'] as const;
+export const PRICEABLE_IMAGE_SIZES: readonly KnownSize[] = IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
 
 export function isPriceableImageSize(size: unknown): size is KnownSize {
   return typeof size === 'string' && PRICEABLE_IMAGE_SIZES.includes(size as KnownSize);

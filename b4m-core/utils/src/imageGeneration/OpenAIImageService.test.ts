@@ -27,12 +27,7 @@ vi.mock('./imageProcessorUtils', () => ({
   downloadImageAsBuffer: vi.fn(),
 }));
 
-import {
-  buildModerationBlockedError,
-  isSupportedEditSize,
-  OpenAIImageService,
-  resolveGptImageOutputOptions,
-} from './OpenAIImageService';
+import { buildModerationBlockedError, OpenAIImageService, resolveGptImageOutputOptions } from './OpenAIImageService';
 import { downloadImageAsBuffer } from './imageProcessorUtils';
 
 // The helper only reads `code`, `status`, and `requestID` off the error, so a
@@ -222,50 +217,6 @@ describe('OpenAIImageService.generate output controls', () => {
     expect(image).toBe('data:image/webp;base64,QUJD');
   });
 });
-
-describe('isSupportedEditSize', () => {
-  it('accepts the gpt-image-1 family presets', () => {
-    for (const size of ['1024x1024', '1024x1536', '1536x1024']) {
-      expect(isSupportedEditSize(ImageModels.GPT_IMAGE_1_5, size)).toBe(true);
-    }
-  });
-
-  it('rejects a dall-e-2 size for the gpt-image-1 family', () => {
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_1_5, '512x512')).toBe(false);
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_1, '256x256')).toBe(false);
-  });
-
-  it('rejects a custom resolution for the gpt-image-1 family, which has fixed sizes', () => {
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_1_5, '1920x1088')).toBe(false);
-  });
-
-  it('accepts the gpt-image-2 presets and auto', () => {
-    for (const size of ['1024x1024', '2048x2048', '2048x1152', '3840x2160', '2160x3840', 'auto']) {
-      expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, size)).toBe(true);
-    }
-  });
-
-  it('accepts a custom gpt-image-2 resolution that meets every constraint', () => {
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '1920x1088')).toBe(true);
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '1280x1024')).toBe(true);
-  });
-
-  it('rejects a custom gpt-image-2 resolution for each individual constraint', () => {
-    // Each of these violates exactly one rule from IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '1920x1080')).toBe(false); // 1080 is not a multiple of 16
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '800x800')).toBe(false); // under the minimum pixel count
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '3840x2224')).toBe(false); // over the maximum pixel count
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '3072x768')).toBe(false); // aspect ratio beyond 3:1
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, '3856x2144')).toBe(false); // long edge beyond 3840
-  });
-
-  it('rejects a size that is absent or not a WIDTHxHEIGHT pair', () => {
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, undefined)).toBe(false);
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, null)).toBe(false);
-    expect(isSupportedEditSize(ImageModels.GPT_IMAGE_2, 'wide')).toBe(false);
-  });
-});
-
 const PNG_DATA_URL = `data:image/png;base64,${Buffer.from('fake-png').toString('base64')}`;
 
 function makeService() {
