@@ -45,7 +45,7 @@ const EventMetricsTab: React.FC = () => {
   } = useEventMetricsState(metrics);
 
   const handleRefresh = () => {
-    void forceRefresh();
+    forceRefresh();
   };
 
   const handleApplyFilters = () => {

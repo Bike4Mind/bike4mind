@@ -138,11 +138,11 @@ async function fetchEventMetrics(filters: EventMetricsFilters): Promise<EventMet
 const ONE_MINUTE_MS = 60 * 1000;
 // Measured off the two dashboards that call this (app/components/admin/EventMetrics and
 // SlackMetrics, both through useEventMetrics): one request per distinct applied filter set behind
-// a 60s staleTime, and two per Refresh click - forceRefresh issues the `recache=true` fetch that
-// bypasses the 12h cache and then refetches. Neither sets a refetchInterval, and the app's
-// QueryClient disables retry and focus/reconnect refetch (app/providers.tsx). An admin tuning
-// filters and refreshing on both dashboards at once lands near 20 in a minute, so 30 leaves
-// headroom while still bounding the uncached recache path.
+// a 60s staleTime, and one per Refresh click - forceRefresh issues the `recache=true` fetch that
+// bypasses the 12h cache, and its response seeds the client query cache directly. Neither sets a
+// refetchInterval, and the app's QueryClient disables retry and focus/reconnect refetch
+// (app/providers.tsx). An admin tuning filters and refreshing on both dashboards at once lands
+// near 10 in a minute, so 30 leaves headroom while still bounding the uncached recache path.
 const EVENT_METRICS_RATE_LIMIT = 30;
 
 // Chained after baseApi so auth has run and the limiter keys on req.user.id rather than the

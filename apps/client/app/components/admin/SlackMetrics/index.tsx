@@ -48,7 +48,7 @@ const SlackMetricsPage: React.FC = () => {
   } = useEventMetricsState(metrics);
 
   const handleRefresh = () => {
-    void forceRefresh();
+    forceRefresh();
   };
 
   const handleApplyFilters = () => {

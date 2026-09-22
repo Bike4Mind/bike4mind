@@ -1,5 +1,4 @@
-import { useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import type { EventMetric } from '../types';
 
@@ -31,35 +30,35 @@ export const fetchEventMetrics = async (filters?: MetricsFilters, recache: boole
 };
 
 export const useEventMetrics = (filters?: MetricsFilters) => {
+  const queryClient = useQueryClient();
+  const queryKey = ['event-metrics', filters];
+
   const query = useQuery({
-    queryKey: ['event-metrics', filters],
+    queryKey,
     queryFn: () => fetchEventMetrics(filters),
     staleTime: 1000 * 60 * 1, // 1 minute for filtered data
   });
 
-  // The recache call below is a raw request, so react-query's isFetching does not cover it.
-  // Callers disable Refresh on the combined flag, which is what keeps one click to one pair of requests.
-  const [isRecaching, setIsRecaching] = useState(false);
+  // The recache response carries the rebuilt metrics, so it seeds the query cache instead of
+  // issuing a second read. A second read would succeed off the untouched 12h server cache and
+  // hide a failed recache behind stale numbers.
+  const recacheMutation = useMutation({
+    mutationFn: (recacheFilters?: MetricsFilters) => fetchEventMetrics(recacheFilters, true),
+    onSuccess: metrics => queryClient.setQueryData(queryKey, metrics),
+  });
 
-  const forceRefresh = async () => {
-    setIsRecaching(true);
-    try {
-      // Force a server-side cache refresh
-      try {
-        await fetchEventMetrics(filters, true);
-      } catch {
-        // Swallowed here so refetch() below always runs; the query's own error state surfaces the failure.
-      }
-      // Then invalidate client query to get the new data
-      return await query.refetch();
-    } finally {
-      setIsRecaching(false);
-    }
-  };
+  // A failed recache stays visible until the next attempt, but it belongs to the filter set it was
+  // issued for - a later filter change must not keep showing it above freshly loaded data.
+  const recacheFailed =
+    recacheMutation.isError && JSON.stringify(recacheMutation.variables ?? {}) === JSON.stringify(filters ?? {});
+
+  const forceRefresh = () => recacheMutation.mutate(filters);
 
   return {
     ...query,
-    isFetching: query.isFetching || isRecaching,
+    isFetching: query.isFetching || recacheMutation.isPending,
+    isError: query.isError || recacheFailed,
+    error: query.error ?? (recacheFailed ? recacheMutation.error : null),
     forceRefresh,
   };
 };
