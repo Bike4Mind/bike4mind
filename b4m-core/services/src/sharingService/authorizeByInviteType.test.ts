@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { InviteType } from '@bike4mind/common';
-import { UnauthorizedError } from '@bike4mind/utils';
+import { ForbiddenError, UnauthorizedError } from '@bike4mind/utils';
 import { authorizeByInviteType } from './authorizeByInviteType';
 
 describe('sharingService - authorizeByInviteType', () => {
@@ -95,5 +95,46 @@ describe('sharingService - authorizeByInviteType', () => {
   it('denies when the per-type share lookup returns null', async () => {
     db.sessions.shareable.findShareAccessById.mockResolvedValue(null);
     await expect(authorizeByInviteType(user, InviteType.Session, 'doc', db as any)).rejects.toThrow(UnauthorizedError);
+  });
+
+  describe('requireManageGroups option', () => {
+    const org = { id: 'org', userId: 'owner', adminUserIds: [], users: [{ userId: 'member-1', permissions: ['read'] }] };
+
+    it('denies a plain org member on Organization when requireManageGroups is true', async () => {
+      db.organizations.findById.mockResolvedValue(org);
+      await expect(
+        authorizeByInviteType({ id: 'member-1', isAdmin: false } as any, InviteType.Organization, 'org', db as any, { requireManageGroups: true })
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it('lets the billing owner through on Organization when requireManageGroups is true', async () => {
+      db.organizations.findById.mockResolvedValue(org);
+      await expect(
+        authorizeByInviteType({ id: 'owner', isAdmin: false } as any, InviteType.Organization, 'org', db as any, { requireManageGroups: true })
+      ).resolves.toBeUndefined();
+    });
+
+    it('denies a plain org member on Group when requireManageGroups is true', async () => {
+      db.groups.findById.mockResolvedValue({ id: 'grp', organizationId: 'org' });
+      db.organizations.findById.mockResolvedValue(org);
+      await expect(
+        authorizeByInviteType({ id: 'member-1', isAdmin: false } as any, InviteType.Group, 'grp', db as any, { requireManageGroups: true })
+      ).rejects.toThrow(ForbiddenError);
+    });
+
+    it('lets the billing owner through on Group when requireManageGroups is true', async () => {
+      db.groups.findById.mockResolvedValue({ id: 'grp', organizationId: 'org' });
+      db.organizations.findById.mockResolvedValue(org);
+      await expect(
+        authorizeByInviteType({ id: 'owner', isAdmin: false } as any, InviteType.Group, 'grp', db as any, { requireManageGroups: true })
+      ).resolves.toBeUndefined();
+    });
+
+    it('still allows a plain member to list (requireManageGroups absent) on Organization', async () => {
+      db.organizations.findById.mockResolvedValue(org);
+      await expect(
+        authorizeByInviteType({ id: 'member-1', isAdmin: false } as any, InviteType.Organization, 'org', db as any)
+      ).resolves.toBeUndefined();
+    });
   });
 });

@@ -9,6 +9,7 @@ import {
   isOrgMember,
 } from '@bike4mind/common';
 import { UnauthorizedError } from '@bike4mind/utils';
+import { assertCanManageOrgGroups } from '../organizationService/groupMembership';
 
 export interface InviteTypeAuthAdapters {
   fabFiles: Pick<IFabFileRepository, 'shareable'>;
@@ -18,21 +19,29 @@ export interface InviteTypeAuthAdapters {
   groups: { findById: (id: string) => Promise<IGroupDocument | null> };
 }
 
+export interface AuthorizeByInviteTypeOptions {
+  /**
+   * When true, Organization and Group arms additionally call assertCanManageOrgGroups after the
+   * membership check. Use for mutation paths (cancelInviteById, refuseWholeInvite non-recipient
+   * branch); omit for read-only paths (listInvitesForDocument) where bare membership suffices.
+   */
+  requireManageGroups?: boolean;
+}
+
 /**
  * Shared per-invite-type authorization for the invite-management flows that key off a
- * document id (listInvitesForDocument, cancelInviteById). Passes silently when the
- * caller is authorized and throws UnauthorizedError otherwise, so callers can't silently
- * diverge on the type -> access mapping. FabFile, Session, and Project use the
+ * document id. Passes silently when authorized and throws otherwise, so callers can't
+ * silently diverge on the type -> access mapping. FabFile, Session, and Project use the
  * `shareable` adapter (findShareAccessById). Organization and Group use findById +
- * membership predicate via isOrgMember (billing owner, orgAclRowConfersMembership users[] row, or
- * platform admin). Any other type (e.g. Tool) has no arm and
- * is denied.
+ * isOrgMember. When requireManageGroups is set, the Org/Group arms additionally enforce
+ * assertCanManageOrgGroups (billing owner, appointed org admin, or platform admin).
  */
 export const authorizeByInviteType = async (
   user: IUserDocument,
   type: InviteType,
   documentId: string,
-  db: InviteTypeAuthAdapters
+  db: InviteTypeAuthAdapters,
+  options?: AuthorizeByInviteTypeOptions
 ): Promise<void> => {
   let authorized: unknown = null;
 
@@ -45,6 +54,7 @@ export const authorizeByInviteType = async (
   } else if (type === InviteType.Organization) {
     const org = await db.organizations.findById(documentId);
     if (org && isOrgMember(user, org)) {
+      if (options?.requireManageGroups) assertCanManageOrgGroups(user, org);
       authorized = org;
     }
   } else if (type === InviteType.Group) {
@@ -52,6 +62,7 @@ export const authorizeByInviteType = async (
     if (group) {
       const org = await db.organizations.findById(group.organizationId);
       if (org && isOrgMember(user, org)) {
+        if (options?.requireManageGroups) assertCanManageOrgGroups(user, org);
         authorized = org;
       }
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { NotFoundError, UnauthorizedError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/utils';
 import { InviteType } from '@bike4mind/common';
 import { cancelInviteById } from './cancelInviteById';
 
@@ -81,7 +81,25 @@ describe('sharingService - cancelInviteById', () => {
     expect(db.invites.update).toHaveBeenCalled();
   });
 
-  it('authorizes a Group invite via the parent org (findById + membership)', async () => {
+  it('denies a plain org member from cancelling a Group invite by id (must be billing owner, org admin, or platform admin)', async () => {
+    const member = { id: 'member-1', isAdmin: false } as any;
+    const invite = {
+      id: 'inv-1',
+      type: InviteType.Group,
+      documentId: 'grp-1',
+      remaining: 1,
+      recipients: { pending: [], accepted: [], refused: [] },
+    };
+    db.invites.findById.mockResolvedValue(invite);
+    db.groups.findById.mockResolvedValue({ id: 'grp-1', organizationId: 'org-1' });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'member-1', permissions: ['read'] }] });
+
+    await expect(cancelInviteById(member, { id: 'inv-1' }, { db } as any)).rejects.toThrow(ForbiddenError);
+    expect(db.invites.update).not.toHaveBeenCalled();
+  });
+
+  it('lets the billing owner cancel a Group invite by id', async () => {
+    const owner = { id: 'owner-1', isAdmin: false } as any;
     const invite = {
       id: 'inv-1',
       type: InviteType.Group,
@@ -91,12 +109,27 @@ describe('sharingService - cancelInviteById', () => {
     };
     db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
     db.groups.findById.mockResolvedValue({ id: 'grp-1', organizationId: 'org-1' });
-    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'user-1', permissions: ['read'] }] });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'owner-1', users: [] });
 
-    await cancelInviteById(user, { id: 'inv-1' }, { db } as any);
+    await cancelInviteById(owner, { id: 'inv-1' }, { db } as any);
 
-    expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
     expect(db.invites.update).toHaveBeenCalled();
+  });
+
+  it('denies a plain org member from cancelling an Organization invite by id', async () => {
+    const member = { id: 'member-1', isAdmin: false } as any;
+    const invite = {
+      id: 'inv-1',
+      type: InviteType.Organization,
+      documentId: 'org-1',
+      remaining: 1,
+      recipients: { pending: [], accepted: [], refused: [] },
+    };
+    db.invites.findById.mockResolvedValue(invite);
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'member-1', permissions: ['read'] }] });
+
+    await expect(cancelInviteById(member, { id: 'inv-1' }, { db } as any)).rejects.toThrow(ForbiddenError);
+    expect(db.invites.update).not.toHaveBeenCalled();
   });
 
   it('denies a Group invite whose parent group is missing', async () => {

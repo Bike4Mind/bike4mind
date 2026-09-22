@@ -18,6 +18,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
+import { ForbiddenError } from '@bike4mind/utils';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).
@@ -141,13 +142,25 @@ describe('group-invite authorization (end-to-end, real repos + Mongo)', () => {
     ).rejects.toThrow(UnauthorizedError);
   });
 
-  it('cancels a group invite for an org member (remaining -> 0)', async () => {
+  it('lets the billing owner cancel a group invite by id (remaining -> 0)', async () => {
     const { inviteId } = await seedGroupInvite();
 
-    await sharingService.cancelInviteById(memberUser, { id: inviteId }, { db } as any);
+    // seedGroupInvite sets userId: 'owner-1', so ownerUser is the billing owner.
+    await sharingService.cancelInviteById(ownerUser, { id: inviteId }, { db } as any);
 
     const reloaded = await Invite.findById(inviteId);
     expect(reloaded?.remaining).toBe(0);
+  });
+
+  it('denies a plain org member from cancelling a group invite by id', async () => {
+    const { inviteId } = await seedGroupInvite();
+
+    await expect(
+      sharingService.cancelInviteById(memberUser, { id: inviteId }, { db } as any)
+    ).rejects.toThrow(ForbiddenError);
+
+    const reloaded = await Invite.findById(inviteId);
+    expect(reloaded?.remaining).toBe(1);
   });
 
   it('lets the billing owner create a group invite', async () => {
