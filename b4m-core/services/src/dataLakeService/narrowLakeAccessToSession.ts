@@ -115,7 +115,7 @@ export function narrowLakeAccessToSession(
     // session-creation tag derivation, which never receives a narrowed set) - it is carried so the
     // value keeps meaning the same thing wherever the set travels, not to satisfy a live caller.
     lakeViewComplete: access.lakeViewComplete,
-    // NOT carried through, deliberately (#3055, review onoya): the account-wide count cannot be
+    // NOT carried through, deliberately (#3055): the account-wide count cannot be
     // attributed to a NARROWED session's scope without knowing whether the specific excluded
     // lake(s) fall inside or outside the caller's requested selection - and that identity is
     // deliberately never surfaced here (count-and-reason-only contract). Concrete case this
