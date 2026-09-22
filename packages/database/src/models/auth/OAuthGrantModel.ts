@@ -63,14 +63,29 @@ class OAuthGrantRepository extends BaseRepository<IOAuthGrantDocument> implement
     return this.model.findOne({ userId, clientId, revokedAt: null }).exec();
   }
 
-  upsertGrant(params: { userId: string; clientId: string; scopes: string[]; source: string }) {
-    return this.model
-      .findOneAndUpdate(
-        { clientId: params.clientId, userId: params.userId },
-        { $set: { scopes: params.scopes, source: params.source, revokedAt: null } },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-      )
-      .exec();
+  async upsertGrant(params: { userId: string; clientId: string; scopes: string[]; source: string }) {
+    // Widen atomically: $addToSet unions the requested scopes into whatever the row already holds,
+    // so two tabs approving different scopes cannot lose-update each other (a read-merge-$set in the
+    // caller could). It also means a re-consent for a subset never shrinks the grant.
+    const filter = { clientId: params.clientId, userId: params.userId };
+    const update = {
+      $addToSet: { scopes: { $each: params.scopes } },
+      $set: { source: params.source, revokedAt: null },
+    };
+    try {
+      return await this.model
+        .findOneAndUpdate(filter, update, { upsert: true, new: true, setDefaultsOnInsert: true })
+        .exec();
+    } catch (err) {
+      // Two concurrent INITIAL consents race the upsert insert; the unique (clientId, userId) index
+      // lets exactly one win and the loser gets E11000. The row now exists, so retry as a plain
+      // update (no upsert) to fold this consent's scopes in. Requires the index to be built - see
+      // the ensure-oauthgrant-client-user-index migration.
+      if ((err as { code?: number })?.code === 11000) {
+        return await this.model.findOneAndUpdate(filter, update, { new: true }).exec();
+      }
+      throw err;
+    }
   }
 
   revoke(userId: string, clientId: string) {
