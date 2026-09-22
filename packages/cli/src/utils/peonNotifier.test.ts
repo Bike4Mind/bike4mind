@@ -71,6 +71,24 @@ describe('peonNotifier', () => {
       const { isPeonAvailable } = await freshModule();
       expect(isPeonAvailable()).toBe(false);
     });
+
+    // Regression: a repo .env is no longer auto-loaded, so a clone's
+    // `CLAUDE_PEON_DIR=.tooling` never reaches process.env - a `peon.sh` sitting
+    // in the checkout must not be spawned. Only a real shell/launcher var counts.
+    it('ignores a repo-planted peon.sh when CLAUDE_PEON_DIR is not in the env', async () => {
+      const repoScript = '/repo/.tooling/peon.sh';
+      mockedExists.mockImplementation(p => p === repoScript); // only the repo copy exists
+      delete process.env.CLAUDE_PEON_DIR;
+
+      const { isPeonAvailable } = await freshModule();
+      expect(isPeonAvailable()).toBe(false);
+
+      // Mechanism sanity: it WOULD resolve if the var were set by the real shell.
+      process.env.CLAUDE_PEON_DIR = '/repo/.tooling';
+      const fresh = await freshModule();
+      expect(fresh.isPeonAvailable()).toBe(true);
+      delete process.env.CLAUDE_PEON_DIR;
+    });
   });
 
   describe('notifyPeon', () => {
