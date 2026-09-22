@@ -3,7 +3,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import SearchResultCards from './SearchResultCards';
+import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
 
 // Tiles are fetched through the authenticated API client and rendered as blob: URLs - a bare
 // <img src="/api/search-image?..."> would 401, since the bearer JWT only rides on axios.
@@ -159,5 +162,85 @@ describe('SearchResultCards', () => {
 
     await waitFor(() => expect(container.querySelectorAll('img')).toHaveLength(1));
     expect(screen.getByText('Solo')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The fence only reaches this component through markdown, and that seam has its own failure mode:
+ * the renderer captures the language with `/language-(\w+)/`, which silently truncates at a
+ * hyphen. An earlier spelling (`b4m-cards`) parsed as `b4m` and the cards never rendered, while
+ * every test above still passed - they hand the component its content directly and never go
+ * through markdown at all. These drive the real react-markdown pipeline with the renderer's own
+ * regex and plugins, so a language rename that breaks the capture fails here.
+ */
+describe('the markdown fence seam', () => {
+  // Mirrors PromptReplies.createCodeComponent: same capture, same plugins, same dispatch.
+  const CAPTURE_LANGUAGE = /language-(\w+)/;
+
+  const renderMarkdown = (markdown: string, replyComplete = false) =>
+    render(
+      <CssVarsProvider theme={appTheme}>
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          components={{
+            code: ({ className, children }) => {
+              const language = CAPTURE_LANGUAGE.exec(className || '')?.[1];
+              if (language === SEARCH_RESULT_CARDS_LANGUAGE) {
+                return <SearchResultCards content={String(children)} replyComplete={replyComplete} />;
+              }
+              return <code className={className}>{children}</code>;
+            },
+          }}
+        >
+          {markdown}
+        </ReactMarkdown>
+      </CssVarsProvider>
+    );
+
+  const fence = (body: string) =>
+    ['Here are three.', '', '```' + SEARCH_RESULT_CARDS_LANGUAGE, body, '```', '', 'All three are automatics.'].join(
+      '\n'
+    );
+
+  it('renders cards inline, in the prose, where the model placed the fence', async () => {
+    const { container } = renderMarkdown(fence(oneCard));
+
+    expect(await screen.findByTestId('search-result-cards')).toBeInTheDocument();
+    expect(screen.getByText('Orient Bambino')).toBeInTheDocument();
+
+    // The fence lands BETWEEN the two paragraphs, where the model put it - not appended after the
+    // reply. Compared at the top level only; the row sits inside the <pre> react-markdown wraps a
+    // fence in, so each block is identified by the row it contains rather than by its own tag.
+    const blocks = [...container.children].map(el =>
+      el.querySelector('[data-testid="search-result-cards"]') ? 'search-result-cards' : el.textContent
+    );
+    expect(blocks).toEqual(['Here are three.', 'search-result-cards', 'All three are automatics.']);
+  });
+
+  it('never leaks the fence JSON into the reply as a code block', async () => {
+    renderMarkdown(fence(oneCard));
+
+    await screen.findByTestId('search-result-cards');
+    expect(screen.queryByText(/"cards"/)).not.toBeInTheDocument();
+    expect(document.querySelector('code')).toBeNull();
+  });
+
+  it('survives the language capture intact - a hyphenated name would truncate and never match', () => {
+    expect(CAPTURE_LANGUAGE.exec(`language-${SEARCH_RESULT_CARDS_LANGUAGE}`)?.[1]).toBe(SEARCH_RESULT_CARDS_LANGUAGE);
+  });
+
+  it('leaves an ordinary code fence alone', () => {
+    renderMarkdown(['```json', '{"cards":[]}', '```'].join('\n'));
+
+    expect(screen.queryByTestId('search-result-cards')).not.toBeInTheDocument();
+    expect(document.querySelector('code')).not.toBeNull();
+  });
+
+  it('shows a skeleton, not raw JSON, for a fence still being streamed', () => {
+    // Mid-stream the closing ``` has not arrived yet, so markdown sees an unterminated fence.
+    renderMarkdown('Here are three.\n\n```' + SEARCH_RESULT_CARDS_LANGUAGE + '\n{"cards":[{"name":"Orient Bam');
+
+    expect(screen.getByTestId('search-result-cards-skeleton')).toBeInTheDocument();
+    expect(screen.queryByText(/"cards"/)).not.toBeInTheDocument();
   });
 });
