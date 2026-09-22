@@ -18,7 +18,7 @@ import { DataLakeAccessModal } from './DataLakeAccessModal';
 import { FallbackLakeSettingsModal } from './FallbackLakeSettingsModal';
 import type { EditableFallbackLake } from './FallbackLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
-import { DEFAULT_DATA_LAKE_GROUNDING_MODE } from '@bike4mind/common';
+import { DEFAULT_DATA_LAKE_GROUNDING_MODE, DEFAULT_DATA_LAKE_ORIGIN } from '@bike4mind/common';
 import type { ManagerLake } from './manager/shared';
 import { prefixSegments } from './manager/shared';
 import { selectTaxonomyBatchByLakeId } from './manager/taxonomySlot';
@@ -114,6 +114,9 @@ export default function DataLakeManagerPanel() {
           // Absent when withheld from a non-editor OR the lake predates the field; seed the default
           // so the picker always shows a concrete mode (matching how the resolver treats absence).
           groundingMode: l.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE,
+          // Absent means a lake that predates this field - reads as curated, the same default
+          // the schema gives every new lake (see IDataLake.origin).
+          origin: l.origin ?? DEFAULT_DATA_LAKE_ORIGIN,
           // Absent (predates the field) reads the same as an explicit false: never built.
           lakeMemoryEnabled: l.lakeMemoryEnabled ?? false,
           // null/undefined both mean "no explicit policy" (the lake inherits), which is the state

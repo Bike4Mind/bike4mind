@@ -72,6 +72,14 @@ export const DATA_LAKE_TRANSITIONAL_STATUSES: readonly DataLakeStatus[] = DATA_L
   s => !(DATA_LAKE_STABLE_STATUSES as readonly DataLakeStatus[]).includes(s)
 );
 
+export const DATA_LAKE_ORIGINS = ['curated', 'connector-fed'] as const;
+
+/**
+ * Derived from the constant above, NOT a parallel union - the mongoose enum imports that same
+ * constant, so a value added here reaches the schema by construction.
+ */
+export type DataLakeOrigin = (typeof DATA_LAKE_ORIGINS)[number];
+
 export type TransitionalRetryAction = 'archive' | 'unarchive' | 'restore' | 'delete';
 
 /**
@@ -197,6 +205,14 @@ type LakeIngestableStatus = (typeof LAKE_INGESTABLE_STATUSES)[number];
  */
 export const isLakeIngestable = (status?: DataLakeStatus): status is LakeIngestableStatus =>
   (LAKE_INGESTABLE_STATUSES as readonly (DataLakeStatus | undefined)[]).includes(status);
+
+/**
+ * Fails closed: only an explicit 'connector-fed' passes, so an absent or unexpected origin is
+ * refused rather than silently admitted. Shared by both origin gates - the Drive bind door
+ * (drive-sync.ts) and the unattended-ingest guard (authorizeLakeWrite.ts) - so they read the
+ * same fact with the same polarity.
+ */
+export const acceptsConnectorContent = (origin?: DataLakeOrigin): boolean => origin === 'connector-fed';
 
 /**
  * What a terminal lifecycle settle may write alongside the status it settles on: the spent
@@ -518,6 +534,14 @@ export interface IDataLake {
    * currently knows - the ledger is the only source for that.
    */
   lakeMemoryPurgedAt?: Date | null;
+  /**
+   * Who is allowed to fill this lake. A DECLARATION by the owner, not a record of what happened:
+   * `curated` refuses unattended ingest, `connector-fed` admits it. Read by the unattended arm of
+   * assertCanWriteDataLakeTags and by the Drive connect door, which refuses to bind a folder to a
+   * curated lake. A new lake is curated unless the creating request declares otherwise, which the
+   * wizard does when a Drive folder was already picked.
+   */
+  origin: DataLakeOrigin;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
