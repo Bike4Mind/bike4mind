@@ -6,7 +6,9 @@ import { createHash } from 'node:crypto';
 export interface McpContentHashSources {
   /**
    * Workspace directories whose code the MCP bundle carries. Must stay in sync with the
-   * copyFiles list in infra/mcp.ts - a path dropped here stops moving the version.
+   * `b4m-core/*` entries in copyFiles in infra/mcp.ts - a path dropped here stops moving the
+   * version. That file's comment is the fuller statement of the obligation, including which
+   * copyFiles entries it deliberately does not cover.
    */
   paths: readonly string[];
   /**
