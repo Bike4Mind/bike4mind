@@ -161,13 +161,18 @@ import {
   resolveForcedRetrieval,
   SYSTEM_PROMPT_PRIORITY,
   resolveSkipAutoOffers,
+  lakeContentTokens,
   toPromptDetails,
   type PromptSourceId,
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
 import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
-import { narrowLakeAccessToSession, type ResolvedLakeAccessSet } from '../dataLakeService/narrowLakeAccessToSession';
+import {
+  narrowLakeAccessToSession,
+  sessionGroundsOnNoLake,
+  type ResolvedLakeAccessSet,
+} from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
@@ -2671,6 +2676,7 @@ export class ChatCompletionProcess {
         suppressLakeArms: this.personalCorpusOnly,
         // Narrows the knowledge tools' lake access to the lake this session is FOR.
         sessionRetrievalTags: session.retrievalTags,
+        sessionLakeScopeExplicit: session.lakeScopeExplicit,
         sessionPreauthorizedLakeIds: vetPreauthorizedLakeIds(session, this.user.id),
         logger: this.logger,
         storage: this.storage,
@@ -2894,12 +2900,14 @@ export class ChatCompletionProcess {
         //
         // Mirrors resolveSessionLakeAccess, the one implementation every knowledge tool runs on:
         // owner-wide access narrowed to the session, and nothing at all where the corpus is
-        // personal and the lake arms are suppressed. Fail direction is inherited from
+        // personal or the session grounds on no lake. Both of those are invisible to the narrowing
+        // itself, which reads an empty scope as "no opinion". Fail direction is inherited from
         // getAccessibleDataLakeAccess, which degrades to empty access rather than throwing, so a
         // lake-resolution outage records an empty scope and the replay skips the turn.
-        const lakeScope = this.personalCorpusOnly
-          ? []
-          : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
+        const lakeScope =
+          this.personalCorpusOnly || sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
+            ? []
+            : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
@@ -3284,6 +3292,7 @@ export class ChatCompletionProcess {
             urlContent: number;
             toolSchemas: number;
             userPrompt: number;
+            lakeRetrieval?: number;
           }
         | undefined;
 
@@ -3431,6 +3440,8 @@ export class ChatCompletionProcess {
         // captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
         // Derived from totalTokens, NOT inputTokens, so the tool-schema count never inflates it.
         // Uses the post-recovery effective totals so a shed turn isn't double-counted as history.
+        // Lake content is still inside this residual HERE. It is promoted to its own bucket below,
+        // once systemPromptDetails has been derived, so what gets persisted is net of the lake layers.
         const knownSourceTokens = fabTokens + effectiveHistoryTokens + mementoTokens + urlTokens + userPromptTokens;
         const systemPromptTokens = Math.max(0, effectiveTotalTokens - knownSourceTokens);
 
@@ -3548,6 +3559,23 @@ export class ChatCompletionProcess {
         // model sees the blocks rather than the order the three helpers happened to run.
         systemPromptDetails = sortDetailsByDeliveryOrder(systemPromptDetails);
         quest.promptMeta!.context!.systemPromptDetails = systemPromptDetails;
+      }
+
+      // Promote the lake layers out of the residual. `tokensBySource.systemPrompts` above is gross -
+      // it still contains the forced-retrieval and lake-memory content - so move exactly the tokens
+      // the layer rows recorded as delivered into a bucket of their own, conserving the sum rather
+      // than counting the lake messages a second time. One counter, and a lake block the budget
+      // dropped is not billed (the rows carry `wasIncluded`). `undefined` means the details never
+      // derived, so the volume is unknown and the residual stays gross rather than claiming zero.
+      if (tokensBySource) {
+        const lakeTokens = lakeContentTokens(systemPromptDetails);
+        if (lakeTokens !== undefined) {
+          tokensBySource = {
+            ...tokensBySource,
+            systemPrompts: Math.max(0, tokensBySource.systemPrompts - lakeTokens),
+            lakeRetrieval: lakeTokens,
+          };
+        }
       }
 
       // Opt-in only, and built from the same tagged stack the breakdown above is derived from, so
@@ -6175,7 +6203,14 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.logger.log('  - Enabling KnowledgeRetrieval (forced) feature');
       this.features.set(
         'knowledgeRetrieval',
-        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter, preauthorizedLakeIds)
+        new KnowledgeRetrievalFeature(
+          this,
+          retrievalTags,
+          citationStyle,
+          retrievalFilter,
+          preauthorizedLakeIds,
+          lakeScopeExplicit
+        )
       );
 
       // Lake memory hot-card (#1440) rides the same Data-Lake toggle: a durable identity/context layer

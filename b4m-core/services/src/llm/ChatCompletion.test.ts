@@ -4703,6 +4703,108 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // The write site promotes the lake layers out of the `systemPrompts` residual into a bucket of
+  // their own. The property that matters is conservation: the bucket is rebuilt from the layer
+  // counts already computed, so the old residual still equals `systemPrompts + lakeRetrieval` -
+  // no second count, and a lake block the budget dropped bills nothing.
+  describe('lake retrieval promoted out of the system-prompt residual', () => {
+    const chunk = { role: 'system' as const, content: 'RETRIEVED-LAKE-CHUNK' };
+    const fact = { role: 'system' as const, content: 'LAKE-MEMORY-FACT' };
+
+    // Content-keyed so a message counts the same way in the six source totals and in
+    // toPromptDetails' per-source pass; that consistency is what makes conservation checkable.
+    const tokenLengthImpl = async (messages: any[]) =>
+      (messages ?? []).reduce((sum: number, message: any) => {
+        const content = typeof message?.content === 'string' ? message.content : '';
+        if (content.includes('RETRIEVED-LAKE-CHUNK')) return sum + 25;
+        if (content.includes('LAKE-MEMORY-FACT')) return sum + 40;
+        return sum + 1;
+      }, 0);
+
+    const runWithLakeSources = async (opts: { withLakes: boolean }) => {
+      mockedCalculateTotalTokenLength.mockReset().mockImplementation(tokenLengthImpl as any);
+      mockTokenizer.countTokens.mockReset().mockResolvedValue(1);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      // Return the admitted system messages BY REFERENCE, so the delivery set the write site
+      // derives from this payload actually contains them - a fixed two-message stub would report
+      // every system row as budget-excluded and the bucket would be a meaningless zero.
+      let builtMessages: IMessage[] = [];
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_prev: any, contextAndSystemMessages: any[], currentUserPromptMessages: any[]) => {
+          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages];
+          return { messages: builtMessages, messageTruncation: null } as any;
+        }
+      );
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      if (opts.withLakes) {
+        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [chunk] } as any);
+        service.features.set('lakeMemory', { getContextMessages: async () => [fact] } as any);
+      }
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const call = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.context?.tokensBySource !== undefined
+      );
+      // Re-derive the residual the way the write site does, independently of the promotion:
+      // total over the payload it counted, less the user prompt (the only known non-system source).
+      const grossResidual = (await tokenLengthImpl(builtMessages)) - 1;
+      return { promptMeta: call?.[0]?.promptMeta, grossResidual };
+    };
+
+    it('moves exactly the delivered lake layer tokens into lakeRetrieval, conserving the residual', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: true });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // 25 (forced-retrieval chunk) + 40 (lake-memory card), read off the layer rows.
+      expect(tokens.lakeRetrieval).toBe(65);
+      // The two buckets still sum to the residual the turn was billed on: nothing was lost or
+      // counted twice, which is the only way a promote-don't-remeasure change can be wrong.
+      expect(tokens.systemPrompts + tokens.lakeRetrieval).toBe(grossResidual);
+      expect(tokens.systemPrompts).toBe(grossResidual - 65);
+
+      const layer = (name: string) =>
+        promptMeta.context.systemPromptDetails.find((detail: any) => detail.name === name);
+      expect(layer('knowledge_retrieval')).toMatchObject({ tokenCount: 25, wasIncluded: true });
+      expect(layer('lake_memory')).toMatchObject({ tokenCount: 40, wasIncluded: true });
+    });
+
+    it('records a real zero when the turn carried no lake layers, leaving the residual gross', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: false });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // A real zero, not unknown: the layer derivation ran and found no lake content.
+      expect(tokens.lakeRetrieval).toBe(0);
+      // No lake rows, so nothing moved and the residual is the whole billed system-prompt total.
+      expect(tokens.systemPrompts).toBe(grossResidual);
+    });
+  });
+
   describe('isRequestTimeoutError', () => {
     it('should match lowercase "request timeout"', () => {
       expect(isRequestTimeoutError(new Error('Anthropic API request timeout after 60000ms'))).toBe(true);

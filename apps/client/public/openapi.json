@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "Bike4Mind API",
-    "version": "10.1.0",
-    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n- `hearth:read`\n- `hearth:write`\n- `optihashi:read`\n- `optihashi:compute`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
+    "version": "11.0.0",
+    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation - with one documented exception: a `pollResult` schema (see the `x-poll-result` extension) describes a handoff response's outcome on a plain, non-contract endpoint, so it is hand-maintained against that handler rather than runtime-validated, and can drift if the handler changes without a matching schema update.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `me:read`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n- `hearth:read`\n- `hearth:write`\n- `optihashi:read`\n- `optihashi:compute`\n- `datalake:read`\n- `datalake:write`\n- `datalake:share`\n- `datalake:query`\n- `overwatch:read`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
     "contact": {
       "name": "Bike4Mind",
       "url": "https://your-deployment.example.com"
@@ -119,7 +119,7 @@
         "required": [
           "id"
         ],
-        "description": "Outcome fields of the quest polled at `GET /api/quests/{id}` after this ACK. A finished turn that failed is `status: \"done\"` with `type: \"error\"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: \"error\"`, present only for a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. `QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but that rejection is caught before a quest exists and surfaces as a synchronous 422 on `/api/embed/chat` instead - it can never appear here. Most `type: \"error\"` turns - an abort, a provider timeout or overload, a recovered stuck quest - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. `type`/`errorCode` separate a recovered from a timeout with partial content keeps `type: \"message\"` even though it did not finish. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.",
+        "description": "Outcome fields of the quest polled at `GET /api/quests/{id}` after this ACK. A finished turn that failed is `status: \"done\"` with `type: \"error\"` and the failure text in `reply`, so a caller reading `reply` alone cannot tell a failure from an answer - check `type` first, and also treat a terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) as failure even though it never sets `type`. `errorCode` is an optional refinement of `type: \"error\"`, present only for a classified billing failure; credit exhaustion arrives here as `insufficient_credits`, the same vocabulary the synchronous 422s on `/api/ai/music`, `/api/ai/sound-effects` and `/api/ai/tts` use. `QUEST_ERROR_CODES` publishes a second member, `spend_cap_exceeded`, but no current throw site on this endpoint raises it as a quest errorCode: its only one, the embed chat route's pre-flight 422, fires outside the process try/catch that would classify it onto the quest. Most `type: \"error\"` turns - an abort, a provider timeout or overload - have NO `errorCode`; its absence does not mean success, only that the failure is unclassified. A recovered stuck quest that still has renderable content is not a failure at all: it keeps `type: \"message\"` even though it did not finish, so a caller gets the content rather than an error. The poll body carries further fields not modelled here, including `images`, `files`, `toolPayloads`, `promptMeta`, and the attachment report (`attachmentNotices`/`attachmentDelivery`) - only the outcome subset is modelled here.",
         "example": {
           "id": "664f1c2b9a1e4d0012ab34cd",
           "status": "done",
@@ -148,6 +148,23 @@
           },
           "message": {
             "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "message",
+              "oob",
+              "error",
+              "system",
+              "voice_transcript"
+            ]
+          },
+          "errorCode": {
+            "type": "string",
+            "enum": [
+              "insufficient_credits",
+              "spend_cap_exceeded"
+            ]
           },
           "tools": {
             "type": "object",
@@ -600,6 +617,16 @@
           "forceKnowledgeRetrieval": {
             "type": "boolean"
           },
+          "retrievalTags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "lakeScopeExplicit": {
+            "type": "boolean",
+            "description": "True when `retrievalTags` is a deliberate choice, so an empty list means \"no lake\" rather than \"any\"."
+          },
           "lastUsedModel": {
             "type": [
               "string",
@@ -670,6 +697,16 @@
           },
           "forceKnowledgeRetrieval": {
             "type": "boolean"
+          },
+          "lakeScope": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "The data lakes this session grounds on, as lake tags (the `datalakeTag` of each lake from GET /api/data-lakes). Send a list to ground only on those lakes, `[]` to ground on no lake at all, or `null` to clear the choice so retrieval falls back to every lake you can reach. Omit to leave the current choice unchanged. Tags naming a lake you cannot reach are ignored at retrieval time rather than rejected here. Narrowing the scope does not by itself turn retrieval on: pair it with `forceKnowledgeRetrieval: true` for a session that is not already grounded. Conversely `[]` leaves a grounded session nothing to retrieve from, so its forced retrieval is skipped rather than run against every lake."
           },
           "propagateToProjects": {
             "type": "boolean",
@@ -1677,6 +1714,98 @@
           "durationSeconds": 3,
           "promptInfluence": 0.5
         }
+      },
+      "getMeResponse200": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "tier": {
+            "type": "string",
+            "enum": [
+              "free",
+              "basic",
+              "pro",
+              "other"
+            ]
+          },
+          "subscription": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "plan_name": {
+                "type": "string"
+              },
+              "price_id": {
+                "type": "string"
+              },
+              "interval": {
+                "type": "string",
+                "enum": [
+                  "monthly",
+                  "yearly"
+                ]
+              },
+              "current_period_ends_at": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "plan_name",
+              "price_id",
+              "interval",
+              "current_period_ends_at"
+            ]
+          },
+          "credits": {
+            "type": "object",
+            "properties": {
+              "balance": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "balance"
+            ]
+          },
+          "entitlements": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "tier",
+          "subscription",
+          "credits",
+          "entitlements"
+        ],
+        "example": {
+          "id": "507f1f77bcf86cd799439011",
+          "name": "Ada Lovelace",
+          "tier": "basic",
+          "subscription": {
+            "plan_name": "Professional",
+            "price_id": "price_123",
+            "interval": "monthly",
+            "current_period_ends_at": "2026-10-18T00:00:00.000Z"
+          },
+          "credits": {
+            "balance": 31667
+          },
+          "entitlements": [
+            "base"
+          ]
+        }
       }
     },
     "parameters": {}
@@ -1686,7 +1815,7 @@
       "post": {
         "operationId": "sendChatMessage",
         "summary": "Send a chat message",
-        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: \"error\"`, since the ACK was already sent. A terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: \"error\"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for every classified failure class (an abort, a provider timeout, a recovered stuck quest, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` reaches this poll path - a spend-cap-exceeded rejection is checked before a quest exists and surfaces as a synchronous 422 on `/api/embed/chat` instead. A caller must treat `type: \"error\"` OR a terminal `status: \"stopped\"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "description": "Sends a message to the AI and creates a quest to process it. By default (async) the call returns immediately with a quest id; poll `GET /api/quests/{id}` for the reply. Send `wait: true` to block until the reply is ready and receive it inline. A tool that produced machine-readable state reports it under `toolPayloads` - an array of `{ type, payload }` entries in emission order, alongside (never instead of) the prose reply - on the `wait: true` body and on the polled quest. A turn can FAIL after the ACK - reported on the polled quest as `type: \"error\"`, since the ACK was already sent. A terminal `status: \"stopped\"` (a missing session, a user-cancelled turn) is ALSO a failure even without `type: \"error\"` - it carries an explanatory string in `reply`/`replies` rather than an answer. `type` is the failure signal for the classified failure classes (an abort, a provider timeout, credit exhaustion); `errorCode` is an optional refinement present only when the failure is a classified billing reason. A recovered stuck quest is NOT in that list: one that still has renderable content resolves as a success by design. `QUEST_ERROR_CODES` has two members, but only `insufficient_credits` is raised as a quest errorCode by any current throw site on this endpoint - `spend_cap_exceeded` is thrown only by the embed chat route's pre-flight, which fires outside the process try/catch that would classify it onto a quest. A caller must treat `type: \"error\"` OR a terminal `status: \"stopped\"` as failure even when `errorCode` is absent, and must not read `reply` as an answer without checking those first. Authenticate with an API key (`b4m_live_`) or a JWT.",
         "tags": [
           "AI"
         ],
@@ -1710,7 +1839,7 @@
         },
         "responses": {
           "200": {
-            "description": "Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/quests/{id}` (see the `sendChatMessage200PollResult` schema), which reports a failed turn as `type: \"error\"` plus an `errorCode` classifier. With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up.",
+            "description": "Message accepted - NOT a completed turn. The default (async) path returns this queued ACK; the outcome arrives on `GET /api/quests/{id}` (see the `sendChatMessage200PollResult` schema). With `wait: true` the body additionally carries the completed reply (`response`/`responses`), `toolPayloads`, `createdAt`, and `performance` timings - fields not modelled here yet; the synchronous response shape is a follow-up. A turn that FAILS still resolves with `200`, never a 4xx, on both that `wait: true` body and the polled quest (`GET /api/quests/{id}`) - the prose explaining why lands in `reply`/`response` like any other answer, so the reply text alone cannot tell a failure from an answer. `type` is the field that can: both surfaces carry it unconditionally, so match on `type: \"error\"` first - it covers credit exhaustion, a provider timeout or overload, and an in-process aborted turn; a real answer carries the turn's actual completion type instead (`\"message\"` for an ordinary reply). Two related states do NOT set `type: \"error\"`: a user-cancelled turn resolves as `status: \"stopped\"` with `type` left at `\"message\"`, and a recovered stuck quest that still has renderable content resolves as a success (`status: \"done\"`, no error) by design, to avoid destroying content to report a failure. `errorCode` then names the failure reason, but only for the billing failures that have one - `\"insufficient_credits\"` today; it is absent on every other `type: \"error\"` turn, so never use its absence to infer success. On a real answer `errorCode` is absent from the `wait: true` body. Contrast the tts/music/soundEffects contracts, which reject synchronously with a 422 carrying the same `errorCode` vocabulary.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2798,17 +2927,17 @@
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/agent-executions/<id>\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{}\nB4M_REQUEST_BODY"
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/agent-executions/<id>\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
           },
           {
             "lang": "JavaScript",
             "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/agent-executions/<id>\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({}),\n});"
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/agent-executions/<id>\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
           },
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/agent-executions/<id>\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={},\n)"
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/agent-executions/<id>\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
           }
         ]
       }
@@ -2817,7 +2946,7 @@
       "put": {
         "operationId": "updateSession",
         "summary": "Update a session",
-        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
+        "description": "Updates a session (called a \"notebook\" in the product UI): its name, attached knowledge files, tags, or retrieval settings. Set `knowledgeIds` and `forceKnowledgeRetrieval: true` together to enable grounded retrieval for `POST /api/chat` against this session - retrieval is gated by these session fields, not by the chat request. `lakeScope` narrows that retrieval to a chosen set of data lakes; omit it to leave the current choice unchanged, or send `null` to clear it so retrieval reaches every lake you can access. Authenticate with an API key (`b4m_live_`) or a JWT. Warning: adding to `knowledgeIds` shares those files with every member of every project containing this session by default (see `propagateToProjects`), and that sharing cannot be undone through the UI.",
         "tags": [
           "Sessions"
         ],
@@ -4572,6 +4701,190 @@
           }
         ]
       }
+    },
+    "/api/v1/me": {
+      "get": {
+        "operationId": "getMe",
+        "summary": "Get the authenticated caller",
+        "description": "Returns the authenticated caller: stable id, display name, plan tier, personal credit balance, and entitlement keys. The subject is always the credential holder - this endpoint accepts no user id, owner id, or impersonation parameter of any kind, so a key can only ever read its own owner. `credits.balance` is the caller's personal ledger; a call billed to an organization draws on a pool this number does not describe. Gate on `tier != \"free\"` for \"is this caller paying\" and on `subscription.price_id` for which product - the `basic`/`pro` rungs come from an internal plan ladder and do not track a plan's marketing name. Responses are never cacheable. Authenticate with an API key (`b4m_live_`) carrying `me:read`, or a JWT.",
+        "tags": [
+          "Account"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The caller, their tier, their personal credit balance, and their entitlement keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/getMeResponse200"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid credentials.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The API key does not hold any of the required scopes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Per-user rate limit exceeded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit-Minute": {
+                "description": "Request quota per minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Minute": {
+                "description": "Requests remaining in the current minute.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Minute": {
+                "description": "Unix epoch (seconds) when the minute window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Limit-Day": {
+                "description": "Request quota per day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining-Day": {
+                "description": "Requests remaining in the current day.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset-Day": {
+                "description": "Unix epoch (seconds) when the day window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "me:read"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X GET \"https://your-deployment.example.com/api/v1/me\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\""
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/v1/me\", {\n  method: \"GET\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n  },\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.get(\n    \"https://your-deployment.example.com/api/v1/me\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n)"
+          }
+        ]
+      }
     }
   },
   "webhooks": {},
@@ -4587,6 +4900,10 @@
     {
       "name": "Audio",
       "description": "Speech, music, and sound-effect generation."
+    },
+    {
+      "name": "Account",
+      "description": "The caller's own identity, plan tier, credit balance, and entitlements."
     }
   ]
 }

@@ -57,9 +57,22 @@ const SEVERITY: Record<DiagnosisStatus, number> = { fail: 3, warn: 2, unknown: 1
 const worstOf = (statuses: DiagnosisStatus[]): DiagnosisStatus =>
   statuses.reduce<DiagnosisStatus>((worst, s) => (SEVERITY[s] > SEVERITY[worst] ? s : worst), 'ok');
 
-const FORCED_SKIP_COPY: Record<'attached_files' | 'personal_corpus', string> = {
+// Keyed off the schema's own union, not a hand-written copy of it: a new skip reason must fail to
+// compile here rather than reach a reader as `undefined`.
+type ForcedSkipReason = NonNullable<NonNullable<PromptMeta['retrieval']>['forcedSkipReason']>;
+
+const FORCED_SKIP_COPY: Record<ForcedSkipReason, string> = {
   attached_files: 'files attached to this message took priority over a library search',
   personal_corpus: 'the personal corpus path took priority over a library search',
+  no_lake_scope: 'this chat is set to ground on no data lake',
+};
+
+// Per-reason, because the fix differs: the first two are about what this turn carried and can be
+// worked around by asking differently, the last is a standing choice on the session that cannot.
+const FORCED_SKIP_REMEDY: Record<ForcedSkipReason, string> = {
+  attached_files: 'Ask again without the attachment, or in a session whose knowledge base holds the material.',
+  personal_corpus: 'Ask again without the attachment, or in a session whose knowledge base holds the material.',
+  no_lake_scope: 'Pick the data lakes this chat should use, or clear the choice to use every one you can reach.',
 };
 
 const countDocuments = (promptMeta: PromptMeta): number =>
@@ -92,7 +105,7 @@ function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
         label,
         status: 'warn',
         detail: `Retrieval was configured but skipped: ${FORCED_SKIP_COPY[skip]}.`,
-        remedy: 'Ask again without the attachment, or in a session whose knowledge base holds the material.',
+        remedy: FORCED_SKIP_REMEDY[skip],
       };
     }
     return {

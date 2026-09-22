@@ -7,6 +7,12 @@ import { substituteArguments } from '../utils/argumentSubstitution.js';
 import { processFileReferences } from '../utils/processFileReferences.js';
 import { logger } from '../utils/Logger.js';
 import { runShellCommand } from '../utils/shellRunner.js';
+import type { PermissionManager } from '../utils/PermissionManager.js';
+import {
+  requestShellCommandPermission,
+  type ShellCommandPermissionDeps,
+  type ShellPermissionPromptFn,
+} from '../utils/commandPermission.js';
 
 /**
  * Parameters for the skill tool
@@ -46,6 +52,21 @@ export interface SkillToolDependencies {
    * it unless the skill declares its own model.
    */
   parentModel?: string;
+  /**
+   * Permission collaborators used to gate a skill's lifecycle hook shell commands
+   * before they run (see requestShellCommandPermission). Every production caller
+   * supplies both; when absent the legacy unguarded behavior is kept (tests).
+   */
+  permissionManager?: PermissionManager;
+  promptFn?: ShellPermissionPromptFn;
+  /**
+   * Live filesystem allow-list (beyond the working directory) used to confine
+   * `@file` references in a skill body. A skill body is model- or repo-authored,
+   * so its `@file` refs are agent-driven and must not read outside the workspace
+   * (e.g. `@/etc/passwd`). Omitted/`[]` confines to the working directory only;
+   * runtime `--add-dir` grants widen it in place.
+   */
+  allowedDirectories?: string[];
 }
 
 /**
@@ -57,8 +78,19 @@ export interface SkillToolDependencies {
  */
 async function executeHook(
   script: string,
-  context: { skillName: string; args: string; result?: string; error?: string }
+  phase: 'pre-invoke' | 'post-invoke' | 'on-error',
+  context: { skillName: string; args: string; result?: string; error?: string },
+  perm?: ShellCommandPermissionDeps
 ): Promise<{ success: boolean; output: string }> {
+  // Gate the hook command through the permission path BEFORE running it. Loading
+  // a trusted project's skill does not pre-authorize the shell it carries.
+  if (perm) {
+    const decision = await requestShellCommandPermission(`skill_hook:${phase}`, script, process.cwd(), perm);
+    if (!decision.allowed) {
+      return { success: false, output: decision.reason || 'Hook command denied' };
+    }
+  }
+
   const result = await runShellCommand({
     command: script,
     cwd: process.cwd(),
@@ -150,6 +182,11 @@ function parseArguments(argsString: string): string[] {
  */
 export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionTools {
   const { customCommandStore } = deps;
+  // Only gate hooks when both collaborators are wired (all production callers).
+  const hookPerm: ShellCommandPermissionDeps | undefined =
+    deps.permissionManager && deps.promptFn
+      ? { permissionManager: deps.permissionManager, promptFn: deps.promptFn }
+      : undefined;
 
   return {
     toolFn: async (args: unknown) => {
@@ -184,10 +221,15 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
       }
 
       if (command.hooks?.['pre-invoke']) {
-        const hookResult = await executeHook(command.hooks['pre-invoke'], {
-          skillName,
-          args: argsString,
-        });
+        const hookResult = await executeHook(
+          command.hooks['pre-invoke'],
+          'pre-invoke',
+          {
+            skillName,
+            args: argsString,
+          },
+          hookPerm
+        );
         if (!hookResult.success) {
           throw new Error(`Pre-invoke hook failed: ${hookResult.output}`);
         }
@@ -198,8 +240,9 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
         const argsArray = params.args ? parseArguments(params.args) : [];
         let expandedBody = substituteArguments(command.body, argsArray);
 
-        // Process @file references
-        const processed = await processFileReferences(expandedBody);
+        // Process @file references. A skill body is agent-driven content, so
+        // confine its refs to the workspace (plus any granted dirs).
+        const processed = await processFileReferences(expandedBody, deps.allowedDirectories ?? []);
         expandedBody = processed.content;
 
         if (processed.errors.length > 0) {
@@ -257,11 +300,16 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
         }
 
         if (command.hooks?.['post-invoke']) {
-          const hookResult = await executeHook(command.hooks['post-invoke'], {
-            skillName,
-            args: argsString,
-            result,
-          });
+          const hookResult = await executeHook(
+            command.hooks['post-invoke'],
+            'post-invoke',
+            {
+              skillName,
+              args: argsString,
+              result,
+            },
+            hookPerm
+          );
           // Log hook output but don't fail on post-invoke errors
           if (!hookResult.success) {
             logger.warn(`Post-invoke hook warning: ${hookResult.output}`);
@@ -272,11 +320,16 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
       } catch (error) {
         if (command.hooks?.['on-error']) {
           const errorMessage = error instanceof Error ? error.message : String(error);
-          const hookResult = await executeHook(command.hooks['on-error'], {
-            skillName,
-            args: argsString,
-            error: errorMessage,
-          });
+          const hookResult = await executeHook(
+            command.hooks['on-error'],
+            'on-error',
+            {
+              skillName,
+              args: argsString,
+              error: errorMessage,
+            },
+            hookPerm
+          );
           // Log hook output but don't swallow the original error
           if (hookResult.output) {
             logger.warn(`On-error hook output: ${hookResult.output}`);

@@ -19,6 +19,23 @@ interface LoginFlowProps {
   onError: (error: Error) => void;
 }
 
+/**
+ * Only https URLs (and http on localhost for dev) may be handed to the OS opener.
+ * The device-flow response is server-controlled, so a hostile/compromised server
+ * could return `file:///...`, `javascript:...` or similar and have the OS launch
+ * it. Reject anything that isn't a plain web URL.
+ */
+export function isBrowserOpenableUrl(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol === 'https:') return true;
+  return url.protocol === 'http:' && (url.hostname === 'localhost' || url.hostname === '127.0.0.1');
+}
+
 function extractErrorMessage(err: unknown): string {
   if (axios.isAxiosError(err)) {
     // Server responded with an error status
@@ -108,11 +125,16 @@ export function LoginFlow({ apiUrl = 'http://localhost:3000', configStore, onSuc
   // Auto-open browser when device flow is initiated
   useEffect(() => {
     if (deviceFlow && status === 'waiting') {
-      // Use verification_uri_complete which includes the user code pre-filled
-      open(deviceFlow.verification_uri_complete).catch(err => {
-        // Silent fail - user can still manually visit the URL
-        console.error('Failed to auto-open browser:', err);
-      });
+      // Use verification_uri_complete which includes the user code pre-filled.
+      // Validate the scheme first - never hand a non-web URL to the OS opener.
+      if (isBrowserOpenableUrl(deviceFlow.verification_uri_complete)) {
+        open(deviceFlow.verification_uri_complete).catch(err => {
+          // Silent fail - user can still manually visit the URL
+          console.error('Failed to auto-open browser:', err);
+        });
+      } else {
+        console.error('Refusing to auto-open untrusted verification URL:', deviceFlow.verification_uri_complete);
+      }
     }
   }, [deviceFlow, status]);
 

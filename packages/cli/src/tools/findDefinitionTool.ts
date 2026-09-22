@@ -1,4 +1,5 @@
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { assertPathAllowed } from '@bike4mind/services/llm/tools/cliTools';
 import { stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
@@ -93,13 +94,6 @@ async function getRipgrepPath(): Promise<string> {
   return rgPath;
 }
 
-function isPathWithinWorkspace(targetPath: string, baseCwd: string): boolean {
-  const resolvedTarget = path.resolve(targetPath);
-  const resolvedBase = path.resolve(baseCwd);
-  const relativePath = path.relative(resolvedBase, resolvedTarget);
-  return !relativePath.startsWith('..') && !path.isAbsolute(relativePath);
-}
-
 /** Escape special regex characters in the symbol name */
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -158,7 +152,7 @@ export function isLikelyDefinition(line: string): boolean {
 // Core search
 // ---------------------------------------------------------------------------
 
-async function findDefinitions(params: FindDefinitionParams): Promise<string> {
+async function findDefinitions(params: FindDefinitionParams, allowedDirectories?: string[]): Promise<string> {
   const { symbol_name, kind, search_path } = params;
 
   if (!symbol_name || !symbol_name.trim()) {
@@ -166,12 +160,11 @@ async function findDefinitions(params: FindDefinitionParams): Promise<string> {
   }
 
   const baseCwd = process.cwd();
-  const targetDir = search_path ? path.resolve(baseCwd, search_path) : baseCwd;
+  const requestedDir = search_path ? path.resolve(baseCwd, search_path) : baseCwd;
 
-  // Security: path traversal guard
-  if (!isPathWithinWorkspace(targetDir, baseCwd)) {
-    throw new Error(`Path validation failed: "${search_path}" resolves outside the allowed workspace directory`);
-  }
+  // Confine through the shared realpath validator (resolves symlinks, honors the
+  // live allow-list). Returns the resolved dir so ripgrep searches the real target.
+  const targetDir = assertPathAllowed(requestedDir, allowedDirectories, 'search');
 
   // Validate directory exists
   try {
@@ -196,6 +189,8 @@ async function findDefinitions(params: FindDefinitionParams): Promise<string> {
     '--max-filesize',
     '5M',
     // Case-sensitive - definition names are exact (unlike grep_search)
+    // `--` ends option parsing so the positional pattern is never read as a flag.
+    '--',
     pattern,
     targetDir,
   ];
@@ -288,11 +283,11 @@ async function findDefinitions(params: FindDefinitionParams): Promise<string> {
 // Tool factory
 // ---------------------------------------------------------------------------
 
-export function createFindDefinitionTool(): ICompletionOptionTools {
+export function createFindDefinitionTool(allowedDirectories?: string[]): ICompletionOptionTools {
   return {
     toolFn: async (args: unknown) => {
       const params = args as FindDefinitionParams;
-      return findDefinitions(params);
+      return findDefinitions(params, allowedDirectories);
     },
     toolSchema: {
       name: 'find_definition',

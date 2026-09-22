@@ -406,7 +406,9 @@ async function emitSemanticCitables(
   /** Undefined when attribution was inconclusive - see the schema field's own doc. */
   dataLakeTagsWithCandidates?: string[]
 ): Promise<void> {
-  // Citables - dedup to one chip per file (multiple chunks can match the same article)
+  // Citables - dedup to one chip per file (multiple chunks can match the same article).
+  // `ranked` is score-descending, so the chunk that survives the dedup is the file's BEST hit,
+  // and that is the passage chunkId/fullContext anchor the reader is deep-linked to.
   const seenFile = new Set<string>();
   const citables: CitableSource[] = [];
   for (const r of ranked) {
@@ -424,7 +426,15 @@ async function emitSemanticCitables(
           .join(', ') || undefined,
       timestamp: new Date().toISOString(),
       status: 'complete',
-      metadata: { sourceSystem: 'knowledge_base', tags: r.fileTags, relevanceScore: r.score },
+      metadata: {
+        sourceSystem: 'knowledge_base',
+        tags: r.fileTags,
+        relevanceScore: r.score,
+        chunkId: r.chunkId,
+        // The passage as SERVED, not as stored: same clip and defang the model was given, so the
+        // reader is shown what grounded the claim rather than a longer chunk it never saw.
+        fullContext: servedPassageText(r, maxChunkChars).text,
+      },
     });
   }
   const names = citables.slice(0, 3).map(c => prettyFileName(c.title));
@@ -1417,7 +1427,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // reaches here; the outer catch writes 'failed' with no volume.
           const keywordArmNoHitsInjected = { chunks: 0, chars: 0 };
 
-          // Emit citable source chips so search results appear as clickable citations
+          // Emit citable source chips so search results appear as clickable citations.
+          // No metadata.chunkId/fullContext here, deliberately: this is the KEYWORD arm, ranking
+          // whole IFabFileDocuments by a metadata-only proxy (see the note above the ranking). No
+          // chunk was scored, so there is no cited passage to deep-link to - a chunk anchor here
+          // could only be a guess, and the reader lands on the whole document, which is honest.
           if (rankedResults.length > 0) {
             const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
               const fileTags = (file.tags?.map(t => t.name) || [])

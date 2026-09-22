@@ -4,6 +4,7 @@ import { b4mLLMTools, B4MLLMTools } from './schemas/llm';
 import { supportedVoiceGenerationVendor, voiceOutputFormatSchema } from './voiceGeneration';
 import { BFLSafetyToleranceSchema } from './schemas/bfl';
 import { PROMPT_TEXT_MAX } from './schemas/briefcasePrompt';
+import { MAX_REFERENCE_IMAGES } from './utils/modelHelpers';
 
 // Re-export LLM tools for external use
 export { b4mLLMTools };
@@ -60,6 +61,16 @@ export const GenerateImageIvokeParamsSchema = OpenAIImageGenerationInput.extend(
   height: z.number().optional(),
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
+  /**
+   * Extra gpt-image "style anchor" images, as fabFile ids. They ride alongside the primary
+   * input image (the first image-type entry in `fabFileIds`) rather than replacing it, and
+   * OpenAI receives them in this order - which matters, because a mask always applies to the
+   * first image in the array. fabFile ids rather than URLs so the existing access +
+   * moderation gates (findAccessibleInIds, isImageServeable) still apply. Ignored by every
+   * non-gpt-image provider. Repeated ids collapse to one anchor. See MAX_REFERENCE_IMAGES for
+   * why the cap is 4 and not OpenAI's 16.
+   */
+  referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   tools: z.array(z.union([b4mLLMTools, z.string()])).optional(),
   safety_tolerance: BFLSafetyToleranceSchema,
   prompt_upsampling: z.boolean().optional(),
@@ -132,6 +143,16 @@ export const EditImageRequestBodySchema = OpenAIImageGenerationInput.extend({
   organizationId: z.string().nullable().optional(),
   aspect_ratio: z.string().optional(),
   fabFileIds: z.array(z.string()).prefault([]),
+  /**
+   * Extra gpt-image "style anchor" images, as fabFile ids. On this endpoint `fabFileIds` is
+   * the inpainting mask, not an image input, so references need their own field: they are
+   * appended after `image` (the edit source), and OpenAI applies the mask to the first entry
+   * of that array - i.e. always to `image`, never to a reference. fabFile ids rather than URLs
+   * so the existing access + moderation gates (findAccessibleInIds, isImageServeable) still
+   * apply. Ignored by BFL and Gemini. Repeated ids collapse to one anchor. See
+   * MAX_REFERENCE_IMAGES for why the cap is 4, not 16.
+   */
+  referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   image: z.string(),
   // OpenAIImageGenerationInput doesn't declare this; without it here, ImageEdit.ts's
   // `...rest` spread silently strips any client-sent output_format before it ever reaches
