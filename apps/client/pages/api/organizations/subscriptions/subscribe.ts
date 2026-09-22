@@ -51,6 +51,13 @@ const handler = baseApi()
     //
     // No id means "create a new org" (the organizationData branch): there is no existing tenant to
     // authorize against, so the gate does not apply.
+    //
+    // Do NOT read that as the two being mutually exclusive. `OrgSubscriptionSubscribeSchema`'s
+    // refine requires only that AT LEAST ONE of organizationId / organizationData is present, so a
+    // caller may send both. The id wins here and the org is gated, but the metadata block below
+    // still keys off organizationData, which sends the invoice webhook down its create-a-new-org
+    // branch against this org's Stripe customer. Pre-existing and tracked separately; it is a
+    // billing-attribution bug, not an authorization one, and this gate does not widen it.
     const organization = organizationId ? await verifyOrgOwner(req.user, organizationId) : null;
 
     // Refuse a second live subscription for the org. This read used to be active-only, so an org
