@@ -622,6 +622,15 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     opts?: {
       grantedLakeIds?: string[];
       orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the owner-bypass exemption (review onoya, #3055): ones the caller
+       * created but no longer effectively owns (`resolveEffectiveOwnerIds`), the same set
+       * `findActiveByUserTagsAndEntitlements` withholds from its own creator arm. `createdByUserId`
+       * is immutable, so without this a caller whose ownership was transferred away keeps reporting
+       * a false zero for a lake they can no longer reach through the owner bypass - the count and
+       * the resolver's own read-side would disagree about who still owns it.
+       */
+      supersededOwnLakeIds?: string[];
     }
   ): Promise<number>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
