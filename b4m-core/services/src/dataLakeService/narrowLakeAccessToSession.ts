@@ -115,11 +115,15 @@ export function narrowLakeAccessToSession(
     // session-creation tag derivation, which never receives a narrowed set) - it is carried so the
     // value keeps meaning the same thing wherever the set travels, not to satisfy a live caller.
     lakeViewComplete: access.lakeViewComplete,
-    // Carried through unchanged: this narrowing is subtractive on the SESSION's behalf and does
-    // not change how many lakes the caller's org/tags surfaced but could not pass the gate for
-    // (#3055) - that count was already fixed upstream. Unlike lakeViewComplete above, this one
-    // DOES have a live downstream reader (the retrieval seed in ChatCompletionProcess).
-    excludedByAccessCount: access.excludedByAccessCount,
+    // NOT carried through, deliberately (#3055, review onoya): the account-wide count cannot be
+    // attributed to a NARROWED session's scope without knowing whether the specific excluded
+    // lake(s) fall inside or outside the caller's requested selection - and that identity is
+    // deliberately never surfaced here (count-and-reason-only contract). Concrete case this
+    // closes: caller can access lake A, lacks the gate for lake B, session narrows to A only -
+    // the turn now reports no exclusion instead of a misleading `excluded: 1` for B, which was
+    // never in this turn's scope. A session naming no lake at all takes the early-return no-op
+    // path above and keeps the account-wide count, since nothing was narrowed away from it.
+    excludedByAccessCount: undefined,
     dataLakeTags: access.dataLakeTags.filter(tag => wanted.has(tag)),
     dataLakeTagPrefixes: access.dataLakeTagPrefixes.filter(prefix => retainedPrefixes.has(prefix)),
     scopedTagPrefixes: access.scopedTagPrefixes.filter(prefix => retainedPrefixes.has(prefix)),
