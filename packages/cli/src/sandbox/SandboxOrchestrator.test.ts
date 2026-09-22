@@ -273,6 +273,29 @@ describe('SandboxOrchestrator', () => {
     });
   });
 
+  describe('network gating', () => {
+    it('passes networkEnabled: false under the default (fail-closed) config', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), mockRuntime);
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
+    });
+
+    it('passes networkEnabled: true when network.enabled is set', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const config = enabledConfig({ network: { ...DEFAULT_SANDBOX_CONFIG.network, enabled: true } });
+      const orchestrator = new SandboxOrchestrator(config, mockRuntime);
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: true }));
+    });
+  });
+
   describe('stats tracking', () => {
     it('recordSandboxed increments counter', () => {
       const orchestrator = new SandboxOrchestrator();

@@ -13,6 +13,8 @@ export interface WrapCommandOptions {
   filesystemConfig: FilesystemConfig;
   env?: Record<string, string>;
   seccompProfile?: string;
+  /** Grant network egress inside the sandbox. Fail-closed: absent/false denies it. */
+  networkEnabled?: boolean;
 }
 
 /** Abstract interface for platform-specific sandbox runtimes */

@@ -9,6 +9,7 @@ import {
   cliSharedTools,
   generateTools,
   getCliOnlyTools,
+  isPathAllowed,
   setShowUserQuestionFn,
   type LlmTools,
   type UserQuestionPayload,
@@ -158,7 +159,8 @@ export function wrapToolWithPermission(
         const cwd = args.cwd ? path.resolve(process.cwd(), args.cwd) : process.cwd();
         const decision = sandboxOrchestrator.shouldSandbox(args.command, cwd);
 
-        if (decision.type === 'blocked') {
+        // Record + report a blocked command and return the model-facing message.
+        const blockCommand = (reason: string): string => {
           sandboxOrchestrator.recordBlocked();
           sandboxOrchestrator
             .recordViolation({
@@ -166,16 +168,26 @@ export function wrapToolWithPermission(
               command: args.command,
               blockedBy: 'config',
               timestamp: new Date(),
-              detail: decision.reason,
+              detail: reason,
             })
             .catch(() => {});
-          console.error(
-            `\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mSandbox denied this command:\x1b[0m ${decision.reason}\n`
-          );
-          return `Command blocked by sandbox: ${decision.reason}`;
+          console.error(`\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mSandbox denied this command:\x1b[0m ${reason}\n`);
+          return `Command blocked by sandbox: ${reason}`;
+        };
+
+        if (decision.type === 'blocked') {
+          return blockCommand(decision.reason);
         }
 
         if (decision.type === 'sandbox') {
+          // Confine the writable root to the same allow-list the core file tools
+          // honor. A model-supplied cwd outside the workspace would otherwise
+          // become the sandbox's read-write bind; reject it (and drop the temp
+          // sandbox profile shouldSandbox already built) before it can execute.
+          if (!isPathAllowed(cwd, allowedDirectories).allowed) {
+            cleanupSandboxFiles(decision.wrappedCommand.cleanupPaths);
+            return blockCommand(`working directory ${cwd} is outside the sandbox writable root`);
+          }
           sandboxOrchestrator.recordSandboxed();
           isSandboxed = true;
           sandboxedArgs = {

@@ -93,6 +93,35 @@ describe('SeatbeltRuntime', () => {
       expect(profile).toContain('(allow file-write* (subpath "/private/tmp"))');
     });
 
+    it('denies network when network is disabled (fail-closed)', () => {
+      const profile = runtime.generateProfile({
+        command: 'curl https://example.com',
+        cwd: '/Users/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: [],
+          deniedPaths: [],
+        },
+      });
+
+      expect(profile).toContain('(deny network*)');
+    });
+
+    it('does not deny network when network is enabled', () => {
+      const profile = runtime.generateProfile({
+        command: 'curl https://example.com',
+        cwd: '/Users/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: [],
+          deniedPaths: [],
+        },
+        networkEnabled: true,
+      });
+
+      expect(profile).not.toContain('(deny network*)');
+    });
+
     it('expands $HOME and $USER in paths', () => {
       const home = os.homedir();
       const profile = runtime.generateProfile({

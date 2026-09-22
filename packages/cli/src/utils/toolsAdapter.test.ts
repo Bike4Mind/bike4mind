@@ -11,6 +11,7 @@ import { promises as fs, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import {
   wrapToolWithHooks,
+  wrapToolWithPermission,
   isPathAccessDenial,
   deriveGrantDirectory,
   persistToolTrust,
@@ -19,6 +20,8 @@ import {
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { PermissionManager } from './PermissionManager.js';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { ApiClient } from '../auth/ApiClient.js';
+import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { AgentHooks, HookMatcher } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
 
@@ -651,5 +654,80 @@ describe('persistToolTrust (folder-trust gate)', () => {
     // Trusted-path persistence must NOT also write it to the global layer.
     const reloadedGlobal = JSON.parse(await fs.readFile(globalConfigPath, 'utf-8'));
     expect(reloadedGlobal.trustedTools ?? []).not.toContain('file_read');
+  });
+});
+
+describe('wrapToolWithPermission sandbox cwd confinement', () => {
+  const noopPrompt = vi.fn(async () => ({ action: 'allow-session' as const }));
+
+  function createOrchestrator() {
+    return {
+      shouldSandbox: vi.fn(() => ({
+        type: 'sandbox',
+        wrappedCommand: { commandString: 'sandboxed-command', cleanupPaths: [] },
+      })),
+      recordBlocked: vi.fn(),
+      recordSandboxed: vi.fn(),
+      recordUnsandboxed: vi.fn(),
+      recordViolation: vi.fn().mockResolvedValue(undefined),
+    } as unknown as SandboxOrchestrator;
+  }
+
+  function wrap(orchestrator: SandboxOrchestrator, allowedDirectories?: string[]) {
+    const toolFn = vi.fn().mockResolvedValue('ok');
+    const tool = createMockTool('bash_execute', toolFn);
+    const permissionManager = {
+      needsPermission: vi.fn(() => false),
+      trustToolForSession: vi.fn(),
+    } as unknown as PermissionManager;
+    const agentContext = { currentAgent: null, observationQueue: [] };
+    const wrapped = wrapToolWithPermission(
+      tool,
+      permissionManager,
+      noopPrompt,
+      agentContext,
+      {},
+      {} as ApiClient,
+      orchestrator,
+      allowedDirectories
+    );
+    return { wrapped, toolFn };
+  }
+
+  it('blocks a cwd outside the workspace and never runs the command', async () => {
+    const orchestrator = createOrchestrator();
+    const outside = path.join(path.parse(process.cwd()).root, 'definitely-outside-workspace');
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    const result = await wrapped.toolFn({ command: 'ls', cwd: outside });
+
+    expect(result).toContain('Command blocked by sandbox');
+    expect(orchestrator.recordBlocked).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recordSandboxed).not.toHaveBeenCalled();
+    expect(toolFn).not.toHaveBeenCalled();
+  });
+
+  it('sandboxes and runs an in-workspace cwd', async () => {
+    const orchestrator = createOrchestrator();
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    const result = await wrapped.toolFn({ command: 'ls' });
+
+    expect(result).toBe('ok');
+    expect(orchestrator.recordSandboxed).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recordBlocked).not.toHaveBeenCalled();
+    expect(toolFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('sandboxes a cwd granted via allowedDirectories', async () => {
+    const orchestrator = createOrchestrator();
+    const granted = path.join(path.parse(process.cwd()).root, 'granted-dir');
+    const { wrapped, toolFn } = wrap(orchestrator, [granted]);
+
+    await wrapped.toolFn({ command: 'ls', cwd: granted });
+
+    expect(orchestrator.recordSandboxed).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recordBlocked).not.toHaveBeenCalled();
+    expect(toolFn).toHaveBeenCalledTimes(1);
   });
 });

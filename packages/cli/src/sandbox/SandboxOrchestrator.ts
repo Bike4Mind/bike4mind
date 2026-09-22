@@ -80,6 +80,7 @@ export class SandboxOrchestrator {
       command,
       cwd,
       filesystemConfig: this.config.filesystem,
+      networkEnabled: this.config.network.enabled,
       env: proxyEnv,
       ...(this.runtime.platform === 'linux' &&
         this.config.platform.linux.seccompProfile && {

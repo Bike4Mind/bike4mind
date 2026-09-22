@@ -62,6 +62,14 @@ export class SeatbeltRuntime implements SandboxRuntime {
       '',
     ];
 
+    // Network egress is fail-closed: deny it unless explicitly enabled (proxy
+    // handles filtering when on). Covers inbound/outbound/bind.
+    if (!options.networkEnabled) {
+      lines.push('; Deny network access (fail-closed)');
+      lines.push('(deny network*)');
+      lines.push('');
+    }
+
     // Filesystem write restrictions
     if (filesystemConfig.writeOnlyToWorkingDir) {
       lines.push('; Deny all file writes globally');

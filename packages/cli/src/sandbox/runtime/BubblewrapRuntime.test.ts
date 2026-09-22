@@ -74,7 +74,7 @@ describe('BubblewrapRuntime', () => {
       expect(result.args[awsIdx - 1]).toBe('--tmpfs');
     });
 
-    it('includes namespace isolation flags', () => {
+    it('includes namespace isolation flags and denies net when network is disabled', () => {
       const result = runtime.wrapCommand({
         command: 'echo test',
         cwd: '/home/test/project',
@@ -86,8 +86,25 @@ describe('BubblewrapRuntime', () => {
       });
 
       expect(result.args).toContain('--unshare-all');
-      expect(result.args).toContain('--share-net');
+      expect(result.args).toContain('--unshare-net');
+      expect(result.args).not.toContain('--share-net');
       expect(result.args).toContain('--die-with-parent');
+    });
+
+    it('shares the net namespace when network is enabled', () => {
+      const result = runtime.wrapCommand({
+        command: 'curl https://example.com',
+        cwd: '/home/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: [],
+          deniedPaths: [],
+        },
+        networkEnabled: true,
+      });
+
+      expect(result.args).toContain('--share-net');
+      expect(result.args).not.toContain('--unshare-net');
     });
 
     it('sets the working directory', () => {
