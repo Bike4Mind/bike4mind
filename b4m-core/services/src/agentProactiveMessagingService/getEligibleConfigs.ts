@@ -68,14 +68,18 @@ export async function getEligibleConfigs({
         // Verify session still exists and is not deleted
         const session = await db.sessions.findById(config.sessionId);
         if (!session || session.deletedAt) {
-          logger.info(`Skipping config ${config.id}: session not found or deleted`);
+          logger.info(`Deleting config ${config.id}: session not found or deleted`);
+          await db.sessionAgentConfigs.deleteBySessionAndAgent(config.sessionId, config.agentId);
           continue;
         }
 
-        // Verify agent still exists and is attached to session
+        // Verify agent still exists and is attached to session. Deleting here (rather than just
+        // skipping) is what bounds a config a detach-then-reattach race left behind: a PUT that
+        // recreates the row right after a detach's own cleanup runs gets caught on the next scan.
         const agentIds = await db.sessions.getAttachedAgents(config.sessionId);
         if (!agentIds.includes(config.agentId)) {
-          logger.info(`Skipping config ${config.id}: agent not attached to session`);
+          logger.info(`Deleting config ${config.id}: agent not attached to session`);
+          await db.sessionAgentConfigs.deleteBySessionAndAgent(config.sessionId, config.agentId);
           continue;
         }
 
