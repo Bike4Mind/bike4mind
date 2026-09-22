@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Hoisted so the vi.mock factories (hoisted above imports) can reference them.
-const { mockAssertCredits, mockCount, mockPublishStart } = vi.hoisted(() => ({
+const { mockAssertCredits, mockCount, mockCountTaggable, mockPublishStart } = vi.hoisted(() => ({
   mockAssertCredits: vi.fn(),
   mockCount: vi.fn(),
+  mockCountTaggable: vi.fn(),
   mockPublishStart: vi.fn(),
 }));
 
@@ -18,7 +19,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/asyncHandler', () => ({
   asyncHandler: (handler: (...a: unknown[]) => unknown) => handler,
 }));
-vi.mock('@bike4mind/database/auth', () => ({ sessionRepository: { count: mockCount } }));
+vi.mock('@bike4mind/database/auth', () => ({
+  sessionRepository: { count: mockCount, countTaggableNotebooks: mockCountTaggable },
+}));
 vi.mock('@server/utils/eventBus', () => ({ SpiderEvents: { Start: { publish: mockPublishStart } } }));
 vi.mock('@server/utils/sessionOperationalCreditPreflight', () => ({
   assertSessionOperationalCredits: mockAssertCredits,
@@ -29,7 +32,11 @@ import handler from '../recalculate-message-counts';
 const TOTAL_NOTEBOOKS = 50;
 const UNGROOMED_PER_OPERATION = 6;
 
-/** Field the handler counts as "still to do" for each spending operation. */
+/**
+ * Field a raw `count` call treats as "still to do". Only the `summarize` leg builds its filter
+ * here; `tags` goes through `sessionRepository.countTaggableNotebooks`, which is why several
+ * assertions below check that no `taggedAt` filter is ever issued.
+ */
 const ungroomedField = (call: unknown[]) => {
   const filter = call[0] as Record<string, unknown>;
   return Object.keys(filter).find(key => key.endsWith('At') && filter[key] === null);
@@ -53,8 +60,9 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
     // These are the counts the handler ASKS for, which is what this file is about; what they
     // match against a real collection is SPENDING_SPIDER_OPERATIONS' concern, not this file's.
     mockCount.mockImplementation(async (filter: Record<string, unknown>) =>
-      'summaryAt' in filter || 'taggedAt' in filter ? UNGROOMED_PER_OPERATION : TOTAL_NOTEBOOKS
+      'summaryAt' in filter ? UNGROOMED_PER_OPERATION : TOTAL_NOTEBOOKS
     );
+    mockCountTaggable.mockResolvedValue(UNGROOMED_PER_OPERATION);
     mockAssertCredits.mockResolvedValue(undefined);
     mockPublishStart.mockResolvedValue(undefined);
   });
@@ -67,32 +75,48 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
     expect(mockAssertCredits).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'admin-1', operationCount: UNGROOMED_PER_OPERATION * 2 })
     );
-    expect(mockCount.mock.calls.map(ungroomedField).filter(Boolean).sort()).toEqual(['summaryAt', 'taggedAt']);
+    expect(mockCount.mock.calls.map(ungroomedField).filter(Boolean)).toEqual(['summaryAt']);
+    expect(mockCountTaggable).toHaveBeenCalledTimes(1);
+    expect(mockCountTaggable).toHaveBeenCalledWith('admin-1');
+  });
+
+  // The `tags` leg must never go back to a plain `{ taggedAt: null }` count. `sessionTagging.ts`
+  // aborts before the model on a notebook with no quests and writes nothing, so that count prices
+  // a dispatch that settles nothing, re-prices it on every run, and refuses a low-balance admin a
+  // run that would have cost them nothing.
+  it('prices the tags leg through countTaggableNotebooks rather than a taggedAt count', async () => {
+    await run({ operations: ['tags'] });
+
+    expect(mockCountTaggable).toHaveBeenCalledWith('admin-1');
+    expect(mockCount.mock.calls.map(ungroomedField).filter(Boolean)).toEqual([]);
+    expect(mockAssertCredits).toHaveBeenCalledWith(
+      expect.objectContaining({ operationCount: UNGROOMED_PER_OPERATION })
+    );
   });
 
   // A soft-deleted notebook is not work the spider will do, so counting one would price the gate
-  // above the real spend. The filter has to carry the same `deletedAt` clause the progress count
-  // uses, on every ungroomed count - a missing clause is invisible in the operationCount
-  // assertions above, which read whatever the mock returns.
-  it('excludes soft-deleted notebooks from every ungroomed count', async () => {
+  // above the real spend. The `summarize` leg builds its filter in this module, so its `deletedAt`
+  // clause is this file's to pin - a missing clause is invisible in the operationCount assertions
+  // above, which read whatever the mock returns. The `tags` leg's exclusions (soft-deleted
+  // notebook, soft-deleted quest, other owner) live in `countTaggableNotebooks` and are pinned
+  // against a real mongod in packages/database/src/models/auth.
+  it('excludes soft-deleted notebooks from the summarize ungroomed count', async () => {
     await run({ operations: ['summarize', 'tags'] });
 
     const ungroomedCalls = mockCount.mock.calls.filter(([filter]) => Boolean(ungroomedField([filter])));
-    expect(ungroomedCalls).toHaveLength(2);
-    for (const [filter] of ungroomedCalls) {
-      expect(filter).toMatchObject({
-        userId: 'admin-1',
-        $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
-      });
-    }
+    expect(ungroomedCalls).toHaveLength(1);
+    expect(ungroomedCalls[0][0]).toMatchObject({
+      userId: 'admin-1',
+      $or: [{ deletedAt: { $exists: false } }, { deletedAt: null }],
+    });
   });
 
   // The spider skips an already-groomed notebook (`!session.summaryAt` / `!session.taggedAt`), so
   // pricing a re-run at totalNotebooks would refuse a large account credits for work it will not
   // do - the gate would make the spider unusable above a few hundred notebooks.
   //
-  // `summarize` on purpose: one leg is enough to pin the sizing, and both narrow identically now
-  // that `taggedAt` is a declared Session path.
+  // `summarize` on purpose: one leg is enough to pin the sizing, and it is the leg whose filter
+  // is built here.
   it('sizes the summarize leg to the ungroomed notebooks, not to every notebook the admin owns', async () => {
     await run({ operations: ['summarize'] });
 
@@ -104,8 +128,9 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
   // Nothing left to groom must cost nothing: the pre-flight short-circuits a zero count.
   it('asks for nothing when every notebook is already groomed', async () => {
     mockCount.mockImplementation(async (filter: Record<string, unknown>) =>
-      'summaryAt' in filter || 'taggedAt' in filter ? 0 : TOTAL_NOTEBOOKS
+      'summaryAt' in filter ? 0 : TOTAL_NOTEBOOKS
     );
+    mockCountTaggable.mockResolvedValue(0);
 
     await run({ operations: ['summarize', 'tags'] });
 
@@ -137,6 +162,7 @@ describe('POST /api/admin/recalculate-message-counts credit pre-flight', () => {
 
     expect(mockAssertCredits).not.toHaveBeenCalled();
     expect(mockCount.mock.calls.map(ungroomedField).filter(Boolean)).toEqual([]);
+    expect(mockCountTaggable).not.toHaveBeenCalled();
     expect(mockPublishStart).toHaveBeenCalled();
   });
 

@@ -5,6 +5,7 @@ import { dataLakeService } from '@bike4mind/services';
 import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
+  dataLakeFindingRepository,
   fabFileRepository,
   fabFileChunkRepository,
 } from '@bike4mind/database';
@@ -91,8 +92,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     // The year is passed in rather than read inside the detector so the same corpus always produces
     // the same report - a stored result an owner already reviewed has to be comparable to the next.
-    const report = await dataLakeService.detectLakeInconsistencies(lake, new Date().getUTCFullYear(), {
-      db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository },
+    const { report, suppressed } = await dataLakeService.detectLakeInconsistencies(lake, new Date().getUTCFullYear(), {
+      db: {
+        fabFiles: fabFileRepository,
+        fabFileChunks: fabFileChunkRepository,
+        dataLakeFindings: dataLakeFindingRepository,
+      },
       logger: req.logger,
     });
 
@@ -106,6 +111,59 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       inconsistencyReport: stored,
       inconsistencyComputedAt: computedAt,
     });
+
+    // Findings a curator DISMISSED are absent from `report` (#3045) - from the blob, from
+    // `countsByKind`, and so from the health summary that reads it. They are still RECORDED below,
+    // and that pairing is the whole design: suppressed from what a curator is shown, current in the
+    // row behind it. A dismissal keys on kind and subject rather than on the passages, so the
+    // evidence under one can change into a far worse contradiction, and the row is then the only
+    // place that is visible at all. `recordDetected` writes no status, so recording cannot reopen
+    // what was dismissed.
+    //
+    // Also emit each finding as a durable row (#3039). Additive for now, and ordered after the blob
+    // deliberately: the blob is still what GET here and the counts on GET /health read, so until
+    // #3040 moves those readers over, a failure in this newer path must not cost the run its report.
+    //
+    // RETENTION IS ONLY HALF DONE UNTIL THEN. The stored blob above still carries
+    // `evidence[].excerpt` on the lake document, and the purge-time sweeps added with the rows
+    // (the `deleteForPurgedDocument(s)` sweeps at both destruction doors) reach the ROWS only -
+    // nothing rewrites the blob when a document it quotes is destroyed. #3040 must carry that
+    // cleanup along with moving the readers; deleting the blob write here first would blind
+    // GET and /health.
+    //
+    // The same `computedAt` is passed as `seenAt` so a run's rows and its report agree on one
+    // instant rather than drifting by the write's latency.
+    //
+    // CAUGHT, and that is what makes the ordering above worth anything. The service already
+    // isolates per-finding failures into its `failed` count, so reaching here means something
+    // unexpected - but the blob write has already COMMITTED, and letting the throw out would hand
+    // the caller a 500 for a run whose report is sitting in the database. They would re-run a
+    // ~1000-chunk detection pass to get back a report they already have. Log and return it.
+    let failed = 0;
+    try {
+      ({ failed } = await dataLakeService.recordLakeFindings(
+        lake.id,
+        [...stored.findings, ...suppressed],
+        { detector: dataLakeService.INCONSISTENCY_DETECTOR, seenAt: computedAt },
+        { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
+      ));
+    } catch (error) {
+      failed = stored.findings.length + suppressed.length;
+      req.logger?.error('Lake findings write failed outright; returning the stored report', {
+        dataLakeId: lake.id,
+        total: stored.findings.length + suppressed.length,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      });
+    }
+    // A partially-written run must not read as a clean one. Each failure is already logged with its
+    // subject by the service; this is the one line that says the RUN was partial.
+    if (failed > 0) {
+      req.logger?.warn('Lake findings partially recorded', {
+        dataLakeId: lake.id,
+        failed,
+        total: stored.findings.length + suppressed.length,
+      });
+    }
 
     return res.json({ ...stored, computedAt });
   });

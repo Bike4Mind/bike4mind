@@ -1,12 +1,21 @@
 import { describe, it, expect, beforeEach, Mock, vi } from 'vitest';
 import { remove } from './remove';
-import { IDataLakeDocument, IDataLakeRepository, IFabFileRepository, ITagRepository } from '@bike4mind/common';
+import {
+  DATA_LAKES,
+  IDataLakeDocument,
+  IDataLakeRepository,
+  IFabFileRepository,
+  ITagRepository,
+} from '@bike4mind/common';
 
 describe('tagService - remove', () => {
   const userId = 'test-user-123';
   const existingTagId = 'existing-tag-123';
   let mockTagRepo: Pick<ITagRepository, 'findByIdAndUserId' | 'delete'>;
-  let mockFabFileRepo: Pick<IFabFileRepository, 'removeTagByUserId' | 'computeDataLakeStats'>;
+  let mockFabFileRepo: Pick<
+    IFabFileRepository,
+    'removeTagByUserId' | 'computeDataLakeStats' | 'claimTagRewriteByUserId'
+  >;
   let mockDataLakeRepo: Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
   let adapters: {
     db: {
@@ -44,6 +53,7 @@ describe('tagService - remove', () => {
     };
     mockFabFileRepo = {
       removeTagByUserId: vi.fn().mockResolvedValue(0),
+      claimTagRewriteByUserId: vi.fn().mockResolvedValue(null),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
     };
     mockDataLakeRepo = {
@@ -299,57 +309,186 @@ describe('tagService - remove', () => {
   });
 
   /**
-   * The audit principal on the auto-activate row a prefix-arm delete can emit. Sibling of #1964's
-   * tag-toggle door: this path built its actor with no `auditPrincipal`, so a key-driven delete
-   * that published a draft lake recorded the human instead of the key. Removing `auditPrincipal`
-   * from the actor at remove.ts's recompute call turns the key case red.
+   * The bulk door's own membership log. The stats recompute above is an approximation - it
+   * re-derives a count - but this log is what a reader reconstructs MEMBERSHIP from, so it has to
+   * name the exact (lake, file) pairs that moved. Without it, deleting a lake's prefix tag walked
+   * every prefix-only file out of that lake leaving no trace at all.
    */
-  describe('auto-activate audit principal', () => {
-    const auditSpy = () => {
+  describe('membership change log', () => {
+    const membershipSpy = () => {
       const record = vi.fn().mockResolvedValue({});
-      return { db: { lakeConfigChangeEvents: { record } }, record };
+      return { db: { lakeMembershipChangeEvents: { record } }, record };
     };
 
-    const drivingActivation = (audit: ReturnType<typeof auditSpy>) => {
-      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
-      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake({ status: 'draft' })]);
-      // fileCount > 0 is what makes the flip eligible - a surviving sibling tag kept members.
-      (mockFabFileRepo.computeDataLakeStats as Mock).mockResolvedValue({
-        fileCount: 1,
-        totalSizeBytes: 10,
-        totalChunkedChars: 0,
-      });
-      (mockDataLakeRepo.activateIfDraft as Mock).mockResolvedValue(true);
-      return { db: { ...adapters.db, ...audit.db } };
+    const fileDoc = (id: string, tagNames: string[]) => ({
+      id,
+      userId,
+      tags: tagNames.map(name => ({ name, strength: 0.5 })),
+    });
+
+    /**
+     * The claim loop's shape: the door keeps claiming until the repository reports nothing left,
+     * and each claimed pre-image is a file THIS request's own write rewrote. A file the door never
+     * wins simply never appears - which is how the losing half of two concurrent deletes records
+     * nothing.
+     */
+    const claimQueue = (files: unknown[]) => {
+      const pending = [...files];
+      return vi.fn(async () => pending.shift() ?? null);
     };
 
-    it('names the API key, not the human, when a key-driven delete publishes a draft lake', async () => {
-      const audit = auditSpy();
-      const withAudit = {
-        ...drivingActivation(audit),
-        auditPrincipal: { principalKind: 'apiKey' as const, principalId: 'key-abc', onBehalfOfUserId: userId },
-      };
+    const deletingTag = (audit: ReturnType<typeof membershipSpy>, name: string, files: unknown[], lakes = [lake()]) => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc(name));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce(lakes);
+      mockFabFileRepo.claimTagRewriteByUserId = claimQueue(files);
+      return { db: { ...adapters.db, fabFiles: mockFabFileRepo, ...audit.db } };
+    };
 
-      await remove(userId, { id: existingTagId }, withAudit);
+    const deletingPrefixTag = (audit: ReturnType<typeof membershipSpy>, files: unknown[], lakes = [lake()]) =>
+      deletingTag(audit, 'lk:invoices', files, lakes);
 
+    it('records one removal naming the lake and the file a prefix-only member leaves', async () => {
+      const audit = membershipSpy();
+
+      await remove(userId, { id: existingTagId }, deletingPrefixTag(audit, [fileDoc('file1', ['lk:invoices'])]));
+
+      expect(mockFabFileRepo.claimTagRewriteByUserId).toHaveBeenCalledWith(userId, 'lk:invoices', null, []);
+      expect(audit.record).toHaveBeenCalledTimes(1);
       expect(audit.record).toHaveBeenCalledWith(
         expect.objectContaining({
-          action: 'auto-activate',
-          principalKind: 'apiKey',
-          principalId: 'key-abc',
-          onBehalfOfUserId: userId,
+          dataLakeId: 'lake1',
+          fabFileId: 'file1',
+          action: 'removed',
+          origin: 'person',
+          principalKind: 'user',
+          principalId: userId,
         })
       );
     });
 
-    it('still names the tag owner when no key is involved', async () => {
-      const audit = auditSpy();
+    // The meta-tag arm still holds this file, so its membership never flipped. A prefix-only diff
+    // would report a leave that did not happen.
+    it('records nothing for a file that also carries the lake meta-tag', async () => {
+      const audit = membershipSpy();
 
-      await remove(userId, { id: existingTagId }, drivingActivation(audit));
+      await remove(
+        userId,
+        { id: existingTagId },
+        deletingPrefixTag(audit, [fileDoc('file1', ['lk:invoices', 'datalake:lake'])])
+      );
+
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('records one removal per lake for a file two candidate lakes hold by the same tag', async () => {
+      const audit = membershipSpy();
+      const lakes = [lake(), lake({ id: 'lake2', datalakeTag: 'datalake:lake2' })];
+
+      await remove(userId, { id: existingTagId }, deletingPrefixTag(audit, [fileDoc('file1', ['lk:invoices'])], lakes));
+
+      expect(audit.record.mock.calls.map(([event]) => event.dataLakeId)).toEqual(['lake1', 'lake2']);
+    });
+
+    // Claimed after the bulk strip, the name is gone and the leaving files are unrecoverable.
+    it('claims the affected files BEFORE the bulk strip runs', async () => {
+      const audit = membershipSpy();
+
+      await remove(userId, { id: existingTagId }, deletingPrefixTag(audit, [fileDoc('file1', ['lk:invoices'])]));
+
+      const claimOrder = (mockFabFileRepo.claimTagRewriteByUserId as Mock).mock.invocationCallOrder[0];
+      const stripOrder = (mockFabFileRepo.removeTagByUserId as Mock).mock.invocationCallOrder[0];
+      expect(claimOrder).toBeLessThan(stripOrder);
+    });
+
+    it('excludes what it has already claimed, so the loop terminates on a repeated match', async () => {
+      const audit = membershipSpy();
+
+      await remove(
+        userId,
+        { id: existingTagId },
+        deletingPrefixTag(audit, [fileDoc('file1', ['lk:invoices']), fileDoc('file2', ['lk:invoices'])])
+      );
+
+      const calls = (mockFabFileRepo.claimTagRewriteByUserId as Mock).mock.calls.map(([, , , exclude]) => exclude);
+      expect(calls).toEqual([[], ['file1'], ['file1', 'file2']]);
+    });
+
+    // The whole point of claiming rather than snapshotting: the request that loses the race wins
+    // no files, so it appends nothing and the history holds one leave per file, not two.
+    it('records nothing for the losing half of two concurrent deletes', async () => {
+      const audit = membershipSpy();
+
+      await remove(userId, { id: existingTagId }, deletingPrefixTag(audit, []));
+
+      expect(mockFabFileRepo.claimTagRewriteByUserId).toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    // Each claim's rewrite has already landed when the next one is attempted, so a fact buffered
+    // until the loop returns is a fact lost the moment a later claim fails - and nothing can
+    // reconstruct it afterwards, the source tag is gone off the file that did move.
+    it('records the first claim even when the next claim throws', async () => {
+      const audit = membershipSpy();
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      let call = 0;
+      mockFabFileRepo.claimTagRewriteByUserId = vi.fn(async () => {
+        call += 1;
+        if (call === 1) return fileDoc('file1', ['lk:invoices']);
+        throw new Error('mongo down');
+      });
+
+      await expect(
+        remove(userId, { id: existingTagId }, { db: { ...adapters.db, fabFiles: mockFabFileRepo, ...audit.db } })
+      ).rejects.toThrow('mongo down');
+
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'file1', action: 'removed' })
+      );
+    });
+
+    // A registry lake has no document, so the owner-anchored candidate query cannot reach it -
+    // but its open prefix arm is real membership and losing the tag is a real leave.
+    it('records a leave from a static registry lake the candidate query cannot return', async () => {
+      const audit = membershipSpy();
+
+      await remove(
+        userId,
+        { id: existingTagId },
+        deletingTag(
+          audit,
+          `${DATA_LAKES[0].fileTagPrefix}handbook`,
+          [fileDoc('file1', [`${DATA_LAKES[0].fileTagPrefix}handbook`])],
+          []
+        )
+      );
 
       expect(audit.record).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: userId })
+        expect.objectContaining({ dataLakeId: DATA_LAKES[0].id, fabFileId: 'file1', action: 'removed' })
       );
+    });
+
+    it('is a silent no-op when no audit repository is wired', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('lk:invoices'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      mockFabFileRepo.claimTagRewriteByUserId = claimQueue([fileDoc('file1', ['lk:invoices'])]);
+
+      await expect(
+        remove(userId, { id: existingTagId }, { db: { ...adapters.db, fabFiles: mockFabFileRepo } })
+      ).resolves.toBeDefined();
+    });
+
+    // The common plain-tag delete must not pay for an audit trail it can never populate.
+    it('claims nothing when the deleted tag matches no lake prefix', async () => {
+      const audit = membershipSpy();
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc('unrelated:tag'));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await remove(userId, { id: existingTagId }, { db: { ...adapters.db, ...audit.db } });
+
+      expect(mockFabFileRepo.claimTagRewriteByUserId).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
     });
   });
 });

@@ -10,7 +10,7 @@ import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { assertLakeWritable } from './assertLakeAccess';
 import { assertCanWriteStaticRegistryTags } from './authorizeLakeWrite';
 import { canManageLake } from './manageRule';
-import { loadActiveLakeGrants, makeLakeGrantResolver } from './authorizeLakeManage';
+import { loadActiveLakeGrants } from './authorizeLakeManage';
 import {
   lakeMembershipSignals,
   satisfiesMembershipScope,
@@ -431,23 +431,15 @@ export const setDataLakeFileTags = async (
     );
   }
 
-  // Step 16. This lake, no `skipActivation`: this actor is a proven manager (step 3), the same
-  // condition `toggleTags.ts` uses to run the unsuppressed recompute.
-  const stats = await recomputeLakeStats(lake, { db, logger }, { actor });
+  // Step 16. This lake.
+  const stats = await recomputeLakeStats(lake, { db, logger });
 
-  // Every OTHER lake in `joins`/`leaves`: `skipActivation` unless this actor manages THAT lake -
-  // exactly the split `toggleTags.ts` makes for its own prefix-arm joins. Resolved through the
-  // same batched grant resolver the sibling doors use; not step 2's grants, which belong to the
-  // URL lake.
+  // Every OTHER lake in `joins`/`leaves` needs its stats corrected too - membership itself
+  // already moved (the writes above), independent of who manages which lake.
   const otherLakes = new Map<string, MembershipLake>();
   for (const { lake: otherLake } of [...joins, ...leaves]) otherLakes.set(otherLake.id, otherLake);
-  if (otherLakes.size > 0) {
-    const grantResolver = makeLakeGrantResolver({ db });
-    await grantResolver.prime([...otherLakes.values()]);
-    for (const otherLake of otherLakes.values()) {
-      const manages = canManageLake(otherLake, actor, grantResolver.get(otherLake.id));
-      await recomputeLakeStats(otherLake, { db, logger }, manages ? { actor } : { skipActivation: true });
-    }
+  for (const otherLake of otherLakes.values()) {
+    await recomputeLakeStats(otherLake, { db, logger });
   }
 
   // Step 17. Post-hoc forensics, not a control - nothing alarms on this line; see the module

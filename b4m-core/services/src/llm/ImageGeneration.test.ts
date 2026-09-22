@@ -9,6 +9,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { OMITTED_QUALITY_TIER } from './imageCostCalculator/OpenAIImageCostCalculator';
 import type { Logger } from '@bike4mind/observability';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
@@ -772,5 +773,82 @@ describe('ImageGenerationService.validateUserCredits (per-member cap)', () => {
       userDetails: [{ id: 'user1', usedCredits: 999_999 }],
     };
     await expect(validate(organization)).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
+  });
+});
+
+describe('ImageGenerationService.process (GPT-Image omitted-quality pin)', () => {
+  // #3007: a GPT-Image request that names no tier used to reach OpenAI with no `quality` at
+  // all, so OpenAI applied its own 'auto' and could render at high effort - while the single,
+  // never-reconciled credit hold had already been taken at the medium price. process() now
+  // forwards the tier it bills. These assert the dispatch half; the billing half (unchanged)
+  // is pinned in OpenAIImageCostCalculator.test.ts.
+  const gptImageModelInfo = {
+    id: ImageModels.GPT_IMAGE_2,
+    type: 'image',
+    name: ImageModels.GPT_IMAGE_2,
+    backend: ModelBackend.OpenAI,
+    contextWindow: 10000,
+    max_tokens: 10000,
+    supportsImageVariation: false,
+    pricing: { 1: { input: 0, output: 0 } },
+  } as unknown as ModelInfo;
+
+  const makeProcessService = () => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
+    return new ImageGenerationService({
+      db: {
+        quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: {} as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+  };
+
+  const generateWith = async (quality?: string) => {
+    vi.mocked(getAvailableModels).mockResolvedValue([gptImageModelInfo]);
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue([]); // empty images short-circuits storage/moderation
+
+    await makeProcessService().process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model: ImageModels.GPT_IMAGE_2,
+        size: '1024x1024',
+        ...(quality ? { quality } : {}),
+      } as any,
+      logger: silentLogger,
+    });
+
+    return mockGeminiGenerate.mock.calls[0]?.[1];
+  };
+
+  it('forwards the billed tier when the request names no quality', async () => {
+    expect(await generateWith()).toMatchObject({ quality: OMITTED_QUALITY_TIER });
+  });
+
+  it('bills and renders an omitted quality at the same tier', async () => {
+    const omitted = await generateWith();
+    const explicit = await generateWith(OMITTED_QUALITY_TIER);
+
+    expect(omitted.quality).toBe(explicit.quality);
+  });
+
+  // 'auto' is the opt-in escape hatch the pin leaves open: it reaches OpenAI unresolved and is
+  // priced at the ceiling (PR #2977). Pinning it here would silently downgrade that render.
+  it('leaves an explicit "auto" unresolved for OpenAI to choose', async () => {
+    expect(await generateWith('auto')).toMatchObject({ quality: 'auto' });
+  });
+
+  it.each(['low', 'high'])('leaves an explicit %s tier alone', async quality => {
+    expect(await generateWith(quality)).toMatchObject({ quality });
   });
 });

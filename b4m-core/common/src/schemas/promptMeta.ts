@@ -330,6 +330,12 @@ export const CitableSourceSchema = z.object({
       chunkId: z.string().optional(),
       relevanceScore: z.number().optional(),
       fullContext: z.string().optional(),
+      /**
+       * Ids of the other cited sources this one provably disagrees with (#3041). Declared rather
+       * than left to the loose object, for the same reason chunkId/fullContext are: a writer that
+       * stamps the wrong shape should fail here, not render a badge that silently names nobody.
+       */
+      conflictsWith: z.array(z.string()).optional(),
     }) // Allow additional properties
     .optional(),
 });
@@ -464,7 +470,7 @@ export const RetrievalSummarySchema = z.object({
    * the per-turn routing question is about, and before this it was indistinguishable from a turn
    * where forced retrieval was never configured at all.
    */
-  forcedSkipReason: z.enum(['attached_files', 'personal_corpus']).optional(),
+  forcedSkipReason: z.enum(['attached_files', 'personal_corpus', 'no_lake_scope']).optional(),
   /** Which retrieval-capable surface(s) ran this turn, e.g. 'lake-memory', 'knowledgeBaseSearch'. */
   surfaces: z.array(z.string()),
   /** Lakes resolved at the moment retrieval ran, stamped point-in-time (not read live from the session). */
@@ -714,6 +720,47 @@ export const RetrievalSummarySchema = z.object({
    * carry nothing, and no backfill is possible - a past turn's grant rows have moved on.
    */
   grantedLakeIdsUsed: z.array(z.string()).optional(),
+  /**
+   * How many lakes were excluded from this turn's scope because the caller lacks the access to
+   * search them, and why (#3055). Resolved at the seed alongside `lakeScope`, from a dedicated
+   * count-only query (see excludedByAccessCount on getDynamicDataLakeAccess - NOT derived from
+   * the candidate set `lakeScope` comes from, which already has the gate enforced datastore-side
+   * and so cannot see this population).
+   *
+   * ABSENT MEANS NOT RECORDED, never "nothing was excluded" - a turn with nothing excluded records
+   * `count: 0` explicitly. Three distinct causes collapse into this one absent state and are not
+   * distinguishable from it: a turn predating this field, a turn whose `retrieval` was written
+   * only by a tool arm rather than by the seed, and the count-only query itself failing or not
+   * being wired on this host (mirrors `lakeViewComplete`'s contract on the access resolver: a
+   * failure must report unknown, never a false zero).
+   *
+   * COUNT AND REASON ONLY, DELIBERATELY. Never a lake id, name, or tag: the caller may not be
+   * permitted to know a given excluded lake exists at all, and this field must stay safe to show
+   * them regardless of which specific lake(s) it is counting. `reason` is a closed enum, not free
+   * text - prose could leak a lake's identity through phrasing - so a future exclusion cause (e.g.
+   * an archived or quota-limited lake) adds an enum value here rather than a description.
+   *
+   * 'access' is the only reason today: the caller's org membership or the lake's public listing
+   * surfaced it as a candidate (they could see it exists) but they hold neither its own
+   * gate/entitlement nor an ownership or grant exception for it.
+   *
+   * A session-preauthorized lake (unionPreauthorizedLakeAccess) that is ALSO gate-dropped from
+   * this account-wide count is corrected, not merely narrow: the seed's targeted measurement
+   * (measureIdentityNamedExclusion, ChatCompletionProcess's promptMeta seed) excludes exactly the
+   * tags this turn successfully admitted via preauthorization before running the gate query, so an
+   * admitted-and-searched lake never reports here as excluded. This account-wide number itself
+   * (excludedByAccessCount on getDynamicDataLakeAccess) is still computed before that union and is
+   * NOT corrected the same way - only the per-turn targeted measurement is, which is what a
+   * preauthorized session's own narrowing always uses (see sessionNamesALake's call site).
+   */
+  excludedLakes: z
+    .object({
+      // Not negative by construction (a `countDocuments` result, never a subtraction of two set
+      // sizes) rather than by any relationship between two derived lists.
+      count: z.number().int().nonnegative(),
+      reason: z.enum(['access']),
+    })
+    .optional(),
 });
 
 /**

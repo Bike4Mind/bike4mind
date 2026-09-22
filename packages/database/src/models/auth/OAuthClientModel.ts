@@ -9,7 +9,8 @@ import BaseRepository from '@bike4mind/db-core';
  * keys via `POST /api/oauth/ai-token`, by exchanging an ID token the app already
  * holds for its logged-in user. Absent -> the client cannot mint AI keys.
  *
- * Two issuer shapes are supported, discriminated by `subjectSource`:
+ * Two issuer shapes are supported, discriminated by `subjectSource` (see
+ * verifyFederatedIdToken.ts):
  *  - `'identities'` (default): the app's own AWS Cognito pool federates B4M as its
  *    upstream IdP, and the B4M user id arrives inside the Cognito `identities[]` claim.
  *  - `'sub'`: the app signs its users in against B4M's OIDC provider directly, so the

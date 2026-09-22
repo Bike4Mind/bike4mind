@@ -449,7 +449,7 @@ describe('sessionSummarization provenance', () => {
   // The event schema makes `trigger` optional, and Mongoose strips an undefined value out of the
   // `$set` rather than clearing the path - so a re-summarization published without one would
   // leave the PREVIOUS trigger next to a fresh `summaryAt`. No in-repo publisher omits it
-  // (spider/summary.ts send 'manual', projects 'project', persistRunAsQuest 'earlyMilestone',
+  // (summary.ts sends 'manual', spider 'spider', projects 'project', persistRunAsQuest 'earlyMilestone',
   // and the completion + image paths only publish when shouldSummarizeSession returned one).
   it('sends the key as undefined rather than inventing a trigger when the event omits it', async () => {
     await run({ trigger: undefined });

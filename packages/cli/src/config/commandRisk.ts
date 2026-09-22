@@ -18,13 +18,18 @@ import { parse as shellParse } from 'shell-quote';
 
 /**
  * Command risk levels, ordered from least to most dangerous.
- * - `low`: read-only / benign (`ls`, `cat foo`).
- * - `medium`: mutates state but not obviously catastrophic (unknown programs, plain writes).
+ * - `low`: positively determined to do nothing (empty input, comment-only).
+ * - `unclassified`: parsed fine, no dangerous pattern matched, but not proven
+ *   safe either - an unrecognized program (`python3 x.py`, `npm install x`) or a
+ *   plain write. Distinct from `low` so a headless `maxAutoAllowRisk: low` policy
+ *   auto-allows only provable no-ops, never arbitrary commands. Not a valid
+ *   policy input value.
+ * - `medium`: privilege escalation or a recognized mutation (`rm foo`).
  * - `high`: destructive, fetch-and-execute, privilege escalation, or unparseable.
  */
-export type CommandRiskLevel = 'low' | 'medium' | 'high';
+export type CommandRiskLevel = 'low' | 'unclassified' | 'medium' | 'high';
 
-const RISK_ORDER: Record<CommandRiskLevel, number> = { low: 0, medium: 1, high: 2 };
+const RISK_ORDER: Record<CommandRiskLevel, number> = { low: 0, unclassified: 1, medium: 2, high: 3 };
 
 /** Result of classifying a single command string. */
 export type CommandRiskAssessment = {
@@ -453,7 +458,9 @@ function skipToInnerProgram(args: string[], onPrivEscalation?: (prog: string) =>
  * into `-c` interpreter code and `eval` arguments.
  */
 function classifySimpleCommand(args: string[], reasons: string[], depth: number): CommandRiskLevel {
-  let level: CommandRiskLevel = 'low';
+  // Floor is `unclassified`, not `low`: reaching the end of this function without
+  // matching a dangerous pattern means "nothing flagged", not "proven safe".
+  let level: CommandRiskLevel = 'unclassified';
 
   // `su`/`runuser` carry their target command via `-c "<cmd>"`. Recurse into that
   // string BEFORE the generic wrapper-skip, which would otherwise consume `-c` and

@@ -622,7 +622,7 @@ export function useBrowsePublicDataLakes(search: string) {
   });
 }
 
-type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
+type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup' | 'promote' | 'demote';
 
 async function postLifecycle(id: string, action: LifecycleAction) {
   const response = await api.post(`/api/data-lakes/${id}/lifecycle`, { action });
@@ -679,6 +679,19 @@ export function useUnarchiveDataLake() {
 /** Recovers a soft-deleted (phase-1) data lake back to active (with dedup pass). */
 export function useRestoreDeletedDataLake() {
   return useLifecycleMutation('restore', 'Data lake restored', 'Failed to restore data lake');
+}
+
+/**
+ * Publishes a draft lake - the explicit, owner/admin-only replacement for the old implicit
+ * draft -> active flip. A draft lake is excluded from grounding until this runs.
+ */
+export function usePromoteDataLake() {
+  return useLifecycleMutation('promote', 'Data lake published', 'Failed to publish data lake');
+}
+
+/** Moves an active lake back to draft, pulling it out of grounding. Reverses promote. */
+export function useDemoteDataLake() {
+  return useLifecycleMutation('demote', 'Data lake moved back to draft', 'Failed to move data lake back to draft');
 }
 
 /** Phase 1 of permanent delete: soft-delete (recoverable). */
@@ -1068,11 +1081,9 @@ export function invalidateLakeFileMembershipQueries(
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.membershipDuplicates(dataLakeId) });
   // A membership change can move the lake's under-chunked count, so refresh the rebuild badge.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
-  // A membership write can reach activateIfDraft's draft -> active flip (see
-  // removeFileFromDataLake / addFileToDataLake), which records a `system`-principal
-  // config-history row. Inert today because these hooks fire from the file wizard, where the
-  // History observer is unmounted - invalidated anyway for the same reason the lifecycle hook
-  // does it: the cost is nothing, and reasoning about which paths qualify is what rots.
+  // A membership write records no config-history row of its own any more (publishing moved to
+  // the explicit promote door), but it is invalidated anyway for the same reason the lifecycle
+  // hook does it: the cost is nothing, and reasoning about which paths qualify is what rots.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
   // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
   // files only, so a membership change scoped to a prefix-only file moves rows without
