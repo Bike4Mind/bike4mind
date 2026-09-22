@@ -106,17 +106,20 @@ const KEYED_LISTING_BACKENDS: readonly string[] = [
 
 /**
  * The credential getAvailableModels constructs the listing backend for `backend`
- * with, or null when this context cannot construct one. The two special cases
- * live here rather than at the construction site so the seeded tier and the
- * catalog tier cannot disagree about who is reachable:
+ * with, or null when this context cannot construct one. The one special case
+ * lives here rather than at the construction site so the seeded tier and the
+ * catalog tier cannot disagree about who is reachable: local-image falls back to
+ * IMAGE_GEN_BASE_URL only under self-host, so a hosted deploy that happens to set
+ * the var never enumerates free local models.
  *
- * - BFL always resolves (no key falls back to the demo key), matching
- *   `new BFLBackend('demo-key')` in both getAvailableModels and getLlmByModel.
- * - local-image falls back to IMAGE_GEN_BASE_URL only under self-host, so a
- *   hosted deploy that happens to set the var never enumerates free local models.
+ * BFL used to resolve unconditionally through a 'demo-key' literal, which listed
+ * the Flux models on a deployment holding no BFL credential. They then survived
+ * the client's accessibility check (which reads this catalog) and could be picked
+ * as the default image model, so the first generation died on a provider 403. The
+ * invariant SELF_HOST.md states - only providers with a key appear in the picker -
+ * is what a keyless BFL has to honor too.
  */
 export function resolveListingKey(backend: ModelBackend, ctx: BackendGateContext): string | null {
-  if (backend === ModelBackend.BFL) return ctx.apiKeys?.bfl || 'demo-key';
   if (backend === ModelBackend.LocalImage) {
     const envUrl = ctx.isSelfHost ? process.env.IMAGE_GEN_BASE_URL : undefined;
     return ctx.apiKeys?.[ModelBackend.LocalImage] || envUrl || null;

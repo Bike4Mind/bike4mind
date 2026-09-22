@@ -22,9 +22,11 @@ vi.mock('./ollamaBackend', () => ({
 
 const { getAvailableModels, setModelPriceRowsProvider } = await import('./index');
 
-// A private model from the always-constructed BFL listing: the includePrivate
-// contract is observable with no keys and no network.
+// A private model from the BFL listing: the includePrivate contract is observable
+// with no network. BFL is key-gated like every other keyed backend, so these cases
+// pass a key table rather than null.
 const PRIVATE_MODEL = ImageModels.FLUX_PRO_FILL;
+const BFL_KEYS = { bfl: 'bfl-key' };
 
 const savedSelfHost = process.env.B4M_SELF_HOST;
 
@@ -46,12 +48,12 @@ afterEach(() => {
 
 describe('getAvailableModels options', () => {
   it('includes private models by default, as the settlement and agent consumers require', async () => {
-    const models = await getAvailableModels(null);
+    const models = await getAvailableModels(BFL_KEYS);
     expect(models.some(m => m.id === PRIVATE_MODEL)).toBe(true);
   });
 
   it('omits private models when includePrivate is false', async () => {
-    const models = await getAvailableModels(null, { includePrivate: false });
+    const models = await getAvailableModels(BFL_KEYS, { includePrivate: false });
     expect(models.some(m => m.id === PRIVATE_MODEL)).toBe(false);
     expect(models.every(m => !m.private)).toBe(true);
   });
@@ -95,14 +97,14 @@ describe('getAvailableModels options', () => {
 
 describe('getAvailableModels module cache', () => {
   it('does not serve an includePrivate:false list to an includePrivate:true caller, or the reverse', async () => {
-    const filteredFirst = await getAvailableModels(null, { includePrivate: false });
+    const filteredFirst = await getAvailableModels(BFL_KEYS, { includePrivate: false });
     expect(filteredFirst.some(m => m.id === PRIVATE_MODEL)).toBe(false);
 
     // Same cache entry, opposite view: the private model must come back.
-    const full = await getAvailableModels(null);
+    const full = await getAvailableModels(BFL_KEYS);
     expect(full.some(m => m.id === PRIVATE_MODEL)).toBe(true);
 
-    const filteredAgain = await getAvailableModels(null, { includePrivate: false });
+    const filteredAgain = await getAvailableModels(BFL_KEYS, { includePrivate: false });
     expect(filteredAgain.some(m => m.id === PRIVATE_MODEL)).toBe(false);
   });
 
