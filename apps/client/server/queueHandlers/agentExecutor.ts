@@ -119,8 +119,9 @@ import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
 import {
   selectGatedToolCall,
   shouldWithholdToolCall,
-  resolveGateDisposition,
   resumeApprovedPause,
+  resolveHandoffConflict,
+  settleGatedCall as settleGatedCallImpl,
   type GatedAction,
 } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
@@ -2361,102 +2362,25 @@ async function processExecution(
     const toolGate = (call: GatedToolCall) =>
       !HANDOFF_DISPATCH_TOOLS.has(call.name) && shouldWithholdToolCall(call.name, approvedTools, deniedTools);
 
-    /**
-     * Act on a withheld call: fail the run, or park it in `awaiting_permission` and ask
-     * the client. Every branch is terminal for this Lambda, so callers return right after.
-     * `withheld` carries the whole iteration's withheld set so a second gated tool raises
-     * its own card once this one is settled.
-     */
-    const settleGatedCall = async (gated: GatedAction, withheld: GatedToolCall[]): Promise<void> => {
-      const { toolName, toolInput, verdict } = gated;
-      const disposition = resolveGateDisposition(verdict, connectionId);
-
-      if (disposition === 'denied') {
-        logger.warn(`[Permission] Tool "${toolName}" is denied - failing execution`);
-        const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
-        // `callerSafe`: this string names only a tool the caller already knows about, and
-        // the public poll response is documented to name the gated tool - so it is
-        // published verbatim rather than collapsed by the sanitizer.
-        await agentExecutionRepository.markFailed(executionId, { message: deniedMessage, callerSafe: true });
-        await sendWs('failed', { executionId, reason: 'tool_denied', toolName });
-        // Settle the dispatch-time Quest, as the hard-error path below does. Without
-        // this the prompt bubble stays `pending` with an empty reply forever - the
-        // status is deliberately `pending` at dispatch so Slack pollers don't fire on
-        // an empty `replies`, and only `persistRunAsQuest` ever flips it to `done`.
-        await persistRunAsQuest(executionId, `${deniedMessage}.`, logger);
-        return;
-      }
-
-      // A headless run (REST dispatch) has nobody to ask - see `resolveGateDisposition`
-      // for why that is treated as denial rather than a pause.
-      if (disposition === 'no_approver') {
-        logger.warn(`[Permission] Tool "${toolName}" needs approval but the run is headless - failing`, {
-          executionId,
-          toolName,
-        });
-        const headlessMessage =
-          `Execution stopped: tool "${toolName}" requires approval, and this run was started ` +
-          'without an interactive client to approve it. Re-run with a "tools" allowlist that ' +
-          'excludes approval-gated tools, or start the run over the WebSocket route.';
-        // `callerSafe`: written for the REST caller specifically - it names the gated tool
-        // and the remedy, which is exactly what the contract promises in `error`.
-        await agentExecutionRepository.markFailed(executionId, { message: headlessMessage, callerSafe: true });
-        // Settle the dispatch-time Quest so chat history shows the reason instead of a
-        // permanently `pending` empty bubble - same reasoning as the denied branch above.
-        await persistRunAsQuest(executionId, `${headlessMessage}`, logger);
-        return;
-      }
-
-      // Approving replays the call via `agent.executeGatedToolCall`, which needs the
-      // backend's `replaceLastToolResultObservation` to record the result in place. Only
-      // Anthropic / Bedrock-Anthropic / DeepSeek / OpenAI implement it - on any other
-      // backend a card here would offer an "Approve" whose only outcome is a failed
-      // replay, so treat it the same as `no_approver` instead of asking a question that
-      // cannot be answered.
-      if (!agent.supportsGatedReplay()) {
-        logger.warn(`[Permission] Tool "${toolName}" needs approval but the backend cannot replay it - failing`, {
-          executionId,
-          toolName,
-        });
-        const unsupportedMessage =
-          `Execution stopped: tool "${toolName}" requires approval, but the current model does ` +
-          'not support resuming after approval. Switch to a model that supports approval-gated ' +
-          'tools, or remove this tool from the run.';
-        await agentExecutionRepository.markFailed(executionId, { message: unsupportedMessage, callerSafe: true });
-        await sendWs('failed', { executionId, reason: 'gated_replay_unsupported', toolName });
-        await persistRunAsQuest(executionId, `${unsupportedMessage}`, logger);
-        return;
-      }
-
-      logger.info(`[Permission] Tool "${toolName}" needs approval, pausing before it runs`);
-      await agentExecutionRepository.updateStatus(executionId, 'awaiting_permission');
-      await agentExecutionRepository.updatePermissionState(executionId, {
-        pendingPermission: {
-          toolName,
-          toolInput,
-          toolCallId: gated.toolCallId,
-          gatedToolCalls: withheld.map(c => ({ id: c.id, name: c.name, input: c.input })),
-          requestedAt: new Date(),
-        },
-      });
-
-      await sendWs('permission_request', {
-        executionId,
-        toolName,
-        toolInput,
-        // 0-indexed to match per-step `iteration_step` events and the
-        // accordion labels in `IterationStream` (which renders
-        // `Iteration {group.iteration + 1}`). `iterationIndex` is the
-        // agent's 1-indexed `this.iterations` after the iteration ran,
-        // so subtract 1 here so `PermissionCard`'s `pending.iteration + 1`
-        // display lines up with the iteration the user is actually
-        // approving.
-        iteration: Math.max(0, iterationIndex - 1),
-      });
-
-      // Lambda exits - client sends permission_response via WebSocket,
-      // which re-invokes this Lambda with ContinuationSchema
-    };
+    // Act on a withheld call: fail the run, or park it in `awaiting_permission` and ask
+    // the client. Thin wiring over `settleGatedCallImpl` in `toolPermissions.ts`, which
+    // owns the actual state machine and is unit-tested there for all four dispositions
+    // (`denied`, `no_approver`, `unsupported`, `ask`). `withheld` carries the whole
+    // iteration's withheld set so a second gated tool raises its own card once this one
+    // is settled.
+    const settleGatedCall = (gated: GatedAction, withheld: GatedToolCall[]): Promise<void> =>
+      settleGatedCallImpl(
+        { executionId, connectionId, gated, withheld, iterationIndex },
+        {
+          supportsGatedReplay: () => agent.supportsGatedReplay(),
+          updateStatus: (id, status) => agentExecutionRepository.updateStatus(id, status),
+          updatePermissionState: (id, update) => agentExecutionRepository.updatePermissionState(id, update),
+          markFailed: (id, err) => agentExecutionRepository.markFailed(id, err),
+          sendWs,
+          persistRunAsQuest: message => persistRunAsQuest(executionId, message, logger),
+          logger,
+        }
+      ).then(() => undefined);
 
     // --- Resume after an approved permission pause ---
     // The approval handler leaves `pendingPermission` in place with `approved: true`
@@ -2748,24 +2672,27 @@ async function processExecution(
       const withheldCalls = iterationResult.gatedToolCalls ?? [];
       const gated = withheldCalls.length > 0 ? selectGatedToolCall(withheldCalls, approvedTools, deniedTools) : null;
       if (gated) {
-        // A permission pause cannot coexist with a handoff signal from the SAME turn.
-        // `delegate_to_agent`/`coordinate_task` already ran (they are exempt from
-        // `toolGate`) and set `handoffSignal`/`dagHandoffSignal`, but nothing durable
-        // about that handoff exists yet - `setWaitingOnChild`/`setDagSpec`/
-        // `setWaitingOnDagChildren` all live in the branches below, which we are about
-        // to skip by pausing here. Approval resumes with status `continuing`, not
+        // A permission pause cannot coexist with a handoff signal from the SAME turn -
+        // see `resolveHandoffConflict` for why. `delegate_to_agent`/`coordinate_task`
+        // already ran (they are exempt from `toolGate`) and set
+        // `handoffSignal`/`dagHandoffSignal`, but nothing durable about that handoff
+        // exists yet - `setWaitingOnChild`/`setDagSpec`/`setWaitingOnDagChildren` all
+        // live in the branches below, which we are about to skip by pausing here.
+        // Approval resumes with status `continuing`, not
         // `awaiting_subagent`/`awaiting_dag_children`, so the signal is NOT re-derived
-        // on resume (the delegating tool's result is already in the checkpoint and does
-        // not re-run) - continuing would strand the handoff while its already-dispatched
+        // on resume - continuing would strand the handoff while its already-dispatched
         // children finish into a parent that never learns about them. Fail loudly
         // instead of silently discarding it.
-        if (handoffSignal.awaitingSubagent || dagHandoffSignal.awaitingDagChildren) {
+        const hasHandoffSignal = Boolean(handoffSignal.awaitingSubagent || dagHandoffSignal.awaitingDagChildren);
+        if (resolveHandoffConflict(withheldCalls.length, hasHandoffSignal) === 'conflict') {
           logger.error(
             '[Permission] A gated tool call landed in the same turn as a subagent/DAG handoff - failing rather than discarding the handoff',
             { executionId, toolName: gated.toolName }
           );
+          const gatedToolDescription =
+            gated.verdict === 'denied' ? 'a tool that is not permitted' : 'a tool requiring approval';
           const conflictMessage =
-            'Execution stopped: a tool requiring approval was called in the same turn as a ' +
+            `Execution stopped: ${gatedToolDescription} was called in the same turn as a ` +
             'subagent/DAG handoff (delegate_to_agent or coordinate_task), which cannot be safely ' +
             'resumed together. Avoid combining a delegation tool with an approval-gated tool in one turn.';
           await agentExecutionRepository.markFailed(executionId, { message: conflictMessage, callerSafe: true });

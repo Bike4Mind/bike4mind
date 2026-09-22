@@ -1410,30 +1410,45 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   /**
    * Mark the pending permission approved without clearing it, so the resumed
    * executor can still read the withheld calls it has to replay. CAS-guarded on
-   * `awaiting_permission` so a duplicate or stale approval cannot re-arm a pause
-   * the executor has already consumed; returns whether it landed.
+   * `status: 'awaiting_permission'` AND `pendingPermission.approved` not already
+   * `true` - the status alone is not enough: `timestamps: true` bumps `updatedAt`
+   * on every write, so a `$set` to the same `approved: true` value still reports
+   * `modifiedCount > 0` even though nothing changed, and the status does not flip
+   * until the resumed executor processes the pause. The `approved` guard is what
+   * actually makes a second approval for a pause already consumed return `false`.
    *
-   * `approvedTool`, when given, is pushed onto `approvedTools` in the SAME update
-   * as the CAS - a second write here could land after a process death between the
-   * two, leaving a retry's CAS miss with a "remember for session" that never took.
+   * `approvedTool`, when given, is added to `approvedTools` (via `$addToSet`, so a
+   * repeat "remember for session" cannot duplicate the entry) in the SAME update as
+   * the CAS - a second write here could land after a process death between the two,
+   * leaving a retry's CAS miss with a "remember for session" that never took.
    */
   async approvePendingPermission(id: string, opts?: { approvedTool?: string }): Promise<boolean> {
     const update: Record<string, unknown> = { $set: { 'pendingPermission.approved': true } };
     if (opts?.approvedTool) {
-      update.$push = { approvedTools: opts.approvedTool };
+      update.$addToSet = { approvedTools: opts.approvedTool };
     }
     const res = await this.model.updateOne(
-      { _id: id, status: 'awaiting_permission', pendingPermission: { $exists: true } },
+      {
+        _id: id,
+        status: 'awaiting_permission',
+        pendingPermission: { $exists: true },
+        'pendingPermission.approved': { $ne: true },
+      },
       update
     );
     return res.modifiedCount > 0;
   }
 
+  /**
+   * `approvedTool` has no production caller: the only "remember for session" approval
+   * path is `approvePendingPermission`, which folds it into the same CAS write as the
+   * approval itself (see that method's doc comment). Only the deny path still calls
+   * through here, via `deniedTool`.
+   */
   async updatePermissionState(
     id: string,
     update: {
       pendingPermission?: IPendingPermission | null;
-      approvedTool?: string;
       deniedTool?: string;
     }
   ): Promise<void> {
@@ -1447,9 +1462,6 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       setOps.pendingPermission = update.pendingPermission;
     }
 
-    if (update.approvedTool) {
-      pushOps.approvedTools = update.approvedTool;
-    }
     if (update.deniedTool) {
       pushOps.deniedTools = update.deniedTool;
     }

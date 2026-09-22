@@ -395,7 +395,7 @@ export interface IterationResult {
   /** Whether the cumulative token ceiling was reached (only true when isComplete is also true) */
   reachedMaxTotalTokens?: boolean;
   /**
-   * Tool calls `AgentRunOptions.toolGate` withheld this iteration, in call order.
+   * Tool calls `RunIterationOptions.toolGate` withheld this iteration, in call order.
    * Their providers were never invoked; the host approves and replays them with
    * `ReActAgent.executeGatedToolCall`, or abandons the run.
    */
@@ -403,7 +403,7 @@ export interface IterationResult {
 }
 
 /**
- * A tool call withheld from execution by `AgentRunOptions.toolGate`.
+ * A tool call withheld from execution by `RunIterationOptions.toolGate`.
  *
  * `id` is the provider's tool_use id, which is what pairs the withheld call with
  * the placeholder tool_result in the conversation - `executeGatedToolCall` needs

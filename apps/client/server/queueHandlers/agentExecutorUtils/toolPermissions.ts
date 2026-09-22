@@ -70,7 +70,7 @@ export type GatedAction = {
 
 /**
  * True when a tool call must not run until the user says so - the predicate behind
- * `AgentRunOptions.toolGate`, which the agent consults BEFORE invoking the tool.
+ * `RunIterationOptions.toolGate`, which the agent consults BEFORE invoking the tool.
  * Withholding covers both `denied` and `needs_approval`: a denied tool must not run
  * either, and the executor re-reads the verdict from the withheld call to decide
  * between failing the run and asking.
@@ -141,8 +141,11 @@ export type ResumeApprovedPauseOutcome =
  * Replay an iteration's approved-and-withheld tool calls and settle whatever is left.
  * This is the whole approve -> replay state machine `agentExecutor.ts` pauses into and
  * resumes from - extracted so it is unit-testable end to end without a live executor.
- * Every side effect (replay, checkpoint write, billing, re-pause) lives here; the caller
- * only decides whether to keep running the iteration loop based on `status`.
+ * Every side effect (replay, checkpoint write, billing, re-pause) lives here, including
+ * the re-pause itself: `deps.settleGatedCall` is `agentExecutor.ts`'s thin wrapper over
+ * this module's own `settleGatedCall`, so a second gated call re-runs the same tested
+ * disposition logic rather than an opaque injected stand-in. The caller only decides
+ * whether to keep running the iteration loop based on `status`.
  */
 export async function resumeApprovedPause<TCheckpoint>(
   params: {
@@ -207,6 +210,10 @@ export async function resumeApprovedPause<TCheckpoint>(
   // must not fall through to the loop with a `GATED_TOOL_OBSERVATION` placeholder the
   // model would read as "awaiting approval" for the rest of the run.
   if (stillWithheld.length > 0) {
+    // Defensive only: `stillWithheld` is built from calls where `shouldWithholdToolCall`
+    // is true (see `partitionApprovedPause`), which is exactly `classifyToolPermission(...)
+    // !== 'allowed'` - so `selectGatedToolCall` always returns non-null here. Kept as a
+    // guard against the two functions' contracts drifting apart, not a reachable branch.
     const nextGated = selectGatedToolCall(stillWithheld, approvedTools, deniedTools);
     if (!nextGated) {
       deps.logger.error(
@@ -216,7 +223,9 @@ export async function resumeApprovedPause<TCheckpoint>(
       await deps.markFailed(executionId, {
         message: 'Execution stopped: a tool call was left awaiting approval that can no longer be resolved.',
       });
-      await deps.sendWs('failed', { executionId, reason: 'gated_replay_error' });
+      // Distinct from `gated_replay_error` (a replay throw): this is "no withheld call
+      // classified as gated," never seen alongside a caught replay exception.
+      await deps.sendWs('failed', { executionId, reason: 'gated_unresolvable' });
       await deps.persistRunAsQuest('Execution stopped: an approval could not be resolved.');
       return { status: 'unresolvable' };
     }
@@ -253,4 +262,154 @@ export type GateDisposition = 'denied' | 'no_approver' | 'ask';
 export function resolveGateDisposition(verdict: GatedAction['verdict'], connectionId: string): GateDisposition {
   if (verdict === 'denied') return 'denied';
   return isHeadlessConnection(connectionId) ? 'no_approver' : 'ask';
+}
+
+/**
+ * A gated tool call cannot coexist with a subagent/DAG handoff from the SAME turn.
+ * `delegate_to_agent`/`coordinate_task` are exempt from the pre-execution gate (see
+ * `agentExecutor.ts`'s `HANDOFF_DISPATCH_TOOLS`), so they already ran and set the
+ * handoff signal - but nothing durable about that handoff exists until the branches
+ * that act on the signal run, and a permission pause would skip straight past them
+ * (it is checked first, see `agentExecutor.ts`). Pausing there would strand the
+ * handoff while its already-dispatched children finish into a parent that never
+ * learns about them, so the executor fails the run explicitly instead.
+ *
+ * Pure so the four cases are unit-testable without a live executor: no withheld
+ * calls this turn is always `proceed` regardless of the signal, and a withheld call
+ * alongside either handoff signal is always `conflict`.
+ */
+export function resolveHandoffConflict(withheldCount: number, hasHandoffSignal: boolean): 'conflict' | 'proceed' {
+  return withheldCount > 0 && hasHandoffSignal ? 'conflict' : 'proceed';
+}
+
+/**
+ * A pending permission as persisted on the execution doc, restated locally so this
+ * module does not need to import the database model's type for one field shape.
+ */
+export type PendingPermissionUpdate = {
+  toolName: string;
+  toolInput: unknown;
+  toolCallId: string;
+  gatedToolCalls: Array<{ id: string; name: string; input: unknown }>;
+  requestedAt: Date;
+};
+
+export type SettleGatedCallOutcome = 'denied' | 'no_approver' | 'unsupported' | 'ask';
+
+/**
+ * Act on a withheld call: fail the run, or park it in `awaiting_permission` and ask
+ * the client. Every outcome is terminal for the calling Lambda invocation, so the
+ * caller returns right after. `withheld` carries the whole iteration's withheld set
+ * so a second gated tool raises its own card once this one is settled.
+ *
+ * Extracted (deps-injected, no closure over a live executor) so all four
+ * dispositions - `denied`, `no_approver`, `unsupported`, `ask` - are unit-testable.
+ */
+export async function settleGatedCall(
+  params: {
+    executionId: string;
+    connectionId: string;
+    gated: GatedAction;
+    withheld: GatedToolCall[];
+    iterationIndex: number;
+  },
+  deps: {
+    // Only Anthropic / Bedrock-Anthropic / DeepSeek / OpenAI implement the backend
+    // method a replay needs (`replaceLastToolResultObservation`) - on any other
+    // backend a card here would offer an "Approve" whose only outcome is a failed
+    // replay, so it is treated the same as `no_approver` instead.
+    supportsGatedReplay: () => boolean;
+    updateStatus: (executionId: string, status: 'awaiting_permission') => Promise<unknown>;
+    updatePermissionState: (
+      executionId: string,
+      update: { pendingPermission: PendingPermissionUpdate }
+    ) => Promise<unknown>;
+    markFailed: (executionId: string, err: { message: string; callerSafe?: boolean }) => Promise<unknown>;
+    sendWs: (event: string, payload: Record<string, unknown>) => Promise<void>;
+    persistRunAsQuest: (message: string) => Promise<void>;
+    logger: {
+      warn: (msg: string, meta?: Record<string, unknown>) => void;
+      info: (msg: string, meta?: Record<string, unknown>) => void;
+    };
+  }
+): Promise<SettleGatedCallOutcome> {
+  const { executionId, connectionId, gated, withheld, iterationIndex } = params;
+  const { toolName, toolInput, verdict } = gated;
+  const disposition = resolveGateDisposition(verdict, connectionId);
+
+  if (disposition === 'denied') {
+    deps.logger.warn(`[Permission] Tool "${toolName}" is denied - failing execution`);
+    const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
+    // `callerSafe`: this string names only a tool the caller already knows about, and
+    // the public poll response is documented to name the gated tool - so it is
+    // published verbatim rather than collapsed by the sanitizer.
+    await deps.markFailed(executionId, { message: deniedMessage, callerSafe: true });
+    await deps.sendWs('failed', { executionId, reason: 'tool_denied', toolName });
+    // Settle the dispatch-time Quest so chat history shows the reason instead of a
+    // permanently `pending` empty bubble - only `persistRunAsQuest` ever flips it to
+    // `done`.
+    await deps.persistRunAsQuest(`${deniedMessage}.`);
+    return 'denied';
+  }
+
+  // A headless run (REST dispatch) has nobody to ask - see `resolveGateDisposition`
+  // for why that is treated as denial rather than a pause.
+  if (disposition === 'no_approver') {
+    deps.logger.warn(`[Permission] Tool "${toolName}" needs approval but the run is headless - failing`, {
+      executionId,
+      toolName,
+    });
+    const headlessMessage =
+      `Execution stopped: tool "${toolName}" requires approval, and this run was started ` +
+      'without an interactive client to approve it. Re-run with a "tools" allowlist that ' +
+      'excludes approval-gated tools, or start the run over the WebSocket route.';
+    // `callerSafe`: written for the REST caller specifically - it names the gated tool
+    // and the remedy, which is exactly what the contract promises in `error`.
+    await deps.markFailed(executionId, { message: headlessMessage, callerSafe: true });
+    await deps.persistRunAsQuest(`${headlessMessage}`);
+    return 'no_approver';
+  }
+
+  if (!deps.supportsGatedReplay()) {
+    deps.logger.warn(`[Permission] Tool "${toolName}" needs approval but the backend cannot replay it - failing`, {
+      executionId,
+      toolName,
+    });
+    const unsupportedMessage =
+      `Execution stopped: tool "${toolName}" requires approval, but the current model does ` +
+      'not support resuming after approval. Switch to a model that supports approval-gated ' +
+      'tools, or remove this tool from the run.';
+    await deps.markFailed(executionId, { message: unsupportedMessage, callerSafe: true });
+    await deps.sendWs('failed', { executionId, reason: 'gated_replay_unsupported', toolName });
+    await deps.persistRunAsQuest(`${unsupportedMessage}`);
+    return 'unsupported';
+  }
+
+  deps.logger.info(`[Permission] Tool "${toolName}" needs approval, pausing before it runs`);
+  await deps.updateStatus(executionId, 'awaiting_permission');
+  await deps.updatePermissionState(executionId, {
+    pendingPermission: {
+      toolName,
+      toolInput,
+      toolCallId: gated.toolCallId,
+      gatedToolCalls: withheld.map(c => ({ id: c.id, name: c.name, input: c.input })),
+      requestedAt: new Date(),
+    },
+  });
+
+  await deps.sendWs('permission_request', {
+    executionId,
+    toolName,
+    toolInput,
+    // 0-indexed to match per-step `iteration_step` events and the accordion labels in
+    // `IterationStream` (which renders `Iteration {group.iteration + 1}`).
+    // `iterationIndex` is the agent's 1-indexed `this.iterations` after the iteration
+    // ran, so subtract 1 here so `PermissionCard`'s `pending.iteration + 1` display
+    // lines up with the iteration the user is actually approving.
+    iteration: Math.max(0, iterationIndex - 1),
+  });
+
+  // Lambda exits - client sends permission_response via WebSocket, which
+  // re-invokes this Lambda with ContinuationSchema.
+  return 'ask';
 }

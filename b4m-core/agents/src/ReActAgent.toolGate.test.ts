@@ -1,5 +1,5 @@
 /**
- * Pre-execution permission gate: `AgentRunOptions.toolGate` must withhold a tool
+ * Pre-execution permission gate: `RunIterationOptions.toolGate` must withhold a tool
  * call BEFORE `toolFn` runs, so a call the user has not approved never reaches its
  * provider (and never bills one). Approval replays it via `executeGatedToolCall`.
  */

@@ -1448,12 +1448,24 @@ describe('AgentExecutionRepository', () => {
 
       expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(true);
       // `agentExecute.ts` moves status to 'continuing' right after a successful approve
-      // (before invoking the resume Lambda) - that status flip, not a same-value $set
-      // being a Mongo no-op, is what makes a retried approval see modifiedCount 0: the
-      // CAS filter no longer matches. Setting `approved` to `true` again on a document
-      // still `awaiting_permission` is NOT a no-op in MongoDB, so a retry racing ahead of
-      // that status write would re-run the $set - the filter's status clause is load-bearing.
+      // (before invoking the resume Lambda), so the status clause alone would already
+      // catch a retry landing after that point.
       await agentExecutionRepository.updateStatus(execution.id, 'continuing' as AgentExecutionStatus);
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
+    });
+
+    it('does not land a second approval while status is still awaiting_permission', async () => {
+      // The status clause alone is not enough here: `timestamps: true` bumps `updatedAt`
+      // on every write, so a `$set` to the same `approved: true` value still reports
+      // `modifiedCount > 0` even though nothing actually changed. Only the
+      // `pendingPermission.approved: { $ne: true }` filter clause catches a retry that
+      // races ahead of the status flip to 'continuing'.
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(true);
       expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
     });
 
