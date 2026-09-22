@@ -174,6 +174,13 @@ export type OpenAIImageGenerationOptions = Omit<ImageGenerateParams, 'prompt'> &
    * single image and drops them with a warning. Callers cap the count (MAX_REFERENCE_IMAGES).
    */
   referenceImages?: string[];
+  /**
+   * Asserts that `imagePrompt`/`referenceImages` (when URLs, not data URLs) were freshly produced
+   * by `BaseStorage.getSignedUrl` in this same request - never set from a caller- or
+   * provider-supplied string. Lets those URLs through the self-host storage-origin exemption in
+   * `downloadImageAsBuffer`. See that function's doc comment.
+   */
+  trustConfiguredStorageOrigin?: boolean;
 };
 
 /**
