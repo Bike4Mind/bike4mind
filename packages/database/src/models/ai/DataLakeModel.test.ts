@@ -373,6 +373,54 @@ describe('DataLakeRepository.countGateExcludedLakes', () => {
     ).toBe(0);
   });
 
+  // #3055: mirrors findActiveByUserTagsAndEntitlements's own multi-org containment test above
+  // (see "an ORG grant does not reach a lake in the caller OTHER org"). Flattening every org's
+  // granted ids into one list, as the count used to, loses which org issued which grant - a
+  // multi-org caller would then have an orgA grant wrongly exempt an orgB lake from the count.
+  it('an ORG grant does not exempt a lake in the caller OTHER org from the count (multi-org caller)', async () => {
+    const inB = await dataLakeRepository.create(
+      baseLake({ slug: 'gated-in-b', organizationId: 'orgB', requiredUserTag: 'TagBobLacks' })
+    );
+
+    // Bob belongs to both orgs. An orgA-issued grant on the orgB lake must not exempt it.
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA', 'orgB'], 'bob', {
+        orgGrantedLakes: { orgA: [inB.id] },
+      })
+    ).toBe(1);
+
+    // The same lake granted by its OWN org does exempt it - containment, not a dead arm.
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA', 'orgB'], 'bob', {
+        orgGrantedLakes: { orgB: [inB.id] },
+      })
+    ).toBe(0);
+  });
+
+  it('restrictToTags limits the count to exactly the named lakes', async () => {
+    const named = await dataLakeRepository.create(
+      baseLake({ slug: 'named', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+    await dataLakeRepository.create(
+      baseLake({ slug: 'unrelated', organizationId: 'orgA', requiredUserTag: 'TagBobLacks' })
+    );
+
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+        restrictToTags: [named.datalakeTag],
+      })
+    ).toBe(1);
+
+    // A tag naming no gate-excluded lake in scope - the unrestricted count would be 2 (both
+    // lakes above), so this pins that restriction actually narrows the query rather than being
+    // ignored.
+    expect(
+      await dataLakeRepository.countGateExcludedLakes([], [], ['orgA'], 'bob', {
+        restrictToTags: ['datalake:does-not-exist'],
+      })
+    ).toBe(0);
+  });
+
   it('never returns a lake document - count only, defense-in-depth stays with the caller', async () => {
     // Not a behavior a TypeScript signature alone proves - the return type is checked here against
     // the actual resolved value, not just declared.
