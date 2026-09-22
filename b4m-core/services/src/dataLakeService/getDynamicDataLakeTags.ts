@@ -438,7 +438,9 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         entitlementKeys,
         organizationIds,
         userId,
-        reach
+        // supersededOwnLakeIds (review onoya): withholds the owner-bypass exemption from a lake
+        // whose ownership has since moved off the caller - see countGateExcludedLakes's own doc.
+        { ...reach, supersededOwnLakeIds: [...supersededOwnLakeIds] }
       );
     } catch (err) {
       context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
