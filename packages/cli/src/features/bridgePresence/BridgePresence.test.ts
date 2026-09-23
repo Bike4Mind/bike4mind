@@ -59,17 +59,24 @@ describe('BridgePresence peer-ownership gate', () => {
   let wsConnections: string[];
   let sockets: WsSocket[];
   let port: number;
+  // When set, the fake server holds every /announce response until it resolves -
+  // lets a test drive a stop() into the window after the POST is sent but before
+  // the CLI sees the 200.
+  let announceGate: Promise<void> | null;
 
   beforeEach(async () => {
     httpRequests = [];
     wsConnections = [];
     sockets = [];
+    announceGate = null;
     resolveMock.mockReset();
     readFileMock.mockReset();
     warn.mockClear();
 
-    server = http.createServer((req, res) => {
-      httpRequests.push(req.url ?? '');
+    server = http.createServer(async (req, res) => {
+      const url = req.url ?? '';
+      httpRequests.push(url);
+      if (announceGate && url.startsWith('/announce')) await announceGate;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end('{}');
     });
@@ -164,7 +171,7 @@ describe('BridgePresence peer-ownership gate', () => {
     await presence.stop();
   });
 
-  it('fails closed and warns when the owner is undeterminable (criterion 3)', async () => {
+  it('fails closed but stays quiet when the owner is undeterminable (nit N3: undeterminable != foreign)', async () => {
     resolveMock.mockResolvedValue({ kind: 'unknown' });
     const presence = new BridgePresence();
 
@@ -172,7 +179,9 @@ describe('BridgePresence peer-ownership gate', () => {
     expect(ok).toBe(false);
     expect(httpRequests).toEqual([]);
     expect(wsConnections).toEqual([]);
-    expect(warn).toHaveBeenCalledTimes(1);
+    // Undeterminable ownership (missing tool / hung probe / ambiguous) fails
+    // closed but is not an attack, so it must NOT fire the security warning.
+    expect(warn).not.toHaveBeenCalled();
 
     await presence.stop();
   });
@@ -221,7 +230,7 @@ describe('BridgePresence peer-ownership gate', () => {
     expect(httpRequests.some(u => u.startsWith('/disconnect'))).toBe(false);
   });
 
-  it('fails closed and warns once when getuid is unavailable (BLOCKER 5: Windows)', async () => {
+  it('fails closed and stays quiet when getuid is unavailable (nit N3: Windows is undeterminable)', async () => {
     const original = Object.getOwnPropertyDescriptor(process, 'getuid');
     Object.defineProperty(process, 'getuid', { value: undefined, configurable: true });
     try {
@@ -230,7 +239,9 @@ describe('BridgePresence peer-ownership gate', () => {
       expect(ok).toBe(false);
       expect(httpRequests).toEqual([]);
       expect(wsConnections).toEqual([]);
-      expect(warn).toHaveBeenCalledTimes(1);
+      // Windows can't run the owner probe: fail-closed, but undeterminable is
+      // not an attack, so no security warning (debug only).
+      expect(warn).not.toHaveBeenCalled();
       await presence.stop();
     } finally {
       if (original) Object.defineProperty(process, 'getuid', original);
@@ -266,6 +277,100 @@ describe('BridgePresence peer-ownership gate', () => {
     // suppress a second warning across the two untrusted probes.
     await waitFor(() => resolveMock.mock.calls.length >= 2, 4000);
     expect(warn).toHaveBeenCalledTimes(1);
+
+    await presence.stop();
+  });
+
+  it('does not publish identity when stop() lands after the /announce POST is sent (BLOCKER 2a)', async () => {
+    // The POST leaves the process, then teardown happens before the 200 lands -
+    // the second re-check site (post-announce) must bail without publishing the
+    // instanceId or opening the command WS.
+    resolveMock.mockResolvedValue(OWNER(me()));
+    let releaseAnnounce!: () => void;
+    announceGate = new Promise<void>(r => (releaseAnnounce = r));
+    const presence = new BridgePresence();
+
+    const startP = presence.start({ workspacePath: '/tmp/ws' });
+    await waitFor(() => httpRequests.some(u => u.startsWith('/announce')));
+    await presence.stop();
+    releaseAnnounce();
+
+    await expect(startP).resolves.toBe(false);
+    expect(wsConnections).toEqual([]);
+    expect(httpRequests.some(u => u.startsWith('/event'))).toBe(false);
+  });
+
+  it('does not connect the command WS when stop() lands during the WS trust probe (BLOCKER 2b)', async () => {
+    // Announce succeeds, then the per-connect WS probe parks; teardown lands
+    // while it is parked. The post-await generation re-check in connectCommandWs
+    // must bail - no handshake, no live socket, no unhandled rejection.
+    let releaseWs!: (owner: ListenerOwner) => void;
+    resolveMock
+      .mockResolvedValueOnce(OWNER(me())) // announce probe: trusted
+      .mockImplementationOnce(() => new Promise<ListenerOwner>(r => (releaseWs = r))); // WS probe parks
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+    await waitFor(() => typeof releaseWs === 'function');
+    await presence.stop();
+    releaseWs(OWNER(me())); // WS probe resolves AFTER teardown
+
+    // Give the stale continuation a chance to (wrongly) build a socket.
+    await new Promise(r => setTimeout(r, 50));
+    expect(wsConnections).toEqual([]);
+  });
+
+  it('closes the trust gate the instant the command WS drops, before any reconnect (nit N1)', async () => {
+    resolveMock
+      .mockResolvedValueOnce(OWNER(me())) // announce
+      .mockResolvedValueOnce(OWNER(me())); // initial WS connect
+    let releaseReconnect!: (owner: ListenerOwner) => void;
+    resolveMock.mockImplementation(() => new Promise<ListenerOwner>(r => (releaseReconnect = r))); // reconnect parks
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+    await waitFor(() => wsConnections.length > 0 && httpRequests.some(u => u.startsWith('/event')));
+    const eventsBefore = httpRequests.filter(u => u.startsWith('/event')).length;
+
+    // WS drops -> the close handler must close the gate immediately. The
+    // reconnect probe is parked, so nothing re-opens it: an emit in this window
+    // must be refused by post(). (Delete `this.trusted = false` in the close
+    // handler and this emit posts - the guard is then unproven.)
+    sockets[0].close();
+    await waitFor(() => typeof releaseReconnect === 'function');
+
+    await presence.emitEvent({ type: 'message', role: 'assistant', text: 'SECRET' });
+    expect(httpRequests.filter(u => u.startsWith('/event')).length).toBe(eventsBefore);
+
+    await presence.stop();
+  });
+
+  it('a stale probe from a superseded generation never re-announces (BLOCKER 1: ABA)', async () => {
+    // gen-1's announce probe parks; a full stop()+start() completes while it is
+    // parked (repopulating config/startOpts); then gen-1 resolves. The
+    // generation guard must make gen-1 a no-op: exactly one announce, one WS,
+    // bound to the live generation - not a double-announce.
+    let releaseGen1!: (owner: ListenerOwner) => void;
+    resolveMock
+      .mockImplementationOnce(() => new Promise<ListenerOwner>(r => (releaseGen1 = r))) // gen-1 announce parks
+      .mockResolvedValue(OWNER(me())); // gen-2: trusted throughout
+    const presence = new BridgePresence();
+
+    const startP1 = presence.start({ workspacePath: '/tmp/ws' });
+    await waitFor(() => typeof releaseGen1 === 'function');
+    await presence.stop();
+    const ok2 = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok2).toBe(true);
+    await waitFor(() => wsConnections.length > 0);
+
+    releaseGen1(OWNER(me())); // gen-1 resolves late - must be a no-op
+    await new Promise(r => setTimeout(r, 50));
+
+    await expect(startP1).resolves.toBe(false);
+    expect(httpRequests.filter(u => u.startsWith('/announce')).length).toBe(1);
+    expect(wsConnections.length).toBe(1);
 
     await presence.stop();
   });

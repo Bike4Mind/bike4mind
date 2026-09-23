@@ -18,8 +18,10 @@ import { resolveLoopbackListenerOwner } from './peerOwner.js';
  * When `cc-bridge` is running on the same machine, the CLI announces itself
  * over loopback so it shows up as a sprite in the user's tavern (the
  * bridge is the sole tavern gateway - the CLI never opens its own Lumina5
- * WS). When the bridge is absent, this module is a strict no-op: the CLI
- * runs exactly as it does today with one warning logged at startup.
+ * WS). This module is fail-closed: when the bridge is absent the CLI runs
+ * exactly as it does today, quietly retrying in the background. Only a foreign
+ * port owner (a different-UID squatter) logs a one-time security warning; an
+ * absent or undeterminable owner stays at debug so we don't cry wolf.
  *
  * Wire protocol (see `cc-bridge/src/http.ts` in the b4m-tavern overlay repo):
  *  - `POST /announce?secret=<s>` -> register a session
@@ -80,6 +82,13 @@ export class BridgePresence {
   private callbacks: BridgePresenceCallbacks = {};
   private started = false;
   private stopped = false;
+  /** Monotonic connection generation, bumped synchronously at the top of
+   *  start() and stop() (before any await). Each awaited probe captures it and
+   *  bails if it moved, so a stop()+start() cycle that completes while an older
+   *  continuation is parked in checkPeerTrust() cannot re-announce, reconnect, or
+   *  emit under the new generation's identity - an ABA the this.* null-checks
+   *  miss (a fresh start() repopulates the very fields those checks test). */
+  private generation = 0;
   /** Gate latch for the egress boundary. Opened only after a same-UID owner
    *  check passes for the current connection generation; `post()` refuses to
    *  put the secret on the wire while it is closed. Cleared when the command WS
@@ -144,6 +153,7 @@ export class BridgePresence {
     // toggled off (Tavern feature disabled) and back on within one CLI run.
     this.stopped = false;
     this.started = true;
+    this.generation += 1; // new generation before any await; see `generation`
 
     const config = await readBridgeConfig();
     if (!config) {
@@ -166,32 +176,35 @@ export class BridgePresence {
    * already trusted (it could read the file directly), and a different-UID (or
    * sandboxed) peer is the adversary this gate stops.
    *
-   * Three outcomes, so the caller can warn only when warning is warranted:
-   *  - `trusted`      - same-UID owner; disclosure is safe.
-   *  - `absent`       - no loopback listener yet (cc-bridge simply not started);
-   *                     fail-closed but quiet - just retry.
-   *  - `unverifiable` - a foreign owner holds the port, ownership can't be
-   *                     determined, or getuid is unavailable (Windows).
-   *                     Fail-closed AND log the security-worded warning.
+   * Four outcomes, so the caller warns only on a real trust failure (a foreign
+   * owner) and stays quiet on the benign ones:
+   *  - `trusted`        - same-UID owner; disclosure is safe.
+   *  - `absent`         - no loopback listener yet (cc-bridge simply not
+   *                       started); fail-closed but quiet - just retry.
+   *  - `foreign`        - a different-UID owner holds the port; fail-closed AND
+   *                       log the security-worded warning (the real adversary).
+   *  - `undeterminable` - ownership can't be resolved: unsupported platform
+   *                       (getuid unavailable), lookup tool missing/hung, or an
+   *                       ambiguous owner set. Fail-closed, but a host that can't
+   *                       run the probe is not an attacker - log at debug, not as
+   *                       the security warning.
    */
-  private async checkPeerTrust(): Promise<'trusted' | 'absent' | 'unverifiable'> {
-    if (typeof process.getuid !== 'function') return 'unverifiable'; // Windows: uncheckable
+  private async checkPeerTrust(): Promise<'trusted' | 'absent' | 'foreign' | 'undeterminable'> {
+    if (typeof process.getuid !== 'function') return 'undeterminable'; // Windows: uncheckable
     const port = this.config?.port ?? DEFAULT_PORT;
     const owner = await resolveLoopbackListenerOwner(port);
     if (owner.kind === 'no-listener') return 'absent';
-    if (owner.kind === 'unknown') return 'unverifiable';
-    if (owner.uid !== process.getuid()) return 'unverifiable';
+    if (owner.kind === 'unknown') return 'undeterminable';
+    if (owner.uid !== process.getuid()) return 'foreign';
     this.peerWarned = false;
     return 'trusted';
   }
 
-  /** Log the untrusted-peer warning once per untrusted state. */
+  /** Log the foreign-owner security warning once per untrusted state. */
   private warnUntrustedPeerOnce(): void {
     if (this.peerWarned) return;
     this.peerWarned = true;
-    logger.warn(
-      '[tavern] cannot confirm the bridge port is owned by this user; not disclosing secret or handling commands'
-    );
+    logger.warn('[tavern] bridge port is held by a different user; not disclosing secret or handling commands');
   }
 
   /** One announce attempt. Schedules a retry on failure; wires up the
@@ -200,20 +213,14 @@ export class BridgePresence {
   private async attemptAnnounce(): Promise<boolean> {
     if (this.stopped || !this.config || !this.startOpts) return false;
     if (this.instanceId) return true;
+    const gen = this.generation;
+    const startOpts = this.startOpts;
 
-    // Verify the port owner before the secret leaves the process. An
-    // untrusted squatter may be replaced by the real bridge later, so route
-    // into the retry loop rather than latching offline.
-    const trust = await this.checkPeerTrust();
-    // Re-check after the await: stop() can null config/startOpts mid-probe.
-    if (this.stopped || !this.config || !this.startOpts) return false;
-    if (trust !== 'trusted') {
-      this.trusted = false;
-      this.signalUntrusted(trust, 'announce');
-      this.scheduleAnnounceRetry();
-      return false;
-    }
-    this.trusted = true; // gate open: post() may now disclose the secret
+    // Verify the port owner before the secret leaves the process. An untrusted
+    // squatter may be replaced by the real bridge later, so gateEgress routes
+    // into the retry loop rather than latching offline. It also re-checks the
+    // generation after its await, so a stop()+start() cycle can't slip through.
+    if (!(await this.gateEgress(gen, 'announce'))) return false;
 
     const instanceId = uuidv4();
     const workspaceName = this.pendingWorkspaceName!;
@@ -224,10 +231,12 @@ export class BridgePresence {
       instanceId,
       source,
       workspaceName,
-      workspacePath: this.startOpts.workspacePath,
+      workspacePath: startOpts.workspacePath,
       capabilities,
     });
-    if (this.stopped || !this.config) return false; // teardown during the announce POST
+    // Teardown, or a stop()+start() cycle, during the announce POST: bail
+    // without publishing this superseded generation's instanceId.
+    if (gen !== this.generation || this.stopped || !this.config) return false;
     if (!announced) {
       this.trusted = false;
       this.scheduleAnnounceRetry();
@@ -248,12 +257,37 @@ export class BridgePresence {
     return true;
   }
 
-  /** Log the untrusted-peer condition once: the security-worded warning for a
-   *  foreign / undeterminable owner, but a quiet debug line for the ordinary
-   *  "cc-bridge not started yet" case so we don't cry wolf on every retry. */
-  private signalUntrusted(trust: 'absent' | 'unverifiable', phase: 'announce' | 'command WS'): void {
-    if (trust === 'unverifiable') this.warnUntrustedPeerOnce();
+  /** Signal the untrusted condition at the right volume: the security-worded
+   *  warning only for a real foreign owner, and a quiet debug line for the
+   *  benign cases (bridge not started yet, or ownership undeterminable) so we
+   *  don't cry wolf on every backed-off retry. */
+  private signalUntrusted(trust: 'absent' | 'foreign' | 'undeterminable', phase: 'announce' | 'command WS'): void {
+    if (trust === 'foreign') this.warnUntrustedPeerOnce();
+    else if (trust === 'undeterminable') logger.debug(`[tavern] bridge port owner undeterminable; retrying ${phase}`);
     else logger.debug(`[tavern] cc-bridge not reachable yet; retrying ${phase}`);
+  }
+
+  /**
+   * Run the pre-disclosure ownership gate for one egress phase and open or keep
+   * the trust latch closed. The caller passes the connection `generation` it
+   * captured BEFORE this await, so a stop()+start() cycle (or a bare stop())
+   * landing during the probe is detected and this stale continuation bails.
+   * Returns true iff the gate is open (secret disclosure is now permitted for
+   * this generation); false means the caller must return - either the owner is
+   * untrusted (a retry has been scheduled) or the generation moved.
+   */
+  private async gateEgress(gen: number, phase: 'announce' | 'command WS'): Promise<boolean> {
+    const trust = await this.checkPeerTrust();
+    if (gen !== this.generation || this.stopped || !this.config) return false;
+    if (trust !== 'trusted') {
+      this.trusted = false;
+      this.signalUntrusted(trust, phase);
+      if (phase === 'announce') this.scheduleAnnounceRetry();
+      else this.scheduleReconnect();
+      return false;
+    }
+    this.trusted = true; // gate open: post() / the WS URL may now carry the secret
+    return true;
   }
 
   private scheduleAnnounceRetry(): void {
@@ -277,13 +311,20 @@ export class BridgePresence {
    *  leave in strict order - see `emitQueue` comment. */
   async emitEvent(event: ICcAgentEventPayload): Promise<void> {
     if (!this.config || !this.instanceId) return;
-    const task = () =>
-      this.post('/event', { instanceId: this.instanceId, event }).catch(err =>
+    // Bind the identity at enqueue time: an event chained before a stop()+start()
+    // cycle must post under the generation (and instanceId) that produced it, or
+    // be dropped - never re-labelled with the new generation's identity.
+    const instanceId = this.instanceId;
+    const gen = this.generation;
+    const task = () => {
+      if (gen !== this.generation) return; // superseded by a stop()+start(); drop
+      return this.post('/event', { instanceId, event }).catch(err =>
         // Logged at info (not debug) so the first-failure root cause surfaces
         // without flipping logger verbosity. The POST has a 2s timeout so this
         // won't spam on a flapping bridge.
         logger.info(`[tavern] emitEvent ${event.type} failed: ${(err as Error).message}`)
       );
+    };
     // Use `finally` flavor of chaining: a failed emit must not stall the
     // rest of the queue. `this.emitQueue.then(task, task)` swallows the
     // prior rejection and runs `task` regardless.
@@ -305,6 +346,7 @@ export class BridgePresence {
   async stop(reason = 'cli_exit'): Promise<void> {
     if (this.stopped || !this.started) return;
     this.stopped = true;
+    this.generation += 1; // supersede any in-flight probe before any await
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -339,7 +381,10 @@ export class BridgePresence {
     this.reconnectAttempts = 0;
     this.peerWarned = false;
     this.trusted = false;
-    this.wsConnecting = false;
+    // wsConnecting is intentionally NOT reset here: an in-flight connectCommandWs
+    // owns it and clears it in its own generation-guarded `finally`. Resetting it
+    // here would re-open the entry guard while that probe is still parked, so two
+    // connects could pass and orphan a socket.
     // Reset the strict-ordered emit queue so a restart within the same CLI run
     // doesn't chain its first event onto a settled/failed promise from the
     // prior session (which could delay or reorder startup events).
@@ -367,8 +412,10 @@ export class BridgePresence {
     // The single egress boundary for every secret-bearing HTTP path
     // (/announce, /event, /disconnect). Refuse while the ownership gate is
     // closed so a peer that flipped after announce cannot be handed the secret.
+    // Silent by design: the probe paths (attemptAnnounce / connectCommandWs)
+    // already classify the owner and warn on a real foreign owner, so warning
+    // again here would cry wolf on an ordinary bridge restart.
     if (!this.trusted) {
-      this.warnUntrustedPeerOnce();
       throw new Error('bridge peer not trusted; refusing to disclose secret');
     }
     const port = this.config.port ?? DEFAULT_PORT;
@@ -388,30 +435,28 @@ export class BridgePresence {
     if (this.stopped || !this.config || !this.instanceId) return;
     if (this.ws || this.wsConnecting) return; // already connected or connecting
     this.wsConnecting = true;
+    const gen = this.generation;
     try {
       // Re-verify ownership before the WS URL (which also carries the secret) is
-      // built, and because its frames drive the callbacks. Checking here covers
-      // both callers - the announce-success path and the reconnect timer -
-      // rather than one guard per caller.
+      // built, and because its frames drive the callbacks. gateEgress covers
+      // both callers - the announce-success path and the reconnect timer - and
+      // re-checks the generation after its await.
       // ponytail: TOCTOU ceiling - owner is re-checked per connect to keep the
       // window small, but a rogue that kills the bridge and rebinds between this
       // check and connect could still be reached. A continuous guarantee needs
       // the server or an OS primitive; out of scope for a CLI-only fix.
-      const trust = await this.checkPeerTrust();
-      // Re-check after the await: stop() can null config/instanceId mid-probe.
-      if (this.stopped || !this.config || !this.instanceId) return;
-      if (trust !== 'trusted') {
-        this.trusted = false;
-        this.signalUntrusted(trust, 'command WS');
-        this.scheduleReconnect();
-        return;
-      }
-      this.trusted = true;
+      if (!(await this.gateEgress(gen, 'command WS'))) return;
 
-      const port = this.config.port ?? DEFAULT_PORT;
+      // gateEgress returned true, so the generation still matches and these are
+      // set; the locals just re-narrow for TypeScript after the await.
+      const config = this.config;
+      const instanceId = this.instanceId;
+      if (!config || !instanceId) return;
+
+      const port = config.port ?? DEFAULT_PORT;
       const url = `ws://127.0.0.1:${port}/commands?instanceId=${encodeURIComponent(
-        this.instanceId
-      )}&secret=${encodeURIComponent(this.config.hookSecret)}`;
+        instanceId
+      )}&secret=${encodeURIComponent(config.hookSecret)}`;
 
       let ws: WebSocket;
       try {
@@ -445,6 +490,9 @@ export class BridgePresence {
       });
 
       ws.on('close', () => {
+        // A socket from a superseded generation must not touch current state: a
+        // stop()+start() cycle already reset trusted/ws for the new generation.
+        if (gen !== this.generation) return;
         // Identity-check: only clear the tracked socket if it is still this one,
         // so an overlapping connect's socket is never orphaned.
         if (this.ws === ws) this.ws = null;

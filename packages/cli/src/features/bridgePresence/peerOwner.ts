@@ -1,6 +1,7 @@
 import { promises as fs, constants } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { logger } from '../../utils/Logger.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -34,7 +35,12 @@ export async function resolveLoopbackListenerOwner(port: number): Promise<Listen
     if (process.platform === 'linux') return await resolveViaProcNet(port);
     if (process.platform === 'darwin') return await resolveViaLsof(port);
     return { kind: 'unknown' };
-  } catch {
+  } catch (err) {
+    // The per-platform helpers already classify their expected failures; an
+    // error escaping to here is unexpected (e.g. a programming bug). Surface it
+    // at debug before the fail-closed sentinel so it isn't silently swallowed
+    // into a permanently-disabled presence.
+    logger.debug(`[tavern] loopback owner lookup failed: ${(err as Error).message}`);
     return { kind: 'unknown' };
   }
 }
