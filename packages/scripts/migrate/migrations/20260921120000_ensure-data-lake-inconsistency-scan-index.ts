@@ -44,10 +44,10 @@ import { type MigrationFile } from './index';
  * left off, since `recordDetected` converges rather than duplicates.
  */
 const LOG = '[ensure-data-lake-inconsistency-scan-index]';
-const logger = new Logger({ metadata: { service: 'migrate:20260922000002' } });
+const logger = new Logger({ metadata: { service: 'migrate:20260921120000' } });
 
 const migration: MigrationFile = {
-  id: 20260922000002,
+  id: 20260921120000,
   name: 'ensure data lake inconsistency scan index and strip stored finding excerpts',
 
   up: async () => {
