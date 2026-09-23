@@ -66,6 +66,13 @@ type RedactablePromptMeta = {
  * and a share/subscribe/clone grant authorizes reading the conversation, not re-reading the
  * owner's corpus through it. The sibling `chunkId` is deliberately kept - an opaque id is not
  * content, and `citables[].id` (the file id) is already unredacted beside it.
+ *
+ * `conflictsWith` (#3041) is kept for the same reason, recorded here so the next reader does not
+ * re-derive it: it holds `fabFileId`s of other cited sources, so it adds a RELATIONSHIP between
+ * chips the viewer can already see rather than a slice of the owner's corpus. That holds only while
+ * the field stays ids - a future version carrying the conflicting SENTENCES (the detector has them:
+ * InconsistencyEvidence.excerpt) would be `fullContext`'s class exactly and would have to join the
+ * list below rather than ride along inside this one.
  */
 const OWNER_ONLY_CITABLE_METADATA_FIELDS = ['fullContext'] as const;
 

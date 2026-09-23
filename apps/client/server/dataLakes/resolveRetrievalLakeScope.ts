@@ -60,6 +60,10 @@ export function withStaticRegistryBypass(
     // despite the similar name - and so skip that derivation's reachability intersection, for
     // admin/developer callers only.
     lakeViewComplete: scope.lakeViewComplete,
+    // Carried through unchanged, same reason as lakeViewComplete: widening a privileged caller's
+    // reach via the static registry says nothing about how many DB lakes their own org/tags
+    // surfaced but couldn't pass the gate for (#3055).
+    excludedByAccessCount: scope.excludedByAccessCount,
     dataLakeTags: dedupe([...scope.dataLakeTags, ...registry.map(lake => lake.datalakeTag)]),
     dataLakeTagPrefixes: dedupe([...scope.dataLakeTagPrefixes, ...registry.map(lake => lake.fileTagPrefix)]),
     scopedTagPrefixes: scope.scopedTagPrefixes,

@@ -1,7 +1,10 @@
 import {
   detectCorpusInconsistencies,
+  inconsistencyFindingKey,
+  type InconsistencyFinding,
   type LakeInconsistencyReport,
   type IDataLakeDocument,
+  type IDataLakeFindingRepository,
   type IFabFileChunkRepository,
   type IFabFileRepository,
 } from '@bike4mind/common';
@@ -35,8 +38,27 @@ export interface DetectLakeInconsistenciesAdapters {
   db: {
     fabFiles: Pick<IFabFileRepository, 'findDataLakeMembershipMembers'>;
     fabFileChunks: Pick<IFabFileChunkRepository, 'findChunkTextSample'>;
+    dataLakeFindings: Pick<IDataLakeFindingRepository, 'listDismissedKeys'>;
   };
   logger?: Logger;
+}
+
+/**
+ * This pass is the `lexical` detector. Named here rather than at the call site because the
+ * dismissal lookup below and the row write the caller performs afterwards have to agree on it - the
+ * two would otherwise key on different detectors and the suppression would silently never match.
+ */
+export const INCONSISTENCY_DETECTOR = 'lexical' as const;
+
+export interface DetectLakeInconsistenciesResult {
+  /** The report, dismissals already removed. This is what is stored on the lake document. */
+  report: LakeInconsistencyReport;
+  /**
+   * What this run saw and did not report, because a curator dismissed it. A caller must still
+   * RECORD these - see `CorpusInconsistencyResult.suppressed` - but must never store them in the
+   * report, which is why they are a sibling of it rather than a field on it.
+   */
+  suppressed: InconsistencyFinding[];
 }
 
 /**
@@ -53,7 +75,7 @@ export async function detectLakeInconsistencies(
   lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
   nowYear: number,
   { db, logger }: DetectLakeInconsistenciesAdapters
-): Promise<LakeInconsistencyReport> {
+): Promise<DetectLakeInconsistenciesResult> {
   // Same guard as computeLakeHealth's: an absent datalakeTag would serialize to null in the
   // membership `$match` and degrade the query to "files with no tags" across every tenant - and this
   // returns document EXCERPTS. Report empty rather than ever scanning on a null tag.
@@ -61,11 +83,34 @@ export async function detectLakeInconsistencies(
     // Report nothing scanned rather than nothing found. `memberCount: 0` is what keeps a lake that
     // was never scanned from rendering as a clean one - the same non-null-means-clean confusion
     // lakeHealth warns about, which a fresh `computedAt` over an empty report would reintroduce.
-    return {
-      ...detectCorpusInconsistencies([], { nowYear, sampled: true }),
-      memberSampled: false,
-      memberCount: 0,
-    };
+    const { suppressed, ...empty } = detectCorpusInconsistencies([], { nowYear, sampled: true });
+    return { report: { ...empty, memberSampled: false, memberCount: 0 }, suppressed };
+  }
+
+  // Loaded before the scan rather than filtering its output, so a dismissal also frees the report's
+  // per-kind budget and is subtracted from `countsByKind` - see the `dismissed` option. What it
+  // suppresses is still returned, so the caller keeps those rows' evidence current; a dismissal
+  // keys on kind and subject, so the passages behind it can change and the row is then the only
+  // place that change is visible. `resolved` is never suppressed - a resolved problem recurring is
+  // exactly what a curator needs to see.
+  //
+  // TOLERATED, not required. This read is the newer findings path, and `inconsistencies.ts` already
+  // isolates the row write there for the same reason: a transient failure here must not cost the
+  // caller a ~1000-chunk detection pass that would otherwise have succeeded. Failing open
+  // re-reports a dismissal for one run, which a curator dismisses again; failing closed returns a
+  // 500 for a report the corpus could have produced.
+  let dismissed: ReadonlySet<string> = new Set();
+  try {
+    dismissed = new Set(
+      (await db.dataLakeFindings.listDismissedKeys(lake.id, INCONSISTENCY_DETECTOR)).map(k =>
+        inconsistencyFindingKey(k.kind, k.subject)
+      )
+    );
+  } catch (error) {
+    logger?.warn?.(
+      `[lakeInconsistency] lake ${lake.id}: could not read dismissed findings; running without ` +
+        `suppression, so previously dismissed findings will be reported again: ${error}`
+    );
   }
 
   const members = await db.fabFiles.findDataLakeMembershipMembers(
@@ -109,19 +154,18 @@ export async function detectLakeInconsistencies(
     });
   }
 
-  return {
-    // `sampled` is TRUE on every run, and unconditionally so: this pass reads at most
+  const { suppressed, ...report } = detectCorpusInconsistencies(documents, {
+    nowYear,
+    // TRUE on every run, and unconditionally so: this pass reads at most
     // INCONSISTENCY_CHUNKS_PER_MEMBER chunks from the start of each member, so it has never examined
     // a corpus whole and its counts are always a floor. It used to be derived from member overflow
     // alone, which told an owner of a small lake that the counts were exact about a pass that had
-    // read five chunks per document. `memberSampled` carries the overflow case, which is the half
-    // that is actionable - it means the lake outgrew the member cap.
-    ...detectCorpusInconsistencies(documents, {
-      nowYear,
-      sampled: true,
-      maxFindings: INCONSISTENCY_FINDINGS_CAP,
-    }),
-    memberSampled,
-    memberCount: documents.length,
-  };
+    // read five chunks per document. `memberSampled` below carries the overflow case, which is the
+    // half that is actionable - it means the lake outgrew the member cap.
+    sampled: true,
+    maxFindings: INCONSISTENCY_FINDINGS_CAP,
+    dismissed,
+  });
+
+  return { report: { ...report, memberSampled, memberCount: documents.length }, suppressed };
 }

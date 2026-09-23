@@ -47,9 +47,9 @@ const handler = baseApi({ auth: false }).post(
     }
 
     const action = String((req.query as { action?: string }).action ?? '');
-    const { connectionId, token, headers, body } = (req.body ?? {}) as {
+    const { connectionId, ticket, headers, body } = (req.body ?? {}) as {
       connectionId?: string;
-      token?: string;
+      ticket?: string;
       headers?: Record<string, string>;
       body?: string;
     };
@@ -58,9 +58,12 @@ const handler = baseApi({ auth: false }).post(
     }
 
     if (action === 'connect') {
+      // The browser's single-use ticket arrives as `?ticket=`; connect.func's resolveWebTicket
+      // reads queryStringParameters.ticket. The CLI path uses the forwarded sec-websocket-protocol
+      // header instead. Forwarding `token` here would leave the browser socket credential-less.
       const event = {
         requestContext: { connectionId },
-        queryStringParameters: token ? { token } : {},
+        queryStringParameters: ticket ? { ticket } : {},
         headers: headers ?? {},
       };
       const result = await connectFunc(event as never, lambdaContext('selfhost_ws_connect'));

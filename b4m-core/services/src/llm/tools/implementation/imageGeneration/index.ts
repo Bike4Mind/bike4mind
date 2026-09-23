@@ -24,7 +24,7 @@ import {
   getSettingsMap,
   getSettingsValue,
 } from '@bike4mind/utils';
-import { BFLImageService } from '@bike4mind/utils';
+import { BFLImageService, downloadImageAsBuffer } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
@@ -35,18 +35,6 @@ import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFil
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 import { resolveImageArgs } from './resolveImageArgs';
-
-async function downloadImage(url: string) {
-  // Handle data URLs (base64 images) from GPT-Image-1
-  if (url.startsWith('data:image/')) {
-    const base64Data = url.split(',')[1];
-    return Buffer.from(base64Data, 'base64');
-  }
-
-  // Handle regular URLs from DALL-E and other models
-  const response = await axios.get(url, { responseType: 'arraybuffer' });
-  return response.data;
-}
 
 /**
  * Validate that an image-generation provider's API key is present. Without
@@ -115,7 +103,7 @@ export async function processAndStoreImages(
   await context.statusUpdate({}, 'Storing images...');
   return Promise.all(
     images.map(async image => {
-      const buffer = await downloadImage(image);
+      const buffer = await downloadImageAsBuffer(image);
       const fileType = await fileTypeFromBuffer(buffer);
       // Default the extension when detection fails: a `${uuid}.undefined` filename would
       // both store with a bogus extension and miss the inline-image regex in PromptReplies
