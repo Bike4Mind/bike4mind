@@ -415,8 +415,8 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
   // Two source documents; file A contributes two chunks (both ranked above file B's)
   // so the indexed style must give both A-sections the SAME number and B the next.
   const makeRetrievalContext = (overrides: { chunkText?: Record<string, string>; charBudget?: number } = {}) => {
-    // fileA carries a date and fileB deliberately does not, so the passage-date test (#2236) covers
-    // both the present and the absent case on one run.
+    // fileA deliberately carries a `createdAt` (its upload time) and fileB does not, so the
+    // undated-heading test below proves the heading ignores it rather than merely lacking one.
     const files = [
       { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [], createdAt: new Date('2026-08-14T09:30:00.000Z') },
       { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [] },
@@ -481,29 +481,23 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
   });
 
   /**
-   * #2236. Without a date in the heading a model asked to prefer the newer of two conflicting
-   * passages has nothing to prefer on. Asserted on the forced arm specifically because it is the
-   * always-on injection site - a `forceKnowledgeRetrieval` session uses this one every turn.
+   * `fileA` carries a `createdAt`, which is the upload time and NOT when the guideline it holds was
+   * published. Asserted on the forced arm specifically because it is the always-on injection site -
+   * a `forceKnowledgeRetrieval` session uses this one every turn, so a date reinstated here reaches
+   * the model on every grounded turn. The `\n` pins the end of the heading, so a clause appended
+   * after the parenthetical fails this rather than slipping past a bare substring match.
    */
-  it('heads a dated document with its date, and omits the clause entirely when there is none', async () => {
+  it('heads a document undated even when the file carries an upload timestamp', async () => {
     const { content } = await runRetrieval('indexed');
-    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
-    // fileB has no createdAt: no empty clause, no "dated undefined", no trailing separator.
+    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
     expect(content).toContain('### [2] Cortes NEJM 2024.pdf (ID: fileB)\n');
-    expect(content).not.toContain('dated undefined');
-    expect(content).not.toContain('dated null');
+    expect(content).not.toMatch(/dated|2026-08-14/);
   });
 
-  it('carries the date on the named style too, so the two citation styles cannot drift', async () => {
+  it('heads the named style undated too, so the two citation styles cannot drift', async () => {
     const { content } = await runRetrieval();
-    expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2026-08-14');
-  });
-
-  it('leaves the date outside toContentLabel, which would be a no-op on it anyway', async () => {
-    const { content } = await runRetrieval('indexed');
-    // The date is digits and separators only, so it survives verbatim - and the `[N]` the indexed
-    // citation contract depends on is still intact beside it.
-    expect(content).toMatch(/### \[1\] .*\(ID: fileA\) - dated \d{4}-\d{2}-\d{2}/);
+    expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
+    expect(content).not.toMatch(/dated|2026-08-14/);
   });
 
   it('both styles carry the anti-invention rule so a grounded turn cannot volunteer an unsourced customer/deal/figure', async () => {
@@ -4173,18 +4167,50 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
-  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
+  const runWithQuest = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) => {
     const ctx = makeCtx(chunks, hasMore);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
     );
+    // Held rather than inlined: the citation chips this arm writes land on the quest, so the
+    // reader's half of the conflict signal is only observable through it.
+    const quest = makeQuest();
     const messages = await feature.getContextMessages(
-      makeQuest(),
+      quest,
       embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
       'uptime'
     );
-    return messages[0]?.content ?? '';
+    return { content: messages[0]?.content ?? '', quest };
   };
+
+  const run = async (chunks: Array<{ fabFileId: string; text: string }>, hasMore = false) =>
+    (await runWithQuest(chunks, hasMore)).content;
+
+  // The note warns the MODEL; these pin that the same turn marks the chips the READER sees, so a
+  // change that keeps one channel and drops the other fails here rather than shipping silently.
+  it('marks both conflicting documents on the citation chips (#3041)', async () => {
+    const { quest } = await runWithQuest([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 95%.' },
+    ]);
+
+    const citables = quest.promptMeta?.citables ?? [];
+    expect(citables.map(c => c.id)).toEqual(['fileA', 'fileB']);
+    expect(citables.find(c => c.id === 'fileA')?.metadata?.conflictsWith).toEqual(['fileB']);
+    expect(citables.find(c => c.id === 'fileB')?.metadata?.conflictsWith).toEqual(['fileA']);
+  });
+
+  it('leaves the chips unmarked when the documents agree', async () => {
+    const { quest } = await runWithQuest([
+      { fabFileId: 'fileA', text: 'Uptime is 99.9%.' },
+      { fabFileId: 'fileB', text: 'Uptime is 99.9%.' },
+    ]);
+
+    // Absent, not an empty array: a chip carrying `conflictsWith: []` would badge with no partner.
+    for (const citable of quest.promptMeta?.citables ?? []) {
+      expect(citable.metadata?.conflictsWith).toBeUndefined();
+    }
+  });
 
   it('keeps the note at column 0, outside the untrusted block', async () => {
     const content = await run([

@@ -31,6 +31,7 @@ import type {
   IChatHistoryItem,
   IChatHistoryItemDocument,
 } from '@bike4mind/common';
+import { parseNotebookImportKey } from '@server/utils/notebookImportKeys';
 import { Resource } from 'sst';
 import { getFilesStorage } from '@server/utils/storage';
 import { v4 as uuidv4 } from 'uuid';
@@ -423,21 +424,12 @@ export const dispatch = withContext(async (event, context, logger) => {
     const bucket = record.s3.bucket.name;
     const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
 
-    // Only process notebook imports (skip options files)
-    if (!key.startsWith('notebooks/') || key.endsWith('.options.json')) {
-      logger.debug('Skipping non-notebook or options file', { key });
+    const importKeys = parseNotebookImportKey(key);
+    if (!importKeys) {
+      logger.debug('Skipping non-notebook, options or malformed key', { key });
       continue;
     }
-
-    const [, userId, filename] = key.split('/'); // prefix not used
-    const timestamp = filename?.split('.')[0];
-
-    if (!userId || !timestamp) {
-      logger.error('Invalid key format', { key });
-      continue;
-    }
-
-    const optionsKey = `notebooks/${userId}/${timestamp}.options.json`;
+    const { userId, optionsKey } = importKeys;
 
     try {
       logger.info('Processing notebook import', { key, optionsKey });

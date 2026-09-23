@@ -8,6 +8,7 @@ import {
   resolveReadGrant,
   resolveLakeReadAccess,
   resolveEnforceReadGrants,
+  resolveEnforceReadGrantsResult,
   manageGrantedLakeIdsFor,
   supersededOwnLakeIdsFor,
   ENFORCE_LAKE_READ_GRANTS_KEY,
@@ -231,6 +232,47 @@ describe('resolveEnforceReadGrants - fail-safe flag read', () => {
     const logger = { warn: vi.fn() };
     expect(await resolveEnforceReadGrants(settings, logger)).toBe(false);
     expect(logger.warn).toHaveBeenCalledOnce();
+  });
+});
+
+// #3155: a telemetry caller (the gate-excluded-lake count) cannot use the plain boolean above,
+// because its `false` return is ambiguous by design - report-only vs. a read that threw. This is
+// the sibling that tells the two apart.
+describe('resolveEnforceReadGrantsResult - tells "off" apart from "read failed"', () => {
+  it('unwired settings -> report-only, read counted as succeeded (nothing to fail)', async () => {
+    expect(await resolveEnforceReadGrantsResult(undefined)).toEqual({ enforced: false, readSucceeded: true });
+  });
+
+  it('setting ON -> enforced, read succeeded', async () => {
+    const settings = { getSettingsValue: vi.fn().mockResolvedValue(true) };
+    expect(await resolveEnforceReadGrantsResult(settings)).toEqual({ enforced: true, readSucceeded: true });
+  });
+
+  it('setting OFF (falsy value) -> report-only, read succeeded', async () => {
+    const settings = { getSettingsValue: vi.fn().mockResolvedValue(undefined) };
+    expect(await resolveEnforceReadGrantsResult(settings)).toEqual({ enforced: false, readSucceeded: true });
+  });
+
+  it('a FAILED read -> report-only AND readSucceeded: false, and still warns', async () => {
+    const settings = { getSettingsValue: vi.fn().mockRejectedValue(new Error('boom')) };
+    const logger = { warn: vi.fn() };
+    expect(await resolveEnforceReadGrantsResult(settings, logger)).toEqual({
+      enforced: false,
+      readSucceeded: false,
+    });
+    expect(logger.warn).toHaveBeenCalledOnce();
+  });
+
+  // Review: the previous version fed the SAME rejecting settings to both halves and compared
+  // `x === x.enforced` - a comparison that passes on any false-on-rejection implementation without
+  // ever exercising the true-on-success path. Asserting the actual booleans on both branches is
+  // what makes this a real pass-through check, not a tautology.
+  it('resolveEnforceReadGrants stays a thin wrapper over the enforced half - both the ON and the failed path', async () => {
+    const onSettings = { getSettingsValue: vi.fn().mockResolvedValue(true) };
+    expect(await resolveEnforceReadGrants(onSettings)).toBe(true);
+
+    const failingSettings = { getSettingsValue: vi.fn().mockRejectedValue(new Error('boom')) };
+    expect(await resolveEnforceReadGrants(failingSettings)).toBe(false);
   });
 });
 

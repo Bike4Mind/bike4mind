@@ -12,9 +12,11 @@ export interface OperationsModelResult {
   llm: ICompletionBackend;
   modelId: string;
   modelInfo: ModelInfo;
-  imageLlm: ICompletionBackend;
-  imageModelId: string;
-  imageModelInfo: ModelInfo;
+  // Null on a deployment with no configured image backend at all (e.g. self-host
+  // with no BFL/OpenAI/local-image key) - text-only callers must tolerate this.
+  imageLlm: ICompletionBackend | null;
+  imageModelId: string | null;
+  imageModelInfo: ModelInfo | null;
   speechLlm: ICompletionBackend | null;
   speechModelId: string | null;
   speechModelInfo: ModelInfo | null;
@@ -53,14 +55,20 @@ export const getApiKeyTypeFromBackend = (backend: ModelBackend): ApiKeyType | nu
 };
 
 /**
- * Get default image model with fallback priority
+ * Get default image model with fallback priority. `excludeIds` skips models
+ * already tried and found unusable (e.g. a backend that failed to construct),
+ * so a caller can retry down the priority order instead of stopping at the
+ * first candidate that cannot actually run.
  */
-export function getDefaultImageModel(models: ModelInfo[]): ModelInfo | undefined {
+export function getDefaultImageModel(
+  models: ModelInfo[],
+  excludeIds: ReadonlySet<string> | string[] = []
+): ModelInfo | undefined {
+  const exclude = excludeIds instanceof Set ? excludeIds : new Set(excludeIds);
   // Priority order: FLUX_PRO_1_1 -> FLUX_KONTEXT_PRO -> GPT_IMAGE_2 -> any image model
-  return (
-    models.find(m => m.id === 'flux-pro-1.1') ||
-    models.find(m => m.id === 'flux-kontext-pro') ||
-    models.find(m => m.id === 'gpt-image-2') ||
-    models.find(m => m.type === 'image')
-  );
+  for (const id of ['flux-pro-1.1', 'flux-kontext-pro', 'gpt-image-2']) {
+    const match = models.find(m => m.id === id);
+    if (match && !exclude.has(match.id)) return match;
+  }
+  return models.find(m => m.type === 'image' && !exclude.has(m.id));
 }

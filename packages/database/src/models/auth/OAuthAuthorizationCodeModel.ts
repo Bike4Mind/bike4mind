@@ -17,6 +17,7 @@ export interface IOAuthAuthorizationCodeDocument extends IMongoDocument {
 }
 
 export interface IOAuthAuthorizationCodeRepository extends IBaseRepository<IOAuthAuthorizationCodeDocument> {
+  findValidCode(code: string): Promise<IOAuthAuthorizationCodeDocument | null>;
   consumeValidCode(code: string): Promise<IOAuthAuthorizationCodeDocument | null>;
 }
 
@@ -48,6 +49,16 @@ class OAuthAuthorizationCodeRepository
 {
   constructor(m: IOAuthAuthorizationCodeModel) {
     super(m);
+  }
+
+  /**
+   * Read an unused, unexpired code WITHOUT consuming it, so the token endpoint can validate
+   * client_id/redirect_uri/PKCE against it before the atomic consume below. A failed validation must
+   * not burn a still-valid single-use code; consumeValidCode does the actual (race-safe) claim once
+   * validation passes.
+   */
+  findValidCode(code: string) {
+    return this.model.findOne({ code, used: false, expiresAt: { $gt: new Date() } }).exec();
   }
 
   /**

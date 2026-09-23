@@ -32,6 +32,11 @@ interface QueueHandlerRegistration {
 interface ScheduledTaskRegistration {
   name: string;
   intervalMs: number;
+  runOnStartup?: boolean;
+  dailyUtcHour?: number;
+  nextUtcSlot?: number;
+  lastScheduledDay?: number;
+  dailyTimer?: ReturnType<typeof setTimeout>;
   fn: () => Promise<void>;
   /** The current run, kept (not a boolean) so shutdown can await it. */
   inFlight?: Promise<void>;
@@ -87,13 +92,26 @@ export class SelfHostWorker {
     this.scheduled.push({ name, intervalMs, fn });
   }
 
+  registerDailyUtcTask(name: string, hour: number, fn: () => Promise<void>, opts?: { runOnStartup?: boolean }): void {
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) throw new Error('UTC hour must be an integer from 0 to 23');
+    this.scheduled.push({ name, intervalMs: 60_000, dailyUtcHour: hour, fn, runOnStartup: opts?.runOnStartup });
+  }
+
   /** Begin polling every registered queue and arm every scheduled task. Non-blocking. */
   start(): void {
     if (this.running) return;
     this.running = true;
     this.pollers = this.queues.map(q => this.runPoller(q));
     for (const t of this.scheduled) {
-      this.timers.push(setInterval(() => this.startScheduledTask(t), t.intervalMs));
+      if (t.dailyUtcHour !== undefined) {
+        const now = new Date();
+        const today = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), t.dailyUtcHour);
+        t.nextUtcSlot = today >= now.getTime() ? today : today + 86_400_000;
+        if (t.runOnStartup) this.startScheduledTask(t);
+        this.checkDailyTask(t);
+      } else {
+        this.timers.push(setInterval(() => this.startScheduledTask(t), t.intervalMs));
+      }
     }
     // Names, not just counts: a queue whose env var is unset is skipped at registration, and the
     // only way to tell that from the outside is to see which consumers this line does NOT list.
@@ -116,6 +134,7 @@ export class SelfHostWorker {
     this.running = false;
     for (const timer of this.timers) clearInterval(timer);
     this.timers.length = 0;
+    for (const task of this.scheduled) clearTimeout(task.dailyTimer);
     const inFlightTasks = this.scheduled.map(t => t.inFlight).filter((p): p is Promise<void> => p !== undefined);
     const pending = [...this.pollers, ...inFlightTasks];
     if (graceMs > 0 && pending.length > 0) {
@@ -124,8 +143,25 @@ export class SelfHostWorker {
     this.pollers = [];
   }
 
+  private checkDailyTask(task: ScheduledTaskRegistration): void {
+    if (!this.running || task.nextUtcSlot === undefined || task.dailyUtcHour === undefined) return;
+    const now = new Date();
+    const day = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+    if (now.getTime() >= task.nextUtcSlot) {
+      const todaySlot = day + task.dailyUtcHour * 3_600_000;
+      task.nextUtcSlot = todaySlot > now.getTime() ? todaySlot : todaySlot + 86_400_000;
+      // Consume skipped/failed slots too; clock changes must not replay the same UTC day.
+      if (task.lastScheduledDay === undefined || day > task.lastScheduledDay) {
+        task.lastScheduledDay = day;
+        this.startScheduledTask(task);
+      }
+    }
+    task.dailyTimer = setTimeout(() => this.checkDailyTask(task), Math.min(60_000, task.nextUtcSlot - now.getTime()));
+  }
+
   /** Start a tick's run and record it, so stop() can wait for it. */
   private startScheduledTask(task: ScheduledTaskRegistration): void {
+    if (!this.running) return;
     // Non-reentrant: setInterval fires on a fixed cadence regardless of run duration, so a run
     // that outlasts its interval would otherwise overlap the next tick and double-enqueue work.
     if (task.inFlight) {
@@ -195,7 +231,15 @@ export class SelfHostWorker {
       return;
     }
     try {
-      await q.dispatch(this.toSqsEvent(message), this.fakeContext(q.name));
+      const result = await q.dispatch(this.toSqsEvent(message), this.fakeContext(q.name));
+      if (result && typeof result === 'object' && 'batchItemFailures' in result) {
+        const failures = result.batchItemFailures;
+        // Dispatch receives one record: any reported failure (including an invalid ID) retries it.
+        // SQS treats a null or empty failure list as success.
+        if (failures != null && (!Array.isArray(failures) || failures.length > 0)) {
+          throw new Error('Handler returned batch failures or an invalid batch failure response');
+        }
+      }
       if (message.ReceiptHandle) {
         await deleteFromQueue(q.url, message.ReceiptHandle);
       }

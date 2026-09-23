@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   detectLakeInconsistencies,
   INCONSISTENCY_CHUNKS_PER_MEMBER,
+  INCONSISTENCY_DETECTOR,
   INCONSISTENCY_MEMBER_SAMPLE,
 } from './detectLakeInconsistencies';
 
@@ -30,12 +31,19 @@ const memberRow = (fabFileId: string, fileName = `${fabFileId}.pdf`): MemberRow 
   arm: 'meta-tag',
 });
 
-const makeAdapters = (members: MemberRow[], textsById: Record<string, string[]> = {}) => {
+type DismissedKey = { kind: string; subject: string };
+
+const makeAdapters = (
+  members: MemberRow[],
+  textsById: Record<string, string[]> = {},
+  dismissed: DismissedKey[] = []
+) => {
   const findChunkTextSample = vi.fn(async (fabFileId: string) => textsById[fabFileId] ?? []);
   return {
     db: {
       fabFiles: { findDataLakeMembershipMembers: vi.fn(async () => members) },
       fabFileChunks: { findChunkTextSample },
+      dataLakeFindings: { listDismissedKeys: vi.fn(async () => dismissed) },
     },
     logger: { warn: vi.fn() },
   };
@@ -48,7 +56,7 @@ describe('detectLakeInconsistencies', () => {
       b: ['Uptime is 99.5%'],
     });
 
-    const report = await detectLakeInconsistencies(lake, 2026, adapters as never);
+    const { report } = await detectLakeInconsistencies(lake, 2026, adapters as never);
 
     expect(report.findings).toHaveLength(1);
     expect(report.findings[0].kind).toBe('metric-disagreement');
@@ -69,7 +77,7 @@ describe('detectLakeInconsistencies', () => {
     const tooMany = Array.from({ length: INCONSISTENCY_MEMBER_SAMPLE + 1 }, (_, i) => memberRow(`f${i}`));
     const adapters = makeAdapters(tooMany);
 
-    const report = await detectLakeInconsistencies(lake, 2026, adapters as never);
+    const { report } = await detectLakeInconsistencies(lake, 2026, adapters as never);
 
     expect(report.memberSampled).toBe(true);
     expect(adapters.db.fabFileChunks.findChunkTextSample).toHaveBeenCalledTimes(INCONSISTENCY_MEMBER_SAMPLE);
@@ -80,14 +88,14 @@ describe('detectLakeInconsistencies', () => {
     // It used to be derived from member overflow alone, so a small lake reported sampled:false -
     // "counts are exact" - about a pass that had read five chunks per document. An owner seeing
     // {findingCount: 0, sampled: false} reasonably concluded the corpus was read and is clean.
-    const report = await detectLakeInconsistencies(lake, 2026, makeAdapters([memberRow('a')]) as never);
+    const { report } = await detectLakeInconsistencies(lake, 2026, makeAdapters([memberRow('a')]) as never);
 
     expect(report.sampled).toBe(true);
     expect(report.memberSampled).toBe(false);
   });
 
   it('reports a lake it never scanned as memberCount 0 rather than as an empty clean report', async () => {
-    const report = await detectLakeInconsistencies(
+    const { report } = await detectLakeInconsistencies(
       { ...lake, datalakeTag: '' } as never,
       2026,
       makeAdapters([memberRow('a')]) as never
@@ -109,7 +117,7 @@ describe('detectLakeInconsistencies', () => {
       c: ['Uptime is 99.9%'],
     });
 
-    const report = await detectLakeInconsistencies(lake, 2026, adapters as never);
+    const { report } = await detectLakeInconsistencies(lake, 2026, adapters as never);
 
     expect(report.memberCount).toBe(3);
     expect(report.findings).toEqual([]);
@@ -126,7 +134,7 @@ describe('detectLakeInconsistencies', () => {
       return fabFileId === 'a' ? ['Uptime is 99.9%'] : ['Uptime is 99.5%'];
     });
 
-    const report = await detectLakeInconsistencies(lake, 2026, adapters as never);
+    const { report } = await detectLakeInconsistencies(lake, 2026, adapters as never);
 
     expect(report.findings).toHaveLength(1);
     expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('could not read chunk text'));
@@ -137,7 +145,7 @@ describe('detectLakeInconsistencies', () => {
     // put other tenants' document TEXT into this response.
     const adapters = makeAdapters([memberRow('a')], { a: ['Uptime is 99.9%'] });
 
-    const report = await detectLakeInconsistencies({ ...lake, datalakeTag: '' }, 2026, adapters as never);
+    const { report } = await detectLakeInconsistencies({ ...lake, datalakeTag: '' }, 2026, adapters as never);
 
     expect(adapters.db.fabFiles.findDataLakeMembershipMembers).not.toHaveBeenCalled();
     expect(adapters.db.fabFileChunks.findChunkTextSample).not.toHaveBeenCalled();
@@ -147,7 +155,7 @@ describe('detectLakeInconsistencies', () => {
   it('drops a member with no chunk text rather than carrying an empty document', async () => {
     const adapters = makeAdapters([memberRow('empty'), memberRow('a')], { a: ['Supported until 2020.'] });
 
-    const report = await detectLakeInconsistencies(lake, 2026, adapters as never);
+    const { report } = await detectLakeInconsistencies(lake, 2026, adapters as never);
 
     expect(report.findings).toHaveLength(1);
     expect(report.findings[0].evidence[0].fabFileId).toBe('a');
@@ -159,7 +167,7 @@ describe('detectLakeInconsistencies', () => {
       b: ['Uptime is 99.5%'],
     });
 
-    const report = await detectLakeInconsistencies(lake, 2026, adapters as never);
+    const { report } = await detectLakeInconsistencies(lake, 2026, adapters as never);
 
     expect(report.findings).toHaveLength(1);
   });
@@ -167,8 +175,8 @@ describe('detectLakeInconsistencies', () => {
   it('takes the year from the caller, so a stored report stays comparable', async () => {
     const adapters = makeAdapters([memberRow('a')], { a: ['Expected in 2025.'] });
 
-    expect((await detectLakeInconsistencies(lake, 2024, adapters as never)).findings).toEqual([]);
-    expect((await detectLakeInconsistencies(lake, 2026, adapters as never)).findings).toHaveLength(1);
+    expect((await detectLakeInconsistencies(lake, 2024, adapters as never)).report.findings).toEqual([]);
+    expect((await detectLakeInconsistencies(lake, 2026, adapters as never)).report.findings).toHaveLength(1);
   });
 
   it('scopes the member read to this lake', async () => {
@@ -180,5 +188,81 @@ describe('detectLakeInconsistencies', () => {
       expect.objectContaining({ datalakeTag: 'datalake:acme', creatorUserId: 'u1' }),
       INCONSISTENCY_MEMBER_SAMPLE
     );
+  });
+});
+
+describe('detectLakeInconsistencies dismissal suppression (#3045)', () => {
+  const twoMembers = { a: ['Uptime is 99.9%'], b: ['Uptime is 99.5%'] };
+
+  it('does not resurrect a finding a curator dismissed', async () => {
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')], twoMembers, [
+      { kind: 'metric-disagreement', subject: 'uptime' },
+    ]);
+
+    const { report } = await detectLakeInconsistencies(lake, 2026, adapters as never);
+
+    expect(report.findings).toHaveLength(0);
+    // The counts feed the health summary, so leaving the dismissal in them would resurrect it there
+    // even with the finding itself gone from the list.
+    expect(report.countsByKind['metric-disagreement']).toBe(0);
+    expect(report.truncated).toBe(false);
+  });
+
+  it('hands the suppressed finding back so its row can stay current', async () => {
+    // A dismissal keys on kind and subject, so the passages under it can change into a worse
+    // contradiction. Dropping the finding entirely would freeze the row at the original excerpts and
+    // leave that change visible nowhere at all.
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')], twoMembers, [
+      { kind: 'metric-disagreement', subject: 'uptime' },
+    ]);
+
+    const { suppressed } = await detectLakeInconsistencies(lake, 2026, adapters as never);
+
+    expect(suppressed).toHaveLength(1);
+    expect(suppressed[0].subject).toBe('uptime');
+    expect(suppressed[0].evidence.map(e => e.fabFileId).sort()).toEqual(['a', 'b']);
+  });
+
+  it('still reports when the dismissal read fails, rather than costing the run its report', async () => {
+    // Failing closed would 500 a ~1000-chunk pass that the corpus could have answered. Failing open
+    // re-reports one dismissal, which a curator dismisses again.
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')], twoMembers);
+    adapters.db.dataLakeFindings.listDismissedKeys = vi.fn(async () => {
+      throw new Error('findings unavailable');
+    });
+
+    const { report } = await detectLakeInconsistencies(lake, 2026, adapters as never);
+
+    expect(report.findings).toHaveLength(1);
+    expect(adapters.logger.warn).toHaveBeenCalled();
+  });
+
+  it("keys the suppression on the lake and this pass's detector", async () => {
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')], twoMembers);
+
+    await detectLakeInconsistencies(lake, 2026, adapters as never);
+
+    expect(adapters.db.dataLakeFindings.listDismissedKeys).toHaveBeenCalledWith('lake1', INCONSISTENCY_DETECTOR);
+  });
+
+  it('leaves a finding dismissed under a DIFFERENT subject alone', async () => {
+    const adapters = makeAdapters([memberRow('a'), memberRow('b')], twoMembers, [
+      { kind: 'metric-disagreement', subject: 'latency' },
+    ]);
+
+    const { report } = await detectLakeInconsistencies(lake, 2026, adapters as never);
+
+    expect(report.findings).toHaveLength(1);
+    expect(report.findings[0].subject).toBe('uptime');
+  });
+
+  it('never reads dismissals for a lake it refuses to scan', async () => {
+    // The null-tag guard returns before any collection is touched; a dismissal read there would be
+    // a query issued for a report that is empty by construction.
+    const adapters = makeAdapters([memberRow('a')], { a: ['Uptime is 99.9%'] });
+
+    await detectLakeInconsistencies({ ...lake, datalakeTag: '' }, 2026, adapters as never);
+
+    expect(adapters.db.dataLakeFindings.listDismissedKeys).not.toHaveBeenCalled();
   });
 });

@@ -104,11 +104,10 @@ import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent'
 import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
 import {
   defangRetrievedContent,
-  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
-import { buildRetrievalConflictNote, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
+import { buildRetrievalConflictSignal, type RetrievalPassage } from '../dataLakeService/retrievalConflictNote';
 import { clipToCodePointBoundary } from './tools/implementation/knowledgeBaseSearch/tokenBudget';
 import { GROUNDED_NO_INVENTION_RULE } from './prompts';
 import { getRelevantMementos } from '../mementoService';
@@ -229,6 +228,9 @@ interface DatabaseAdapters {
     IDataLakeRepository,
     | 'findActiveByUserTags'
     | 'findActiveByUserTagsAndEntitlements'
+    // #3055's count-only companion query - see getDynamicDataLakeTags.ts's DataLakeAccessContext,
+    // which this type must satisfy at every ChatCompletionFeatures call site.
+    | 'countGateExcludedLakes'
     | 'findByDatalakeTag'
     | 'findById'
     | 'find'
@@ -790,6 +792,10 @@ export class LakeMemoryFeature implements ChatCompletionFeature {
       // The SAME entitlement-aware resolver forced retrieval and the knowledge tools use, so the card
       // spans exactly the lakes this user may read - the offer and the read can't disagree.
       const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
+      // `entitlementKeysResolved` deliberately omitted (defaults to complete): this call site reads
+      // only `dataLakeTags`, never `excludedByAccessCount` - see that field's own doc on why an
+      // entitlement-read failure must reach it (#3155 review). Add the field here too if this ever
+      // starts reading the count.
       const { dataLakeTags: entitledTags } = await getDynamicDataLakeAccess({
         db: this.chatCompletion.db,
         user: this.user,
@@ -1976,6 +1982,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
     // grants or lakes read and reports it ONLY through this logger (setting lakeViewComplete false
     // as the machine-readable half). Omitting it made every one of those catches silent on the main
     // chat path, so "this user reaches no lakes" and "the grant read just failed" looked identical.
+    // `entitlementKeysResolved` deliberately omitted here too, same reason as the lake-memory card
+    // above: this path never reads `excludedByAccessCount` (#3155 review).
     const resolved = await getDynamicDataLakeAccess({ db, user, entitlementKeys, logger: this.logger });
     // `user.id` is the session OWNER here, not merely the turn's actor: preauthorizedLakeIds only
     // reaches this process after vetPreauthorizedLakeIds has established the two are the same
@@ -2105,7 +2113,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       const entitlementKeys = await this.chatCompletion.resolveEntitlementKeys();
       // Held in a local rather than passed inline: the grant-reach memo is scoped by OBJECT
       // IDENTITY, so the telemetry derivation below is a cache hit only if it gets this same
-      // instance (see grantedLakeIdsUsedFor).
+      // instance (see grantedLakeIdsUsedFor). `entitlementKeysResolved` deliberately omitted, same
+      // reason as the other two builders in this file: nothing downstream of this object reads
+      // `excludedByAccessCount` (#3155 review).
       const lakeAccessContext = { db, user, entitlementKeys, logger: this.logger };
       const prompts = await getAccessibleDataLakePrompts(lakeAccessContext, {
         restrictToDatalakeTags: datalakeTags,
@@ -2985,15 +2995,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // wraps `name` alone, never the whole heading: it strips brackets, so applying it wider
         // would eat the `[N]` the indexed citation contract depends on.
         const safeName = toContentLabel(name);
-        // The date is read off the file document, not the candidate: `excludeContent` projects by
-        // EXCLUSION, so `createdAt` is already on the docs in `fileById` and no extra read or
-        // candidate field is needed. Unwrapped by toContentLabel on purpose - documentDateClause
-        // emits digits and separators only, so it cannot forge a marker the way `name` could.
-        const datedClause = documentDateClause(file?.createdAt);
+        // Undated, as the two knowledge tools are: the only date on the file document is
+        // `createdAt`, which is when it was uploaded rather than when its content was written.
         const heading =
           this.citationStyle === 'indexed'
-            ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})${datedClause}`
-            : `### ${safeName} (ID: ${candidate.fabFileId})${datedClause}`;
+            ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})`
+            : `### ${safeName} (ID: ${candidate.fabFileId})`;
         sections.push(`${heading}\n${text}`);
         conflictPassages.push({ fabFileId: candidate.fabFileId, text });
         used += text.length;
@@ -3122,10 +3129,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         ...(backgroundScore !== undefined ? { backgroundScore } : {}),
       });
 
+      // Ahead of the chips rather than beside the note it also produces: one detector pass feeds
+      // both, so the reader is marked with exactly the conflicts the model is warned about (#3041).
+      const conflict = buildRetrievalConflictSignal(conflictPassages);
+
       // Emit citation chips for the distinct source files so the UI shows "Sources (N)".
       const citables: CitableSource[] = sourceFileIds.map((fid, index) => {
         const file = fileById.get(fid);
         const cited = citedChunkByFile.get(fid);
+        const conflictsWith = conflict.conflictsByFileId.get(fid);
         const tagDesc = (file?.tags?.map(t => t.name) || [])
           .filter(t => !t.startsWith('datalake:'))
           .slice(0, 4)
@@ -3147,6 +3159,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
             // entirely, since an empty-string anchor would make the reader chase a passage that
             // does not exist rather than showing the whole document.
             ...(cited ? { chunkId: cited.chunkId, fullContext: cited.passage } : {}),
+            // Spread for the same reason, and COPIED: an absent key must leave the field off
+            // entirely rather than stamping an empty array the chip would badge with no partner to
+            // name, and the chip must not alias the detector's own array.
+            ...(conflictsWith ? { conflictsWith: [...conflictsWith] } : {}),
           },
         };
       });
@@ -3224,7 +3240,8 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         'consoles or other infrastructure steps for counting it.\n\n';
       // Last of the column-0 notes, nearest the content it describes: the injected passages
       // contradict each other, so the model must surface that rather than pick the top-ranked side.
-      const conflictNote = buildRetrievalConflictNote(conflictPassages);
+      // Computed above with the chips, so the two channels cannot name different documents.
+      const conflictNote = conflict.note;
       const header =
         this.citationStyle === 'indexed'
           ? '[Knowledge Base — Retrieved Context]\n' +
