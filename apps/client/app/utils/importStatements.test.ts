@@ -2,6 +2,7 @@ import vm from 'node:vm';
 import { transform, type PluginObj } from '@babel/standalone';
 import { describe, expect, it } from 'vitest';
 import {
+  codeImportDependencies,
   createImportScanner,
   hasSingleLineImportFrom,
   IMPORT_SCANNER_FACTORY_SRC,
@@ -429,5 +430,31 @@ describe('createImportScanner serialized for the sandbox preview', () => {
       if (run(browser) !== run(local)) mismatches++;
     }
     expect(mismatches).toBe(0);
+  });
+});
+
+describe('codeImportDependencies (editor preview dependency list)', () => {
+  // The viewer's pre-change extractor, verbatim: `.*?` cannot cross a line terminator.
+  const originalViewerDeps = (code: string): string[] => {
+    const re = /import\s+.*?\s+from\s+['"]([^'"]+)['"]/g;
+    const out: string[] = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(code)) !== null) {
+      if (!m[1].startsWith('.') && !m[1].startsWith('/') && m[1] !== 'react') out.push(m[1]);
+    }
+    return out;
+  };
+
+  it('agrees with the old extractor on single-line imports', () => {
+    const code =
+      "import React, { useState } from 'react';\nimport * as d3 from 'd3';\nimport { x } from './local';\nimport _ from \"lodash\"";
+    expect(codeImportDependencies(code)).toEqual(['d3', 'lodash']);
+    expect(codeImportDependencies(code)).toEqual(originalViewerDeps(code));
+  });
+
+  it('also reports a multi-line import clause, which the old extractor missed (intentional widening)', () => {
+    const code = "import {\n  LineChart,\n  Line,\n} from 'recharts';\nimport { Camera } from 'lucide-react';";
+    expect(codeImportDependencies(code)).toEqual(['recharts', 'lucide-react']);
+    expect(originalViewerDeps(code)).toEqual(['lucide-react']);
   });
 });

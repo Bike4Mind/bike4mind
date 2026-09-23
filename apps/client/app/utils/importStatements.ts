@@ -402,3 +402,16 @@ export function hasSingleLineImportFrom(source: string, specifier: string): bool
   }
   return false;
 }
+
+/**
+ * External packages the editor's code imports, for the preview's dependency list. Uses the same
+ * linear scan the sandbox rewrites with, so a multi-line clause counts too (the single-line regex
+ * this replaced skipped it), and runs on every edit without rescanning the rest of the line.
+ */
+export function codeImportDependencies(code: string): string[] {
+  const deps: string[] = [];
+  for (const { specifier } of scanImportStatements(code)) {
+    if (!specifier.startsWith('.') && !specifier.startsWith('/') && specifier !== 'react') deps.push(specifier);
+  }
+  return deps;
+}
