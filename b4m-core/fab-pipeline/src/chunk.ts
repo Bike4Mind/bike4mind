@@ -2,6 +2,7 @@ import {
   BedrockEmbeddingModel,
   countCodePoints,
   DEFAULT_PASSAGE_TOKEN_TARGET,
+  DocumentDateSource,
   IFabFile,
   MIN_CHUNK_CHARS_FLOOR,
   MIN_PASSAGE_TOKEN_TARGET,
@@ -16,6 +17,13 @@ import {
 } from '@bike4mind/common';
 import mammoth from 'mammoth';
 import JSZip from 'jszip';
+import {
+  acceptDocumentDate,
+  parseFrontmatterDate,
+  parseOoxmlCoreCreated,
+  parsePdfInfoDate,
+  type ExtractedDocumentDate,
+} from './documentDate';
 import type { Tiktoken } from 'tiktoken';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
@@ -49,6 +57,22 @@ const MAX_PPTX_SLIDES = 5_000;
 const MAX_SLIDE_XML_BYTES = 16 * 1024 * 1024;
 const MAX_PPTX_TOTAL_XML_BYTES = 32 * 1024 * 1024;
 const MAX_PPTX_TEXT_CHARS = 2_000_000;
+
+/** Where docx, xlsx and pptx all keep the authored-date property (#3048). */
+const OOXML_CORE_PROPERTIES_PATH = 'docProps/core.xml';
+/** Real core properties run to a few hundred bytes; a megabyte of them is a bomb, not metadata. */
+const MAX_OOXML_CORE_XML_BYTES = 256 * 1024;
+
+/** unpdf's document proxy, named here so the metadata side-read reads as one thing. */
+type PdfDocumentProxy = Awaited<ReturnType<typeof getDocumentProxy>>;
+
+/**
+ * Formats where a leading `---` fence means frontmatter. Deliberately NOT widened to the
+ * text-shaped application/* types the switch also routes through chunkText: in YAML `---` is a
+ * document separator and a top-level `date:` is the file's own content, so reading one as the
+ * document's vintage would be a guess rather than a signal.
+ */
+const FRONTMATTER_MIME_TYPES = new Set<string>(['text/markdown', 'text/plain']);
 
 // Pull the bodies of `<a:t>` text runs out of a PPTX slide's XML with a linear scan.
 // The equivalent regex (`/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g`) is quadratic on XML that
@@ -176,6 +200,11 @@ export class SmartChunker {
   // (see computeServerTextHash) so the fingerprint is stable across chunk-policy changes; the chunk
   // OUTPUT is not. Undefined for a file with no extractable text (image/audio/unsupported/empty).
   private lastExtractedText: string | undefined;
+  // The document's own vintage from the most recent chunkFile() call, when the format carried one
+  // (#3048). Rides the chunking pass because that is the one place the decoded bytes are already in
+  // hand - re-reading the file just to look at its metadata would double the ingest read for a
+  // field most documents do not have. Undefined whenever no source offered a plausible date.
+  private lastDocumentDate: ExtractedDocumentDate | undefined;
 
   /**
    * @param model - The embedding model name
@@ -256,6 +285,14 @@ export class SmartChunker {
   }
 
   /**
+   * The document's own vintage from the most recent chunkFile() call, or undefined when the format
+   * carried none that survived the plausibility window. See lastDocumentDate.
+   */
+  public getDocumentDate(): ExtractedDocumentDate | undefined {
+    return this.lastDocumentDate;
+  }
+
+  /**
    * Chunk a file into smaller pieces that can be processed by the model
    * Overloaded method that accepts either an IFabFile or a Buffer with mimeType
    */
@@ -282,6 +319,7 @@ export class SmartChunker {
     // Cleared per call; each format handler below sets it to the text it extracted. Anything that
     // returns no chunks (audio/image/unsupported) leaves it undefined.
     this.lastExtractedText = undefined;
+    this.lastDocumentDate = undefined;
 
     // Audio (generated TTS / sound effects) is intentionally not vectorizable -
     // there is nothing to chunk. Short-circuit quietly so reprocess/on-demand
@@ -346,6 +384,12 @@ export class SmartChunker {
         if (mimeType && mimeType.startsWith('text/')) {
           const textContent = content.toString();
           this.lastExtractedText = textContent;
+          if (FRONTMATTER_MIME_TYPES.has(mimeType)) {
+            this.lastDocumentDate = acceptDocumentDate(
+              parseFrontmatterDate(textContent),
+              DocumentDateSource.FRONTMATTER
+            );
+          }
           chunks = await this.chunkText(textContent);
           break;
         }
@@ -432,6 +476,46 @@ export class SmartChunker {
     return chunks;
   }
 
+  /**
+   * The PDF's own `CreationDate`, if it carries a plausible one.
+   *
+   * Metadata is a best-effort side read: the text is already extracted by the time this runs, so a
+   * malformed info dictionary must cost the file its vintage and nothing else. It is logged rather
+   * than swallowed because getMetadata() throwing is genuinely exceptional - a PDF with no dates
+   * returns an empty info dictionary, it does not raise.
+   */
+  private async readPdfDocumentDate(pdf: PdfDocumentProxy): Promise<ExtractedDocumentDate | undefined> {
+    try {
+      const { info } = await pdf.getMetadata();
+      const creationDate = (info as unknown as Record<string, unknown> | undefined)?.CreationDate;
+      return acceptDocumentDate(parsePdfInfoDate(creationDate), DocumentDateSource.PDF_METADATA);
+    } catch (error) {
+      this.logger.warn(`Could not read PDF metadata for a document date: ${(error as Error).message}`);
+      return undefined;
+    }
+  }
+
+  /**
+   * `dcterms:created` from an OOXML container's `docProps/core.xml` - the date Word/PowerPoint
+   * stamp when the document is first saved.
+   *
+   * Takes an already-open zip so the PPTX path does not pay for a second load. Read through
+   * readZipEntryBounded like every other entry in this file: core.xml is a few hundred bytes in
+   * any real document, so anything claiming more than the cap is a compression bomb, not metadata.
+   */
+  private async readOoxmlDocumentDate(zip: JSZip): Promise<ExtractedDocumentDate | undefined> {
+    const entry = zip.files[OOXML_CORE_PROPERTIES_PATH];
+    if (!entry) return undefined;
+    const read = await readZipEntryBounded(entry as unknown as BoundedZipEntry, MAX_OOXML_CORE_XML_BYTES);
+    if (!read.ok) {
+      this.logger.warn(
+        `${OOXML_CORE_PROPERTIES_PATH} exceeded ${MAX_OOXML_CORE_XML_BYTES} bytes; no document date read`
+      );
+      return undefined;
+    }
+    return acceptDocumentDate(parseOoxmlCoreCreated(read.text), DocumentDateSource.DOCUMENT_PROPERTIES);
+  }
+
   // Chunks PDF content into pieces that fit within the model's token limit
   private async chunkPDF(content: Buffer): Promise<Chunk[]> {
     // Convert the Buffer to Uint8Array and get the PDF document proxy
@@ -441,6 +525,8 @@ export class SmartChunker {
 
     // The extracted text, page-joined - captured before size-chunking so the fingerprint is stable.
     this.lastExtractedText = Array.isArray(text) ? text.join('\n') : text;
+
+    this.lastDocumentDate = await this.readPdfDocumentDate(pdf);
 
     if (typeof text === 'string') {
       // If text is a single string, chunk it as plain text
@@ -602,6 +688,9 @@ export class SmartChunker {
     // Extract raw text from the DOCX file using mammoth
     const result = await mammoth.extractRawText({ buffer: content });
     this.lastExtractedText = result.value;
+    // mammoth exposes no metadata API at all, so the container is opened separately for the one
+    // property wanted. Lazy: JSZip reads the directory here, not every entry's bytes.
+    this.lastDocumentDate = await this.readOoxmlDocumentDate(await JSZip.loadAsync(content));
     // Chunk the extracted text as plain text
     return this.chunkText(result.value);
   }
@@ -611,6 +700,7 @@ export class SmartChunker {
   // order, and chunk the concatenated text. Notes slides are intentionally skipped.
   private async chunkPPTX(content: Buffer): Promise<Chunk[]> {
     const zip = await JSZip.loadAsync(content);
+    this.lastDocumentDate = await this.readOoxmlDocumentDate(zip);
     const allSlidePaths = Object.keys(zip.files)
       .filter(p => /^ppt\/slides\/slide\d+\.xml$/.test(p))
       .sort((a, b) => {
@@ -802,6 +892,14 @@ export class SmartChunker {
     const { read, utils } = await import('xlsx');
 
     const workbook = read(content, { type: 'buffer' });
+
+    // SheetJS already parses the workbook's properties, so this needs no second pass over the
+    // container - and unlike a docProps/core.xml read it also covers legacy .xls, whose created
+    // date lives in an OLE summary stream rather than in any XML.
+    this.lastDocumentDate = acceptDocumentDate(
+      workbook.Props?.CreatedDate ?? null,
+      DocumentDateSource.DOCUMENT_PROPERTIES
+    );
 
     // Canonical extracted text for the fingerprint: every sheet's rows serialized deterministically,
     // independent of chunkTokenLimit. The chunk OUTPUT below flips between whole-row and per-cell

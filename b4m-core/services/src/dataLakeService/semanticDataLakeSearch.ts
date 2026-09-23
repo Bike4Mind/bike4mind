@@ -107,6 +107,8 @@ export interface SemanticChunkResult {
   fileId: string;
   fileName: string;
   fileTags: string[];
+  /** The source document's own vintage (#3048), for the passage header. Null when it has none. */
+  documentDate: Date | null;
   chunkText: string;
   score: number;
 }
@@ -441,6 +443,13 @@ interface RankableFile {
    * below must carry it.
    */
   createdAt?: Date | string | null;
+  /**
+   * The document's OWN vintage (#3048) - the one date that IS surfaced to the model, unlike
+   * `createdAt` above. Carried purely so the passage header can show it: supersession ranking
+   * still keys on `createdAt`, because which COPY we ingested last is a different question from
+   * when the document was written. All three builders below must carry it.
+   */
+  documentDate?: Date | null;
   /**
    * The only record of which embedding space a file's chunks live in - chunks carry no model of
    * their own. Width alone cannot separate ada-002 from text-embedding-3-small (both 1536), so
@@ -787,6 +796,7 @@ async function scanAndRank(args: {
           fileId: chunk.fabFileId,
           fileName: file.fileName,
           fileTags: file.fileTags,
+          documentDate: file.documentDate ?? null,
           chunkText: chunk.text ?? '',
           score,
         });
@@ -994,6 +1004,7 @@ async function rankChunksForFiles(args: {
       relativePath: file?.relativePath,
       driveFileId: file?.driveFileId,
       createdAt: file?.createdAt,
+      documentDate: file?.documentDate,
       userId: file?.userId,
       // The curator ruling the collapse reads as its top tier. This projection is the LAST hop
       // before the partition, so a field carried faithfully by both `fileById` builders and
@@ -1658,6 +1669,7 @@ async function lakeScopedSearch(
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
         createdAt: f.createdAt,
+        documentDate: f.documentDate,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
@@ -1790,6 +1802,7 @@ async function fileScopedSearch(
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
         createdAt: f.createdAt,
+        documentDate: f.documentDate,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,

@@ -11,9 +11,16 @@ export interface AnnSearchAdapter {
   ): Promise<Array<{ id: string; fabFileId: string; text: string; score: number }>>;
 }
 
-interface AnnRankableFile {
+/**
+ * The parent-file metadata an ANN row is shaped from. Exported so the two backend wrappers name
+ * this type rather than re-declaring a narrower structural copy: a hand-written duplicate that
+ * omits a field still compiles, and the field then arrives undefined at runtime with no error.
+ */
+export interface AnnRankableFile {
   fileName: string;
   fileTags: string[];
+  /** The source document's own vintage (#3048), carried through for the passage header. */
+  documentDate?: Date | null;
 }
 
 export interface AnnVectorSearchResult {
@@ -122,6 +129,7 @@ export async function annVectorSearch(args: {
       fileId: hit.fabFileId,
       fileName: file.fileName,
       fileTags: file.fileTags,
+      documentDate: file.documentDate ?? null,
       chunkText: hit.text,
       score,
     });

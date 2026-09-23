@@ -9,7 +9,7 @@ import {
   embeddingModelContextWindow,
 } from './chunk';
 import { Logger } from '@bike4mind/observability';
-import { countCodePoints, MIN_CHUNK_CHARS_FLOOR } from '@bike4mind/common';
+import { countCodePoints, DocumentDateSource, MIN_CHUNK_CHARS_FLOOR } from '@bike4mind/common';
 
 // Minimal mock storage - chunkText doesn't use storage
 const mockStorage = {
@@ -615,5 +615,81 @@ describe('getExtractedText (lake admission fingerprint source, #1679)', () => {
     await chunker.chunkFile(Buffer.from('anything'), 'application/octet-stream');
     chunker.freeEncoder();
     expect(chunker.getExtractedText()).toBeUndefined();
+  });
+});
+
+// The parsers have their own unit tests; this covers the wiring - that chunkFile actually reaches
+// them for the formats that carry a vintage, and leaves the slot empty for the ones that do not.
+describe('chunkFile captures a document date', () => {
+  const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+  async function buildDatedPptx(coreXmlBody: string | null): Promise<Buffer> {
+    const zip = new JSZip();
+    zip.file('ppt/slides/slide1.xml', '<?xml version="1.0"?><p:sld xmlns:a="x"><a:t>Slide text</a:t></p:sld>');
+    if (coreXmlBody !== null) {
+      zip.file(
+        'docProps/core.xml',
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties>${coreXmlBody}</cp:coreProperties>`
+      );
+    }
+    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
+  }
+
+  let chunker: SmartChunker;
+  beforeEach(() => {
+    chunker = createChunker();
+  });
+  afterEach(() => {
+    chunker.freeEncoder();
+  });
+
+  it('reads frontmatter from a markdown file', async () => {
+    await chunker.chunkFile(Buffer.from('---\ntitle: Report\ndate: 2019-03-04\n---\n\nBody text.'), 'text/markdown');
+    expect(chunker.getDocumentDate()).toEqual({
+      date: new Date('2019-03-04T00:00:00.000Z'),
+      source: DocumentDateSource.FRONTMATTER,
+    });
+  });
+
+  // The gate exists because `---` leads a horizontal rule, a diff hunk and a YAML stream too; only
+  // the formats where a leading block conventionally IS document frontmatter are scanned.
+  it('does not scan a text type outside the frontmatter allowlist', async () => {
+    await chunker.chunkFile(Buffer.from('---\ndate: 2019-03-04\n---\n\n<p>Body</p>'), 'text/html');
+    expect(chunker.getDocumentDate()).toBeUndefined();
+  });
+
+  it('reads dcterms:created out of an OOXML container', async () => {
+    const pptx = await buildDatedPptx(
+      '<dcterms:created xsi:type="dcterms:W3CDTF">2019-03-04T09:15:00Z</dcterms:created>'
+    );
+    await chunker.chunkFile(pptx, PPTX_MIME);
+    expect(chunker.getDocumentDate()).toEqual({
+      date: new Date('2019-03-04T09:15:00.000Z'),
+      source: DocumentDateSource.DOCUMENT_PROPERTIES,
+    });
+  });
+
+  it('leaves the slot empty for an OOXML container with no core properties', async () => {
+    await chunker.chunkFile(await buildDatedPptx(null), PPTX_MIME);
+    expect(chunker.getDocumentDate()).toBeUndefined();
+  });
+
+  // Proves the plausibility funnel is on the chunker path, not only in the parser's own tests:
+  // 1601-01-01 is Windows FILETIME zero, which parses as a perfectly valid calendar date.
+  it('refuses an implausible container date rather than storing it', async () => {
+    const pptx = await buildDatedPptx('<dcterms:created>1601-01-01T00:00:00Z</dcterms:created>');
+    await chunker.chunkFile(pptx, PPTX_MIME);
+    expect(chunker.getDocumentDate()).toBeUndefined();
+  });
+
+  // A chunker instance is reused across files in the ingest loop, so a stale date surviving into
+  // the next file would stamp one document's vintage onto another's.
+  it('resets between files', async () => {
+    const pptx = await buildDatedPptx('<dcterms:created>2019-03-04T09:15:00Z</dcterms:created>');
+    await chunker.chunkFile(pptx, PPTX_MIME);
+    expect(chunker.getDocumentDate()).toBeDefined();
+
+    await chunker.chunkFile(Buffer.from('Plain text with no vintage.'), 'text/plain');
+    expect(chunker.getDocumentDate()).toBeUndefined();
   });
 });

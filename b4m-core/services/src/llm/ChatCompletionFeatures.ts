@@ -107,6 +107,7 @@ import { recordLakeAccessEvent } from '../dataLakeService/recordLakeAccessEvent'
 import { defangBlockMarkers, renderDataLakePromptSection } from '../dataLakeService/renderDataLakePromptBlock';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../dataLakeService/renderRetrievedContentBlock';
@@ -3036,12 +3037,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         // wraps `name` alone, never the whole heading: it strips brackets, so applying it wider
         // would eat the `[N]` the indexed citation contract depends on.
         const safeName = toContentLabel(name);
-        // Undated, as the two knowledge tools are: the only date on the file document is
-        // `createdAt`, which is when it was uploaded rather than when its content was written.
+        // Dated from `documentDate` only - the document's own vintage (#3048) - and undated when
+        // there is none. Never from `createdAt`, which is when the file was uploaded rather than
+        // when its content was written (#3047). Appended after the `(ID: ...)` parenthetical in
+        // both citation styles, which the indexed contract and its tests both slice on.
+        const dateClause = documentDateClause(file?.documentDate);
         const heading =
           this.citationStyle === 'indexed'
-            ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})`
-            : `### ${safeName} (ID: ${candidate.fabFileId})`;
+            ? `### [${fileIdx + 1}] ${safeName} (ID: ${candidate.fabFileId})${dateClause}`
+            : `### ${safeName} (ID: ${candidate.fabFileId})${dateClause}`;
         sections.push(`${heading}\n${text}`);
         conflictPassages.push({ fabFileId: candidate.fabFileId, text });
         used += text.length;

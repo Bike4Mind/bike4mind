@@ -1,4 +1,5 @@
 export * from './chunk';
+export * from './documentDate';
 export * from './embeddings';
 export * from './ingest';
 export * from './ssrfProtection';

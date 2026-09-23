@@ -1,5 +1,6 @@
 import type { drive_v3 } from '@googleapis/drive';
-import { SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { DocumentDateSource, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { acceptDocumentDate } from '@bike4mind/fab-pipeline';
 import { resolveSupportedMimeType } from '@bike4mind/utils';
 import {
   listFolderChildren,
@@ -21,6 +22,39 @@ const EDITOR_EXPORTS: Record<string, string> = {
   [GOOGLE_SHEET]: SupportedFabFileMimeTypes.XLSX,
   [GOOGLE_SLIDES]: SupportedFabFileMimeTypes.PPTX,
 };
+
+/**
+ * Was this file AUTHORED in Drive, rather than merely uploaded to it?
+ *
+ * This is what decides whether Drive's `createdTime` is a document vintage (#3048). For a Google
+ * Editors file it is: the document has no bytes of its own outside Drive - which is precisely why
+ * it has to be EXPORTED to be ingested - so it was written there at that moment. For an uploaded
+ * binary `createdTime` is the upload time, and presenting that as a document date is the same
+ * ingestion-time-as-vintage mistake #3047 removed, so it is never taken.
+ *
+ * Keyed off EDITOR_EXPORTS rather than a second list, so a newly supported Editors type cannot be
+ * ingestible here but unrecognised there.
+ */
+export function isDriveAuthoredMimeType(mimeType: string): boolean {
+  return Object.hasOwn(EDITOR_EXPORTS, mimeType);
+}
+
+/**
+ * The document-vintage fields to persist for a Drive file, or an empty object when Drive offers no
+ * vintage for it. Spread straight into the FabFile create payload.
+ *
+ * Goes through `acceptDocumentDate` like every other extractor rather than trusting Drive's string
+ * directly: the plausibility window belongs to the field, not to any one source, and a second way
+ * in that skips it is how the window stops meaning anything.
+ */
+export function driveDocumentVintage(file: DriveFile): {
+  documentDate?: Date;
+  documentDateSource?: DocumentDateSource;
+} {
+  if (!file.createdTime || !isDriveAuthoredMimeType(file.mimeType)) return {};
+  const accepted = acceptDocumentDate(new Date(file.createdTime), DocumentDateSource.DRIVE_CREATED);
+  return accepted ? { documentDate: accepted.date, documentDateSource: accepted.source } : {};
+}
 
 /** A file discovered by the recursive walk, with its path relative to the ingested root. */
 export type WalkedDriveFile = DriveFile & { relativePath: string };
