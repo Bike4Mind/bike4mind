@@ -25,8 +25,9 @@ type ApiKeyTable = Parameters<typeof resolveEmbeddingConfig>[1];
  * this returns an embedder that resolves undefined for every call. A vectorless event is still
  * recallable - `embeddingScorer` falls back to the lexical scorer and flags the result off-scale so
  * the cosine floor cannot drop it (`b4m-core/memory/src/recall.ts:77-82`) - it just ranks on a weaker
- * signal. Worth knowing that it stays that way for a lake: the re-embed backfill walks `user`
- * principals only (`reembedMementos.ts:222`).
+ * signal. And it stays that way: nothing backfills a vector onto an event written without one.
+ * `reembedMementos.ts` re-encodes EXISTING vectors into a new space and skips vectorless events
+ * outright (`reembedMementos.ts:180`).
  */
 export function createMementoEmbedder(apiKeyTable: ApiKeyTable, logger: Logger): MementoEmbedder {
   const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);

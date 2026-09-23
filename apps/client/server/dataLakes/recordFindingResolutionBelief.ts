@@ -142,9 +142,10 @@ export async function recordFindingResolutionBelief(
   );
   const embed = createMementoEmbedder(apiKeyTable, logger);
   const embedding = await embed(fact).catch((err: unknown) => {
-    // Logged rather than swallowed: no backfill re-embeds a LAKE principal, so a belief that misses
-    // its vector here misses it permanently and ranks on lexical overlap forever. Still best-effort -
-    // a weaker belief beats losing the curator's decision.
+    // Logged rather than swallowed: nothing backfills a vector onto an event written without one
+    // (`reembedMementos.ts:180` skips them), so a belief that misses its vector here misses it
+    // permanently and ranks on lexical overlap forever. Still best-effort - a weaker belief beats
+    // losing the curator's decision.
     logger.warn(
       `[lakeMemory] could not embed a curator resolution; writing it without a vector: ${
         err instanceof Error ? err.message : String(err)
