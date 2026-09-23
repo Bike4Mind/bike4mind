@@ -109,9 +109,12 @@ const nextConfig = {
   // Must match turbopack.root — SST/OpenNext may also inject this value
   outputFileTracingRoot: monorepoRoot,
 
-  // outputFileTracingIncludes carries two unrelated concerns and both fail silently when lost.
-  // Resolve any conflict here as a UNION of the two groups below; taking either side alone is a
-  // green build that is broken at runtime. Neither the route keys nor the two consts collide.
+  // outputFileTracingIncludes carries three unrelated concerns, and most of what it declares fails
+  // silently when lost - only the public content root and help-index.json are caught, by the
+  // container build's check-standalone-tree.mjs. Resolve any conflict here as a UNION of the three
+  // groups below; taking one side alone is a green build that is broken at runtime. One route key
+  // spans groups: '/api/help/chat' deliberately carries the content roots AND both search
+  // artifacts, so a conflict on THAT line has to keep both groups' entries, not just one side's.
   //
   // Sandbox routes: every route that can construct a REPL sandbox. Missing one does not open a
   // hole - the caller fails closed, rlm-answer with a 503 and a wake by dropping code_execute -
@@ -123,23 +126,28 @@ const nextConfig = {
   //
   // Help content roots: declared rather than traced. The two server readers
   // (pages/api/help/content.ts and server/help/retrieval.ts) build their read paths with template
-  // literals and keep the roots out of every path.* call, because @vercel/nft partially evaluates
-  // a path.resolve() whose base it cannot determine statically - a root chosen from a runtime
-  // array is exactly that - then gives up and globs the whole app directory into the bundle. That
-  // measured 47 MB of source, public/, e2e specs and tsconfig.tsbuildinfo against Lambda's hard
-  // 250 MB ceiling. Opaque paths mean nothing traces these files, so they MUST be declared here:
-  // the two halves are a pair, and dropping either one silently 404s every admin help article or
-  // silently re-adds the 47 MB. See server/help/contentPath.ts.
+  // literals and keep the roots out of every path.* call, because the file tracer partially
+  // evaluates a path.resolve() whose base it cannot determine statically - a root chosen from a
+  // runtime array is exactly that - then gives up and globs the whole app directory into the
+  // bundle. That measured 47 MB of source, public/, e2e specs and tsconfig.tsbuildinfo against
+  // Lambda's hard 250 MB ceiling. Opaque paths mean nothing traces these files, so they MUST be
+  // declared here: the two halves are a pair. Dropping the declaration 404s every admin article
+  // silently, and takes the public root with it - that half fails the container build's
+  // check-standalone-tree.mjs, but nothing catches it before then, and server/help/retrieval.ts
+  // reads the public root per request for EVERY user, not just admins. Reintroducing a
+  // path.resolve against a dynamic root silently re-adds the 47 MB. See server/help/contentPath.ts.
   //
   // Help search artifacts: declared for the opposite reason to the roots above. Their read sites
   // (pages/api/help/index.ts and server/help/retrieval.ts) build a path.join(process.cwd(),
   // '<literal>'), a shape the tracer CAN fold to a concrete file, so both artifacts have been
   // reaching the standalone tree on their own - off a tracer implementation detail with no config
   // contract behind it. These entries make that a declaration. Under Turbopack the tracer is
-  // Turbopack's own rather than nft, whose collect-build-traces is gated off; the includes here
-  // are still live, while the excludes below are dormant. help-embeddings.json exists only when
-  // an embedding key was present at build time (see .gitignore), and an include matching no file
-  // is a silent no-op, so declaring it costs a keyless build nothing.
+  // Turbopack's own rather than nft, whose collect-build-traces is gated off - and since that
+  // module is also the only JS-side reader of this key, the includes here are live only because
+  // Turbopack applies them natively. The excludes below are dormant either way; see the note on
+  // them. help-embeddings.json exists only when an embedding key was present at build time (see
+  // .gitignore), and an include matching no file is a silent no-op, so declaring it costs a
+  // keyless build nothing.
   outputFileTracingIncludes: {
     '/api/data-lakes/rlm-answer': [ISOLATED_VM_PREBUILDS],
     '/api/deep-agent/spin': [ISOLATED_VM_PREBUILDS],

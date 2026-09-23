@@ -4,26 +4,31 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 /**
- * Guards `outputFileTracingIncludes` in apps/client/next.config.mjs, which carries two unrelated
- * concerns that both fail SILENTLY when lost.
+ * Guards `outputFileTracingIncludes` in apps/client/next.config.mjs, which carries three unrelated
+ * concerns: the help content roots, the generated help search artifacts (see ARTIFACT_ROUTES
+ * below) and the isolated-vm sandbox prebuild. Most of what it declares fails SILENTLY when lost.
+ * The two exceptions are the public content root and help-index.json, both of which the container
+ * build's check-standalone-tree.mjs requires; the admin root, help-embeddings.json and the
+ * prebuild have no guard at all.
  *
- * The help half is the reason this file exists. Both server readers of the help content roots
+ * The content roots are the reason this file exists. Both of their server readers
  * (`pages/api/help/content.ts`, `server/help/retrieval.ts`) build their read paths by template
- * interpolation so that no root ever reaches a `path.*` call - deliberately, because @vercel/nft
- * cannot fold a `path.resolve()` whose base it does not know and falls back to globbing the whole
- * app directory into the bundle (measured at 47 MB against Lambda's hard 250 MB ceiling). The
- * cost of that choice is that nothing traces the two content directories implicitly any more, so
- * the declaration here is the only thing putting them in the deployed Lambda. Delete it and
- * `next build`, typecheck and every CI leg stay green while help content 404s at runtime, because
- * `loadHelpContent` swallows the ENOENT. No ordinary test can see it.
+ * interpolation so that no root ever reaches a `path.*` call - deliberately, because the file
+ * tracer cannot fold a `path.resolve()` whose base it does not know and falls back to globbing the
+ * whole app directory into the bundle (measured at 47 MB against Lambda's hard 250 MB ceiling).
+ * The cost of that choice is that nothing traces the two content directories implicitly any more,
+ * so the declaration here is the only thing putting them in the deployed Lambda. Drop the admin
+ * root and `next build`, typecheck and every CI leg stay green while every admin article 404s at
+ * runtime, because `loadHelpContent` swallows the ENOENT. No ordinary test can see it.
  *
- * The sandbox half is pinned in the same place for a merge-safety reason rather than a tracing
- * one. Both groups were added to this one object literal independently, so a conflict here
- * presents as a same-hunk collision that invites picking a side - and either side alone is a
+ * The sandbox prebuild is pinned in the same place for a merge-safety reason rather than a tracing
+ * one. The three groups were added to this one object literal independently, so a conflict here
+ * presents as a same-hunk collision that invites picking a side - and one side alone can be a
  * green build that is broken in production: drop the sandbox entries and every `code_execute`
- * route silently loses its native binary, drop the help entries and help content 404s. The
- * correct resolution is always the union, and asserting all five keys is what makes a
- * one-sided resolution loud instead of silent.
+ * route silently loses its native binary, drop the content roots and help content 404s. Dropping
+ * the search artifacts breaks nothing today (see ARTIFACT_ROUTES), which is precisely why a
+ * one-sided resolution there would go unnoticed. The correct resolution is always the union, and
+ * asserting all six keys is what makes a one-sided resolution loud instead of silent.
  *
  * Imported rather than text-matched, unlike checkClientTestShards.test.ts and its siblings: this
  * config is ESM and evaluating it is both cheap and strictly stronger, since it checks the
@@ -57,7 +62,14 @@ const ARTIFACT_ROUTES: ReadonlyArray<[route: string, entries: string[]]> = [
 /**
  * The read sites each route entry above was keyed to, so the declaration and its justification
  * cannot drift apart: move a read out of one of these modules and the entry it justifies goes
- * stale with nothing failing. This does NOT catch a brand new reader in a third module.
+ * stale with nothing failing.
+ *
+ * A tripwire, not a proof. It matches one exact call shape - `process.cwd()` then the
+ * single-quoted literal - so it stays green on a brand new reader in a third module, and on a
+ * comment that happens to reproduce that whole token sequence. It goes RED on refactors that are
+ * fine in themselves: hoisting the literal to a shared const, double quotes, a template literal,
+ * or moving the join behind a helper. Each of those is a one-line fix here, which is the trade -
+ * a loud local failure in exchange for catching the silent kind.
  */
 const ARTIFACT_READERS: ReadonlyArray<[file: string, literal: string]> = [
   ['apps/client/pages/api/help/index.ts', 'app/generated/help-index.json'],
@@ -97,7 +109,15 @@ describe('outputFileTracingIncludes', () => {
 
   it.each(ARTIFACT_READERS)('%s still reads %s, so its declaration is not rotting', (file, literal) => {
     const source = fs.readFileSync(path.join(REPO_ROOT, file), 'utf8');
-    expect(source, `${file} no longer reads ${literal}; the entry in next.config.mjs is now stale`).toContain(literal);
+    // The call shape, not the bare path: a whole-file match on the path alone stays green when the
+    // read moves out of the module and only a comment naming the old file is left behind. `\s*`
+    // absorbs a re-wrapped argument list. Asserted as a boolean because the haystack is a whole
+    // source file, and a string matcher would print all of it as the received value on failure.
+    const readSite = new RegExp(`process\\.cwd\\(\\),\\s*'${literal.replace(/\./g, '\\.')}'`);
+    expect(
+      readSite.test(source),
+      `${file} no longer reads ${literal} off process.cwd(); the entry in next.config.mjs is now stale`
+    ).toBe(true);
   });
 
   it.each(SANDBOX_ROUTES)('still declares an isolated-vm prebuild for %s', route => {
