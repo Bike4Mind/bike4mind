@@ -82,7 +82,11 @@ export class SandboxOrchestrator {
       command,
       cwd,
       filesystemConfig: this.config.filesystem,
-      networkEnabled: this.config.network.enabled,
+      // Belt-and-braces: never claim network is on to the runtime unless a proxy is
+      // actually running to filter it. This is the single consumption choke point, so
+      // any path that leaves a stale network.enabled flag (e.g. /sandbox:disable or
+      // /sandbox:mode) still fails closed here - the flag alone can't grant raw egress.
+      networkEnabled: this.config.network.enabled && (this.proxyManager?.isRunning() ?? false),
       env: proxyEnv,
       ...(this.runtime.platform === 'linux' &&
         this.config.platform.linux.seccompProfile && {
@@ -119,17 +123,15 @@ export class SandboxOrchestrator {
     return this.config;
   }
 
-  /** Update config (does not persist - caller must save) */
-  updateConfig(config: SandboxConfig): void {
-    this.config = config;
-  }
-
   /**
    * Toggle network egress at runtime and keep the runtime flag and the actual
-   * proxy in lockstep - this is the SINGLE owner of that lifecycle. Fail-closed:
-   * when enabling, the proxy must be running afterwards or the flag stays false,
-   * so `shouldSandbox` can never hand `networkEnabled: true` to the runtime while
-   * `getProxyEnv()` is empty (which would grant raw, unfiltered IP egress).
+   * proxy in lockstep - this is the SINGLE lifecycle owner. Fail-closed: when
+   * enabling, the proxy must be running afterwards or the flag stays false. The
+   * flag is not trusted on its own either - shouldSandbox additionally gates on
+   * proxyManager.isRunning(), so a stale network.enabled left by any other path
+   * can never hand the runtime raw egress. Note the proxy only filters clients
+   * that honor HTTP(S)_PROXY; raw sockets (`curl --noproxy`, `nc`) still egress
+   * when network is on, so allowedDomains binds proxy-aware traffic only.
    * Returns whether network is enabled on return. Does not persist - caller saves.
    */
   async setNetworkEnabled(enabled: boolean): Promise<boolean> {
@@ -167,16 +169,6 @@ export class SandboxOrchestrator {
   /** Get the ProxyManager instance (if any) */
   getProxyManager(): ProxyManager | null {
     return this.proxyManager;
-  }
-
-  /** Start the network proxy (if configured) */
-  async startProxy(): Promise<void> {
-    await this.proxyManager?.start();
-  }
-
-  /** Stop the network proxy */
-  async stopProxy(): Promise<void> {
-    await this.proxyManager?.stop();
   }
 
   /** Get full status information for display */

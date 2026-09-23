@@ -50,6 +50,20 @@ describe('ProxyManager', () => {
       expect(manager.getPort()).toBe(port);
     });
 
+    it('concurrent starts share one in-flight promise (no orphaned second proxy)', async () => {
+      manager = new ProxyManager(enabledConfig());
+      // Overlapping starts must dedupe on the in-flight promise, not just isRunning():
+      // both would otherwise see isRunning() false and each bind a server, leaking one.
+      const p1 = manager.start();
+      const p2 = manager.start();
+      const p3 = manager.start();
+      expect(p2).toBe(p1);
+      expect(p3).toBe(p1);
+      await Promise.all([p1, p2, p3]);
+      expect(manager.isRunning()).toBe(true);
+      expect(manager.getPort()).toBeGreaterThan(0);
+    });
+
     it('stop when not started is safe', async () => {
       manager = new ProxyManager(enabledConfig());
       await manager.stop(); // should not throw

@@ -687,6 +687,7 @@ describe('persistToolTrust (folder-trust gate)', () => {
 describe('isSandboxFailure', () => {
   it('is false when the command was not sandboxed', () => {
     expect(isSandboxFailure(false, 'sandbox-exec: deny(1) file-write-data /x')).toBe(false);
+    expect(isSandboxFailure(false, 'touch: /etc/hosts: Operation not permitted')).toBe(false);
   });
 
   it('matches the sandbox launcher/denial markers', () => {
@@ -694,11 +695,21 @@ describe('isSandboxFailure', () => {
     expect(isSandboxFailure(true, 'bwrap: Creating new namespace failed')).toBe(true);
   });
 
-  it('does NOT match a bare generic EPERM (benign non-sandbox failure)', () => {
-    // A denied network/file op does not print this string, but a benign non-sandbox
-    // failure (e.g. `kill` on a foreign pid) does - matching it would mis-offer the
-    // full-access unsandboxed re-run for a command a re-run cannot fix.
-    expect(isSandboxFailure(true, 'kill: 1: Operation not permitted')).toBe(false);
+  it('matches a real macOS Seatbelt denial (EPERM with no marker prefix)', () => {
+    // A real Seatbelt denial surfaces as the denied syscall's own EPERM printed by
+    // the tool that hit it, with NO `sandbox-exec:` prefix. Matching it is what keeps
+    // the unsandboxed-retry offer and the `/sandbox:network on` tip reachable on macOS
+    // for the two most common cases: a write outside the workspace and a blocked connect.
+    expect(isSandboxFailure(true, 'touch: /etc/hosts: Operation not permitted')).toBe(true);
+    expect(isSandboxFailure(true, 'curl: (7) Failed to connect to example.com port 443: Operation not permitted')).toBe(
+      true
+    );
+  });
+
+  it('accepts the cheap false positive on a bare EPERM (deniable prompt only)', () => {
+    // e.g. `kill` on a foreign pid also prints this. We accept the deniable retry
+    // prompt because a false NEGATIVE would silently drop the recovery path entirely.
+    expect(isSandboxFailure(true, 'kill: 1: Operation not permitted')).toBe(true);
   });
 });
 
@@ -774,6 +785,24 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
     expect(orchestrator.recordSandboxed).toHaveBeenCalledTimes(1);
     expect(orchestrator.recordBlocked).not.toHaveBeenCalled();
     expect(toolFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a symlinked cwd that realpath-resolves outside the workspace', async () => {
+    // A symlink inside an allowed dir that points outside must not let the sandbox
+    // bind a writable root outside the workspace: realpathSync(cwd) resolves the link
+    // before the allow-list check, so confinement is on the real target, not the lexical path.
+    const orchestrator = createOrchestrator();
+    const workspace = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'b4m-ws-')));
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'b4m-out-')));
+    const link = path.join(workspace, 'escape');
+    await fs.symlink(outside, link);
+    const { wrapped, toolFn } = wrap(orchestrator, [workspace]);
+
+    const result = await wrapped.toolFn({ command: 'ls', cwd: link });
+
+    expect(result).toContain('outside the sandbox writable root');
+    expect(orchestrator.recordBlocked).toHaveBeenCalledTimes(1);
+    expect(toolFn).not.toHaveBeenCalled();
   });
 
   // Point shouldSandbox at a real temp file standing in for the Seatbelt .sb

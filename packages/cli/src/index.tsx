@@ -3362,7 +3362,10 @@ function CliApp() {
           console.log('Sandbox not initialized');
           break;
         }
-        await state.sandboxOrchestrator.stopProxy();
+        // Route through the single lifecycle owner so the persisted state stays
+        // honest: this clears config.network.enabled and tears the proxy down,
+        // rather than leaving network.enabled: true on disk for a later boot to load.
+        await state.sandboxOrchestrator.setNetworkEnabled(false);
         state.sandboxOrchestrator.setMode('disabled');
         state.permissionManager?.setSandboxState('disabled', false);
         await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());

@@ -445,18 +445,20 @@ export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): 
 
 /**
  * Detect whether a tool result indicates a sandbox-specific runtime failure
- * worth offering an unsandboxed retry for. Matches only the markers the sandbox
- * itself emits: `sandbox-exec:` (Seatbelt, including its `deny(1) ...` lines that
- * StderrViolationParser also keys on) and `bwrap:` (Linux). Deliberately does NOT
- * match a bare "Operation not permitted": that generic EPERM fires on benign
- * non-sandbox failures (e.g. `kill` on a foreign pid) that an unsandboxed re-run
- * would not fix, and real network/file denials do not surface that string anyway
- * (a denied `curl`/`nc` just exits non-zero) - so matching it only mis-offers the
- * full-access downgrade. Exported for direct unit testing.
+ * worth offering an unsandboxed retry for. Matches the sandbox markers
+ * (`sandbox-exec:`, `bwrap:`) AND a bare "Operation not permitted": on macOS a
+ * real Seatbelt denial is the denied syscall's own EPERM, printed by the tool
+ * that hit it with NO `sandbox-exec:` prefix (that prefix only appears when the
+ * profile fails to load) - a write denial reads `touch: <path>: Operation not
+ * permitted`, and a blocked connect surfaces the same EPERM. Matching only the
+ * markers would never fire for those, silently dropping the recovery offer and
+ * the `/sandbox:network on` tip. The known false positive (e.g. `kill` on a
+ * foreign pid) is accepted: it only costs a deniable retry prompt, whereas a
+ * false negative removes the recovery path entirely. Exported for unit testing.
  */
 export function isSandboxFailure(isSandboxed: boolean, result: string): boolean {
   if (!isSandboxed) return false;
-  return result.includes('sandbox-exec:') || result.includes('bwrap:');
+  return result.includes('sandbox-exec:') || result.includes('bwrap:') || result.includes('Operation not permitted');
 }
 
 /**

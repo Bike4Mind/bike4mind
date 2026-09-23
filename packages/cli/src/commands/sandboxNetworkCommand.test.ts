@@ -41,12 +41,26 @@ describe('handleSandboxNetworkCommand', () => {
     expect(await handleSandboxNetworkCommand(deps, undefined)).toContain('Usage:');
   });
 
-  it('reports when the runtime is unavailable and never toggles', async () => {
+  it('enabling reports when the runtime is unavailable and never toggles', async () => {
     const orchestrator = makeOrchestrator({ isAvailable: vi.fn(() => false) });
     const { deps, save } = makeDeps(orchestrator);
     expect(await handleSandboxNetworkCommand(deps, 'on')).toBe('Sandbox runtime not available on this platform');
     expect(orchestrator.setNetworkEnabled).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();
+  });
+
+  it('off always succeeds even with no runtime - the fail-closed direction is never gated', async () => {
+    const orchestrator = makeOrchestrator({
+      isAvailable: vi.fn(() => false),
+      setNetworkEnabled: vi.fn(async () => false),
+    });
+    const { deps, save } = makeDeps(orchestrator);
+
+    const msg = await handleSandboxNetworkCommand(deps, 'off');
+
+    expect(orchestrator.setNetworkEnabled).toHaveBeenCalledWith(false);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(msg).toBe('Sandbox network disabled (fail-closed)');
   });
 
   it('on: enables, persists, syncs permission state, reports the port', async () => {
@@ -58,10 +72,10 @@ describe('handleSandboxNetworkCommand', () => {
     expect(orchestrator.setNetworkEnabled).toHaveBeenCalledWith(true);
     expect(save).toHaveBeenCalledTimes(1);
     expect(setSandboxState).toHaveBeenCalledTimes(1);
-    expect(msg).toBe('Sandbox network enabled (filtered via proxy on port 8888)');
+    expect(msg).toBe('Sandbox network egress enabled (proxy-aware clients filtered on port 8888)');
   });
 
-  it('on but proxy fails to start: fails closed and persists nothing', async () => {
+  it('on but proxy fails to start: fails closed and persists the reset (disk matches memory)', async () => {
     const orchestrator = makeOrchestrator({ setNetworkEnabled: vi.fn(async () => false) });
     const { deps, save } = makeDeps(orchestrator);
 
@@ -69,7 +83,9 @@ describe('handleSandboxNetworkCommand', () => {
 
     expect(msg).toContain('Failed to start the network proxy');
     expect(msg).toContain('fail-closed');
-    expect(save).not.toHaveBeenCalled();
+    // The reset (network.enabled already back to false) is persisted so a later boot
+    // does not load a stale `true`.
+    expect(save).toHaveBeenCalledTimes(1);
   });
 
   it('off: disables, persists, and reports fail-closed', async () => {

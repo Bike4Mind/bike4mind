@@ -11,6 +11,7 @@ export class ProxyManager {
   private proxy: HttpConnectProxy | null = null;
   private networkConfig: NetworkConfig;
   private eventHandlers = new Set<(event: ProxyEvent) => void>();
+  private startPromise: Promise<void> | null = null;
 
   constructor(networkConfig: NetworkConfig) {
     this.networkConfig = { ...networkConfig, allowedDomains: [...networkConfig.allowedDomains] };
@@ -25,14 +26,23 @@ export class ProxyManager {
     this.networkConfig.enabled = enabled;
   }
 
-  isEnabled(): boolean {
-    return this.networkConfig.enabled;
+  // Not async on purpose: an async method wraps its return value in a fresh
+  // promise, so concurrent callers could never share ONE in-flight start. Returning
+  // the stored promise directly is what lets the guard below dedupe overlapping
+  // starts - isRunning() alone does not (both see it false before either server
+  // binds), which would leak an orphaned listening proxy.
+  start(): Promise<void> {
+    if (!this.networkConfig.enabled) return Promise.resolve();
+    if (this.proxy?.isRunning()) return Promise.resolve(); // idempotent
+    if (this.startPromise) return this.startPromise;
+
+    this.startPromise = this.doStart().finally(() => {
+      this.startPromise = null;
+    });
+    return this.startPromise;
   }
 
-  async start(): Promise<void> {
-    if (!this.networkConfig.enabled) return;
-    if (this.proxy?.isRunning()) return; // idempotent
-
+  private async doStart(): Promise<void> {
     this.proxy = new HttpConnectProxy({
       allowedDomains: this.networkConfig.allowedDomains,
     });

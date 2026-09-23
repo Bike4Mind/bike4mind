@@ -61,7 +61,6 @@ function createStatefulProxyManager(opts?: { failStart?: boolean }): ProxyManage
     setEnabled: vi.fn((v: boolean) => {
       enabled = v;
     }),
-    isEnabled: () => enabled,
     start: vi.fn(async () => {
       if (enabled && !opts?.failStart) running = true;
     }),
@@ -314,15 +313,73 @@ describe('SandboxOrchestrator', () => {
       expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
     });
 
-    it('passes networkEnabled: true when network.enabled is set', () => {
+    it('gates networkEnabled on a running proxy - a set flag alone never grants egress', () => {
+      // The stale-flag case (network.enabled true, no running proxy) is exactly the
+      // bypass /sandbox:disable and /sandbox:mode could leave behind. The choke-point
+      // guard in shouldSandbox must fail closed regardless of the flag.
       const mockRuntime = createMockRuntime();
       const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
       const config = enabledConfig({ network: { ...DEFAULT_SANDBOX_CONFIG.network, enabled: true } });
-      const orchestrator = new SandboxOrchestrator(config, mockRuntime);
+      const orchestrator = new SandboxOrchestrator(config, mockRuntime, createMockProxyManager(false, null));
+
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
+    });
+
+    it('passes networkEnabled: true only when the flag is set AND a proxy is running', () => {
+      const mockRuntime = createMockRuntime();
+      const wrapSpy = vi.spyOn(mockRuntime, 'wrapCommand');
+      const config = enabledConfig({ network: { ...DEFAULT_SANDBOX_CONFIG.network, enabled: true } });
+      const orchestrator = new SandboxOrchestrator(config, mockRuntime, createMockProxyManager(true, 8888));
 
       orchestrator.shouldSandbox('curl https://example.com', '/tmp');
 
       expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: true }));
+    });
+  });
+
+  describe('B1: no /sandbox command sequence grants egress without a running proxy', () => {
+    it('network on -> disable -> mode permissions leaves the runtime networkEnabled: false', async () => {
+      const proxy = createStatefulProxyManager();
+      const runtime = createMockRuntime();
+      const wrapSpy = vi.spyOn(runtime, 'wrapCommand');
+      const config = enabledConfig({ network: { ...DEFAULT_SANDBOX_CONFIG.network, enabled: true } });
+      const orchestrator = new SandboxOrchestrator(config, runtime, proxy);
+
+      // /sandbox:network on
+      expect(await orchestrator.setNetworkEnabled(true)).toBe(true);
+      expect(proxy.isRunning()).toBe(true);
+
+      // /sandbox:disable now routes through setNetworkEnabled(false) before setMode.
+      await orchestrator.setNetworkEnabled(false);
+      orchestrator.setMode('disabled');
+      expect(proxy.isRunning()).toBe(false);
+      expect(orchestrator.getConfig().network.enabled).toBe(false);
+
+      // /sandbox:mode permissions re-enables the sandbox but must not resurrect egress.
+      orchestrator.setMode('permissions');
+      orchestrator.shouldSandbox('curl https://evil.example', '/tmp');
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
+    });
+
+    it('boot-from-persisted {enabled:false, network.enabled:true} then mode permissions stays fail-closed', () => {
+      // Even if a stale persisted config claims network is on, no proxy was started
+      // on boot, so the choke point must still deny egress.
+      const proxy = createStatefulProxyManager(); // never started
+      const runtime = createMockRuntime();
+      const wrapSpy = vi.spyOn(runtime, 'wrapCommand');
+      const config = enabledConfig({
+        enabled: false,
+        mode: 'disabled',
+        network: { ...DEFAULT_SANDBOX_CONFIG.network, enabled: true },
+      });
+      const orchestrator = new SandboxOrchestrator(config, runtime, proxy);
+
+      orchestrator.setMode('permissions');
+      orchestrator.shouldSandbox('curl https://evil.example', '/tmp');
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
+      expect(proxy.isRunning()).toBe(false);
     });
   });
 

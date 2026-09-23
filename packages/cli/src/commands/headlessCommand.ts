@@ -51,11 +51,7 @@ import {
 } from '../tools';
 import { WorkItemsClient } from '../api/WorkItemsClient.js';
 import { CheckpointStore } from '../storage/CheckpointStore.js';
-import { createSandboxRuntime } from '../sandbox/runtime/SandboxRuntimeAdapter.js';
-import { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
-import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
-import { ProxyManager } from '../sandbox/proxy/ProxyManager.js';
-import { ViolationLogStore } from '../sandbox/logging/ViolationLogStore.js';
+import { buildSandbox } from '../bootstrap/buildSandbox.js';
 import { readFile } from 'fs/promises';
 import {
   HEADLESS_SCHEMA_VERSION,
@@ -310,49 +306,18 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       return Promise.resolve({ answers: [] });
     };
 
-    // Initialize sandbox and checkpoint store in parallel (independent)
-    const sandboxConfig = config.sandbox ?? DEFAULT_SANDBOX_CONFIG;
+    // Initialize the sandbox through the single shared wiring path. Headless emits
+    // NDJSON on stdout, so all sandbox status/warnings are routed to stderr.
     const checkpointProjectDir = configStore.getProjectConfigDir() ?? process.cwd();
     const checkpointStore = new CheckpointStore(checkpointProjectDir);
-
-    const [sandboxRuntime] = await Promise.all([
-      createSandboxRuntime(),
-      checkpointStore.init(session.id).catch(() => {}),
-    ]);
-
-    const proxyManager = new ProxyManager(sandboxConfig.network);
-    const sandboxOrchestrator = new SandboxOrchestrator(sandboxConfig, sandboxRuntime, proxyManager);
-    permissionManager.setSandboxState(sandboxConfig.mode, sandboxOrchestrator.isActive());
-
-    // Record blocked egress so it is not silent and stats.violations counts it
-    // (mirrors buildSandbox; without this the headless proxy filters but reports
-    // nothing).
-    proxyManager.onEvent(event => {
-      if (event.type === 'blocked') {
-        process.stderr.write(`Sandbox: network proxy blocked ${event.method} ${event.domain}\n`);
-        sandboxOrchestrator
-          .recordViolation({
-            type: 'network',
-            domain: event.domain,
-            command: `[network] ${event.method} ${event.domain}`,
-            blockedBy: 'proxy',
-            timestamp: event.timestamp,
-            detail: `Blocked ${event.method} to ${event.domain}`,
-          })
-          .catch(() => {});
-      }
+    const toStderr = (line: string): void => void process.stderr.write(`${line}\n`);
+    const { sandboxOrchestrator } = await buildSandbox({
+      config,
+      sessionId: session.id,
+      permissionManager,
+      checkpointStore,
+      log: { info: toStderr, warn: toStderr },
     });
-    sandboxOrchestrator.setViolationStore(new ViolationLogStore());
-
-    // Start the proxy through the orchestrator's single lifecycle owner so it fails
-    // closed: without a running proxy, getProxyEnv() is empty and the runtime would
-    // otherwise grant raw egress with allowedDomains ignored (mirrors buildSandbox).
-    if (sandboxConfig.enabled && sandboxConfig.mode !== 'disabled' && sandboxConfig.network.enabled) {
-      const on = await sandboxOrchestrator.setNetworkEnabled(true);
-      if (!on) {
-        process.stderr.write('Sandbox: network filtering requested but the proxy failed to start; egress disabled.\n');
-      }
-    }
 
     // Agent context for observation tracking
     const agentContext: AgentContext = {
