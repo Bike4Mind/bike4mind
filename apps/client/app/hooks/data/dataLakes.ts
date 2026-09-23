@@ -11,6 +11,9 @@ import type {
   ResearchRunTrigger,
   IDataLakeBatchDocument,
   IDataLakeBatchSummary,
+  IDataLakeFindingDocument,
+  InconsistencyKind,
+  LakeFindingStatus,
   IDataLakeSpendResponse,
   IFabFileDocument,
   DataLakePrincipalType,
@@ -38,7 +41,7 @@ import type {
 } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -2177,6 +2180,67 @@ export type ResearchConfigInput = {
   costCeilingMicroUsd?: number;
   proposedTags?: string[];
 };
+
+// -- Detected corpus problems (#3039) ---------------------------------------
+
+/**
+ * How a curator narrows one lake's findings. Every field is optional and independent, and the whole
+ * object is passed to the route as-is - so it doubles as the cache key, and two surfaces asking the
+ * same question share one fetch.
+ */
+export type LakeFindingFilters = { status?: LakeFindingStatus; kind?: InconsistencyKind; limit?: number };
+
+/**
+ * One lake's detected corpus problems. Manage-gated server-side - the rows carry document EXCERPTS
+ * - so a mere reader gets a 4xx, surfaced as `isForbidden` and never retried, matching
+ * `useDataLakeProposals`.
+ *
+ * Filtering is server-side rather than a client-side pass over one fetched page: the route bounds
+ * what it returns, so narrowing a page here would silently hide rows that never crossed the wire.
+ *
+ * No polling. Findings only change when a detection run is triggered, and a list that reshuffles
+ * under a curator comparing two passages is worse than one a few minutes stale.
+ */
+export function useDataLakeFindings(
+  dataLakeId: string | null,
+  filters?: LakeFindingFilters,
+  opts?: { enabled?: boolean }
+) {
+  const query = useInfiniteQuery({
+    queryKey: dataLakeKeys.findings(dataLakeId, filters),
+    initialPageParam: 0,
+    queryFn: async ({ pageParam }) => {
+      const { data } = await api.get<{ data: IDataLakeFindingDocument[]; hasMore: boolean }>(
+        `/api/data-lakes/${dataLakeId}/findings`,
+        { params: { ...filters, offset: pageParam } }
+      );
+      return data;
+    },
+    // Next offset = how many rows are loaded so far; undefined once the route says there is
+    // nothing left, so a queue that ends exactly on a page boundary does not draw a phantom
+    // "load more".
+    getNextPageParam: (lastPage, allPages) =>
+      lastPage.hasMore ? allPages.reduce((n, page) => n + page.data.length, 0) : undefined,
+    enabled: !!dataLakeId && (opts?.enabled ?? true),
+    retry: false,
+    staleTime: 1000 * 60,
+    // Switching a filter re-keys the query, and without this the list blanks to a spinner on every
+    // switch - the rows are a queue a curator is scanning, not a page they navigated away from.
+    // Scoped to the same lake: `LakeInfoPanel` reuses this hook across lake selections, and an
+    // unscoped `keepPreviousData` would carry lake A's rows over while lake B's page is loading.
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey[1] === dataLakeId ? previousData : undefined,
+  });
+  const findings = useMemo(() => query.data?.pages.flatMap(page => page.data), [query.data]);
+  return {
+    ...query,
+    data: findings,
+    isForbidden: isPermissionRejection(query.error),
+    hasMore: query.hasNextPage,
+    loadMore: query.fetchNextPage,
+    isLoadingMore: query.isFetchingNextPage,
+  };
+}
 
 /** How often the run list re-reads while a run is queued or running. */
 const RESEARCH_RUN_POLL_MS = 1000 * 5;

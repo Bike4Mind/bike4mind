@@ -111,6 +111,15 @@ export const dataLakeKeys = {
   /** Invalidation prefix covering every status variant of one lake's queue. */
   proposalsOf: (dataLakeId: string) => ['dataLakeProposals', dataLakeId] as const,
   /**
+   * One lake's detected corpus problems (GET /api/data-lakes/:id/findings), #3039. Outside `list`
+   * for the same reason as `spend` and `proposals`, and keyed by the filter pair because the route
+   * narrows server-side - a client-side filter over one cached page would hide rows the bound cut.
+   */
+  findings: (dataLakeId: string | null, filters?: { status?: string; kind?: string; limit?: number }) =>
+    ['dataLakeFindings', dataLakeId, filters ?? {}] as const,
+  /** Invalidation prefix covering every filter variant of one lake's findings. */
+  findingsOf: (dataLakeId: string) => ['dataLakeFindings', dataLakeId] as const,
+  /**
    * One lake's saved research configurations (GET /api/data-lakes/:id/research/configs), #1682.
    * Outside `list` for the same reason as `spend` and `proposals`.
    */
