@@ -171,6 +171,16 @@ export interface ListLakeFindingsOptions {
    * mutating anything, and leaves the retired row fully visible - status intact - on GET /findings.
    */
   seenSince?: Date;
+  /**
+   * Keep only terminal rows resolved at or after this instant (`resolvedAt >= resolvedSince`).
+   *
+   * `seenSince` alone cannot tell a dismissal that predates a run from one made after it: a
+   * re-detected subject gets its `lastSeenAt` bumped to the new run's instant regardless of when it
+   * was dismissed (`recordDetected` never touches `status` or `resolvedAt` on update), so a
+   * `seenSince`-only dismissed-rows query for compensating a run's counts would also catch dismissals
+   * that were already excluded from those counts before the run ever executed.
+   */
+  resolvedSince?: Date;
   limit?: number;
 }
 

@@ -310,10 +310,11 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
     // `resolveFinding` never recomputes the stored summary - a dismissal only ever touches the row.
     // Serving the stored count as-is would show a non-zero count beside a findings list that no
     // longer contains that subject, the identical shape `seenSince` was added to close.
+    const computedAt = new Date('2026-06-01T00:00:00Z');
     h.assertLakeWriteAccess.mockResolvedValue({
       ...lake,
       inconsistencyReport: report({ countsByKind: { ...report().countsByKind, 'expired-claim': 1 } }),
-      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+      inconsistencyComputedAt: computedAt,
     });
     h.listByLake.mockImplementation(async (_id: string, opts: { status?: string | string[] }) =>
       opts.status === 'dismissed' ? [{ id: 'finding-1', kind: 'expired-claim', subject: 'roadmap' }] : []
@@ -326,6 +327,32 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
       countsByKind: { 'expired-claim': 0 },
       findings: [],
     });
+    // resolvedSince, not seenSince - the two diverge for a subject dismissed before this run but
+    // re-detected by it, whose lastSeenAt advances even though its resolvedAt does not.
+    const dismissedCall = h.listByLake.mock.calls.find(call => call[1].status === 'dismissed');
+    expect(dismissedCall?.[1]).toMatchObject({ resolvedSince: computedAt });
+    expect(dismissedCall?.[1]).not.toHaveProperty('seenSince');
+  });
+
+  it('does not subtract a dismissal that predates this run, even if the row was re-detected by it', async () => {
+    // The query itself is the guard: a dismissal dated before `computedAt` cannot match
+    // `resolvedSince: computedAt` regardless of how recently the row's lastSeenAt advanced. This
+    // pins that the route asks for the right field rather than merely happening to pass one named
+    // `resolvedSince` - a kind with a genuinely counted, un-dismissed subject must not move.
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report({ countsByKind: { ...report().countsByKind, 'expired-claim': 1 } }),
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    // A real repository would exclude this row given `resolvedSince`, since it was resolved before
+    // the run; asserting the route never widens that contract to a `seenSince`-only lookup that a
+    // pre-run dismissal, re-detected, would also satisfy.
+    h.listByLake.mockResolvedValue([]);
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(json.mock.calls[0][0]).toMatchObject({ countsByKind: { 'expired-claim': 1 } });
   });
 
   it('never drives a count below zero for a kind that was already exhausted', async () => {

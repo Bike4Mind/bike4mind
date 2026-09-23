@@ -335,6 +335,49 @@ describe('lakeInconsistencySweep cron', () => {
     expect(years[0]).toBe(new Date().getUTCFullYear());
   });
 
+  it('records suppressed (dismissed-but-still-evidenced) findings alongside the reported ones', async () => {
+    // #3045: a curator's dismissal keeps a subject out of the report, but the row behind it must
+    // keep tracking new evidence - so the sweep's copy of this needs the same pin the route already
+    // has (inconsistencies.test.ts:368), not just the shared implementation.
+    mockFindDue.mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+    const dismissed = finding('legacy-claim');
+    mockDetect.mockResolvedValueOnce(detectResult({}, [dismissed]));
+
+    await handler();
+
+    const [lakeId, findings, options, deps] = mockRecordFindings.mock.calls[0];
+    expect(lakeId).toBe('lake-1');
+    expect(findings).toEqual([finding('revenue'), dismissed]);
+    expect(options.detector).toBe('lexical');
+    expect(deps.db.dataLakeFindings).toBeDefined();
+  });
+
+  it('counts the lake as failed, withholds its summary, but still stamps it when the summary write rejects', async () => {
+    // `dataLakeRepository.update` throwing is not modeled by `recordLakeFindings`'s own `failed`
+    // count - it is a separate write this test has to fail on its own to prove the outer per-lake
+    // try/catch (not just the findings-failed gate) is what catches it.
+    mockFindDue.mockResolvedValueOnce([lake()]).mockResolvedValueOnce([]);
+    mockUpdateLake.mockRejectedValueOnce(new Error('write conflict'));
+
+    const result = await handler();
+
+    expect(result).toMatchObject({ scanned: 1, failed: 1 });
+    expect(mockMarkScanned).toHaveBeenCalledWith('lake-1', expect.any(Date));
+  });
+
+  it('does not count a lake as failed when only its staleness stamp write rejects, and still stamps a sibling', async () => {
+    // A refactor that moved the self-stamp inside the outcome try/catch would silently start
+    // counting a stamp failure as a detection failure, and (if it also short-circuited the batch)
+    // could stop stamping every lake queued behind it.
+    mockFindDue.mockResolvedValueOnce([lake({ id: 'lake-a' }), lake({ id: 'lake-b' })]).mockResolvedValueOnce([]);
+    mockMarkScanned.mockRejectedValueOnce(new Error('cannot reach primary')).mockResolvedValue(undefined);
+
+    const result = await handler();
+
+    expect(result).toMatchObject({ scanned: 2, failed: 0 });
+    expect(mockMarkScanned).toHaveBeenCalledWith('lake-b', expect.any(Date));
+  });
+
   it('emits the run metric even when the scan itself throws', async () => {
     mockFindDue.mockRejectedValue(new Error('cannot reach primary'));
 

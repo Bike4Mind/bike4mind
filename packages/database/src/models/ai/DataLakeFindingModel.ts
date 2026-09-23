@@ -146,6 +146,7 @@ class DataLakeFindingRepository extends BaseRepository<IDataLakeFindingDocument>
         ...(options?.kind ? { kind: options.kind } : {}),
         ...(options?.detector ? { detector: options.detector } : {}),
         ...(options?.seenSince ? { lastSeenAt: { $gte: options.seenSince } } : {}),
+        ...(options?.resolvedSince ? { resolvedAt: { $gte: options.resolvedSince } } : {}),
       })
       .sort({ lastSeenAt: -1 });
     if (options?.limit) query.limit(options.limit);

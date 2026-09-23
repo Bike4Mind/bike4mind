@@ -285,6 +285,38 @@ describe('DataLakeFindingRepository', () => {
     expect(await repo.listByLake('lake-1', { seenSince: SEEN_FIRST })).toHaveLength(2);
   });
 
+  it('narrows to dismissals resolved at or after resolvedSince, unlike seenSince', async () => {
+    // A subject dismissed BEFORE a run also gets its lastSeenAt bumped to that run's instant if the
+    // detector re-reports it (recordDetected never touches status/resolvedAt on update) - so a
+    // seenSince-scoped query for "what did this run dismiss" would also catch a dismissal that
+    // predates the run entirely. resolvedAt is the only field that actually distinguishes the two.
+    const preRun = await repo.recordDetected(input({ subject: 'dismissed before the run', seenAt: SEEN_FIRST }));
+    await repo.resolveFinding('lake-1', preRun.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_FIRST,
+    });
+    // Re-detected by a later run: lastSeenAt advances even though status/resolvedAt do not.
+    await repo.recordDetected(input({ subject: 'dismissed before the run', seenAt: SEEN_LATER }));
+
+    const postRun = await repo.recordDetected(input({ subject: 'dismissed after the run', seenAt: SEEN_LATER }));
+    await repo.resolveFinding('lake-1', postRun.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+
+    // seenSince alone cannot tell them apart: both rows now have lastSeenAt >= SEEN_LATER.
+    const bySeenSince = (await repo.listByLake('lake-1', { status: 'dismissed', seenSince: SEEN_LATER })).map(
+      f => f.subject
+    );
+    expect(bySeenSince).toEqual(expect.arrayContaining(['dismissed before the run', 'dismissed after the run']));
+
+    // resolvedSince keeps only the one actually dismissed at or after that instant.
+    const byResolvedSince = await repo.listByLake('lake-1', { status: 'dismissed', resolvedSince: SEEN_LATER });
+    expect(byResolvedSince.map(f => f.subject)).toEqual(['dismissed after the run']);
+  });
+
   it('scopes every list to its own lake', async () => {
     await repo.recordDetected(input({ lakeId: 'lake-1' }));
     await repo.recordDetected(input({ lakeId: 'lake-2' }));
