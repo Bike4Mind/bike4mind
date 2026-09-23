@@ -739,6 +739,9 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
       dataLakes: {
         findActiveByUserTags: vi.fn().mockResolvedValue([]),
         findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+        // Also required rather than decorative: this site vouches for its entitlement keys, so the
+        // exclusion count actually runs and an absent method would throw into its swallowing catch.
+        countGateExcludedLakes: vi.fn().mockResolvedValue(0),
         findById,
       },
     },
@@ -813,7 +816,9 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
       }
     ).resolveDataLakeAccess();
 
-    expect(access.lakeViewComplete).not.toBe(false);
+    // toBe(true), not `.not.toBe(false)`: the looser form also passes when the field is dropped
+    // entirely, which is the exact mistake this pair of cases exists to catch.
+    expect(access.lakeViewComplete).toBe(true);
   });
 
   const MANAGED_LAKE = {

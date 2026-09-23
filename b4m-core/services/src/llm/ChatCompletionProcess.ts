@@ -2749,8 +2749,10 @@ export class ChatCompletionProcess {
 
       // Resolve entitlement keys once before building tools so the knowledge tools'
       // data-lake access (getDynamicDataLakeAccess) sees the same keys as forced retrieval. The
-      // resolution's completeness half is not carried into ToolContext: no knowledge tool measures
-      // an exclusion count, and the tools' own access resolution keeps the optimistic default.
+      // resolution's completeness half is not carried into ToolContext: no knowledge tool reads an
+      // exclusion count, so the tool path simply gets `undefined` there (the honest answer for an
+      // unvouched host) while its lake view keeps the optimistic default. Carry the half through if
+      // a tool ever grows a consumer for that count.
       const { keys: entitlementKeys } = await this.resolveEntitlementKeys();
 
       const toolBuilder = new ToolBuilder({
