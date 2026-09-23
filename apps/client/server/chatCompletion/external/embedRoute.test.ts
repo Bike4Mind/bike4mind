@@ -66,7 +66,10 @@ vi.mock('@bike4mind/services/llm', async () => {
 });
 
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  // adapterFamily is what the embed reasoning gate reads; a catalog row always carries one.
+  getAvailableModels: vi
+    .fn()
+    .mockResolvedValue([{ id: 'test-model', backend: 'anthropic', adapterFamily: 'anthropic-messages' }]),
   getLlmByModel: vi.fn(() => ({ currentModel: '', complete: vi.fn() })),
 }));
 
@@ -729,10 +732,11 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(text).not.toContain('web_search');
   });
 
-  it('strips reasoning that spans chunks, per request', async () => {
-    // Reasoning models inline their monologue at the SAME index as the prose, wrapped
-    // in <think> sentinels that arrive on separate streaming callbacks. State is held
-    // per request, so an unterminated block cannot bleed into the next visitor.
+  it('redacts reasoning and everything after it, per request', async () => {
+    // The model gate above means a correctly configured embed never gets here. If reasoning
+    // does reach the text channel anyway, the close marker is model text and is NOT trusted
+    // to end suppression, so the rest of the stream is dropped rather than parsed. State is
+    // held per request, so a suppressed stream cannot bleed into the next visitor.
     mockExecuteCompletion.mockImplementation(
       async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
         await params.onChunk(['<think>']);
@@ -743,9 +747,9 @@ describe('POST /api/embed/chat - server-side tools', () => {
     );
 
     const first = await (await post(CHAT)).text();
-    expect(first).toContain('hello from the agent');
     expect(first).not.toContain('internal pricing');
     expect(first).not.toContain('<think>');
+    expect(first).not.toContain('hello from the agent');
 
     mockExecuteCompletion.mockImplementation(
       async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
@@ -753,6 +757,40 @@ describe('POST /api/embed/chat - server-side tools', () => {
       }
     );
     expect(await (await post(CHAT)).text()).toContain('hello from the agent');
+  });
+
+  it.each([
+    ['deepseek', 'a family that wraps reasoning in the text channel'],
+    ['ollama', 'a family that wraps reasoning in the text channel'],
+    [undefined, 'a model the catalog cannot describe'],
+  ])('refuses %s before opening the stream (%s)', async (adapterFamily, _why) => {
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { id: 'test-model', backend: 'anthropic', adapterFamily } as never,
+    ]);
+
+    const res = await post(CHAT);
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ code: 'agent_model_not_embeddable' });
+    // Pre-stream refusal: nothing was billed and no SSE frame was written.
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('delivers held text before the error frame when the run fails mid-stream', async () => {
+    // The tail was already generated and paid for; a later failure must not swallow it.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['the operator is <']);
+        throw new Error('backend exploded');
+      }
+    );
+
+    const text = await (await post(CHAT)).text();
+    // The held `<` rides its own content frame, so the two are not contiguous on the wire.
+    expect(text).toContain('the operator is ');
+    expect(text).toContain('"text":"<"');
+    expect(text.indexOf('"text":"<"')).toBeLessThan(text.indexOf('"type":"error"'));
   });
 
   it('delivers an answer whose final chunk ends mid-sentinel', async () => {

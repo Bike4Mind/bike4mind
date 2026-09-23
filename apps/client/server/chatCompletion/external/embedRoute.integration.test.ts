@@ -83,6 +83,8 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
       {
         id: 'test-model',
         backend: 'anthropic',
+        // Read by the embed reasoning gate; a real catalog row always carries one.
+        adapterFamily: 'anthropic-messages',
         type: 'text',
         pricing: { 200000: { input: 0.000003, output: 0.000015 } },
       },

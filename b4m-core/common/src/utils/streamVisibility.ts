@@ -143,3 +143,39 @@ export function visibleReplyText(part: string | null | undefined): string {
 export function hasVisibleReplyText(parts: readonly (string | null | undefined)[]): boolean {
   return parts.some(part => visibleReplyText(part).trim().length > 0);
 }
+
+/**
+ * Adapter families whose reasoning can NEVER reach the text channel, so a surface that must
+ * hide reasoning can serve them.
+ *
+ * An allowlist, not a denylist, because this is a redaction gate: the families that do
+ * inline reasoning (kimiBackend.ts:526, deepseekBackend.ts:472, xaiBackend.ts:602,
+ * ollamaBackend.ts:492, bedrockBackend/deepseek.ts:309, bedrockBackend/moonshot.ts:57) wrap
+ * it in the markers above with nothing else separating it, and the text between them is
+ * model-generated - so reasoning containing the close marker ends a parsed redaction early.
+ * A family nobody has vetted must not inherit permission by being new.
+ *
+ * The anthropic families qualify because their reasoning is opt-in per request, arrives at
+ * its own content-block index, and has each marker emitted as a whole chunk by the adapter
+ * (anthropicBackend.ts:1338,1423; bedrockBackend/anthropic.ts:1155) rather than as model
+ * text. openai/gemini emit no markers at all.
+ *
+ * Keyed on adapterFamily, not model id, so a newly discovered model on a vetted provider
+ * works the day it appears in the catalog while a new PROVIDER stays refused until vetted.
+ */
+export const REASONING_SAFE_ADAPTER_FAMILIES: readonly string[] = [
+  'openai-chat',
+  'openai-responses',
+  'anthropic-messages',
+  'bedrock-anthropic',
+  'gemini',
+];
+
+/**
+ * Whether this adapter family can put model-generated reasoning in the text channel.
+ * Anything not explicitly vetted reads as true, so callers fail closed.
+ */
+export function inlinesReasoningIntoText(adapterFamily: string | null | undefined): boolean {
+  if (!adapterFamily) return true;
+  return !REASONING_SAFE_ADAPTER_FAMILIES.includes(adapterFamily);
+}

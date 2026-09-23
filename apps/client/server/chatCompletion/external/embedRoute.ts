@@ -10,6 +10,7 @@ import {
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
   isAgentOwnedByEmbedKey,
+  inlinesReasoningIntoText,
   type IMessage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -320,6 +321,18 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
     const write = (chunk: string) => {
       if (!res.writableEnded) res.write(chunk);
     };
+    // Handler scope, not the stream block: the error path flushes it too. One builder per
+    // request - it carries reasoning-stripper state across chunks and must never be shared.
+    const buildPublicEvent = createPublicSSEEventBuilder();
+    // Release text the stripper held as a possible split <think> sentinel that no later
+    // chunk completed, and log the redacted-vs-empty case the visitor cannot tell apart.
+    const flushPublicTail = () => {
+      const tail = buildPublicEvent.flush();
+      if (tail) write(serializeSSEEvent(tail));
+      if (buildPublicEvent.redactedReasoning()) {
+        logger.warn('[EMBED_CHAT] Reasoning reached the public text channel; remainder redacted', { requestId });
+      }
+    };
 
     try {
       if (mongoose.connection.readyState !== 1) {
@@ -391,6 +404,31 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           error_description:
             'Bound agent has no explicit model configured. Set a model on the agent; embed chat does not fall back to the system default.',
           code: 'agent_model_not_configured',
+        });
+      }
+
+      // Reasoning must never reach an anonymous visitor, and on these providers it streams
+      // inline in the text channel wrapped in model-generated <think> markers - markers that
+      // cannot be parsed as a boundary, because the reasoning between them may contain them.
+      // Refuse the model here, before any stream bytes, instead of stripping mid-stream.
+      // Fail-closed on a model the catalog cannot describe (see inlinesReasoningIntoText).
+      const embedModels = await getAvailableModels(
+        (await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
+          db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+          getSettingsByNames,
+        })) as ApiKeyTable
+      );
+      const embedAdapterFamily = embedModels.find(m => m.id === hydrated.model)?.adapterFamily;
+      if (inlinesReasoningIntoText(embedAdapterFamily)) {
+        logger.warn('[EMBED_CHAT] Refused a model that streams reasoning in the text channel', {
+          model: hydrated.model,
+          adapterFamily: embedAdapterFamily,
+        });
+        return res.status(422).json({
+          error: 'unprocessable',
+          error_description:
+            'Bound agent uses a model whose reasoning streams inline with its reply, which cannot be hidden from a public visitor. Set the agent to a different model.',
+          code: 'agent_model_not_embeddable',
         });
       }
 
@@ -486,7 +524,6 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         ...(body.messages as IMessage[]),
       ];
 
-      const buildPublicEvent = createPublicSSEEventBuilder();
       try {
         await executeCompletion({
           userId: ctx.userId,
@@ -525,10 +562,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             write(serializeSSEEvent(buildPublicEvent.build(text, info)));
           },
         });
-        // Release text the stripper held as a possible split <think> sentinel that no
-        // later chunk completed - without this an answer ending mid-tag is truncated.
-        const tail = buildPublicEvent.flush();
-        if (tail) write(serializeSSEEvent(tail));
+        flushPublicTail();
         write(SSE_DONE_SIGNAL);
       } finally {
         clearInterval(heartbeat);
@@ -539,6 +573,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         error: error instanceof Error ? error.message : String(error),
       });
       if (streaming) {
+        // Text already delivered stays delivered: emit the held tail before the error
+        // frame rather than dropping it because the run failed afterwards.
+        flushPublicTail();
         // Classify billing/policy failures so the embedding client can branch on
         // `code` instead of parsing message text.
         write(serializeSSEEvent(formatSSEError(error, requestId, resolveQuestErrorCode(error))));

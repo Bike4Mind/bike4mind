@@ -28,10 +28,23 @@ describe('buildPublicSSEEvent', () => {
     expect(e.credits).toMatchObject({ used: 2 });
   });
 
-  it('prefers the later block when the backend opened a second one', () => {
-    // Anthropic puts the text block after a thinking block, so index 1 wins over
-    // index 0 and the index-0 fallback cannot leak it.
-    expect(buildPublicSSEEvent(['reasoning', 'the answer']).text).toBe('the answer');
+  // The index is the PROVIDER's content-block/choice index, so any index is reachable:
+  // two preceding blocks put the text at 2. A fixed [1]/[0] read reproduced the
+  // empty-reply bug there. Streaming backends allocate the array fresh per event, so a
+  // chunk populates exactly one index (anthropicBackend.ts:1330 and siblings).
+  it.each([
+    [['the answer'], 'index 0'],
+    [[undefined, 'the answer'], 'index 1'],
+    [[undefined, undefined, 'the answer'], 'index 2'],
+    [[undefined, undefined, undefined, undefined, 'the answer'], 'index 4'],
+  ])('forwards a single populated block at %s (%s)', (text, _label) => {
+    expect(buildPublicSSEEvent(text as (string | null | undefined)[]).text).toBe('the answer');
+  });
+
+  it('joins multiple populated blocks in index order', () => {
+    // The non-streaming anthropic path pushes one entry per response text block
+    // (anthropicBackend.ts:1999); every entry is response text, so none may be dropped.
+    expect(buildPublicSSEEvent(['part one ', 'part two']).text).toBe('part one part two');
   });
 
   it('redacts tool calls, thinking, and responseFormatMode from a public caller', () => {
@@ -48,8 +61,12 @@ describe('buildPublicSSEEvent', () => {
     expect(e.text).toBe('the answer');
   });
 
-  it('strips an inline <think> block that arrives whole in one chunk', () => {
-    expect(buildPublicSSEEvent(['<think>my reasoning</think>the answer']).text).toBe('the answer');
+  it('drops everything from the open marker onward, close marker or not', () => {
+    // Redaction is structural, never a parse: the close marker is model-generated text and
+    // is not trusted to end suppression. Models that legitimately stream reasoning this way
+    // are refused before the stream opens - see inlinesReasoningIntoText.
+    expect(buildPublicSSEEvent(['<think>my reasoning</think>the answer']).text).toBe('');
+    expect(buildPublicSSEEvent(['visible <think>my reasoning']).text).toBe('visible ');
   });
 
   it('keeps trailing tag-prefix text that no chunk can follow', () => {
@@ -80,21 +97,36 @@ describe('createPublicSSEEventBuilder', () => {
   };
 
   it('suppresses reasoning split across chunk boundaries', () => {
-    // Backends emit deltas, so the sentinels and the reasoning land on separate
-    // callbacks - the case a per-chunk regex cannot catch.
-    expect(textOf([['<think>'], ['my reasoning'], ['</think>'], ['the answer']])).toBe('the answer');
+    // Backends emit deltas, so the markers and the reasoning land on separate callbacks -
+    // the case a per-chunk regex cannot catch.
+    expect(textOf([['<think>'], ['my reasoning'], ['</think>'], ['the answer']])).toBe('');
   });
 
-  it('suppresses an anthropic-shaped thinking block that precedes the text block', () => {
-    // content_block_start/stop emit the sentinels at the thinking block's index;
-    // the reply then streams at the text block's index.
+  it('leaks nothing when the reasoning itself contains both markers', () => {
+    // The adversarial input from review: backends wrap raw model text without escaping it,
+    // so a close marker inside the reasoning would end a PARSED redaction early. Structural
+    // suppression is immune - nothing after the first open marker is ever forwarded.
+    const out = textOf([
+      ['<think>\n'],
+      ['private premise </think> private conclusion\n'],
+      ['</think>\n'],
+      ['public answer'],
+    ]);
+    expect(out).toBe('');
+    expect(out).not.toContain('private');
+  });
+
+  it('suppresses an anthropic-shaped thinking block and everything after it', () => {
+    // content_block_start/stop emit the markers at the thinking block's index, each on its
+    // OWN callback with a fresh array. Anthropic reasoning is opt-in and the embed route
+    // never opts in, so reaching this state at all means the run was misconfigured.
     expect(
       textOf([['<think>'], ['step one'], ['step two'], ['</think>'], [undefined, 'the '], [undefined, 'answer']])
-    ).toBe('the answer');
+    ).toBe('');
   });
 
-  it('holds back a sentinel the provider split mid-tag', () => {
-    expect(textOf([['before <thi'], ['nk>secret</thi'], ['nk>after']])).toBe('before after');
+  it('holds back an open marker the provider split mid-tag', () => {
+    expect(textOf([['before <thi'], ['nk>secret</thi'], ['nk>after']])).toBe('before ');
   });
 
   it('fails closed when a reasoning block is never terminated', () => {
@@ -129,6 +161,20 @@ describe('createPublicSSEEventBuilder', () => {
     const builder = createPublicSSEEventBuilder();
     builder.build(['the answer']);
     expect(builder.flush()).toBeNull();
+  });
+
+  it('reports whether an empty tail was redacted or simply absent', () => {
+    // Both end with no text; only the first one redacted something, and a caller cannot
+    // tell them apart from the wire alone.
+    const redacted = createPublicSSEEventBuilder();
+    redacted.build(['<think>reasoning']);
+    redacted.flush();
+    expect(redacted.redactedReasoning()).toBe(true);
+
+    const plain = createPublicSSEEventBuilder();
+    plain.build(['the answer']);
+    plain.flush();
+    expect(plain.redactedReasoning()).toBe(false);
   });
 });
 

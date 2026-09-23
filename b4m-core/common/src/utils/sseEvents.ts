@@ -3,6 +3,7 @@
  * Shared between Next.js API route and Lambda function
  */
 import type { QuestErrorCode } from '../types/entities/SessionTypes';
+import { THINK_OPEN_TAG } from './streamVisibility';
 
 export interface SSEContentEvent {
   type: 'content' | 'tool_use';
@@ -106,12 +107,15 @@ export interface CompletionInfo {
 
 /**
  * Build SSE event from LLM completion callback
- * @param text - Array of text chunks [thinking, response] (may contain null/undefined)
+ * @param text - Sparse array indexed by the provider's content-block/choice index (may
+ *   contain null/undefined/holes). NOT [thinking, response] - see
+ *   {@link resolveResponseText} for the real shape. This positional read is kept for
+ *   first-party surfaces that already depend on it; public callers use
+ *   {@link createPublicSSEEventBuilder}, which resolves the whole array.
  * @param info - Completion metadata (tools, usage)
  * @returns SSE event object
  */
 export function buildSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  // Get text content (text[0] = thinking, text[1] = response)
   const textContent = text[1] || text[0] || '';
 
   const event: SSEContentEvent = {
@@ -164,15 +168,37 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
   return event;
 }
 
-const THINK_OPEN = '<think>';
-const THINK_CLOSE = '</think>';
+/**
+ * Resolve the response text carried by ONE adapter callback.
+ *
+ * `text` is a SPARSE array indexed by the provider's content-block/choice index - never
+ * [thinking, response]. Every streaming backend allocates it fresh inside its event loop
+ * (anthropicBackend.ts:1330, kimiBackend.ts:506, deepseekBackend.ts:451, xaiBackend.ts:582,
+ * openaiBackend.ts:1476, geminiBackend.ts:669), so one callback populates exactly the index
+ * the provider used - 2 or higher as soon as two blocks precede the text, which a fixed
+ * [1]/[0] read drops entirely. The lone dense shape is the non-streaming anthropic path,
+ * which pushes one entry per response text block (anthropicBackend.ts:1999).
+ *
+ * Rule: join every populated entry in index order. It drops nothing at any index, and it
+ * cannot merge channels - reasoning arrives on its own callback when streaming, and is
+ * never pushed at all in the non-streaming path (thinking blocks carry `.thinking`, not
+ * `.text`).
+ */
+function resolveResponseText(text: (string | null | undefined)[]): string {
+  let out = '';
+  for (const entry of text) {
+    if (entry) out += entry;
+  }
+  return out;
+}
 
 /**
- * Longest suffix of `text` that is a proper prefix of `tag` - a sentinel the provider
- * split across streaming chunks. Held back rather than forwarded, so a half-arrived
- * `<thi` can never reach a public caller as prose.
+ * Longest suffix of `text` that is a proper prefix of THINK_OPEN_TAG - a marker the
+ * provider split across streaming chunks. Held back rather than forwarded, so a
+ * half-arrived `<thi` can never reach a public caller as prose.
  */
-function danglingTagPrefix(text: string, tag: string): string {
+function danglingTagPrefix(text: string): string {
+  const tag = THINK_OPEN_TAG;
   for (let len = Math.min(text.length, tag.length - 1); len > 0; len--) {
     if (tag.startsWith(text.slice(text.length - len))) return text.slice(text.length - len);
   }
@@ -180,58 +206,49 @@ function danglingTagPrefix(text: string, tag: string): string {
 }
 
 /**
- * Stateful <think>...</think> stripper for ONE public stream.
+ * Reasoning guard for ONE public stream: everything from the first THINK_OPEN_TAG onward
+ * is dropped, to the end of the stream.
  *
- * Stateful by necessity: every backend emits per-chunk DELTAS (each declares a fresh
- * `streamedText` inside its own event loop), so the sentinels and the reasoning between
- * them arrive on separate callbacks and a per-chunk regex would never see a pair. These
- * sentinels are the repo-wide reasoning convention and the ONLY signal separating the
- * two channels - anthropicBackend brackets its extended-thinking block with them, and
- * kimi/xai/deepseek/ollama inline reasoning at the SAME index as the prose wrapped in
- * them. Fails closed: an unterminated block suppresses to end of stream. Non-streaming
- * twin: stripThinkingBlocks in packages/cli/src/llm/streamAccumulator.ts.
+ * It deliberately does NOT look for THINK_CLOSE_TAG and resume. The text between the
+ * markers is model-generated and unescaped, so reasoning containing the close marker would
+ * end redaction early and put the rest of the monologue on an anonymous stream - the
+ * markers cannot be parsed as a trust boundary. What they CAN do is announce that reasoning
+ * has started, which is enough to fail closed. Models whose reasoning legitimately streams
+ * this way are refused before the stream opens ({@link inlinesReasoningIntoText}), so on a
+ * correctly gated route this suppression is an anomaly path, not the normal one - and the
+ * builder reports it via `redactedReasoning` so the operator can tell it from an empty reply.
  *
- * `flush` is not optional for a caller: text held as a possible split sentinel is only
- * known to be prose once the stream ends, so skipping it truncates the answer.
+ * Stateful by necessity: backends emit per-chunk deltas (each allocates `streamedText`
+ * inside its own event loop), so a marker can straddle two callbacks.
  */
-function createReasoningStripper(): { strip: (chunk: string) => string; flush: () => string } {
+function createReasoningStripper(): {
+  strip: (chunk: string) => string;
+  flush: () => string;
+  isSuppressing: () => boolean;
+} {
   let suppressing = false;
   let held = '';
   const strip = (chunk: string) => {
-    let rest = held + chunk;
+    if (suppressing) return '';
+    const rest = held + chunk;
     held = '';
-    let out = '';
-    while (rest.length > 0) {
-      if (suppressing) {
-        const close = rest.indexOf(THINK_CLOSE);
-        if (close === -1) {
-          held = danglingTagPrefix(rest, THINK_CLOSE);
-          return out;
-        }
-        rest = rest.slice(close + THINK_CLOSE.length);
-        suppressing = false;
-      } else {
-        const open = rest.indexOf(THINK_OPEN);
-        if (open === -1) {
-          held = danglingTagPrefix(rest, THINK_OPEN);
-          return out + rest.slice(0, rest.length - held.length);
-        }
-        out += rest.slice(0, open);
-        rest = rest.slice(open + THINK_OPEN.length);
-        suppressing = true;
-      }
+    const open = rest.indexOf(THINK_OPEN_TAG);
+    if (open !== -1) {
+      suppressing = true;
+      return rest.slice(0, open);
     }
-    return out;
+    held = danglingTagPrefix(rest);
+    return rest.slice(0, rest.length - held.length);
   };
-  // A held tag prefix that no further chunk completed was never a sentinel - release it
-  // as the prose it is. Inside an unterminated block it IS a partial </think>, and the
-  // fail-closed rule wins, so nothing escapes.
+  // A held marker prefix that no further chunk completed was never a marker - release it as
+  // the prose it is, or an answer ending in `<` or `<thi` is truncated. Nothing is released
+  // once suppressing: past the open marker everything is reasoning.
   const flush = () => {
     const tail = suppressing ? '' : held;
     held = '';
     return tail;
   };
-  return { strip, flush };
+  return { strip, flush, isSuppressing: () => suppressing };
 }
 
 /**
@@ -249,22 +266,26 @@ function createReasoningStripper(): { strip: (chunk: string) => string; flush: (
  * Reasoning is stripped from the text itself too - see {@link createReasoningStripper}
  * - which is why this is a stateful builder rather than a pure function. A streaming
  * caller MUST call `flush` once the completion is done and write any event it returns
- * before [DONE]: the stripper holds back a trailing partial sentinel, and only the end
+ * before [DONE]: the guard holds back a trailing partial marker, and only the end
  * of the stream proves that text was prose rather than the start of a `<think>`.
  */
 export function createPublicSSEEventBuilder(): {
   build: (text: (string | null | undefined)[], info?: CompletionInfo) => SSEContentEvent;
   flush: () => SSEContentEvent | null;
+  /**
+   * True once reasoning appeared and the remainder was REDACTED rather than never sent.
+   * On a correctly gated route this should never fire; an empty public reply otherwise
+   * looks identical to a backend that returned nothing.
+   */
+  redactedReasoning: () => boolean;
 } {
   const reasoning = createReasoningStripper();
   const build = (text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent => {
-    // Resolve the response the way buildSSEEvent does. `text` is indexed by the
-    // provider's content-block/choice index - it is NOT [thinking, response]: an
-    // ordinary reply lands at index 0 and index 1 exists only when the backend opened
-    // a second block, so reading [1] alone dropped the text of every ordinary reply.
-    // Prefer [1] when present (an Anthropic text block following a thinking block),
-    // else [0]; reasoning is redacted by the <think> sentinels below, not by position.
-    const responseOnly: (string | null | undefined)[] = ['', reasoning.strip(text[1] || text[0] || '')];
+    // Resolve over the WHOLE sparse array - see resolveResponseText. Reading a fixed
+    // [1]/[0] dropped the text of every ordinary reply (index 0) and still dropped any
+    // block the provider placed at index 2 or beyond. Reasoning is redacted by the
+    // <think> sentinels below, never by position.
+    const responseOnly: (string | null | undefined)[] = ['', reasoning.strip(resolveResponseText(text))];
     if (!info) return buildSSEEvent(responseOnly, undefined);
     // Allowlist forward (not denylist): explicitly name the fields a public caller may
     // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.
@@ -283,7 +304,7 @@ export function createPublicSSEEventBuilder(): {
     const tail = reasoning.flush();
     return tail ? buildSSEEvent(['', tail]) : null;
   };
-  return { build, flush };
+  return { build, flush, redactedReasoning: reasoning.isSuppressing };
 }
 
 /**
