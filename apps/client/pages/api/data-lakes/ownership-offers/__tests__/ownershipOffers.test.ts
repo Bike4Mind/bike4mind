@@ -47,7 +47,9 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findById: vi.fn().mockResolvedValue({ id: 'lake-oid-1', name: 'Lake One' }) },
   dataLakeAccessGrantRepository: {},
   dataLakeOwnershipOfferRepository: {},
-  userRepository: { findById: vi.fn().mockResolvedValue({ id: 'creator', email: 'creator@example.com' }) },
+  // Keyed by id: the accept route mails the offerer AND each demoted owner, and every one of them
+  // resolves through this same `findById`. A single canned address makes "who was mailed" unassertable.
+  userRepository: { findById: vi.fn(async (id: string) => ({ id, email: `${id}@example.com` })) },
   organizationRepository: {},
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {},
@@ -147,8 +149,26 @@ describe('POST /api/data-lakes/ownership-offers/:offerId/accept', () => {
 
     await call(acceptHandler, req('POST', { offerId: 'offer-1' }), res);
 
-    // One to the offerer, one to the demoted prior owner.
+    // One to the offerer, one to the demoted prior owner - each at their OWN address, so a mutation
+    // that sends both to one person (or to the wrong person) fails here.
     expect(h.sendEmail).toHaveBeenCalledTimes(2);
+    expect(h.sendEmail).toHaveBeenCalledWith('creator@example.com', expect.anything());
+    expect(h.sendEmail).toHaveBeenCalledWith('prior-owner@example.com', expect.anything());
+  });
+
+  it('does not double-email the offerer when they are also a demoted prior owner', async () => {
+    // The offerer is skipped in the demotion loop: they already got the mail above.
+    h.acceptLakeOwnershipOffer.mockResolvedValue({
+      newOwnerUserId: 'recipient',
+      demotedUserIds: ['creator'],
+      offer: OFFER,
+    });
+    const { res } = makeRes();
+
+    await call(acceptHandler, req('POST', { offerId: 'offer-1' }), res);
+
+    expect(h.sendEmail).toHaveBeenCalledTimes(1);
+    expect(h.sendEmail).toHaveBeenCalledWith('creator@example.com', expect.anything());
   });
 
   it('propagates the not-found refusal for a non-recipient', async () => {

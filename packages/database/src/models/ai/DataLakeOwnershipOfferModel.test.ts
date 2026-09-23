@@ -99,6 +99,32 @@ describe('DataLakeOwnershipOfferRepository', () => {
     expect((await repo.findPendingForLake('lake-1'))?.status).toBe('pending');
   });
 
+  it('expirePendingForLake leaves a RESOLVED row past its expiry alone', async () => {
+    // The `status: 'pending'` clause keeps an accepted offer's history from being rewritten to
+    // `expired` (and its `resolvedAt` overwritten) once the calendar passes its `expiresAt` - which
+    // every accepted offer eventually does.
+    const accepted = await repo.create(offer({ expiresAt: new Date('2026-01-01T00:00:00Z') }));
+    await repo.resolve(accepted.id, 'accepted');
+    const asOf = new Date('2026-06-01T00:00:00Z');
+
+    expect(await repo.expirePendingForLake('lake-1', asOf)).toBe(0);
+
+    const after = await repo.findById(accepted.id);
+    expect(after?.status).toBe('accepted');
+    expect(after?.resolvedAt).not.toEqual(asOf);
+  });
+
+  it('expirePendingForLake matches its own lake and the inclusive boundary', async () => {
+    const boundary = new Date('2026-06-01T00:00:00Z');
+    await repo.create(offer({ dataLakeId: 'lake-1', expiresAt: boundary }));
+    const other = await repo.create(offer({ dataLakeId: 'lake-2', expiresAt: new Date('2026-01-01T00:00:00Z') }));
+
+    // `$lte`, mirroring the read filter's `$gt`: a row is retired exactly when the reads stop seeing
+    // it. And only THIS lake's rows - another lake's lapsed offer must not be touched.
+    expect(await repo.expirePendingForLake('lake-1', boundary)).toBe(1);
+    expect((await repo.findById(other.id))?.status).toBe('pending');
+  });
+
   it('listPendingForRecipient returns only that recipient live offers', async () => {
     await repo.create(offer({ recipientUserId: 'alice', dataLakeId: 'lake-1' }));
     await repo.create(offer({ recipientUserId: 'alice', dataLakeId: 'lake-2' }));
