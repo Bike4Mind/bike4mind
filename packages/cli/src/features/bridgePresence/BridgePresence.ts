@@ -85,12 +85,6 @@ export class BridgePresence {
   private config: BridgeConfig | null = null;
   private instanceId: string | null = null;
   private ws: WebSocket | null = null;
-  /** Whether the current command WS actually reached 'open'. `this.ws` is set at
-   *  construction (before the handshake completes), so it alone cannot tell "a
-   *  socket was constructed" from "a socket connected"; stop()'s best-effort
-   *  `/disconnect` gates on this so it fires only for a session whose connect-time
-   *  ownership check ran. */
-  private wsOpened = false;
   private callbacks: BridgePresenceCallbacks = {};
   private started = false;
   private stopped = false;
@@ -106,10 +100,11 @@ export class BridgePresence {
    *  put the secret on the wire while it is closed. Cleared when the command WS
    *  drops (the real TOCTOU boundary, where the port owner could flip). On
    *  teardown it is cleared last, AFTER stop()'s best-effort `/disconnect`; that
-   *  POST is additionally gated on the command WS having actually opened (see
-   *  `wsOpened`), so it only ever signals a peer that passed a connect-time
-   *  ownership check - never a port owner that could have flipped in a window
-   *  where no command WS was ever established. */
+   *  POST is additionally gated on a command WS having been constructed for this
+   *  session (see `wsWasLive` in stop()). connectCommandWs re-verifies the owner
+   *  (gateEgress) BEFORE it constructs the socket, so `this.ws !== null` means a
+   *  connect-time ownership check ran for this generation - the POST never signals
+   *  a port owner in a window where no command WS was ever attempted. */
   private trusted = false;
   /** In-flight guard for connectCommandWs, scoped to the generation that owns
    *  it: the trust probe is awaited, so without this two overlapping calls could
@@ -418,14 +413,15 @@ export class BridgePresence {
       clearTimeout(this.announceRetryTimer);
       this.announceRetryTimer = null;
     }
-    // Whether a command WS actually opened for this session. Only such a session
-    // had a connect-time ownership check; if we announced but the WS never opened
-    // (stop() landed before/inside connectCommandWs, or the connect never
-    // completed), no connect-time check ran, so POSTing /disconnect could hand the
-    // secret to a port owner that flipped after announce. post() separately refuses
-    // while the trust latch is closed, so the gate here is just this connect-time
-    // condition, not a duplicate trust check.
-    const wsOpened = this.wsOpened;
+    // Whether a command WS was constructed for this session. connectCommandWs
+    // re-verifies the owner (gateEgress) BEFORE constructing the socket, so
+    // `this.ws !== null` here means a connect-time ownership check ran; if we
+    // announced but never got that far (stop() landed before/inside
+    // connectCommandWs), no connect-time check ran, so POSTing /disconnect could
+    // hand the secret to a port owner that flipped after announce. Captured before
+    // close() below. post() separately refuses while the trust latch is closed, so
+    // this gate is just the connect-time condition, not a duplicate trust check.
+    const wsWasLive = this.ws !== null;
     if (this.ws) {
       try {
         this.ws.close();
@@ -434,7 +430,7 @@ export class BridgePresence {
       }
       this.ws = null;
     }
-    if (this.config && this.instanceId && wsOpened) {
+    if (this.config && this.instanceId && wsWasLive) {
       await this.post('/disconnect', { instanceId: this.instanceId, reason }).catch(() => {
         /* best-effort */
       });
@@ -452,7 +448,6 @@ export class BridgePresence {
     this.reconnectAttempts = 0;
     this.peerWarned = false;
     this.trusted = false;
-    this.wsOpened = false;
     // wsConnectingGen is intentionally NOT reset here: it is generation-scoped, so
     // a stale in-flight connect only short-circuits its own generation and clears
     // the flag in its own guarded `finally`. Clearing it here would either strand
@@ -545,14 +540,12 @@ export class BridgePresence {
       }
 
       this.ws = ws;
-      this.wsOpened = false;
 
       ws.on('open', () => {
         // Identity guard (mirrors the close handler): only the currently tracked
         // socket may touch shared state. A late 'open' from a superseded socket
         // must not reset the live generation's reconnect backoff.
         if (this.ws !== ws) return;
-        this.wsOpened = true;
         this.reconnectAttempts = 0;
         logger.debug('[tavern] command WS open');
       });
@@ -587,7 +580,6 @@ export class BridgePresence {
         // never the current this.ws.
         if (this.ws !== ws) return;
         this.ws = null;
-        this.wsOpened = false;
         // Connection generation ended - re-verify ownership before the next
         // disclosure (the port owner could flip while we are disconnected).
         this.trusted = false;
