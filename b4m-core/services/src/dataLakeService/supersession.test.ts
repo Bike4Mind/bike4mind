@@ -337,3 +337,174 @@ describe('buildSupersessionReport / describeSupersession', () => {
     expect(describeSupersession(report)).toContain('old [old, matched by fileName, superseded by new]');
   });
 });
+
+describe('partitionBySupersession curator rulings', () => {
+  const ruling = (by: string, lake = 'lake1') => [
+    { dataLakeId: lake, supersededByFabFileId: by, decidedByUserId: 'u1', decidedAt: new Date('2024-05-05') },
+  ];
+
+  it('suppresses a ruled member behind its named winner', () => {
+    const { servable, superseded } = partitionBySupersession(
+      [
+        file({ id: 'loser', fileName: 'a.md', supersededInLakes: ruling('winner') }),
+        file({ id: 'winner', fileName: 'b.md' }),
+      ],
+      { lakes: LAKES }
+    );
+    expect(idsOf(servable)).toEqual(['winner']);
+    expect(superseded).toEqual([
+      { file: expect.objectContaining({ id: 'loser' }), tier: 'curator', supersededBy: 'winner' },
+    ]);
+  });
+
+  it('applies a ruling between two documents that share no identity key', () => {
+    // The whole reason the explicit tier exists: these two would never group by fileName,
+    // relativePath or driveFileId, so no derived tier could express the curator's decision.
+    const { servable } = partitionBySupersession(
+      [
+        file({ id: 'loser', fileName: 'pricing-2023.md', supersededInLakes: ruling('winner') }),
+        file({ id: 'winner', fileName: 'pricing-current.md' }),
+      ],
+      { lakes: LAKES }
+    );
+    expect(idsOf(servable)).toEqual(['winner']);
+  });
+
+  it('applies a ruling even when the derived identity tiers are switched off', () => {
+    const { servable, superseded } = partitionBySupersession(
+      [
+        file({ id: 'old', createdAt: new Date('2024-01-01'), supersededInLakes: ruling('ruled-winner') }),
+        file({ id: 'ruled-winner', createdAt: new Date('2024-02-01') }),
+        // Same file name and older, so the derived collapse WOULD suppress this one - and must not.
+        file({ id: 'derived-loser', createdAt: new Date('2023-01-01') }),
+      ],
+      { lakes: LAKES, identityTiers: false }
+    );
+    expect(idsOf(servable)).toEqual(['ruled-winner', 'derived-loser']);
+    expect(superseded.map(e => e.tier)).toEqual(['curator']);
+  });
+
+  it('ignores a ruling made for a different lake', () => {
+    const { servable, superseded } = partitionBySupersession(
+      [file({ id: 'a', supersededInLakes: ruling('b', 'lake2') }), file({ id: 'b', fileName: 'other.md' })],
+      { lakes: LAKES }
+    );
+    expect(idsOf(servable)).toEqual(['a', 'b']);
+    expect(superseded).toEqual([]);
+  });
+
+  it('ignores a ruling whose winner is not in the scoped set', () => {
+    // The retention guard: a winner that was purged, removed from the lake or withheld mid-reindex
+    // leaves the ruling inert, so the lake still contributes the older document rather than
+    // nothing at all. This is what makes a stale-ruling sweep unnecessary.
+    const { servable, superseded } = partitionBySupersession(
+      [file({ id: 'loser', supersededInLakes: ruling('gone') })],
+      { lakes: LAKES }
+    );
+    expect(idsOf(servable)).toEqual(['loser']);
+    expect(superseded).toEqual([]);
+  });
+
+  it('ignores a self-referential ruling', () => {
+    const { servable } = partitionBySupersession([file({ id: 'self', supersededInLakes: ruling('self') })], {
+      lakes: LAKES,
+    });
+    expect(idsOf(servable)).toEqual(['self']);
+  });
+
+  it('never lets a ruled member win a derived identity group', () => {
+    // `ruled` is the newest of the three by name-tier recency, so without the exclusion it would
+    // take the key and suppress `sibling` - on the strength of a generation a curator just retired.
+    const { servable, superseded } = partitionBySupersession(
+      [
+        file({ id: 'ruled', createdAt: new Date('2024-09-01'), supersededInLakes: ruling('winner') }),
+        file({ id: 'sibling', createdAt: new Date('2024-03-01') }),
+        file({ id: 'winner', fileName: 'other.md' }),
+      ],
+      { lakes: LAKES }
+    );
+    expect(idsOf(servable)).toEqual(['sibling', 'winner']);
+    expect(superseded).toEqual([
+      { file: expect.objectContaining({ id: 'ruled' }), tier: 'curator', supersededBy: 'winner' },
+    ]);
+  });
+
+  it('declines both halves of a two-file ruling cycle, so the subject does not vanish', () => {
+    // Two findings, two rulings, neither call able to see the loop it closed. Without the cycle
+    // walk each file is suppressed by the other and the lake contributes NOTHING for the subject -
+    // the exact failure the winner-must-be-in-scope guard exists to prevent.
+    const { servable, superseded } = partitionBySupersession(
+      [
+        file({ id: 'a', supersededInLakes: ruling('b') }),
+        file({ id: 'b', fileName: 'other.md', supersededInLakes: ruling('a') }),
+      ],
+      { lakes: LAKES, identityTiers: false }
+    );
+    expect(idsOf(servable)).toEqual(['a', 'b']);
+    expect(superseded).toEqual([]);
+  });
+
+  it('declines a longer ruling cycle too', () => {
+    const { servable } = partitionBySupersession(
+      [
+        file({ id: 'a', fileName: 'a.md', supersededInLakes: ruling('b') }),
+        file({ id: 'b', fileName: 'b.md', supersededInLakes: ruling('c') }),
+        file({ id: 'c', fileName: 'c.md', supersededInLakes: ruling('a') }),
+      ],
+      { lakes: LAKES, identityTiers: false }
+    );
+    expect(idsOf(servable)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('honors a chain that does not loop, suppressing every link but the last', () => {
+    const { servable, superseded } = partitionBySupersession(
+      [
+        file({ id: 'a', fileName: 'a.md', supersededInLakes: ruling('b') }),
+        file({ id: 'b', fileName: 'b.md', supersededInLakes: ruling('c') }),
+        file({ id: 'c', fileName: 'c.md' }),
+      ],
+      { lakes: LAKES, identityTiers: false }
+    );
+    expect(idsOf(servable)).toEqual(['c']);
+    expect(superseded.map(e => e.supersededBy)).toEqual(['b', 'c']);
+  });
+
+  it('honors a ruling whose winner is itself ruled behind something out of scope', () => {
+    // Leaving the scoped set ends the cycle walk without declining anything: `b` is a servable
+    // winner here, because its own ruling names a file that is not present and is therefore inert.
+    const { servable } = partitionBySupersession(
+      [
+        file({ id: 'a', fileName: 'a.md', supersededInLakes: ruling('b') }),
+        file({ id: 'b', fileName: 'b.md', supersededInLakes: ruling('gone') }),
+      ],
+      { lakes: LAKES, identityTiers: false }
+    );
+    expect(idsOf(servable)).toEqual(['b']);
+  });
+
+  it('leaves the derived collapse exactly as it was when no ruling is present', () => {
+    const { servable, superseded } = partitionBySupersession(
+      [file({ id: 'old', createdAt: new Date('2024-01-01') }), file({ id: 'new', createdAt: new Date('2024-06-01') })],
+      { lakes: LAKES }
+    );
+    expect(idsOf(servable)).toEqual(['new']);
+    expect(superseded.map(e => e.tier)).toEqual(['fileName']);
+  });
+});
+
+describe('describeSupersession wording', () => {
+  it('does not claim a curator suppression is a newer version of the same document', () => {
+    // The model acts on this sentence. A curator rules on two documents that CONTRADICT each
+    // other, so "a newer version of the same source document" - true of every derived tier - is a
+    // false statement about a `curator` entry, and this prose reaches the model on every turn.
+    const prose = describeSupersession(
+      buildSupersessionReport([
+        { file: { id: 'old', fileName: 'pricing-2023.md' }, tier: 'curator', supersededBy: 'new' },
+      ])
+    ) as string;
+    expect(prose).toContain('matched by curator');
+    expect(prose).toContain("curator's explicit ruling");
+    expect(prose).not.toMatch(/holds a newer\s+version of the same source document:/);
+    expect(prose).toContain('retrieve one by id or name');
+  });
+});

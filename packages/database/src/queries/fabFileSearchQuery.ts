@@ -402,6 +402,13 @@ export interface FabFileSearchParams {
      * duplicate prefixes are dropped rather than matching everything / repeating a conjunct.
      */
     lacksContentPrefixTags?: string[];
+    /**
+     * Opts the search back into `supersededInLakes`, which is `select: false` on the schema by
+     * default (see FabFileModel.ts). Only the curator-supersession collapse's own callers
+     * (semanticDataLakeSearch, ChatCompletionFeatures' forced retrieval) should ever pass this -
+     * it is control-plane metadata, not something any other search result should carry outward.
+     */
+    includeSupersessionRulings?: boolean;
   };
   useDocumentDB?: boolean;
 }
@@ -413,6 +420,7 @@ export interface FabFileSearchQuery {
   skip: number;
   limit: number;
   excludeContent?: boolean;
+  includeSupersessionRulings?: boolean;
 }
 
 /**
@@ -622,5 +630,6 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     skip: (pagination.page - 1) * pagination.limit,
     limit: pagination.limit + 1, // +1 for hasMore detection
     excludeContent: options?.excludeContent,
+    includeSupersessionRulings: options?.includeSupersessionRulings,
   };
 }

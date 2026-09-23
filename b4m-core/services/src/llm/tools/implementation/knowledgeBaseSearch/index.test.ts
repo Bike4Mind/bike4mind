@@ -595,7 +595,7 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
 
       const out = await run(contextWithFlag(true));
 
-      expect(out).toContain('older file version(s) were not ranked');
+      expect(out).toContain('were not ranked because this data lake holds a version');
       expect(out).toContain('old-id');
       expect(out).toContain('new-id');
       expect(out).toContain('fileName');
