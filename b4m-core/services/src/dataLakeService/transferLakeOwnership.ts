@@ -7,7 +7,7 @@ import type {
   IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, normalizeId } from '@bike4mind/utils';
-import { resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
+import { resolveEffectiveOwnerIds, type LakeGrant, type ManageActor } from './manageRule';
 import { assertLakeGrantable } from './assertLakeAccess';
 import {
   isOrgOwnershipCandidate,
@@ -208,7 +208,7 @@ export async function authorizeLakeTransfer(
  * holds - the audit is written LAST so it can never claim a transfer that failed partway.
  */
 export async function applyLakeOwnershipTransfer(
-  actor: LakeTransferActor,
+  actor: ManageActor,
   lake: IDataLakeDocument,
   grants: LakeGrant[],
   newOwnerUserId: string,
