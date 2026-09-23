@@ -9,8 +9,11 @@ import type {
   AgentResult,
   AgentRunOptions,
   AgentStep,
+  GatedToolCall,
   IterationResult,
+  RunIterationOptions,
 } from './types';
+import { GATED_TOOL_OBSERVATION } from './types';
 import {
   categorizeTools,
   executeToolsInParallel,
@@ -349,6 +352,16 @@ export class ReActAgent extends EventEmitter {
    * @returns Agent result with final answer and all steps
    */
   async run(query: string | MessageContent, options: AgentRunOptions = {}): Promise<AgentResult> {
+    // `run()` has its own tool-execution loop and never consults `toolGate` - only
+    // `runIteration()` does, and `toolGate` lives on `RunIterationOptions`, not
+    // `AgentRunOptions`, specifically so a TypeScript caller cannot pass one here.
+    // This guard only catches a plain-JS caller (no type checker) smuggling one in;
+    // silently ignoring it would be the worst failure mode for a permission gate
+    // (every call runs ungated), so refuse outright instead.
+    if ((options as RunIterationOptions).toolGate) {
+      throw new Error('ReActAgent.run: toolGate is only honored by runIteration(), not run()');
+    }
+
     // Reset state for new run
     this.steps = [];
     this.totalTokens = 0;
@@ -999,13 +1012,24 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * Throws if the underlying backend doesn't support this surgery or if no
    * matching message is found.
    */
+  /**
+   * Whether the current backend can record a replayed tool result via
+   * `replaceLastToolResultObservation` / `executeGatedToolCall`. Only Anthropic,
+   * Bedrock-Anthropic, DeepSeek and OpenAI implement it today - checking this
+   * before raising a permission card avoids offering an "Approve" that can only fail.
+   */
+  supportsGatedReplay(): boolean {
+    return typeof this.context.llm.replaceLastToolResultObservation === 'function';
+  }
+
   replaceLastToolResultObservation(toolCallId: string, newObservation: string): void {
-    if (!this.context.llm.replaceLastToolResultObservation) {
+    if (!this.supportsGatedReplay()) {
       throw new Error(
         `ReActAgent.replaceLastToolResultObservation: backend (${this.context.llm.currentModel}) does not implement replaceLastToolResultObservation — cannot resume after subagent handoff`
       );
     }
-    this.context.llm.replaceLastToolResultObservation(this.messages, toolCallId, newObservation);
+    // Non-null by construction: `supportsGatedReplay()` above is this exact typeof check.
+    this.context.llm.replaceLastToolResultObservation!(this.messages, toolCallId, newObservation);
   }
 
   /**
@@ -1112,7 +1136,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
    * duplicated between run() and runIteration(). Extract into a shared private method
    * once runIteration() is validated in production.
    */
-  async runIteration(query?: string | MessageContent, options: AgentRunOptions = {}): Promise<IterationResult> {
+  async runIteration(query?: string | MessageContent, options: RunIterationOptions = {}): Promise<IterationResult> {
     const maxIterations = options.maxIterations ?? this.context.maxIterations ?? 50;
     const temperature = options.temperature ?? this.context.temperature ?? 0.7;
     const maxTokens = options.maxTokens ?? this.context.maxTokens;
@@ -1224,6 +1248,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       let currentText = '';
       let finalAnswer = '';
       const processedToolIds = new Set<string>();
+      const gatedToolCalls: GatedToolCall[] = [];
       let hadToolCalls = false;
       let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
       const iterStartInputTokens = this.totalInputTokens;
@@ -1339,18 +1364,34 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                   options.parallelExecution &&
                   shouldUseParallelExecution(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool)
                 ) {
+                  // Keyed by the provider `tool_use` id (not `getToolId`, which is
+                  // name+stringified-args and collides when a batch calls the same
+                  // tool twice with identical arguments). `withholdIfGated` assigns
+                  // `toolUse.id` when the provider omitted one, so every entry here
+                  // is guaranteed to have it set by the time this map is read.
+                  const withheld = new Map<string, GatedToolCall>();
                   for (const toolUse of unprocessedTools) {
                     const actionStep = this.buildActionStep(toolUse);
                     iterationSteps.push(actionStep);
+                    const gated = this.withholdIfGated(toolUse, options.toolGate);
+                    if (gated) {
+                      withheld.set(toolUse.id as string, gated);
+                      gatedToolCalls.push(gated);
+                    }
                   }
                   // On abort this returns the partial results instead of throwing, so the
                   // loop below still pairs a tool_result with every advertised tool_use.
                   // That keeps the aborted iteration's checkpoint self-consistent (every
                   // tool_use paired) rather than relying on the catch-block rollback, so a
                   // resumed session replays cleanly with no orphaned tool_use ids.
-                  const plan = categorizeTools(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool);
+                  const runnable = unprocessedTools.filter(t => !withheld.has(t.id as string));
+                  const plan = categorizeTools(runnable, options.isReadOnlyTool ?? defaultIsReadOnlyTool);
                   const results = await this.runToolBatchAbortTolerant(plan, options.signal);
                   for (const toolUse of unprocessedTools) {
+                    if (withheld.has(toolUse.id as string)) {
+                      this.appendToolMessages(this.messages, toolUse, GATED_TOOL_OBSERVATION, thinkingBlocks);
+                      continue;
+                    }
                     const result = results.get(getToolId(toolUse));
                     const observation = observationForResult(result);
                     this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
@@ -1361,6 +1402,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                   for (const toolUse of unprocessedTools) {
                     const actionStep = this.buildActionStep(toolUse);
                     iterationSteps.push(actionStep);
+
+                    const gated = this.withholdIfGated(toolUse, options.toolGate);
+                    if (gated) {
+                      gatedToolCalls.push(gated);
+                      this.appendToolMessages(this.messages, toolUse, GATED_TOOL_OBSERVATION, thinkingBlocks);
+                      continue;
+                    }
 
                     const queuedObs = this.observationQueue.find(obs => obs.toolId === getToolId(toolUse));
                     let observation: string;
@@ -1436,6 +1484,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             isComplete: true,
             reachedMaxIterations: false,
             checkpoint: this.toCheckpoint(),
+            ...(gatedToolCalls.length > 0 ? { gatedToolCalls } : {}),
           };
         }
         this.emit('gate_proceed', { ...decision, iteration: this.iterations });
@@ -1476,6 +1525,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           reachedMaxIterations: false,
           reachedMaxTotalTokens: true,
           checkpoint: this.toCheckpoint(),
+          ...(gatedToolCalls.length > 0 ? { gatedToolCalls } : {}),
         };
       }
 
@@ -1500,6 +1550,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           isComplete: true,
           reachedMaxIterations: true,
           checkpoint: this.toCheckpoint(),
+          ...(gatedToolCalls.length > 0 ? { gatedToolCalls } : {}),
         };
       }
 
@@ -1522,6 +1573,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         isComplete: iterationComplete,
         reachedMaxIterations: false,
         checkpoint: this.toCheckpoint(),
+        ...(gatedToolCalls.length > 0 ? { gatedToolCalls } : {}),
       };
     } catch (error) {
       // Capture the in-flight iteration index BEFORE rollback. `this.iterations`
@@ -1708,6 +1760,72 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       if (error instanceof ToolExecutionAbortedError) return error.partialResults;
       throw error;
     }
+  }
+
+  /**
+   * Ask the host's pre-execution gate whether this call may run.
+   *
+   * Assigns `toolUse.id` when the provider did not supply one, because the id is
+   * what later pairs the withheld call with its placeholder tool_result - the
+   * generated id must be the same one `appendToolMessages` writes, not a second
+   * fresh one.
+   */
+  private withholdIfGated(toolUse: ToolUseInfo, gate?: (call: GatedToolCall) => boolean): GatedToolCall | null {
+    if (!gate) return null;
+    if (!toolUse.id) {
+      toolUse.id = `${toolUse.name}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    }
+    const call: GatedToolCall = { id: toolUse.id, name: toolUse.name, input: toolUse.arguments };
+    return gate(call) ? call : null;
+  }
+
+  /**
+   * Run a call the gate withheld earlier, once the host has approval for it, and
+   * swap its placeholder tool_result for the real observation. Call this on a
+   * checkpoint-resumed agent before the next `runIteration()`; the gate is NOT
+   * re-consulted, so the caller owns the approval decision.
+   */
+  async executeGatedToolCall(call: GatedToolCall): Promise<string> {
+    // Checked BEFORE executing: the backend method is optional and several backends
+    // (gemini, xai, kimi, ollama, ...) do not implement it. Running the tool first and
+    // discovering that afterwards would leave the side effect behind with no way to record
+    // its result, and report the failure as though the tool had never run.
+    if (!this.supportsGatedReplay()) {
+      throw new Error(
+        `ReActAgent.executeGatedToolCall: backend (${this.context.llm.currentModel}) cannot record a replayed tool result, so an approval-gated tool cannot be run on it`
+      );
+    }
+    const observation = await this.executeToolWithQueueFallback({
+      id: call.id,
+      name: call.name,
+      arguments: typeof call.input === 'string' || call.input === undefined ? call.input : JSON.stringify(call.input),
+    });
+    this.replaceLastToolResultObservation(call.id, observation);
+    this.buildObservationStep(call.name, observation);
+    return observation;
+  }
+
+  /**
+   * Read and clear the average confidence of every observation pushed since the
+   * last call (or the last `runIteration()`, whichever is more recent) - `null`
+   * if nothing has been scored yet.
+   *
+   * Exists for the approval-replay path: `executeGatedToolCall` pushes onto
+   * `iterationConfidences` the same way an ordinary tool call does, but that
+   * happens OUTSIDE any `runIteration()` call, so the confidence gate the host
+   * runs at the end of an iteration never sees it - and `runIteration()` clears
+   * `iterationConfidences` at its own start regardless, discarding the score
+   * before anything reads it. The host calls this right after replaying an
+   * approved batch (see `resumeApprovedPause` / `gateReplayConfidence`) so a
+   * replayed tool that failed still gets the same low-confidence pause a normal
+   * iteration would have gotten - resetting `iterationConfidences` here is a
+   * no-op for the next `runIteration()`, which resets it again anyway.
+   */
+  takeIterationConfidence(): number | null {
+    if (this.iterationConfidences.length === 0) return null;
+    const avg = this.iterationConfidences.reduce((a, b) => a + b, 0) / this.iterationConfidences.length;
+    this.iterationConfidences = [];
+    return avg;
   }
 
   /**
