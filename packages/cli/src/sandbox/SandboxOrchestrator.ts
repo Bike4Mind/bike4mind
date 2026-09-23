@@ -141,19 +141,24 @@ export class SandboxOrchestrator {
       return false;
     }
 
+    // Enabling requires a proxy to filter through - without one, egress would be
+    // raw and unfiltered, so fail closed rather than set the flag.
+    if (!this.proxyManager) {
+      this.config.network.enabled = false;
+      return false;
+    }
+
     // Enabling: start the proxy FIRST; only grant egress if it actually runs.
-    if (this.proxyManager) {
-      this.proxyManager.setEnabled(true);
-      try {
-        await this.proxyManager.start();
-      } catch {
-        // fall through to the isRunning check -> fail closed
-      }
-      if (!this.proxyManager.isRunning()) {
-        this.proxyManager.setEnabled(false);
-        this.config.network.enabled = false;
-        return false;
-      }
+    this.proxyManager.setEnabled(true);
+    try {
+      await this.proxyManager.start();
+    } catch {
+      // fall through to the isRunning check -> fail closed
+    }
+    if (!this.proxyManager.isRunning()) {
+      this.proxyManager.setEnabled(false);
+      this.config.network.enabled = false;
+      return false;
     }
     this.config.network.enabled = true;
     return true;

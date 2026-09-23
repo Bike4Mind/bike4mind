@@ -369,6 +369,17 @@ describe('SandboxOrchestrator', () => {
       await orchestrator.setNetworkEnabled(true);
       expect(DEFAULT_SANDBOX_CONFIG.network.enabled).toBe(before);
     });
+
+    it('fails closed with no proxy manager - never sets networkEnabled with no proxy to filter', async () => {
+      const runtime = createMockRuntime();
+      const wrapSpy = vi.spyOn(runtime, 'wrapCommand');
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), runtime);
+
+      expect(await orchestrator.setNetworkEnabled(true)).toBe(false);
+      expect(orchestrator.getConfig().network.enabled).toBe(false);
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
+    });
   });
 
   describe('stats tracking', () => {
