@@ -93,10 +93,11 @@ export class BridgePresence {
    *  check passes for the current connection generation; `post()` refuses to
    *  put the secret on the wire while it is closed. Cleared when the command WS
    *  drops (the real TOCTOU boundary, where the port owner could flip). On
-   *  teardown it is cleared last, AFTER stop()'s best-effort `/disconnect` -
-   *  that POST rides the still-open gate deliberately: stop() only reaches it
-   *  when the command WS is live to the peer we verified at connect (a flipped
-   *  peer would have dropped the WS, closing the gate first). */
+   *  teardown it is cleared last, AFTER stop()'s best-effort `/disconnect`; that
+   *  POST is additionally gated on the command WS having actually been live (see
+   *  `wsWasLive` in stop()), so it only ever signals a peer we verified at
+   *  connect and stayed connected to - never a port owner that could have
+   *  flipped in a window where no command WS was ever established. */
   private trusted = false;
   /** In-flight guard for connectCommandWs, scoped to the generation that owns
    *  it: the trust probe is awaited, so without this two overlapping calls could
@@ -191,14 +192,15 @@ export class BridgePresence {
    *                       started); fail-closed but quiet - just retry.
    *  - `foreign`        - a different-UID owner holds the port; fail-closed AND
    *                       log the security-worded warning (the real adversary).
-   *  - `undeterminable` - ownership can't be resolved: unsupported platform
-   *                       (getuid unavailable), lookup tool missing/hung, or an
-   *                       ambiguous owner set. Fail-closed, but a host that can't
-   *                       run the probe is not an attacker - log at debug, not as
-   *                       the security warning.
+   *  - `undeterminable` - ownership can't be resolved: lookup tool missing/hung,
+   *                       a read/spawn error, or an ambiguous owner set.
+   *                       Fail-closed, but a host that can't run the probe is not
+   *                       an attacker - log at debug, not as the security warning.
+   *
+   * A platform without `getuid` (Windows) is latched off earlier, in
+   * `attemptAnnounce`, so this method is only reached where `getuid` exists.
    */
   private async checkPeerTrust(): Promise<'trusted' | 'absent' | 'foreign' | 'undeterminable'> {
-    if (typeof process.getuid !== 'function') return 'undeterminable'; // Windows: uncheckable
     const port = this.config?.port ?? DEFAULT_PORT;
     let owner: Awaited<ReturnType<typeof resolveLoopbackListenerOwner>>;
     try {
@@ -212,7 +214,7 @@ export class BridgePresence {
     }
     if (owner.kind === 'no-listener') return 'absent';
     if (owner.kind === 'unknown') return 'undeterminable';
-    if (owner.uid !== process.getuid()) return 'foreign';
+    if (owner.uid !== process.getuid!()) return 'foreign'; // getuid present: attemptAnnounce latches Windows off
     this.peerWarned = false;
     return 'trusted';
   }
@@ -385,6 +387,12 @@ export class BridgePresence {
       clearTimeout(this.announceRetryTimer);
       this.announceRetryTimer = null;
     }
+    // Whether a command WS was actually established for this session. Only such a
+    // session had a connect-time ownership check; if we announced but never opened
+    // the WS (stop() landed before/inside connectCommandWs), `trusted` is still
+    // open from the announce probe yet no connect-time check ran, so POSTing here
+    // could disclose the secret to a port owner that flipped after announce.
+    const wsWasLive = this.ws !== null;
     if (this.ws) {
       try {
         this.ws.close();
@@ -393,7 +401,7 @@ export class BridgePresence {
       }
       this.ws = null;
     }
-    if (this.config && this.instanceId) {
+    if (this.config && this.instanceId && this.trusted && wsWasLive) {
       await this.post('/disconnect', { instanceId: this.instanceId, reason }).catch(() => {
         /* best-effort */
       });

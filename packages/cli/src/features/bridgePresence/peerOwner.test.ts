@@ -123,6 +123,12 @@ describe('parseLsofForUid', () => {
     expect(parseLsofForUid('p1\nu501\nf3\nn10.0.0.1:22\np2\nf3\nn127.0.0.1:48732\n')).toEqual([]);
   });
 
+  it('surfaces every matching owner so an ambiguous set can be rejected', () => {
+    expect(parseLsofForUid('p1\nu501\nf3\nn127.0.0.1:48732\np2\nu502\nf4\nn127.0.0.1:48732\n').sort()).toEqual([
+      501, 502,
+    ]);
+  });
+
   it('returns [] when no uid field is present', () => {
     expect(parseLsofForUid('f3\nn127.0.0.1:48732\n')).toEqual([]);
   });
@@ -213,6 +219,30 @@ describe('resolveLoopbackListenerOwner', () => {
       cb(Object.assign(new Error('timed out'), { killed: true }))
     );
     await expect(resolveLoopbackListenerOwner(48732)).resolves.toEqual({ kind: 'unknown' });
+  });
+
+  it('darwin: two distinct owners on the port => unknown (ambiguous)', async () => {
+    setPlatform('darwin');
+    accessMock.mockResolvedValue(undefined);
+    execFileMock.mockImplementation((_file, _args, _opts, cb: (e: unknown, r: unknown) => void) =>
+      cb(null, { stdout: 'p1\nu501\nf3\nn127.0.0.1:48732\np2\nu502\nf4\nn127.0.0.1:48732\n', stderr: '' })
+    );
+    // Symmetric with the linux ambiguity rule: a unique owner is required, so two
+    // distinct UIDs on the loopback port fail closed rather than trusting the first.
+    await expect(resolveLoopbackListenerOwner(48732)).resolves.toEqual({ kind: 'unknown' });
+  });
+
+  it('darwin: resolves the lsof path once and reuses it across probes (cache)', async () => {
+    setPlatform('darwin');
+    accessMock.mockResolvedValue(undefined);
+    execFileMock.mockImplementation((_file, _args, _opts, cb: (e: unknown, r: unknown) => void) =>
+      cb(null, { stdout: 'p1\nu501\nf3\nn127.0.0.1:48732\n', stderr: '' })
+    );
+    await resolveLoopbackListenerOwner(48732);
+    await resolveLoopbackListenerOwner(48732);
+    // The resolved lsof path cannot change within a process, so the X_OK probe
+    // runs once and is reused (the beforeEach reset keeps cases isolated).
+    expect(accessMock).toHaveBeenCalledTimes(1);
   });
 
   it('unsupported platform => unknown (fail-closed)', async () => {

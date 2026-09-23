@@ -525,4 +525,109 @@ describe('BridgePresence peer-ownership gate', () => {
 
     await presence.stop();
   });
+
+  it('does not POST /disconnect when stop() lands before the command WS opens (BLOCKER: no connect-verified peer)', async () => {
+    // Announce passes the announce-time owner check, but the WS probe parks so no
+    // command WS is ever established; stop() then lands. The announce `trusted`
+    // latch is still open, yet no connect-time check ran, so /disconnect must NOT
+    // be sent - it could disclose the secret to a port owner that flipped after
+    // announce. Delete the `wsWasLive` gate in stop() and this /disconnect fires.
+    let releaseWs!: (owner: ListenerOwner) => void;
+    resolveMock
+      .mockResolvedValueOnce(OWNER(me())) // announce: trusted
+      .mockImplementationOnce(() => new Promise<ListenerOwner>(r => (releaseWs = r))); // WS probe parks
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+    await waitFor(() => typeof releaseWs === 'function');
+    await presence.stop();
+    releaseWs(OWNER(me()));
+    await new Promise(r => setTimeout(r, 30));
+
+    expect(httpRequests.some(u => u.startsWith('/disconnect'))).toBe(false);
+    expect(wsConnections).toEqual([]);
+  });
+
+  it('POSTs /disconnect for a trusted, connected session on stop() (BLOCKER: happy path not over-refused)', async () => {
+    resolveMock.mockResolvedValue(OWNER(me()));
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+    await waitFor(() => wsConnections.length > 0);
+
+    await presence.stop();
+    // A session whose command WS actually opened is connect-verified, so teardown
+    // must still signal /disconnect with the secret. Delete the /disconnect block
+    // and this fails - the gate would silently over-refuse a legitimate disconnect.
+    expect(httpRequests.some(u => u.startsWith('/disconnect') && u.includes(`secret=${SECRET}`))).toBe(true);
+  });
+
+  it('fails closed and stays quiet when the owner probe throws unexpectedly (BLOCKER: resolver throw)', async () => {
+    resolveMock.mockRejectedValue(new Error('boom'));
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(false);
+    expect(httpRequests).toEqual([]);
+    // An unexpected throw from the probe fails closed, logs at debug, and does NOT
+    // fire the security warning. Delete the catch in checkPeerTrust and start()
+    // rejects (an unhandled rejection) instead of resolving false quietly.
+    expect(warn).not.toHaveBeenCalled();
+    expect(debug.mock.calls.some(([m]) => typeof m === 'string' && m.includes('loopback owner lookup threw'))).toBe(
+      true
+    );
+
+    await presence.stop();
+  });
+
+  it('a stale start() parked in readBridgeConfig across a stop()+start() does not re-announce (BLOCKER: post-config gen re-check)', async () => {
+    resolveMock.mockResolvedValue(OWNER(me()));
+    let releaseConfig!: () => void;
+    // gen-1 parks in readBridgeConfig; the fresh start()'s read uses the
+    // beforeEach default (already resolved).
+    readFileMock.mockImplementationOnce(
+      () => new Promise<string>(r => (releaseConfig = () => r(JSON.stringify({ port, hookSecret: SECRET }))))
+    );
+    const presence = new BridgePresence();
+
+    const startP1 = presence.start({ workspacePath: '/tmp/ws' });
+    await waitFor(() => typeof releaseConfig === 'function');
+    await presence.stop();
+    const ok2 = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok2).toBe(true);
+    await waitFor(() => wsConnections.length > 0);
+
+    releaseConfig(); // gen-1's config read resolves late - the gen re-check must bail
+    await expect(startP1).resolves.toBe(false);
+    expect(httpRequests.filter(u => u.startsWith('/announce')).length).toBe(1);
+
+    await presence.stop();
+  });
+
+  it('a stale gen-1 socket closing after a stop()+start() leaves gen-2 untouched (BLOCKER: WS-close identity guard)', async () => {
+    resolveMock.mockResolvedValue(OWNER(me()));
+    const presence = new BridgePresence();
+
+    const ok1 = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok1).toBe(true);
+    await waitFor(() => wsConnections.length === 1); // gen-1 socket
+
+    await presence.stop();
+    const ok2 = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok2).toBe(true);
+    await waitFor(() => wsConnections.length === 2); // gen-2 socket
+    await new Promise(r => setTimeout(r, 100)); // let gen-1's socket close settle
+
+    // gen-2 must be intact: trusted still set (the emit posts) and no reconnect
+    // opened a third socket. Remove the identity guard (`this.ws !== ws`) and
+    // gen-1's late close clears trusted / schedules a reconnect on gen-2.
+    await presence.emitEvent({ type: 'message', role: 'assistant', text: 'gen2-live' });
+    await new Promise(r => setTimeout(r, 20));
+    expect(eventBodies.some(b => b.includes('gen2-live'))).toBe(true);
+    expect(wsConnections.length).toBe(2);
+
+    await presence.stop();
+  });
 });
