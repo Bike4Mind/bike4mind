@@ -90,14 +90,16 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
   });
 
   it('passes each filter through independently', async () => {
-    const { done } = invoke({ status: 'open', kind: 'expired-claim', detector: 'model', limit: '10' });
+    const { done } = invoke({ status: 'open', kind: 'expired-claim', detector: 'model', limit: '10', offset: '20' });
     await done;
 
     expect(h.listByLake.mock.calls[0][1]).toEqual({
       status: 'open',
       kind: 'expired-claim',
       detector: 'model',
-      limit: 10,
+      // One past the requested page - see the `hasMore` test below.
+      limit: 11,
+      offset: 20,
     });
   });
 
@@ -109,8 +111,18 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
       status: undefined,
       kind: undefined,
       detector: undefined,
-      limit: 50,
+      limit: 51,
+      offset: 0,
     });
+  });
+
+  it('rejects a repeated offset rather than coercing the array to a number', async () => {
+    await expect(invoke({ offset: ['10', '20'] as unknown as string }).done).rejects.toThrow();
+    expect(h.listByLake).not.toHaveBeenCalled();
+  });
+
+  it('rejects a negative offset', async () => {
+    await expect(invoke({ offset: '-1' }).done).rejects.toThrow();
   });
 
   it('rejects an unknown status, kind or detector instead of silently ignoring it', async () => {
@@ -141,13 +153,27 @@ describe('GET /api/data-lakes/[id]/findings (#3039)', () => {
     await expect(invoke({ limit: '500' }).done).rejects.toThrow();
   });
 
-  it('returns the rows under data', async () => {
+  it('returns the rows under data, with hasMore false when the page is short', async () => {
     const rows = [{ id: 'f1', kind: 'expired-claim' }];
     h.listByLake.mockResolvedValue(rows);
 
     const { json, done } = invoke();
     await done;
 
-    expect(json).toHaveBeenCalledWith({ data: rows });
+    expect(json).toHaveBeenCalledWith({ data: rows, hasMore: false });
+  });
+
+  it('reports hasMore, and trims the lookahead row, when the queue outruns the page', async () => {
+    // 51 findings on a 50-row page: the repo call asked for 51, so a 51st row back means there is
+    // at least one more beyond this page.
+    const rows = Array.from({ length: 51 }, (_, i) => ({ id: `f${i}`, kind: 'expired-claim' }));
+    h.listByLake.mockResolvedValue(rows);
+
+    const { json, done } = invoke();
+    await done;
+
+    const [{ data, hasMore }] = json.mock.calls[0];
+    expect(data).toHaveLength(50);
+    expect(hasMore).toBe(true);
   });
 });

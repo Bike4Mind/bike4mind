@@ -76,6 +76,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // replaces the whole module, so an unlisted export is `undefined` and every render here throws.
     // Undefined data leaves the chip with no open groups, so it renders null and stays out of the way.
     useGetLakeMembershipDuplicates: () => ({ data: undefined, isLoading: false }),
+    // Same for LakeFindingsChip: it renders a neutral chip either way, so no findings just means
+    // no open-count badge.
+    useDataLakeFindings: () => ({ data: undefined, isLoading: false, error: null, isForbidden: false }),
     useGetLakeMemoryHealth: (...args: unknown[]) => useGetLakeMemoryHealth(...(args as [])),
     useBuildLakeMemory: (id: string | null) => {
       buildHookSpy(id);

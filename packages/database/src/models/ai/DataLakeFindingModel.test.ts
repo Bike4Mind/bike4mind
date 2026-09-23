@@ -344,6 +344,22 @@ describe('DataLakeFindingRepository', () => {
     expect(both.map(f => f.subject)).toEqual(['counted, then dismissed']);
   });
 
+  it('pages with offset, breaking a lastSeenAt tie by id so no row is skipped or repeated', async () => {
+    // Same seenAt on all four: findings from one detection run commonly land in the same instant,
+    // and a page boundary that fell mid-tie is exactly the bug a `sort({ lastSeenAt: -1 })` alone
+    // produces.
+    for (const subject of ['a', 'b', 'c', 'd']) {
+      await repo.recordDetected(input({ subject, seenAt: SEEN_FIRST }));
+    }
+
+    const firstPage = await repo.listByLake('lake-1', { limit: 2, offset: 0 });
+    const secondPage = await repo.listByLake('lake-1', { limit: 2, offset: 2 });
+
+    expect(firstPage).toHaveLength(2);
+    expect(secondPage).toHaveLength(2);
+    expect(new Set([...firstPage, ...secondPage].map(f => f.id)).size).toBe(4);
+  });
+
   it('scopes every list to its own lake', async () => {
     await repo.recordDetected(input({ lakeId: 'lake-1' }));
     await repo.recordDetected(input({ lakeId: 'lake-2' }));

@@ -76,6 +76,7 @@ import {
   ReActAgent,
   type AgentCheckpoint,
   type AgentStep,
+  type GatedToolCall,
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
@@ -115,7 +116,13 @@ import {
   resolveAgentArtifactGate,
 } from '../utils/artifactGate';
 import { resolveExecutionQuestId } from './agentExecutor.resolveQuestId';
-import { selectGatedAction, resolveGateDisposition } from './agentExecutorUtils/toolPermissions';
+import {
+  shouldWithholdToolCall,
+  resumeApprovedPauseAndGateConfidence,
+  handleWithheldToolCalls,
+  settleGatedCall as settleGatedCallImpl,
+  type GatedAction,
+} from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { resolveDisplayAnswer } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
@@ -145,7 +152,12 @@ import {
   attachmentNoticeStrings,
   unmaterializedAttachments,
 } from './agentExecutor.attachmentContent';
-import { applySessionToolPolicy, delegationOffer, runHasAttachments } from './agentExecutor.sessionToolPolicy';
+import {
+  applySessionToolPolicy,
+  delegationOffer,
+  DELEGATION_TOOLS,
+  runHasAttachments,
+} from './agentExecutor.sessionToolPolicy';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
 // Per-iteration billing (delta math + #657 context-window guard + tool-internal
@@ -1170,7 +1182,15 @@ async function processExecution(
       });
       // An exclusive toolset voids the payload's tool selection by design - but silently
       // voiding it is how a "why is the tool I picked missing?" report goes undiagnosable.
-      if (orchestrationProfile.toolsetIsExclusive && startPayload?.enabledTools?.length) {
+      // Only a PINNED payload is worth warning about. Every agentless chat send ships the
+      // user's ambient Smart Tools, which are an offer to union, not a demand to replace, so
+      // warning on those would fire on every single send on an exclusive surface and bury the
+      // pinned case this log exists to surface.
+      if (
+        orchestrationProfile.toolsetIsExclusive &&
+        startPayload?.enabledTools?.length &&
+        !startPayload.enabledToolsAreAmbient
+      ) {
         logger.warn('[Orchestration] Payload enabledTools ignored: profile toolset is exclusive', {
           profileId: orchestrationProfile.id,
           ignoredToolCount: startPayload.enabledTools.length,
@@ -1752,7 +1772,11 @@ async function processExecution(
     // the agentless path (Agent-mode toggle / `@agent` literal trigger) ends
     // up with a non-empty toolbelt instead of mission-tools only.
     const profileEnabledTools = orchestrationProfile
-      ? pickEffectiveEnabledTools(startPayload?.enabledTools, orchestrationProfile)
+      ? pickEffectiveEnabledTools(
+          startPayload?.enabledTools,
+          orchestrationProfile,
+          startPayload?.enabledToolsAreAmbient
+        )
       : (startPayload?.enabledTools ?? []);
 
     // Lattice parity with chat_completion. Mirrors
@@ -2332,6 +2356,92 @@ async function processExecution(
       };
     };
 
+    // See `toolGate` below for why these two are exempt from the pre-execution gate.
+    // Reuses `DELEGATION_TOOLS` so the exemption cannot drift from the tools it names.
+    const HANDOFF_DISPATCH_TOOLS = new Set<string>(DELEGATION_TOOLS);
+
+    // Pre-execution permission gate (the callback the agent consults BEFORE invoking a
+    // tool). Withholding here is what makes a denied or unapproved call cost nothing: the
+    // tool function never runs, so no provider is called, no side effect lands, and no
+    // media USD folds into `pendingToolUsage`. The withheld calls come back on
+    // `IterationResult.gatedToolCalls`, and the branch below turns them into a pause.
+    //
+    // `HANDOFF_DISPATCH_TOOLS` is exempt. Those two set `handoffSignal` /
+    // `dagHandoffSignal` and hand the run to a child Lambda; withholding them would
+    // strand the signal for an iteration and hard-fail every headless delegation at
+    // `no_approver`. The permission check below still runs BEFORE the branches that act
+    // on those signals - a gated tool called in the same turn fails the run explicitly
+    // rather than silently discarding the handoff (see the comment at that check). Their
+    // own denial is enforced earlier, at toolbelt construction, via `profileDeniedTools` /
+    // `delegationOffer`.
+    const toolGate = (call: GatedToolCall) =>
+      !HANDOFF_DISPATCH_TOOLS.has(call.name) && shouldWithholdToolCall(call.name, approvedTools, deniedTools);
+
+    // Act on a withheld call: fail the run, or park it in `awaiting_permission` and ask
+    // the client. Thin wiring over `settleGatedCallImpl` in `toolPermissions.ts`, which
+    // owns the actual state machine and is unit-tested there for all four dispositions
+    // (`denied`, `no_approver`, `unsupported`, `ask`). `withheld` carries the whole
+    // iteration's withheld set so a second gated tool raises its own card once this one
+    // is settled.
+    const settleGatedCall = (gated: GatedAction, withheld: GatedToolCall[]): Promise<void> =>
+      settleGatedCallImpl(
+        { executionId, connectionId, gated, withheld, iterationIndex },
+        {
+          supportsGatedReplay: () => agent.supportsGatedReplay(),
+          updateStatus: (id, status) => agentExecutionRepository.updateStatus(id, status),
+          updatePermissionState: (id, update) => agentExecutionRepository.updatePermissionState(id, update),
+          markFailed: (id, err) => agentExecutionRepository.markFailed(id, err),
+          sendWs,
+          persistRunAsQuest: message => persistRunAsQuest(executionId, message, logger),
+          logger,
+        }
+      ).then(() => undefined);
+
+    // --- Resume after an approved permission pause ---
+    // The approval handler leaves `pendingPermission` in place with `approved: true`
+    // precisely so this runs: the withheld calls are replayed HERE, which is the first
+    // moment their providers are invoked. A one-time approval covers only the tool it
+    // named; anything else the same iteration withheld raises its own card below.
+    // See `resumeApprovedPauseAndGateConfidence` for the state machine itself - this is
+    // only the wiring.
+    const approvedPause = execution.pendingPermission?.approved ? execution.pendingPermission : undefined;
+    if (approvedPause) {
+      const { proceed } = await resumeApprovedPauseAndGateConfidence(
+        {
+          executionId,
+          iterationIndex,
+          withheld: approvedPause.gatedToolCalls ?? [],
+          approvedToolCallId: approvedPause.toolCallId,
+          approvedTools,
+          deniedTools,
+          confidenceGateThreshold: orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD,
+        },
+        {
+          executeGatedToolCall: call => agent.executeGatedToolCall(call),
+          toCheckpoint: () => agent.toCheckpoint(),
+          updatePermissionState: id => agentExecutionRepository.updatePermissionState(id, { pendingPermission: null }),
+          updateCheckpoint: (id, checkpoint) =>
+            agentExecutionRepository.updateCheckpoint(id, checkpoint, ledgerForWrite(optiPlanState)),
+          billIterationIfNeeded: (idx, checkpoint) => billIterationIfNeeded(idx, checkpoint, counters),
+          settleGatedCall,
+          markFailed: (id, err) => agentExecutionRepository.markFailed(id, err),
+          sendWs,
+          persistRunAsQuest: message => persistRunAsQuest(executionId, message, logger),
+          logger,
+          // The replayed calls' confidence never flows through the ordinary
+          // post-iteration gate check below: they ran outside any `runIteration()`
+          // call, and the next one clears `iterationConfidences` at its own start
+          // regardless - see `ReActAgent.takeIterationConfidence`.
+          takeIterationConfidence: () => agent.takeIterationConfidence(),
+          recordIterationConfidence: (id, confidence) =>
+            agentExecutionRepository.recordIterationConfidence(id, confidence),
+          setPendingGate: (id, gate) => agentExecutionRepository.setPendingGate(id, gate),
+          recordGateEmitted: id => agentExecutionRepository.recordGateEmitted(id),
+        }
+      );
+      if (!proceed) return;
+    }
+
     while (iterationIndex < maxIterations) {
       // Check abort flag
       const isAborted = await agentExecutionRepository.checkAbortFlag(executionId);
@@ -2541,6 +2651,10 @@ async function processExecution(
         // single biggest cost reduction for multi-iteration runs; cache-read tokens are
         // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
         enableCaching: true,
+        // Pre-execution permission gate - see `toolGate` above. The agent withholds a
+        // gated call instead of running it, so nothing is spent on a call the user has
+        // not approved yet.
+        toolGate,
       });
 
       iterationIndex = iterationResult.checkpoint.iteration;
@@ -2567,6 +2681,44 @@ async function processExecution(
         ledgerForWrite(optiPlanState)
       );
       await billIterationIfNeeded(iterationIndex, iterationResult.checkpoint, counters);
+
+      // Permission check. The calls listed here were withheld BEFORE execution by
+      // `toolGate`, so nothing has run and nothing has been billed for them yet -
+      // denying costs the user nothing, and approving is what finally invokes the
+      // provider (see the resume block above the loop).
+      //
+      // This MUST run before the handoff/DAG branches below: `toolGate` only exempts
+      // `HANDOFF_DISPATCH_TOOLS` themselves, not the rest of the turn, so a turn that
+      // calls `coordinate_task`/`delegate_to_agent` alongside another gated tool sets
+      // both `handoffSignal`/`dagHandoffSignal` AND `iterationResult.gatedToolCalls`.
+      // Handing off first would strand the withheld call - the handoff branches
+      // `return`, so it would never reach a permission card, and the continuation
+      // Lambda would later restore its `GATED_TOOL_OBSERVATION` placeholder as if it
+      // were a real result.
+      // A permission pause cannot coexist with a handoff signal from the SAME turn -
+      // see `resolveHandoffConflict` (inside `handleWithheldToolCalls`) for why.
+      // `delegate_to_agent`/`coordinate_task` already ran (they are exempt from
+      // `toolGate`) and set `handoffSignal`/`dagHandoffSignal`, but nothing durable
+      // about that handoff exists yet - `setWaitingOnChild`/`setDagSpec`/
+      // `setWaitingOnDagChildren` all live in the branches below, which a pause here
+      // would skip. Approval resumes with status `continuing`, not
+      // `awaiting_subagent`/`awaiting_dag_children`, so the signal is NOT re-derived
+      // on resume - continuing would strand the handoff while its already-dispatched
+      // children finish into a parent that never learns about them. Fail loudly
+      // instead of silently discarding it.
+      const withheldCalls = iterationResult.gatedToolCalls ?? [];
+      const hasHandoffSignal = Boolean(handoffSignal.awaitingSubagent || dagHandoffSignal.awaitingDagChildren);
+      const withheldOutcome = await handleWithheldToolCalls(
+        { executionId, withheldCalls, approvedTools, deniedTools, hasHandoffSignal },
+        {
+          settleGatedCall,
+          markFailed: (id, err) => agentExecutionRepository.markFailed(id, err),
+          sendWs,
+          persistRunAsQuest: message => persistRunAsQuest(executionId, message, logger),
+          logger,
+        }
+      );
+      if (withheldOutcome.status !== 'none') return;
 
       // Handoff signal: orchestrator-side polling on a sync Lambda-dispatched
       // subagent ran out of time. The placeholder observation has been appended
@@ -2668,98 +2820,6 @@ async function processExecution(
           executionId,
           pendingNodes: pendingNodeIds,
         });
-        return;
-      }
-
-      // Permission check after iteration - classify tool calls across all steps.
-      //
-      // KNOWN LIMITATION (Phase 1): Permission classification happens AFTER
-      // runIteration() executes the tool. Side effects (e.g., send_slack_message)
-      // have already occurred by this point. Pre-execution gating requires splitting
-      // runIteration() into plan + execute phases - tracked for Phase 2.
-      //
-      // Inspect `allSteps` (not the primary `step`): for tool-calling iterations
-      // the primary step is the trailing `observation`, so the action step lives
-      // only in `allSteps`. See selectGatedAction for multi-tool semantics.
-      const gated = selectGatedAction(iterationResult.allSteps, approvedTools, deniedTools);
-      if (gated) {
-        const { toolName, toolInput, verdict } = gated;
-        const disposition = resolveGateDisposition(verdict, connectionId);
-
-        if (disposition === 'denied') {
-          // Fail the execution - the tool already executed (Phase 1 limitation),
-          // but continuing would let the agent act on the denied tool's result
-          // and potentially retry it indefinitely. Checkpoint persistence and
-          // iteration billing already happened above the branch.
-          logger.warn(`[Permission] Tool "${toolName}" is denied — failing execution`);
-          const deniedMessage = `Execution stopped: tool "${toolName}" is not permitted`;
-          // `callerSafe`: this string names only a tool the caller already knows about, and
-          // the public poll response is documented to name the gated tool - so it is
-          // published verbatim rather than collapsed by the sanitizer.
-          await agentExecutionRepository.markFailed(executionId, { message: deniedMessage, callerSafe: true });
-          await sendWs('failed', {
-            executionId,
-            reason: 'tool_denied',
-            toolName,
-          });
-          // Settle the dispatch-time Quest, as the hard-error path below does. Without
-          // this the prompt bubble stays `pending` with an empty reply forever - the
-          // status is deliberately `pending` at dispatch so Slack pollers don't fire on
-          // an empty `replies`, and only `persistRunAsQuest` ever flips it to `done`.
-          await persistRunAsQuest(executionId, `${deniedMessage}.`, logger);
-          return;
-        }
-
-        // A headless run (REST dispatch) has nobody to ask - see `resolveGateDisposition`
-        // for why that is treated as denial rather than a pause.
-        if (disposition === 'no_approver') {
-          logger.warn(`[Permission] Tool "${toolName}" needs approval but the run is headless - failing`, {
-            executionId,
-            toolName,
-          });
-          const headlessMessage =
-            `Execution stopped: tool "${toolName}" requires approval, and this run was started ` +
-            'without an interactive client to approve it. Re-run with a "tools" allowlist that ' +
-            'excludes approval-gated tools, or start the run over the WebSocket route.';
-          // `callerSafe`: written for the REST caller specifically - it names the gated tool
-          // and the remedy, which is exactly what the contract promises in `error`.
-          await agentExecutionRepository.markFailed(executionId, { message: headlessMessage, callerSafe: true });
-          // Settle the dispatch-time Quest so chat history shows the reason instead of a
-          // permanently `pending` empty bubble - same reasoning as the denied branch above.
-          await persistRunAsQuest(executionId, `${headlessMessage}`, logger);
-          return;
-        }
-
-        // disposition === 'ask' - pause and ask the user. Note: the tool
-        // has already executed (Phase 1 limitation) - approval gates future
-        // iterations, not this one. Checkpoint persistence and iteration
-        // billing already happened above the branch.
-        logger.info(`[Permission] Tool "${toolName}" needs approval, pausing execution`);
-        await agentExecutionRepository.updateStatus(executionId, 'awaiting_permission');
-        await agentExecutionRepository.updatePermissionState(executionId, {
-          pendingPermission: {
-            toolName,
-            toolInput,
-            requestedAt: new Date(),
-          },
-        });
-
-        await sendWs('permission_request', {
-          executionId,
-          toolName,
-          toolInput,
-          // 0-indexed to match per-step `iteration_step` events and the
-          // accordion labels in `IterationStream` (which renders
-          // `Iteration {group.iteration + 1}`). `iterationIndex` is the
-          // agent's 1-indexed `this.iterations` after the iteration ran,
-          // so subtract 1 here so `PermissionCard`'s `pending.iteration + 1`
-          // display lines up with the iteration the user is actually
-          // approving.
-          iteration: Math.max(0, iterationIndex - 1),
-        });
-
-        // Lambda exits - client sends permission_response via WebSocket,
-        // which re-invokes this Lambda with ContinuationSchema
         return;
       }
 
