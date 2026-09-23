@@ -1,5 +1,13 @@
+import vm from 'node:vm';
+import { transform, type PluginObj } from '@babel/standalone';
 import { describe, expect, it } from 'vitest';
-import { hasSingleLineImportFrom, scanImportStatements } from './importStatements';
+import {
+  createImportScanner,
+  hasSingleLineImportFrom,
+  IMPORT_SCANNER_FACTORY_SRC,
+  scanImportStatements,
+  type ImportScanner,
+} from './importStatements';
 
 /**
  * The scanner here replaced four backtracking regexes, so those regexes are the oracle for its
@@ -328,5 +336,98 @@ describe('hasSingleLineImportFrom', () => {
 
   it('is specifier-scoped', () => {
     expect(hasSingleLineImportFrom(`import { x } from 'preact'`, 'react')).toBe(false);
+  });
+});
+
+describe('createImportScanner serialized for the sandbox preview', () => {
+  const SRC = IMPORT_SCANNER_FACTORY_SRC;
+
+  /** Free identifiers and helper-producing syntax in the factory source, found by parsing it. */
+  function analyze(src: string): { free: string[]; banned: string[] } {
+    const free = new Set<string>();
+    const banned = new Set<string>();
+    const plugin = (): PluginObj => ({
+      visitor: {
+        Identifier(path) {
+          if (path.isReferencedIdentifier() && !path.scope.getBinding(path.node.name)) free.add(path.node.name);
+        },
+        ArrowFunctionExpression: () => void banned.add('arrow'),
+        TemplateLiteral: () => void banned.add('template literal'),
+        SpreadElement: () => void banned.add('spread'),
+        RestElement: () => void banned.add('rest'),
+        AssignmentPattern: () => void banned.add('default param'),
+        OptionalMemberExpression: () => void banned.add('?.'),
+        OptionalCallExpression: () => void banned.add('?.'),
+        ClassDeclaration: () => void banned.add('class'),
+        VariableDeclaration(path) {
+          if (path.node.kind !== 'var') banned.add(path.node.kind);
+        },
+        LogicalExpression(path) {
+          if (path.node.operator === '??') banned.add('??');
+        },
+      },
+    });
+    transform(`(${src});`, { plugins: [plugin], sourceType: 'script', code: false });
+    return { free: [...free], banned: [...banned] };
+  }
+
+  function evaluate(src: string): { scanner: ImportScanner; context: vm.Context } {
+    const context = vm.createContext(Object.create(null));
+    const scanner = vm.runInContext(`(${src})()`, context) as ImportScanner;
+    return { scanner, context };
+  }
+
+  it('references nothing outside itself and uses no helper-producing syntax', () => {
+    expect(analyze(SRC)).toEqual({ free: [], banned: [] });
+  });
+
+  it('control: the analysis flags a free reference and banned syntax', () => {
+    const mutant = SRC.replace('var WS = /\\s/;', 'var WS = OUTER_WS; var f = (x) => x ?? `${x}`;');
+    expect(mutant).not.toBe(SRC);
+    const { free, banned } = analyze(mutant);
+    expect(free).toContain('OUTER_WS');
+    expect(banned).toEqual(expect.arrayContaining(['arrow', '??', 'template literal']));
+  });
+
+  it('is ASCII and safe to inline in a script block', () => {
+    expect(SRC).toMatch(/^[\t\n\r\x20-\x7e]*$/);
+    for (const bad of ['</script', '<script', '<!--', '${']) expect(SRC.toLowerCase()).not.toContain(bad);
+    for (const helper of ['__name', '_to_consumable_array', '_interop_', 'cov_', '__vite_ssr_', '__TURBOPACK__']) {
+      expect(SRC).not.toContain(helper);
+    }
+  });
+
+  it('runs in an empty context, strict and sloppy, without leaking globals', () => {
+    const sloppySrc = SRC.replace(/(['"])use strict\1;?/, '');
+    expect(sloppySrc).not.toBe(SRC);
+    for (const src of [SRC, sloppySrc]) {
+      const { scanner, context } = evaluate(src);
+      for (const source of CORPUS.slice(0, 300)) {
+        scanner.stripTypeOnlyImports(source);
+        scanner.findRelativeImport(source);
+      }
+      expect(Object.keys(context)).toEqual([]);
+    }
+  });
+
+  it('matches the module instance on the whole corpus', () => {
+    const { scanner: browser } = evaluate(SRC);
+    const local = createImportScanner();
+    const tag = (s: { clause: string }, text: string) => `<${s.clause}|${text}>`;
+    let mismatches = 0;
+    for (const source of CORPUS) {
+      const run = (sc: ImportScanner) =>
+        JSON.stringify([
+          sc.scanImportStatements(source),
+          sc.scanImportStatements(source, { typeKeyword: true, consumeTrailing: true }),
+          sc.replaceImportStatements(source, { consumeTrailing: true }, tag),
+          sc.stripTypeOnlyImports(source),
+          sc.findRelativeImport(source),
+          sc.braceSpan(source),
+          sc.braceSpan(source, true),
+        ]);
+      if (run(browser) !== run(local)) mismatches++;
+    }
+    expect(mismatches).toBe(0);
   });
 });
