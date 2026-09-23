@@ -13,6 +13,7 @@ import {
   wrapToolWithHooks,
   wrapToolWithPermission,
   isPathAccessDenial,
+  isSandboxFailure,
   deriveGrantDirectory,
   persistToolTrust,
   type HookWrapperContext,
@@ -654,6 +655,24 @@ describe('persistToolTrust (folder-trust gate)', () => {
     // Trusted-path persistence must NOT also write it to the global layer.
     const reloadedGlobal = JSON.parse(await fs.readFile(globalConfigPath, 'utf-8'));
     expect(reloadedGlobal.trustedTools ?? []).not.toContain('file_read');
+  });
+});
+
+describe('isSandboxFailure', () => {
+  it('is false when the command was not sandboxed', () => {
+    expect(isSandboxFailure(false, 'sandbox-exec: deny(1) file-write-data /x')).toBe(false);
+  });
+
+  it('matches the sandbox launcher/denial markers', () => {
+    expect(isSandboxFailure(true, 'sandbox-exec: deny(1) file-write-data /x')).toBe(true);
+    expect(isSandboxFailure(true, 'bwrap: Creating new namespace failed')).toBe(true);
+  });
+
+  it('does NOT match a bare generic EPERM (benign non-sandbox failure)', () => {
+    // A denied network/file op does not print this string, but a benign non-sandbox
+    // failure (e.g. `kill` on a foreign pid) does - matching it would mis-offer the
+    // full-access unsandboxed re-run for a command a re-run cannot fix.
+    expect(isSandboxFailure(true, 'kill: 1: Operation not permitted')).toBe(false);
   });
 });
 

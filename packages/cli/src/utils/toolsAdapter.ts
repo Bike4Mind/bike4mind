@@ -378,12 +378,19 @@ export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): 
 }
 
 /**
- * Detect whether a tool result indicates a sandbox-specific runtime failure.
- * Returns true for errors originating from sandbox-exec (macOS) or bwrap (Linux).
+ * Detect whether a tool result indicates a sandbox-specific runtime failure
+ * worth offering an unsandboxed retry for. Matches only the markers the sandbox
+ * itself emits: `sandbox-exec:` (Seatbelt, including its `deny(1) ...` lines that
+ * StderrViolationParser also keys on) and `bwrap:` (Linux). Deliberately does NOT
+ * match a bare "Operation not permitted": that generic EPERM fires on benign
+ * non-sandbox failures (e.g. `kill` on a foreign pid) that an unsandboxed re-run
+ * would not fix, and real network/file denials do not surface that string anyway
+ * (a denied `curl`/`nc` just exits non-zero) - so matching it only mis-offers the
+ * full-access downgrade. Exported for direct unit testing.
  */
-function isSandboxFailure(isSandboxed: boolean, result: string): boolean {
+export function isSandboxFailure(isSandboxed: boolean, result: string): boolean {
   if (!isSandboxed) return false;
-  return result.includes('sandbox-exec:') || result.includes('bwrap:') || result.includes('Operation not permitted');
+  return result.includes('sandbox-exec:') || result.includes('bwrap:');
 }
 
 /**
@@ -405,7 +412,11 @@ async function retrySandboxFailure(
   const retryResponse = await showPermissionPrompt(
     toolName,
     originalArgs,
-    `🛑 SANDBOX BLOCKED — This command was denied by the OS sandbox.\n\n- The sandbox prevented this operation because it violates filesystem restrictions.\n- You can retry without the sandbox, but the command will run with full system access.\n\n@@Error Details@@\n${errorSnippet}`
+    `🛑 SANDBOX BLOCKED - This command was denied by the OS sandbox.\n\n` +
+      `- The sandbox prevented this operation because it violates filesystem or network restrictions.\n` +
+      `- If this was a network call, prefer '/sandbox:network on' to allow filtered egress instead of full access.\n` +
+      `- You can retry without the sandbox, but the command will run with full system access.\n\n` +
+      `@@Error Details@@\n${errorSnippet}`
   );
 
   if (retryResponse.action !== 'deny') {
