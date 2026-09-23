@@ -78,6 +78,9 @@ import {
   useGetTransitionalDataLakes,
   useRetryLakeLifecycle,
   useTransferLakeOwnership,
+  useCancelLakeOwnershipOffer,
+  useAcceptLakeOwnershipOffer,
+  useDeclineLakeOwnershipOffer,
   usePurgeDataLakeDocument,
   useCreateDataLake,
   useReanalyzeTaxonomy,
@@ -1005,16 +1008,17 @@ describe('config-history invalidation on the config-writing doors', () => {
         });
       },
     },
-    // The transfer door moves no document field, so its history row is the ONLY record that the
-    // handover happened - and the manager who just confirmed the transfer is the reader most likely
-    // to open History next.
+    // The ACCEPT door, not the offer door: an offer moves nothing and records nothing, so it owes
+    // no history invalidation. Accepting applies the transfer through grant rows (no document field
+    // moves), so the history row is the ONLY record the handover happened - and the recipient who
+    // just accepted is the reader most likely to open History next.
     {
-      name: 'useTransferLakeOwnership',
+      name: 'useAcceptLakeOwnershipOffer',
       drive: async wrapper => {
-        apiPost.mockResolvedValueOnce({ data: { newOwnerUserId: 'u2', demotedUserIds: ['u1'] } });
-        const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
+        apiPost.mockResolvedValueOnce({ data: { data: { newOwnerUserId: 'u2', demotedUserIds: ['u1'] } } });
+        const { result } = renderHook(() => useAcceptLakeOwnershipOffer(), { wrapper });
         await act(async () => {
-          await result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u2' });
+          await result.current.mutateAsync({ offerId: 'o1', dataLakeId: 'lake1' });
         });
       },
     },
@@ -1363,16 +1367,14 @@ describe('useUnderChunkedCount: the unresolvable-space discriminator', () => {
 });
 
 describe('useTransferLakeOwnership cache invalidation', () => {
-  it('refreshes the access view, the picker and the lake LIST - ownership decides canManage', async () => {
-    // The list matters as much as the view: once the actor is no longer the owner, controls that
-    // were theirs (transfer, the visibility expose gate) must disappear from the panel rather than
-    // linger until something else happens to refetch. `dataLakeKeys.list` is the bare ['data-lakes']
-    // prefix, so this one invalidation also covers the public/archived/deleted catalogs.
+  it('refreshes the picker and the access view - the pending offer is read from the picker', async () => {
+    // The offer moves no ownership, so the lake LIST is deliberately left alone: nothing a manager
+    // can do has changed. The picker query is what the dialog re-reads to render "waiting on X".
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
     const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       React.createElement(QueryClientProvider, { client: queryClient }, children);
-    apiPost.mockResolvedValueOnce({ data: { newOwnerUserId: 'u9', demotedUserIds: ['u1'] } });
+    apiPost.mockResolvedValueOnce({ data: { offer: { id: 'o1' } } });
 
     const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
     await act(async () => {
@@ -1383,7 +1385,6 @@ describe('useTransferLakeOwnership cache invalidation', () => {
     const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
     expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
     expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
-    expect(keys).toContain(JSON.stringify(['data-lakes']));
   });
 
   it("surfaces the server refusal text, not axios's generic status message", async () => {
@@ -1405,6 +1406,69 @@ describe('useTransferLakeOwnership cache invalidation', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
+  });
+});
+
+describe('useCancelLakeOwnershipOffer', () => {
+  it('DELETEs the pending offer and refreshes the picker that renders it', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockResolvedValueOnce({ data: { offer: { id: 'o1', status: 'cancelled' } } });
+
+    const { result } = renderHook(() => useCancelLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ id: 'lake1' });
+    });
+
+    expect(apiDelete).toHaveBeenCalledWith('/api/data-lakes/lake1/transfer-ownership');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
+  });
+});
+
+describe('useAcceptLakeOwnershipOffer cache invalidation', () => {
+  it('refreshes the offers list, the lake list and the access view - ownership decides canManage', async () => {
+    // Accepting DOES move ownership, so the lake list matters: controls that were the actor's may
+    // legitimately vanish, and the manager's own banner entry is gone.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { data: { newOwnerUserId: 'u9', demotedUserIds: ['u1'] } } });
+
+    const { result } = renderHook(() => useAcceptLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ offerId: 'o1', dataLakeId: 'lake1' });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/ownership-offers/o1/accept');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-offers']));
+    expect(keys).toContain(JSON.stringify(['data-lakes']));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+  });
+});
+
+describe('useDeclineLakeOwnershipOffer', () => {
+  it('POSTs the decline and refreshes only the offers list', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockResolvedValueOnce({ data: { data: { id: 'o1', status: 'declined' } } });
+
+    const { result } = renderHook(() => useDeclineLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await result.current.mutateAsync({ offerId: 'o1' });
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/ownership-offers/o1/decline');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-offers']));
+    // Nothing changed hands, so the lake list is NOT refetched for a decline.
+    expect(keys).not.toContain(JSON.stringify(['data-lakes']));
   });
 });
 

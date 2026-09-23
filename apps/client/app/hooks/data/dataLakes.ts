@@ -19,6 +19,8 @@ import type {
   DataLakePrincipalType,
   LakeAccessView,
   LakeOwnershipCandidateList,
+  LakeOwnershipOfferSummary,
+  LakePendingOwnershipOffer,
   LakeHealthApiResponse,
   LakeMemoryHealth,
   LakeConfigHistoryView,
@@ -275,9 +277,83 @@ export function useLakeOwnershipCandidates(dataLakeId: string | null, enabled = 
     enabled: enabled && !!dataLakeId,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{ data: LakeOwnershipCandidateList }>(
-        `/api/data-lakes/${dataLakeId}/transfer-ownership`
-      );
+      const response = await api.get<{
+        data: LakeOwnershipCandidateList;
+        pendingOffer: LakePendingOwnershipOffer | null;
+      }>(`/api/data-lakes/${dataLakeId}/transfer-ownership`);
+      // The pending offer arrives beside the candidate list, not inside it (the server keeps them
+      // separate facts); merge it here so the dialog reads one object.
+      return { ...response.data.data, pendingOffer: response.data.pendingOffer ?? null };
+    },
+    staleTime: 1000 * 30,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Offer a lake's ownership to another user. BREAKING: this no longer transfers anything - it opens a
+ * PENDING OFFER the recipient must accept, and ownership is unchanged until they do. The prior owner
+ * therefore keeps every owner power in the meantime.
+ *
+ * Invalidates the picker's own query (the pending offer is read from it) and the access view, so the
+ * dialog that just sent the offer re-renders in its "waiting on X" state.
+ */
+export function useTransferLakeOwnership() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, newOwnerUserId }: { id: string; newOwnerUserId: string }) => {
+      const response = await api.post<{ offer: unknown }>(`/api/data-lakes/${id}/transfer-ownership`, {
+        newOwnerUserId,
+      });
+      return response.data;
+    },
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      toast.success('Ownership offer sent');
+    },
+    onError: (error: Error) => {
+      // This endpoint's rejections are the actionable kind ("name another member", "must belong to
+      // the organization that owns this data lake").
+      const refusal = serverRefusalMessage(error);
+      toast.error(refusal || error.message || 'Failed to send the ownership offer');
+    },
+  });
+}
+
+/** Cancel a pending offer before the recipient answers. Nothing was transferred, so nothing unwinds. */
+export function useCancelLakeOwnershipOffer() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id }: { id: string }) => {
+      const response = await api.delete<{ offer: unknown }>(`/api/data-lakes/${id}/transfer-ownership`);
+      return response.data;
+    },
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      toast.success('Ownership offer cancelled');
+    },
+    onError: (error: Error) => {
+      const refusal = serverRefusalMessage(error);
+      toast.error(refusal || error.message || 'Failed to cancel the ownership offer');
+    },
+  });
+}
+
+/**
+ * The caller's own pending ownership offers - the recipient's banner. No id to pass: the server scopes
+ * the query to the authenticated user.
+ */
+export function useOwnLakeOwnershipOffers(enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.ownershipOffers,
+    enabled,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.get<{ data: LakeOwnershipOfferSummary[] }>('/api/data-lakes/ownership-offers');
       return response.data.data;
     },
     staleTime: 1000 * 30,
@@ -286,38 +362,52 @@ export function useLakeOwnershipCandidates(dataLakeId: string | null, enabled = 
 }
 
 /**
- * Hand a lake's ownership to another user. The prior owner is demoted to curator rather than removed,
- * so they keep management access and the transfer is reversible by the new owner.
- *
- * Invalidates the lake list as well as the access view: ownership decides `canManage`, so the panel's
- * own controls (Access included) may legitimately disappear for the actor once they are no longer the
- * owner - refetching is what keeps the UI honest about what the actor can still do. The config
- * history goes too: this door records a `transfer-ownership` event, and the History tab that renders
- * it sits in the same modal that submitted the transfer.
+ * Accept an offer and take ownership. Invalidate the lake list and the access view as well as the
+ * offers themselves: the accept changes what the caller can MANAGE, and records a config-change row,
+ * so the panel's own controls and the History tab must both refetch.
  */
-export function useTransferLakeOwnership() {
+export function useAcceptLakeOwnershipOffer() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ id, newOwnerUserId }: { id: string; newOwnerUserId: string }) => {
-      const response = await api.post<{ newOwnerUserId: string; demotedUserIds: string[] }>(
-        `/api/data-lakes/${id}/transfer-ownership`,
-        { newOwnerUserId }
+    mutationFn: async ({ offerId }: { offerId: string; dataLakeId: string }) => {
+      const response = await api.post<{ data: { newOwnerUserId: string; demotedUserIds: string[] } }>(
+        `/api/data-lakes/ownership-offers/${offerId}/accept`
       );
-      return response.data;
+      return response.data.data;
     },
-    onSuccess: (_data, { id }) => {
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+    onSuccess: (_data, { dataLakeId }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
       toast.success('Data lake ownership transferred');
     },
     onError: (error: Error) => {
-      // This endpoint's rejections are the actionable kind ("name another member", "must belong to
-      // the organization that owns this data lake").
       const refusal = serverRefusalMessage(error);
-      toast.error(refusal || error.message || 'Failed to transfer ownership');
+      toast.error(refusal || error.message || 'Failed to accept the ownership offer');
+    },
+  });
+}
+
+/** Decline an offer. Touches no grants, so only the offers list needs refreshing. */
+export function useDeclineLakeOwnershipOffer() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ offerId }: { offerId: string }) => {
+      const response = await api.post<{ data: { id: string; status: string } }>(
+        `/api/data-lakes/ownership-offers/${offerId}/decline`
+      );
+      return response.data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
+      toast.success('Ownership offer declined');
+    },
+    onError: (error: Error) => {
+      const refusal = serverRefusalMessage(error);
+      toast.error(refusal || error.message || 'Failed to decline the ownership offer');
     },
   });
 }
