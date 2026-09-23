@@ -5,10 +5,10 @@ export type PermissionResponse = 'allow-once' | 'allow-session' | 'allow-always'
 
 /**
  * Escape terminal control characters (carriage return, ESC/ANSI, other C0
- * controls, DEL) into a visible `\xHH` form. The preview is model-authored;
- * rendering it raw would let a `\r` or ESC sequence rewrite what the user sees,
- * so the approved text could differ from what actually runs. Tab and newline are
- * left intact (newline is already the line delimiter).
+ * controls, DEL) into a visible `\xHH` form. The preview and arguments are
+ * model-authored; rendering them raw would let a `\r` or ESC sequence rewrite
+ * what the user sees, so the approved text could differ from what actually runs.
+ * Tab and newline are left intact (newline is already the line delimiter).
  */
 export function escapeTerminalControlChars(text: string): string {
   // eslint-disable-next-line no-control-regex
@@ -208,7 +208,10 @@ export function PermissionPrompt({
         <Box marginTop={1} flexDirection="column">
           <Text bold>Arguments:</Text>
           <Box paddingLeft={2} flexDirection="column">
-            <Text dimColor>{argsString}</Text>
+            {/* Escape at render, after truncation on purpose: escaping first could slice a
+                \xHH sequence in half, and the "N more chars" count would then reflect
+                escaped length, not the real arg length. */}
+            <Text dimColor>{escapeTerminalControlChars(argsString)}</Text>
           </Box>
         </Box>
       )}
