@@ -1,3 +1,5 @@
+import { SEARCH_RESULT_CARDS_LANGUAGE } from '@bike4mind/common';
+
 /**
  * Anti-fabrication clause for the grounded/data-lake retrieval path, shared byte-identically by the
  * surfaces that put retrieved knowledge-base content in front of the model:
@@ -136,3 +138,34 @@ ${tools.map(t => `\`${t}\``).join(', ')}
 3. DO NOT show the \`_confirmToken\` value — it is internal only.
 The system will automatically add Confirm/Cancel buttons and format the preview.`;
 }
+
+/**
+ * Teaches the `b4m_cards` fence, appended to a web_search result ONLY when that search actually
+ * returned images (see shouldIncludeImages). Delivering it with the results rather than in the system
+ * prompt costs nothing on the turns that will never use it, and arrives exactly when it is actionable.
+ *
+ * The field names must stay in sync with the parser in
+ * apps/client/app/components/Session/parseSearchResultCards.ts; the fence language is shared.
+ */
+export const WEB_SEARCH_CARDS_PROMPT = [
+  'The results above include images, so illustrate your answer - do not wait to be asked. When you name specific',
+  `things the user would want to SEE, emit a \`\`\`${SEARCH_RESULT_CARDS_LANGUAGE} fenced block inline in your reply, placed`,
+  'exactly where the pictures belong - right after the sentence that introduces them, not at the end.',
+  'The block is a single JSON object:',
+  '',
+  `\`\`\`${SEARCH_RESULT_CARDS_LANGUAGE}`,
+  '{"cards":[{"name":"Orient Bambino","note":"Your own description of this thing, in your voice.",',
+  '"meta":"~$200","url":"https://orientwatch.co/bambino","images":[',
+  '{"url":"https://example.com/a.jpg","source":"orientwatch.co"},',
+  '{"url":"https://example.com/b.jpg","source":"jomashop"}]}]}',
+  '```',
+  '',
+  'Rules: `name` and at least one `images` entry are required. Every image `url` must be copied verbatim',
+  "from an `image:` or Images line above, never invented or guessed, and `source` is that entry's own",
+  '`source`/hostname, so each picture is attributed. Prefer the "Images found for this search" pool:',
+  'those carry their own page and publisher. `note` is YOUR prose about the thing, not the',
+  'search snippet. `meta` is a short footer such as a price or key spec. `url` is where the card links.',
+  'Two to six cards is the useful range. Keep writing normally around the block - it replaces neither',
+  'your explanation nor your citations. Omit the block only if the results genuinely have no images',
+  'worth showing; never tell the user you could show pictures if they asked - just show them.',
+].join('\n');

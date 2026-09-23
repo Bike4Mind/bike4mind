@@ -100,6 +100,7 @@ export * from './LakeMembershipDiffTypes';
 export * from './LakeConfigHistoryTypes';
 export * from './DataLakeSpendNotificationTypes';
 export * from './LakeAccessViewTypes';
+export * from './DataLakeCorpusActionTypes';
 export * from './DataLakeFindingTypes';
 export * from './DataLakeProposalTypes';
 export * from './DataLakeResearchTypes';

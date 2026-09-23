@@ -4775,6 +4775,7 @@ describe('removeFileFromDataLake - single-file removal', () => {
       totalSizeBytes: 0,
       totalChunkedChars: 0,
       restoreTokenMinted: true,
+      statsUpdated: true,
     });
   });
 
@@ -4892,6 +4893,7 @@ describe('removeFileFromDataLake - single-file removal', () => {
       totalSizeBytes: 0,
       totalChunkedChars: 0,
       restoreTokenMinted: true,
+      statsUpdated: true,
     });
   });
 

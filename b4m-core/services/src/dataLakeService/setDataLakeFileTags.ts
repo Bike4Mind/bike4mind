@@ -31,7 +31,7 @@ import { assertLakeAdmission, type AdmissionMember } from './lakeAdmissionGate';
 import { recomputeLakeStats } from './recomputeLakeStats';
 import type { LakeConfigAuditAdapters } from './recordLakeConfigChange';
 
-interface SetDataLakeFileTagsAdapters extends LakeConfigAuditAdapters {
+export interface SetDataLakeFileTagsAdapters extends LakeConfigAuditAdapters {
   db: LakeConfigAuditAdapters['db'] & {
     // `findByDatalakeTag` is for the fallback tagger's own lake resolution (step 15), not for
     // anything this door resolves directly - the tagger takes the whole `db` bag.

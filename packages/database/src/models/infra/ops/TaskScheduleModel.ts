@@ -10,6 +10,7 @@ const TaskScheduleSchema = new mongoose.Schema(
     statusFailedReason: { type: String, required: false },
     statusFailedAt: { type: Date, required: false },
     statusCompletedAt: { type: Date, required: false },
+    claimedAt: { type: Date, required: false },
     processDate: { type: Date, required: true },
     createdAt: { type: Date, required: true },
     updatedAt: { type: Date, required: true },
@@ -25,6 +26,8 @@ const TaskScheduleSchema = new mongoose.Schema(
   }
 );
 
+TaskScheduleSchema.index({ status: 1, processDate: 1 });
+
 const TaskScheduleModel =
   (mongoose.models['TaskSchedule'] as unknown as mongoose.Model<ITaskSchedule>) ||
   mongoose.model<ITaskSchedule>('TaskSchedule', TaskScheduleSchema);
@@ -34,9 +37,23 @@ class TaskScheduleRepository extends BaseRepository<ITaskSchedule> implements IT
     super(taskScheduleModel);
   }
 
-  async findAllStatusPendingByProcessDateLessThan(processDate: Date): Promise<ITaskSchedule[]> {
-    const result = await this.model.find({ status: TaskScheduleStatus.PENDING, processDate: { $lt: processDate } });
-    return result.map(doc => doc.toJSON());
+  async claimDueTaskSchedule(processDate: Date, leaseExpiredBefore: Date): Promise<ITaskSchedule | null> {
+    const claimedAt = new Date();
+    const claimed = await this.model.findOneAndUpdate(
+      {
+        processDate: { $lt: processDate },
+        $or: [
+          { status: TaskScheduleStatus.PENDING },
+          { status: TaskScheduleStatus.PROCESSING, claimedAt: { $lt: leaseExpiredBefore } },
+          // Matches an absent claimedAt too, so a PROCESSING row that lost its stamp stays
+          // recoverable rather than stranded until the expireAt TTL removes it.
+          { status: TaskScheduleStatus.PROCESSING, claimedAt: null },
+        ],
+      },
+      { $set: { status: TaskScheduleStatus.PROCESSING, claimedAt, updatedAt: claimedAt } },
+      { new: true, sort: { processDate: 1 } }
+    );
+    return claimed ? claimed.toJSON() : null;
   }
 }
 

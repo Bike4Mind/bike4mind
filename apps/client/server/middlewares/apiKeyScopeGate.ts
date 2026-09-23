@@ -99,6 +99,16 @@ export function parseStagedScopes(raw: string | undefined): {
  * been minted with it, so a key holding none of them is not grandfathered and is
  * denied.
  *
+ * `alsoRequiredScopes` is AND semantics on top of that: every one of these must
+ * be held, regardless of how the OR check above resolves - a route can require a
+ * feature scope AND separately gate spend, which a single OR list cannot express
+ * (see issue #2330). It has **no staging path**: unlike `requiredScopes`, which
+ * exists to grandfather keys a newly-declared gate would otherwise 403, an AND
+ * scope is only ever added to a route that is adopting it, so there is no
+ * pre-existing population to protect - it enforces from day one. Checked first,
+ * ahead of every other branch, so a missing AND scope can never be masked by an
+ * OR match, a scope-less route's default allow, or a staged OR list.
+ *
  * A route that declares no scopes still allows any ordinary key. The exception is
  * a {@link isConfinedKey} credential, which is denied there: it authorizes its own
  * flow and nothing else. Callers must therefore invoke this even when
@@ -111,8 +121,12 @@ export function parseStagedScopes(raw: string | undefined): {
 export function decideScopeGate(
   requiredScopes: ApiKeyScope[] | undefined,
   heldScopes: ApiKeyScope[] | undefined,
-  staged: ReadonlySet<string>
+  staged: ReadonlySet<string>,
+  alsoRequiredScopes?: ApiKeyScope[]
 ): ScopeGateDecision {
+  if (alsoRequiredScopes?.some(scope => !heldScopes?.includes(scope))) {
+    return { outcome: 'deny' };
+  }
   if (requiredScopes?.some(scope => heldScopes?.includes(scope))) return { outcome: 'allow' };
   // Above both branches below: neither a missing declaration nor an active staging
   // window may admit a confined key.

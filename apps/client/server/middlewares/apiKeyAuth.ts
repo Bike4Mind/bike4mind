@@ -30,8 +30,12 @@ const hashApiKeyForLogging = (apiKey: string): string => {
  * @param requiredScopes - When provided, the authenticated key must hold at
  *   least one of these scopes (OR / "any of" semantics) or the request is
  *   rejected with 403. Omitted -> no scope requirement (any valid key passes).
+ * @param alsoRequiredScopes - When provided, the key must ALSO hold every one
+ *   of these scopes (AND / "all of" semantics), independent of how
+ *   requiredScopes resolves. No staging grace period - see decideScopeGate's
+ *   doc comment (apiKeyScopeGate.ts).
  */
-export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
+export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: ApiKeyScope[]) => {
   return async (req: Request, res: Response, next: NextFunction) => {
     // If already authenticated via JWT, skip API key auth
     if (req.user) {
@@ -94,7 +98,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
           });
         }
       }
-      const gate = decideScopeGate(requiredScopes, validation.scopes, staged);
+      const gate = decideScopeGate(requiredScopes, validation.scopes, staged, alsoRequiredScopes);
       if (gate.outcome !== 'allow') {
         // A scope 403 fires before req.apiKeyInfo is set, so log from `validation`
         // (never the raw key) - otherwise the only trace is errorHandler's generic warn.
@@ -106,6 +110,7 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[]) => {
           userId: validation.userId,
           heldScopes: validation.scopes,
           requiredScopes,
+          alsoRequiredScopes,
           endpoint: req.originalUrl,
         };
         if (gate.outcome === 'stagedAllow') {

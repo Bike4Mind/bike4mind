@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FabFile, fabFileRepository } from '../models/content/FabFileModel';
 import { setupMongoTest } from '../__test__/utils';
 import { KnowledgeType } from '@bike4mind/common';
@@ -145,6 +145,29 @@ describe('FabFileRepository.pullTagsByFabFileId', () => {
     await fabFileRepository.pullTagsByFabFileId(id, ['datalake:org:mylake', 'mylake:invoices']);
 
     expect((await FabFile.findById(id))?.primaryTag).toBe('user-tag');
+  });
+
+  it('still reports the tag removal when the primaryTag cleanup write rejects', async () => {
+    const id = await seed({ primaryTag: 'mylake:invoices' });
+
+    // The $pull (first call) must land for real; only the second, primaryTag $unset call fails.
+    const realUpdateOne = FabFile.updateOne.bind(FabFile);
+    let call = 0;
+    vi.spyOn(FabFile, 'updateOne').mockImplementation((...args: Parameters<typeof FabFile.updateOne>) => {
+      call += 1;
+      if (call === 2) return Promise.reject(new Error('primaryTag write boom')) as any;
+      return realUpdateOne(...args);
+    });
+
+    await expect(fabFileRepository.pullTagsByFabFileId(id, ['datalake:org:mylake', 'mylake:invoices'])).resolves.toBe(
+      1
+    );
+
+    vi.restoreAllMocks();
+    expect((await tagsOf(id)).map(t => t.name)).not.toContain('mylake:invoices');
+    // The committed $pull is not undone by the rejected second write; the stale primaryTag is
+    // left in place rather than the whole removal being thrown away.
+    expect((await FabFile.findById(id))?.primaryTag).toBe('mylake:invoices');
   });
 
   it('does not throw for an id that matches no document', async () => {
