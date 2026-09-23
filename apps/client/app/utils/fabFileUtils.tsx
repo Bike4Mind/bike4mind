@@ -209,13 +209,20 @@ export const getContentFromFabfile = async ({
   fileUrl,
   mimeType,
   bustCache = false,
+  strict = false,
 }: {
   fileUrl?: string;
   mimeType?: string;
   bustCache?: boolean;
+  // When true, a missing URL or a failed fetch/extraction throws instead of resolving to ''.
+  // Most callers treat '' as "nothing to show" either way, but a caller that needs to tell a
+  // successfully-read empty document apart from a retrieval failure (e.g. an expired presigned
+  // URL) needs the rejection.
+  strict?: boolean;
 }) => {
   if (!fileUrl || !mimeType) {
     console.warn('Missing fileUrl or mimeType:', { fileUrl, mimeType });
+    if (strict) throw new Error('Missing fileUrl or mimeType');
     return '';
   }
   try {
@@ -238,6 +245,7 @@ export const getContentFromFabfile = async ({
     return content;
   } catch (error) {
     console.error('Error fetching file:', error);
+    if (strict) throw error instanceof Error ? error : new Error('Failed to fetch file content');
     return '';
   }
 };
