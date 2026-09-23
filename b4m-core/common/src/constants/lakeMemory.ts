@@ -25,8 +25,62 @@ export const LAKE_RECALL_K_DEFAULT = 24;
  * turns remain - a symptom that looks nothing like a misconfigured setting.
  *
  * 200 x the 500-char per-fact cap in `buildLakeMemoryContext` is ~100,000 chars, matching
- * `forcedRetrievalCharBudget`'s own declared ceiling for the retrieval block alongside it. A dated
- * card adds a fixed `(document dated YYYY-MM-DD)` suffix per fact, so the rendered block runs a few
- * percent over that figure - the ceiling is the order of magnitude, not a byte budget.
+ * `forcedRetrievalCharBudget`'s own declared ceiling for the retrieval block alongside it. Cards
+ * render undated today, so nothing is added per fact; were the `(document dated YYYY-MM-DD)` suffix
+ * ever populated the block would run a few percent over that figure - the ceiling is the order of
+ * magnitude, not a byte budget.
  */
 export const LAKE_RECALL_K_MAX = 200;
+
+/**
+ * Prefix marking a ledger `sources` entry that is PROVENANCE rather than a source document.
+ *
+ * Every other writer puts bare FabFile ids in a memory event's `sources`, and three readers lean on
+ * that: `createReachableSourcesResolver` and `createSurvivingSourcesResolver` resolve each id
+ * against the FabFile collection, and `aggregateLakeMemoryCoverage` counts the distinct union as
+ * "source documents". A curator's resolution belief (#3049) also has to name the FINDING it came
+ * from, which is not a document - so it goes in prefixed, and every one of those readers filters the
+ * prefixed entries back out with `isDocumentSource`.
+ *
+ * The prefixed id is HARMLESS to correctness wherever it leaks through - it simply resolves to
+ * nothing, and a finding's own document ids ride in the same array so the belief stays citable on
+ * those. It is filtered anyway because "harmless" is not free: the FabFile lookups run it through an
+ * ObjectId-only guard that logs `skipping ids that cannot address a row by _id` on every lake recall
+ * turn and every profile read, which is noise that looks like a bug for as long as anyone chases it.
+ *
+ * Shred is the one path that must NOT filter: `markSourceShredded` matches an exact string, so the
+ * prefixed ref is usable as the key that retracts a belief when its finding goes away. Nothing wires
+ * that up today - no caller passes a `finding:` id to `markSourceShredded`, which is keyed on
+ * FabFile ids throughout - so this is a door that COULD be opened, not one that is.
+ *
+ * `MemoryLedgerEventModel.aggregateLakeMemoryCoverage` restates this test in Mongo operators (an
+ * aggregation pipeline cannot call a JS predicate), but builds it from
+ * `LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES` rather than from a hardcoded prefix of its own, so the two
+ * cannot drift on WHICH prefixes count - `MemoryLedgerEventModel.test.ts` pins them together against
+ * a real Mongo.
+ */
+export const LAKE_MEMORY_FINDING_SOURCE_PREFIX = 'finding:';
+
+/**
+ * EVERY provenance prefix, and the single list both readers of it are built from.
+ *
+ * `isDocumentSource` derives its predicate from this, and `aggregateLakeMemoryCoverage` builds its
+ * Mongo `$filter` condition from the same array (it cannot call a JS predicate inside an aggregation
+ * pipeline, so the restatement is unavoidable - sharing the INPUT is what keeps the two honest).
+ * Adding a second provenance prefix here therefore reaches both, which is what makes the "edit this
+ * and nothing else" claim below true rather than aspirational.
+ */
+export const LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES = [LAKE_MEMORY_FINDING_SOURCE_PREFIX] as const;
+
+/** The `sources` entry naming the finding a belief was decided on. */
+export const findingSourceRef = (findingId: string): string => `${LAKE_MEMORY_FINDING_SOURCE_PREFIX}${findingId}`;
+
+/**
+ * Whether a `sources` entry names a SOURCE DOCUMENT rather than provenance.
+ *
+ * The one predicate every FabFile-resolving reader of a belief's `sources` filters on, so that
+ * "which of these is a document id?" has a single answer. Adding a second provenance prefix means
+ * editing `LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES` and nothing else.
+ */
+export const isDocumentSource = (sourceId: string): boolean =>
+  !LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES.some(prefix => sourceId.startsWith(prefix));

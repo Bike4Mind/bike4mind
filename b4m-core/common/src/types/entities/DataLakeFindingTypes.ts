@@ -145,12 +145,23 @@ export interface ResolveLakeFindingInput {
   resolution?: string;
 }
 
+/**
+ * The detector-scoped identity of a finding, without the lake. What a re-detection needs in order to
+ * recognise a problem a curator has already ruled on.
+ */
+export interface LakeFindingKey {
+  kind: InconsistencyKind;
+  subject: string;
+}
+
 /** How a surface narrows one lake's findings. Every filter is optional and independent. */
 export interface ListLakeFindingsOptions {
   status?: LakeFindingStatus;
   kind?: InconsistencyKind;
   detector?: LakeFindingDetector;
   limit?: number;
+  /** How many matching rows to skip before `limit` takes over. Pairs with `limit` for load-more paging. */
+  offset?: number;
 }
 
 export interface IDataLakeFindingRepository extends IBaseRepository<IDataLakeFindingDocument> {
@@ -166,8 +177,25 @@ export interface IDataLakeFindingRepository extends IBaseRepository<IDataLakeFin
    * reopening under the curator who closed it.
    */
   recordDetected(input: RecordLakeFindingInput): Promise<IDataLakeFindingDocument>;
-  /** One lake's findings, most recently seen first, narrowed by any combination of filters. */
+  /**
+   * One lake's findings, most recently seen first (ties broken by `_id` for a stable page
+   * boundary - findings from one detection run commonly share `lastSeenAt`), narrowed by any
+   * combination of filters and paged via `limit`/`offset`.
+   */
   listByLake(lakeId: string, options?: ListLakeFindingsOptions): Promise<IDataLakeFindingDocument[]>;
+  /**
+   * The keys one detector's DISMISSED findings occupy in this lake, so a re-detection can drop what
+   * a curator has already judged to be no problem instead of reporting it at them again (#3045).
+   *
+   * Keys only, and unbounded on purpose. It is read on every detection run to filter that run's
+   * output, so it must cover every dismissal rather than a page of them - which is affordable
+   * precisely because it projects away `sources`, the one field on this row that has any size.
+   *
+   * `resolved` is deliberately NOT included. Resolved means the corpus problem was dealt with, so
+   * re-detecting it means it came back and a curator has to see that; dismissed means there was
+   * never a problem to deal with, and re-detection has learned nothing new.
+   */
+  listDismissedKeys(lakeId: string, detector: LakeFindingDetector): Promise<LakeFindingKey[]>;
   /**
    * Atomically move an OPEN finding to a terminal status, stamping the resolver. Returns the
    * updated row, or null when the filter missed - which is the whole double-resolve guard for two

@@ -11,10 +11,10 @@ export type ShellPermissionPromptFn = (
 
 /**
  * The permission collaborators a hook path threads through so its shell command
- * can be classified and prompted before it runs. Optional at every hook call
- * site: when present the command is gated; when absent (e.g. a unit test that
- * exercises hook dispatch directly) the legacy unguarded behavior is kept.
- * Every PRODUCTION call site supplies this, which is what makes the gate hold.
+ * can be classified and prompted before it runs. Both fields are required, and
+ * the consuming context (HookWrapperContext.permission) is required too: a caller
+ * that forgets to wire it is a type error, never a silent unprompted bypass.
+ * There is no legacy unguarded fallback.
  */
 export interface ShellCommandPermissionDeps {
   permissionManager: PermissionManager;

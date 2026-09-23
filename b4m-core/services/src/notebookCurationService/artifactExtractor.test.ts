@@ -63,3 +63,38 @@ describe('extractArtifactsFromMessage - attribute values containing quotes', () 
     expect(html?.metadata?.title).toBe("Bob's App");
   });
 });
+
+describe('extractArtifactsFromMessage - presentation-only fences', () => {
+  const options = {
+    includeCode: true,
+    includeDiagrams: true,
+    includeDataViz: true,
+  } as CurationOptions;
+
+  const reply = [
+    'Here are the ones worth looking at.',
+    '',
+    '```b4m_cards',
+    '{"cards":[',
+    '{"name":"A","images":["https://cdn.example.com/a.jpg"]}',
+    ']}',
+    '```',
+    '',
+    'The first is the safest pick.',
+  ].join('\n');
+
+  it('does not curate a b4m_cards block as a code artifact', () => {
+    const artifacts = extractArtifactsFromMessage({ id: 'm1', reply } as CurationMessage, options);
+
+    expect(artifacts).toEqual([]);
+  });
+
+  it('still curates an ordinary code fence in the same reply', () => {
+    const withCode = `${reply}\n\n\`\`\`ts\nconst a = 1;\nconst b = 2;\nconst c = 3;\n\`\`\``;
+
+    const artifacts = extractArtifactsFromMessage({ id: 'm1', reply: withCode } as CurationMessage, options);
+
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]).toMatchObject({ type: CurationArtifactType.CODE, language: 'ts' });
+  });
+});

@@ -63,7 +63,6 @@ const KNOWN_UNGATED = new Set<string>([
   'dlq/queues.ts',
   'dlq/replay.ts',
   'emergency-login.ts',
-  'event-metrics.ts',
   'gears/[key].ts',
   'gears/index.ts',
   'generate-highlights.ts',

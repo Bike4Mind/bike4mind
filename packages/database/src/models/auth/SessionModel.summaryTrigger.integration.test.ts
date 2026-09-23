@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import mongoose from 'mongoose';
-import { SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
+import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../__test__/createMongoServer';
 import { Session, sessionRepository } from './SessionModel';
 
@@ -14,7 +14,8 @@ import { Session, sessionRepository } from './SessionModel';
  *    session schema, the entity type and the session.summarize event payload. It drifted
  *    ('milestone'/'growth' for values nothing produces), and BaseModel's findOneAndUpdate runs
  *    without runValidators, so an out-of-enum value persists silently rather than throwing.
- *    Hence the enum is asserted directly AND exercised through a validating write.
+ *    Hence the enum is asserted directly AND exercised through a validating write. It names the
+ *    PERSISTED subset: a stored field may only carry a reason a summarization happened.
  *  - The stored value must survive a strict-mode `$set`, so assert on the RAW collection
  *    document. A hydrated read strips an undeclared path too and would pass against the bug.
  *
@@ -54,12 +55,12 @@ describe('Session.summaryTrigger', () => {
     const path = Session.schema.path('summaryTrigger');
     expect(path).toBeDefined();
     expect(path.instance).toBe('String');
-    expect((path as mongoose.Schema.Types.String).enumValues).toEqual([...SESSION_SUMMARY_TRIGGERS]);
+    expect((path as mongoose.Schema.Types.String).enumValues).toEqual([...PERSISTED_SESSION_SUMMARY_TRIGGERS]);
   });
 
   // `create` validates where `sessionRepository.update` does not, so this is the leg that proves
   // the enum accepts what the producing code emits rather than just matching a constant.
-  it.each([...SESSION_SUMMARY_TRIGGERS])('accepts %s on a validating insert', async trigger => {
+  it.each([...PERSISTED_SESSION_SUMMARY_TRIGGERS])('accepts %s on a validating insert', async trigger => {
     const session = await insertSession({ summaryTrigger: trigger });
 
     const stored = await Session.collection.findOne({ _id: session._id });
@@ -67,11 +68,18 @@ describe('Session.summaryTrigger', () => {
   });
 
   // Without this the enum could be dropped entirely and every case above would still pass.
-  it('rejects a value outside the list', async () => {
-    await expect(insertSession({ summaryTrigger: 'milestone' })).rejects.toThrow(mongoose.Error.ValidationError);
+  // 'milestone' and 'growth' are the values the drifted enum used to accept, so they also pin that
+  // the drift is gone. 'throttling' is the reason shouldSummarizeSession DECLINED to summarize: it
+  // names no run, so it is a decision reason and never a stored one - this is the last write
+  // boundary that used to take it.
+  it.each(['milestone', 'growth', 'throttling'])('rejects %s, a value outside the list', async trigger => {
+    await expect(insertSession({ summaryTrigger: trigger })).rejects.toThrow(mongoose.Error.ValidationError);
   });
 
-  // The path the summarization handler actually writes through.
+  // The path the summarization handler actually writes through. NOT an enum reproducer: BaseModel's
+  // _plainUpdate calls findOneAndUpdate without runValidators, so this leg passed against the
+  // drifted enum too. What it guards is that the path is DECLARED (strict mode drops an undeclared
+  // key out of the `$set`) and that the value reaches the raw document unchanged.
   it('persists summaryTrigger alongside the summary through sessionRepository.update', async () => {
     const session = await insertSession();
     const summaryAt = new Date('2024-05-01T12:00:00.000Z');

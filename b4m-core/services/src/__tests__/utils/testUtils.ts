@@ -15,6 +15,8 @@ import {
   ICreditTransactionDocument,
   IAuthSessionRepository,
   IAuthSessionDocument,
+  ISessionAgentConfigRepository,
+  ISessionAgentConfigDocument,
 } from '@bike4mind/common';
 import {
   IResearchTask,
@@ -56,10 +58,22 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   findAllBySessionId: vi.fn(),
 });
 
+export const createMockSessionAgentConfigRepository = (): ISessionAgentConfigRepository => ({
+  ...createMockRepository<ISessionAgentConfigDocument>(),
+  findBySessionAndAgent: vi.fn(),
+  findBySessionId: vi.fn(),
+  findAllWithProactiveMessagingEnabled: vi.fn(),
+  updateLastProactiveMessageAt: vi.fn(),
+  deleteBySessionId: vi.fn(),
+  deleteBySessionAndAgent: vi.fn(),
+});
+
 export const createMockFabFileRepository = (): IFabFileRepository => ({
   ...createMockRepository<IFabFileDocument>(),
   shareable: createMockShareableRepository<IFabFileDocument>(),
   getAccessibleFiles: vi.fn(),
+  setLakeSupersession: vi.fn(),
+  clearLakeSupersession: vi.fn(),
   // Default true ("I still own my claim") rather than the vi.fn() default of undefined/falsy,
   // which would otherwise silently read as "claim lost" for any test that reaches this guard
   // through the shared mock without overriding it.

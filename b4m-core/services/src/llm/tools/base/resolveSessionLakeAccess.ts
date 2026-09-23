@@ -12,6 +12,7 @@ const NO_LAKES: ResolvedLakeAccessSet = {
   dataLakeTagPrefixes: [],
   scopedTagPrefixes: [],
   lakes: [],
+  excludedByAccessCount: 0,
 };
 
 /**

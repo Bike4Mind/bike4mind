@@ -11,7 +11,13 @@ import UserPrompt from '@client/app/components/Session/UserPrompt';
 import ResearchModeResponseDisplay from '@client/app/components/Session/ResearchModeResponseDisplay';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
-import { IChatHistoryItem, SettingKey, ELISION_PUBLISH_BODY, ANSWER_DIAGNOSIS_TITLE } from '@bike4mind/common';
+import {
+  IChatHistoryItem,
+  SettingKey,
+  ELISION_PUBLISH_BODY,
+  ANSWER_DIAGNOSIS_TITLE,
+  stripSearchResultCardFences,
+} from '@bike4mind/common';
 import { elidedReplyWarning } from '@client/app/utils/artifactParser';
 import DeleteOutline from '@mui/icons-material/DeleteOutline';
 import { Menu, MenuItem, ListItemDecorator } from '@mui/joy';
@@ -516,7 +522,10 @@ const MessageContent: React.FC<ContentProps> = memo(
 
     const isProcessingPrompt = !['done', 'stopped'].includes(messageData.status || '');
 
-    const extractedReplies = useMemo(() => extractReplies(messageData), [messageData]);
+    // Stripped here, at the read boundary, so every consumer below (Copy button, Download menu,
+    // publish/share markdown) never sees raw b4m_cards fence JSON - only the reply renderer
+    // (PromptReplies.tsx) intercepts the fence to render cards instead.
+    const extractedReplies = useMemo(() => extractReplies(messageData).map(stripSearchResultCardFences), [messageData]);
 
     // Publish-and-share: snapshot this reply to a public /p/r URL + social bar.
     const { publishAndShare: publishAndShareReply, modal: shareModal } = usePublishShare();

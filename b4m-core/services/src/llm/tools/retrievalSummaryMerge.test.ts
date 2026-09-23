@@ -471,4 +471,38 @@ describe('mergeRetrievalSummary', () => {
       expect(merged?.lakeScope).toEqual(['datalake:a']);
     });
   });
+
+  // #3055: same seed and same reasoning as lakeScope - both come off one getAccessibleDataLakeAccess
+  // call, so existing-wins pass-through is correct rather than a sum (a second write would double
+  // the identical exclusion, not report a new one).
+  describe('excludedLakes', () => {
+    it('survives a later surface write that carries none', () => {
+      const merged = mergeRetrievalSummary(
+        base({ excludedLakes: { count: 2, reason: 'access' } }),
+        base({ surfaces: ['knowledgeBaseSearch'], dataLakeTags: ['datalake:acme:handbook'] })
+      );
+      expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
+    });
+
+    it('stays absent on a turn nothing seeded', () => {
+      const merged = mergeRetrievalSummary(base(), base());
+      expect(merged && 'excludedLakes' in merged).toBe(false);
+    });
+
+    it('does not sum the two sides - a later write must not double the same exclusion', () => {
+      const merged = mergeRetrievalSummary(
+        base({ excludedLakes: { count: 2, reason: 'access' } }),
+        base({ excludedLakes: { count: 5, reason: 'access' } })
+      );
+      expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
+    });
+
+    // The production direction: ChatCompletionProcess's seed calls this with the seed as
+    // `incoming` onto whatever a tool arm already wrote as `existing`, so "existing absent,
+    // incoming has it" must not be silently dropped.
+    it('picks it up from the incoming side when the existing side never wrote one', () => {
+      const merged = mergeRetrievalSummary(base(), base({ excludedLakes: { count: 2, reason: 'access' } }));
+      expect(merged?.excludedLakes).toEqual({ count: 2, reason: 'access' });
+    });
+  });
 });

@@ -26,6 +26,7 @@ import {
   ImageModerationIncident as ImageModerationIncidentInput,
   AttachmentLakeAccess,
   materializePromptMetaSession,
+  PersistedSessionSummaryTrigger,
 } from '@bike4mind/common';
 import {
   BFL_IMAGE_MODELS,
@@ -65,13 +66,13 @@ import {
   ImageEditResponse,
   BaseStorage,
   getSettingsByNames,
+  downloadImageAsBuffer,
 } from '@bike4mind/utils';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { truncateImagePrompt } from './imagePromptTruncation';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
-import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
@@ -167,7 +168,7 @@ interface IImageGenerationServiceOptions {
    * Wiring this lets image-only sessions accumulate long-term context just like chat sessions -
    * the resolver in `resolveImagePrompt` then has more than the last 6 turns to ground on.
    */
-  invokeSummarizeSession?: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
+  invokeSummarizeSession?: (sessionId: string, trigger: PersistedSessionSummaryTrigger) => Promise<void>;
   /** Lambda function name for image processing (from SST Resource.ImageProcessor.name) */
   imageProcessorLambdaName?: string;
   /** Checks a generated image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
@@ -181,21 +182,11 @@ interface IImageGenerationServiceOptions {
   resolveLakeAccess?: (user: IUserDocument, logger: Logger) => Promise<AttachmentLakeAccess>;
 }
 
-async function downloadImage(url: string) {
-  // Handle data URLs (base64 images) from GPT-Image-1
-  if (url.startsWith('data:image/')) {
-    const base64Data = url.split(',')[1];
-    return Buffer.from(base64Data, 'base64');
-  }
-
-  // Handle regular URLs from DALL-E and other models
-  const response = await axios.get(url, { responseType: 'arraybuffer' });
-  return response.data;
-}
-
-async function imageUrlToBase64(imageUrl: string): Promise<string> {
-  const data = await downloadImage(imageUrl);
-  const buffer = Buffer.from(data, 'binary');
+async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
+  // `downloadImageAsBuffer` handles both the data URLs GPT-Image-1 returns and the http(s) URLs
+  // from DALL-E and friends, and SSRF-guards the latter. `trustConfiguredStorageOrigin` must only
+  // be set true for a URL a caller just got back from `getSignedUrl` in this same request.
+  const buffer = await downloadImageAsBuffer(imageUrl, { trustConfiguredStorageOrigin });
   return buffer.toString('base64');
 }
 
@@ -249,10 +240,11 @@ export class ImageGenerationService {
       logger.debug(`Skipping image-gen summarize check: session ${sessionId} not found`);
       return;
     }
-    const [shouldSummarize, trigger] = await shouldSummarizeSession(session, { db: this.db, logger });
-    if (shouldSummarize) {
+    // Indexed rather than destructured - see the matching call in ChatCompletionFeatures.
+    const decision = await shouldSummarizeSession(session, { db: this.db, logger });
+    if (decision[0]) {
       logger.info(`Triggering notebook summarization from image-gen for session ${sessionId}`);
-      await this.invokeSummarizeSession(sessionId, trigger);
+      await this.invokeSummarizeSession(sessionId, decision[1]);
     }
   }
 
@@ -1018,7 +1010,9 @@ export class ImageGenerationService {
               Logger.globalInstance.debug(`[DEBUG] Gemini edit: converting input image to base64`, {
                 urlPreview: imageUrl.substring(0, 100) + '...',
               });
-              base64Image = await imageUrlToBase64(imageUrl);
+              // `imageUrl` is always a fabFile/storage `getSignedUrl` result or an internal
+              // storage key above, never a caller-supplied string.
+              base64Image = await imageUrlToBase64(imageUrl, true);
               Logger.globalInstance.debug(`[DEBUG] Gemini edit: base64 conversion successful`, {
                 length: base64Image.length,
               });
@@ -1179,7 +1173,8 @@ export class ImageGenerationService {
         let base64Image: string | undefined;
         if (imageUrl) {
           try {
-            base64Image = await imageUrlToBase64(imageUrl);
+            // `imageUrl` above always came from `fabFileStorage.getSignedUrl` or `storage.getSignedUrl`.
+            base64Image = await imageUrlToBase64(imageUrl, true);
             Logger.globalInstance.debug(`[DEBUG] ✅ Base64 conversion successful:`, {
               base64Length: base64Image.length,
               preview: base64Image.substring(0, 50) + '...',
@@ -1344,6 +1339,9 @@ export class ImageGenerationService {
         if (referenceImageUrls.length) {
           openaiParams.referenceImages = referenceImageUrls;
         }
+        // `imageUrl` and `referenceImageUrls` above are always `getSignedUrl` results, never a
+        // caller- or provider-supplied string.
+        openaiParams.trustConfiguredStorageOrigin = true;
 
         Logger.globalInstance.debug(`[DEBUG] OpenAI API call parameters:`, {
           model,
@@ -1385,7 +1383,7 @@ export class ImageGenerationService {
             model,
           });
 
-          const buffer = await downloadImage(image);
+          const buffer = await downloadImageAsBuffer(image);
           const fileType = await fileTypeFromBuffer(buffer);
           const filename = `${uuidv4()}.${fileType?.ext}`;
 

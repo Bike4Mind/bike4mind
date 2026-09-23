@@ -35,6 +35,16 @@ export { isPathAllowed, assertPathAllowed, type PathValidationResult } from './u
 // re-exported so the CLI permission preview can show the SAME span that will be
 // replaced (not just the model's typed old_string).
 export { fuzzyMatch, type FuzzyMatchResult } from './implementation/editLocalFile/fuzzyMatch';
+// Authorized resolve-only preflight + snapshot-binding surface, re-exported so the
+// CLI permission layer decides whether to re-confirm a fuzzy edit through the SAME
+// path authorization and matcher the tool uses at write time (no raw-path read),
+// and binds approval to the resolved content hash.
+export {
+  resolveEditLocalFile,
+  FuzzyEditConfirmationRequiredError,
+  isFuzzyEditConfirmationRequired,
+  type EditPlan,
+} from './implementation/editLocalFile';
 
 // Static imports - these modules do NOT use dynamic path.resolve(process.cwd(), ...)
 // and are safe from Turbopack's broad file pattern tracing.
