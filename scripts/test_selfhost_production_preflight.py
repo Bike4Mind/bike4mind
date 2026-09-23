@@ -10,7 +10,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from selfhost_production_preflight import check_config, main
+from selfhost_production_preflight import check_config, main, mongo_hosts, placeholder, public_url
 
 
 def configured_stack():
@@ -50,11 +50,31 @@ class PreflightTests(unittest.TestCase):
         self.assertIn('app.selected', check_config(model))
 
     def test_missing_and_malformed_database_uris_fail(self):
-        for uri in ('', 'https://db.example.org', 'mongodb://', 'mongodb://[invalid/app'):
+        for uri in ('', 'https://db.example.org', 'mongodb://', 'mongodb://[invalid/app',
+                    'mongodb://operator:db-password@mongo:notaport/app',
+                    'mongodb://operator:db-password@mongo:70000/app',
+                    'mongodb+srv://db.example.org:27017/app'):
             with self.subTest(uri=uri):
                 model = configured_stack()
                 model['services']['app']['environment']['MONGODB_URI'] = uri
                 self.assertIn('mongo.connection', check_config(model))
+
+    def test_mongo_seed_port_table(self):
+        cases = [
+            ('mongodb://mongo:27017/app', {'mongo'}),
+            ('mongodb://mongo1:27017,mongo2:27018/app', {'mongo1', 'mongo2'}),
+            ('mongodb://mongo/app', {'mongo'}),
+            ('mongodb+srv://db.example.org/app', {'db.example.org'}),
+        ]
+        for uri, expected in cases:
+            with self.subTest(uri=uri):
+                self.assertEqual(mongo_hosts(uri), expected)
+        # urlsplit(...).port raises ValueError for these instead of returning None.
+        for uri in ('mongodb://mongo:notaport/app', 'mongodb://mongo:70000/app',
+                    'mongodb://mongo1:27017,mongo2:notaport/app',
+                    'mongodb+srv://db.example.org:27017/app'):
+            with self.subTest(uri=uri):
+                self.assertRaises(ValueError, mongo_hosts, uri)
 
     def test_active_runtime_database_override_is_checked(self):
         model = configured_stack()
@@ -157,12 +177,30 @@ class PreflightTests(unittest.TestCase):
 
     def test_signing_keys_and_encryption_keys_are_checked_without_echoing_them(self):
         for key, value in [('JWT_SECRET', 'change-me-openssl-rand-hex-32'),
+                           ('JWT_SECRET', 'changeme'), ('JWT_SECRET', 'CHANGEME'),
                            ('SESSION_SECRET', ''), ('SECRET_ENCRYPTION_KEY', 'not-hex'),
                            ('SECRET_ENCRYPTION_KEY_PREVIOUS', 'not-hex')]:
-            with self.subTest(key=key):
+            with self.subTest(key=key, value=value):
                 model = configured_stack()
                 model['services']['app']['environment'][key] = value
                 self.assertIn('app.secrets', check_config(model))
+
+    def test_placeholder_table(self):
+        cases = [
+            ('', True), (None, True),
+            ('selfhost', True), ('minioadmin', True), ('not-configured', True),
+            ('changeme', True), ('CHANGEME', True), ('ChangeMe', True),
+            ('change-me-openssl-rand-hex-32', True),
+            ('replace-with-your-secret', True), ('replace-me', True),
+            ('your-secret-here', True), ('your_api_key', True),
+            ('my-secret-placeholder-value', True),
+            ('insert-jwt-secret-here', True), ('insert_session_secret_here', True),
+            ('a' * 64, False),
+            ('operator-chosen-random-secret-value', False),
+        ]
+        for value, expected in cases:
+            with self.subTest(value=value):
+                self.assertEqual(placeholder(value), expected)
 
     def test_gateway_must_share_actual_app_secret(self):
         model = configured_stack()
@@ -178,6 +216,42 @@ class PreflightTests(unittest.TestCase):
                 model['services']['caddy'] = {'image': 'caddy:2'}
                 model['services']['app']['environment'][key] = value
                 self.assertIn('app.public-urls', check_config(model))
+
+    def test_public_url_table(self):
+        cases = [
+            # (value, scheme, origin, expected)
+            ('https://chat.example.org', 'https', True, True),
+            ('https://chat.example.org/', 'https', True, True),
+            ('wss://chat.example.org/ws', 'wss', False, True),
+            ('https://chat.example.org:8443', 'https', True, True),
+            ('https://[2001:db8::1]', 'https', True, True),
+            # malformed / whitespace hosts
+            ('https://exa mple.org', 'https', True, False),
+            ('https://exa<mple.org', 'https', True, False),
+            ('https://[::1', 'https', True, False),
+            # explicit ports
+            ('https://chat.example.org:0', 'https', True, False),
+            ('https://chat.example.org:99999', 'https', True, False),
+            ('https://chat.example.org:abc', 'https', True, False),
+            # embedded credentials
+            ('https://user:pass@chat.example.org', 'https', True, False),
+            ('https://user@chat.example.org', 'https', True, False),
+            # trailing slashes / non-root paths
+            ('https://chat.example.org/path', 'https', True, False),
+            ('https://chat.example.org/path/', 'https', True, False),
+            # query and fragment components
+            ('https://chat.example.org/?a=1', 'https', True, False),
+            ('https://chat.example.org/#frag', 'https', True, False),
+            # loopback hosts
+            ('https://localhost/', 'https', True, False),
+            ('https://127.0.0.1/', 'https', True, False),
+            ('https://[::1]/', 'https', True, False),
+            # wrong scheme
+            ('http://chat.example.org/', 'https', True, False),
+        ]
+        for value, scheme, origin, expected in cases:
+            with self.subTest(value=value, scheme=scheme, origin=origin):
+                self.assertEqual(public_url(value, scheme, origin=origin), expected)
 
     def test_public_internal_ports_and_host_network_are_rejected(self):
         for name in ('sqs', 'mongo', 'app', 'ws', 'chatcompletion'):

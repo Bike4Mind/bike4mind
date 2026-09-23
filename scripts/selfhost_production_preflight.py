@@ -31,10 +31,21 @@ MESSAGES = {
 }
 
 
+# Mirrors the canonical PLACEHOLDER_VALUE_PATTERNS in scripts/secrets-scan-summarize-and-ingest.mjs.
+PLACEHOLDER_VALUES = {
+    'selfhost', 'minioadmin', 'not-configured', 'not_configured', 'changeme',
+    'your-secret-here', 'your_secret_here', 'your-api-key', 'your_api_key',
+    'my-secret-placeholder-value', 'my_secret_placeholder_value',
+}
+PLACEHOLDER_TOKENS = ('change-me', 'replace-with', 'replace-me')
+PLACEHOLDER_PATTERN = re.compile(r'insert[-_].*[-_]here')
+
+
 def placeholder(value):
     text = str(value or '').strip().lower()
-    return (not text or text in {'selfhost', 'minioadmin', 'not-configured'}
-            or any(token in text for token in ('change-me', 'replace-with', 'replace-me')))
+    return (not text or text in PLACEHOLDER_VALUES
+            or any(token in text for token in PLACEHOLDER_TOKENS)
+            or bool(PLACEHOLDER_PATTERN.search(text)))
 
 
 def image_name(service):
@@ -48,12 +59,32 @@ def loopback(host):
         return host.lower().rstrip('.') == 'localhost'
 
 
+# WHATWG forbidden host code points: the characters that make `new URL()` throw
+# rather than silently accept a broken host (notably whitespace, which urlsplit lets through).
+FORBIDDEN_HOST_CHARS = set('\x00\t\n\r "#/:<>?@[\\]^|')
+
+
+def valid_host(host):
+    if not host:
+        return False
+    try:
+        # IPv6 literals are colons and hex digits; their charset is validated by
+        # ipaddress, not the forbidden-host-code-point set below (which treats ':' as
+        # the port delimiter).
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return not any(char in FORBIDDEN_HOST_CHARS for char in host)
+
+
 def public_url(value, scheme, origin=False):
     try:
         url = urlsplit(value or '')
-        return (url.scheme == scheme and bool(url.hostname) and not loopback(url.hostname)
+        path = '' if url.path == '/' else url.path
+        return (url.scheme == scheme and bool(url.hostname) and valid_host(url.hostname)
+                and not loopback(url.hostname)
                 and url.username is None and url.password is None and not url.query and not url.fragment
-                and (not origin or not url.path) and (url.port is None or 0 < url.port < 65536))
+                and (not origin or not path) and (url.port is None or 0 < url.port < 65536))
     except ValueError:
         return False
 
@@ -68,8 +99,19 @@ def service_hosts(name, service):
 
 def mongo_hosts(uri):
     # Mongo seed lists can contain multiple hosts, unlike an ordinary URL authority.
+    # urlsplit(...).port raises ValueError (rather than returning None) for a
+    # non-numeric or out-of-range port, so an invalid seed surfaces as a malformed
+    # URI the same way a bad host does. mongodb+srv seed lists may not carry a port.
+    srv = uri.startswith('mongodb+srv://')
     authority = uri.split('://', 1)[1].split('/', 1)[0].rsplit('@', 1)[-1]
-    return {urlsplit('//' + host).hostname for host in authority.split(',')}
+    hosts = set()
+    for host in authority.split(','):
+        split = urlsplit('//' + host)
+        port = split.port  # validates range/format as a side effect; see comment above
+        if srv and port is not None:
+            raise ValueError('mongodb+srv seed lists must not specify a port')
+        hosts.add(split.hostname)
+    return hosts
 
 
 def check_config(model):
