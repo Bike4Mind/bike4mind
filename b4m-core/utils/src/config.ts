@@ -1,7 +1,3 @@
-import * as dotenv from 'dotenv';
-
-dotenv.config();
-
 /**
  * Initialize a config object with fallback values.
  *
@@ -11,7 +7,7 @@ dotenv.config();
 const initializeConfig = <T, K extends keyof T>(fallbackConfig: Record<K, string>) => {
   return new Proxy(fallbackConfig, {
     get: (target, prop) => {
-      // Use env (or .env) first, if set
+      // Use the process environment first, if set (nothing auto-loads a cwd .env)
       if (process.env[prop as string]) {
         return process.env[prop as string];
       }

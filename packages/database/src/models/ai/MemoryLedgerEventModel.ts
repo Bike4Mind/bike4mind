@@ -1,5 +1,5 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IMongoDocument } from '@bike4mind/common';
+import { IMongoDocument, LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 const ModelName = 'MemoryLedgerEvent';
@@ -324,7 +324,23 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
           factCount: { $size: '$subjects' },
           sourceDocumentCount: {
             $size: {
-              $reduce: { input: '$sourcesArrays', initialValue: [], in: { $setUnion: ['$$value', '$$this'] } },
+              // DOCUMENTS only. A `sources` entry may also be provenance - a curator-resolution
+              // belief names the finding it was decided on (#3049) - and counting those here would
+              // silently inflate a number the lake-memory health card shows as "source documents".
+              // Prefix test rather than a FabFile lookup: this runs over the whole chain, and the
+              // prefix is the contract. Built by mapping the SAME exported prefix list that
+              // `isDocumentSource` derives from, so a new provenance prefix reaches both at once
+              // instead of leaving this pipeline counting it as a document.
+              $filter: {
+                input: {
+                  $reduce: { input: '$sourcesArrays', initialValue: [], in: { $setUnion: ['$$value', '$$this'] } },
+                },
+                cond: {
+                  $and: LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES.map(prefix => ({
+                    $ne: [{ $indexOfCP: ['$$this', prefix] }, 0],
+                  })),
+                },
+              },
             },
           },
         },

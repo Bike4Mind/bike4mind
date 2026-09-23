@@ -281,6 +281,73 @@ export function isBuiltInCommand(name: string): boolean {
 }
 
 /**
+ * First-party feature-module slash commands (FeatureModuleRegistry). These are
+ * registered at runtime, not part of COMMANDS, so isBuiltInCommand misses them -
+ * yet a remote/custom skill that shadows one would hijack the feature. Kept as a
+ * static list because RemoteSkillSource filters at fetch time, before any registry
+ * is built. MUST STAY IN SYNC with the feature modules' getCommands() (tavern,
+ * hearth); a drift guard in commands.test.ts derives the names from those modules
+ * and fails if this list drifts.
+ */
+export const RESERVED_FEATURE_COMMANDS: readonly string[] = ['tavern', 'quest', 'hearth'];
+
+/**
+ * Checks if a command name is reserved (a built-in OR a first-party feature command).
+ * Use this, not isBuiltInCommand, when deciding whether an external skill may register.
+ *
+ * `featureCommandNames` carries the LIVE feature/plugin command names from the
+ * runtime FeatureModuleRegistry - a dynamic superset of the static
+ * RESERVED_FEATURE_COMMANDS. Pass it so load, display, and dispatch share one
+ * reserved-name source; a repo-planted command whose name matches a runtime
+ * plugin command is otherwise hidden from display yet still loads and executes.
+ */
+export function isReservedCommandName(name: string, featureCommandNames?: ReadonlySet<string>): boolean {
+  return (
+    isBuiltInCommand(name) || RESERVED_FEATURE_COMMANDS.includes(name) || (featureCommandNames?.has(name) ?? false)
+  );
+}
+
+/** A store whose reserved-name gate can be re-pointed and re-pruned. Structural
+ *  so this module needn't import CustomCommandStore (which imports this one). */
+interface ReservedNameSink {
+  setReservedNameSource(getNames: () => ReadonlySet<string>): void;
+  pruneReservedProjectCommands(): void;
+}
+
+/** A built feature registry, as far as reserved-name wiring cares. */
+interface FeatureCommandRegistry {
+  getAllCommands(): { name: string }[];
+}
+
+/**
+ * Point a command store's reserved-name gate at a feature registry's live
+ * command names, then prune any project command that loaded (pre-registry)
+ * under a name the registry now owns. Both index.tsx wiring sites (bootstrap and
+ * plugin hot-reload) call this, so load, display, and dispatch share one
+ * reserved-name source and the wiring is unit-testable in isolation.
+ */
+export function wireReservedCommandNames(store: ReservedNameSink, registry: FeatureCommandRegistry): void {
+  store.setReservedNameSource(() => new Set(registry.getAllCommands().map(c => c.name)));
+  store.pruneReservedProjectCommands();
+}
+
+/** The slice of CLI state the re-wire touches. Structural so this module needn't
+ *  import the index.tsx state type. */
+interface CommandStoreState {
+  customCommandStore: ReservedNameSink;
+}
+
+/**
+ * Re-wire a CLI state's command store to a feature registry. Both index.tsx
+ * wiring sites (bootstrap and plugin hot-reload) call this with the live `state`,
+ * so the store-extraction step is pinned by a unit test instead of living
+ * untested inline at each call site (no test imports index.tsx).
+ */
+export function rewireReservedNames(state: CommandStoreState, registry: FeatureCommandRegistry): void {
+  wireReservedCommandNames(state.customCommandStore, registry);
+}
+
+/**
  * Converts a CustomCommand to a CommandDefinition for unified handling
  * @param customCommand - Custom command to convert
  * @returns CommandDefinition compatible with autocomplete and help
@@ -307,15 +374,19 @@ export function mergeCommands(
   featureCommands?: CommandDefinition[]
 ): CommandDefinition[] {
   const builtInCommands = COMMANDS.map(cmd => ({ ...cmd, source: 'built-in' as const }));
+  // A custom command may not shadow a built-in OR a live feature command; the
+  // latter set is dynamic (plugins), so union it with the passed featureCommands.
+  const featureNames = new Set((featureCommands ?? []).map(cmd => cmd.name));
+  const isReserved = (name: string) => isReservedCommandName(name, featureNames);
   const customDefinitions = customCommands
-    .filter(cmd => !isBuiltInCommand(cmd.name)) // Filter out conflicts
+    .filter(cmd => !isReserved(cmd.name)) // Filter out conflicts
     .map(customCommandToDefinition);
 
   // Log warnings for conflicting command names
-  const conflicts = customCommands.filter(cmd => isBuiltInCommand(cmd.name));
+  const conflicts = customCommands.filter(cmd => isReserved(cmd.name));
   if (conflicts.length > 0) {
     console.warn(
-      'Warning: The following custom commands have names that conflict with built-in commands and will be ignored:',
+      'Warning: The following custom commands have reserved names (a built-in or feature/plugin command) and will be ignored:',
       conflicts.map(cmd => cmd.name).join(', ')
     );
   }

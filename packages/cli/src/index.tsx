@@ -62,6 +62,7 @@ import { ConversationContext, reconstructTurnBlocks } from './context/Conversati
 import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
 import { buildWorkflowState } from './utils/workflowState.js';
 import { getProcessHooks } from './utils/processHooks.js';
+import { isValidSessionId, SESSION_ID_PATTERN } from './utils/validateSessionId.js';
 import {
   buildHandoffPrompt,
   parseHandoffResponse,
@@ -143,7 +144,7 @@ import packageJson from '../package.json';
 import type { ICreditTransactionResponse, ModelInfo } from '@bike4mind/common';
 import { CREDIT_DEDUCT_TRANSACTION_TYPES } from '@bike4mind/common';
 import { USAGE_DAYS, MODEL_NAME_COLUMN_WIDTH, USAGE_CACHE_TTL } from './config/constants';
-import { mergeCommands } from './config/commands.js';
+import { mergeCommands, rewireReservedNames } from './config/commands.js';
 import { SubagentOrchestrator } from './agents/SubagentOrchestrator.js';
 import { AgentStore } from './agents/AgentStore.js';
 import { createAgentDelegateTool } from './agents/delegateTool.js';
@@ -659,6 +660,16 @@ function CliApp() {
       // uuid (so a later --resume finds it). Stage launches set neither -> random uuid.
       const pinnedSessionId = process.env.B4M_SESSION_ID;
       const resumeSessionId = process.env.B4M_RESUME_ID;
+      // Both become filesystem path components (session store, debug logs);
+      // reject anything outside the strict charset before use (see validateSessionId).
+      if (pinnedSessionId && !isValidSessionId(pinnedSessionId)) {
+        console.error(`Invalid session id (--session-id / B4M_SESSION_ID): must match ${SESSION_ID_PATTERN.source}`);
+        process.exit(1);
+      }
+      if (resumeSessionId && !isValidSessionId(resumeSessionId)) {
+        console.error(`Invalid session id (--resume / B4M_RESUME_ID): must match ${SESSION_ID_PATTERN.source}`);
+        process.exit(1);
+      }
       let newSession: Session;
       if (resumeSessionId) {
         const resumed = await state.sessionStore.load(resumeSessionId);
@@ -937,8 +948,7 @@ function CliApp() {
                 subagentOrchestrator: orchestrator,
                 sessionId: newSession.id,
                 // Gate skill lifecycle hook shell commands through permission.
-                permissionManager,
-                promptFn,
+                permission: { permissionManager, promptFn },
                 // Confine skill @file refs to the workspace (plus granted dirs).
                 allowedDirectories: additionalDirectories,
               }),
@@ -1003,6 +1013,12 @@ function CliApp() {
         // 'tool_search' is added later but its name is fixed; reserve it too.
         reservedToolNames: [...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name).concat('tool_search'),
       });
+
+      // Feed the live plugin command names into the custom-command load gate, then
+      // drop any project command that loaded (pre-registry, above) under a name a
+      // runtime plugin command now owns - so load, display, and dispatch all share
+      // one reserved-name source.
+      rewireReservedNames(state, featureRegistry);
 
       // Register feature module tool names with ToolRouter so they route as local tools
       const featureModuleToolNames = featureRegistry.getAllToolNames();
@@ -2124,8 +2140,13 @@ function CliApp() {
   };
 
   const handleCommand = async (command: string, args: string[]) => {
-    // Check if this is a custom command first
-    const customCommand = state.customCommandStore.getCommand(command);
+    // Check if this is a custom command first. A reserved name (built-in or
+    // feature command) must never be served from the custom store - a repo-planted
+    // `.claude/commands/help.md` would otherwise hijack dispatch, since this lookup
+    // runs before any built-in/feature handling. getModelReachableCommand applies
+    // the same live reserved-name gate mergeCommands uses for the display list, at
+    // the point that actually executes - one derivation of the reserved set, not two.
+    const customCommand = state.customCommandStore.getModelReachableCommand(command);
     if (customCommand) {
       try {
         // Show that the command is being executed
@@ -2932,7 +2953,7 @@ function CliApp() {
         const variantForCount = state.config?.preferences.promptVariant ?? 'current';
         const corePromptTokens = tokenCounter.countTokens(buildSystemPrompt(variantForCount));
         const projectContextTokens = state.contextContent ? tokenCounter.countTokens(state.contextContent) : 0;
-        const commands = state.customCommandStore.getAllCommands();
+        const commands = state.customCommandStore.getModelReachableCommands();
         const skillsSection = buildSkillsPromptSection(commands);
         const skillsTokens = skillsSection ? tokenCounter.countTokens(skillsSection) : 0;
         const agentDirectoryTokens = state.agentStore
@@ -3086,9 +3107,11 @@ function CliApp() {
       }
 
       case 'commands': {
-        const customCommands = state.customCommandStore.getAllCommands();
-        const globalCommands = state.customCommandStore.getCommandsBySource('global');
-        const projectCommands = state.customCommandStore.getCommandsBySource('project');
+        // Model-reachable set: display matches dispatch, so a reserved-named
+        // command the dispatch chokepoint would refuse is not listed here.
+        const customCommands = state.customCommandStore.getModelReachableCommands();
+        const globalCommands = customCommands.filter(cmd => cmd.source === 'global');
+        const projectCommands = customCommands.filter(cmd => cmd.source === 'project');
 
         console.log('\n📝 Custom Commands:\n');
 
@@ -3676,7 +3699,15 @@ function CliApp() {
         logger,
         reservedToolNames: baseTools.map(t => t.toolSchema.name),
       });
-      newFeatureRegistry = rebuilt.registry;
+      const rebuiltRegistry = rebuilt.registry;
+      newFeatureRegistry = rebuiltRegistry;
+
+      // Re-point the custom-command reserved-name gate at the hot-swapped registry
+      // and re-prune, mirroring the bootstrap wiring. Without this the store's
+      // reserved source stays pinned to the boot registry, so a project command
+      // shadowing a plugin enabled at runtime survives load, display, and dispatch.
+      rewireReservedNames(state, rebuiltRegistry);
+
       for (const skippedPlugin of rebuilt.skipped) {
         console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
       }
@@ -3708,7 +3739,7 @@ function CliApp() {
         buildSystemPrompt(updatedConfig.preferences.promptVariant ?? 'current', {
           contextContent: state.contextContent,
           agentStore: state.agentStore || undefined,
-          customCommands: state.customCommandStore.getAllCommands(),
+          customCommands: state.customCommandStore.getModelReachableCommands(),
           enableSkillTool: updatedConfig.preferences.enableSkillTool !== false,
           enableDynamicAgentCreation: updatedConfig.preferences.enableDynamicAgentCreation === true,
           additionalDirectories: state.additionalDirectories,

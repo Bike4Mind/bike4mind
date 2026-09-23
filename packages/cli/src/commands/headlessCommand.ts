@@ -452,8 +452,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
               customCommandStore,
               subagentOrchestrator: orchestrator,
               sessionId: session.id,
-              permissionManager,
-              promptFn,
+              permission: { permissionManager, promptFn },
               allowedDirectories: additionalDirectories,
             }),
           ],
@@ -484,7 +483,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const systemPrompt = buildSystemPrompt(config.preferences.promptVariant ?? 'current', {
       contextContent: contextResult.mergedContent,
       agentStore,
-      customCommands: customCommandStore.getAllCommands(),
+      customCommands: customCommandStore.getModelReachableCommands(),
       enableSkillTool,
       enableDynamicAgentCreation: false,
       additionalDirectories,

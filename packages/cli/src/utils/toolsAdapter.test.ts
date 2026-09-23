@@ -25,6 +25,7 @@ import type { ApiClient } from '../auth/ApiClient.js';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { AgentHooks, HookMatcher } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
+import type { ShellCommandPermissionDeps } from './commandPermission.js';
 
 // Mock the hookExecutor module
 vi.mock('../agents/hookExecutor.js', () => ({
@@ -62,11 +63,19 @@ function createMockHookMatcher(matcher?: string): HookMatcher[] {
   ];
 }
 
+// executeHooks is mocked in this suite, so the permission is never consulted -
+// it only has to type-check now that HookWrapperContext.permission is required.
+const NOOP_PERM = {
+  permissionManager: { needsPermission: () => false },
+  promptFn: async () => ({ action: 'allow-once' as const }),
+} as unknown as ShellCommandPermissionDeps;
+
 // Default hook context for tests
 const defaultHookContext: HookWrapperContext = {
   sessionId: 'test-session',
   agentName: 'test-agent',
   cwd: '/test/cwd',
+  permission: NOOP_PERM,
 };
 
 describe('wrapToolWithHooks', () => {
@@ -519,6 +528,7 @@ describe('wrapToolWithHooks', () => {
         sessionId: 'custom-session-123',
         agentName: 'custom-agent',
         cwd: '/custom/working/dir',
+        permission: NOOP_PERM,
       };
 
       vi.mocked(executeHooks).mockResolvedValue({ decision: 'allow' });
@@ -534,6 +544,22 @@ describe('wrapToolWithHooks', () => {
         toolName: 'context_test',
         toolInput: { param: 'value' },
       });
+      // permission is not a hook-context field; it must NOT leak into buildHookContext.
+      expect(buildHookContext).not.toHaveBeenCalledWith(expect.objectContaining({ permission: expect.anything() }));
+    });
+
+    it('threads the required permission deps to executeHooks (not undefined)', async () => {
+      // The reviewer's mutation reverted this arg to `undefined`, silently disabling
+      // the hook-command gate while the suite stayed green. Pin it: executeHooks
+      // must receive the context's permission as its third argument.
+      const tool = createMockTool('perm_test');
+      const hooks: AgentHooks = { PreToolUse: createMockHookMatcher('perm_test') };
+      vi.mocked(executeHooks).mockResolvedValue({ decision: 'allow' });
+
+      const wrappedTool = wrapToolWithHooks(tool, hooks, defaultHookContext);
+      await wrappedTool.toolFn({ input: 'x' });
+
+      expect(executeHooks).toHaveBeenCalledWith(hooks.PreToolUse, expect.anything(), NOOP_PERM);
     });
   });
 });
