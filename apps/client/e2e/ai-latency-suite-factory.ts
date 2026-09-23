@@ -101,6 +101,25 @@ export function createAiLatencySuite({
     return Math.max(TIMEOUTS.AI_RESPONSE, (scenario.streamingBudgetSec ?? thresholdSec) * 1000);
   }
 
+  // Stand-in result for a prompt that never finished. responseTimeSec is the elapsed time at the
+  // point it was abandoned, so it understates the real latency - but it keeps the prompt inside the
+  // gated average instead of dropping it, which is what let a cell whose worst prompt timed out
+  // still average well under thresholdSec.
+  function incompleteResult(scenario: PromptScenario, elapsedMs: number): PromptResult {
+    return {
+      id: scenario.id,
+      prompt: scenario.prompt,
+      response: '',
+      responseTimeMs: elapsedMs,
+      responseTimeSec: Math.round(elapsedMs) / 1000,
+      responseRateCharsPerSec: 0,
+      renderTimeMs: 0,
+      renderTimeSec: 0,
+      measuresDeliverable: Boolean(scenario.expectsImage || scenario.generatesArtifact),
+      incomplete: true,
+    };
+  }
+
   function prompt(index: number) {
     const scenario = selectedPrompts[index];
 
@@ -118,26 +137,37 @@ export function createAiLatencySuite({
       // separate, much longer measurement, so latency and streaming rate below are taken over the
       // stream window only and the render/settle tail is recorded separately as renderTimeMs.
       let streamEndMs: number;
-      if (scenario.expectsImage) {
-        // The image is tool-produced around the stream (the stop button can hide only once
-        // generation finishes; city-no-cars streams no caption, textlen 0), so the send needs the
-        // image-generation budget, not just the render wait - a short send budget would throw
-        // before the render budget is ever used. Do not gate on the text container (it only mounts
-        // with the image); assert the image as the success signal.
-        await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.IMAGE_GENERATION);
-        streamEndMs = Date.now();
-        imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
-      } else {
-        // An artifact is likewise generated around the stream, so an artifact prompt needs the
-        // image-generation budget for the send; plain text uses the streaming budget below.
-        const sendBudget = scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : textStreamBudgetMs(scenario);
-        await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
-        streamEndMs = Date.now();
-        // Streaming completing does not mean the artifact resolved; wait out the placeholders so
-        // the scrape below reads the finished reply, not "Generating artifact..."/"Loading artifact...".
-        if (scenario.generatesArtifact) {
-          await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION);
+      // Scoped to the send/settle block only: a failure here is the latency signal we must not
+      // lose, whereas a navigation or model-selection failure earlier is a setup problem and has no
+      // latency to report. Records the elapsed time and re-throws - the test still fails, it just
+      // stops taking its own worst number out of the average on the way out.
+      try {
+        if (scenario.expectsImage) {
+          // The image is tool-produced around the stream (the stop button can hide only once
+          // generation finishes; city-no-cars streams no caption, textlen 0), so the send needs the
+          // image-generation budget, not just the render wait - a short send budget would throw
+          // before the render budget is ever used. Do not gate on the text container (it only mounts
+          // with the image); assert the image as the success signal.
+          await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.IMAGE_GENERATION);
+          streamEndMs = Date.now();
+          imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
+        } else {
+          // An artifact is likewise generated around the stream, so an artifact prompt needs the
+          // image-generation budget for the send; plain text uses the streaming budget below.
+          const sendBudget = scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : textStreamBudgetMs(scenario);
+          await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
+          streamEndMs = Date.now();
+          // Streaming completing does not mean the artifact resolved; wait out the placeholders so
+          // the scrape below reads the finished reply, not "Generating artifact..."/"Loading artifact...".
+          if (scenario.generatesArtifact) {
+            await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION);
+          }
         }
+      } catch (err: unknown) {
+        const result = incompleteResult(scenario, Date.now() - startMs);
+        collectedResults.push(result);
+        persistResults(resolvedModel, [result]);
+        throw err;
       }
       const settleEndMs = Date.now();
 

@@ -694,6 +694,10 @@ jobs:
               if [ -n "$LATENCY_JSON" ]; then
                 THRESHOLD="$(jq -r '.thresholdSec // empty' "$LATENCY_JSON")"
                 AVG="$(jq -r '.averageResponseTimeSec // 0' "$LATENCY_JSON")"
+                # A prompt abandoned at its budget has no upper bound, so averaging it in understates
+                # the cell: two fast prompts drag the mean back under thresholdSec and the breach
+                # disappears into it. Count any abandoned gated prompt as a breach in its own right.
+                ABANDONED="$(jq -r '[.results[]? | select(.incomplete == true) | select(.measuresDeliverable != true)] | length' "$LATENCY_JSON")"
 
                 if [ -z "$THRESHOLD" ] || [ "$THRESHOLD" = "null" ]; then
                   LATENCY_STR="$(printf '%.2fs' "$AVG") / <=N/A FAIL"
@@ -706,8 +710,10 @@ jobs:
                     LATENCY_STR="No Data"
                     LATENCY_NO_DATA=$((LATENCY_NO_DATA + 1))
                     HAS_NO_DATA=true
-                  elif [ "$IS_OVER" = "1" ]; then
-                    LATENCY_STR="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
+                  elif [ "$IS_OVER" = "1" ] || [ "${ABANDONED:-0}" -gt 0 ]; then
+                    REASON="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
+                    [ "${ABANDONED:-0}" -gt 0 ] && REASON="${REASON} (${ABANDONED} prompt(s) never finished)"
+                    LATENCY_STR="$REASON"
                     LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
                     EXCEEDED=true
                   else
