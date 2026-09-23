@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { Quest, agentExecutionRepository } from '@bike4mind/database';
+import { Quest, agentExecutionRepository, questRepository } from '@bike4mind/database';
 import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../../packages/database/src/__test__/createMongoServer';
 import * as sweepModule from '@server/cron/agentExecutionAbandonedSweep';
 import { SelfHostWorker } from './selfHostWorker';
@@ -116,6 +116,46 @@ describe('self-host abandoned execution recovery against Mongo', () => {
         status: 'failed',
         failureReason: 'abandoned',
       });
+    });
+  });
+
+  it('retries a quest settlement that failed on the first tick and settles it on the second', async () => {
+    // The bug this whole retry mechanism exists for: markAbandoned already made
+    // the execution terminal, so `findStaleActiveIds` can never select it again
+    // - a failed settle has no path back except the `questSettlementFailedAt`
+    // marker and the retry pass that looks for it.
+    const stale = await seed('continuing', 8);
+    const questId = new mongoose.Types.ObjectId();
+    await Quest.collection.insertOne({ _id: questId, agentExecutionId: stale.toString(), status: 'pending' });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(now);
+
+    vi.spyOn(questRepository, 'settleIfUnfinished').mockRejectedValueOnce(new Error('transient mongo blip'));
+
+    const first = await sweepModule.runAbandonedExecutionSweep({ emitMetrics: false });
+
+    expect(first.marked).toBe(1);
+    expect(first.questsSettled).toBe(0);
+    expect(await executions().findOne({ _id: stale })).toMatchObject({
+      status: 'failed',
+      failureReason: 'abandoned',
+    });
+    // The execution write already landed; only the quest settlement failed.
+    expect((await executions().findOne({ _id: stale }))?.questSettlementFailedAt).toBeInstanceOf(Date);
+    expect((await Quest.collection.findOne({ _id: questId }))?.status).toBe('pending');
+
+    // Tick two, an hour later: no new candidates from findStaleActiveIds (the
+    // execution is already terminal), but the retry pass picks up the marker
+    // and the mocked failure does not recur.
+    vi.advanceTimersByTime(HOUR);
+    const second = await sweepModule.runAbandonedExecutionSweep({ emitMetrics: false });
+
+    expect(second.marked).toBe(0);
+    expect(second.questsSettled).toBe(1);
+    expect((await executions().findOne({ _id: stale }))?.questSettlementFailedAt).toBeUndefined();
+    expect(await Quest.collection.findOne({ _id: questId })).toMatchObject({
+      status: 'done',
+      type: 'error',
     });
   });
 });
