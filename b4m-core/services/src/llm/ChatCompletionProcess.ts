@@ -111,7 +111,11 @@ import {
   measureIdentityNamedExclusion,
   warnIfManyLakeMemberships,
   type MeasurableDataLakeAccessContext,
+  type EntitlementResolution,
 } from '../dataLakeService/getDynamicDataLakeTags';
+// Re-exported so the resolver below and the type it returns stay reachable from one import, while
+// the declaration stays beside the context contract it has to satisfy.
+export type { EntitlementResolution };
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import {
   buildElisionStamp,
@@ -780,17 +784,6 @@ export function computeSettlementDelta(
   if (-delta <= available) return { delta, writtenOffCredits: 0 };
   // `available > 0 ? ...` avoids returning -0 when the balance is empty.
   return { delta: available > 0 ? -available : 0, writtenOffCredits: -delta - available };
-}
-
-/**
- * The caller's entitlement keys together with whether they are the real ones (`resolved: false`
- * means the lookup threw and `keys` is the fail-safe `[]`). One value rather than two returns so a
- * consumer building a `DataLakeAccessContext` cannot take the keys and leave the signal behind -
- * see `DataLakeAccessContext.entitlementKeysResolved` for what reads it.
- */
-export interface EntitlementResolution {
-  keys: string[];
-  resolved: boolean;
 }
 
 export class ChatCompletionProcess {

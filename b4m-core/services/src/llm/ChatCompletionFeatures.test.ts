@@ -776,6 +776,46 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
     );
   });
 
+  /**
+   * A degraded key list can drop an entitlement-gated lake out of the resolved set, so a thrown
+   * entitlement lookup has to travel with the keys and land as `lakeViewComplete: false`. Without
+   * this the signal could be dropped at this call site and the suite would stay green.
+   */
+  it('reports an incomplete lake view when the entitlement lookup degraded the keys', async () => {
+    const ctx = makeCtx(vi.fn().mockResolvedValue(MANAGED_LAKE));
+    ctx.resolveEntitlementKeys = vi.fn().mockResolvedValue({ keys: [], resolved: false });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakeViewComplete).toBe(false);
+  });
+
+  it('leaves the lake view complete when the entitlement lookup succeeded', async () => {
+    const ctx = makeCtx(vi.fn().mockResolvedValue(MANAGED_LAKE));
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakeViewComplete).not.toBe(false);
+  });
+
   const MANAGED_LAKE = {
     id: 'managed',
     name: 'Managed Lake',
