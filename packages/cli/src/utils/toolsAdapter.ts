@@ -12,6 +12,7 @@ import {
   setShowUserQuestionFn,
   resolveEditLocalFile,
   isFuzzyEditConfirmationRequired,
+  isPathAllowed,
   type EditPlan,
   type LlmTools,
   type UserQuestionPayload,
@@ -347,7 +348,7 @@ export function wrapToolWithPermission(
       const basePreview =
         toolName === 'edit_local_file' && editPlan
           ? editPlan.diffPreview
-          : await generateToolPreview(toolName, args, isSandboxed);
+          : await generateToolPreview(toolName, args, isSandboxed, allowedDirectories);
       const preview =
         forcePromptForRisk && commandRisk
           ? prependRiskBanner(basePreview, commandRisk.reasons)
@@ -664,9 +665,21 @@ async function executeWithFuzzyConfirmation(
 async function generateToolPreview(
   toolName: string,
   args: Record<string, unknown>,
-  isSandboxed: boolean
+  isSandboxed: boolean,
+  allowedDirectories?: string[]
 ): Promise<string | undefined> {
   try {
+    // Any preview that reads a file must go through the SAME authorization as
+    // execution: never open a raw model-supplied path the tool would itself
+    // reject. Without this, previewing an out-of-bounds path reads it anyway, and
+    // a special file such as /dev/zero hangs or exhausts memory in the preflight
+    // rather than failing at the allowlist.
+    const pathArg = typeof args?.path === 'string' ? (args.path as string) : undefined;
+    const readsFile = toolName === 'edit_local_file' || toolName === 'create_file' || toolName === 'delete_file';
+    if (readsFile && pathArg && !isPathAllowed(pathArg, allowedDirectories).allowed) {
+      return `[Path outside allowed directories: ${pathArg}]`;
+    }
+
     if (toolName === 'edit_local_file' && args?.path && args?.old_string && typeof args?.new_string === 'string') {
       return await generateEditLocalFilePreview({
         path: args.path as string,

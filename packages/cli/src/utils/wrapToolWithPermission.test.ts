@@ -217,6 +217,66 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     expect(await fs.readFile(file, 'utf-8')).toBe('hello world\n'); // untouched
   });
 
+  it('previews an out-of-bounds edit as denied WITHOUT reading the raw path (preview auth parity)', async () => {
+    // In normal mode a prompt IS shown, so the preview runs. It must not read a
+    // path the tool would refuse - previewing old_string alone would open a raw
+    // out-of-bounds path (a /dev/zero could hang the preview).
+    useCliStore.getState().setInteractionMode('normal');
+    const { file } = await fuzzyFile();
+    const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
+    const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
+    // Untrusted + no allowedDirectories: the file is outside cwd, so it is denied,
+    // but a prompt is still shown first (this is where the preview is built).
+    const wrapped = wrapToolWithPermission(
+      realEditTool([]),
+      new PermissionManager([], undefined, []),
+      prompt,
+      agentContext,
+      {} as any,
+      {} as any
+    );
+    const readSpy = vi.spyOn(fs, 'readFile');
+
+    await expect(
+      wrapped.toolFn({ path: file, old_string: 'hello world   ', new_string: 'hi world' })
+    ).rejects.toThrow();
+
+    const preview = prompt.mock.calls[0][2] as string;
+    expect(preview).toContain('Path outside allowed directories');
+    expect(preview).not.toContain('hello world'); // the file was never read/diffed
+    expect(readSpy).not.toHaveBeenCalledWith(file, expect.anything());
+    readSpy.mockRestore();
+  });
+
+  it('re-confirms a granted edit that resolves fuzzily instead of applying it silently', async () => {
+    // onoya: a directory grant must not double as a confirmation bypass. Grant the
+    // out-of-bounds dir, then the retry resolves fuzzily and must re-prompt.
+    const pm = new PermissionManager([], undefined, []);
+    pm.trustToolForSession('edit_local_file'); // main gate auto-approves; isolates grant + fuzzy prompts
+    const { dir, file } = await fuzzyFile();
+    const dirs: string[] = []; // shared live allow-list; the grant pushes onto it
+    const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
+    const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
+    const wrapped = wrapToolWithPermission(
+      realEditTool(dirs),
+      pm,
+      prompt,
+      agentContext,
+      {} as any,
+      {} as any,
+      undefined,
+      dirs
+    );
+
+    await wrapped.toolFn({ path: file, old_string: 'hello world   ', new_string: 'hi world' });
+
+    // Prompt 1 = grant the directory; prompt 2 = confirm the fuzzy span. Not silent.
+    expect(prompt).toHaveBeenCalledTimes(2);
+    expect(prompt.mock.calls[1][2] as string).toContain('was not an exact match');
+    expect(await fs.readFile(file, 'utf-8')).toBe('hi world\n');
+    expect(dir).toBe(path.dirname(file));
+  });
+
   it('forces the prompt for a fuzzy edit even when the tool is host-allowlisted', async () => {
     // The host-allowlist short-circuit is gated on !forcePrompt, so a fuzzy edit is
     // still re-confirmed. A fresh module picks up B4M_ALLOWED_TOOLS (parsed once).
