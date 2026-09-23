@@ -1,6 +1,6 @@
 import { memoryLedgerRepository, memoryPrincipalKeyRepository } from '@bike4mind/database';
 import { embeddingScorer, recall } from '@bike4mind/memory';
-import { MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
+import { MEMENTO_MIN_SIMILARITY, isDocumentSource } from '@bike4mind/common';
 import { createKeyProvider } from './factCipher';
 import { createLedgerMemoryStore } from './ledgerMemoryStore';
 import { embedMementoQuery } from './mementoQueryEmbedding';
@@ -127,7 +127,10 @@ export async function recallLakeMemory(opts: RecallLakeMemoryOptions): Promise<L
 
   // Reachability gate + query embed are independent of each other (both derive from the belief set),
   // so resolve them together.
-  const allSourceIds = [...new Set(beliefs.flatMap(b => b.sources ?? []))];
+  // Documents only: a curator-resolution belief also cites the finding it was decided on (#3049),
+  // which is not a FabFile and would ride into the ObjectId-only lookup behind this resolver,
+  // logging `skipping ids that cannot address a row by _id` on every turn that recalls one.
+  const allSourceIds = [...new Set(beliefs.flatMap(b => b.sources ?? []).filter(isDocumentSource))];
   const [reachable, embedded] = await Promise.all([
     opts.resolveReachableSources(allSourceIds),
     embedMementoQuery(opts.userId, opts.query).catch(err => {

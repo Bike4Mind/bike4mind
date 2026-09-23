@@ -410,6 +410,57 @@ describe('WorkflowStepHandler', () => {
         })
       );
     });
+
+    it('strips a b4m_cards fence out of outputs.response', async () => {
+      const mockUser = createMockUser({ lastNotebookId: 'notebook_123' });
+      vi.mocked(User.findOne).mockResolvedValue(mockUser);
+      vi.mocked(addMessageToSession).mockResolvedValue({
+        id: 'quest_123',
+      } as any);
+      vi.mocked(Quest.findById).mockResolvedValue({
+        status: 'done',
+        replies: ['Here are some watches.\n\n```b4m_cards\n{"cards":[{"name":"Leaked"}]}\n```\n\nDone.'],
+      } as any);
+
+      const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
+        user_id: 'U123',
+        message: 'Hello',
+        wait_for_response: true,
+      });
+
+      await handler.handleFunctionExecuted(event);
+
+      const call = mockSlackClient.functionCompleteSuccess.mock.calls[0][1] as { response: string };
+      expect(call.response).not.toContain('b4m_cards');
+      expect(call.response).not.toContain('"cards"');
+      expect(call.response).toContain('Here are some watches.');
+    });
+
+    it('strips a b4m_cards fence out of the DM notificationMessage too', async () => {
+      const mockUser = createMockUser({ lastNotebookId: 'notebook_123' });
+      vi.mocked(User.findOne).mockResolvedValue(mockUser);
+      vi.mocked(addMessageToSession).mockResolvedValue({
+        id: 'quest_123',
+      } as any);
+      vi.mocked(Quest.findById).mockResolvedValue({
+        status: 'done',
+        replies: ['Here are some watches.\n\n```b4m_cards\n{"cards":[{"name":"Leaked"}]}\n```\n\nDone.'],
+      } as any);
+      mockSlackClient.sendDirectMessage.mockResolvedValue(true);
+
+      const event = createEvent(WORKFLOW_STEP_CALLBACKS.SEND_MESSAGE, {
+        user_id: 'U123',
+        message: 'Hello',
+        wait_for_response: true,
+        send_notification: true,
+      });
+
+      await handler.handleFunctionExecuted(event);
+
+      const [, notificationMessage] = mockSlackClient.sendDirectMessage.mock.calls[0] as [string, string];
+      expect(notificationMessage).not.toContain('b4m_cards');
+      expect(notificationMessage).not.toContain('"cards"');
+    });
   });
 
   describe('handleQuery', () => {
