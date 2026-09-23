@@ -34,10 +34,11 @@ const NODE_TEST_ROOTS = ['server', 'pages'];
 const VITEST_DEFAULT_INCLUDE = ['**/*.{test,spec}.?(c|m)[jt]s?(x)'];
 
 // Two lanes over one config, selected by CLIENT_TEST_LANE (set only by the `test:integration`
-// script). The ~20 `*.e2e.test.ts` files each boot a real mongod, and running them inline pushed
+// script). The `*.e2e.test.ts` files each boot a real mongod, and running them inline pushed
 // this shard's job past its CI budget even though the suite itself passed - so they get their own
-// matrix shard. One config rather than two so the aliases, setup file and environment split cannot
-// drift between the lanes.
+// matrix shard. The suffix is the only lane selector, so __tests__/mongoTestTimeoutBudget.test.ts
+// fails any mongod-booting suite that lacks it. One config rather than two so the aliases, setup
+// file and environment split cannot drift between the lanes.
 // NOTE: `test:e2e` in package.json is Playwright, NOT these files. The Playwright directory is
 // the bare 'e2e' exclusion below.
 // `undefined` in the unit lane means "whatever vitest includes by default" - see above.
@@ -66,7 +67,7 @@ const projectTest = {
   ...sharedTest,
   globals: true,
   setupFiles: [path.resolve(__dirname, 'vitest.setup.ts')],
-  // Raise the 15s shared floor to 30s. Load-bearing for the integration lane, which holds ~20
+  // Raise the 15s shared floor to 30s. Load-bearing for the integration lane, which holds the
   // real-Mongo suites (createMongoServer/createMongoReplSet): their first write per worker pays an
   // unavoidable, legitimate cold-start: Mongoose builds every model's indexes on connect (needed
   // for correctness - the rate-limit suite depends on one, so autoIndex CANNOT be disabled) plus

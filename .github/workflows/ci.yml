@@ -503,7 +503,7 @@ jobs:
             filter: '--filter @bike4mind/client'
             workers: ''
             args: '--shard=3/3'
-          # The client package's ~20 real-Mongo suites (`*.e2e.test.ts`), split off
+          # The client package's real-Mongo suites (`*.e2e.test.ts`), split off
           # the shard above. Each boots a mongod, and inline they pushed that job
           # past `timeout-minutes` even on runs where the suite itself passed - the
           # job was killed after the tests were green, so the signal was a coin

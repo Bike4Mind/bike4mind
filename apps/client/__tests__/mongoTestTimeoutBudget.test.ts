@@ -34,6 +34,12 @@ describe('real-Mongo suites in the client shard declare the shared 60s budget', 
     expect(audit.suites).toContain('server/services/deleteOrganizationTransaction.e2e.test.ts');
   });
 
+  it('names every real-Mongo suite *.e2e.test.ts so it runs in the integration lane', () => {
+    // The suffix is the only lane selector (LANE_INCLUDE / LANE_EXCLUDE in vitest.config.mts). A
+    // suite without it still passes, just by booting its mongod inside a unit shard.
+    expect(audit.suites.filter(suite => !suite.endsWith('.e2e.test.ts'))).toEqual([]);
+  });
+
   it('imports MONGO_TEST_TIMEOUT_MS rather than inventing a budget', () => {
     expect(audit.missingBudgetImport).toEqual([]);
   });
