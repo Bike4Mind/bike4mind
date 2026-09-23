@@ -406,11 +406,23 @@ export class ImageEditService {
     if (!user) throw new NotFoundError('User not found');
 
     // Owner-wide lake access for scoping every fabFile lookup on this path - the mask below and
-    // the anchors further down. Absent resolver (or a resolution outage) degrades to
-    // owner/share/global-read only - never widens, never fails the run. Resolved unconditionally,
-    // mirroring ImageGenerationService: the mask lookup runs on every edit, so there is no
-    // anchor-free mainline left to spare the roundtrip.
-    const lakeAccess = this.resolveLakeAccess ? await this.resolveLakeAccess(user, logger) : undefined;
+    // the anchors further down. Resolved unconditionally, mirroring ImageGenerationService: the
+    // mask lookup runs on every edit, so there is no anchor-free mainline left to spare the
+    // roundtrip.
+    //
+    // The catch is load-bearing: this sits ABOVE the try/catch that owns the quest's terminal
+    // write, so a rejection would strand the quest in status 'running' until the check-timeout
+    // reaper found it rather than failing it cleanly. Degrading to owner/share/global-read is
+    // always safe (it narrows, never widens), and the resolveLakeAccess signature cannot enforce
+    // that every future wiring stays non-throwing the way createAttachmentLakeAccess does.
+    const lakeAccess = this.resolveLakeAccess
+      ? await this.resolveLakeAccess(user, logger).catch(error => {
+          logger.warn('[ImageEdit] Lake access resolution failed; falling back to ownership-only', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return undefined;
+        })
+      : undefined;
 
     const settings = await getSettingsMap(this.db);
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);

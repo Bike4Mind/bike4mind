@@ -438,6 +438,7 @@ describe('ImageEditService.process mask access (#3069)', () => {
       model?: string;
       lakeAccess?: Record<string, unknown>;
       withResolver?: boolean;
+      failLakeAccess?: boolean;
     } = {}
   ) => {
     const reachable = opts.reachable ?? ((ids: string[]) => ids.map(id => (id === 'mask1' ? maskFile : null)));
@@ -446,7 +447,10 @@ describe('ImageEditService.process mask access (#3069)', () => {
     );
     const deleteFabFile = vi.fn();
     const getSignedUrl = vi.fn(async (path: string) => `https://example.invalid/${path}`);
-    const resolveLakeAccess = vi.fn(async () => (opts.lakeAccess ?? {}) as never);
+    const resolveLakeAccess = vi.fn(async () => {
+      if (opts.failLakeAccess) throw new Error('lake-resolution-outage');
+      return (opts.lakeAccess ?? {}) as never;
+    });
     const quest = {
       id: 'quest1',
       sessionId: 'session1',
@@ -558,6 +562,18 @@ describe('ImageEditService.process mask access (#3069)', () => {
 
     expect(findAccessibleInIds).toHaveBeenCalledWith(['mask1'], { userId: 'user1', userGroups: undefined }, undefined);
     expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+  });
+
+  it('degrades rather than stranding the quest when the lake resolver itself rejects', async () => {
+    // This resolution sits above the try/catch that owns the quest's terminal write, so an
+    // unhandled rejection would leave status 'running' for the check-timeout reaper instead of
+    // failing cleanly. The run must reach dispatch on the ownership arms alone.
+    const { findAccessibleInIds, quest } = await run({ failLakeAccess: true });
+
+    expect(findAccessibleInIds).toHaveBeenCalledWith(['mask1'], { userId: 'user1', userGroups: undefined }, undefined);
+    // 'stop-after-dispatch' is the provider stub - proof the outage did not short-circuit the run.
+    expect(quest.reply).toBe('stop-after-dispatch');
+    expect(quest.status).toBe('done');
   });
 });
 
