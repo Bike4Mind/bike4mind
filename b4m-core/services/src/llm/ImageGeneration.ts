@@ -44,6 +44,7 @@ import {
   BFL_DIMENSION_BOUNDS,
   ImageOutputFormatSchema,
   toNonWebpOutputFormat,
+  resolveGptImageGenerateSize,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -835,24 +836,19 @@ export class ImageGenerationService {
       if (apiKeyTable[modelInfo.backend as keyof typeof apiKeyTable] === 'expired')
         throw new InternalServerError(`Model API key is expired for backend: "${modelInfo.backend}"`);
 
-      // For GPT image models (except gpt-image-2 which supports flexible sizes),
-      // normalize size to a valid GPT size. BFL sizes like '1440x810'
-      // can reach here if the user switched models without resetting their size selection,
-      // or if the transparent-background step-down above moved a gpt-image-2-only size
-      // (e.g. 2048x2048, 3840x2160) onto gpt-image-1.5.
-      const needsSizeNormalization =
-        isGPTImageModel(model) &&
-        !isGPTImage2Model(model) &&
-        size &&
-        !(OPENAI_IMAGE_SIZES as readonly string[]).includes(size);
-      if (needsSizeNormalization) {
+      // Resolve a GPT-Image size exactly as OpenAIImageService will before it renders, so the
+      // credit hold below prices the image that is actually produced. BFL sizes like '1440x810'
+      // reach here when the user switched models without resetting their size, or when the
+      // transparent-background step-down above moved a gpt-image-2-only size onto gpt-image-1.5.
+      // Other providers keep their size: the OpenAI rule would measure them as dall-e.
+      const effectiveSize = isGPTImageModel(model) && size ? resolveGptImageGenerateSize(model, size) : size;
+      if (effectiveSize !== size) {
         logger.debug('Normalizing image size not supported by the resolved model', {
           resolvedModel: model,
           requestedSize: size,
-          normalizedSize: OPENAI_IMAGE_SIZES[0],
+          normalizedSize: effectiveSize,
         });
       }
-      const effectiveSize = needsSizeNormalization ? (OPENAI_IMAGE_SIZES[0] as string) : size;
 
       // Validate credits before proceeding
       let usageCostUsd = 0;
