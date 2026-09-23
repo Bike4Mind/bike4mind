@@ -44,24 +44,24 @@ const DEFAULT_HOOK_TIMEOUT_SECONDS = 60;
 async function executeCommandHook(
   hook: HookDefinition,
   context: HookContext,
-  perm?: ShellCommandPermissionDeps
+  perm: ShellCommandPermissionDeps
 ): Promise<HookResult> {
   if (!hook.command) {
     return { decision: 'allow' };
   }
 
   // Gate the hook command through the permission path BEFORE running it. Loading
-  // a trusted project's agent does not pre-authorize the shell it carries.
-  if (perm) {
-    const decision = await requestShellCommandPermission(
-      `agent_hook:${context.hook_event_name}`,
-      hook.command,
-      context.cwd,
-      perm
-    );
-    if (!decision.allowed) {
-      return { decision: 'deny', reason: decision.reason || 'Hook command denied' };
-    }
+  // a trusted project's agent does not pre-authorize the shell it carries. `perm`
+  // is required so a call site that forgets to wire it is a type error, never a
+  // silent bypass that runs the repo's shell unprompted.
+  const decision = await requestShellCommandPermission(
+    `agent_hook:${context.hook_event_name}`,
+    hook.command,
+    context.cwd,
+    perm
+  );
+  if (!decision.allowed) {
+    return { decision: 'deny', reason: decision.reason || 'Hook command denied' };
   }
 
   const timeoutSeconds = hook.timeout ?? DEFAULT_HOOK_TIMEOUT_SECONDS;
@@ -156,7 +156,7 @@ function matchesToolPattern(toolName: string, pattern: string): boolean {
 export async function executeHooks(
   hooks: HookMatcher[] | undefined,
   context: HookContext,
-  perm?: ShellCommandPermissionDeps
+  perm: ShellCommandPermissionDeps
 ): Promise<HookResult> {
   if (!hooks || hooks.length === 0) {
     return { decision: 'allow' };

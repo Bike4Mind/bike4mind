@@ -119,3 +119,82 @@ describe('CitableSources cited-passage anchor', () => {
     expect(useSessionLayout.getState().citedPassage).toBeNull();
   });
 });
+
+/**
+ * The reader's half of the retrieval conflict signal (#3041). The model is told two retrieved
+ * documents disagree; these assertions pin that the reader is told the same thing, and told it
+ * as a heuristic rather than as a proven contradiction.
+ */
+describe('CitableSources conflict badge', () => {
+  const lakeChip = (id: string, title: string, conflictsWith?: unknown): CitableSource => ({
+    id,
+    type: 'document',
+    title,
+    url: `/opti?mode=datalake&article=${id}`,
+    status: 'complete',
+    metadata: { sourceSystem: 'knowledge_base', ...(conflictsWith === undefined ? {} : { conflictsWith }) },
+  });
+
+  const renderChips = (citables: CitableSource[]) =>
+    render(
+      <TestWrapper>
+        <CitableSources citables={citables} />
+      </TestWrapper>
+    );
+
+  it('badges both halves of a pair and names the other source', () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a']),
+    ]);
+
+    expect(screen.getAllByTestId('citable-conflict-badge')).toHaveLength(2);
+    expect(screen.getByTitle(/May disagree with Annual Report\.pdf/)).toBeInTheDocument();
+    expect(screen.getByTitle(/May disagree with Q3 Revenue\.pdf/)).toBeInTheDocument();
+  });
+
+  it('hedges the claim rather than asserting a contradiction', () => {
+    // The detector's own contract: a finding is "worth a human's eye", never proven. Wording that
+    // overclaims here would be the one place that contract is broken, since this is the only
+    // surface a non-technical reader sees it on.
+    // One badged chip, so the hedge resolves to a single element: the wording is identical on every
+    // badge, and a two-chip fixture would match both.
+    renderChips([lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']), lakeChip('file-b', 'Annual Report.pdf')]);
+
+    expect(screen.getByTitle(/not a proven contradiction/)).toBeInTheDocument();
+  });
+
+  it('leaves an unmarked source unbadged', () => {
+    renderChips([
+      lakeChip('file-a', 'Q3 Revenue.pdf', ['file-b']),
+      lakeChip('file-b', 'Annual Report.pdf', ['file-a']),
+      lakeChip('file-c', 'Support Hours.md'),
+    ]);
+
+    expect(screen.getAllByTestId('citable-conflict-badge')).toHaveLength(2);
+  });
+
+  it('shows no badge when no source carries a conflict', () => {
+    renderChips([lakeChip('file-a', 'Q3 Revenue.pdf'), lakeChip('file-b', 'Annual Report.pdf')]);
+
+    expect(screen.queryByTestId('citable-conflict-badge')).not.toBeInTheDocument();
+  });
+
+  it('keeps the badge when the partner is not among the rendered chips', () => {
+    // A real conflict whose partner lost the dedup upstream. Dropping the badge would hide a true
+    // signal; naming an id the reader cannot match to a chip would be noise. So it counts instead.
+    renderChips([lakeChip('file-a', 'Q3 Revenue.pdf', ['file-missing'])]);
+
+    expect(screen.getByTestId('citable-conflict-badge')).toBeInTheDocument();
+    expect(screen.getByTitle(/May disagree with 1 further source\./)).toBeInTheDocument();
+  });
+
+  it('renders no badge for a malformed conflictsWith rather than throwing in the reply', () => {
+    // metadata is an open bag read back from a stored document, so the render path cannot assume
+    // the field's shape - and a throw here would take out the whole assistant message.
+    renderChips([lakeChip('file-a', 'Q3 Revenue.pdf', 'file-b')]);
+
+    expect(screen.queryByTestId('citable-conflict-badge')).not.toBeInTheDocument();
+    expect(screen.getByText('Q3 Revenue.pdf')).toBeInTheDocument();
+  });
+});

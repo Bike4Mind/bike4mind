@@ -1,5 +1,6 @@
 import passport from '@server/auth/auth';
 import ability from '@server/auth/ability';
+import { admitsOptionalAuthUser } from '@server/middlewares/oauthRouteGate';
 import type { Request, Response, NextFunction } from 'express';
 
 /**
@@ -32,16 +33,13 @@ export const optionalJwtAuth = () => {
       // that would otherwise silently downgrade every viewer to anonymous - log it so it's
       // observable while still not failing the request.
       if (err) req.logger?.warn('optionalJwtAuth: jwt strategy error, continuing anonymously', err);
-      // Degrade a pre-MFA (mfaPending) session to anonymous. The JWT strategy stamps
-      // mfaPending onto req.user and returns it as a success; the normal full-auth chain has a
-      // separate middleware that blocks mfaPending users, but this route is `auth: false` and
-      // bypasses it - so we must mirror that policy here or a username+password session that
-      // hasn't completed MFA could view gated bundles. Such a viewer falls through to the
-      // loader shell's sign-in branch, the correct posture for a pre-MFA session.
-      const u = user as (Express.User & { mfaPending?: boolean }) | false | null;
-      if (err || !u || u.mfaPending) return next();
-      req.user = u;
-      req.ability = ability(u as Parameters<typeof ability>[0]);
+      // Degrade to anonymous on err, and on any user the shared admission guard rejects (a pre-MFA
+      // session or a relying-party OAuth token) - see admitsOptionalAuthUser in oauthRouteGate.ts.
+      // Such a viewer falls through to the loader shell's sign-in / public branch, the correct
+      // posture: an mfaPending session or OAuth token must not read a user's PRIVATE bundles here.
+      if (err || !admitsOptionalAuthUser(user)) return next();
+      req.user = user as Express.User;
+      req.ability = ability(user as Parameters<typeof ability>[0]);
       next();
     })(req, res, next);
   };

@@ -17,7 +17,7 @@ import { type MigrationFile } from './index';
  * Idempotent: createIndexes is a no-op for indexes that already exist.
  */
 const migration: MigrationFile = {
-  id: 20260922000000,
+  id: 20260921100000,
   name: 'ensure data lake corpus action indexes',
 
   up: async () => {

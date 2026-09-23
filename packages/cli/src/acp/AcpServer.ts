@@ -692,8 +692,7 @@ export class AcpServer {
                 subagentOrchestrator: orchestrator,
                 sessionId,
                 // Gate skill lifecycle hook shell commands through permission.
-                permissionManager,
-                promptFn: this.promptFn,
+                permission: { permissionManager, promptFn: this.promptFn },
                 allowedDirectories,
               }),
             ]

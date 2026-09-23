@@ -123,6 +123,35 @@ describe('ContextBreakdownModal', () => {
     expect(screen.getByText('No retrieval was recorded for this turn.')).toBeTruthy();
   });
 
+  // #3055: count + reason next to the existing "lakes:" chip.
+  it('shows the excluded-lakes chip when the turn recorded an access exclusion', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: { ...breakdown, retrieval: { ...breakdown.retrieval, excludedLakes: { count: 2, reason: 'access' } } },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.getByTestId('context-breakdown-excluded-lakes-chip').textContent).toContain('excluded: 2 (access)');
+  });
+
+  it('omits the excluded-lakes chip when nothing was excluded', () => {
+    renderModal();
+
+    expect(screen.queryByTestId('context-breakdown-excluded-lakes-chip')).toBeNull();
+  });
+
+  it('omits the excluded-lakes chip on a recorded zero, not just on absence', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: { ...breakdown, retrieval: { ...breakdown.retrieval, excludedLakes: { count: 0, reason: 'access' } } },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.queryByTestId('context-breakdown-excluded-lakes-chip')).toBeNull();
+  });
+
   it('surfaces the servers error message when the request was forbidden', () => {
     mockUseQuestContextBreakdown.mockReturnValue({
       data: undefined,

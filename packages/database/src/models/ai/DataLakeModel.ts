@@ -714,6 +714,74 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   /**
+   * Count-only companion to {@link findActiveByUserTagsAndEntitlements} above (#3055) - see the
+   * interface doc for the contract. `$nor: [requirementConstraint(...)]` is the complement of
+   * that helper's own `$or` (gateless OR held tag OR held entitlement): a lake matching NONE of
+   * those arms has a gate the caller does not hold, which is exactly the population this counts.
+   *
+   * Visibility is org membership OR public - deliberately narrower than `findActiveByUserTagsAndEntitlements`'s
+   * own arms (no owner bypass, no grant arm): those two arms are exactly what make a lake NOT
+   * excluded regardless of its gate, so they are subtracted here instead of counted as visible.
+   * The user-grant arm is an unconditional `_id: $nin` (a user-principal grant crosses orgs by
+   * design). The org-grant arm reuses `orgGrantArms` under `$nor`, one arm per granting org,
+   * for the same reason `findActiveByUserTagsAndEntitlements` does: flattening every org's
+   * granted ids into one list loses which org issued which grant, so a lake in org B granted by
+   * org A would wrongly exempt a caller who belongs to both but was never granted that lake by
+   * ITS org - undercounting a real exclusion.
+   *
+   * `restrictToTags`, when given, further limits the count to lakes whose `datalakeTag` is in the
+   * list - the per-turn-scoped sibling question "of exactly these lakes, how many are excluded",
+   * for a caller that named specific lakes by identity rather than asking about the whole account.
+   *
+   * The owner-bypass exemption (#3055): a lake is withheld from the count for its CREATOR
+   * only when ownership has not since moved off them - `createdByUserId` is immutable, so without
+   * `supersededOwnLakeIds` a transferred-away creator would still report a false zero for a lake
+   * they can no longer reach via the owner bypass. Mirrors `findActiveByUserTagsAndEntitlements`'s
+   * own creator arm: `$or` rather than a single `$ne`, because "exempt from the count" is now two
+   * cases (not mine at all, OR mine but superseded) that a single field comparison cannot express.
+   */
+  async countGateExcludedLakes(
+    userTags: string[],
+    entitlementKeys: string[],
+    organizationIds: string[] | undefined,
+    userId: string | undefined,
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      supersededOwnLakeIds?: string[];
+      restrictToTags?: string[];
+    }
+  ): Promise<number> {
+    const memberOrgIds = organizationIds ?? [];
+    const visibilityArms: Record<string, unknown>[] = [{ isPublic: true }];
+    if (memberOrgIds.length > 0) visibilityArms.push({ organizationId: { $in: memberOrgIds } });
+
+    const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.countGateExcludedLakes');
+    const orgGrantExemptionArms = orgGrantArms(opts?.orgGrantedLakes);
+    const supersededOwnLakeIds = usableObjectIds(opts?.supersededOwnLakeIds, 'DataLakeModel.countGateExcludedLakes');
+
+    const ownerExemptionArms: Record<string, unknown>[] = [{ createdByUserId: { $ne: userId } }];
+    if (supersededOwnLakeIds.length > 0) {
+      ownerExemptionArms.push({ createdByUserId: userId, _id: { $in: supersededOwnLakeIds } });
+    }
+
+    const filter: Record<string, unknown> = {
+      status: 'active',
+      $and: [
+        { $or: visibilityArms },
+        { $nor: [requirementConstraint(userTags, entitlementKeys)] },
+        ...(userId ? [{ $or: ownerExemptionArms }] : []),
+        ...(grantedLakeIds.length > 0 ? [{ _id: { $nin: grantedLakeIds } }] : []),
+        ...(orgGrantExemptionArms.length > 0 ? [{ $nor: orgGrantExemptionArms }] : []),
+        ...(opts?.restrictToTags && opts.restrictToTags.length > 0
+          ? [{ datalakeTag: { $in: opts.restrictToTags } }]
+          : []),
+      ],
+    };
+    return this.dataLakeModel.countDocuments(filter);
+  }
+
+  /**
    * Ids of every lake this user CREATED, in any status - the candidate set for resolving which of
    * them their ownership has since moved off (see `supersededOwnLakeIdsFor`). Creator provenance is
    * immutable, so this is a stable, cheap anchor; it deliberately answers nothing about ownership by
