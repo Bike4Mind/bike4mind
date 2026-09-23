@@ -539,23 +539,41 @@ export async function handlePermissionResponse(
   // continue - the tool was only recorded when `rememberForSession` was set,
   // which the Deny button never sends.)
   if (!cmd.approved) {
-    await agentExecutionRepository.updatePermissionState(cmd.executionId, {
-      pendingPermission: null,
+    const denialMessage = `Execution stopped: you denied "${cmd.toolName}".`;
+    // CAS-guarded the same way `approvePendingPermission` is (status
+    // `awaiting_permission`, pause not already approved, identity-pinned on
+    // `toolCallId`) - an approval for this exact pause that has already won its own
+    // CAS cannot be undone by a denial racing it from another tab.
+    const denied = await agentExecutionRepository.denyPendingPermission(cmd.executionId, {
+      toolCallId: pendingCallId,
       deniedTool: cmd.rememberForSession ? cmd.toolName : undefined,
-      matchToolCallId: pendingCallId,
+      errorMessage: denialMessage,
     });
+    if (!denied) {
+      // Lost the CAS - almost certainly to a concurrent approval for the same pause
+      // that already claimed it. Nothing is left here to deny; report current status
+      // like the toolCallId-mismatch branch above so the UI does not hang.
+      const current = await agentExecutionRepository.findById(cmd.executionId);
+      logger.warn('[Permission] Deny lost the CAS - a concurrent response already claimed this pause', {
+        executionId: cmd.executionId,
+        toolName: cmd.toolName,
+      });
+      await sendAgentEvent(connectionId, endpoint, {
+        action: 'progress',
+        executionId: cmd.executionId,
+        status: current?.status ?? execution.status,
+      });
+      return;
+    }
     if (cmd.rememberForSession) {
       await rememberToolDecision(execution.sessionId, userId, cmd.toolName, 'denied', logger);
     }
-    await agentExecutionRepository.markFailed(cmd.executionId, {
-      message: `Execution stopped: you denied "${cmd.toolName}".`,
-    });
     await sendAgentEvent(connectionId, endpoint, {
       action: 'failed',
       executionId: cmd.executionId,
       reason: 'tool_denied',
       toolName: cmd.toolName,
-      message: `Execution stopped: you denied "${cmd.toolName}".`,
+      message: denialMessage,
     });
     logger.info('[Permission] Denied — execution stopped', {
       executionId: cmd.executionId,

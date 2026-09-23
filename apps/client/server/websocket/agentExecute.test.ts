@@ -13,6 +13,7 @@ const mockUpdatePermissionState = vi.fn();
 const mockMarkFailed = vi.fn();
 const mockUpdateStatus = vi.fn();
 const mockApprovePendingPermission = vi.fn();
+const mockDenyPendingPermission = vi.fn();
 const mockRememberDecision = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
@@ -23,6 +24,7 @@ vi.mock('@bike4mind/database', () => ({
     markFailed: (...args: unknown[]) => mockMarkFailed(...args),
     updateStatus: (...args: unknown[]) => mockUpdateStatus(...args),
     approvePendingPermission: (...args: unknown[]) => mockApprovePendingPermission(...args),
+    denyPendingPermission: (...args: unknown[]) => mockDenyPendingPermission(...args),
   },
   sessionToolApprovalRepository: {
     rememberDecision: (...args: unknown[]) => mockRememberDecision(...args),
@@ -121,6 +123,7 @@ describe('handlePermissionResponse', () => {
     mockApiGwSend.mockResolvedValue(undefined);
     mockLambdaSend.mockResolvedValue(undefined);
     mockApprovePendingPermission.mockResolvedValue(true);
+    mockDenyPendingPermission.mockResolvedValue(true);
   });
 
   it('remembers the approval keyed on execution.sessionId when rememberForSession is true', async () => {
@@ -172,7 +175,7 @@ describe('handlePermissionResponse', () => {
     expect(mockLambdaSend).toHaveBeenCalled();
   });
 
-  it('still marks the execution failed and sends a failed event on deny, regardless of persistence', async () => {
+  it('marks the execution failed atomically in the same CAS write and sends a failed event on deny', async () => {
     await handlePermissionResponse(
       baseCmd({ approved: false, rememberForSession: true }),
       'user-1',
@@ -182,9 +185,12 @@ describe('handlePermissionResponse', () => {
     );
 
     expect(mockRememberDecision).toHaveBeenCalledWith('user-1', baseExecution.sessionId, 'web_search', 'denied');
-    expect(mockMarkFailed).toHaveBeenCalledWith('exec-1', {
-      message: 'Execution stopped: you denied "web_search".',
+    expect(mockDenyPendingPermission).toHaveBeenCalledWith('exec-1', {
+      toolCallId: 'call-1',
+      deniedTool: 'web_search',
+      errorMessage: 'Execution stopped: you denied "web_search".',
     });
+    expect(mockMarkFailed).not.toHaveBeenCalled();
     expect(mockApiGwSend).toHaveBeenCalled();
     const [sentCommand] = mockApiGwSend.mock.calls[0];
     expect(sentCommand.input.Data.toString()).toContain('"action":"failed"');
@@ -271,7 +277,7 @@ describe('handlePermissionResponse', () => {
       noopLogger as any
     );
 
-    expect(mockUpdatePermissionState).not.toHaveBeenCalled();
+    expect(mockDenyPendingPermission).not.toHaveBeenCalled();
     expect(mockMarkFailed).not.toHaveBeenCalled();
   });
 
@@ -416,11 +422,67 @@ describe('handlePermissionResponse', () => {
       noopLogger as any
     );
 
-    expect(mockUpdatePermissionState).toHaveBeenCalledWith('exec-1', {
-      pendingPermission: null,
+    expect(mockDenyPendingPermission).toHaveBeenCalledWith('exec-1', {
+      toolCallId: 'call-1',
       deniedTool: undefined,
-      matchToolCallId: 'call-1',
+      errorMessage: 'Execution stopped: you denied "web_search".',
     });
     expect(mockApprovePendingPermission).not.toHaveBeenCalled();
+    expect(mockUpdatePermissionState).not.toHaveBeenCalled();
+  });
+
+  it('does not resume or fail the run when denial loses the CAS to a concurrent approval that already claimed the pause', async () => {
+    // Concrete interleaving: two tabs answer the same pause. Approval wins the CAS
+    // first (pendingPermission.approved flips true, status may already be
+    // `continuing`); this denial's CAS then loses. It must not clear the pause, must
+    // not mark the run failed, and must report current status instead of hanging.
+    mockDenyPendingPermission.mockResolvedValueOnce(false);
+    mockFindById.mockResolvedValueOnce(baseExecution).mockResolvedValueOnce({
+      ...baseExecution,
+      status: 'continuing',
+      pendingPermission: { toolName: 'web_search', toolCallId: 'call-1', approved: true },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: false, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockMarkFailed).not.toHaveBeenCalled();
+    expect(mockRememberDecision).not.toHaveBeenCalled();
+    expect(noopLogger.warn).toHaveBeenCalled();
+    expect(mockApiGwSend).toHaveBeenCalled();
+    const [sent] = mockApiGwSend.mock.calls[0];
+    expect(sent.input.Data.toString()).toContain('"action":"progress"');
+    expect(sent.input.Data.toString()).toContain('"status":"continuing"');
+  });
+
+  it('does not let a denial that loses the CAS clear a pause a subsequent approval is about to claim', async () => {
+    // Same race, opposite ordering: this denial's CAS loses because a concurrent
+    // approval already CAS-won first, even though the resume dispatch has not run
+    // yet (status still awaiting_permission). Denial must still back off rather
+    // than clearing/failing the run out from under the approval in flight.
+    mockDenyPendingPermission.mockResolvedValueOnce(false);
+    mockFindById.mockResolvedValueOnce(baseExecution).mockResolvedValueOnce({
+      ...baseExecution,
+      pendingPermission: { toolName: 'web_search', toolCallId: 'call-1', approved: true },
+    });
+
+    await handlePermissionResponse(
+      baseCmd({ approved: false, rememberForSession: false }),
+      'user-1',
+      'conn-1',
+      'https://endpoint',
+      noopLogger as any
+    );
+
+    expect(mockMarkFailed).not.toHaveBeenCalled();
+    expect(mockUpdatePermissionState).not.toHaveBeenCalled();
+    expect(mockApiGwSend).toHaveBeenCalled();
+    const [sent] = mockApiGwSend.mock.calls[0];
+    expect(sent.input.Data.toString()).toContain('"action":"progress"');
   });
 });

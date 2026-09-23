@@ -1558,4 +1558,102 @@ describe('AgentExecutionRepository', () => {
       expect(reloaded?.pendingPermission).toBeUndefined();
     });
   });
+
+  describe('denyPendingPermission', () => {
+    const pause = () => ({
+      toolName: 'image_generation',
+      toolInput: { prompt: 'cat' },
+      toolCallId: 'toolu_1',
+      gatedToolCalls: [{ id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' }],
+      requestedAt: new Date(),
+    });
+
+    it('clears the pause, records the denied tool, and fails the run in one write', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      const denied = await agentExecutionRepository.denyPendingPermission(execution.id, {
+        toolCallId: 'toolu_1',
+        deniedTool: 'image_generation',
+        errorMessage: 'Execution stopped: you denied "image_generation".',
+      });
+
+      expect(denied).toBe(true);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.status).toBe('failed');
+      expect(reloaded?.pendingPermission).toBeUndefined();
+      expect(reloaded?.deniedTools).toContain('image_generation');
+      expect(reloaded?.error?.message).toBe('Execution stopped: you denied "image_generation".');
+    });
+
+    it('does not land when toolCallId names a different pause than the one persisted', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      const denied = await agentExecutionRepository.denyPendingPermission(execution.id, {
+        toolCallId: 'toolu_cat',
+        errorMessage: 'Execution stopped: you denied "image_generation".',
+      });
+
+      expect(denied).toBe(false);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.status).toBe('awaiting_permission');
+      expect(reloaded?.pendingPermission).toBeDefined();
+    });
+
+    // The concrete race the review flagged: two tabs answer the same pause. Whichever
+    // side's CAS lands first (approve or deny) must be the only one that can act -
+    // the loser's write must be a no-op, not a partial mutation.
+    it('cannot clear a pause that a concurrent approval already claimed', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id, { toolCallId: 'toolu_1' })).toBe(
+        true
+      );
+
+      const denied = await agentExecutionRepository.denyPendingPermission(execution.id, {
+        toolCallId: 'toolu_1',
+        errorMessage: 'Execution stopped: you denied "image_generation".',
+      });
+
+      expect(denied).toBe(false);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      // The approval's claim survives intact: still approved, still awaiting the
+      // executor's replay, not clobbered into `failed` by the losing denial.
+      expect(reloaded?.status).toBe('awaiting_permission');
+      expect(reloaded?.pendingPermission?.approved).toBe(true);
+    });
+
+    it('cannot land after a concurrent denial already won and failed the run', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(
+        await agentExecutionRepository.denyPendingPermission(execution.id, {
+          toolCallId: 'toolu_1',
+          errorMessage: 'Execution stopped: you denied "image_generation".',
+        })
+      ).toBe(true);
+
+      // A same-pause approval racing in after denial already won must not resurrect it.
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id, { toolCallId: 'toolu_1' })).toBe(
+        false
+      );
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.status).toBe('failed');
+      expect(reloaded?.pendingPermission).toBeUndefined();
+    });
+  });
 });

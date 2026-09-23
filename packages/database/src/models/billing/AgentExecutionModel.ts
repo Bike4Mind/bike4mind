@@ -1449,18 +1449,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   /**
    * `approvedTool` has no production caller: the only "remember for session" approval
    * path is `approvePendingPermission`, which folds it into the same CAS write as the
-   * approval itself (see that method's doc comment). Only the deny path still calls
-   * through here, via `deniedTool`.
+   * approval itself (see that method's doc comment). Denial goes through
+   * `denyPendingPermission` instead, which is CAS-guarded the same way approval is -
+   * this method's own `matchToolCallId` filter binds a write to a specific pause's
+   * identity, but not to the `awaiting_permission` / not-already-approved state, so it
+   * is not safe against a concurrent approve/deny race on its own.
    */
   async updatePermissionState(
     id: string,
     update: {
       pendingPermission?: IPendingPermission | null;
-      deniedTool?: string;
       /**
        * Filters the write onto the pause the caller actually read, the same
        * identity guard `approvePendingPermission` applies to approval - without
-       * it, a deny read against one pause could land after a replay already
+       * it, a write against one pause could land after a replay already
        * re-paused on a different withheld call for the same tool, clearing that
        * one out from under an approval that was about to land for it.
        */
@@ -1468,7 +1470,6 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     }
   ): Promise<void> {
     const setOps: Record<string, unknown> = {};
-    const pushOps: Record<string, unknown> = {};
     const unsetOps: Record<string, unknown> = {};
 
     if (update.pendingPermission === null) {
@@ -1477,13 +1478,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       setOps.pendingPermission = update.pendingPermission;
     }
 
-    if (update.deniedTool) {
-      pushOps.deniedTools = update.deniedTool;
-    }
-
     const ops: Record<string, unknown> = {};
     if (Object.keys(setOps).length > 0) ops.$set = setOps;
-    if (Object.keys(pushOps).length > 0) ops.$addToSet = pushOps;
     if (Object.keys(unsetOps).length > 0) ops.$unset = unsetOps;
 
     if (Object.keys(ops).length > 0) {
@@ -1493,6 +1489,44 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       }
       await this.model.updateOne(filter, ops);
     }
+  }
+
+  /**
+   * Mirrors `approvePendingPermission`'s CAS, on the deny side. Same filter (status
+   * `awaiting_permission`, pause exists, `pendingPermission.approved` not already
+   * `true`, and identity-pinned on `toolCallId` when given) so an approval that has
+   * already claimed this pause cannot be undone by a denial racing it from another
+   * tab - and clears the pause, records the denied tool, and moves the run to
+   * `failed` in the SAME write, so a process death between "clear the pause" and
+   * "mark failed" can never leave a doc with no pending permission and no terminal
+   * status either.
+   */
+  async denyPendingPermission(
+    id: string,
+    opts: { toolCallId?: string; deniedTool?: string; errorMessage: string }
+  ): Promise<boolean> {
+    const filter: Record<string, unknown> = {
+      _id: id,
+      status: 'awaiting_permission',
+      pendingPermission: { $exists: true },
+      'pendingPermission.approved': { $ne: true },
+    };
+    if (opts.toolCallId) {
+      filter['pendingPermission.toolCallId'] = opts.toolCallId;
+    }
+    const update: Record<string, unknown> = {
+      $set: {
+        status: 'failed',
+        error: { message: opts.errorMessage },
+        completedAt: new Date(),
+      },
+      $unset: { pendingPermission: '' },
+    };
+    if (opts.deniedTool) {
+      update.$addToSet = { deniedTools: opts.deniedTool };
+    }
+    const res = await this.model.updateOne(filter, update);
+    return res.modifiedCount > 0;
   }
 
   /**
