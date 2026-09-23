@@ -447,7 +447,7 @@ interface RankableFile {
    * The document's OWN vintage (#3048) - the one date that IS surfaced to the model, unlike
    * `createdAt` above. Carried purely so the passage header can show it: supersession ranking
    * still keys on `createdAt`, because which COPY we ingested last is a different question from
-   * when the document was written. All three builders below must carry it.
+   * when the document was written. Both builders below must carry it.
    */
   documentDate?: Date | null;
   /**

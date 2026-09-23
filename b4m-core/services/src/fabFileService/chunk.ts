@@ -175,11 +175,13 @@ export const prepareFabFileChunks = async (
   //
   // A stored DRIVE_CREATED is the one exception, and it wins outright. That source is only ever
   // set for a Google Editors file, which has no bytes of its own: what the chunker just read is a
-  // RENDITION that Drive generated moments ago at fetch time. Its embedded metadata therefore
-  // dates the export, not the document - an exported .xlsx or .pptx carries a docProps/core.xml
-  // whose dcterms:created is effectively "now", which is exactly the ingestion-time-as-vintage
-  // answer this field exists to avoid. And on a miss (a Doc exports to bare text) there is nothing
-  // to re-read on a later pass, so clearing it would lose the vintage permanently.
+  // RENDITION Drive generated at ingest, whether this pass fetched it or re-read the stored copy.
+  // Nothing in it can date the document. An exported .pptx carries a docProps/core.xml whose
+  // dcterms:created is the export moment, which is exactly the ingestion-time-as-vintage answer
+  // this field exists to avoid; a Sheets .xlsx export carries no docProps/ at all and a Doc
+  // exports to bare text, so those two come back undated. Neither outcome may displace the date
+  // Drive gave us, and on the undated ones there is nothing to re-read on a later pass, so
+  // clearing it would lose the vintage permanently.
   //
   // The date is required alongside the source, not just the source: `documentDateSource` is never
   // meaningful on its own (see FabFileTypes), and without this a row carrying a DRIVE_CREATED

@@ -8,7 +8,10 @@ import {
   parsePdfInfoDate,
 } from './documentDate';
 
-const iso = (date: Date | null | undefined) => date?.toISOString() ?? null;
+const iso = (date: Date | null) => date?.toISOString() ?? null;
+
+/** What `formatDocumentDate` prints into a passage header - the only form the model ever sees. */
+const renderedDay = (date: Date | null) => date?.toISOString().slice(0, 10) ?? null;
 
 describe('isPlausibleDocumentDate', () => {
   const now = Date.UTC(2026, 8, 23);
@@ -42,22 +45,36 @@ describe('isPlausibleDocumentDate', () => {
 });
 
 describe('parsePdfInfoDate', () => {
-  it('parses a full PDF date string with a positive UTC offset', () => {
-    // 12:30 at UTC+02:00 is 10:30Z - the offset is subtracted, not added.
-    expect(iso(parsePdfInfoDate("D:20190304123000+02'00'"))).toBe('2019-03-04T10:30:00.000Z');
-  });
-
-  it('parses a negative offset', () => {
-    expect(iso(parsePdfInfoDate("D:20190304123000-05'00'"))).toBe('2019-03-04T17:30:00.000Z');
-  });
-
   it('parses the Z form and a bare date with no D: prefix', () => {
     expect(iso(parsePdfInfoDate('D:20190304123000Z'))).toBe('2019-03-04T12:30:00.000Z');
     expect(iso(parsePdfInfoDate('20190304'))).toBe('2019-03-04T00:00:00.000Z');
   });
 
-  it('parses a truncated offset that omits the minutes', () => {
-    expect(iso(parsePdfInfoDate('D:20190304123000+02'))).toBe('2019-03-04T10:30:00.000Z');
+  // The offset is consumed by the pattern and then ignored, so the instant keeps the wall-clock
+  // day the producer wrote. Applying it would build a true UTC instant whose UTC DAY - the only
+  // part that reaches the model - is not the day the document claims.
+  it.each([
+    ['positive offset', "D:20190304123000+02'00'"],
+    ['negative offset', "D:20190304123000-05'00'"],
+    ['offset with no minutes', 'D:20190304123000+02'],
+    ['no offset at all', 'D:20190304123000'],
+  ])('ignores the UTC offset: %s', (_label, value) => {
+    expect(iso(parsePdfInfoDate(value))).toBe('2019-03-04T12:30:00.000Z');
+  });
+
+  // The failure this guards is a rendered one, so it is pinned on the rendered day rather than on
+  // the instant: both of these used to print the neighbouring calendar day.
+  it.each([
+    ['midnight at a positive offset', "D:20190304000000+08'00'"],
+    ['late evening at a negative offset', "D:20190304230000-05'00'"],
+  ])('renders the authored calendar day: %s', (_label, value) => {
+    expect(renderedDay(parsePdfInfoDate(value))).toBe('2019-03-04');
+  });
+
+  // Same reason: an offset applied here would push this an hour under the 1980 floor and the
+  // document would silently lose a vintage it genuinely carries.
+  it('keeps an offset date at the plausibility floor inside the window', () => {
+    expect(isPlausibleDocumentDate(parsePdfInfoDate("D:19800101000000+01'00'")!)).toBe(true);
   });
 
   // The two spellings of "unset" a producer can use, and they must behave identically: defaulting
@@ -161,9 +178,17 @@ describe('parseFrontmatterDate', () => {
     expect(iso(parseFrontmatterDate(text))).toBe('2019-03-04T00:00:00.000Z');
   });
 
-  it('normalises separator styles in the key', () => {
-    expect(iso(parseFrontmatterDate('---\npub_date: 2019-03-04\n---\n'))).toBe('2019-03-04T00:00:00.000Z');
-    expect(iso(parseFrontmatterDate('---\npubDate: 2019-03-04\n---\n'))).toBe('2019-03-04T00:00:00.000Z');
+  it.each(['pub_date', 'pub-date', 'pubDate', 'publish_date', 'publish-date', 'publishDate'])(
+    'accepts the separator spelling %s',
+    key => {
+      expect(iso(parseFrontmatterDate(`---\n${key}: 2019-03-04\n---\n`))).toBe('2019-03-04T00:00:00.000Z');
+    }
+  );
+
+  // The spellings are enumerated rather than derived by stripping `_` and `-`, because that strip
+  // also folded each of these into a real key and read it as the document's vintage.
+  it.each(['d_ate', '_date', 'd-a-t-e', 'pu_b_date'])('refuses the near-miss key %s', key => {
+    expect(parseFrontmatterDate(`---\n${key}: 2019-03-04\n---\n`)).toBeNull();
   });
 
   it('ignores a date on a nested key, which describes something other than the document', () => {
@@ -188,6 +213,22 @@ describe('parseFrontmatterDate', () => {
   it('does not scan past the leading-bytes limit', () => {
     const padded = `---\n${'filler: x\n'.repeat(2000)}date: 2019-03-04\n---\n`;
     expect(parseFrontmatterDate(padded)).toBeNull();
+  });
+});
+
+// The three formats disagreed here: the PDF parser applied the info dictionary's UTC offset while
+// the ISO parser ignored any zone designator, so one authored date printed a different day
+// depending on which container it arrived in.
+describe('one authored day renders identically whatever format carried it', () => {
+  it.each([
+    ['PDF info dictionary', () => parsePdfInfoDate("D:20190304093000+05'30'")],
+    [
+      'OOXML core properties',
+      () => parseOoxmlCoreCreated('<dcterms:created>2019-03-04T09:30:00+05:30</dcterms:created>'),
+    ],
+    ['frontmatter', () => parseFrontmatterDate('---\ndate: 2019-03-04T09:30:00+05:30\n---\n')],
+  ])('%s', (_label, parse) => {
+    expect(renderedDay(parse())).toBe('2019-03-04');
   });
 });
 

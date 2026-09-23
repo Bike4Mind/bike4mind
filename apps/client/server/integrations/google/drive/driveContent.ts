@@ -35,7 +35,7 @@ const EDITOR_EXPORTS: Record<string, string> = {
  * Keyed off EDITOR_EXPORTS rather than a second list, so a newly supported Editors type cannot be
  * ingestible here but unrecognised there.
  */
-export function isDriveAuthoredMimeType(mimeType: string): boolean {
+function isDriveAuthoredMimeType(mimeType: string): boolean {
   return Object.hasOwn(EDITOR_EXPORTS, mimeType);
 }
 
@@ -52,7 +52,7 @@ export function driveDocumentVintage(file: DriveFile): {
   documentDateSource?: DocumentDateSource;
 } {
   if (!file.createdTime || !isDriveAuthoredMimeType(file.mimeType)) return {};
-  const accepted = acceptDocumentDate(new Date(file.createdTime), DocumentDateSource.DRIVE_CREATED);
+  const accepted = acceptDocumentDate(file.createdTime, DocumentDateSource.DRIVE_CREATED);
   return accepted ? { documentDate: accepted.date, documentDateSource: accepted.source } : {};
 }
 

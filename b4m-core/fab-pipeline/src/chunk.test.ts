@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import JSZip from 'jszip';
 import {
   SmartChunker,
@@ -10,6 +10,35 @@ import {
 } from './chunk';
 import { Logger } from '@bike4mind/observability';
 import { countCodePoints, DocumentDateSource, MIN_CHUNK_CHARS_FLOOR } from '@bike4mind/common';
+
+/**
+ * Forces `getMetadata()` to reject on the next PDF opened, so the guard in `readPdfDocumentDate`
+ * can be driven. A fixture cannot reach it: pdf.js recovers from a missing, non-dictionary or
+ * malformed Info entry and returns an empty info object rather than raising.
+ */
+const pdfMetadataFailure = vi.hoisted(() => ({ message: null as string | null }));
+
+// Passthrough by default, so every other PDF test in this file still drives the REAL unpdf reader.
+vi.mock('unpdf', async importOriginal => {
+  const actual = await importOriginal<typeof import('unpdf')>();
+  return {
+    ...actual,
+    getDocumentProxy: async (...args: Parameters<typeof actual.getDocumentProxy>) => {
+      const proxy = await actual.getDocumentProxy(...args);
+      const message = pdfMetadataFailure.message;
+      if (!message) return proxy;
+      return new Proxy(proxy, {
+        // Methods are bound to the real proxy: pdf.js instances carry private fields, so calling
+        // one with `this` set to the Proxy would throw for a reason unrelated to this test.
+        get(target, prop) {
+          if (prop === 'getMetadata') return () => Promise.reject(new Error(message));
+          const value = Reflect.get(target, prop);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    },
+  };
+});
 
 // Minimal mock storage - chunkText doesn't use storage
 const mockStorage = {
@@ -670,8 +699,12 @@ describe('chunkFile captures a document date', () => {
     chunker.freeEncoder();
   });
 
-  it('reads frontmatter from a markdown file', async () => {
-    await chunker.chunkFile(Buffer.from('---\ntitle: Report\ndate: 2019-03-04\n---\n\nBody text.'), 'text/markdown');
+  // Every mime in the allowlist, because they reach the scan through the same default branch and a
+  // missing member is silent: the file chunks normally and simply never gets a vintage. That is
+  // how `text/x-markdown` - a persisted mime the claim-first resolver hands Drive ingest - was
+  // left out.
+  it.each(['text/markdown', 'text/x-markdown', 'text/plain'])('reads frontmatter from %s', async mimeType => {
+    await chunker.chunkFile(Buffer.from('---\ntitle: Report\ndate: 2019-03-04\n---\n\nBody text.'), mimeType);
     expect(chunker.getDocumentDate()).toEqual({
       date: new Date('2019-03-04T00:00:00.000Z'),
       source: DocumentDateSource.FRONTMATTER,
@@ -683,6 +716,67 @@ describe('chunkFile captures a document date', () => {
   it('does not scan a text type outside the frontmatter allowlist', async () => {
     await chunker.chunkFile(Buffer.from('---\ndate: 2019-03-04\n---\n\n<p>Body</p>'), 'text/html');
     expect(chunker.getDocumentDate()).toBeUndefined();
+  });
+
+  /**
+   * A structurally minimal but real .docx: mammoth resolves the document part through
+   * `_rels/.rels`, so the relationship and content-type parts have to be present even though only
+   * `word/document.xml` and `docProps/core.xml` carry anything this test reads.
+   */
+  async function buildDatedDocx(coreXmlBody: string | null): Promise<Buffer> {
+    const zip = new JSZip();
+    zip.file(
+      '[Content_Types].xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+        '</Types>'
+    );
+    zip.file(
+      '_rels/.rels',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
+        '</Relationships>'
+    );
+    zip.file(
+      'word/document.xml',
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' +
+        '<w:p><w:r><w:t>Quarterly revenue report</w:t></w:r></w:p></w:body></w:document>'
+    );
+    if (coreXmlBody !== null) {
+      zip.file(
+        'docProps/core.xml',
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties>${coreXmlBody}</cp:coreProperties>`
+      );
+    }
+    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
+  }
+
+  // DOCX reaches readOoxmlDocumentDate through its own container open (mammoth exposes no metadata
+  // API), so the PPTX suite below proves nothing about it: deleting the DOCX wiring failed no test.
+  describe('DOCX, which opens its own container for the property', () => {
+    const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+
+    it('reads dcterms:created and still extracts the document text', async () => {
+      const docx = await buildDatedDocx(
+        '<dcterms:created xsi:type="dcterms:W3CDTF">2019-03-04T09:15:00Z</dcterms:created>'
+      );
+      const chunks = await chunker.chunkFile(docx, DOCX_MIME);
+      expect(chunks.map(c => c.text).join(' ')).toContain('Quarterly revenue report');
+      expect(chunker.getDocumentDate()).toEqual({
+        date: new Date('2019-03-04T09:15:00.000Z'),
+        source: DocumentDateSource.DOCUMENT_PROPERTIES,
+      });
+    });
+
+    it('leaves the slot empty for a DOCX with no core properties', async () => {
+      const chunks = await chunker.chunkFile(await buildDatedDocx(null), DOCX_MIME);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toBeUndefined();
+    });
   });
 
   it('reads dcterms:created out of an OOXML container', async () => {
@@ -706,6 +800,18 @@ describe('chunkFile captures a document date', () => {
   it('refuses an implausible container date rather than storing it', async () => {
     const pptx = await buildDatedPptx('<dcterms:created>1601-01-01T00:00:00Z</dcterms:created>');
     await chunker.chunkFile(pptx, PPTX_MIME);
+    expect(chunker.getDocumentDate()).toBeUndefined();
+  });
+
+  // The cap is the compression-bomb guard: a real core.xml is a few hundred bytes, so anything
+  // claiming more is not metadata. STORE keeps the fixture's declared size honest - a DEFLATEd
+  // megabyte of repeated padding would be a few hundred bytes on disk and prove nothing.
+  it('skips a core.xml over the size cap, keeping the document chunked', async () => {
+    const oversized = await buildDatedPptx(
+      `<dcterms:created>2019-03-04T09:15:00Z</dcterms:created><cp:keywords>${'x'.repeat(300 * 1024)}</cp:keywords>`
+    );
+    const chunks = await chunker.chunkFile(oversized, PPTX_MIME);
+    expect(chunks.map(c => c.text).join(' ')).toContain('Slide text');
     expect(chunker.getDocumentDate()).toBeUndefined();
   });
 
@@ -839,6 +945,20 @@ describe('chunkFile captures a document date', () => {
     it('leaves the slot empty for a PDF whose Info dict carries no CreationDate', async () => {
       await chunker.chunkFile(buildPdf(null), 'application/pdf');
       expect(chunker.getDocumentDate()).toBeUndefined();
+    });
+
+    // The metadata read happens AFTER the text is already extracted, so a reader that raises there
+    // must cost the file its vintage and nothing else. Driven through the mock because pdf.js
+    // recovers from every malformed Info dict a fixture can express.
+    it('still chunks a PDF whose metadata read raises', async () => {
+      pdfMetadataFailure.message = 'simulated pdf.js metadata failure';
+      try {
+        const chunks = await chunker.chunkFile(buildPdf('D:20190304091500Z'), 'application/pdf');
+        expect(chunks.map(c => c.text).join(' ')).toContain('Quarterly revenue report');
+        expect(chunker.getDocumentDate()).toBeUndefined();
+      } finally {
+        pdfMetadataFailure.message = null;
+      }
     });
   });
 

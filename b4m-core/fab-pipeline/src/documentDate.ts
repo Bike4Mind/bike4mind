@@ -26,6 +26,27 @@ const FRONTMATTER_SCAN_LIMIT_BYTES = 8 * 1024;
 /** Frontmatter keys that denote the document's own date, in descending order of directness. */
 const FRONTMATTER_DATE_KEYS = ['date', 'published', 'publishdate', 'pubdate', 'created'] as const;
 
+type FrontmatterDateKey = (typeof FRONTMATTER_DATE_KEYS)[number];
+
+/**
+ * Every accepted spelling of those keys, mapped to the canonical one, matched after lowercasing.
+ *
+ * Enumerated rather than normalised by stripping `_` and `-` from the key: that strip also folds
+ * `d_ate`, `_date` and `d-a-t-e` into `date`, so a typo'd or deliberately-odd key would be read as
+ * the document's vintage. Every separator style a writer actually uses is here instead.
+ */
+const FRONTMATTER_DATE_KEY_SPELLINGS = new Map<string, FrontmatterDateKey>([
+  ['date', 'date'],
+  ['published', 'published'],
+  ['publishdate', 'publishdate'],
+  ['publish_date', 'publishdate'],
+  ['publish-date', 'publishdate'],
+  ['pubdate', 'pubdate'],
+  ['pub_date', 'pubdate'],
+  ['pub-date', 'pubdate'],
+  ['created', 'created'],
+]);
+
 /**
  * Is this a date we are willing to present as a document's vintage?
  *
@@ -46,6 +67,10 @@ export function isPlausibleDocumentDate(date: Date, now: number = Date.now()): b
  * Anchored to `YYYY-MM-DD` rather than handed to `new Date(...)` raw: the Date constructor's
  * non-ISO fallback is implementation-defined, and it happily turns "Q3 budget" or "12" into a date
  * on some engines. A vintage sourced from a guess is exactly what this field must not carry.
+ *
+ * Any trailing zone designator is outside the match and so has no effect: the instant carries the
+ * wall-clock day the producer wrote, which is the day the header renders. `parsePdfInfoDate` holds
+ * the same contract deliberately - see the reasoning there.
  */
 function parseIsoDatePrefix(raw: string): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2}))?)?/.exec(raw.trim());
@@ -81,14 +106,21 @@ function parseIsoDatePrefix(raw: string): Date | null {
  * Producers are loose with this: the `D:` prefix is often missing, the offset is often absent or
  * truncated, and an unset slot is frequently written out as all zeros. Anything that does not yield
  * a real calendar date comes back null and is dropped by the caller.
+ *
+ * The trailing UTC offset is matched and then DELIBERATELY IGNORED, so the instant carries the
+ * wall-clock date the producer wrote. This field is rendered as a bare `YYYY-MM-DD` day
+ * (formatDocumentDate, renderRetrievedContentBlock.ts), so shifting the instant into true UTC
+ * moves the RENDERED DAY off the one the document claims: `D:20190304000000+08'00'` would print
+ * 2019-03-03. `parseIsoDatePrefix` - the parser behind OOXML, frontmatter and .xls - already
+ * ignores offsets, so ignoring it here is what makes one authored date render the same whatever
+ * format it arrived in. It also keeps a genuine `D:19800101000000+01'00'` inside the plausibility
+ * floor instead of nudging it an hour below 1980.
  */
 export function parsePdfInfoDate(raw: unknown): Date | null {
   if (typeof raw !== 'string') return null;
-  const match = /^(?:D:)?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?(?:(Z)|([+-])(\d{2})'?(\d{2})?)?/.exec(
-    raw.trim()
-  );
+  const match = /^(?:D:)?(\d{4})(\d{2})?(\d{2})?(\d{2})?(\d{2})?(\d{2})?(?:Z|[+-]\d{2}'?(?:\d{2})?)?/.exec(raw.trim());
   if (!match) return null;
-  const [, year, month, day, hour, minute, second, , offsetSign, offsetHour, offsetMinute] = match;
+  const [, year, month, day, hour, minute, second] = match;
 
   // Month and day must be PRESENT and non-zero. Producers spell "unset" both ways - omitting the
   // field entirely (`D:2019`) and writing it out as zeros (`D:20190000`) - and both mean the same
@@ -100,26 +132,15 @@ export function parsePdfInfoDate(raw: unknown): Date | null {
   const dayOfMonth = Number(day);
   if (monthIndex < 0 || dayOfMonth < 1) return null;
 
-  let ms = Date.UTC(
-    Number(year),
-    monthIndex,
-    dayOfMonth,
-    Number(hour ?? '0'),
-    Number(minute ?? '0'),
-    Number(second ?? '0')
+  const date = new Date(
+    Date.UTC(Number(year), monthIndex, dayOfMonth, Number(hour ?? '0'), Number(minute ?? '0'), Number(second ?? '0'))
   );
-  const utc = new Date(ms);
   // Year included for the same reason as in parseIsoDatePrefix: `D:00990304` would otherwise be
   // remapped to a credible 1999-03-04 by Date.UTC's two-digit-year rule.
-  if (utc.getUTCFullYear() !== Number(year) || utc.getUTCMonth() !== monthIndex || utc.getUTCDate() !== dayOfMonth) {
+  if (date.getUTCFullYear() !== Number(year) || date.getUTCMonth() !== monthIndex || date.getUTCDate() !== dayOfMonth) {
     return null;
   }
-
-  if (offsetSign) {
-    const offsetMs = (Number(offsetHour ?? '0') * 60 + Number(offsetMinute ?? '0')) * 60 * 1000;
-    ms += offsetSign === '+' ? -offsetMs : offsetMs;
-  }
-  return new Date(ms);
+  return date;
 }
 
 /**
@@ -153,9 +174,8 @@ export function parseFrontmatterDate(text: string): Date | null {
     // something else (a nested object's own field), not the document's vintage.
     const pair = /^([A-Za-z_][\w-]*)[ \t]*:[ \t]*(.+?)[ \t]*$/.exec(line);
     if (!pair) continue;
-    const key = pair[1].toLowerCase().replace(/[_-]/g, '');
-    if (!FRONTMATTER_DATE_KEYS.includes(key as (typeof FRONTMATTER_DATE_KEYS)[number])) continue;
-    if (found.has(key)) continue;
+    const key = FRONTMATTER_DATE_KEY_SPELLINGS.get(pair[1].toLowerCase());
+    if (!key || found.has(key)) continue;
     const parsed = parseIsoDatePrefix(pair[2].replace(/^['"]|['"]$/g, ''));
     if (parsed) found.set(key, parsed);
   }

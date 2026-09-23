@@ -29,11 +29,12 @@ export interface LakeBeliefRecall {
   /** Source FabFile ids the fact was extracted from, for citation. Always at least one (reachable). */
   sources: string[];
   /**
-   * `YYYY-MM-DD` of the source document, when it is known. Always absent today: nothing captures a
-   * document's own date, and production wires no dates resolver (see `resolveSourceDates`). With no
-   * resolver wired no belief carries a date, so `buildLakeMemoryContext` omits the date line
-   * altogether - its `dated` gate gives the "unknown" rendering only once some fact in the batch
-   * does carry one.
+   * `YYYY-MM-DD` of the source document, when it is known. Still absent today, but no longer for
+   * want of the data: ingest now captures `FabFile.documentDate` (#3048), and what keeps every
+   * lake-memory card undated is that production wires no dates resolver (see `resolveSourceDates`).
+   * With no resolver wired no belief carries a date, so `buildLakeMemoryContext` omits the date
+   * line altogether - its `dated` gate gives the "unknown" rendering only once some fact in the
+   * batch does carry one.
    */
   sourceDate?: string;
 }

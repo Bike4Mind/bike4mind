@@ -72,7 +72,11 @@ type PdfDocumentProxy = Awaited<ReturnType<typeof getDocumentProxy>>;
  * document separator and a top-level `date:` is the file's own content, so reading one as the
  * document's vintage would be a guess rather than a signal.
  */
-const FRONTMATTER_MIME_TYPES = new Set<string>(['text/markdown', 'text/plain']);
+const FRONTMATTER_MIME_TYPES = new Set<string>([
+  SupportedFabFileMimeTypes.TXT_MARKDOWN,
+  SupportedFabFileMimeTypes.TXT_MD_LEGACY,
+  SupportedFabFileMimeTypes.TXT_PLAIN,
+]);
 
 // Pull the bodies of `<a:t>` text runs out of a PPTX slide's XML with a linear scan.
 // The equivalent regex (`/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g`) is quadratic on XML that

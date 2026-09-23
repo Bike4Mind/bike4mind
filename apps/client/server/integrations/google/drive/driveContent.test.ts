@@ -5,7 +5,6 @@ import {
   walkFolder,
   fetchDriveFileContent,
   isUnderRoot,
-  isDriveAuthoredMimeType,
   driveDocumentVintage,
   DriveWalkTimeBudgetExceededError,
 } from './driveContent';
@@ -323,13 +322,10 @@ describe('driveDocumentVintage', () => {
     expect(driveDocumentVintage(driveFile(GOOGLE_DOC, '1970-01-01T00:00:00.000Z'))).toEqual({});
     expect(driveDocumentVintage(driveFile(GOOGLE_DOC, 'not-a-timestamp'))).toEqual({});
   });
-});
 
-describe('isDriveAuthoredMimeType', () => {
-  // Keyed off EDITOR_EXPORTS, so a type we can only ingest by EXPORTING is exactly the set that
-  // was authored in Drive. A plain-object key like `constructor` must not read as authored.
-  it('is false for inherited Object properties', () => {
-    expect(isDriveAuthoredMimeType('constructor')).toBe(false);
-    expect(isDriveAuthoredMimeType('toString')).toBe(false);
+  // The Editors gate reads EDITOR_EXPORTS with Object.hasOwn, so an inherited Object key must not
+  // read as an authored type and pick up a vintage it has no claim to.
+  it.each(['constructor', 'toString'])('refuses the inherited Object property %s as a mime type', mimeType => {
+    expect(driveDocumentVintage(driveFile(mimeType, '2019-03-04T09:15:00.000Z'))).toEqual({});
   });
 });
