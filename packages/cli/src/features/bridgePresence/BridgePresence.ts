@@ -10,7 +10,7 @@ import type {
 import WebSocket from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../../utils/Logger.js';
-import { resolveLoopbackListenerOwner } from './peerOwner.js';
+import { canResolveLoopbackOwner, resolveLoopbackListenerOwner } from './peerOwner.js';
 
 /**
  * Local tavern presence for the B4M CLI.
@@ -22,6 +22,12 @@ import { resolveLoopbackListenerOwner } from './peerOwner.js';
  * exactly as it does today, quietly retrying in the background. Only a foreign
  * port owner (a different-UID squatter) logs a one-time security warning; an
  * absent or undeterminable owner stays at debug so we don't cry wolf.
+ *
+ * Supported topology: the bridge and the CLI run as the SAME OS user on the same
+ * host. A cc-bridge owned by a different UID (a root-owned or separately
+ * containerised bridge) is indistinguishable from a squatter over loopback, so it
+ * reads as `foreign`/`absent` and tavern presence stays off by design - that is
+ * the same-UID trust model, not a failure.
  *
  * Wire protocol (see `cc-bridge/src/http.ts` in the b4m-tavern overlay repo):
  *  - `POST /announce?secret=<s>` -> register a session
@@ -79,6 +85,12 @@ export class BridgePresence {
   private config: BridgeConfig | null = null;
   private instanceId: string | null = null;
   private ws: WebSocket | null = null;
+  /** Whether the current command WS actually reached 'open'. `this.ws` is set at
+   *  construction (before the handshake completes), so it alone cannot tell "a
+   *  socket was constructed" from "a socket connected"; stop()'s best-effort
+   *  `/disconnect` gates on this so it fires only for a session whose connect-time
+   *  ownership check ran. */
+  private wsOpened = false;
   private callbacks: BridgePresenceCallbacks = {};
   private started = false;
   private stopped = false;
@@ -94,10 +106,10 @@ export class BridgePresence {
    *  put the secret on the wire while it is closed. Cleared when the command WS
    *  drops (the real TOCTOU boundary, where the port owner could flip). On
    *  teardown it is cleared last, AFTER stop()'s best-effort `/disconnect`; that
-   *  POST is additionally gated on the command WS having actually been live (see
-   *  `wsWasLive` in stop()), so it only ever signals a peer we verified at
-   *  connect and stayed connected to - never a port owner that could have
-   *  flipped in a window where no command WS was ever established. */
+   *  POST is additionally gated on the command WS having actually opened (see
+   *  `wsOpened`), so it only ever signals a peer that passed a connect-time
+   *  ownership check - never a port owner that could have flipped in a window
+   *  where no command WS was ever established. */
   private trusted = false;
   /** In-flight guard for connectCommandWs, scoped to the generation that owns
    *  it: the trust probe is awaited, so without this two overlapping calls could
@@ -143,6 +155,21 @@ export class BridgePresence {
     this.callbacks = cbs;
   }
 
+  /** True iff `gen` is still the live connection generation - the single spelling
+   *  of the ABA guard applied after every await (see `generation`). */
+  private isCurrent(gen: number): boolean {
+    return gen === this.generation;
+  }
+
+  /** Test-only: the generation currently holding the connectCommandWs in-flight
+   *  latch, or null when free. Exposed to pin the `finally` identity guard - a
+   *  stale generation's finally must not clear a live generation's latch (which
+   *  would let a second overlapping connect build an untracked socket). Not part
+   *  of the runtime contract. */
+  get __wsConnectingGenForTests(): number | null {
+    return this.wsConnectingGen;
+  }
+
   /**
    * Probe the local bridge and, if present, announce this CLI session.
    * Returns true iff the announce succeeded (tavern presence is active).
@@ -164,7 +191,7 @@ export class BridgePresence {
     const config = await readBridgeConfig();
     // A stop()+start() during the config read supersedes this start(); bail so we
     // don't install a stale generation's config over the live one.
-    if (gen !== this.generation) return false;
+    if (!this.isCurrent(gen)) return false;
     if (!config) {
       logger.debug('[tavern] cc-bridge not configured; CLI runs without tavern presence');
       return false;
@@ -197,8 +224,9 @@ export class BridgePresence {
    *                       Fail-closed, but a host that can't run the probe is not
    *                       an attacker - log at debug, not as the security warning.
    *
-   * A platform without `getuid` (Windows) is latched off earlier, in
-   * `attemptAnnounce`, so this method is only reached where `getuid` exists.
+   * A platform that can't resolve ownership (see `canResolveLoopbackOwner`) is
+   * latched off earlier, in `attemptAnnounce`, so this method is only reached
+   * where `getuid` exists and the platform has an owner probe.
    */
   private async checkPeerTrust(): Promise<'trusted' | 'absent' | 'foreign' | 'undeterminable'> {
     const port = this.config?.port ?? DEFAULT_PORT;
@@ -232,13 +260,14 @@ export class BridgePresence {
   private async attemptAnnounce(): Promise<boolean> {
     if (this.stopped || !this.config || !this.startOpts) return false;
     if (this.instanceId) return true;
-    // A platform without getuid (Windows) can never pass the same-UID ownership
-    // check, so every probe fails closed forever. Latch off rather than spin the
-    // announce-retry loop at its 30s cap. Real Windows support would need a native
-    // owner probe (e.g. GetExtendedTcpTable + process-token compare) - out of
-    // scope for this loopback ownership fix.
-    if (typeof process.getuid !== 'function') {
-      logger.debug('[tavern] ownership unverifiable on this platform (no getuid); tavern presence disabled');
+    // A platform that can't resolve loopback ownership (Windows has no getuid;
+    // BSD/SunOS/etc. have no owner probe) can never pass the same-UID check, so
+    // every retry would fail closed forever. Latch off rather than spin the
+    // announce-retry loop at its 30s cap. Real support for such a platform needs a
+    // native owner probe (e.g. GetExtendedTcpTable + token compare on Windows) -
+    // out of scope for this loopback ownership fix.
+    if (!canResolveLoopbackOwner()) {
+      logger.debug('[tavern] ownership unresolvable on this platform; tavern presence disabled');
       return false;
     }
     const gen = this.generation;
@@ -268,7 +297,7 @@ export class BridgePresence {
     // instanceId is a short-lived ghost on the bridge - we never learned to
     // /disconnect it. Left to the bridge's own idle-session GC rather than
     // bypassing the ownership gate to disconnect a now-unverified peer.
-    if (gen !== this.generation || this.stopped || !this.config) return false;
+    if (!this.isCurrent(gen) || this.stopped || !this.config) return false;
     if (!announced) {
       this.trusted = false;
       this.scheduleAnnounceRetry();
@@ -312,7 +341,7 @@ export class BridgePresence {
    */
   private async gateEgress(gen: number, phase: 'announce' | 'command WS'): Promise<boolean> {
     const trust = await this.checkPeerTrust();
-    if (gen !== this.generation || this.stopped || !this.config) return false;
+    if (!this.isCurrent(gen) || this.stopped || !this.config) return false;
     if (trust !== 'trusted') {
       this.trusted = false;
       this.signalUntrusted(trust, phase);
@@ -351,7 +380,7 @@ export class BridgePresence {
     const instanceId = this.instanceId;
     const gen = this.generation;
     const task = () => {
-      if (gen !== this.generation) return; // superseded by a stop()+start(); drop
+      if (!this.isCurrent(gen)) return; // superseded by a stop()+start(); drop
       return this.post('/event', { instanceId, event }).catch(err =>
         // Logged at info (not debug) so the first-failure root cause surfaces
         // without flipping logger verbosity. The POST has a 2s timeout so this
@@ -389,12 +418,14 @@ export class BridgePresence {
       clearTimeout(this.announceRetryTimer);
       this.announceRetryTimer = null;
     }
-    // Whether a command WS was actually established for this session. Only such a
-    // session had a connect-time ownership check; if we announced but never opened
-    // the WS (stop() landed before/inside connectCommandWs), `trusted` is still
-    // open from the announce probe yet no connect-time check ran, so POSTing here
-    // could disclose the secret to a port owner that flipped after announce.
-    const wsWasLive = this.ws !== null;
+    // Whether a command WS actually opened for this session. Only such a session
+    // had a connect-time ownership check; if we announced but the WS never opened
+    // (stop() landed before/inside connectCommandWs, or the connect never
+    // completed), no connect-time check ran, so POSTing /disconnect could hand the
+    // secret to a port owner that flipped after announce. post() separately refuses
+    // while the trust latch is closed, so the gate here is just this connect-time
+    // condition, not a duplicate trust check.
+    const wsOpened = this.wsOpened;
     if (this.ws) {
       try {
         this.ws.close();
@@ -403,7 +434,7 @@ export class BridgePresence {
       }
       this.ws = null;
     }
-    if (this.config && this.instanceId && this.trusted && wsWasLive) {
+    if (this.config && this.instanceId && wsOpened) {
       await this.post('/disconnect', { instanceId: this.instanceId, reason }).catch(() => {
         /* best-effort */
       });
@@ -421,6 +452,7 @@ export class BridgePresence {
     this.reconnectAttempts = 0;
     this.peerWarned = false;
     this.trusted = false;
+    this.wsOpened = false;
     // wsConnectingGen is intentionally NOT reset here: it is generation-scoped, so
     // a stale in-flight connect only short-circuits its own generation and clears
     // the flag in its own guarded `finally`. Clearing it here would either strand
@@ -513,12 +545,14 @@ export class BridgePresence {
       }
 
       this.ws = ws;
+      this.wsOpened = false;
 
       ws.on('open', () => {
         // Identity guard (mirrors the close handler): only the currently tracked
         // socket may touch shared state. A late 'open' from a superseded socket
         // must not reset the live generation's reconnect backoff.
         if (this.ws !== ws) return;
+        this.wsOpened = true;
         this.reconnectAttempts = 0;
         logger.debug('[tavern] command WS open');
       });
@@ -553,6 +587,7 @@ export class BridgePresence {
         // never the current this.ws.
         if (this.ws !== ws) return;
         this.ws = null;
+        this.wsOpened = false;
         // Connection generation ended - re-verify ownership before the next
         // disclosure (the port owner could flip while we are disconnected).
         this.trusted = false;
@@ -587,7 +622,7 @@ export class BridgePresence {
   }
 
   private async dispatchCommand(command: ICcAgentCommandPayload): Promise<void> {
-    if (this.stopped) return; // a frame may arrive between stop() and socket close
+    if (this.stopped) return; // defense-in-depth; the WS message identity guard already drops frames from a stale/torn-down socket
     switch (command.type) {
       case 'send_prompt':
         if (this.callbacks.onSendPrompt) await this.callbacks.onSendPrompt(command.text);

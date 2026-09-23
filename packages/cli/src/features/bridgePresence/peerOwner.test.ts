@@ -29,8 +29,13 @@ vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => (execFileMock as (...a: unknown[]) => unknown)(...args),
 }));
 
-const { parseProcNetForUid, parseLsofForUid, resolveLoopbackListenerOwner, __resetLsofPathCacheForTests } =
-  await import('./peerOwner.js');
+const {
+  parseProcNetForUid,
+  parseLsofForUid,
+  resolveLoopbackListenerOwner,
+  canResolveLoopbackOwner,
+  __resetLsofPathCacheForTests,
+} = await import('./peerOwner.js');
 
 // 0xBE5C === 48732 (the default bridge port); 0A === TCP_LISTEN.
 const PROC_NET_TCP = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
@@ -109,6 +114,14 @@ describe('parseLsofForUid', () => {
 
   it('accepts a mapped-loopback listener name', () => {
     expect(parseLsofForUid('p1234\nu501\nf3\nn[::ffff:127.0.0.1]:48732\n')).toEqual([501]);
+  });
+
+  it('accepts an IPv6 loopback listener name ([::1])', () => {
+    expect(parseLsofForUid('p1234\nu501\nf3\nn[::1]:48732\n')).toEqual([501]);
+  });
+
+  it('accepts an IPv6 wildcard listener name ([::])', () => {
+    expect(parseLsofForUid('p1234\nu501\nf3\nn[::]:48732\n')).toEqual([501]);
   });
 
   it('ignores a same-port listener on a non-loopback interface', () => {
@@ -245,10 +258,93 @@ describe('resolveLoopbackListenerOwner', () => {
     expect(accessMock).toHaveBeenCalledTimes(1);
   });
 
+  it('linux: the same owner across tcp and tcp6 dedupes to one owner', async () => {
+    setPlatform('linux');
+    readFileMock.mockImplementation(file =>
+      file === '/proc/net/tcp' ? Promise.resolve(PROC_NET_TCP) : Promise.resolve(PROC_NET_TCP6_LOOPBACK)
+    );
+    // Both tables list uid 1000 on the port; the Set dedupes so this is a single
+    // unambiguous owner, not a two-owner ambiguity.
+    await expect(resolveLoopbackListenerOwner(48732)).resolves.toEqual({ kind: 'owner', uid: 1000 });
+  });
+
+  it('darwin: falls back to /usr/bin/lsof when /usr/sbin/lsof is absent', async () => {
+    setPlatform('darwin');
+    accessMock.mockImplementation(path =>
+      path === '/usr/bin/lsof' ? Promise.resolve() : Promise.reject(new Error('ENOENT'))
+    );
+    execFileMock.mockImplementation((file, _args, _opts, cb: (e: unknown, r: unknown) => void) => {
+      expect(file).toBe('/usr/bin/lsof'); // the fallback path is the one spawned
+      cb(null, { stdout: 'p1234\nu501\nf3\nn127.0.0.1:48732\n', stderr: '' });
+    });
+    await expect(resolveLoopbackListenerOwner(48732)).resolves.toEqual({ kind: 'owner', uid: 501 });
+  });
+
+  it('darwin: a non-(code 1) lsof spawn error => unknown (fail-closed)', async () => {
+    setPlatform('darwin');
+    accessMock.mockResolvedValue(undefined);
+    // e.g. EACCES / a crash: not the "exit 1, no output" no-match case, and no
+    // usable stdout, so ownership is indeterminate.
+    execFileMock.mockImplementation((_file, _args, _opts, cb: (e: unknown) => void) =>
+      cb(Object.assign(new Error('spawn EACCES'), { code: 13 }))
+    );
+    await expect(resolveLoopbackListenerOwner(48732)).resolves.toEqual({ kind: 'unknown' });
+  });
+
+  it('darwin: lsof exits non-zero but with usable stdout => parsed, not discarded', async () => {
+    setPlatform('darwin');
+    accessMock.mockResolvedValue(undefined);
+    // lsof can exit 1 while still printing matching rows (a later fd errored). Its
+    // stdout is authoritative, so it is parsed rather than treated as no-listener.
+    execFileMock.mockImplementation((_file, _args, _opts, cb: (e: unknown) => void) =>
+      cb(Object.assign(new Error('partial'), { code: 1, stdout: 'p1234\nu501\nf3\nn127.0.0.1:48732\n' }))
+    );
+    await expect(resolveLoopbackListenerOwner(48732)).resolves.toEqual({ kind: 'owner', uid: 501 });
+  });
+
   it('unsupported platform => unknown (fail-closed)', async () => {
     setPlatform('win32');
     await expect(resolveLoopbackListenerOwner(48732)).resolves.toEqual({ kind: 'unknown' });
     expect(readFileMock).not.toHaveBeenCalled();
     expect(execFileMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('canResolveLoopbackOwner', () => {
+  const realPlatform = process.platform;
+  function setPlatform(value: NodeJS.Platform): void {
+    Object.defineProperty(process, 'platform', { value, configurable: true });
+  }
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', { value: realPlatform, configurable: true });
+  });
+
+  it('true on linux with getuid', () => {
+    setPlatform('linux');
+    expect(canResolveLoopbackOwner()).toBe(true);
+  });
+
+  it('true on darwin with getuid', () => {
+    setPlatform('darwin');
+    expect(canResolveLoopbackOwner()).toBe(true);
+  });
+
+  it('false on a getuid platform with no owner probe (freebsd)', () => {
+    // The gap that let the announce-retry loop spin: getuid exists but there is no
+    // /proc or lsof probe for the platform, so ownership can never be resolved.
+    setPlatform('freebsd');
+    expect(canResolveLoopbackOwner()).toBe(false);
+  });
+
+  it('false when getuid is unavailable (Windows)', () => {
+    setPlatform('linux'); // supported platform, but no getuid to compare against
+    const original = Object.getOwnPropertyDescriptor(process, 'getuid');
+    Object.defineProperty(process, 'getuid', { value: undefined, configurable: true });
+    try {
+      expect(canResolveLoopbackOwner()).toBe(false);
+    } finally {
+      if (original) Object.defineProperty(process, 'getuid', original);
+    }
   });
 });

@@ -16,9 +16,13 @@ const { resolveMock, readFileMock, warn, debug } = vi.hoisted(() => ({
 // Owner-lookup seam - the only pre-transmission trust signal. Stub it per test
 // to model a trusted (same-UID) peer, a foreign owner, a not-yet-listening
 // bridge, and an undeterminable owner, without touching a live socket.
-vi.mock('./peerOwner.js', () => ({
-  resolveLoopbackListenerOwner: (port: number) => resolveMock(port),
-}));
+vi.mock('./peerOwner.js', async importOriginal => {
+  const actual = await importOriginal<typeof import('./peerOwner.js')>();
+  return {
+    ...actual, // keep the real canResolveLoopbackOwner (platform capability predicate)
+    resolveLoopbackListenerOwner: (port: number) => resolveMock(port),
+  };
+});
 
 // Point readBridgeConfig at our in-process fake listener (port filled once the
 // server is up) with a known secret we can grep the wire for.
@@ -611,27 +615,61 @@ describe('BridgePresence peer-ownership gate', () => {
     await presence.stop();
   });
 
-  it('a stale gen-1 socket closing after a stop()+start() leaves gen-2 untouched (BLOCKER: WS-close identity guard)', async () => {
-    resolveMock.mockResolvedValue(OWNER(me()));
+  // The WS-close identity guard is pinned deterministically in
+  // BridgePresence.lifecycle.test.ts (mocked `ws`): against a real socket, stop()
+  // closes the old client synchronously so a stale close cannot be interleaved
+  // while a newer socket is live, which is why a real-socket attempt at it here
+  // was vacuous (green with the guard mutated).
+
+  it('latches the retry loop off (no spin) on a getuid platform without an owner probe (BSD/SunOS)', async () => {
+    // getuid exists but the platform has no owner resolver (canResolveLoopbackOwner
+    // is false), so the same-UID check can never pass. attemptAnnounce must latch off
+    // rather than spin the announce-retry loop forever - the Windows latch,
+    // generalized to the capability predicate rather than just `typeof getuid`.
+    const original = Object.getOwnPropertyDescriptor(process, 'platform');
+    Object.defineProperty(process, 'platform', { value: 'freebsd', configurable: true });
+    try {
+      const presence = new BridgePresence();
+      const ok = await presence.start({ workspacePath: '/tmp/ws' });
+      expect(ok).toBe(false);
+
+      await new Promise(r => setTimeout(r, 1200)); // past the first announce-retry backoff (1s)
+      const retryLogs = debug.mock.calls.filter(([m]) => typeof m === 'string' && m.includes('retrying'));
+      expect(retryLogs).toEqual([]);
+      expect(resolveMock).not.toHaveBeenCalled(); // latched off before ever probing
+      expect(httpRequests).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+
+      await presence.stop();
+    } finally {
+      if (original) Object.defineProperty(process, 'platform', original);
+    }
+  });
+
+  it('re-warns when the peer goes foreign again after a trusted reconnect (peerWarned reset)', async () => {
+    // A trusted check resets peerWarned, so a later foreign owner warns again - the
+    // latch suppresses repeats within one untrusted state, not across a recovery.
+    // Delete `this.peerWarned = false` in checkPeerTrust and the second foreign owner
+    // is silently swallowed.
+    resolveMock
+      .mockResolvedValueOnce(OWNER(me() + 1)) // announce probe: foreign -> warn #1
+      .mockResolvedValueOnce(OWNER(me())) // announce retry: trusted -> announce (resets peerWarned)
+      .mockResolvedValueOnce(OWNER(me())) // WS connect: trusted
+      .mockResolvedValue(OWNER(me() + 1)); // reconnect after drop: foreign -> warn #2
     const presence = new BridgePresence();
 
-    const ok1 = await presence.start({ workspacePath: '/tmp/ws' });
-    expect(ok1).toBe(true);
-    await waitFor(() => wsConnections.length === 1); // gen-1 socket
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(false);
+    await waitFor(() => warn.mock.calls.length === 1);
 
-    await presence.stop();
-    const ok2 = await presence.start({ workspacePath: '/tmp/ws' });
-    expect(ok2).toBe(true);
-    await waitFor(() => wsConnections.length === 2); // gen-2 socket
-    await new Promise(r => setTimeout(r, 100)); // let gen-1's socket close settle
+    // The announce retry brings the trusted session up.
+    await waitFor(() => wsConnections.length > 0, 4000);
 
-    // gen-2 must be intact: trusted still set (the emit posts) and no reconnect
-    // opened a third socket. Remove the identity guard (`this.ws !== ws`) and
-    // gen-1's late close clears trusted / schedules a reconnect on gen-2.
-    await presence.emitEvent({ type: 'message', role: 'assistant', text: 'gen2-live' });
-    await new Promise(r => setTimeout(r, 20));
-    expect(eventBodies.some(b => b.includes('gen2-live'))).toBe(true);
-    expect(wsConnections.length).toBe(2);
+    // The bridge dies and a foreign owner takes the port: the reconnect probe must
+    // warn again (peerWarned was reset by the intervening trusted check).
+    sockets[0].close();
+    await waitFor(() => warn.mock.calls.length === 2, 4000);
+    expect(warn).toHaveBeenCalledTimes(2);
 
     await presence.stop();
   });

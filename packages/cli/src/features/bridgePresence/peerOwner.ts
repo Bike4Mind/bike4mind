@@ -40,6 +40,20 @@ export async function resolveLoopbackListenerOwner(port: number): Promise<Listen
   return { kind: 'unknown' };
 }
 
+/**
+ * Whether this platform + process can resolve loopback listener ownership at all:
+ * there must be a `getuid` to compare against (Windows has none) AND an owner probe
+ * for the platform. When false, the caller latches presence off rather than spinning
+ * a retry loop forever on a check that can never pass (a `getuid`-bearing platform
+ * with no probe - BSD/SunOS - would otherwise retry indefinitely).
+ * MUST stay in sync with `resolveLoopbackListenerOwner`'s platform dispatch above:
+ * a platform gains a probe there and a `true` here in the same change.
+ */
+export function canResolveLoopbackOwner(): boolean {
+  if (typeof process.getuid !== 'function') return false;
+  return process.platform === 'linux' || process.platform === 'darwin';
+}
+
 async function resolveViaProcNet(port: number): Promise<ListenerOwner> {
   const uids = new Set<number>();
   let readAny = false;
