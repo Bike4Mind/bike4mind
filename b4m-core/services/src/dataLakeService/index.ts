@@ -26,6 +26,7 @@ export * from './authorizeLakeManage';
 // with the SAME rule the read path re-derives it with, instead of open-coding a second gate.
 export * from './filterStillManagedLakes';
 export * from './transferLakeOwnership';
+export * from './lakeOwnershipOffer';
 export * from './lakeGrantWriteRule';
 export * from './manageLakeGrant';
 export * from './lapseDepartedMemberLakeAccess';
