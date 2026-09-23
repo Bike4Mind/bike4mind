@@ -148,4 +148,11 @@ export interface PromptResult {
    * still catches a real text regression. Absent (falsy) for text prompts.
    */
   measuresDeliverable?: boolean;
+  /**
+   * The prompt never finished: responseTimeSec is the elapsed time when it was abandoned, a FLOOR
+   * on the real latency rather than a measurement of it. Recorded so a timed-out prompt still
+   * counts against the gated average - dropping it removed the slowest prompt in the cell from the
+   * mean precisely because it was the slowest. Absent (falsy) for prompts that completed.
+   */
+  incomplete?: boolean;
 }
