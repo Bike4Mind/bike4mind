@@ -1,11 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { mockTrackRedditEvent } = vi.hoisted(() => ({
+const { mockTrackRedditEvent, mockTrackMetaEvent } = vi.hoisted(() => ({
   mockTrackRedditEvent: vi.fn(),
+  mockTrackMetaEvent: vi.fn(),
 }));
 
 vi.mock('./redditPixel', () => ({
   trackRedditEvent: mockTrackRedditEvent,
+}));
+
+vi.mock('./metaPixel', () => ({
+  trackMetaEvent: mockTrackMetaEvent,
 }));
 
 import { trackPurchaseConversion } from './purchaseConversion';
@@ -61,6 +66,16 @@ describe('trackPurchaseConversion', () => {
     });
   });
 
+  it('sends value, currency and the dedupe id to Meta as Subscribe', () => {
+    trackPurchaseConversion(PURCHASE);
+
+    expect(mockTrackMetaEvent).toHaveBeenCalledExactlyOnceWith('Subscribe', {
+      value: 30,
+      currency: 'USD',
+      eventId: 'cs_test_1',
+    });
+  });
+
   it('stamps first-touch and session-UTM attribution from the shared cookies', () => {
     setCookie('b4m-first-touch', { source: 'reddit', medium: 'cpc', campaign: 'launch-v1' });
     setCookie('b4m_utm', { source: 'newsletter', medium: 'email' });
@@ -101,12 +116,13 @@ describe('trackPurchaseConversion', () => {
     expect(params.transaction_id).toBe('cs_test_2');
   });
 
-  it('still reports to Reddit when GA4 is absent', () => {
+  it('still reports to both ad pixels when GA4 is absent', () => {
     vi.stubGlobal('gtag', undefined);
 
     trackPurchaseConversion(PURCHASE);
 
     expect(mockGtag).not.toHaveBeenCalled();
     expect(mockTrackRedditEvent).toHaveBeenCalledOnce();
+    expect(mockTrackMetaEvent).toHaveBeenCalledOnce();
   });
 });
