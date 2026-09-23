@@ -1,3 +1,5 @@
+import type { AdapterFamily } from '../types/entities/ModelCatalogTypes';
+
 /**
  * Which part of a streamed assistant reply the user actually sees.
  *
@@ -145,37 +147,73 @@ export function hasVisibleReplyText(parts: readonly (string | null | undefined)[
 }
 
 /**
- * Adapter families whose reasoning can NEVER reach the text channel, so a surface that must
- * hide reasoning can serve them.
+ * Whether an adapter family can put model-generated reasoning into the TEXT channel - the
+ * string handed to the completion callback, as opposed to a separate field.
  *
- * An allowlist, not a denylist, because this is a redaction gate: the families that do
- * inline reasoning (kimiBackend.ts:526, deepseekBackend.ts:472, xaiBackend.ts:602,
- * ollamaBackend.ts:492, bedrockBackend/deepseek.ts:309, bedrockBackend/moonshot.ts:57) wrap
- * it in the markers above with nothing else separating it, and the text between them is
- * model-generated - so reasoning containing the close marker ends a parsed redaction early.
- * A family nobody has vetted must not inherit permission by being new.
- *
- * The anthropic families qualify because their reasoning is opt-in per request, arrives at
- * its own content-block index, and has each marker emitted as a whole chunk by the adapter
- * (anthropicBackend.ts:1338,1423; bedrockBackend/anthropic.ts:1155) rather than as model
- * text. openai/gemini emit no markers at all.
- *
- * Keyed on adapterFamily, not model id, so a newly discovered model on a vetted provider
- * works the day it appears in the catalog while a new PROVIDER stays refused until vetted.
+ * - `never`   - reasoning is not returned at all, or the adapter never asks for it.
+ * - `opt-in`  - only when the caller enables it on the request; off by default.
+ * - `always`  - whenever the model reasons, inlined at the SAME index as the prose and
+ *               bracketed by the markers above, with nothing else separating the two.
  */
-export const REASONING_SAFE_ADAPTER_FAMILIES: readonly string[] = [
-  'openai-chat',
-  'openai-responses',
-  'anthropic-messages',
-  'bedrock-anthropic',
-  'gemini',
-];
+export type ReasoningChannel = 'never' | 'opt-in' | 'always';
 
 /**
- * Whether this adapter family can put model-generated reasoning in the text channel.
- * Anything not explicitly vetted reads as true, so callers fail closed.
+ * Truth table over every declared AdapterFamily, each entry read off the adapter.
+ *
+ * Exhaustive by type: `Record<AdapterFamily, ...>` makes adding a family to the union a
+ * compile error here, so a new provider cannot be admitted or refused by omission.
+ *
+ * `always` is the dangerous class. Those adapters wrap raw model text in the markers, so
+ * reasoning that itself contains the close marker would end a parsed redaction early - the
+ * markers are not a trust boundary and must not be treated as one. A public surface refuses
+ * these families instead of trying to strip their output.
+ */
+export const REASONING_CHANNEL_BY_ADAPTER_FAMILY: Record<AdapterFamily, ReasoningChannel> = {
+  // Emits the markers around its thinking block, but only when the request enables
+  // thinking (anthropicBackend.ts:1033), and at that block's OWN content-block index with
+  // each marker as a whole adapter-emitted chunk (anthropicBackend.ts:1338,1374,1423).
+  'anthropic-messages': 'opt-in',
+  // Same shape through Bedrock (bedrockBackend/anthropic.ts:1155).
+  'bedrock-anthropic': 'opt-in',
+  // streamedText[c.index] = c.delta.content only; reasoning_effort is a REQUEST parameter
+  // and Chat Completions returns no reasoning text (openaiBackend.ts:1521).
+  'openai-chat': 'never',
+  // Forwards response.output_text.delta only, and the request carries reasoning.effort
+  // without reasoning.summary, so no summary events exist to forward
+  // (openaiBackend.ts:2099, :2064).
+  'openai-responses': 'never',
+  // Takes part.text only, and the adapter never sends includeThoughts/thinkingConfig, so
+  // Gemini returns no thought parts to take (geminiBackend.ts:678).
+  gemini: 'never',
+  // Plain completions: chunkText comes from response.generation (bedrockBackend/llama.ts:161).
+  'bedrock-llama': 'never',
+  'bedrock-jurassic': 'never',
+  'bedrock-titan': 'never',
+  // Inline reasoning at the prose index, marker-wrapped by the adapter.
+  xai: 'always', // xaiBackend.ts:402,602,612
+  kimi: 'always', // kimiBackend.ts:459,526,540
+  deepseek: 'always', // deepseekBackend.ts:404,472,486
+  ollama: 'always', // ollamaBackend.ts:487-514, wrapping the provider's separate thinking field
+  'bedrock-deepseek': 'always', // bedrockBackend/deepseek.ts:309,327
+  'bedrock-moonshot': 'always', // bedrockBackend/moonshot.ts:57
+  // Not text completion at all - image, embedding and credential-only families. They cannot
+  // back a chat agent, so they are refused rather than described.
+  bfl: 'always',
+  'local-image': 'always',
+  aws: 'always',
+  voyageai: 'always',
+};
+
+/**
+ * Whether model-generated reasoning can reach the text channel on this family no matter
+ * what the caller requests. Unknown/absent families read as true, so callers fail closed.
+ *
+ * `opt-in` families read as FALSE, so a caller admitting them carries the obligation not to
+ * enable thinking on the request. The public embed route is the one such caller: it passes
+ * only temperature/maxTokens/stream, pinned by a test.
  */
 export function inlinesReasoningIntoText(adapterFamily: string | null | undefined): boolean {
   if (!adapterFamily) return true;
-  return !REASONING_SAFE_ADAPTER_FAMILIES.includes(adapterFamily);
+  const channel = REASONING_CHANNEL_BY_ADAPTER_FAMILY[adapterFamily as AdapterFamily];
+  return channel === undefined || channel === 'always';
 }

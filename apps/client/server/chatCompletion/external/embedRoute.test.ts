@@ -732,31 +732,21 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(text).not.toContain('web_search');
   });
 
-  it('redacts reasoning and everything after it, per request', async () => {
-    // The model gate above means a correctly configured embed never gets here. If reasoning
-    // does reach the text channel anyway, the close marker is model text and is NOT trusted
-    // to end suppression, so the rest of the stream is dropped rather than parsed. State is
-    // held per request, so a suppressed stream cannot bleed into the next visitor.
-    mockExecuteCompletion.mockImplementation(
-      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
-        await params.onChunk(['<think>']);
-        await params.onChunk(['the user is asking about internal pricing']);
-        await params.onChunk(['</think>']);
-        await params.onChunk(['hello from the agent'], { outputTokens: 5 });
-      }
-    );
-
-    const first = await (await post(CHAT)).text();
-    expect(first).not.toContain('internal pricing');
-    expect(first).not.toContain('<think>');
-    expect(first).not.toContain('hello from the agent');
-
+  it('never enables thinking on the completion request', async () => {
+    // Load-bearing: anthropic families are admitted by the model gate because their
+    // reasoning is OPT-IN. Nothing filters the text, so if this route ever asked for
+    // thinking, the reasoning would stream straight to an anonymous visitor.
     mockExecuteCompletion.mockImplementation(
       async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
         await params.onChunk(['hello from the agent'], { outputTokens: 5 });
       }
     );
-    expect(await (await post(CHAT)).text()).toContain('hello from the agent');
+
+    await post(CHAT);
+
+    const { options } = mockExecuteCompletion.mock.calls[0][0] as { options: Record<string, unknown> };
+    expect(options).not.toHaveProperty('thinking');
+    expect(Object.keys(options).sort()).toEqual(['maxTokens', 'stream', 'temperature']);
   });
 
   it.each([
@@ -777,8 +767,8 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('delivers held text before the error frame when the run fails mid-stream', async () => {
-    // The tail was already generated and paid for; a later failure must not swallow it.
+  it('keeps text already streamed when the run fails afterwards', async () => {
+    // It was generated and paid for; a later failure must not swallow it.
     mockExecuteCompletion.mockImplementation(
       async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
         await params.onChunk(['the operator is <']);
@@ -787,27 +777,24 @@ describe('POST /api/embed/chat - server-side tools', () => {
     );
 
     const text = await (await post(CHAT)).text();
-    // The held `<` rides its own content frame, so the two are not contiguous on the wire.
-    expect(text).toContain('the operator is ');
-    expect(text).toContain('"text":"<"');
-    expect(text.indexOf('"text":"<"')).toBeLessThan(text.indexOf('"type":"error"'));
+    expect(text).toContain('the operator is <');
+    expect(text.indexOf('the operator is <')).toBeLessThan(text.indexOf('"type":"error"'));
   });
 
-  it('delivers an answer whose final chunk ends mid-sentinel', async () => {
-    // The stripper holds a trailing `<th` back in case the next chunk completes it into
-    // `<think>`. No chunk follows, so it was prose: the route must release it at end of
-    // stream or the visitor silently loses the tail of the answer.
+  it('delivers an answer whose chunks split a literal marker', async () => {
+    // Nothing is held back waiting for a marker, so both halves reach the wire in order
+    // and the visitor sees the whole answer they paid for.
     mockExecuteCompletion.mockImplementation(
       async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
-        await params.onChunk(['use the operator <']);
-        await params.onChunk(['th'], { outputTokens: 5 });
+        await params.onChunk(['use the <']);
+        await params.onChunk(['think> tag'], { outputTokens: 5 });
       }
     );
 
     const text = await (await post(CHAT)).text();
-    expect(text).toContain('use the operator ');
-    expect(text).toContain('<th');
-    expect(text.indexOf('<th')).toBeLessThan(text.indexOf('[DONE]'));
+    expect(text).toContain('use the <');
+    expect(text).toContain('think> tag');
+    expect(text.indexOf('think> tag')).toBeLessThan(text.indexOf('[DONE]'));
   });
 
   it('a missing key owner runs the completion persona-only instead of failing', async () => {

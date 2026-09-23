@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
-  createPublicSSEEventBuilder,
+  buildPublicSSEEvent,
   formatSSEError,
   resolveRequestId,
   serializeSSEEvent,
@@ -12,6 +12,7 @@ import {
   isAgentOwnedByEmbedKey,
   inlinesReasoningIntoText,
   type IMessage,
+  type ModelInfo,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { assertOwnerHasCredits, assertKeySpendWithinCap, apiKeyService } from '@bike4mind/services';
@@ -197,23 +198,26 @@ async function buildEmbedServerTools(args: {
    * per-member credit side-table and can lag membership (a member may have no row yet).
    */
   ownerOrg: { userId?: string; users?: Array<{ userId?: string }> | null } | null;
+  /**
+   * Resolved once on the request path for the reasoning-channel model gate, which runs
+   * before this. Passed in rather than re-derived: both are per-request work, and the gate
+   * cannot be skipped.
+   */
+  apiKeys: ApiKeyTable;
+  models: ModelInfo[];
   logger: Logger;
   getAbortSignal: () => AbortSignal | undefined;
 }): Promise<ICompletionOptionTools[] | undefined> {
-  const { ctx, hydrated, ownerOrg, logger, getAbortSignal } = args;
+  const { ctx, hydrated, ownerOrg, apiKeys: toolApiKeys, models, logger, getAbortSignal } = args;
 
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
 
   // These reads are independent, so fetch them together (mirrors the
   // agent/org parallel fetch on the request path above).
-  const [project, owner, toolApiKeys, toolAvailability] = await Promise.all([
+  const [project, owner, toolAvailability] = await Promise.all([
     hydrated.projectId ? projectRepository.findById(hydrated.projectId) : Promise.resolve(null),
     userRepository.findById(ctx.userId),
-    apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
-      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-      getSettingsByNames,
-    }),
     // Never rejects (see resolveToolAvailability's doc comment). Fail-closed here (unlike the
     // Tools picker UI's fail-open default): embed-widget end users have no way to add their own
     // key, so a tool this lookup couldn't confirm works should not reach the model.
@@ -242,9 +246,8 @@ async function buildEmbedServerTools(args: {
     return undefined;
   }
 
-  const models = await getAvailableModels(toolApiKeys as ApiKeyTable);
   const modelInfo = models.find(m => m.id === hydrated.model);
-  const toolLlm = getLlmByModel(toolApiKeys as ApiKeyTable, { modelInfo, logger, endUserId: ctx.userId });
+  const toolLlm = getLlmByModel(toolApiKeys, { modelInfo, logger, endUserId: ctx.userId });
   if (!toolLlm) {
     logger.warn('[EMBED_CHAT] No LLM backend for tool context; running without tools');
     return undefined;
@@ -320,18 +323,6 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
     let streaming = false;
     const write = (chunk: string) => {
       if (!res.writableEnded) res.write(chunk);
-    };
-    // Handler scope, not the stream block: the error path flushes it too. One builder per
-    // request - it carries reasoning-stripper state across chunks and must never be shared.
-    const buildPublicEvent = createPublicSSEEventBuilder();
-    // Release text the stripper held as a possible split <think> sentinel that no later
-    // chunk completed, and log the redacted-vs-empty case the visitor cannot tell apart.
-    const flushPublicTail = () => {
-      const tail = buildPublicEvent.flush();
-      if (tail) write(serializeSSEEvent(tail));
-      if (buildPublicEvent.redactedReasoning()) {
-        logger.warn('[EMBED_CHAT] Reasoning reached the public text channel; remainder redacted', { requestId });
-      }
     };
 
     try {
@@ -412,12 +403,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // cannot be parsed as a boundary, because the reasoning between them may contain them.
       // Refuse the model here, before any stream bytes, instead of stripping mid-stream.
       // Fail-closed on a model the catalog cannot describe (see inlinesReasoningIntoText).
-      const embedModels = await getAvailableModels(
-        (await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
-          db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-          getSettingsByNames,
-        })) as ApiKeyTable
-      );
+      const embedApiKeys = (await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
+        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+        getSettingsByNames,
+      })) as ApiKeyTable;
+      const embedModels = await getAvailableModels(embedApiKeys);
       const embedAdapterFamily = embedModels.find(m => m.id === hydrated.model)?.adapterFamily;
       if (inlinesReasoningIntoText(embedAdapterFamily)) {
         logger.warn('[EMBED_CHAT] Refused a model that streams reasoning in the text channel', {
@@ -498,6 +488,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       const abortController = new AbortController();
       res.on('close', () => abortController.abort());
       const serverTools = await buildEmbedServerTools({
+        apiKeys: embedApiKeys,
+        models: embedModels,
         ctx,
         hydrated,
         // Only an org-owned agent extends KB authorization to org-mate projects.
@@ -554,15 +546,13 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           source: 'api',
           logger,
           onChunk: async (text, info) => {
-            // Public/anonymous caller: text + usage/credits only. The builder drops
-            // server-internal metadata (tool calls, thinking blocks) that the backend
-            // reports on tool/reasoning turns, and strips <think> reasoning from the
-            // text. One builder per request - it carries stripper state across chunks.
-            // See its contract in sseEvents.ts.
-            write(serializeSSEEvent(buildPublicEvent.build(text, info)));
+            // Public/anonymous caller: text + usage/credits only. Drops the
+            // server-internal metadata the backend reports on tool turns. The text is
+            // forwarded verbatim - reasoning is kept out by the model gate above, not by
+            // filtering content. See its contract in sseEvents.ts.
+            write(serializeSSEEvent(buildPublicSSEEvent(text, info)));
           },
         });
-        flushPublicTail();
         write(SSE_DONE_SIGNAL);
       } finally {
         clearInterval(heartbeat);
@@ -573,9 +563,6 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         error: error instanceof Error ? error.message : String(error),
       });
       if (streaming) {
-        // Text already delivered stays delivered: emit the held tail before the error
-        // frame rather than dropping it because the run failed afterwards.
-        flushPublicTail();
         // Classify billing/policy failures so the embedding client can branch on
         // `code` instead of parsing message text.
         write(serializeSSEEvent(formatSSEError(error, requestId, resolveQuestErrorCode(error))));

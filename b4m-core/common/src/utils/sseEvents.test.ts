@@ -1,12 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import {
-  buildMetaEvent,
-  buildPublicSSEEvent,
-  buildSSEEvent,
-  createPublicSSEEventBuilder,
-  formatSSEError,
-  serializeSSEEvent,
-} from './sseEvents';
+import { buildMetaEvent, buildPublicSSEEvent, buildSSEEvent, formatSSEError, serializeSSEEvent } from './sseEvents';
 
 describe('buildPublicSSEEvent', () => {
   // `text` is indexed by the provider's content-block/choice index, not by channel.
@@ -61,12 +54,27 @@ describe('buildPublicSSEEvent', () => {
     expect(e.text).toBe('the answer');
   });
 
-  it('drops everything from the open marker onward, close marker or not', () => {
-    // Redaction is structural, never a parse: the close marker is model-generated text and
-    // is not trusted to end suppression. Models that legitimately stream reasoning this way
-    // are refused before the stream opens - see inlinesReasoningIntoText.
-    expect(buildPublicSSEEvent(['<think>my reasoning</think>the answer']).text).toBe('');
-    expect(buildPublicSSEEvent(['visible <think>my reasoning']).text).toBe('visible ');
+  // The text is forwarded verbatim. Reasoning is kept off a public stream by admitting
+  // only models that cannot put it in the text channel (inlinesReasoningIntoText), never by
+  // scanning content: on an admitted family `<think>` is ordinary prose, and truncating
+  // there would bill the visitor for a reply they only partly received.
+  it('forwards a literal <think> token an admitted model wrote as prose', () => {
+    expect(buildPublicSSEEvent(['The literal <think> tag opens a reasoning block.']).text).toBe(
+      'The literal <think> tag opens a reasoning block.'
+    );
+  });
+
+  it('forwards a literal marker pair written as prose', () => {
+    expect(buildPublicSSEEvent(['Write <think>...</think> around it.']).text).toBe(
+      'Write <think>...</think> around it.'
+    );
+  });
+
+  it('forwards a literal marker split across chunks', () => {
+    // Nothing is held back now, so a token straddling two callbacks arrives in two pieces
+    // that concatenate to the original - no chunk is dropped waiting for a marker.
+    const chunks = [['The literal <'], ['th'], ['ink> tag.']];
+    expect(chunks.map(c => buildPublicSSEEvent(c).text).join('')).toBe('The literal <think> tag.');
   });
 
   it('keeps trailing tag-prefix text that no chunk can follow', () => {
@@ -86,95 +94,6 @@ describe('buildPublicSSEEvent', () => {
     const e = buildPublicSSEEvent(['the answer'], { usdCost: 0.0123 });
     expect(e.credits).toBeUndefined();
     expect(serializeSSEEvent(e)).not.toContain('usdCost');
-  });
-});
-
-describe('createPublicSSEEventBuilder', () => {
-  // Models the route end to end: every chunk, then the end-of-stream flush.
-  const textOf = (chunks: (string | null | undefined)[][]) => {
-    const builder = createPublicSSEEventBuilder();
-    return chunks.map(c => builder.build(c).text).join('') + (builder.flush()?.text ?? '');
-  };
-
-  it('suppresses reasoning split across chunk boundaries', () => {
-    // Backends emit deltas, so the markers and the reasoning land on separate callbacks -
-    // the case a per-chunk regex cannot catch.
-    expect(textOf([['<think>'], ['my reasoning'], ['</think>'], ['the answer']])).toBe('');
-  });
-
-  it('leaks nothing when the reasoning itself contains both markers', () => {
-    // The adversarial input from review: backends wrap raw model text without escaping it,
-    // so a close marker inside the reasoning would end a PARSED redaction early. Structural
-    // suppression is immune - nothing after the first open marker is ever forwarded.
-    const out = textOf([
-      ['<think>\n'],
-      ['private premise </think> private conclusion\n'],
-      ['</think>\n'],
-      ['public answer'],
-    ]);
-    expect(out).toBe('');
-    expect(out).not.toContain('private');
-  });
-
-  it('suppresses an anthropic-shaped thinking block and everything after it', () => {
-    // content_block_start/stop emit the markers at the thinking block's index, each on its
-    // OWN callback with a fresh array. Anthropic reasoning is opt-in and the embed route
-    // never opts in, so reaching this state at all means the run was misconfigured.
-    expect(
-      textOf([['<think>'], ['step one'], ['step two'], ['</think>'], [undefined, 'the '], [undefined, 'answer']])
-    ).toBe('');
-  });
-
-  it('holds back an open marker the provider split mid-tag', () => {
-    expect(textOf([['before <thi'], ['nk>secret</thi'], ['nk>after']])).toBe('before ');
-  });
-
-  it('fails closed when a reasoning block is never terminated', () => {
-    expect(textOf([['<think>'], ['leaked?'], ['still reasoning']])).toBe('');
-  });
-
-  it('keeps each stream independent', () => {
-    const a = createPublicSSEEventBuilder();
-    a.build(['<think>']);
-    // A second stream must not inherit the first one's open block.
-    expect(createPublicSSEEventBuilder().build(['the answer']).text).toBe('the answer');
-  });
-
-  it('holds a trailing tag prefix until the stream ends, then releases it as prose', () => {
-    const builder = createPublicSSEEventBuilder();
-    // Mid-stream the prefix could still turn into `<think>`, so it stays held back.
-    expect(builder.build(['compare a <']).text).toBe('compare a ');
-    expect(builder.build(['th']).text).toBe('');
-    // Nothing completed the tag, so it was prose all along - the answer would end
-    // `compare a ` without this.
-    expect(builder.flush()?.text).toBe('<th');
-  });
-
-  it('releases nothing at flush inside an unterminated reasoning block', () => {
-    const builder = createPublicSSEEventBuilder();
-    // The held text is a partial `</think>`; fail-closed outranks the flush.
-    builder.build(['<think>reasoning</thi']);
-    expect(builder.flush()).toBeNull();
-  });
-
-  it('emits no trailing event when nothing was held', () => {
-    const builder = createPublicSSEEventBuilder();
-    builder.build(['the answer']);
-    expect(builder.flush()).toBeNull();
-  });
-
-  it('reports whether an empty tail was redacted or simply absent', () => {
-    // Both end with no text; only the first one redacted something, and a caller cannot
-    // tell them apart from the wire alone.
-    const redacted = createPublicSSEEventBuilder();
-    redacted.build(['<think>reasoning']);
-    redacted.flush();
-    expect(redacted.redactedReasoning()).toBe(true);
-
-    const plain = createPublicSSEEventBuilder();
-    plain.build(['the answer']);
-    plain.flush();
-    expect(plain.redactedReasoning()).toBe(false);
   });
 });
 

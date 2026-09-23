@@ -3,7 +3,6 @@
  * Shared between Next.js API route and Lambda function
  */
 import type { QuestErrorCode } from '../types/entities/SessionTypes';
-import { THINK_OPEN_TAG } from './streamVisibility';
 
 export interface SSEContentEvent {
   type: 'content' | 'tool_use';
@@ -111,7 +110,7 @@ export interface CompletionInfo {
  *   contain null/undefined/holes). NOT [thinking, response] - see
  *   {@link resolveResponseText} for the real shape. This positional read is kept for
  *   first-party surfaces that already depend on it; public callers use
- *   {@link createPublicSSEEventBuilder}, which resolves the whole array.
+ *   {@link buildPublicSSEEvent}, which resolves the whole array.
  * @param info - Completion metadata (tools, usage)
  * @returns SSE event object
  */
@@ -193,65 +192,6 @@ function resolveResponseText(text: (string | null | undefined)[]): string {
 }
 
 /**
- * Longest suffix of `text` that is a proper prefix of THINK_OPEN_TAG - a marker the
- * provider split across streaming chunks. Held back rather than forwarded, so a
- * half-arrived `<thi` can never reach a public caller as prose.
- */
-function danglingTagPrefix(text: string): string {
-  const tag = THINK_OPEN_TAG;
-  for (let len = Math.min(text.length, tag.length - 1); len > 0; len--) {
-    if (tag.startsWith(text.slice(text.length - len))) return text.slice(text.length - len);
-  }
-  return '';
-}
-
-/**
- * Reasoning guard for ONE public stream: everything from the first THINK_OPEN_TAG onward
- * is dropped, to the end of the stream.
- *
- * It deliberately does NOT look for THINK_CLOSE_TAG and resume. The text between the
- * markers is model-generated and unescaped, so reasoning containing the close marker would
- * end redaction early and put the rest of the monologue on an anonymous stream - the
- * markers cannot be parsed as a trust boundary. What they CAN do is announce that reasoning
- * has started, which is enough to fail closed. Models whose reasoning legitimately streams
- * this way are refused before the stream opens ({@link inlinesReasoningIntoText}), so on a
- * correctly gated route this suppression is an anomaly path, not the normal one - and the
- * builder reports it via `redactedReasoning` so the operator can tell it from an empty reply.
- *
- * Stateful by necessity: backends emit per-chunk deltas (each allocates `streamedText`
- * inside its own event loop), so a marker can straddle two callbacks.
- */
-function createReasoningStripper(): {
-  strip: (chunk: string) => string;
-  flush: () => string;
-  isSuppressing: () => boolean;
-} {
-  let suppressing = false;
-  let held = '';
-  const strip = (chunk: string) => {
-    if (suppressing) return '';
-    const rest = held + chunk;
-    held = '';
-    const open = rest.indexOf(THINK_OPEN_TAG);
-    if (open !== -1) {
-      suppressing = true;
-      return rest.slice(0, open);
-    }
-    held = danglingTagPrefix(rest);
-    return rest.slice(0, rest.length - held.length);
-  };
-  // A held marker prefix that no further chunk completed was never a marker - release it as
-  // the prose it is, or an answer ending in `<` or `<thi` is truncated. Nothing is released
-  // once suppressing: past the open marker everything is reasoning.
-  const flush = () => {
-    const tail = suppressing ? '' : held;
-    held = '';
-    return tail;
-  };
-  return { strip, flush, isSuppressing: () => suppressing };
-}
-
-/**
  * Build an SSE event for an ANONYMOUS/public caller (e.g. the embed chat widget).
  * Allowlists only what such a caller may see - assistant text plus usage/credit
  * accounting - and drops server-internal reasoning metadata: tool calls
@@ -263,63 +203,30 @@ function createReasoningStripper(): {
  * allowlists forward: any field later added to CompletionInfo stays hidden from
  * public surfaces until deliberately surfaced here.
  *
- * Reasoning is stripped from the text itself too - see {@link createReasoningStripper}
- * - which is why this is a stateful builder rather than a pure function. A streaming
- * caller MUST call `flush` once the completion is done and write any event it returns
- * before [DONE]: the guard holds back a trailing partial marker, and only the end
- * of the stream proves that text was prose rather than the start of a `<think>`.
- */
-export function createPublicSSEEventBuilder(): {
-  build: (text: (string | null | undefined)[], info?: CompletionInfo) => SSEContentEvent;
-  flush: () => SSEContentEvent | null;
-  /**
-   * True once reasoning appeared and the remainder was REDACTED rather than never sent.
-   * On a correctly gated route this should never fire; an empty public reply otherwise
-   * looks identical to a backend that returned nothing.
-   */
-  redactedReasoning: () => boolean;
-} {
-  const reasoning = createReasoningStripper();
-  const build = (text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent => {
-    // Resolve over the WHOLE sparse array - see resolveResponseText. Reading a fixed
-    // [1]/[0] dropped the text of every ordinary reply (index 0) and still dropped any
-    // block the provider placed at index 2 or beyond. Reasoning is redacted by the
-    // <think> sentinels below, never by position.
-    const responseOnly: (string | null | undefined)[] = ['', reasoning.strip(resolveResponseText(text))];
-    if (!info) return buildSSEEvent(responseOnly, undefined);
-    // Allowlist forward (not denylist): explicitly name the fields a public caller may
-    // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.
-    // Everything not listed (toolsUsed, thinking, responseFormatMode, usdCost, and
-    // any future addition) is dropped by omission.
-    const safeInfo: CompletionInfo = {
-      inputTokens: info.inputTokens,
-      outputTokens: info.outputTokens,
-      cacheReadInputTokens: info.cacheReadInputTokens,
-      cacheCreationInputTokens: info.cacheCreationInputTokens,
-      creditsUsed: info.creditsUsed,
-    };
-    return buildSSEEvent(responseOnly, safeInfo);
-  };
-  const flush = () => {
-    const tail = reasoning.flush();
-    return tail ? buildSSEEvent(['', tail]) : null;
-  };
-  return { build, flush, redactedReasoning: reasoning.isSuppressing };
-}
-
-/**
- * Single-shot {@link createPublicSSEEventBuilder}, for a one-chunk (non-streaming)
- * public event. A STREAM must use the builder instead: reasoning sentinels span
- * chunks, and a fresh stripper per chunk cannot pair them.
+ * It does NOT filter the text. Keeping reasoning out of a public stream is the CALLER's
+ * job, done by admitting only models whose reasoning cannot reach the text channel - see
+ * {@link inlinesReasoningIntoText}. Scanning the text for `<think>` here would be worse
+ * than useless: on an admitted family that token is ordinary prose (ask any model to
+ * explain the tag), so treating it as a marker truncates a legitimate paid reply, while an
+ * unadmitted family cannot be made safe by parsing anyway, because the reasoning between
+ * the markers is model-generated and may contain them. A new public caller must run the
+ * same family gate before it streams.
  */
 export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  const builder = createPublicSSEEventBuilder();
-  const event = builder.build(text, info);
-  // No chunk can follow, so a held tag prefix is prose. Fold it into this event rather
-  // than return a second one a single-shot caller has nowhere to put.
-  const tail = builder.flush();
-  if (tail) event.text += tail.text;
-  return event;
+  const responseOnly: (string | null | undefined)[] = ['', resolveResponseText(text)];
+  if (!info) return buildSSEEvent(responseOnly, undefined);
+  // Allowlist forward (not denylist): explicitly name the fields a public caller may
+  // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.
+  // Everything not listed (toolsUsed, thinking, responseFormatMode, usdCost, and
+  // any future addition) is dropped by omission.
+  const safeInfo: CompletionInfo = {
+    inputTokens: info.inputTokens,
+    outputTokens: info.outputTokens,
+    cacheReadInputTokens: info.cacheReadInputTokens,
+    cacheCreationInputTokens: info.cacheCreationInputTokens,
+    creditsUsed: info.creditsUsed,
+  };
+  return buildSSEEvent(responseOnly, safeInfo);
 }
 
 /**
