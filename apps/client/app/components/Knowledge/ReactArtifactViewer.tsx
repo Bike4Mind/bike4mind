@@ -18,6 +18,7 @@ import {
 } from '@mui/joy';
 import { type ReactArtifact } from '@bike4mind/common';
 import { validateArtifactContent } from '@client/app/utils/artifactParser';
+import { scanImportStatements } from '@client/app/utils/importStatements';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import Editor from 'react-simple-code-editor';
@@ -271,12 +272,10 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
   const memoizedDependencies = useMemo(() => {
     const metadataDeps = artifact.metadata?.dependencies || [];
 
-    // Also extract dependencies from the actual code
-    const codeImportRegex = /import\s+.*?\s+from\s+['"]([^'"]+)['"]/g;
+    // Also extract dependencies from the actual code, with the same linear scan the sandbox uses to
+    // rewrite them - a regex here rescans the rest of the line per `import` and runs on every edit.
     const codeDeps: string[] = [];
-    let match;
-    while ((match = codeImportRegex.exec(editableCode)) !== null) {
-      const dep = match[1];
+    for (const { specifier: dep } of scanImportStatements(editableCode)) {
       // Only include external packages (not relative imports)
       if (!dep.startsWith('.') && !dep.startsWith('/') && dep !== 'react') {
         codeDeps.push(dep);
