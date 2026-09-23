@@ -200,7 +200,7 @@ describe('offerLakeOwnership', () => {
   });
 
   it('retires an expired pending offer and opens a new one over it', async () => {
-    // Finding 1: an expired row is invisible to every read but still occupies the partial unique index
+    // An expired row is invisible to every read but still occupies the partial unique index
     // and the raw pre-check, wedging the lake with no UI control able to clear it. The offer must
     // retire it, not refuse on it.
     const expired = offerRow({ expiresAt: new Date(Date.now() - 1000) });
@@ -344,8 +344,8 @@ describe('acceptLakeOwnershipOffer', () => {
 
   it('carries the offer-time API-key principal into the applied transfer', async () => {
     // The route resolved an API key at OFFER time; the accept must attribute the transfer to that
-    // same principal, not to the recipient's session. Finding 3's M2 mutation (dropping the spread)
-    // turns every one of these fields back into the recipient's `user` id.
+    // same principal, not to the recipient's session. Dropping the spread turns every one of these
+    // fields back into the recipient's `user` id.
     const { adapters, upsertGrant, record } = makeAdapters({
       grants: [grant({ principalId: 'creator', role: 'owner' })],
       offer: offerRow({
@@ -404,12 +404,10 @@ describe('acceptLakeOwnershipOffer', () => {
   });
 
   describe('the owner-rung check admits what the OFFER gate admitted', () => {
-    // Finding 1 (round 2, P1): the rung is picked owner-first, so an owner who was authorized as a
-    // platform admin or as the team manager is recorded on `creator`/`grant-owner` and never on the
-    // admin rungs. The old accept re-check used `isOrgOwnershipCandidate`, which has neither a
-    // platform-admin exemption nor a `managerId` arm, so their offers could never be accepted -
-    // a regression against the synchronous transfer. Each case below runs the REAL gate first, so
-    // the rung is the one the gate chose.
+    // The rung is picked owner-first, so an owner who was authorized as a platform admin or as the
+    // team manager is recorded on `creator`/`grant-owner` and never on the admin rungs. The accept
+    // re-check must admit the same arms the offer gate admitted. Each case below runs the REAL gate
+    // first, so the rung is the one the gate chose.
     const ownerGrant = () => grant({ principalId: 'creator', role: 'owner' });
 
     it('accepts an offer from a platform-admin owner who is not on the org roster', async () => {
@@ -489,9 +487,9 @@ describe('acceptLakeOwnershipOffer', () => {
   });
 
   it('refuses an org-admin offer once the offerer loses ADMIN rights', async () => {
-    // Finding 2: the org-admin rung is granted through `administeredOrgIds` (billing owner / manager /
+    // The org-admin rung is granted through `administeredOrgIds` (billing owner / manager /
     // appointed admin), NOT roster membership. A demoted admin still on `users[]` must not be able to
-    // demote an owner; the old `isOrgOwnershipCandidate` check let them.
+    // demote an owner.
     const { adapters, upsertGrant, resolve } = makeAdapters({
       offer: offerRow({ offeredByUserId: 'orgAdmin', offeredVia: 'org-admin' }),
       org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'orgAdmin' }, { userId: 'recipient' }] },
@@ -513,7 +511,7 @@ describe('acceptLakeOwnershipOffer', () => {
   });
 
   it('refuses when the lake moved to PRIVATE after the offer', async () => {
-    // Finding 2: `organizationId` is stored on the offer; a lake since made personal no longer matches,
+    // `organizationId` is stored on the offer; a lake since made personal no longer matches,
     // and the org rungs that authorized the offer are gone.
     const { adapters, upsertGrant, resolve } = makeAdapters({
       offer: offerRow({ organizationId: 'org1' }),
@@ -541,8 +539,7 @@ describe('acceptLakeOwnershipOffer', () => {
   });
 
   it('refuses a platform-admin offer once the offerer loses the admin flag', async () => {
-    // Finding 6, the P2 twin of finding 2: `platform-admin` is a live claim on the flag, not a fact
-    // snapshotted with the offer.
+    // `platform-admin` is a live claim on the flag, not a fact snapshotted with the offer.
     const { adapters, upsertGrant, resolve, findByIdUser } = makeAdapters({
       offer: offerRow({ offeredByUserId: 'root', offeredVia: 'platform-admin' }),
       offererIsAdmin: false,
@@ -550,7 +547,7 @@ describe('acceptLakeOwnershipOffer', () => {
     await expect(acceptLakeOwnershipOffer('recipient', 'offer1', adapters)).rejects.toThrow(
       /no longer a platform admin/i
     );
-    // Finding 4: the flag must be read from the OFFERER, not from whoever else the test happens to
+    // The flag must be read from the OFFERER, not from whoever else the test happens to
     // make an admin. Without this pin, `findById(recipientUserId)` reads the same false flag and the
     // refusal is indistinguishable from the right one.
     expect(findByIdUser).toHaveBeenCalledWith('root');

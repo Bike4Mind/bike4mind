@@ -291,7 +291,7 @@ describe('GET /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('hides the pending offer from a caller who could not transfer the lake', async () => {
-    // Finding 4: the pending row names the next owner, so a reader gets the candidate list (empty for
+    // The pending row names the next owner, so a reader gets the candidate list (empty for
     // them) but never the offer.
     h.findPendingLakeOwnershipOffer.mockResolvedValue({
       id: 'offer-1',

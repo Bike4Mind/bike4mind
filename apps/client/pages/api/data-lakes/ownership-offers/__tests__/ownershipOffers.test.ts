@@ -138,7 +138,7 @@ describe('POST /api/data-lakes/ownership-offers/:offerId/accept', () => {
   });
 
   it('also emails a demoted prior owner who is not the offerer', async () => {
-    // Finding 7: an org admin can offer a lake the owner controls; when the recipient accepts, that
+    // An org admin can offer a lake the owner controls; when the recipient accepts, that
     // owner is demoted and must be told.
     h.acceptLakeOwnershipOffer.mockResolvedValue({
       newOwnerUserId: 'recipient',

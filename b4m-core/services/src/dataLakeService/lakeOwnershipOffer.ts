@@ -199,13 +199,10 @@ export async function acceptLakeOwnershipOffer(
         );
       }
     } else if (offer.offeredVia !== 'platform-admin') {
-      // The ownership rungs (`creator`/`grant-owner`) re-check exactly what the OFFER-time gate
-      // admitted (`resolveLakeTransferAuthority`'s `inLakeOrg || isAdmin`), re-read live: platform
-      // admin, billing owner, a roster row that still confers membership, team manager, or appointed
-      // admin. `isOrgOwnershipCandidate` was NARROWER than that gate - no `managerId` arm, no
-      // platform-admin exemption - while the rung is picked owner-first, so an owner admitted as
-      // admin or manager was recorded on an ownership rung and then refused here forever. That was a
-      // regression against the synchronous transfer, which allowed them.
+      // The ownership rungs (`creator`/`grant-owner`) re-check what the OFFER-time gate admitted
+      // (`resolveLakeTransferAuthority`'s `inLakeOrg || isAdmin`), re-read live: platform admin,
+      // billing owner, a roster row that still confers membership, team manager, or appointed admin.
+      // The rung is picked owner-first, so admins and managers land here.
       const offerer = await db.users.findById(offer.offeredByUserId);
       if (!org || !offerer || !(isOrgMember(offerer, org) || isOrgAdminOf(org, offer.offeredByUserId))) {
         // An owner grant outlives membership, so an offerer who has since left the org and holds no
