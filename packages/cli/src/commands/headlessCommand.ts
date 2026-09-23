@@ -51,10 +51,18 @@ import {
 } from '../tools';
 import { WorkItemsClient } from '../api/WorkItemsClient.js';
 import { CheckpointStore } from '../storage/CheckpointStore.js';
-import { createSandboxRuntime } from '../sandbox/runtime/SandboxRuntimeAdapter.js';
-import { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
-import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
-import { ProxyManager } from '../sandbox/proxy/ProxyManager.js';
+import { buildSandbox, type SandboxLog } from '../bootstrap/buildSandbox.js';
+
+/**
+ * Sandbox status/warning sink for headless mode. Headless emits its NDJSON protocol
+ * on stdout, so BOTH info and warn must go to stderr - routing either to stdout would
+ * corrupt the protocol stream. Exported so this invariant is unit-tested (see
+ * headlessSandboxLog.test.ts) rather than left as an inline lambda nothing pins.
+ */
+export const headlessSandboxLog: SandboxLog = {
+  info: line => void process.stderr.write(`${line}\n`),
+  warn: line => void process.stderr.write(`${line}\n`),
+};
 import { readFile } from 'fs/promises';
 import {
   HEADLESS_SCHEMA_VERSION,
@@ -309,19 +317,17 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       return Promise.resolve({ answers: [] });
     };
 
-    // Initialize sandbox and checkpoint store in parallel (independent)
-    const sandboxConfig = config.sandbox ?? DEFAULT_SANDBOX_CONFIG;
+    // Initialize the sandbox through the single shared wiring path. Headless emits
+    // NDJSON on stdout, so all sandbox status/warnings are routed to stderr.
     const checkpointProjectDir = configStore.getProjectConfigDir() ?? process.cwd();
     const checkpointStore = new CheckpointStore(checkpointProjectDir);
-
-    const [sandboxRuntime] = await Promise.all([
-      createSandboxRuntime(),
-      checkpointStore.init(session.id).catch(() => {}),
-    ]);
-
-    const proxyManager = new ProxyManager(sandboxConfig.network);
-    const sandboxOrchestrator = new SandboxOrchestrator(sandboxConfig, sandboxRuntime, proxyManager);
-    permissionManager.setSandboxState(sandboxConfig.mode, sandboxOrchestrator.isActive());
+    const { sandboxOrchestrator } = await buildSandbox({
+      config,
+      sessionId: session.id,
+      permissionManager,
+      checkpointStore,
+      log: headlessSandboxLog,
+    });
 
     // Agent context for observation tracking
     const agentContext: AgentContext = {

@@ -42,6 +42,7 @@ exports[`e2e — slash-command surface > exposes a stable name list (sorted, inc
   "sandbox:domains",
   "sandbox:enable",
   "sandbox:mode",
+  "sandbox:network",
   "sandbox:trust-domain",
   "sandbox:violations",
   "sandbox:violations:clear",
@@ -286,6 +287,12 @@ exports[`e2e — slash-command surface > matches the canonical built-in command 
     "args": "<auto-allow|permissions>",
     "description": "Set sandbox mode (auto-allow or permissions)",
     "name": "sandbox:mode",
+  },
+  {
+    "aliases": [],
+    "args": "<on|off>",
+    "description": "Toggle sandbox network egress (off is fail-closed default)",
+    "name": "sandbox:network",
   },
   {
     "aliases": [],

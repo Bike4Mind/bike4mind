@@ -1334,7 +1334,10 @@ export class ConfigStore {
    */
   async saveSandboxConfig(sandbox: SandboxConfig): Promise<void> {
     await this.load();
-    this.globalConfig!.sandbox = sandbox;
+    // Clone at the boundary: callers pass the orchestrator's live config object, so
+    // aliasing it into globalConfig would make a later unrelated save() serialize
+    // whatever in-memory sandbox state has since mutated.
+    this.globalConfig!.sandbox = structuredClone(sandbox);
     await this.save();
   }
 
