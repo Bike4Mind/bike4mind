@@ -32,7 +32,8 @@
         "Google Pixel",
         "camera",
         "battery"
-      ]
+      ],
+      "streamingBudgetSec": 300
     }
   ]
 }

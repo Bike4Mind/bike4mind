@@ -93,6 +93,14 @@ export function createAiLatencySuite({
     fs.writeFileSync(resultsPath, JSON.stringify(output, null, 2));
   }
 
+  // The streaming cap must never be tighter than the latency budget the suite itself declares:
+  // capping at AI_RESPONSE while thresholdSec allows more fails a response the suite would have
+  // accepted, and reports it as a hang instead of as slow. A tool-heavy scenario overrides this
+  // with its own budget, since its first token can trail minutes of tool work.
+  function textStreamBudgetMs(scenario: PromptScenario): number {
+    return Math.max(TIMEOUTS.AI_RESPONSE, (scenario.streamingBudgetSec ?? thresholdSec) * 1000);
+  }
+
   function prompt(index: number) {
     const scenario = selectedPrompts[index];
 
@@ -121,8 +129,8 @@ export function createAiLatencySuite({
         imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
       } else {
         // An artifact is likewise generated around the stream, so an artifact prompt needs the
-        // image-generation budget for the send; plain text keeps the standard streaming budget.
-        const sendBudget = scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : TIMEOUTS.AI_RESPONSE;
+        // image-generation budget for the send; plain text uses the streaming budget below.
+        const sendBudget = scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : textStreamBudgetMs(scenario);
         await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
         streamEndMs = Date.now();
         // Streaming completing does not mean the artifact resolved; wait out the placeholders so

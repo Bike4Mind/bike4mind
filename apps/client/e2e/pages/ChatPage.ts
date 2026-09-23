@@ -157,8 +157,12 @@ export class ChatPage extends BasePage {
           return;
         }
       }
-      // If still changing or empty, re-throw
-      throw new Error(`Streaming did not complete within ${timeout}ms`);
+      // Still changing, or nothing streamed at all. Say which: an empty reply means the turn never
+      // reached token output (typically still running tools), which is a budget signal, whereas a
+      // growing reply means the stream itself is slow. The two have different fixes and the bare
+      // message sent triage down the wrong path.
+      const stage = text1.length === 0 ? 'no text streamed yet (tool work still in flight?)' : 'reply still growing';
+      throw new Error(`Streaming did not complete within ${timeout}ms - ${stage}`);
     }
   }
 
