@@ -247,9 +247,9 @@ describe('parseArtifacts - graphically-empty SVG suppression', () => {
 
   it('leaves an unterminated comment in place, scaling linearly', () => {
     // Openings with no closer: the shape that made the old /<!--[\s\S]*?-->/g re-scan to
-    // the end of the input from every one of them. The pre-fix code takes ~370ms at
-    // small=10000 and ~1.6s at its double, so it breaches the ratio ceiling (and, on a
-    // slower host, the small-input ceiling) rather than hanging the runner.
+    // the end of the input from every one of them. The pre-fix code takes ~70ms at
+    // small=10000 and ~285ms at its double, so it breaches the ratio ceiling rather than
+    // hanging the runner.
     assertLinearGrowth(
       n => '<svg>' + '<!--'.repeat(n) + '</svg>',
       10000,
@@ -437,10 +437,14 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
     for (const label of ['html', 'svg', 'tsx', 'json', 'mermaid']) {
-      // 30000, not more: the current parser needs well under a millisecond either side,
-      // so the budget is really GC noise in the measured window, and a shorter run
-      // allocates less. Pre-fix core still runs 211-9222ms at this size.
-      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 30000);
+      // Sized so EVERY label fails on the 500ms ceiling pre-fix, not on the growth ratio:
+      // the ratio's true quadratic value is 4.0 and the check is < 3, but a 30000-char run
+      // cost four of these labels only 49-151ms, and a MIN_BASELINE_MS floor that low leaves
+      // a noisy baseline read enough room to pass against unfixed code. At 180000 the
+      // pre-fix core parser needs ~1800ms on svg/tsx/json and ~5400ms on html (mermaid was
+      // already over at 30000, at ~1680ms), while the current one needs a millisecond or two
+      // either side, so the budget is really GC noise in the measured window.
+      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 180000);
     }
   });
 
@@ -518,9 +522,9 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
   it('leaves an unterminated html fence untouched, scaling linearly', () => {
     // Many <!DOCTYPE occurrences and no </html> anywhere, so the pre-fix bare-document
     // pattern re-scanned to the end of the input from each one. Sized off this copy's
-    // own constant, not the client twin's: pre-fix core runs 38ms at n=1600 (inside the
-    // ceiling, so that size pinned nothing) but 357ms at 6400 and 1410ms at 12800, which
-    // breaches the growth ratio. The current parser is 0.3ms and 0.5ms.
+    // own constant, not the client twin's: at n=1600 pre-fix core runs 3ms, which the
+    // MIN_BASELINE_MS floor keeps well inside the ratio, but 50ms at 6400 and 201ms at
+    // 12800, ratio ~4.0. The current parser is 0.3ms and 0.6ms.
     assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 6400);
   });
 
@@ -572,9 +576,9 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 
     it('stays linear on a long run of mermaid openers that never close, scaling linearly', () => {
       // One opener every 11 characters and no closer anywhere: the old regex started a fresh
-      // lazy scan to the end of the input from each one. Measured on this shape it runs 781ms
-      // at n=10000 and 3153ms at 20000, so the baseline alone breaks the ceiling pre-fix and
-      // fails fast instead of wedging the shard; the index scan is 0.85ms and 1.54ms.
+      // lazy scan to the end of the input from each one. Measured on this shape it runs 399ms
+      // at n=10000 and 1590ms at 20000, so pre-fix it breaches the ratio (with the baseline
+      // itself near the small-input ceiling); the index scan is 0.7ms and 1.2ms.
       assertLinearGrowth(n => '```mermaidZ'.repeat(n), 10000);
     });
   });
@@ -832,6 +836,86 @@ const FENCE_CORPUS: readonly string[] = (() => {
   // reach the multi-fence paths where a rejected fence still has to leave both cursors usable.
   return [...build(20000, 0x5eed1234, 14), ...build(4000, 0xc0ffee, 40)];
 })();
+
+// scanMermaidFences as it stood before its fence-free probe was hoisted in front of the two
+// index builds. Verbatim apart from its own regex instance, which keeps this copy from
+// disturbing the module-scoped lastIndex the real scanner shares across calls.
+const UNHOISTED_FENCE_OPEN = /```mermaid/gi;
+
+function scanMermaidFencesUnhoisted(source: string): { start: number; end: number; body: string }[] {
+  const isBodyBreak = (code: number) => code === 0x0d || code === 0x2028 || code === 0x2029;
+  const closers: number[] = [];
+  for (let at = source.indexOf('\n```'); at !== -1; at = source.indexOf('\n```', at + 1)) closers.push(at);
+  const breaks: number[] = [];
+  for (let at = 0; at < source.length; at++) if (isBodyBreak(source.charCodeAt(at))) breaks.push(at);
+
+  const fences: { start: number; end: number; body: string }[] = [];
+  let closerAt = 0;
+  let breakAt = 0;
+  UNHOISTED_FENCE_OPEN.lastIndex = 0;
+  for (let open = UNHOISTED_FENCE_OPEN.exec(source); open; open = UNHOISTED_FENCE_OPEN.exec(source)) {
+    const start = open.index;
+    let body = start + open[0].length;
+    while (body < source.length && /\s/.test(source[body])) body++;
+    if (source.startsWith('```', body)) {
+      fences.push({ start, end: body + 3, body: '' });
+      UNHOISTED_FENCE_OPEN.lastIndex = body + 3;
+      continue;
+    }
+    while (closerAt < closers.length && closers[closerAt] <= body) closerAt++;
+    if (closerAt === closers.length) continue;
+    while (breakAt < breaks.length && breaks[breakAt] < body) breakAt++;
+    const close = closers[closerAt];
+    if (breakAt < breaks.length && breaks[breakAt] < close) continue;
+    fences.push({ start, end: close + 4, body: source.slice(body, close + 1) });
+    UNHOISTED_FENCE_OPEN.lastIndex = close + 4;
+  }
+  return fences;
+}
+
+describe('scanMermaidFences - fence-free fast path', () => {
+  it('returns what the unhoisted scanner returned, over the corpus and on a repeat pass', () => {
+    // Twice over: the real scanner's opener regex is module-scoped and /g, so a probe that
+    // left lastIndex behind would only start dropping matches from the second call onwards.
+    const extra = [
+      '',
+      'prose with no fence at all\nand a second line\n',
+      'x'.repeat(4000),
+      '```mermaid\nnever closes',
+      '```mermaid\nA\n```\n```mermaid\nnever closes',
+      '```mermaid\nA\n``````mermaid\n```',
+    ];
+    for (let pass = 0; pass < 2; pass++) {
+      for (const source of [...FENCE_CORPUS, ...extra]) {
+        expect({ pass, source, fences: scanMermaidFences(source) }).toEqual({
+          pass,
+          source,
+          fences: scanMermaidFencesUnhoisted(source),
+        });
+      }
+    }
+  });
+
+  it('skips the closer and body-break index builds when there is no mermaid fence', () => {
+    // Same body either way, so the gap is the two index passes alone: measured ~50x with the
+    // probe hoisted and ~1.3x without it, which puts this threshold far outside timer noise.
+    const body = 'lorem ipsum dolor sit amet, consectetur adipiscing elit\n'.repeat(24000);
+    const opened = body + '```mermaid\nx';
+    const best = (source: string) => {
+      let bestMs = Infinity;
+      for (let attempt = 0; attempt < 9; attempt++) {
+        const startedAt = performance.now();
+        scanMermaidFences(source);
+        bestMs = Math.min(bestMs, performance.now() - startedAt);
+      }
+      return bestMs;
+    };
+
+    expect(scanMermaidFences(body)).toEqual([]);
+    expect(scanMermaidFences(opened)).toEqual([]);
+    expect(best(body) * 4).toBeLessThan(best(opened));
+  });
+});
 
 describe('scanMermaidFences differential vs the pre-change regexes', () => {
   it.each([

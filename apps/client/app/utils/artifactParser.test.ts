@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { beforeAll, describe, it, expect } from 'vitest';
 import {
   convertCodeBlocksToArtifacts as coreConvertCodeBlocksToArtifacts,
   parseArtifacts as coreParseArtifacts,
@@ -13,6 +13,22 @@ import {
   shouldWarnElidedArtifact,
   elidedReplyWarning,
 } from './artifactParser';
+
+const STALE = 'core dist is stale - run pnpm turbo:core:build (or --force if that reports FULL TURBO)';
+
+// Everything in this file reaches @bike4mind/utils, which resolves to b4m-core/utils/dist
+// rather than source - the client parser imports stripHtmlComments, hasFullHtmlDocument and
+// hasCompleteSvg from it. A dist predating those exports does not fail to link: vitest hands
+// the importer `undefined` for each missing name, so the first suite to call one dies with
+// `TypeError: stripHtmlComments is not a function` pointing at client source, and ~20 further
+// suites follow, none of them naming the real cause. Checking the export surface once, up
+// front, turns that into a single attributable failure.
+beforeAll(async () => {
+  const core: Record<string, unknown> = await import('@bike4mind/utils/artifactParser');
+  for (const name of ['stripHtmlComments', 'hasFullHtmlDocument', 'hasCompleteSvg']) {
+    expect(typeof core[name], `${STALE} (missing export: ${name})`).toBe('function');
+  }
+});
 
 // The baseline-vs-SMALL_INPUT_MS_CEILING check below is the real regression guard: it
 // fails fast instead of letting a hang run out the clock. The ratio check is secondary
@@ -591,10 +607,15 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     // Greedy whitespace ahead of the lazy body group backtracks one character at a time
     // when the fence never closes, which is quadratic in the length of the run.
     for (const label of ['html', 'svg', 'tsx', 'python', 'json']) {
-      // 30000, not more: the current parser needs well under a millisecond either side,
-      // so the budget is really GC noise in the measured window, and a shorter run
-      // allocates less. Pre-fix core still runs 211-9222ms at this size.
-      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 30000);
+      // Sized so EVERY label fails on the 500ms ceiling pre-fix, not on the growth ratio:
+      // the ratio's true quadratic value is 4.0 and the check is < 3, but a 30000-char run
+      // cost the tsx/python/json labels only ~54ms, and a MIN_BASELINE_MS floor that low
+      // leaves a noisy baseline read enough room to pass against unfixed code. At 180000
+      // the pre-fix client parser needs ~1900ms on those three (html and svg were already
+      // over at 30000, at ~2600ms), while the current one needs 0.2ms at this size and
+      // 0.4ms at the doubled one - still well under a millisecond either side, so the
+      // budget is really GC noise in the measured window.
+      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 180000);
     }
   });
 
@@ -709,7 +730,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 
   it('drops a double quote from a tool-output mermaid title', () => {
     // Same shape as the recharts case above (a Unicode escape survives the deep-unescape
-    // loop, reaching metadata.title intact), pinning the mermaid stripTitleQuotes call site.
+    // loop, reaching metadata.title intact), pinning the mermaid title call site.
     const payload = '{"type":"mermaid","metadata":{"title":"a\\u0022 title"},"content":"graph TD"}';
     const out = convertCodeBlocksToArtifacts('{"result": "' + payload + '"}');
     expect(out).toContain('type="application/vnd.ant.mermaid"');
@@ -718,7 +739,7 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 
   it('promotes a non-string tool-output title instead of dropping the artifact', () => {
     // metadata.title is model-controlled and not type-guaranteed; a number used to
-    // throw inside stripTitleQuotes and leave the tool output as raw JSON text.
+    // throw inside the title sanitizer and leave the tool output as raw JSON text.
     const recharts = '{"type":"recharts","metadata":{"title":7},"content":{"chartType":"bar","data":[{"x":1}]}}';
     const chart = convertCodeBlocksToArtifacts('{"result": "' + recharts + '"}');
     expect(chart).toContain('type="application/vnd.ant.recharts"');
@@ -728,6 +749,84 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     const diagram = convertCodeBlocksToArtifacts('{"result": "' + mermaid + '"}');
     expect(diagram).toContain('type="application/vnd.ant.mermaid"');
     expect(diagram).toContain('title="7"');
+  });
+
+  it('drops tag brackets from a tool-output title', () => {
+    // </> survive the deep-unescape loop, so a bracket reaches metadata.title
+    // intact. This file's ARTIFACT_REGEX reads a quoted value as a unit, but the repo's
+    // other artifact matchers read attributes as [^>], where a bare > closes the tag and
+    // hands everything after it to a re-typed artifact.
+    const recharts =
+      '{"type":"recharts","metadata":{"title":"a\\u003Cb\\u003Ec"},"content":{"chartType":"bar","data":[{"x":1}]}}';
+    const chart = convertCodeBlocksToArtifacts('{"result": "' + recharts + '"}');
+    expect(chart).toContain('type="application/vnd.ant.recharts"');
+    expect(chart).toContain('title="abc"');
+
+    const mermaid = '{"type":"mermaid","metadata":{"title":"a\\u003Cb\\u003Ec"},"content":"graph TD"}';
+    const diagram = convertCodeBlocksToArtifacts('{"result": "' + mermaid + '"}');
+    expect(diagram).toContain('type="application/vnd.ant.mermaid"');
+    expect(diagram).toContain('title="abc"');
+  });
+
+  it('does not let a tool-output mermaid body inject a second artifact', () => {
+    // toolOutput.content is model-controlled and lands in the rebuilt tag's body, which
+    // ARTIFACT_REGEX ends at the first </artifact>. Unescaped, the tail below parses as a
+    // second artifact of the model's chosen type.
+    const payload =
+      '{"type":"mermaid","metadata":{"title":"Diagram"},"content":' +
+      JSON.stringify(
+        "graph TD</artifact><artifact identifier='pwn' type='application/vnd.ant.react' title='Pwn'>export default () => null;"
+      ) +
+      '}';
+    const result = parseArtifactsWithFallback('{"result": "' + payload + '"}');
+
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].type).toBe('mermaid');
+    expect(result.artifacts[0].identifier).toMatch(/^mermaid-/);
+    expect(result.artifacts[0].content).not.toContain('<artifact');
+  });
+
+  it('round-trips a benign tool-output mermaid body unchanged', () => {
+    const payload = '{"type":"mermaid","metadata":{"title":"My Diagram"},"content":"graph TD; A-->B;"}';
+    const result = parseArtifactsWithFallback('{"result": "' + payload + '"}');
+
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].type).toBe('mermaid');
+    expect(result.artifacts[0].title).toBe('My Diagram');
+    expect(result.artifacts[0].content).toBe('graph TD; A-->B;');
+  });
+
+  it('does not let a tool-output recharts body inject a second artifact', () => {
+    // Same hole on the chart branch. Asserted in artifact display mode because the inline
+    // default rewrites the chart to a fence, which would hide the injected tag's fate.
+    const payload =
+      '{"type":"recharts","metadata":{"title":"Chart"},"content":{"chartType":"bar","data":[{"x":1}],"note":' +
+      JSON.stringify("</artifact><artifact identifier='pwn' type='application/vnd.ant.react' title='Pwn'>evil") +
+      '}}';
+    const result = parseArtifactsWithFallback('{"result": "' + payload + '"}', {
+      rechartsDisplayMode: 'artifact',
+    });
+
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].type).toBe('recharts');
+    expect(result.artifacts[0].identifier).toMatch(/^recharts-/);
+    // The escape is lossless: the body is JSON, so the consumer's parse restores it.
+    expect(JSON.parse(result.artifacts[0].content).note).toBe(
+      "</artifact><artifact identifier='pwn' type='application/vnd.ant.react' title='Pwn'>evil"
+    );
+  });
+
+  it('round-trips a benign tool-output recharts body unchanged', () => {
+    const payload =
+      '{"type":"recharts","metadata":{"title":"My Chart"},"content":{"chartType":"bar","data":[{"x":1}]}}';
+    const result = parseArtifactsWithFallback('{"result": "' + payload + '"}', {
+      rechartsDisplayMode: 'artifact',
+    });
+
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].type).toBe('recharts');
+    expect(result.artifacts[0].title).toBe('My Chart');
+    expect(JSON.parse(result.artifacts[0].content)).toEqual({ chartType: 'bar', data: [{ x: 1 }] });
   });
 
   it('counts a self-closing tag with a long attribute span as JSX syntax', () => {
@@ -867,9 +966,12 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
  *
  * The core side of this comparison (coreConvertCodeBlocksToArtifacts / coreParseArtifacts)
  * resolves through @bike4mind/utils' package exports to b4m-core/utils/dist, not source.
- * `pnpm turbo:core:build` rebuilds that dist after any core change; CI is safe because
- * turbo's test task depends on ^build, and the staleness cases below fail loudly when a
- * local run would otherwise validate a stale core build.
+ * `pnpm turbo:core:build` rebuilds that dist after any core change. CI does not run turbo
+ * for tests at all: each client shard runs `pnpm --recursive --filter @bike4mind/client test
+ * --shard=i/3`, which builds nothing. It is safe because the test job depends on a separate
+ * core-build job and restores that job's dist artifact before the run, falling back to
+ * `pnpm core:build` if the download fails. Staleness is therefore a local-run hazard, which
+ * the export-surface check at the top of this file and the cases below exist to catch.
  */
 describe('parity with the core parser', () => {
   const DOC = '<!DOCTYPE html>\n<html><head><title>Page</title></head><body><h1>Hi</h1></body></html>';
@@ -881,7 +983,6 @@ describe('parity with the core parser', () => {
   // after it pin the linearizations, which are behavior-preserving by design, so they catch
   // a dist whose rewrite is broken, not a dist built from main, and not a same-behavior
   // revert.
-  const STALE = 'core dist is stale - run pnpm turbo:core:build (or --force if that reports FULL TURBO)';
   const coreWrappers = (out: string) => (out.match(/<artifact /g) || []).length;
 
   it('core dist strips a double quote from a promoted document title', () => {

@@ -29,13 +29,23 @@ describe('chartJsonParser - code fence regex growth', () => {
   it('stays linear on an unclosed ```recharts fence followed by a run of newlines', () => {
     // The old fence regex (/```(?:json|recharts)?\s*\n?([\s\S]*?)\n?\s*```/) was cubic
     // on this shape: three overlapping whitespace consumers backtrack against the run
-    // of newlines when no closing fence is ever found. n=2000 took ~30s on that regex;
-    // this stays under the ceiling on the fixed pattern.
-    assertLinearGrowth(n => '```recharts\n' + '\n'.repeat(n), 2000);
+    // of newlines when no closing fence is ever found.
+    // The trailing 'x' is what makes the shape reach that regex at all: the parser trims
+    // its input first, so a run of pure whitespace collapses to the bare fence opener and
+    // costs nothing at any n - without a non-whitespace tail this pins nothing.
+    // n is sized so the pre-fix cost clears the 500ms ceiling with room to spare while
+    // staying far inside the 30s testTimeout: measured against the old pattern at n=1200,
+    // 1149-1211ms per call, against 0.7-0.8ms now. The ceiling assertion fires before the
+    // doubled measurement, so time-to-failure is that one call; even if both ran, the
+    // doubled call adds ~9.5s and the test still finishes inside the timeout.
+    assertLinearGrowth(n => '```recharts\n' + '\n'.repeat(n) + 'x', 1200);
   });
 
   it('stays linear on an unclosed ```json fence with trailing spaces per line', () => {
-    assertLinearGrowth(n => '```json\n' + ' \n'.repeat(n), 2000);
+    // Same trim-survival requirement and the same sizing rule as above; this shape costs
+    // more per character, so n is lower. Pre-fix at n=700: 932-1540ms per call (the
+    // doubled call would add ~9.2s if the ceiling ever let it run), against 0.8ms now.
+    assertLinearGrowth(n => '```json\n' + ' \n'.repeat(n) + 'x', 700);
   });
 
   it('stays linear on an unclosed ```json fence padded with spaces and no newline', () => {

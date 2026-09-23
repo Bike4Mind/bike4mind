@@ -4,6 +4,7 @@ import {
   transpileReactSource,
   rewriteImportsToRequire,
   stripTypeOnlyImports,
+  unwrapDefaultExport,
   assertPublishableDependencies,
   findRelativeImport,
   UnsupportedReactDependencyError,
@@ -680,6 +681,10 @@ describe('stripTypeOnlyImports differential vs the original brace regexes', () =
     `import { } from 'react';`,
     `import {\n  type Foo,\n  bar,\n} from 'react';`,
     `import { a }, { b } from 'm';`,
+    // Two brace groups where the FIRST is entirely type-only: a last-brace span would splice the
+    // groups together and keep `bar`, where the original drops the whole statement.
+    `import { type Foo }, { bar } from 'm';`,
+    `import { type Foo }, { type Bar } from 'm';`,
     `import { a } from 'm'; import { b } from 'n';`,
     `import { a from 'm';`,
     `import a } from 'm';`,
@@ -908,10 +913,14 @@ describe('findRelativeImport scales linearly on the shapes the regexes rescanned
     assertLinearGrowth(n => 'export '.repeat(n), 16000, findRelativeImport);
   });
 
+  // Every shape here blows the ceiling on the original: 0.80s, 1.85s and 1.01s at 16000 keywords.
+  // The side-effect and require patterns get no guard of their own - a start position there can
+  // only reach the quote adjacent to it, so they measured 0.10ms and 0.45ms on the original and a
+  // growth assertion over them can never fail.
   it('scans keyword runs that do reach a quote in near-linear time', () => {
     assertLinearGrowth(n => 'import '.repeat(n) + '"', 16000, findRelativeImport);
-    assertLinearGrowth(n => 'import "./'.repeat(n), 16000, findRelativeImport);
-    assertLinearGrowth(n => 'require("./'.repeat(n), 16000, findRelativeImport);
+    assertLinearGrowth(n => 'import from '.repeat(n) + '"', 16000, findRelativeImport);
+    assertLinearGrowth(n => 'import ./'.repeat(n) + '"', 16000, findRelativeImport);
   });
 });
 
@@ -1018,4 +1027,267 @@ describe('side-effect import guard leading-whitespace run', () => {
       assertLinearGrowth(n => term.repeat(n), 32768, assertPublishableDependencies);
     });
   }
+});
+
+/** Verbatim pre-change unwrap: the oracle for the two anchored default-export rewrites. */
+function originalUnwrapDefaultExport(transformed: string): string {
+  return transformed
+    .replace(/^(\s*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
+    .replace(/^\s*export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm, 'const __DEFAULT_EXPORT__ = $1;');
+}
+
+describe('unwrapDefaultExport differential vs the original anchored export regexes', () => {
+  const UNWRAP_TERMINATORS: readonly [string, string][] = [
+    ['LF', '\n'],
+    ['CR', '\r'],
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ];
+
+  const UNWRAP_CORPUS: readonly string[] = (() => {
+    const LEAD = ['', ' ', '  ', '\t', '\f', '\v', '\u00a0', ' \t', '\ufeff'];
+    const TERMS = ['\n', '\r', '\r\n', '\u2028', '\u2029'];
+    const BODIES = [
+      'export default Counter;',
+      'export default function App() { return null; }',
+      'export  default\tCounter;',
+      'export { Counter as default };',
+      'export {Counter as default}',
+      'export { Counter as  default } ;',
+      'export { Counter as notdefault };',
+      'export { default as Counter };',
+      'export default;',
+      'exportdefault X;',
+      'const s = "export default X";',
+      'var x = 1;',
+      '};',
+      '',
+    ];
+    const rand = lcg(0x0defa17);
+    const pick = (a: readonly string[]): string => a[Math.floor(rand() * a.length)];
+    const cases: string[] = [];
+    for (let i = 0; i < 6000; i++) {
+      const n = 1 + Math.floor(rand() * 5);
+      let text = pick(LEAD) + pick(BODIES);
+      for (let j = 1; j < n; j++) text += pick(TERMS) + pick(LEAD) + pick(BODIES);
+      cases.push(text);
+    }
+    return cases;
+  })();
+
+  // The one thing the narrowed run changes: the original let `\s*` bridge line terminators, so a
+  // rewritten `export { X as default }` swallowed the whitespace above it. Dropping the run
+  // directly before each rewritten statement is what that difference is confined to; equality
+  // after this normalization means nothing else moved by a byte.
+  const normalizeUnwrapLead = (out: string): string => out.replace(/\s*(?=const __DEFAULT_EXPORT__ )/g, '');
+
+  it('rewrites the same statements, byte for byte outside the leading run', () => {
+    const diffs = UNWRAP_CORPUS.filter(
+      src => normalizeUnwrapLead(unwrapDefaultExport(src)) !== normalizeUnwrapLead(originalUnwrapDefaultExport(src))
+    );
+    expect({ count: diffs.length, examples: diffs.slice(0, 5).map(s => JSON.stringify(s)) }).toEqual({
+      count: 0,
+      examples: [],
+    });
+  });
+
+  it('is byte-identical on the `export default` form, and differs only by retained whitespace on the other', () => {
+    const byteDiffs = UNWRAP_CORPUS.filter(src => unwrapDefaultExport(src) !== originalUnwrapDefaultExport(src));
+    expect(byteDiffs.every(src => /export\s*\{/.test(src))).toBe(true);
+    // Non-vacuous: the corpus does reach the documented difference, and reaches it on both forms.
+    expect(byteDiffs.length).toBeGreaterThan(50);
+    expect(UNWRAP_CORPUS.filter(src => unwrapDefaultExport(src) !== src).length).toBeGreaterThan(1000);
+  });
+
+  it('pins the retained whitespace: the blank line above the export survives the rewrite', () => {
+    const src = 'function App() {}\n\n  export { App as default };';
+    expect(originalUnwrapDefaultExport(src)).toBe('function App() {}\nconst __DEFAULT_EXPORT__ = App;');
+    expect(unwrapDefaultExport(src)).toBe('function App() {}\n\n  const __DEFAULT_EXPORT__ = App;');
+    // Indentation already survived on the `export default` form and still does.
+    expect(unwrapDefaultExport('  export default App;')).toBe('  const __DEFAULT_EXPORT__ = App;');
+  });
+
+  it('mutation control: narrowing the run to [ \\t] disagrees with the original', () => {
+    const narrowed = (t: string): string =>
+      t
+        .replace(/^([ \t]*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
+        .replace(
+          /^([ \t]*)export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm,
+          '$1const __DEFAULT_EXPORT__ = $2;'
+        );
+    const diffs = UNWRAP_CORPUS.filter(
+      src => normalizeUnwrapLead(narrowed(src)) !== normalizeUnwrapLead(originalUnwrapDefaultExport(src))
+    );
+    expect(diffs.length).toBeGreaterThan(0);
+  });
+
+  // The original was quadratic on every terminator axis: `\s*` swallowed them, so each line start
+  // rescanned to the end of input. 32768 bare terminators cost it ~0.45s, past the ceiling.
+  for (const [label, term] of UNWRAP_TERMINATORS) {
+    it(`scales linearly on a file of bare ${label} line terminators`, () => {
+      assertLinearGrowth(n => term.repeat(n), 32768, unwrapDefaultExport);
+    });
+  }
+});
+
+describe('findSurvivingEsmImport resumes past the clause terminator, not past the quote scan', () => {
+  afterEach(() => {
+    vi.doUnmock('@client/app/utils/importStatements');
+    vi.resetModules();
+  });
+
+  // An unterminated quote on the first import line makes the quote scan cross into the next line.
+  // Resuming at that scan's end stepped over the line-initial survivor below it.
+  const CROSSING: readonly string[] = [
+    `import "\nimport Foo from 'm';`,
+    `import 'a\nimport Foo from "m";`,
+    `import '\r\nimport { useState } from 'react';`,
+  ];
+
+  it('reports the survivor on the line after an unterminated quote', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    for (const src of CROSSING) {
+      expect(() => mod.rewriteImportsToRequire(src)).toThrow(/Could not rewrite an ESM import/);
+    }
+  });
+
+  // Local copies of the scan, differing only in where the cursor resumes. `max` is the variant this
+  // suite replaced; the assertions below are the mutation control for the resume rule.
+  const scanWithResume = (code: string, resume: 'max' | 'terminator'): string | null => {
+    const lineInitialImport = /^[^\S\n\r\u2028\u2029]*import\s/gm;
+    let m: RegExpExecArray | null;
+    while ((m = lineInitialImport.exec(code)) !== null) {
+      const importEnd = m.index + m[0].length - 1;
+      let p = importEnd;
+      while (p < code.length && code[p] !== ';' && code[p] !== "'" && code[p] !== '"') p++;
+      let r = p + 1;
+      if (p < code.length && code[p] !== ';') {
+        while (r < code.length && code[r] !== "'" && code[r] !== '"') r++;
+        let q = p;
+        while (q > importEnd && /\s/.test(code[q - 1])) q--;
+        const quoted = r > p + 1 && r < code.length;
+        if (quoted && q < p && code.slice(q - 4, q) === 'from' && q - 4 - importEnd >= 2 && /\s/.test(code[q - 5])) {
+          return code.slice(m.index, r + 1);
+        }
+      }
+      lineInitialImport.lastIndex = resume === 'max' ? Math.max(p + 1, r) : p + 1;
+    }
+    return null;
+  };
+
+  /** Every line start tried independently: the most a line-anchored scan could ever catch. */
+  const exhaustive = (code: string): string | null => {
+    const starts = [0];
+    for (let i = 0; i < code.length; i++) if (/[\n\r\u2028\u2029]/.test(code[i])) starts.push(i + 1);
+    const lead = /^[^\S\n\r\u2028\u2029]*import\s/;
+    for (const s of starts) {
+      const head = lead.exec(code.slice(s));
+      if (!head) continue;
+      const importEnd = s + head[0].length - 1;
+      let p = importEnd;
+      while (p < code.length && code[p] !== ';' && code[p] !== "'" && code[p] !== '"') p++;
+      if (p >= code.length || code[p] === ';') continue;
+      let r = p + 1;
+      while (r < code.length && code[r] !== "'" && code[r] !== '"') r++;
+      let q = p;
+      while (q > importEnd && /\s/.test(code[q - 1])) q--;
+      const quoted = r > p + 1 && r < code.length;
+      if (quoted && q < p && code.slice(q - 4, q) === 'from' && q - 4 - importEnd >= 2 && /\s/.test(code[q - 5])) {
+        return code.slice(s, r + 1);
+      }
+    }
+    return null;
+  };
+
+  it('mutation control: the old resume misses these, the new one catches them', () => {
+    for (const src of CROSSING) {
+      expect(scanWithResume(src, 'max')).toBeNull();
+      expect(scanWithResume(src, 'terminator')).not.toBeNull();
+    }
+  });
+
+  const RESUME_CORPUS: readonly string[] = (() => {
+    const PIECES = [
+      'import',
+      'import ',
+      '\nimport ',
+      '\nimport Foo from ',
+      '\nimport{Foo}from',
+      'import x from',
+      "import 'x';",
+      '\r\nimport ',
+      '\u2028import ',
+      '\u2028',
+      '\u2029',
+      '\r',
+      '\n',
+      '\r\n',
+      ' ',
+      '  ',
+      '\t',
+      '\f',
+      '\v',
+      '\u00a0',
+      'from',
+      ' from ',
+      "'",
+      '"',
+      ';',
+      '{',
+      '}',
+      'x',
+      'Foo',
+      './a',
+      'react',
+      "'react'",
+      '"m"',
+      'as',
+      'default',
+      '//c',
+    ];
+    const rand = lcg(0x5ca17e);
+    const cases: string[] = [];
+    for (let i = 0; i < 40000; i++) {
+      const k = 2 + Math.floor(rand() * 9);
+      let text = '';
+      for (let j = 0; j < k; j++) text += PIECES[Math.floor(rand() * PIECES.length)];
+      cases.push(text);
+    }
+    return cases;
+  })();
+
+  it('catches a strict superset of what the old resume caught, and misses nothing a line start could reach', () => {
+    let lost = 0;
+    let gained = 0;
+    let missedVsExhaustive = 0;
+    const examples: string[] = [];
+    for (const src of RESUME_CORPUS) {
+      const oldHit = scanWithResume(src, 'max');
+      const newHit = scanWithResume(src, 'terminator');
+      if (oldHit && !newHit) {
+        lost++;
+        if (examples.length < 5) examples.push(JSON.stringify(src));
+      }
+      if (newHit && !oldHit) gained++;
+      if (exhaustive(src) && !newHit) {
+        missedVsExhaustive++;
+        if (examples.length < 5) examples.push(JSON.stringify(src));
+      }
+    }
+    expect({ lost, missedVsExhaustive, examples }).toEqual({ lost: 0, missedVsExhaustive: 0, examples: [] });
+    expect(gained).toBeGreaterThan(0);
+  });
+
+  // Resuming earlier must not reopen the quadratic: the next start is still past this statement's
+  // first `;`/quote, so the clause scans stay disjoint.
+  it('stays near-linear on an input of unterminated import quotes', () => {
+    assertLinearGrowth(n => 'import "a\n'.repeat(n), 16384, rewriteImportsToRequire);
+  });
 });

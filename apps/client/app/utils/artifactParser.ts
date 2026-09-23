@@ -468,16 +468,45 @@ export function validateArtifactContent(
 }
 
 /**
- * Removes double quotes from model-controlled text bound for a title="..." attribute.
- * The artifact attribute parser (ATTRIBUTE_REGEX) has no escape mechanism, so one would
- * truncate the attribute and leave the rest to be read as further attributes.
- * extractHTMLTitle applies the same rule to a <title> element.
+ * Sanitizes model-controlled text bound for a title="..." attribute in a tag this file
+ * rebuilds. The artifact attribute parser (ATTRIBUTE_REGEX) has no escape mechanism, so a
+ * " would truncate the attribute and leave the rest to be read as further attributes.
+ * ARTIFACT_REGEX here is quote-aware, but the repo's other artifact matchers
+ * (sharedToolBuilder, notebookCurationService, openaiBackend) match attributes as [^>],
+ * so a < or > reaching them closes the tag early; newlines break the single-line ones.
+ * extractHTMLTitle applies the quote half of this rule to a <title> element.
+ * The server-side twin is sanitizeArtifactTitle in b4m-core services
+ * (llm/tools/utils/artifactEmission). It converts quotes to typographic ones rather than
+ * stripping them, because there the pristine title also survives in the artifact JSON body.
  * Takes unknown because the callers read it out of parsed tool-output JSON, where a
  * title need not be a string; each caller's own default covers a value that coerces
  * to empty.
  */
-function stripTitleQuotes(title: unknown): string {
-  return String(title ?? '').replace(/"/g, '');
+function sanitizeToolOutputTitle(title: unknown): string {
+  return String(title ?? '')
+    .replace(/[<>"]/g, '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Escapes the literal "</artifact>" sequence in a JSON artifact body so it cannot truncate
+ * ARTIFACT_REGEX's non-greedy body match and leave a following "<artifact ...>" to be read
+ * as a second, model-chosen artifact. JSON.parse reads "\/" as "/", so the consumer
+ * restores the original losslessly. Twin of escapeArtifactBodyJson in b4m-core services
+ * (llm/tools/utils/artifactEmission), which this package cannot import; keep in sync.
+ */
+function escapeArtifactBodyJson(body: string): string {
+  return body.replace(/<\/artifact>/gi, '<\\/artifact>');
+}
+
+/**
+ * Same protection for a RAW (non-JSON) body, where the JSON backslash escape would render
+ * as garbage. Matches the bare "<artifact"/"</artifact>" the parsers match and no more.
+ * Twin of stripArtifactTagsFromRawBody in b4m-core services; keep in sync.
+ */
+function stripArtifactTagsFromRawBody(body: string): string {
+  return body.replace(/<(\/?)artifact\b/gi, '&lt;$1artifact');
 }
 
 /**
@@ -545,7 +574,8 @@ function convertToolOutputsToArtifacts(content: string): string {
 
         if ((toolOutput.type === 'rechart' || toolOutput.type === 'recharts') && toolOutput.content) {
           const identifier = `recharts-${Date.now()}`;
-          const title = stripTitleQuotes(toolOutput.metadata?.title || 'Interactive Chart') || 'Interactive Chart';
+          const title =
+            sanitizeToolOutputTitle(toolOutput.metadata?.title || 'Interactive Chart') || 'Interactive Chart';
 
           // Validate recharts content structure
           let rechartsContent;
@@ -562,8 +592,11 @@ function convertToolOutputsToArtifacts(content: string): string {
               return match; // Return original if validation fails
             }
 
+            const rechartsBody =
+              typeof toolOutput.content === 'string' ? toolOutput.content : JSON.stringify(toolOutput.content);
+
             return `<artifact identifier="${identifier}" type="application/vnd.ant.recharts" title="${title}">
-${typeof toolOutput.content === 'string' ? toolOutput.content : JSON.stringify(toolOutput.content)}
+${escapeArtifactBodyJson(rechartsBody)}
 </artifact>`;
           } catch (validationError) {
             console.warn('Failed to validate recharts content:', validationError);
@@ -573,10 +606,10 @@ ${typeof toolOutput.content === 'string' ? toolOutput.content : JSON.stringify(t
 
         if (toolOutput.type === 'mermaid' && toolOutput.content) {
           const identifier = `mermaid-${Date.now()}`;
-          const title = stripTitleQuotes(toolOutput.metadata?.title || 'Mermaid Diagram') || 'Mermaid Diagram';
+          const title = sanitizeToolOutputTitle(toolOutput.metadata?.title || 'Mermaid Diagram') || 'Mermaid Diagram';
 
           const artifactSyntax = `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">
-${toolOutput.content}
+${stripArtifactTagsFromRawBody(String(toolOutput.content))}
 </artifact>`;
 
           return artifactSyntax;
@@ -590,7 +623,12 @@ ${toolOutput.content}
     });
   }
 
-  // Fallback: If no patterns matched, try a more aggressive approach
+  // Fallback: If no patterns matched, try a more aggressive approach.
+  // Currently unreachable: fallbackPattern's capture starts with a greedy [^"]*, which
+  // swallows the backslash of the first \" pair, so the alternation that was meant to walk
+  // escaped quotes never engages and the capture always ends at the payload's first quote.
+  // JSON.parse then fails at every escaping depth. Kept (and hardened alongside the live
+  // branches above) because a fix to that pattern would reach this body interpolation.
   if (processedContent === content && hasTargetType) {
     // Look for the basic structure: "result":"{ ... "type":"mermaid" ... }"
     const fallbackPattern = /"result":\s*"([^"]*(?:\\"[^"]*)*)"[^}]*\}/g;
@@ -612,10 +650,10 @@ ${toolOutput.content}
 
           if (toolOutput.type === 'mermaid' && toolOutput.content) {
             const identifier = `mermaid-${Date.now()}`;
-            const title = stripTitleQuotes(toolOutput.metadata?.title || 'Mermaid Diagram') || 'Mermaid Diagram';
+            const title = sanitizeToolOutputTitle(toolOutput.metadata?.title || 'Mermaid Diagram') || 'Mermaid Diagram';
 
             const artifactSyntax = `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">
-${toolOutput.content}
+${stripArtifactTagsFromRawBody(String(toolOutput.content))}
 </artifact>`;
 
             // Replace the original match with artifact syntax
@@ -669,10 +707,9 @@ ${codeContent.trim()}
     }
 
     // For javascript/typescript, require strong React indicators
-    // Count React-specific patterns (need at least 2 to convert). Scanned against a
-    // capped prefix so an unclosed fence can't make every predicate rescan an
-    // arbitrarily large body; the emitted artifact still carries the full
-    // untruncated codeContent.
+    // Count React-specific patterns (need at least 2 to convert), over a capped prefix so
+    // five predicates cannot each rescan a large fence body. A closed fence whose only
+    // indicators sit past the window is left a plain code block.
     const scanContent = codeContent.slice(0, MAX_FENCE_SCAN_CHARS);
     const hasReactHooks =
       /\buse(State|Effect|Context|Reducer|Callback|Memo|Ref|ImperativeHandle|LayoutEffect|DebugValue)\b/.test(
@@ -709,7 +746,8 @@ ${codeContent.trim()}
   // The two-tier split is the original behavior; what changed is that two adjacent `html`
   // fences are now two artifacts, where the old regex merged them into one. A body carrying
   // a CR, U+2028 or U+2029 is also accepted now, where the old `.`/`\n`-built pattern could
-  // not reach across one - the core parser has always matched those bodies.
+  // not reach across one - core's html fence body is the same [\s\S] class, so the twins
+  // agree on which bodies promote.
   const htmlCodeBlockRegex = /```html([\s\S]*?)```/gi;
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
@@ -968,7 +1006,7 @@ function extractComponentName(code: string): string | null {
 function extractHTMLTitle(code: string): string | null {
   const titleMatch = code.match(/<title>(.*?)<\/title>/i);
   if (!titleMatch) return null;
-  return titleMatch[1].replace(/"/g, '') || null;
+  return titleMatch[1].replace(/[<>"]/g, '') || null;
 }
 
 /**

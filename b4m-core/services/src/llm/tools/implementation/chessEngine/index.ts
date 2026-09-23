@@ -1,5 +1,6 @@
 import { Chess, Move } from 'chess.js';
 import { ToolDefinition } from '../../base/types';
+import { escapeArtifactBodyJson } from '../../utils/artifactEmission';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -160,6 +161,10 @@ function getSearchDepth(difficulty: Difficulty): number {
       return 3;
     case 'advanced':
       return 4;
+    default:
+      // The tool argument is cast, not validated, so an off-list value lands here; without
+      // this the depth is undefined and minimax recurses on NaN until the stack overflows.
+      return 3;
   }
 }
 
@@ -260,7 +265,9 @@ function findBestMove(game: Chess, difficulty: Difficulty): string | null {
 // ---------------------------------------------------------------------------
 
 function wrapWithArtifact(data: Record<string, unknown>): string {
-  const json = JSON.stringify(data);
+  // `difficulty` reaches here straight off the model's tool call (cast, never validated),
+  // so an unescaped "</artifact>" in it would truncate the body and open a second artifact.
+  const json = escapeArtifactBodyJson(JSON.stringify(data));
   const identifier = `chess-${Date.now()}`;
   return `<artifact identifier="${identifier}" type="application/vnd.ant.chess" title="Chess Game">\n${json}\n</artifact>`;
 }

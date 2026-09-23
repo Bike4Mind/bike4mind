@@ -342,7 +342,10 @@ function findSurvivingEsmImport(code: string): string | null {
         return code.slice(m.index, r + 1);
       }
     }
-    lineInitialImport.lastIndex = Math.max(p + 1, r);
+    // Resume just past the clause terminator, not past `r`: the quote scan for `r` may cross a
+    // line terminator, and skipping to it would step over a line-initial import on the next line.
+    // Runs stay disjoint either way (the next start is past this statement's first quote/`;`).
+    lineInitialImport.lastIndex = p + 1;
   }
   return null;
 }
@@ -381,6 +384,26 @@ export function assertPublishableDependencies(source: string): void {
       throw new UnsupportedReactDependencyError(dep);
     }
   }
+}
+
+/**
+ * Unwrap the default export into the local the bootstrap reads. Handles BOTH forms
+ * checkHasDefaultExport accepts - `export default X` and `export { X as default }` - because Babel
+ * (preset-react only) leaves module syntax untouched, so an unhandled `export { ... }` would
+ * survive into the classic inline <script> and fail to parse (silently blanking the page).
+ * Anchored to line-start (`m`): Babel emits top-level exports at column 0, so this rewrites the
+ * real statement but NOT a literal "export default ..." embedded in a string / JSX text. The
+ * leading run excludes line terminators for the reason spelled out on the side-effect guard above,
+ * and both forms keep it in a capture so the statement's indentation survives the rewrite.
+ * Exported for unit tests.
+ */
+export function unwrapDefaultExport(transformed: string): string {
+  return transformed
+    .replace(/^([^\S\n\r\u2028\u2029]*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
+    .replace(
+      /^([^\S\n\r\u2028\u2029]*)export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm,
+      '$1const __DEFAULT_EXPORT__ = $2;'
+    );
 }
 
 /**
@@ -423,15 +446,7 @@ export async function transpileReactSource(source: string): Promise<string> {
     throw new ReactArtifactTranspileError('JSX transform produced no output.');
   }
 
-  // Unwrap the default export into a local the bootstrap reads. Handle BOTH forms that
-  // checkHasDefaultExport accepts - `export default X` and `export { X as default }` - because
-  // Babel (preset-react only) leaves module syntax untouched, so an unhandled `export { ... }`
-  // would survive into the classic inline <script> and fail to parse (silently blanking the page).
-  const unwrapped = transformed
-    // Anchored to line-start (`m`): Babel emits top-level exports at column 0, so this rewrites the
-    // real statement but NOT a literal "export default ..." embedded in a string / JSX text.
-    .replace(/^(\s*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
-    .replace(/^\s*export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm, 'const __DEFAULT_EXPORT__ = $1;');
+  const unwrapped = unwrapDefaultExport(transformed);
 
   // Authoritative default-export check: checkHasDefaultExport (the pre-check) is intentionally
   // lenient (unanchored) and matches "export default" even inside a string, so a source whose only

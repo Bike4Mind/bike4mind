@@ -222,6 +222,13 @@ function isMermaidBodyBreak(code: number): boolean {
  * closer is further right, so it would cross the same character.
  */
 export function scanMermaidFences(source: string): { start: number; end: number; body: string }[] {
+  // Probe before indexing so fence-free content (the common case) costs one scan, not three.
+  // The regex is module-scoped and /g, so reset its lastIndex first and then feed this very
+  // match to the loop rather than re-running it from wherever the probe left off.
+  MERMAID_FENCE_OPEN.lastIndex = 0;
+  const firstOpen = MERMAID_FENCE_OPEN.exec(source);
+  if (!firstOpen) return [];
+
   const closers: number[] = [];
   for (let at = source.indexOf('\n```'); at !== -1; at = source.indexOf('\n```', at + 1)) closers.push(at);
   const breaks: number[] = [];
@@ -230,8 +237,7 @@ export function scanMermaidFences(source: string): { start: number; end: number;
   const fences: { start: number; end: number; body: string }[] = [];
   let closerAt = 0;
   let breakAt = 0;
-  MERMAID_FENCE_OPEN.lastIndex = 0;
-  for (let open = MERMAID_FENCE_OPEN.exec(source); open; open = MERMAID_FENCE_OPEN.exec(source)) {
+  for (let open: RegExpExecArray | null = firstOpen; open; open = MERMAID_FENCE_OPEN.exec(source)) {
     const start = open.index;
     let body = start + open[0].length;
     while (body < source.length && MERMAID_WS.test(source[body])) body++;
@@ -272,9 +278,9 @@ function replaceMermaidFences(source: string, replace: (fullMatch: string, body:
 export function convertCodeBlocksToArtifacts(content: string): string {
   // The fence patterns below put no \s* in front of the body group: it is greedy over
   // characters the lazy body matches anyway, so a fence label followed by a long
-  // whitespace run and no closer backtracks quadratically. Every callback trims. The
-  // mermaid pattern is the exception - it keeps \s*, but its body group starts with \S,
-  // so there is nothing for the \s* to give back.
+  // whitespace run and no closer backtracks quadratically. Every callback trims. Mermaid
+  // fences are not in this set: their match set depends on that \s* skip between label and
+  // body, so scanMermaidFences walks them by index instead.
   // Detect React component code blocks (body captured linearly; see hasReactComponentLine)
   const reactCodeBlockRegex = /```(?:tsx?|javascript|jsx)([\s\S]*?)```/gi;
 
