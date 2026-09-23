@@ -9,13 +9,13 @@ from pathlib import Path
 import subprocess
 import tempfile
 import time
-import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parent.parent
+PROBE_QUEUE = 'researchEngineQueue'
 
 
 def run(*args):
@@ -31,6 +31,12 @@ def request(endpoint, action, **params):
 
 def field(xml, name):
     return xml.findtext('.//{*}' + name)
+
+
+def require(condition, message):
+    """Assert-like check that isn't stripped under python -O / PYTHONOPTIMIZE."""
+    if not condition:
+        raise AssertionError(message)
 
 
 def drill(model, directory, disabled):
@@ -55,18 +61,29 @@ def drill(model, directory, disabled):
         deadline = time.monotonic() + 60
         while True:
             try:
-                request(endpoint, 'ListQueues')
+                # Probe GetQueueUrl, not just ListQueues: elasticmq's config-declared
+                # queues register asynchronously after the HTTP listener already
+                # accepts connections, so a bare connectivity check can return ready
+                # before the queue this drill needs actually exists.
+                request(endpoint, 'GetQueueUrl', QueueName=PROBE_QUEUE)
                 return endpoint
-            except (urllib.error.URLError, TimeoutError):
+            except OSError as error:
+                # OSError (not just URLError) also catches: a broker that accepts the
+                # TCP connection before its HTTP server is ready and then drops it
+                # (RemoteDisconnected, raised by getresponse() during probing), and the
+                # HTTPError the probe above gets while the queue is still registering
+                # (HTTPError is itself an OSError subclass via URLError).
                 if time.monotonic() >= deadline:
-                    raise
+                    raise TimeoutError(
+                        f'sqs broker at {endpoint} never became ready: {error}'
+                    ) from error
                 time.sleep(0.5)
 
     def recreate():
         old = run(*command, 'ps', '-q', 'sqs')
         run(*command, 'up', '-d', '--no-deps', '--force-recreate', '--renew-anon-volumes', 'sqs')
         new = run(*command, 'ps', '-q', 'sqs')
-        assert old != new, 'Container was not replaced'
+        require(old != new, 'Container was not replaced')
         return ready()
 
     try:
@@ -74,25 +91,25 @@ def drill(model, directory, disabled):
         endpoint = ready()
         container = run(*command, 'ps', '-q', 'sqs')
         print('Image:', run('docker', 'inspect', '--format', '{{.Image}}', container))
-        queue = field(request(endpoint, 'GetQueueUrl', QueueName='researchEngineQueue'), 'QueueUrl')
-        assert queue, 'Main queue declaration missing'
+        queue = field(request(endpoint, 'GetQueueUrl', QueueName=PROBE_QUEUE), 'QueueUrl')
+        require(queue, 'Main queue declaration missing')
         body = 'compose-durability-' + uuid.uuid4().hex
         message_id = field(request(endpoint, 'SendMessage', QueueUrl=queue, MessageBody=body), 'MessageId')
-        assert message_id, 'SendMessage returned no ID'
+        require(message_id, 'SendMessage returned no ID')
         print(label, 'enqueued', message_id, flush=True)
         endpoint = recreate()
         received = request(endpoint, 'ReceiveMessage', QueueUrl=queue, WaitTimeSeconds=2, VisibilityTimeout=1)
         if disabled:
-            assert field(received, 'MessageId') is None, 'Disabled storage retained a message'
+            require(field(received, 'MessageId') is None, 'Disabled storage retained a message')
             print('PASS disabled: pending message lost after replacement', message_id, flush=True)
             return
-        assert field(received, 'MessageId') == message_id, 'Pending message ID did not survive'
-        assert field(received, 'Body') == body, 'Pending message body changed'
+        require(field(received, 'MessageId') == message_id, 'Pending message ID did not survive')
+        require(field(received, 'Body') == body, 'Pending message body changed')
         request(endpoint, 'DeleteMessage', QueueUrl=queue, ReceiptHandle=field(received, 'ReceiptHandle'))
         endpoint = recreate()
         time.sleep(2)  # Beyond the receipt visibility window, so invisibility cannot hide resurrection.
         received = request(endpoint, 'ReceiveMessage', QueueUrl=queue, WaitTimeSeconds=2)
-        assert field(received, 'MessageId') is None, 'Deleted message resurrected'
+        require(field(received, 'MessageId') is None, 'Deleted message resurrected')
         print('PASS durable: identical pending ID survived; acknowledged deletion survived', message_id, flush=True)
     finally:
         run(*command, 'down', '--volumes', '--remove-orphans')
