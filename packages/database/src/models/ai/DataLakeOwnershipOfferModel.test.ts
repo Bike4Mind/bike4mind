@@ -1,0 +1,88 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import type { IDataLakeOwnershipOffer } from '@bike4mind/common';
+import {
+  DataLakeOwnershipOfferModel as OfferModel,
+  buildPendingOfferExpiryFilter,
+  dataLakeOwnershipOfferRepository as repo,
+} from './DataLakeOwnershipOfferModel';
+import { setupMongoTest } from '../../__test__/utils';
+
+const offer = (
+  overrides: Partial<IDataLakeOwnershipOffer> = {}
+): Omit<IDataLakeOwnershipOffer, 'id' | 'createdAt' | 'updatedAt'> => ({
+  dataLakeId: 'lake-1',
+  offeredByUserId: 'owner',
+  recipientUserId: 'alice',
+  status: 'pending',
+  expiresAt: new Date('2026-10-01T00:00:00Z'),
+  priorOwnerUserIds: ['owner'],
+  offeredVia: 'creator',
+  ...overrides,
+});
+
+describe('buildPendingOfferExpiryFilter - the shared live-offer predicate', () => {
+  it('is empty when no asOf is given (expired rows are included)', () => {
+    expect(buildPendingOfferExpiryFilter()).toEqual({});
+  });
+
+  it('admits never-expiring OR not-yet-expired offers at asOf', () => {
+    const asOf = new Date('2026-09-01T00:00:00Z');
+    expect(buildPendingOfferExpiryFilter(asOf)).toEqual({
+      $or: [{ expiresAt: null }, { expiresAt: { $exists: false } }, { expiresAt: { $gt: asOf } }],
+    });
+  });
+});
+
+describe('DataLakeOwnershipOfferRepository', () => {
+  setupMongoTest();
+  // beforeEach() dropDatabase()s (indexes included) and this model is not in setupMongoTest's
+  // one-time ensureIndexes list - rebuild per test so the partial unique index is real.
+  beforeEach(async () => {
+    await OfferModel.ensureIndexes();
+  });
+
+  it('allows at most one PENDING offer per lake, but a resolved one does not block the next', async () => {
+    const first = await repo.create(offer());
+    await expect(OfferModel.create(offer() as unknown as Record<string, unknown>)).rejects.toThrow(
+      /duplicate key|E11000/i
+    );
+
+    // Resolving the open one frees the slot: the invariant is one LIVE offer, not one ever.
+    expect(await repo.resolve(first.id, 'declined')).not.toBeNull();
+    const second = await repo.create(offer({ recipientUserId: 'bob' }));
+    expect(second.id).toBeDefined();
+    expect(await repo.findPendingForLake('lake-1')).not.toBeNull();
+  });
+
+  it('resolve is atomic: the second resolve loses and reports it', async () => {
+    const created = await repo.create(offer());
+    const accepted = await repo.resolve(created.id, 'accepted');
+    expect(accepted?.status).toBe('accepted');
+    expect(accepted?.resolvedAt).toBeInstanceOf(Date);
+
+    // The row is no longer pending, so the precondition matches nothing - this is the double-accept
+    // guard the service leans on rather than read-then-write.
+    expect(await repo.resolve(created.id, 'cancelled')).toBeNull();
+    // And it did not overwrite the winner's status.
+    expect((await repo.findById(created.id))?.status).toBe('accepted');
+  });
+
+  it('findPendingForLake filters expired offers at asOf but not without one', async () => {
+    await repo.create(offer({ expiresAt: new Date('2026-01-01T00:00:00Z') }));
+    const asOf = new Date('2026-06-01T00:00:00Z');
+    expect(await repo.findPendingForLake('lake-1', asOf)).toBeNull();
+    // Without asOf the expired row is still readable - the transaction that refuses it does so by
+    // reading it, so it must be visible there.
+    expect((await repo.findPendingForLake('lake-1'))?.status).toBe('pending');
+  });
+
+  it('listPendingForRecipient returns only that recipient live offers', async () => {
+    await repo.create(offer({ recipientUserId: 'alice', dataLakeId: 'lake-1' }));
+    await repo.create(offer({ recipientUserId: 'alice', dataLakeId: 'lake-2' }));
+    await repo.create(offer({ recipientUserId: 'bob', dataLakeId: 'lake-3' }));
+    await repo.create(offer({ recipientUserId: 'alice', dataLakeId: 'lake-4', status: 'declined' }));
+
+    const alice = await repo.listPendingForRecipient('alice');
+    expect(alice.map(o => o.dataLakeId).sort()).toEqual(['lake-1', 'lake-2']);
+  });
+});
