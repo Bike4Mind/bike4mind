@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { BadRequestError } from '@bike4mind/utils';
 import { Request } from 'express';
@@ -41,6 +41,13 @@ import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingRe
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
+    // Restated here even though `loadFindingForLake` asserts it too: the route gate is the read
+    // scope, so the source guard in `dataLakeApiKeyScopeCoverage.test.ts` requires every mutating
+    // handler on a read-gated route to name the stronger scope in-handler. It cannot follow the
+    // call into a helper, and that bluntness is the point - it is what still fails when route 44
+    // forgets. Cheap to keep: the assert is synchronous and idempotent.
+    assertDataLakeWriteScope(req);
+
     // Before the first await: the crypto-shred fence refuses a write only when the purge lands at or
     // after this instant, so stamping it later would let a purge that landed mid-request lift its own
     // tombstone. See `recordFindingResolutionBelief`'s `startedAt`.

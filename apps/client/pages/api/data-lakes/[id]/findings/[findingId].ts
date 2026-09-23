@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeFindingRepository } from '@bike4mind/database';
 import { LAKE_FINDING_RESOLUTION_MAX_CHARS, type LakeFindingTerminalStatus } from '@bike4mind/common';
@@ -53,13 +53,18 @@ const UpdateBody = z.discriminatedUnion('action', [
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
+    // Restated even though `loadFindingForLake` asserts it too: `dataLakeApiKeyScopeCoverage.test.ts`
+    // scans SOURCE for this call on every mutating handler of a read-gated route, and cannot follow
+    // it into a helper. That bluntness is what still fails when route 44 forgets. Sync and idempotent.
+    assertDataLakeWriteScope(req);
+
     // Before the first await: the crypto-shred fence refuses a write only when the purge lands at or
     // after this instant, so stamping it later would let a purge that landed mid-request lift its own
     // tombstone. See `recordFindingResolutionBelief`'s `startedAt`.
     const startedAt = new Date();
     const { id, findingId } = req.query as { id: string; findingId: string };
 
-    // Scope, lake-write access and belongs-to-lake, shared with the `/belief` sibling. The
+    // Lake-write access and belongs-to-lake, shared with the `/belief` sibling. The
     // cross-lake check is what stops a caller who manages one lake from ruling on any finding id in
     // the database by quoting their own lake in the URL.
     //

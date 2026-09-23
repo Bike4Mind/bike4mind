@@ -86,7 +86,10 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => 
     await invoke().done;
 
     expect(h.assertLakeWriteAccess).toHaveBeenCalledTimes(1);
-    expect(h.assertDataLakeWriteScope).toHaveBeenCalledTimes(1);
+    // Count deliberately not pinned: the handler asserts the scope inline (so the source scan in
+    // dataLakeApiKeyScopeCoverage.test.ts can see it) and `loadFindingForLake` asserts it again for
+    // any future caller. Both land on this spy; what matters is that the gate ran, not how often.
+    expect(h.assertDataLakeWriteScope).toHaveBeenCalled();
   });
 
   it("refuses another lake's finding, so a manager cannot project a foreign ruling into their lake", async () => {
