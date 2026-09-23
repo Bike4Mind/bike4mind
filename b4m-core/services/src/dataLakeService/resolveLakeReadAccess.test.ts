@@ -263,9 +263,16 @@ describe('resolveEnforceReadGrantsResult - tells "off" apart from "read failed"'
     expect(logger.warn).toHaveBeenCalledOnce();
   });
 
-  it('resolveEnforceReadGrants stays a thin wrapper over the enforced half', async () => {
-    const settings = { getSettingsValue: vi.fn().mockRejectedValue(new Error('boom')) };
-    expect(await resolveEnforceReadGrants(settings)).toBe((await resolveEnforceReadGrantsResult(settings)).enforced);
+  // Review: the previous version fed the SAME rejecting settings to both halves and compared
+  // `x === x.enforced` - a comparison that passes on any false-on-rejection implementation without
+  // ever exercising the true-on-success path. Asserting the actual booleans on both branches is
+  // what makes this a real pass-through check, not a tautology.
+  it('resolveEnforceReadGrants stays a thin wrapper over the enforced half - both the ON and the failed path', async () => {
+    const onSettings = { getSettingsValue: vi.fn().mockResolvedValue(true) };
+    expect(await resolveEnforceReadGrants(onSettings)).toBe(true);
+
+    const failingSettings = { getSettingsValue: vi.fn().mockRejectedValue(new Error('boom')) };
+    expect(await resolveEnforceReadGrants(failingSettings)).toBe(false);
   });
 });
 
