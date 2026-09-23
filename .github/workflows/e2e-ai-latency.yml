@@ -800,3 +800,15 @@ jobs:
             {
               "text": ":warning: One or more Bike4Mind AI responses exceeded latency thresholds or encountered failures! Please investigate. <#C08QZ42L9KM|b4m-automation-results>."
             }
+
+      - name: Fail the run when a latency threshold was exceeded
+        # The aggregate step already prints ":x: Failed" and pages #slow-responses for a breach, but
+        # the job still exited 0, so the only thing that could turn the run red was a Playwright
+        # timeout. That made the per-response streaming cap the de-facto latency gate by accident,
+        # while thresholdSec - the number that exists to measure this - decorated a report column.
+        # Exiting non-zero here makes the declared budget the gate, so raising a streaming cap can
+        # no longer silently retire the slowness signal.
+        if: ${{ always() && steps.aggregate.outputs.exceeded == 'true' && needs.e2e-ai-latency.outputs.preview_skipped != 'true' }}
+        run: |
+          echo "::error::Average response time exceeded the declared threshold for one or more suite/model cells. See the summary table in the aggregate step."
+          exit 1
