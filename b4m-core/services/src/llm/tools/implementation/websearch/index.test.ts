@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import { verifyImageUrlSignature } from '@bike4mind/common';
+import type { ToolContext } from '../../base/types';
 import {
   safeHostname,
   serpApiSearch,
   performWebSearch,
   shouldIncludeImages,
   formatImageResults,
+  webSearchTool,
   WEB_SEARCH_NOT_CONFIGURED_MSG,
 } from './index';
 
@@ -59,7 +61,15 @@ describe('safeHostname', () => {
 });
 
 describe('shouldIncludeImages', () => {
-  const hit = (thumbnail?: string) => ({ title: 't', url: 'https://x.com', snippet: 's', thumbnail });
+  // Mirrors what the real providers set (providers.ts): `images` alongside `thumbnail` as
+  // `images[0]`, never one without the other.
+  const hit = (...urls: string[]) => ({
+    title: 't',
+    url: 'https://x.com',
+    snippet: 's',
+    thumbnail: urls[0],
+    images: urls.length ? urls : undefined,
+  });
 
   it('is false when the model did not ask, however many thumbnails came back', () => {
     expect(shouldIncludeImages([hit('https://i/1.jpg'), hit('https://i/2.jpg')], undefined)).toBe(false);
@@ -72,6 +82,14 @@ describe('shouldIncludeImages', () => {
 
   it('is true once the model asked and a real cluster of pictures came back', () => {
     expect(shouldIncludeImages([hit('https://i/1.jpg'), hit('https://i/2.jpg'), hit()], true)).toBe(true);
+  });
+
+  // A provider (e.g. SearXNG) that has no dedicated image-search pool can still carry several
+  // images on a single organic hit - counting hits-that-have-at-least-one-image would undercount
+  // that as one picture and drop a real card-worthy cluster.
+  it('sums every image on a single hit, not just whether the hit has any', () => {
+    expect(shouldIncludeImages([hit('https://i/1.jpg', 'https://i/2.jpg'), hit()], true)).toBe(true);
+    expect(shouldIncludeImages([hit('https://i/1.jpg'), hit()], true)).toBe(false);
   });
 
   // A plain web search frequently carries NO usable images, so the dedicated image search is where
@@ -150,13 +168,27 @@ describe('performWebSearch - image handling', () => {
     vi.unstubAllGlobals();
   });
 
-  it('still attaches thumbnails to the citables so the sources panel can use them later', async () => {
+  it('attaches thumbnails to the citables when images were actually requested and found', async () => {
+    useSerpApi();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(serpResponse(twoImageHits)));
+
+    const result = await performWebSearch(mockAdapters, { query: 'q', include_images: true }, TEST_SECRET);
+
+    expect(result.citables[0].metadata).toMatchObject({ thumbnail: 'https://img/a.jpg' });
+    vi.unstubAllGlobals();
+  });
+
+  // Keeps the "byte-identical text output when include_images is unset" contract honest for the
+  // stored citable too, not just the formatted text: a citable carrying thumbnail/images data the
+  // model never asked for and the reply never showed would be a silent behavior change.
+  it('never attaches thumbnails to the citables when include_images is unset', async () => {
     useSerpApi();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(serpResponse(twoImageHits)));
 
     const result = await performWebSearch(mockAdapters, { query: 'q' });
 
-    expect(result.citables[0].metadata).toMatchObject({ thumbnail: 'https://img/a.jpg' });
+    expect(result.citables[0].metadata).not.toHaveProperty('thumbnail');
+    expect(result.citables[0].metadata).not.toHaveProperty('images');
     vi.unstubAllGlobals();
   });
 
@@ -164,7 +196,7 @@ describe('performWebSearch - image handling', () => {
     useSerpApi();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(serpResponse(twoImageHits)));
 
-    const result = await performWebSearch(mockAdapters, { query: 'q', include_images: true });
+    const result = await performWebSearch(mockAdapters, { query: 'q', include_images: true }, TEST_SECRET);
 
     expect(result.formattedResults).toContain('Images: https://img/a.jpg');
     expect(result.formattedResults).toContain('b4m_cards');
@@ -239,6 +271,74 @@ describe('performWebSearch - image handling', () => {
 
     expect(result.formattedResults).not.toContain('Images:');
     expect(result.formattedResults).not.toContain('b4m_cards');
+    vi.unstubAllGlobals();
+  });
+
+  // Degrades to plain prose (no paid image search, no cards prompt) rather than doing the paid
+  // provider call and emitting a card row that fails verification at the real proxy 100% of the
+  // time - see /api/search-image, which rejects every unconfigured/placeholder secret.
+  it('treats a placeholder signing secret as no images requested at all', async () => {
+    useSerpApi();
+    const fetchMock = vi.fn().mockResolvedValue(serpResponse(twoImageHits));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await performWebSearch(mockAdapters, { query: 'q', include_images: true }, '');
+
+    expect(result.formattedResults).not.toContain('Images:');
+    expect(result.formattedResults).not.toContain('b4m_cards');
+    // Never paid for the dedicated image-search call either.
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('engine=google_images'))).toBe(false);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe('webSearchTool.implementation(...).toolFn - signature threading through the tool boundary', () => {
+  const serpResponse = (organic: unknown[]) =>
+    ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      json: async () => ({ organic_results: organic }),
+      text: async () => '',
+    }) as unknown as Response;
+
+  const twoImageHits = [
+    { title: 'A', link: 'https://a.com', snippet: 'about a', thumbnail: 'https://img/a.jpg' },
+    { title: 'B', link: 'https://b.com', snippet: 'about b', thumbnail: 'https://img/b.jpg' },
+  ];
+
+  function createFakeContext(): ToolContext {
+    return {
+      userId: 'u1',
+      user: {} as ToolContext['user'],
+      logger: { warn: vi.fn(), error: vi.fn(), debug: vi.fn(), info: vi.fn() } as unknown as ToolContext['logger'],
+      db: {} as ToolContext['db'],
+      onStart: vi.fn().mockResolvedValue(undefined),
+      statusUpdate: vi.fn().mockResolvedValue(undefined),
+    } as unknown as ToolContext;
+  }
+
+  // Calling performWebSearch directly (as every other test above does) bypasses the tool's own
+  // toolFn, so deleting `toolConfig?.imageUrlSigningSecret` from webSearchTool.implementation
+  // itself would leave every other test in this file green. This is the one that actually
+  // exercises the tool boundary the real config threading (buildSubagentToolConfig,
+  // ChatCompletionProcess, embedRoute, ...) all feed into.
+  it('signs the emitted image URL with the secret from toolConfig, verifiable against that secret', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetProvider.mockResolvedValue('serpapi');
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(serpResponse(twoImageHits)));
+
+    const context = createFakeContext();
+    const output = (await webSearchTool
+      .implementation(context, { imageUrlSigningSecret: TEST_SECRET })
+      .toolFn({ query: 'q', include_images: true })) as string;
+
+    const imageLine = output.split('\n').find(line => line.startsWith('Images: '));
+    expect(imageLine).toBeDefined();
+    const signedUrl = imageLine!.replace('Images: ', '');
+    expect(verifyImageUrlSignature(signedUrl, TEST_SECRET)).toBe(true);
+    expect(verifyImageUrlSignature(signedUrl, 'a-different-secret')).toBe(false);
     vi.unstubAllGlobals();
   });
 });

@@ -1775,6 +1775,7 @@ async function processExecution(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: execution.imageConfig,
       audioConfig: execution.audioConfig,
+      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
     // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
@@ -3403,6 +3404,7 @@ async function processSubagentDispatch(
       apiKeyTable: apiKeyTable as ApiKeyTable,
       imageConfig: child.imageConfig,
       audioConfig: child.audioConfig,
+      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
     // Lattice opt-in pool for this subagent (and any grandchildren it delegates

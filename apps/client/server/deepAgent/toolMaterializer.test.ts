@@ -9,7 +9,9 @@ import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 // b4m-core/services/src/llm/toolAvailability.test.ts already covers.
 const resolveToolAvailabilityMock = vi.fn();
 
-vi.mock('sst', () => ({ Resource: { ImageProcessor: { name: 'image-processor' } } }));
+vi.mock('sst', () => ({
+  Resource: { ImageProcessor: { name: 'image-processor' }, SECRET_ENCRYPTION_KEY: { value: 'test-secret' } },
+}));
 vi.mock('@bike4mind/services/llm', async importOriginal => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return { ...actual, resolveToolAvailability: (...args: unknown[]) => resolveToolAvailabilityMock(...args) };

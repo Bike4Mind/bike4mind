@@ -23,7 +23,7 @@ describe('SEARCH_RESULT_CARDS_LANGUAGE', () => {
 });
 
 describe('parseSearchResultCards', () => {
-  it('parses a well-formed block, keeping per-image attribution', () => {
+  it('parses a well-formed block, attributing each image to its own derived host', () => {
     const parsed = parseSearchResultCards(
       block([
         {
@@ -44,7 +44,8 @@ describe('parseSearchResultCards', () => {
           note: 'The default answer to this question.',
           meta: '~$200',
           url: 'https://orientwatch.co/bambino',
-          images: [{ url: 'https://cdn.example.com/a.jpg', source: 'orientwatch.co' }],
+          // Derived from the image's own host, NOT the model-authored `source` above.
+          images: [{ url: 'https://cdn.example.com/a.jpg', source: 'cdn.example.com' }],
         },
       ],
     });
@@ -61,12 +62,15 @@ describe('parseSearchResultCards', () => {
     });
   });
 
-  it('prefers an explicit source over the derived host', () => {
+  // A hostile search snippet could otherwise caption a tile with a trusted-looking host while the
+  // image/link point elsewhere - the caption must always come from the image's own URL, never from
+  // model-authored text.
+  it('ignores an explicit model-authored source, always deriving the caption from the image host', () => {
     const parsed = parseSearchResultCards(
       block([{ name: 'A', images: [{ url: 'https://cdn.example.com/a.jpg', source: 'orientwatch.co' }] }])
     );
 
-    expect(parsed).toMatchObject({ state: 'ok', cards: [{ images: [{ source: 'orientwatch.co' }] }] });
+    expect(parsed).toMatchObject({ state: 'ok', cards: [{ images: [{ source: 'cdn.example.com' }] }] });
   });
 
   it.each([

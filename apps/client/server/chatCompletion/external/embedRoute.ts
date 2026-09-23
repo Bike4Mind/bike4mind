@@ -281,7 +281,12 @@ async function buildEmbedServerTools(args: {
     onToolFinish: async () => {},
   };
 
-  const tools = buildSharedTools(deps, callbacks, { enabledTools, getAbortSignal, toolAvailability });
+  const tools = buildSharedTools(deps, callbacks, {
+    enabledTools,
+    getAbortSignal,
+    toolAvailability,
+    config: { web_search: { imageUrlSigningSecret: Config.SECRET_ENCRYPTION_KEY || '' } },
+  });
   return tools && tools.length > 0 ? tools : undefined;
 }
 

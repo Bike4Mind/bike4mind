@@ -99,11 +99,15 @@ describe('SearchResultCards', () => {
     }
   });
 
-  it('attributes each tile to the host its picture came from', async () => {
+  // The caption is always the picture's OWN derived host, never the model-authored `source` in
+  // the fence (`oneCard` sets 'orientwatch.co'/'jomashop' there) - a hostile snippet could
+  // otherwise caption a tile with a trusted-looking host while the image points elsewhere.
+  it('attributes each tile to the host its picture came from, ignoring the model-authored source', async () => {
     renderCards(oneCard);
 
-    expect(await screen.findByText('orientwatch.co')).toBeInTheDocument();
-    expect(screen.getByText('jomashop')).toBeInTheDocument();
+    expect(await screen.findAllByText('cdn.example.com')).toHaveLength(2);
+    expect(screen.queryByText('orientwatch.co')).not.toBeInTheDocument();
+    expect(screen.queryByText('jomashop')).not.toBeInTheDocument();
   });
 
   it('releases each blob URL when the row unmounts', async () => {

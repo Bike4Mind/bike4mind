@@ -1,7 +1,7 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolDefinition, ToolContext } from '../../base/types';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
-import { CitableSource, signImageUrl } from '@bike4mind/common';
+import { CitableSource, signImageUrl, isPlaceholderImageSigningSecret } from '@bike4mind/common';
 import { resolveWebSearchProvider, type WebSearchImageResult, type WebSearchProviderResult } from './providers';
 import { WEB_SEARCH_CARDS_PROMPT } from '../../../prompts';
 
@@ -56,22 +56,36 @@ export function shouldIncludeImages(
   imageResults: WebSearchImageResult[] = []
 ): boolean {
   if (!includeImages) return false;
-  return results.filter(r => !!r.thumbnail).length + imageResults.length >= MIN_IMAGE_RESULTS;
+  // Sum actual pictures, not hits-that-have-at-least-one-image: a provider like SearXNG can
+  // return one organic hit carrying several images, which would otherwise undercount a real
+  // card-worthy cluster as a single picture.
+  const organicImageCount = results.reduce((sum, r) => sum + (r.images?.length ?? 0), 0);
+  return organicImageCount + imageResults.length >= MIN_IMAGE_RESULTS;
 }
 
 /** The image pool, rendered for the model as one line per picture. `imageUrlSigningSecret` signs
  *  each URL so the proxy can verify it later - see WebSearchToolConfig. */
+// Strips raw newlines a hostile search snippet could use to forge extra fake lines in this
+// line-structured tool output (each field is interpolated onto its own line below).
+function stripNewlines(value: string): string {
+  return value.replace(/[\r\n]+/g, ' ');
+}
+
 export function formatImageResults(images: WebSearchImageResult[], imageUrlSigningSecret = ''): string {
   return [
     'Images found for this search (use these to build cards; each is already attributed to its own page):',
     '',
-    ...images.map(
-      (image, index) =>
-        `${index + 1}. ${image.title || image.source}\n` +
+    ...images.map((image, index) => {
+      const title = stripNewlines(image.title || image.source);
+      const source = stripNewlines(image.source);
+      const pageUrl = stripNewlines(image.pageUrl);
+      return (
+        `${index + 1}. ${title}\n` +
         `   image: ${signImageUrl(image.url, imageUrlSigningSecret)}\n` +
-        `   source: ${image.source}\n` +
-        `   page: ${image.pageUrl}`
-    ),
+        `   source: ${source}\n` +
+        `   page: ${pageUrl}`
+      );
+    }),
   ].join('\n');
 }
 
@@ -104,14 +118,21 @@ export async function performWebSearch(
     const results = await provider.search(params.query, params.num_results);
     Logger.globalInstance.log(`📊 WebSearch Tool: ${provider.name} found ${results.length} results`);
 
+    // An unconfigured/placeholder signing secret can never produce a verifiable image URL - every
+    // tile would render "Image unavailable" while still paying for the extra provider call and
+    // showing the model the cards prompt. Degrade to plain prose instead, same as if the model
+    // never asked for images at all.
+    const canSignImages = !isPlaceholderImageSigningSecret(imageUrlSigningSecret);
+    const wantsImages = !!params.include_images && canSignImages;
+
     // Only on a visual query: this is a second paid provider call, so it stays behind the model's
     // own `include_images` flag and never runs on an ordinary search.
-    const imageResults = params.include_images ? ((await provider.searchImages?.(params.query)) ?? []) : [];
+    const imageResults = wantsImages ? ((await provider.searchImages?.(params.query)) ?? []) : [];
     if (imageResults.length) {
       Logger.globalInstance.log(`🖼️ WebSearch Tool: ${provider.name} found ${imageResults.length} images`);
     }
 
-    const withImages = shouldIncludeImages(results, params.include_images, imageResults);
+    const withImages = shouldIncludeImages(results, wantsImages, imageResults);
 
     const citables: CitableSource[] = results.map((result, index) => ({
       id: result.url, // Use URL as unique identifier
@@ -125,7 +146,10 @@ export async function performWebSearch(
         sourceSystem: 'web_search',
         relevanceScore: 1 - index * 0.1, // Higher relevance for earlier results
         fullContext: result.snippet,
-        ...(result.thumbnail ? { thumbnail: result.thumbnail, images: result.images } : {}),
+        // Only ever set when images were actually requested/found - keeps the "byte-identical
+        // output when include_images is unset" contract honest for the stored citable too, not
+        // just the text output below.
+        ...(withImages && result.thumbnail ? { thumbnail: result.thumbnail, images: result.images } : {}),
       },
     }));
 

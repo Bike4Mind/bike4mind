@@ -79,11 +79,12 @@ function parseImages(raw: unknown): SearchResultCardImage[] {
     const url = safeImageUrl(typeof entry === 'string' ? entry : (entry as { url?: unknown })?.url);
     if (!url || seen.has(url)) continue;
     seen.add(url);
-    const source =
-      typeof entry === 'object' && entry !== null ? nonEmptyString((entry as { source?: unknown }).source) : undefined;
-    // Fall back to the image's OWN host, not the card's link host: a card linking orientwatch.co
-    // whose picture is served from a jomashop CDN must not be captioned "orientwatch.co".
-    images.push({ url, source: source ?? hostnameOf(url) });
+    // Caption is ALWAYS the image's own derived hostname, never the model-authored `source` from
+    // the fence: a hostile search snippet could otherwise caption a tile with a trusted-looking
+    // host while the image/link point elsewhere. Also not the card's link host - a card linking
+    // orientwatch.co whose picture is served from a jomashop CDN must not be captioned
+    // "orientwatch.co".
+    images.push({ url, source: hostnameOf(url) });
     if (images.length >= MAX_IMAGES_PER_CARD) break;
   }
   return images;

@@ -1,3 +1,4 @@
+import { Resource } from 'sst';
 import { cliTools } from '@bike4mind/services';
 import { adminSettingsRepository, apiKeyRepository, toolExecutionLogRepository } from '@bike4mind/database';
 
@@ -71,7 +72,8 @@ export async function executeToolWithLogging(request: ToolExecutionInput, contex
         adminSettings: adminSettingsRepository,
         apiKeys: apiKeyRepository,
       },
-    }
+    },
+    Resource.SECRET_ENCRYPTION_KEY.value
   );
 
   logger.info(`Tool ${toolName} ${result.success ? 'succeeded' : 'failed'} in ${result.executionTimeMs}ms`);

@@ -1,9 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { signImageUrl, stripImageUrlSignature, verifyImageUrlSignature } from './signedImageUrl';
 
 const SECRET = 'a-real-test-secret';
 const URL_NO_QUERY = 'https://cdn.example.com/watch.jpg';
 const URL_WITH_QUERY = 'https://cdn.example.com/watch.jpg?w=400&label=A B'; // deliberately unencoded space
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe('signImageUrl / verifyImageUrlSignature round trip', () => {
   it('a freshly signed URL verifies against the same secret', () => {
@@ -29,8 +33,9 @@ describe('signImageUrl / verifyImageUrlSignature round trip', () => {
   });
 
   it('appends with "?" when the URL has no existing query string, "&" when it does', () => {
-    expect(signImageUrl(URL_NO_QUERY, SECRET)).toContain('?b4mSig=');
-    expect(signImageUrl(URL_WITH_QUERY, SECRET)).toContain('&b4mSig=');
+    expect(signImageUrl(URL_NO_QUERY, SECRET)).toContain('?b4mExp=');
+    expect(signImageUrl(URL_WITH_QUERY, SECRET)).toContain('&b4mExp=');
+    expect(signImageUrl(URL_NO_QUERY, SECRET)).toContain('&b4mSig=');
   });
 
   it('an input that already carries a trailing signature is returned unchanged, not double-signed', () => {
@@ -45,13 +50,36 @@ describe('signImageUrl / verifyImageUrlSignature round trip', () => {
 });
 
 describe('stripImageUrlSignature', () => {
-  it('removes exactly the trailing signature, recovering the original URL', () => {
+  it('removes exactly the trailing expiry + signature, recovering the original URL', () => {
     expect(stripImageUrlSignature(signImageUrl(URL_NO_QUERY, SECRET))).toBe(URL_NO_QUERY);
     expect(stripImageUrlSignature(signImageUrl(URL_WITH_QUERY, SECRET))).toBe(URL_WITH_QUERY);
   });
 
   it('is a no-op on a URL with no signature', () => {
     expect(stripImageUrlSignature(URL_NO_QUERY)).toBe(URL_NO_QUERY);
+  });
+});
+
+describe('verifyImageUrlSignature - expiry', () => {
+  it('verifies a URL signed with a custom TTL that has not yet elapsed', () => {
+    const signed = signImageUrl(URL_NO_QUERY, SECRET, 60);
+    expect(verifyImageUrlSignature(signed, SECRET)).toBe(true);
+  });
+
+  it('rejects a URL once its TTL has elapsed', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    const signed = signImageUrl(URL_NO_QUERY, SECRET, 60);
+    expect(verifyImageUrlSignature(signed, SECRET)).toBe(true);
+
+    vi.setSystemTime(new Date('2026-01-01T00:02:00Z')); // 120s later, past the 60s TTL
+    expect(verifyImageUrlSignature(signed, SECRET)).toBe(false);
+  });
+
+  it('rejects a non-numeric b4mExp', () => {
+    const signed = signImageUrl(URL_NO_QUERY, SECRET);
+    const forged = signed.replace(/b4mExp=\d+/, 'b4mExp=notanumber');
+    expect(verifyImageUrlSignature(forged, SECRET)).toBe(false);
   });
 });
 
@@ -74,8 +102,8 @@ describe('verifyImageUrlSignature - tamper resistance', () => {
 
   it('rejects a signature copied onto a different URL', () => {
     const signed = signImageUrl(URL_NO_QUERY, SECRET);
-    const signature = /b4mSig=([0-9a-f]{32})$/.exec(signed)?.[1];
-    const forged = `https://attacker.example.com/beacon?b4mSig=${signature}`;
+    const match = /b4mExp=(\d+)&b4mSig=([0-9a-f]{32})$/.exec(signed);
+    const forged = `https://attacker.example.com/beacon?b4mExp=${match?.[1]}&b4mSig=${match?.[2]}`;
     expect(verifyImageUrlSignature(forged, SECRET)).toBe(false);
   });
 
@@ -83,6 +111,12 @@ describe('verifyImageUrlSignature - tamper resistance', () => {
     const signed = signImageUrl(URL_NO_QUERY, SECRET);
     const flipped = signed.slice(0, -1) + (signed.endsWith('0') ? '1' : '0');
     expect(verifyImageUrlSignature(flipped, SECRET)).toBe(false);
+  });
+
+  it('rejects a b4mExp extended forward in time without a valid signature for it', () => {
+    const signed = signImageUrl(URL_NO_QUERY, SECRET, 1);
+    const tampered = signed.replace(/b4mExp=\d+/, `b4mExp=${Math.floor(Date.now() / 1000) + 999999}`);
+    expect(verifyImageUrlSignature(tampered, SECRET)).toBe(false);
   });
 });
 
