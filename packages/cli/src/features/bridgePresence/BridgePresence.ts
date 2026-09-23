@@ -230,6 +230,15 @@ export class BridgePresence {
   private async attemptAnnounce(): Promise<boolean> {
     if (this.stopped || !this.config || !this.startOpts) return false;
     if (this.instanceId) return true;
+    // A platform without getuid (Windows) can never pass the same-UID ownership
+    // check, so every probe fails closed forever. Latch off rather than spin the
+    // announce-retry loop at its 30s cap. Real Windows support would need a native
+    // owner probe (e.g. GetExtendedTcpTable + process-token compare) - out of
+    // scope for this loopback ownership fix.
+    if (typeof process.getuid !== 'function') {
+      logger.debug('[tavern] ownership unverifiable on this platform (no getuid); tavern presence disabled');
+      return false;
+    }
     const gen = this.generation;
     const startOpts = this.startOpts;
 

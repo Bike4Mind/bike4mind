@@ -6,10 +6,11 @@ import type { ListenerOwner } from './peerOwner.js';
 
 // Hoisted so the vi.mock factories (themselves hoisted above imports) can
 // reference these safely.
-const { resolveMock, readFileMock, warn } = vi.hoisted(() => ({
+const { resolveMock, readFileMock, warn, debug } = vi.hoisted(() => ({
   resolveMock: vi.fn<(port: number) => Promise<ListenerOwner>>(),
   readFileMock: vi.fn<() => Promise<string>>(),
   warn: vi.fn(),
+  debug: vi.fn(),
 }));
 
 // Owner-lookup seam - the only pre-transmission trust signal. Stub it per test
@@ -30,7 +31,7 @@ vi.mock('fs', async importOriginal => {
 });
 
 vi.mock('../../utils/Logger.js', () => ({
-  logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+  logger: { debug, info: vi.fn(), warn, error: vi.fn() },
 }));
 
 // Imported after the mocks are registered.
@@ -82,6 +83,7 @@ describe('BridgePresence peer-ownership gate', () => {
     resolveMock.mockReset();
     readFileMock.mockReset();
     warn.mockClear();
+    debug.mockClear();
 
     server = http.createServer((req, res) => {
       let body = '';
@@ -475,6 +477,28 @@ describe('BridgePresence peer-ownership gate', () => {
     expect(eventBodies.some(b => b.includes('gen1-LATE'))).toBe(false);
 
     await presence.stop();
+  });
+
+  it('latches the retry loop off (no spin) on a platform without getuid (Windows)', async () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'getuid');
+    Object.defineProperty(process, 'getuid', { value: undefined, configurable: true });
+    try {
+      const presence = new BridgePresence();
+      const ok = await presence.start({ workspacePath: '/tmp/ws' });
+      expect(ok).toBe(false);
+
+      // Past the first announce-retry backoff (1s): the ownership check can never
+      // pass here, so the loop must be latched off - no repeated "retrying" probes.
+      await new Promise(r => setTimeout(r, 1200));
+      const retryLogs = debug.mock.calls.filter(([m]) => typeof m === 'string' && m.includes('retrying'));
+      expect(retryLogs).toEqual([]);
+      expect(httpRequests).toEqual([]);
+      expect(warn).not.toHaveBeenCalled();
+
+      await presence.stop();
+    } finally {
+      if (original) Object.defineProperty(process, 'getuid', original);
+    }
   });
 
   it('refuses a closed-gate emit silently after a benign bridge restart (nit: post() silent refusal)', async () => {
