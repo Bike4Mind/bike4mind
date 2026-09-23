@@ -1347,8 +1347,10 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         }
         break;
       case 'questmaster':
-        // Use the async export feature for QuestMaster plans
-        questExport.startExport(currentItem.content);
+        // The plan id lives on the item's id, not its content: a streamed quest completion
+        // overwrites the content with a QuestMasterData object (see the streamed_chat_completion
+        // subscription above), and the export route only accepts an id.
+        questExport.startExport(currentItem.id);
         break;
       case 'code':
         downloadFile(
@@ -1720,6 +1722,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                     sx={(theme: Theme) => ({
                       borderColor: theme.palette.divider,
                     })}
+                    data-testid="knowledgeviewer-download-btn"
                   >
                     {questExport.isExporting ? (
                       <CircularProgress size="sm" sx={{ '--CircularProgress-size': '16px' }} />

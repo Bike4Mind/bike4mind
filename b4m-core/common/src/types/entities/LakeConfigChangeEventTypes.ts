@@ -157,6 +157,8 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   totalChunkedChars: 'excluded',
   embeddingSpendMicroUsd: 'excluded',
   lastSyncAt: 'excluded',
+  // Sweep bookkeeping, not an operator choice - see IDataLake.lastHealthCheckedAt.
+  lastHealthCheckedAt: 'excluded',
   filesDeletedAt: 'excluded',
   filesArchivedAt: 'excluded',
   lakeMemoryExtractionAt: 'excluded',

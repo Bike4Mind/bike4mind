@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import { rmSync } from 'fs';
+import { rmSync, realpathSync } from 'fs';
 import path from 'path';
 import { Logger } from '@bike4mind/observability';
 import { BaseStorage } from '@bike4mind/fab-pipeline';
@@ -10,6 +10,10 @@ import {
   generateTools,
   getCliOnlyTools,
   setShowUserQuestionFn,
+  resolveEditLocalFile,
+  isFuzzyEditConfirmationRequired,
+  isPathAllowed,
+  type EditPlan,
   type LlmTools,
   type UserQuestionPayload,
   type UserQuestionResponse,
@@ -33,6 +37,15 @@ import { matchesAnyPattern } from '../agents/toolFilter.js';
 import { getProcessHooks } from './processHooks.js';
 import { clampInteractionMode } from '../agents/interactionModeClamp.js';
 import type { InteractionMode } from '../bootstrap/types.js';
+
+/**
+ * What a permission prompt is asking about. 'tool' is a normal tool-call gate;
+ * 'directory-grant' is a request to widen the filesystem allow-list, which is a
+ * separate decision (deny-by-default in headless, never inheriting the tool's
+ * own verdict). Passed as an optional 4th arg so existing 3-arg prompt callbacks
+ * remain valid; a headless callback reads it to fail closed on scope widening.
+ */
+export type PermissionPromptKind = 'tool' | 'directory-grant';
 
 /**
  * Tool-name patterns auto-approved without a permission prompt, from `--allowedTools`
@@ -117,7 +130,7 @@ interface AgentContext {
 /**
  * Wrap a tool with permission checking, server routing, and observation tracking.
  */
-function wrapToolWithPermission(
+export function wrapToolWithPermission(
   tool: ICompletionOptionTools,
   permissionManager: PermissionManager,
   showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>,
@@ -180,6 +193,9 @@ function wrapToolWithPermission(
       }
 
       const effectiveArgs = isSandboxed ? sandboxedArgs : args;
+      // Args actually handed to execution. Defaults to effectiveArgs; the fuzzy-edit
+      // gate below rebinds it to carry the approved content-hash snapshot.
+      let execArgs: Record<string, unknown> = effectiveArgs;
 
       /**
        * Shared execution flow: run tool, cleanup sandbox files, capture violations,
@@ -188,7 +204,7 @@ function wrapToolWithPermission(
       async function executeAndRecord(): Promise<string> {
         let result: string;
         try {
-          result = await executeTool(toolName, effectiveArgs, apiClient, originalFn);
+          result = await executeWithFuzzyConfirmation(toolName, execArgs, apiClient, originalFn, showPermissionPrompt);
         } catch (err) {
           // grep_search / glob_files re-throw path-validation errors instead
           // of returning them as a string. Normalize a denial to a string so
@@ -198,7 +214,10 @@ function wrapToolWithPermission(
           if (!isPathAccessDenial(msg)) throw err;
           result = msg;
         }
-        cleanupSandboxFiles(effectiveArgs?._sandboxCleanup);
+        // Only clean up paths THIS wrapper set on sandboxedArgs. When unsandboxed,
+        // effectiveArgs === the raw model args, so a model-supplied `_sandboxCleanup`
+        // must never reach rmSync(recursive, force).
+        cleanupSandboxFiles(isSandboxed ? sandboxedArgs?._sandboxCleanup : undefined);
         await captureViolations(isSandboxed, result, args?.command, sandboxOrchestrator);
         result = await retrySandboxFailure(
           isSandboxed,
@@ -214,7 +233,7 @@ function wrapToolWithPermission(
         result = await retryPathAccessDenial(
           result,
           toolName,
-          effectiveArgs,
+          execArgs,
           allowedDirectories,
           configStore,
           apiClient,
@@ -267,27 +286,75 @@ function wrapToolWithPermission(
       }
       const forcePromptForRisk = commandRisk?.level === 'high';
 
+      // Fuzzy-edit gate: resolve the edit ONCE, through the SAME path
+      // authorization the tool itself enforces (no raw model-supplied path is
+      // ever read here), to learn whether it resolves via the fuzzy fallback -
+      // which can write a wider span than old_string names. Such an edit is
+      // re-confirmed even under trust / auto-accept (mirroring forcePromptForRisk)
+      // so the human sees the real span. Any resolve error (auth denial, missing
+      // file, no match) leaves editPlan null: the gate forces no prompt and the
+      // real error surfaces at execution. edit_local_file is never shell-like, so
+      // this and forcePromptForRisk are mutually exclusive.
+      let editPlan: EditPlan | null = null;
+      if (
+        toolName === 'edit_local_file' &&
+        typeof args?.path === 'string' &&
+        typeof args?.old_string === 'string' &&
+        typeof args?.new_string === 'string'
+      ) {
+        try {
+          editPlan = await resolveEditLocalFile(
+            args as { path: string; old_string: string; new_string: string },
+            allowedDirectories
+          );
+        } catch {
+          editPlan = null;
+        }
+      }
+      const forcePromptForFuzzyEdit = editPlan?.strategy != null;
+      const forcePrompt = forcePromptForRisk || forcePromptForFuzzyEdit;
+
+      // Bind the fuzzy edit's execution to the snapshot the gate just approved, so
+      // the bytes written are the ones the human confirmed. The tool refuses to
+      // apply a fuzzy edit whose content-hash no longer matches, forcing a fresh
+      // prompt (see executeWithFuzzyConfirmation). Exact edits are deterministic
+      // and need no binding.
+      if (forcePromptForFuzzyEdit && editPlan) {
+        execArgs = { ...effectiveArgs, confirmedFuzzyHash: editPlan.contentHash };
+      }
+
       // Host allowlist (claude --allowedTools): auto-approve tools matching an
       // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
       const allowedPatterns = getAllowedToolPatterns();
-      if (!forcePromptForRisk && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
+      if (!forcePrompt && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
         return executeAndRecord();
       }
 
       // Auto-approved, trusted, or sandbox auto-allowed
-      if (!forcePromptForRisk && !permissionManager.needsPermission(toolName, { isSandboxed })) {
+      if (!forcePrompt && !permissionManager.needsPermission(toolName, { isSandboxed })) {
         return executeAndRecord();
       }
 
       // Auto-accept: skip permission prompt when Shift+Tab toggle is on
-      if (!forcePromptForRisk && interactionMode === 'auto-accept') {
+      if (!forcePrompt && interactionMode === 'auto-accept') {
         return executeAndRecord();
       }
 
-      // Generate preview for dangerous operations
-      const basePreview = await generateToolPreview(toolName, args, isSandboxed);
+      // Generate preview for dangerous operations. For edit_local_file the gate
+      // already resolved the real span through the authorized preflight, so reuse
+      // that (one resolve, no extra raw-path read) instead of resolving again in
+      // generateToolPreview; fall back to the generic preview only when the edit
+      // did not resolve (auth denied, missing file, no match).
+      const basePreview =
+        toolName === 'edit_local_file' && editPlan
+          ? editPlan.diffPreview
+          : await generateToolPreview(toolName, args, isSandboxed, allowedDirectories);
       const preview =
-        forcePromptForRisk && commandRisk ? prependRiskBanner(basePreview, commandRisk.reasons) : basePreview;
+        forcePromptForRisk && commandRisk
+          ? prependRiskBanner(basePreview, commandRisk.reasons)
+          : forcePromptForFuzzyEdit
+            ? prependFuzzyEditBanner(basePreview)
+            : basePreview;
 
       // Show permission prompt and wait indefinitely for response
       const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
@@ -307,6 +374,44 @@ function wrapToolWithPermission(
       return executeAndRecord();
     },
   };
+}
+
+/**
+ * Collaborators the permission wrapper needs. Bundled so the several entrypoints
+ * that build raw tool lists (MCP tools, skill, get_file_structure, find_definition)
+ * can route them through the ONE wrapper without repeating its long argument list.
+ */
+export interface WrapToolDeps {
+  permissionManager: PermissionManager;
+  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>;
+  agentContext: AgentContext;
+  configStore: any; // ConfigStore instance (no shared interface)
+  apiClient: ApiClient;
+  sandboxOrchestrator?: SandboxOrchestrator;
+  /** Live, mutable allow-list shared with the core tool context (see wrapToolWithPermission). */
+  allowedDirectories?: string[];
+  interactionModeOverride?: InteractionMode;
+}
+
+/**
+ * Route a set of otherwise-raw tools through the permission wrapper. This is the
+ * single choke-point every tool the model can call must pass through; anything
+ * constructed outside generateCliTools is wrapped here before it reaches the agent.
+ */
+export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): ICompletionOptionTools[] {
+  return tools.map(tool =>
+    wrapToolWithPermission(
+      tool,
+      deps.permissionManager,
+      deps.showPermissionPrompt,
+      deps.agentContext,
+      deps.configStore,
+      deps.apiClient,
+      deps.sandboxOrchestrator,
+      deps.allowedDirectories,
+      deps.interactionModeOverride
+    )
+  );
 }
 
 /**
@@ -395,23 +500,41 @@ async function retryPathAccessDenial(
   configStore: any,
   apiClient: ApiClient,
   originalFn: (args: unknown) => Promise<string>,
-  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>
+  showPermissionPrompt: (
+    toolName: string,
+    args: unknown,
+    preview?: string,
+    kind?: PermissionPromptKind
+  ) => Promise<{ action: PermissionResponse }>
 ): Promise<string> {
   if (!allowedDirectories || !isPathAccessDenial(result)) return result;
 
   const grantDir = deriveGrantDirectory(toolName, args);
   if (!grantDir) return result;
+  // Grant the realpath, not the lexical string: the core validator resolves
+  // symlinks (realpathSync) before matching, so a lexical entry for a symlinked
+  // dir would never match and the grant would silently fail to unblock.
+  let resolvedGrantDir = grantDir;
+  try {
+    resolvedGrantDir = realpathSync(grantDir);
+  } catch {
+    // Not-yet-resolvable path: fall back to the lexical dir.
+  }
   // Already granted - return the result rather than re-prompting in a loop.
-  if (allowedDirectories.includes(grantDir)) return result;
+  if (allowedDirectories.includes(resolvedGrantDir)) return result;
 
   const preview =
     `🔒 DIRECTORY ACCESS — "${toolName}" needs a path outside the current workspace.\n\n` +
     `- Grant access to this directory:\n` +
-    `  ${grantDir}\n` +
+    `  ${resolvedGrantDir}\n` +
     `- "Allow for this session" grants access until the CLI exits.\n` +
     `- "Always allow" also saves it to your config so it persists across sessions.`;
 
-  const response = await showPermissionPrompt(toolName, args, preview);
+  // Prompt as a 'directory-grant', NOT as the originating tool: widening the
+  // filesystem allow-list is its own decision. In headless this must be
+  // deny-by-default rather than inheriting the tool's policy verdict (a policy
+  // allowing `file_read` must not silently widen scope to any directory).
+  const response = await showPermissionPrompt(toolName, args, preview, 'directory-grant');
   if (response.action === 'deny') return result;
 
   // Grant into the live allow-list the core tool context reads on each call.
@@ -420,20 +543,23 @@ async function retryPathAccessDenial(
   // shortcut. `allow-session` and `allow-always` keep the grant for the rest
   // of the run; `allow-always` also persists it to config.
   const oneShot = response.action === 'allow-once';
-  allowedDirectories.push(grantDir);
+  allowedDirectories.push(resolvedGrantDir);
 
   if (response.action === 'allow-always') {
     try {
-      await configStore.addDirectory(grantDir);
+      await configStore.addDirectory(resolvedGrantDir);
     } catch {
       // Best-effort persistence - the session grant above is already applied.
     }
   }
 
-  // Retry now that the directory is allowed. A failure here (including another
-  // denial for a different path) is returned as-is - no recursion, no loop.
+  // Retry now that the directory is allowed. Route back through the fuzzy-edit
+  // confirmation so a granted edit that resolves fuzzily is re-prompted, not
+  // silently applied - a directory grant must never double as a confirmation
+  // bypass. A failure here (including another denial for a different path) is
+  // returned as-is - no recursion, no loop.
   try {
-    return await executeTool(toolName, args, apiClient, originalFn);
+    return await executeWithFuzzyConfirmation(toolName, args, apiClient, originalFn, showPermissionPrompt);
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   } finally {
@@ -441,7 +567,7 @@ async function retryPathAccessDenial(
     // for the rest of the session. Only remove the entry we added (guard
     // against a concurrent grant of the same dir having persisted it).
     if (oneShot) {
-      const idx = allowedDirectories.lastIndexOf(grantDir);
+      const idx = allowedDirectories.lastIndexOf(resolvedGrantDir);
       if (idx !== -1) allowedDirectories.splice(idx, 1);
     }
   }
@@ -496,17 +622,66 @@ function prependRiskBanner(basePreview: string | undefined, reasons: string[]): 
 }
 
 /**
+ * Prepend a banner to an edit_local_file preview whose old_string was not an
+ * exact match. The diff passed in is the resolved fuzzy span (from the tool's own
+ * authorized resolve), so the banner just explains why this edit is re-prompted
+ * despite trust / auto-accept.
+ */
+function prependFuzzyEditBanner(basePreview: string | undefined): string {
+  const banner = '[!] old_string was not an exact match; the diff below is the actual span that will be written.';
+  return basePreview ? `${banner}\n\n${basePreview}` : banner;
+}
+
+/**
+ * Execute a tool, and when the core edit_local_file tool refuses a fuzzy edit that
+ * is not bound to the current file snapshot - the gate saw an exact match but the
+ * file changed before the write, or a directory grant re-entered here - force ONE
+ * permission prompt showing the REAL resolved span, then retry bound to the hash
+ * the tool reported so the write matches what the human approved. A further
+ * concurrent change makes the tool refuse again; that is surfaced rather than
+ * looped - fail safe, never a silent wider-than-named write.
+ */
+async function executeWithFuzzyConfirmation(
+  toolName: string,
+  args: Record<string, unknown>,
+  apiClient: ApiClient,
+  originalFn: (args: unknown) => Promise<string>,
+  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>
+): Promise<string> {
+  try {
+    return await executeTool(toolName, args, apiClient, originalFn);
+  } catch (err) {
+    if (!isFuzzyEditConfirmationRequired(err)) throw err;
+    const response = await showPermissionPrompt(toolName, args, prependFuzzyEditBanner(err.diffPreview));
+    if (response.action === 'deny') throw new PermissionDeniedError(toolName, args);
+    return executeTool(toolName, { ...args, confirmedFuzzyHash: err.contentHash }, apiClient, originalFn);
+  }
+}
+
+/**
  * Generate a human-readable preview string for a tool invocation.
  * Used in the permission prompt to show what the tool will do.
  */
 async function generateToolPreview(
   toolName: string,
   args: Record<string, unknown>,
-  isSandboxed: boolean
+  isSandboxed: boolean,
+  allowedDirectories?: string[]
 ): Promise<string | undefined> {
   try {
+    // Any preview that reads a file must go through the SAME authorization as
+    // execution: never open a raw model-supplied path the tool would itself
+    // reject. Without this, previewing an out-of-bounds path reads it anyway, and
+    // a special file such as /dev/zero hangs or exhausts memory in the preflight
+    // rather than failing at the allowlist.
+    const pathArg = typeof args?.path === 'string' ? (args.path as string) : undefined;
+    const readsFile = toolName === 'edit_local_file' || toolName === 'create_file' || toolName === 'delete_file';
+    if (readsFile && pathArg && !isPathAllowed(pathArg, allowedDirectories).allowed) {
+      return `[Path outside allowed directories: ${pathArg}]`;
+    }
+
     if (toolName === 'edit_local_file' && args?.path && args?.old_string && typeof args?.new_string === 'string') {
-      return generateEditLocalFilePreview({
+      return await generateEditLocalFilePreview({
         path: args.path as string,
         old_string: args.old_string as string,
         new_string: args.new_string,
@@ -582,10 +757,10 @@ export interface HookWrapperContext {
   cwd: string;
   /**
    * Permission collaborators used to gate each agent lifecycle hook's shell
-   * command before it runs. Threaded to executeHooks; every production caller
-   * supplies it.
+   * command before it runs. Threaded to executeHooks; required so a caller that
+   * forgets to wire it is a type error, never a silent unprompted bypass.
    */
-  permission?: ShellCommandPermissionDeps;
+  permission: ShellCommandPermissionDeps;
 }
 
 /**
@@ -609,6 +784,9 @@ export function wrapToolWithHooks(
 
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
+  // Keep permission out of the buildHookContext spread (it is not a hook-context
+  // field); thread it to executeHooks as the required perm instead.
+  const { permission, ...baseCtx } = hookContext;
 
   return {
     ...tool,
@@ -620,12 +798,12 @@ export function wrapToolWithHooks(
         const preResult = await executeHooks(
           hooks.PreToolUse,
           buildHookContext({
-            ...hookContext,
+            ...baseCtx,
             hookEventName: 'PreToolUse',
             toolName,
             toolInput: args as Record<string, unknown>,
           }),
-          hookContext.permission
+          permission
         );
 
         if (preResult.decision === 'deny') {
@@ -654,13 +832,13 @@ export function wrapToolWithHooks(
           await executeHooks(
             hooks.PostToolUseFailure,
             buildHookContext({
-              ...hookContext,
+              ...baseCtx,
               hookEventName: 'PostToolUseFailure',
               toolName,
               toolInput: finalArgs as Record<string, unknown>,
               error: error.message,
             }),
-            hookContext.permission
+            permission
           );
         }
         throw err;
@@ -671,13 +849,13 @@ export function wrapToolWithHooks(
         const postResult = await executeHooks(
           hooks.PostToolUse,
           buildHookContext({
-            ...hookContext,
+            ...baseCtx,
             hookEventName: 'PostToolUse',
             toolName,
             toolInput: finalArgs as Record<string, unknown>,
             toolResult: observation,
           }),
-          hookContext.permission
+          permission
         );
 
         if (postResult.decision === 'block') {

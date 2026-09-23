@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import { readFileSync } from 'fs';
 import { computeHelpCorpusHash } from '@bike4mind/infra';
 import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
@@ -836,7 +836,7 @@ execSync('pnpm --filter @bike4mind/scripts help:build-index', { stdio: 'inherit'
 // it. The computation lives in @bike4mind/infra because nothing imports this file, so that is the
 // only place its failure modes can be tested - see helpCorpusHash.ts for which ones and why.
 const HELP_CORPUS_HASH = computeHelpCorpusHash({
-  readDocsTree: () => execSync('git ls-tree -r HEAD docs-site/docs').toString(),
+  readDocsTree: () => execFileSync('git', ['ls-tree', '-r', 'HEAD', 'docs-site/docs']).toString(),
   readIndex: () => readFileSync('apps/client/app/generated/help-index.json'),
 });
 
@@ -876,6 +876,38 @@ const helpDatalakeIngestCron = new sst.aws.Cron('helpDatalakeIngest', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+/**
+ * Lake Health Sweep - scheduled counterpart to the on-demand GET /api/data-lakes/:id/health.
+ * Computes computeLakeHealth for every active lake and persists one row per lake per day, so a
+ * degrading lake is visible as a trend instead of only when someone opens it.
+ *
+ * Schedule: daily, after dataLakeBatchReconcile (5am UTC) so a batch that reconciler just forced
+ * terminal is reflected in the same day's health.
+ */
+const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
+  schedule: 'cron(0 6 * * ? *)', // Daily at 6am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/lakeHealthSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -906,4 +938,5 @@ export {
   spendReconciliationCron,
   driveLakeResyncPollCron,
   helpDatalakeIngestCron,
+  lakeHealthSweepCron,
 };

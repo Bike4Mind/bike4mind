@@ -9,6 +9,7 @@ import {
   HeadlessInputError,
   parsePermissionPolicy,
   evaluatePermissionPolicy,
+  resolveHeadlessPermissionDecision,
 } from './headlessProtocol.js';
 
 describe('headless protocol envelope', () => {
@@ -63,9 +64,9 @@ describe('headless protocol envelope', () => {
 });
 
 describe('classifyToolRisk', () => {
-  it('classifies a shell tool from its command text (benign -> low)', () => {
+  it('classifies a shell tool from its command text (no dangerous pattern -> unclassified)', () => {
     const risk = classifyToolRisk('bash_execute', { command: 'ls -la' }, 'prompt_always');
-    expect(risk.level).toBe('low');
+    expect(risk.level).toBe('unclassified');
   });
 
   it('classifies a destructive shell command as high', () => {
@@ -183,8 +184,68 @@ describe('evaluatePermissionPolicy', () => {
     expect(evaluatePermissionPolicy(policy, 'other_tool', 'medium').action).toBe('deny');
   });
 
+  it('denies an unclassified command under maxAutoAllowRisk:low (only provable no-ops auto-allow)', () => {
+    // `python3 x.py` etc. classify as unclassified, which ranks above low, so a
+    // low threshold no longer silently auto-approves arbitrary commands.
+    expect(evaluatePermissionPolicy(policy, 'bash_execute_like', 'unclassified').action).toBe('deny');
+    expect(evaluatePermissionPolicy(policy, 'bash_execute_like', 'low').action).toBe('allow');
+  });
+
   it('falls back to defaultAction when no rule matches and no threshold applies', () => {
     const allowByDefault = parsePermissionPolicy('{"defaultAction":"allow"}');
     expect(evaluatePermissionPolicy(allowByDefault, 'x', 'high').action).toBe('allow');
+  });
+});
+
+describe('resolveHeadlessPermissionDecision directory-grant fail-closed (criterion 1)', () => {
+  const fileReadOnly = parsePermissionPolicy('{"allow":["file_read"],"defaultAction":"deny"}');
+
+  it('denies a directory-grant even when the policy would allow the underlying tool', () => {
+    // A policy that allows file_read must NOT let a follow-on directory widening
+    // ride on that verdict - headless has no human to grant scope, so it fails
+    // closed as its own distinct decision, not a second silent approval.
+    const decision = resolveHeadlessPermissionDecision({
+      dangerouslySkipPermissions: false,
+      isDirectoryGrant: true,
+      toolName: 'file_read',
+      riskLevel: 'low',
+      permissionPolicy: fileReadOnly,
+    });
+    expect(decision.action).toBe('deny');
+    expect(decision.reason).toMatch(/directory access not granted/);
+  });
+
+  it('still applies the policy verdict for a normal (non-directory-grant) tool call', () => {
+    expect(
+      resolveHeadlessPermissionDecision({
+        dangerouslySkipPermissions: false,
+        isDirectoryGrant: false,
+        toolName: 'file_read',
+        riskLevel: 'low',
+        permissionPolicy: fileReadOnly,
+      }).action
+    ).toBe('allow-once');
+  });
+
+  it('denies a directory-grant even under a permissive policy, but --dangerously-skip-permissions overrides everything', () => {
+    const allowAll = parsePermissionPolicy('{"defaultAction":"allow"}');
+    expect(
+      resolveHeadlessPermissionDecision({
+        dangerouslySkipPermissions: false,
+        isDirectoryGrant: true,
+        toolName: 'anything',
+        riskLevel: 'high',
+        permissionPolicy: allowAll,
+      }).action
+    ).toBe('deny');
+    expect(
+      resolveHeadlessPermissionDecision({
+        dangerouslySkipPermissions: true,
+        isDirectoryGrant: true,
+        toolName: 'anything',
+        riskLevel: 'high',
+        permissionPolicy: allowAll,
+      }).action
+    ).toBe('allow-once');
   });
 });

@@ -175,6 +175,11 @@ export interface FeedbackCountBucket {
  * Feedback rollup: counts only, never content and never a username. The window is capped in DAYS
  * because every $facet arm groups the whole matched set in memory before its own top-N cut, so
  * the day cap is what bounds the rows those groupings accumulate over.
+ *
+ * The cap counts COVERAGE, not the gap between the bounds: every feedback window is inclusive at
+ * both ends, so a span of exactly this many days covers one instant more than that. Both sides
+ * measure it that way - the org routes read this same constant through
+ * `apps/client/server/utils/orgFeedbackWindow.ts`.
  */
 export const FEEDBACK_ROLLUP_MAX_WINDOW_DAYS = 366;
 
@@ -199,9 +204,13 @@ export function parseFeedbackRollupBound(value: string): Date {
 /**
  * GET /api/feedback/rollup query contract. There is deliberately no `userId` key: the server
  * derives the principal from the session, so `?userId=<someone-else>` is stripped here rather
- * than trusted. The window is half-open in UTC (`$gte from`, `$lt to`); buildFeedbackRollupPipeline
- * in apps/client/server/utils/feedbackRollup.ts must keep that convention, or an organization
- * rollup and the personal rollups under it disagree on the documents sitting exactly on a bound.
+ * than trusted. The window is INCLUSIVE at both ends in UTC (`$gte from`, `$lte to`): `to` is the
+ * last instant included, so a caller tiling consecutive windows counts a row on a shared bound
+ * twice. Both aggregations compose their scope through buildFeedbackWindowFilter
+ * (@bike4mind/database), which is what keeps the personal rollup and orgFeedbackReport from
+ * disagreeing about the documents sitting exactly on a bound. Agreeing on the bound is all it
+ * buys: an org total equals the personal totals under it only when those are scoped
+ * `{ userId, organizationId }`.
  */
 export const FeedbackRollupQuerySchema = z
   .object({
@@ -214,7 +223,9 @@ export const FeedbackRollupQuerySchema = z
   })
   .refine(
     query =>
-      parseFeedbackRollupBound(query.to).getTime() - parseFeedbackRollupBound(query.from).getTime() <=
+      // Strictly less than: `to` is included, so a span of exactly the cap covers the cap plus an
+      // instant. Same comparison on the org side, against the same constant.
+      parseFeedbackRollupBound(query.to).getTime() - parseFeedbackRollupBound(query.from).getTime() <
       FEEDBACK_ROLLUP_MAX_WINDOW_DAYS * ROLLUP_DAY_MS,
     {
       message: `window must not exceed ${FEEDBACK_ROLLUP_MAX_WINDOW_DAYS} days`,
@@ -241,6 +252,13 @@ export interface OrgFeedbackMemberCount extends OrgFeedbackMember {
 }
 
 /**
+ * Tag keys kept in the org report. Tags are free-form, so unlike the enum-sized groupings beside
+ * them the key space is unbounded. Shared so a client caption naming the ceiling reads the same
+ * number the server applied.
+ */
+export const ORG_FEEDBACK_BY_TAG_LIMIT = 50;
+
+/**
  * GET /api/organizations/:id/feedback-report. Declared here rather than beside the route so the
  * handler, the aggregate that builds it and the client hook that reads it share one shape.
  *
@@ -259,6 +277,10 @@ export interface OrgFeedbackReport {
   byStatus: FeedbackCountBucket[];
   /** Rows carrying no tag are absent, so these counts do not sum to `totals.count`. */
   byTag: FeedbackCountBucket[];
+  /** True when more than `ORG_FEEDBACK_BY_TAG_LIMIT` distinct tags matched, so `byTag` is a top-N
+   * cut rather than the whole key space. A fresh report always sets it either way; it is absent
+   * only on one serialized before the field existed, which is why it is optional. */
+  byTagTruncated?: boolean;
   byMember: OrgFeedbackMemberCount[];
   membership: {
     /** Size of the union the report scoped on. */

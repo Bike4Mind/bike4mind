@@ -7,12 +7,7 @@ import { substituteArguments } from '../utils/argumentSubstitution.js';
 import { processFileReferences } from '../utils/processFileReferences.js';
 import { logger } from '../utils/Logger.js';
 import { runShellCommand } from '../utils/shellRunner.js';
-import type { PermissionManager } from '../utils/PermissionManager.js';
-import {
-  requestShellCommandPermission,
-  type ShellCommandPermissionDeps,
-  type ShellPermissionPromptFn,
-} from '../utils/commandPermission.js';
+import { requestShellCommandPermission, type ShellCommandPermissionDeps } from '../utils/commandPermission.js';
 
 /**
  * Parameters for the skill tool
@@ -54,11 +49,19 @@ export interface SkillToolDependencies {
   parentModel?: string;
   /**
    * Permission collaborators used to gate a skill's lifecycle hook shell commands
-   * before they run (see requestShellCommandPermission). Every production caller
-   * supplies both; when absent the legacy unguarded behavior is kept (tests).
+   * before they run (see requestShellCommandPermission). One required field, not
+   * two independent optionals: wiring only one (and silently disabling the gate)
+   * is now impossible, and forgetting it entirely is a type error.
    */
-  permissionManager?: PermissionManager;
-  promptFn?: ShellPermissionPromptFn;
+  permission: ShellCommandPermissionDeps;
+  /**
+   * Live filesystem allow-list (beyond the working directory) used to confine
+   * `@file` references in a skill body. A skill body is model- or repo-authored,
+   * so its `@file` refs are agent-driven and must not read outside the workspace
+   * (e.g. `@/etc/passwd`). Omitted/`[]` confines to the working directory only;
+   * runtime `--add-dir` grants widen it in place.
+   */
+  allowedDirectories?: string[];
 }
 
 /**
@@ -72,15 +75,13 @@ async function executeHook(
   script: string,
   phase: 'pre-invoke' | 'post-invoke' | 'on-error',
   context: { skillName: string; args: string; result?: string; error?: string },
-  perm?: ShellCommandPermissionDeps
+  perm: ShellCommandPermissionDeps
 ): Promise<{ success: boolean; output: string }> {
   // Gate the hook command through the permission path BEFORE running it. Loading
   // a trusted project's skill does not pre-authorize the shell it carries.
-  if (perm) {
-    const decision = await requestShellCommandPermission(`skill_hook:${phase}`, script, process.cwd(), perm);
-    if (!decision.allowed) {
-      return { success: false, output: decision.reason || 'Hook command denied' };
-    }
+  const decision = await requestShellCommandPermission(`skill_hook:${phase}`, script, process.cwd(), perm);
+  if (!decision.allowed) {
+    return { success: false, output: decision.reason || 'Hook command denied' };
   }
 
   const result = await runShellCommand({
@@ -173,12 +174,7 @@ function parseArguments(argsString: string): string[] {
  * @returns Tool definition compatible with agent tools
  */
 export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionTools {
-  const { customCommandStore } = deps;
-  // Only gate hooks when both collaborators are wired (all production callers).
-  const hookPerm: ShellCommandPermissionDeps | undefined =
-    deps.permissionManager && deps.promptFn
-      ? { permissionManager: deps.permissionManager, promptFn: deps.promptFn }
-      : undefined;
+  const { customCommandStore, permission: hookPerm } = deps;
 
   return {
     toolFn: async (args: unknown) => {
@@ -202,11 +198,16 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
         }
       }
 
-      const command = customCommandStore.getCommand(skillName);
+      // Use the model-reachable accessor, not a bare getCommand: it enforces the
+      // live reserved-name gate at this execution chokepoint, so a repo-planted or
+      // remote command shadowing a plugin can't run here even if it survived load.
+      const command = customCommandStore.getModelReachableCommand(skillName);
 
       if (!command) {
+        // List the model-reachable set so "available skills" matches what this
+        // chokepoint would actually run (no reserved-named entry advertised).
         const available = customCommandStore
-          .getAllCommands()
+          .getModelReachableCommands()
           .map(c => c.name)
           .join(', ');
         throw new Error(`skill: "${skillName}" not found. Available skills: ${available || 'none'}`);
@@ -232,8 +233,9 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
         const argsArray = params.args ? parseArguments(params.args) : [];
         let expandedBody = substituteArguments(command.body, argsArray);
 
-        // Process @file references
-        const processed = await processFileReferences(expandedBody);
+        // Process @file references. A skill body is agent-driven content, so
+        // confine its refs to the workspace (plus any granted dirs).
+        const processed = await processFileReferences(expandedBody, deps.allowedDirectories ?? []);
         expandedBody = processed.content;
 
         if (processed.errors.length > 0) {

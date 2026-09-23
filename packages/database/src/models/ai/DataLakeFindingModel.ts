@@ -2,6 +2,8 @@ import mongoose, { Model, Schema } from 'mongoose';
 import type {
   IDataLakeFindingDocument,
   IDataLakeFindingRepository,
+  LakeFindingDetector,
+  LakeFindingKey,
   ListLakeFindingsOptions,
   RecordLakeFindingInput,
   ResolveLakeFindingInput,
@@ -142,10 +144,24 @@ class DataLakeFindingRepository extends BaseRepository<IDataLakeFindingDocument>
         ...(options?.kind ? { kind: options.kind } : {}),
         ...(options?.detector ? { detector: options.detector } : {}),
       })
-      .sort({ lastSeenAt: -1 });
+      // `_id` breaks ties deterministically: findings from one detection run commonly share
+      // `lastSeenAt` to the millisecond, and an unstable order would let a row cross a page
+      // boundary as further pages are fetched.
+      .sort({ lastSeenAt: -1, _id: -1 });
+    if (options?.offset) query.skip(options.offset);
     if (options?.limit) query.limit(options.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as IDataLakeFindingDocument);
+  }
+
+  async listDismissedKeys(lakeId: string, detector: LakeFindingDetector): Promise<LakeFindingKey[]> {
+    // Projected to the two key halves and lean, because this is read on every detection run to
+    // filter that run's output: hydrating the rows would pull each one's `sources` excerpts across
+    // purely to throw them away. Seeks the review-queue index on its `lakeId, status` prefix.
+    const rows = await this.findingModel
+      .find({ lakeId, status: 'dismissed', detector }, { kind: 1, subject: 1, _id: 0 })
+      .lean();
+    return rows.map(({ kind, subject }) => ({ kind, subject }));
   }
 
   async resolveFinding(

@@ -430,6 +430,14 @@ export interface IDataLake {
   /** Last time files were synced/uploaded to this data lake */
   lastSyncAt?: Date;
   /**
+   * Last time the scheduled lake health sweep graded this lake (`lakeHealthSweep`), stamped
+   * whether the grading succeeded or failed. Doubles as the sweep's fairness key: it scans
+   * `status: 'active'` lakes oldest-checked-first (null/never-checked sorts first), so a fleet
+   * larger than one run's cap drains across runs instead of the same prefix by `_id` being
+   * regraded forever while the tail is never reached. Not touched by anything else.
+   */
+  lastHealthCheckedAt?: Date | null;
+  /**
    * The exact `deletedAt` stamp phase-1 delete wrote on this lake's members, so restore can
    * un-delete that batch and nothing else. Not a time window: it is matched by EQUALITY, which is
    * what keeps a file the creator deleted independently - before OR during the deleted window -
@@ -594,6 +602,44 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
       supersededOwnLakeIds?: string[];
     }
   ): Promise<IDataLakeDocument[]>;
+  /**
+   * Count-only companion to `findActiveByUserTagsAndEntitlements` (#3055): active lakes the
+   * caller can see exist - by org membership or public listing - but whose own
+   * `requiredUserTag`/`requiredEntitlement` gate they hold neither of. Excludes lakes reached
+   * through the owner or grant bypass (those are never "excluded"; the resolver restores them
+   * regardless of the gate) and gateless lakes (never a candidate for THIS count - they resolve
+   * for every org member).
+   *
+   * NEVER RETURNS A LAKE DOCUMENT, deliberately - a `countDocuments`, not a `find`. This method
+   * exists solely to measure denial for a caller-facing count; it must never become a second way
+   * to read a lake's fields, or the resolver's read-side stays a stricter gate than this one.
+   */
+  countGateExcludedLakes(
+    userTags: string[],
+    entitlementKeys: string[],
+    organizationIds: string[] | undefined,
+    userId: string | undefined,
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      /**
+       * Lakes to withhold from the owner-bypass exemption (#3055): ones the caller
+       * created but no longer effectively owns (`resolveEffectiveOwnerIds`), the same set
+       * `findActiveByUserTagsAndEntitlements` withholds from its own creator arm. `createdByUserId`
+       * is immutable, so without this a caller whose ownership was transferred away keeps reporting
+       * a false zero for a lake they can no longer reach through the owner bypass - the count and
+       * the resolver's own read-side would disagree about who still owns it.
+       */
+      supersededOwnLakeIds?: string[];
+      /**
+       * Restricts the count to lakes whose `datalakeTag` is in this list - the per-turn-scoped
+       * question "of exactly these lakes, how many are excluded" for a caller that named specific
+       * lakes by identity, as opposed to the whole-account question this method otherwise answers.
+       * Absent or empty runs the unrestricted, account-wide count.
+       */
+      restrictToTags?: string[];
+    }
+  ): Promise<number>;
   findByOrganizationId(orgId: string): Promise<IDataLakeDocument[]>;
   /**
    * Datastore-side accessibility filter - owner OR org-admin OR public OR (org-match AND
@@ -830,6 +876,31 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
   setLakeMemoryCursor(id: string, cursor: string | null): Promise<void>;
   /** Advance the cursor only while the purge fence still matches `fenceAt`; false means it moved. */
   setLakeMemoryCursorIfFenceUnmoved(id: string, cursor: string | null, fenceAt: Date | null): Promise<boolean>;
+  /**
+   * Stamp `lastHealthCheckedAt` for the lake health sweep's staleness ordering - see the field's
+   * own doc comment. Called for every lake the sweep ATTEMPTS, success or failure, so a lake that
+   * keeps failing does not sort first forever and starve the rest of the fleet.
+   */
+  markHealthChecked(id: string, at: Date): Promise<void>;
+  /**
+   * One page of the health sweep's staleness-ordered scan of active lakes: oldest/never-checked
+   * first, keyset-paged on (lastHealthCheckedAt, _id). `excludeCheckedAt` is the stamp the calling
+   * run writes as it grades, and excluding it is load-bearing rather than an optimization - the
+   * scan sorts on the same field the run mutates, so without it every lake already graded this run
+   * re-enters the candidate set behind an older cursor and is graded twice.
+   */
+  findDueForHealthCheck(params: {
+    cursor: { lastHealthCheckedAt: Date | null; id: string } | null;
+    limit: number;
+    excludeCheckedAt: Date;
+    projection: Record<string, 0 | 1>;
+  }): Promise<IDataLakeDocument[]>;
+  /** Whether any candidate remains behind `cursor`, so a run can tell a deferred remainder from a
+   * last page that merely landed on the cap. */
+  hasMoreDueForHealthCheck(
+    cursor: { lastHealthCheckedAt: Date | null; id: string } | null,
+    excludeCheckedAt: Date
+  ): Promise<boolean>;
 }
 
 // ── Data Lake Batch ─────────────────────────────────────────────────────────

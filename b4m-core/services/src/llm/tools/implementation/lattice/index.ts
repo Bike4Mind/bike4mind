@@ -11,6 +11,7 @@ import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
 import { buildNewModel, isModelOwner } from '../../../../latticeService/latticeModelService';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
+import { escapeArtifactBodyJson, sanitizeArtifactTitle } from '../../utils/artifactEmission';
 
 // Shared types
 
@@ -232,11 +233,16 @@ export const latticeCreateModelTool: ToolDefinition = {
       // Return as artifact block that client can parse and display
       const entityCount = model.data?.entities?.length || 0;
       const ruleCount = model.rules?.rules?.length || 0;
+      // Model-controlled, and the whole tool result - prose included - is scanned for
+      // <artifact> tags by the tool_result extractor in llm/sharedToolBuilder.ts, which
+      // runs with no artifacts-enabled gate. So the name is sanitized everywhere it is
+      // emitted, not just inside the tag attribute.
+      const artifactTitle = sanitizeArtifactTitle(name);
 
-      return `Created "${name}" model with ${entityCount} entities and ${ruleCount} rules.
+      return `Created "${artifactTitle}" model with ${entityCount} entities and ${ruleCount} rules.
 
-<artifact identifier="${model.id}" type="application/vnd.b4m.lattice" title="${name}">
-${JSON.stringify(artifactData, null, 2)}
+<artifact identifier="${model.id}" type="application/vnd.b4m.lattice" title="${artifactTitle}">
+${escapeArtifactBodyJson(JSON.stringify(artifactData, null, 2))}
 </artifact>
 
 The model is ready for viewing. You can add more data by asking to add line items or create formulas.`;

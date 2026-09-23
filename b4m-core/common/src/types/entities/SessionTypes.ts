@@ -7,7 +7,7 @@ import { SearchOptions } from '../../search';
 import { ChatModelName } from '../../models';
 import { MessageContentObject } from './MessageTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
-import type { SessionSummaryTrigger } from '../../constants/sessionSummary';
+import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
 
 /** Pending action for Slack/Web button-based confirmation flow */
@@ -723,7 +723,7 @@ export interface ISession {
   claudeConversationId?: string;
   summary?: string;
   summaryAt?: Date;
-  summaryTrigger?: SessionSummaryTrigger;
+  summaryTrigger?: PersistedSessionSummaryTrigger;
   contextSummary?: string;
   contextSummaryUpToQuestId?: string; // string ObjectId — boundary; messages ≤ this are excluded from verbatim history
   contextSummaryAt?: Date;
@@ -731,6 +731,9 @@ export interface ISession {
   deletedAt?: Date;
   tags?: { name: string; strength: number }[];
   taggedAt?: Date; // When tags were last generated for this session
+  // When tagging last spent a completion without producing tags; see isTagAttemptDue. Nullable
+  // because clearing it needs an explicit null - mongoose drops `undefined` from the `$set`.
+  tagLastAttemptAt?: Date | null;
   clonedSourceId?: string | null;
   forkedSourceId?: string | null;
   isAutoNamed?: boolean;
@@ -767,6 +770,60 @@ export interface ISession {
 }
 
 ///////////
+
+/**
+ * How long a notebook whose tagging completion produced no usable tags stays ineligible.
+ *
+ * The tagging handler bills `recordSessionOperationalUsage` BEFORE it parses, so a notebook the
+ * model can never produce tags for costs one operations-model call per grooming run. Stamping
+ * `taggedAt` on that failure would bound the spend but close the gate forever on a notebook that
+ * was never tagged: no operator or automated path clears `taggedAt`, only a user re-importing that
+ * one notebook. A cooldown bounds the spend without that, the same trade
+ * `apps/client/server/s3/moderationRescueSweep.ts` makes and for the same reason - a terminal
+ * give-up state is unrecoverable when there is no operator re-run route.
+ *
+ * Bounds the SPIDER's dispatch only. `sessionSummarization.ts` auto-tags after a summary and
+ * `pages/api/sessions/[id]/tag.ts` tags on request; both publish the event directly and are
+ * deliberately not held back - a user asking for tags should not be refused by a groomer's budget.
+ */
+export const TAG_RETRY_BACKOFF_MS = 24 * 60 * 60_000;
+
+/**
+ * A stamp at or before this instant has served its backoff.
+ *
+ * Both halves of the gate derive their boundary from this one function so they cannot disagree by
+ * a millisecond at the edge - the in-memory test is `stamp <= cutoff` and the Mongo test is
+ * `$lte: cutoff`, which are the same comparison against the same value.
+ */
+function tagRetryCutoff(now: number): Date {
+  return new Date(now - TAG_RETRY_BACKOFF_MS);
+}
+
+/**
+ * The spider's in-memory half of the tagging retry gate.
+ *
+ * MUST agree with `tagAttemptDueFilter` below. The gate decides what is dispatched and the filter
+ * decides what the credit pre-flight prices; the two disagreeing is exactly the defect
+ * `apps/client/server/events/sessionTaggingGate.e2e.test.ts` exists to catch, which is why both
+ * forms live here rather than one beside each caller.
+ */
+export function isTagAttemptDue(session: Pick<ISession, 'tagLastAttemptAt'>, now: number = Date.now()): boolean {
+  if (!session.tagLastAttemptAt) return true;
+  return new Date(session.tagLastAttemptAt).getTime() <= tagRetryCutoff(now).getTime();
+}
+
+/**
+ * The Mongo half of the gate above. `null` matches a missing field as well as a null one.
+ *
+ * Wrapped in `$and` rather than returned as a bare `$or` because the soft-delete idiom in this
+ * codebase is itself a top-level `$or`; spread beside one, a second `$or` key would silently
+ * replace the first and widen the filter to every soft-deleted row.
+ */
+export function tagAttemptDueFilter(now: number = Date.now()) {
+  return {
+    $and: [{ $or: [{ tagLastAttemptAt: null }, { tagLastAttemptAt: { $lte: tagRetryCutoff(now) } }] }],
+  };
+}
 
 export interface ISessionDocument extends ISession, IShareableDocument {}
 

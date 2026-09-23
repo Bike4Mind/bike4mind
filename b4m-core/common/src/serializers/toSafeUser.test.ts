@@ -358,3 +358,199 @@ describe('redactUserSecretsForSelf - authProviders', () => {
     }
   });
 });
+
+describe('redactUserSecretsForSelf - slackSettings', () => {
+  const slackSettings = {
+    slackUserId: 'U1',
+    slackUserToken: 'slack-secret-token',
+    slackUserScopes: ['identity.basic', 'reminders:write'],
+    defaultNotebookId: 'nb-1',
+    autoCreateNotebook: true,
+    notebookNamePrefix: 'daily-',
+    lastUsedAgent: 'dev',
+    defaultProjectId: 'proj-1',
+    agentNotebookRouting: { dev: 'nb-dev' },
+    keywordRouting: [{ keyword: 'standup', notebookId: 'nb-standup' }],
+    customAgentId: 'agent-1',
+    githubNotifications: { enabled: true, githubUsername: 'jane' },
+  };
+
+  it('keeps every field the settings UI reads', () => {
+    // Dropping any of these breaks SlackIntegrationSection/GitHubNotificationsSection,
+    // which read them straight off currentUser.slackSettings.
+    const out = redactUserSecretsForSelf({ slackSettings } as never);
+    const slack = out?.slackSettings as Record<string, unknown>;
+
+    expect(slack.slackUserId).toBe('U1');
+    expect(slack.defaultNotebookId).toBe('nb-1');
+    expect(slack.autoCreateNotebook).toBe(true);
+    expect(slack.notebookNamePrefix).toBe('daily-');
+    expect(slack.defaultProjectId).toBe('proj-1');
+    expect(slack.agentNotebookRouting).toEqual({ dev: 'nb-dev' });
+    expect(slack.keywordRouting).toEqual(slackSettings.keywordRouting);
+    expect(slack.customAgentId).toBe('agent-1');
+    expect(slack.githubNotifications).toEqual({ enabled: true, githubUsername: 'jane' });
+  });
+
+  it('drops the token and the fields the settings UI never reads', () => {
+    const out = redactUserSecretsForSelf({ slackSettings } as never);
+    const slack = out?.slackSettings as Record<string, unknown>;
+
+    expect(slack).not.toHaveProperty('slackUserToken');
+    expect(slack).not.toHaveProperty('slackUserScopes');
+    expect(slack).not.toHaveProperty('lastUsedAgent');
+    expect(JSON.stringify(out)).not.toContain('slack-secret-token');
+  });
+
+  it('allowlists exactly the named fields, dropping settings-growth metadata', () => {
+    // Allowlist like every other block in the serializer: a field added to the
+    // slackSettings type does not reach the browser until named here.
+    const out = redactUserSecretsForSelf({ slackSettings } as never);
+
+    expect(out?.slackSettings).toEqual({
+      slackUserId: 'U1',
+      defaultNotebookId: 'nb-1',
+      autoCreateNotebook: true,
+      notebookNamePrefix: 'daily-',
+      defaultProjectId: 'proj-1',
+      agentNotebookRouting: { dev: 'nb-dev' },
+      keywordRouting: slackSettings.keywordRouting,
+      customAgentId: 'agent-1',
+      githubNotifications: { enabled: true, githubUsername: 'jane' },
+    });
+  });
+});
+
+// The structural tests above pin block MEMBERSHIP (which top-level fields get
+// rebuilt vs. dropped whole); they say nothing about which SUBFIELDS a rebuild block
+// keeps. Each case below feeds its block a superset input (allowed fields + token
+// fields + one made-up growth field) so this fails the moment a rebuild block starts
+// passing through something not on its allowlist.
+describe('redactUserSecretsForSelf - rebuild-block allowlists stay pinned', () => {
+  const CASES: Array<{ field: string; input: Record<string, unknown>; allowed: string[] }> = [
+    {
+      field: 'mfa',
+      input: {
+        totpEnabled: true,
+        setupAt: new Date(),
+        lastUsedAt: new Date(),
+        totpSecret: 'x',
+        backupCodes: ['x'],
+        futureField: 'x',
+      },
+      allowed: ['totpEnabled', 'setupAt', 'lastUsedAt'],
+    },
+    {
+      field: 'googleDrive',
+      input: { expiresAt: new Date(), accessToken: 'x', refreshToken: 'x', futureField: 'x' },
+      allowed: ['expiresAt'],
+    },
+    {
+      field: 'atlassianConnect',
+      input: {
+        siteName: 'acme',
+        resources: [],
+        status: 'connected',
+        connectedAt: new Date(),
+        selectedResourceId: 'r1',
+        disconnectReason: null,
+        accessToken: 'x',
+        refreshToken: 'x',
+        futureField: 'x',
+      },
+      allowed: ['siteName', 'resources', 'status', 'connectedAt', 'selectedResourceId', 'disconnectReason'],
+    },
+    {
+      field: 'notionConnect',
+      input: {
+        workspaceId: 'w',
+        workspaceName: 'WS',
+        workspaceIcon: 'icon',
+        status: 'connected',
+        writeEnabled: true,
+        accessMode: 'all',
+        allowedPages: [],
+        excludedPageIds: [],
+        rootPageId: 'r1',
+        connectedAt: new Date(),
+        disconnectReason: null,
+        accessToken: 'x',
+        botId: 'x',
+        futureField: 'x',
+      },
+      allowed: [
+        'workspaceId',
+        'workspaceName',
+        'workspaceIcon',
+        'status',
+        'writeEnabled',
+        'accessMode',
+        'allowedPages',
+        'excludedPageIds',
+        'rootPageId',
+        'connectedAt',
+        'disconnectReason',
+      ],
+    },
+    {
+      field: 'blogIntegration',
+      input: {
+        baseUrl: 'https://b',
+        defaultAuthor: 'Jane',
+        defaultTags: ['a'],
+        connectedAt: new Date(),
+        apiKey: 'x',
+        futureField: 'x',
+      },
+      allowed: ['baseUrl', 'defaultAuthor', 'defaultTags', 'connectedAt'],
+    },
+    {
+      field: 'slackSettings',
+      input: {
+        slackUserId: 'U1',
+        defaultNotebookId: 'nb-1',
+        autoCreateNotebook: true,
+        notebookNamePrefix: 'daily-',
+        defaultProjectId: 'proj-1',
+        agentNotebookRouting: { dev: 'nb-dev' },
+        keywordRouting: [],
+        customAgentId: 'agent-1',
+        githubNotifications: { enabled: true },
+        slackUserToken: 'x',
+        slackUserScopes: ['x'],
+        lastUsedAgent: 'x',
+        futureField: 'x',
+      },
+      allowed: [
+        'slackUserId',
+        'defaultNotebookId',
+        'autoCreateNotebook',
+        'notebookNamePrefix',
+        'defaultProjectId',
+        'agentNotebookRouting',
+        'keywordRouting',
+        'customAgentId',
+        'githubNotifications',
+      ],
+    },
+  ];
+
+  it.each(CASES)('$field rebuild keeps exactly its allowed subfields', ({ field, input, allowed }) => {
+    const out = redactUserSecretsForSelf({ [field]: input } as never)!;
+    const rebuilt = out[field] as Record<string, unknown>;
+    expect(Object.keys(rebuilt).sort()).toEqual([...allowed].sort());
+  });
+
+  // authProviders rebuilds an array, not an object, so it needs its own shape check
+  // rather than a CASES entry -- its per-element allowlist is otherwise covered
+  // exhaustively by the dedicated describe block above.
+  it('authProviders array elements keep exactly id and strategy', () => {
+    const out = redactUserSecretsForSelf({
+      authProviders: [
+        { id: 'p1', strategy: 'okta', accessToken: 'x', oktaIdentityProviderId: 'idp', futureField: 'x' },
+      ],
+    } as never)!;
+    const provider = (out.authProviders as Array<Record<string, unknown>>)[0];
+    expect(Object.keys(provider).sort()).toEqual(['id', 'strategy']);
+  });
+});

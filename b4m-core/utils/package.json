@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "6.1.2",
+  "version": "6.2.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -181,7 +181,6 @@
     "cheerio": "1.2.0",
     "csv-parse": "^7.0.2",
     "dayjs": "^1.11.23",
-    "dotenv": "^17.4.2",
     "file-type": "^22.1.0",
     "image-size": "^1.2.1",
     "jimp": "^1.6.1",

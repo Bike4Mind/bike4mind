@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
+import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
@@ -426,21 +427,21 @@ describe('sessionSummarization provenance', () => {
     h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
   });
 
-  it.each(['manual', 'project', 'earlyMilestone', 'contentGrowth'] as const)(
-    'writes the %s trigger alongside the summary',
-    async trigger => {
-      await run({ trigger });
+  // Derived from the persisted list, so a new reason-it-happened picks up handler coverage for free
+  // and a decision-only reason like 'throttling' is excluded by construction rather than by a filter
+  // this test has to remember to keep.
+  it.each([...PERSISTED_SESSION_SUMMARY_TRIGGERS])('writes the %s trigger alongside the summary', async trigger => {
+    await run({ trigger });
 
-      expect(h.sessionUpdate).toHaveBeenCalledWith(
-        expect.objectContaining({
-          id: SESSION_ID,
-          summary: 'A summary of the session.',
-          summaryAt: expect.any(Date),
-          summaryTrigger: trigger,
-        })
-      );
-    }
-  );
+    expect(h.sessionUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: SESSION_ID,
+        summary: 'A summary of the session.',
+        summaryAt: expect.any(Date),
+        summaryTrigger: trigger,
+      })
+    );
+  });
 
   // The event schema makes `trigger` optional, and Mongoose strips an undefined value out of the
   // `$set` rather than clearing the path - so a re-summarization published without one would

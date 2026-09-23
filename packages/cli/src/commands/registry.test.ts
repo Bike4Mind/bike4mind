@@ -23,6 +23,7 @@ function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
     } as unknown as CommandContext['configStore'],
     customCommandStore: {
       getAllCommands: vi.fn(() => []),
+      getModelReachableCommands: vi.fn(() => []),
     } as unknown as CommandContext['customCommandStore'],
     permissionManager: {
       getTrustedTools: vi.fn(() => [] as string[]),
@@ -56,7 +57,7 @@ describe('command registry dispatch', () => {
   it('routes /help to the help handler and lists custom commands', async () => {
     const ctx = makeContext({
       customCommandStore: {
-        getAllCommands: vi.fn(() => [
+        getModelReachableCommands: vi.fn(() => [
           { name: 'deploy', description: 'ship it', source: 'project', argumentHint: '<env>' },
         ]),
       } as unknown as CommandContext['customCommandStore'],
