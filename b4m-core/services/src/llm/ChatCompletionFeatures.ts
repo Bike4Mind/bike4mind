@@ -66,6 +66,8 @@ import {
   materializePromptMetaSession,
   ModelBackend,
   type SupportedEmbeddingModel,
+  PersistedSessionSummaryTrigger,
+  SessionSummaryTrigger,
 } from '@bike4mind/common';
 import {
   getDynamicDataLakeAccess,
@@ -384,7 +386,7 @@ export interface IChatCompletionServiceOptions {
    * Used to turn `session.systemPromptId` into the session's authored prompt on every entry point.
    */
   loadSystemPromptById?: (promptId: string) => Promise<string | null>;
-  summarizeSession: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
+  summarizeSession: (sessionId: string, trigger: PersistedSessionSummaryTrigger) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
     serverName: string;
@@ -1499,6 +1501,15 @@ export interface SummarizationCheckContext {
 }
 
 /**
+ * The verdict and the reason, correlated: only a decision to summarize carries a trigger a document
+ * may keep. 'throttling' lives on the false arm alone - it is the reason a run did NOT happen, so it
+ * names no provenance and no write boundary accepts it (see PERSISTED_SESSION_SUMMARY_TRIGGERS).
+ */
+export type SummarizationDecision =
+  | [shouldSummarize: true, trigger: PersistedSessionSummaryTrigger]
+  | [shouldSummarize: false, trigger: SessionSummaryTrigger | undefined];
+
+/**
  * Decide whether a session is due for re-summarization. Shared by the chat path
  * (`SummarizeNotebookFeature`) and the image-gen path so that image-only sessions
  * also accumulate long-term context. The actual summarization is published as an
@@ -1513,7 +1524,7 @@ export interface SummarizationCheckContext {
 export async function shouldSummarizeSession(
   session: ISessionDocument,
   ctx: SummarizationCheckContext
-): Promise<[boolean, ISessionDocument['summaryTrigger']]> {
+): Promise<SummarizationDecision> {
   if (session.summaryAt) {
     const minutesSinceLastSummary = (Date.now() - session.summaryAt.getTime()) / (1000 * 60);
     if (minutesSinceLastSummary < SUMMARIZATION_CONFIG.minTimeBetweenSummaries) {
@@ -1562,14 +1573,16 @@ export class SummarizeNotebookFeature implements ChatCompletionFeature {
   }
 
   async onComplete({ quest, session }: { quest: IChatHistoryItemDocument; session: ISessionDocument }): Promise<void> {
-    const [shouldSummarize, trigger] = await shouldSummarizeSession(session, {
+    // Indexed, not destructured: the tuple's arms correlate the verdict with the trigger, and
+    // destructuring drops that correlation - only decision[0] narrows decision[1] to a persisted one.
+    const decision = await shouldSummarizeSession(session, {
       db: this.chatCompletion.db,
       logger: this.logger,
     });
 
-    if (shouldSummarize) {
+    if (decision[0]) {
       this.logger.info(`Triggering notebook summarization job for session ${quest.sessionId}`);
-      this.chatCompletion.summarizeSession(quest.sessionId, trigger);
+      this.chatCompletion.summarizeSession(quest.sessionId, decision[1]);
     } else {
       this.logger.debug(`Skipping summarization for session ${quest.sessionId} - criteria not met`);
     }

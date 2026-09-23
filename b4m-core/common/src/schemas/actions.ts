@@ -10,7 +10,7 @@ import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES, CHAT_HISTORY_ITEM_TYPES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
-import { SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
+import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '../constants/sessionSummary';
 import { findDisallowedSubscriptionFilterKeys } from './subscriptionQueryFilter';
 
 // Schemas for actions sent over the WebSocket connection.
@@ -1182,7 +1182,7 @@ export const SessionCreatedAction = shareableDocumentSchema.extend({
   claudeConversationId: z.string().optional(),
   summary: z.string().optional(),
   summaryAt: z.date().optional(),
-  summaryTrigger: z.enum(SESSION_SUMMARY_TRIGGERS).optional(),
+  summaryTrigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS).optional(),
   deletedAt: z.date().optional(),
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
   taggedAt: z.date().optional(),

@@ -5,10 +5,10 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { NotFoundError } from '@server/utils/errors';
 import {
   Permission,
-  ISessionDocument,
   IChatHistoryItem,
   IUserDocument,
   redactPromptMetaForViewer,
+  PersistedSessionSummaryTrigger,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
@@ -166,7 +166,7 @@ export const stopReply = async (sessionId: string, ability: Ability) => {
   return latestQuest;
 };
 
-export const summarizeSession = async (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => {
+export const summarizeSession = async (sessionId: string, trigger: PersistedSessionSummaryTrigger) => {
   await publishSummarizeSession(sessionId, trigger);
 };
 

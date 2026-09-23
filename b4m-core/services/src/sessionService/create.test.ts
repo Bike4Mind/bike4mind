@@ -338,3 +338,56 @@ describe('createSession taggedAt validation', () => {
     expect(created[1].taggedAt).toBeUndefined();
   });
 });
+
+/**
+ * `summaryTrigger` is the provenance half of the summary trio (`summary`/`summaryAt`/trigger) that
+ * clone/fork/snip carry. Pins both halves of the guarantee create.ts documents on it: kept by
+ * secureParameters, and an out-of-enum value rejected rather than silently dropped - the Mongoose
+ * write runs no validators, so this schema is the only thing standing between a bad trigger and a
+ * stored document.
+ */
+describe('createSession summaryTrigger validation', () => {
+  const user = { id: '67cbd75e2415ca84138fada7' } as IUserDocument;
+
+  it('carries a summaryTrigger onto the persisted payload alongside its summary', async () => {
+    const { adapters, created } = makeAdapters();
+    const summaryAt = new Date('2026-05-01T00:00:00.000Z');
+    await createSession(user, { name: 'ok', summary: 'the gist', summaryAt, summaryTrigger: 'manual' }, adapters);
+    expect(created[0].summary).toBe('the gist');
+    expect(created[0].summaryAt).toEqual(summaryAt);
+    expect(created[0].summaryTrigger).toBe('manual');
+  });
+
+  it('rejects an out-of-enum summaryTrigger instead of silently dropping it', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      createSession(
+        user,
+        { name: 'ok', summaryTrigger: 'milestone' } as unknown as Parameters<typeof createSession>[1],
+        adapters
+      )
+    ).rejects.toThrow(UnprocessableEntityError);
+  });
+
+  /**
+   * 'throttling' is in the enum but is the one member no document may carry: shouldSummarizeSession
+   * returns it as the reason it DECLINED to summarize. It stays assignable here because
+   * ISessionDocument types the field with it, so only a runtime check can keep it off a write.
+   */
+  it('rejects the throttling trigger, which names a summarization that never happened', async () => {
+    const { adapters } = makeAdapters();
+    await expect(
+      createSession(user, { name: 'ok', summary: 'the gist', summaryTrigger: 'throttling' }, adapters)
+    ).rejects.toThrow(UnprocessableEntityError);
+  });
+
+  /**
+   * Unlike `taggedAt`, an unpaired trigger is deliberately NOT scrubbed: `summaryAt` has no such
+   * guard either, and a guard on one member of the trio alone would make the three inconsistent.
+   */
+  it('does not fabricate a summaryTrigger when the caller passes none', async () => {
+    const { adapters, created } = makeAdapters();
+    await createSession(user, { name: 'no-trigger', summary: 'the gist' }, adapters);
+    expect(created[0].summaryTrigger).toBeUndefined();
+  });
+});
