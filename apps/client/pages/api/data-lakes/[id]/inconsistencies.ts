@@ -92,8 +92,12 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
     // The year is passed in rather than read inside the detector so the same corpus always produces
     // the same report - a stored result an owner already reviewed has to be comparable to the next.
-    const report = await dataLakeService.detectLakeInconsistencies(lake, new Date().getUTCFullYear(), {
-      db: { fabFiles: fabFileRepository, fabFileChunks: fabFileChunkRepository },
+    const { report, suppressed } = await dataLakeService.detectLakeInconsistencies(lake, new Date().getUTCFullYear(), {
+      db: {
+        fabFiles: fabFileRepository,
+        fabFileChunks: fabFileChunkRepository,
+        dataLakeFindings: dataLakeFindingRepository,
+      },
       logger: req.logger,
     });
 
@@ -108,6 +112,14 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       inconsistencyComputedAt: computedAt,
     });
 
+    // Findings a curator DISMISSED are absent from `report` (#3045) - from the blob, from
+    // `countsByKind`, and so from the health summary that reads it. They are still RECORDED below,
+    // and that pairing is the whole design: suppressed from what a curator is shown, current in the
+    // row behind it. A dismissal keys on kind and subject rather than on the passages, so the
+    // evidence under one can change into a far worse contradiction, and the row is then the only
+    // place that is visible at all. `recordDetected` writes no status, so recording cannot reopen
+    // what was dismissed.
+    //
     // Also emit each finding as a durable row (#3039). Additive for now, and ordered after the blob
     // deliberately: the blob is still what GET here and the counts on GET /health read, so until
     // #3040 moves those readers over, a failure in this newer path must not cost the run its report.
@@ -131,15 +143,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     try {
       ({ failed } = await dataLakeService.recordLakeFindings(
         lake.id,
-        stored.findings,
-        { detector: 'lexical', seenAt: computedAt },
+        [...stored.findings, ...suppressed],
+        { detector: dataLakeService.INCONSISTENCY_DETECTOR, seenAt: computedAt },
         { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
       ));
     } catch (error) {
-      failed = stored.findings.length;
+      failed = stored.findings.length + suppressed.length;
       req.logger?.error('Lake findings write failed outright; returning the stored report', {
         dataLakeId: lake.id,
-        total: stored.findings.length,
+        total: stored.findings.length + suppressed.length,
         error: error instanceof Error ? error.message : 'Unknown error',
       });
     }
@@ -149,7 +161,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       req.logger?.warn('Lake findings partially recorded', {
         dataLakeId: lake.id,
         failed,
-        total: stored.findings.length,
+        total: stored.findings.length + suppressed.length,
       });
     }
 

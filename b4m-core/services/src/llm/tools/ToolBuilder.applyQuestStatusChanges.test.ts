@@ -110,6 +110,68 @@ describe('applyQuestStatusChanges', () => {
       expect(quest.promptMeta?.citables?.[0].metadata?.fullContext).toBe('passage');
     });
 
+    it('unions conflict marks across the dedup instead of letting the anchor rule drop them (#3041)', () => {
+      // The shape that makes this load-bearing: knowledgeBaseRetrieve stamps conflictsWith and
+      // deliberately never carries a passage anchor, so on a turn that also searches the same file
+      // the anchored search chip wins - and winner-takes-all would drop the conflict warning the
+      // model was given, leaving the reader the only party unaware of it.
+      const quest = makeQuest({
+        promptMeta: {
+          citables: [{ id: 'file-1', url: 'u1', title: 't1', metadata: { conflictsWith: ['file-9'] } }],
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            citables: [{ id: 'file-1', url: 'u1', title: 't1', metadata: { chunkId: 'c1', fullContext: 'passage' } }],
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
+
+      // The anchored chip still wins the position and keeps its anchor...
+      expect(quest.promptMeta?.citables?.[0].metadata?.fullContext).toBe('passage');
+      // ...and the loser's conflict marks ride across onto it.
+      expect(quest.promptMeta?.citables?.[0].metadata?.conflictsWith).toEqual(['file-9']);
+    });
+
+    it('dedups conflict marks when both chips carry overlapping ones', () => {
+      const quest = makeQuest({
+        promptMeta: {
+          citables: [{ id: 'file-1', url: 'u1', title: 't1', metadata: { conflictsWith: ['file-9'] } }],
+        },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: {
+            citables: [{ id: 'file-1', url: 'u1', title: 't1', metadata: { conflictsWith: ['file-9', 'file-8'] } }],
+          },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
+
+      expect(quest.promptMeta?.citables?.[0].metadata?.conflictsWith).toEqual(['file-9', 'file-8']);
+    });
+
+    it('leaves a chip with no conflict marks untouched by the union', () => {
+      // The common case: the union must not stamp an empty array onto every deduped chip, which the
+      // UI would read as a badge with no partner to name.
+      const quest = makeQuest({
+        promptMeta: { citables: [{ id: 'file-1', url: 'u1', title: 't1' }] },
+      } as Partial<IChatHistoryItemDocument>);
+      applyQuestStatusChanges(
+        quest,
+        {
+          promptMeta: { citables: [{ id: 'file-1', url: 'u1', title: 't1' }] },
+        } as Partial<IChatHistoryItemDocument>,
+        'user-1'
+      );
+
+      expect(quest.promptMeta?.citables?.[0].metadata?.conflictsWith).toBeUndefined();
+    });
+
     it('sets promptMeta when the quest had none', () => {
       const quest = makeQuest();
       applyQuestStatusChanges(

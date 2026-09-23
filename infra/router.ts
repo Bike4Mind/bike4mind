@@ -79,6 +79,90 @@ const sharedDevDomain = isSharedDevStage && process.env.SERVER_DOMAIN ? `files.d
  */
 export const routePrefix = $dev && process.env.DEV_ROUTER_DISTRIBUTION_ID ? `/${$app.stage}` : '';
 
+// Public CDN path prefixes that serve user-uploaded or user-influenced files from S3.
+// The base list must mirror resolveProxyTarget in appFileProxy.ts (the allowlist of prefixes
+// routed through CloudFront) - i.e. the router.routeBucket(...) registrations in
+// infra/buckets.ts PLUS the tavern overlay's /tavern-sounds + /tavern-icons routes
+// (contributed via contributeTavernInfra, sst.config.ts) and /whats-new (a separate
+// distribution bucket the proxy can't serve, so it's here but absent from resolveProxyTarget).
+// KEEP IN SYNC with both; packages/scripts/src/checkUserFileCdnPrefixes.test.ts is the guard.
+// routePrefix is baked in so the prefixes are the literal URIs the viewer requests on EVERY
+// stage that owns its router - '' on deployed stages, '/<stage>' on `sst dev --stage
+// shared-dev` (routeBucket registers `${routePrefix}/generated`, etc.), where a bare
+// '/generated/' would never match.
+const userFileCdnPrefixes = [
+  '/generated/',
+  '/proxied-images/',
+  '/admin-logos/',
+  '/profile-photos/',
+  '/org-files/',
+  '/tavern-sounds/',
+  '/tavern-icons/',
+  '/app-config/',
+  '/whats-new/',
+].map(prefix => `${routePrefix}${prefix}`);
+
+// Same inert-document CSP the self-host proxy sets (apps/client/pages/api/app-files/serve/
+// [...key].ts). KEEP THE TWO IN SYNC - both serve these prefixes same-origin with the app.
+// allow-downloads keeps legitimate downloads of non-executable generated files (PDF, xlsx)
+// working; it grants no script/form/same-origin/popup capability, so the inertness the
+// backstop exists for is unchanged.
+const USER_FILE_CSP = "default-src 'none'; sandbox allow-downloads";
+// Request header stamped in the viewer-REQUEST function to mark a user-file request; read
+// back in the viewer-response function (see below). Spoofable but harmless: a spoofed marker
+// can only ADD the restrictive CSP to the attacker's own response, never remove it.
+const USER_FILE_MARKER_HEADER = 'x-b4m-user-file';
+
+// Defense-in-depth CSP backstop for hosted/CDN-served user files. A user-supplied file
+// (an SVG or HTML uploaded as e.g. a profile photo) opened directly at its CDN URL must not
+// execute script. SST v4's lazy Router serves every route through ONE routing CloudFront
+// Function (viewer-request) plus ONE viewer-response function, with no per-route cache
+// behaviors or ResponseHeadersPolicy to attach to. The catch: SST rewrites event.request.uri
+// INSIDE the viewer-request function (verified against the SST 4.17.1 Router source), so by
+// the viewer-response stage the URI is the rewritten S3 key (e.g. /generated/x -> /x), not
+// the public prefix. Matching prefixes at response time would therefore silently miss the
+// four rewritten prefixes (/generated, /whats-new, /admin-logos, /org-files) - the very case
+// this backstop exists to cover. So we stamp a marker in the viewer-REQUEST injection, which
+// SST emits as the FIRST statement of the routing function (before its own rewrite), where
+// the URI is still the original prefix; the viewer-response function then keys off that
+// marker. The identity prefixes are also matched directly as a fallback, so coverage never
+// regresses below the pre-marker behavior even if the marker header were dropped in transit.
+const userFileMarkerInjection = `
+  var __ufUri = event.request.uri;
+  var __ufPrefixes = ${JSON.stringify(userFileCdnPrefixes)};
+  for (var __ufI = 0; __ufI < __ufPrefixes.length; __ufI++) {
+    if (__ufUri.indexOf(__ufPrefixes[__ufI]) === 0) {
+      event.request.headers["${USER_FILE_MARKER_HEADER}"] = { value: "1" };
+      break;
+    }
+  }
+`;
+
+// Applied ONLY to user-file responses so the SPA (default behavior) and the ALB API routes
+// (/api/ai/v1/completions, ...) are left untouched.
+const userFileCspInjection = `
+  var __cspHit = event.request.headers["${USER_FILE_MARKER_HEADER}"] !== undefined;
+  if (!__cspHit) {
+    var __cspUri = event.request.uri;
+    var __cspPrefixes = ${JSON.stringify(userFileCdnPrefixes)};
+    for (var __cspI = 0; __cspI < __cspPrefixes.length; __cspI++) {
+      if (__cspUri.indexOf(__cspPrefixes[__cspI]) === 0) { __cspHit = true; break; }
+    }
+  }
+  if (__cspHit) {
+    event.response.headers["content-security-policy"] = { value: "${USER_FILE_CSP}" };
+    event.response.headers["x-content-type-options"] = { value: "nosniff" };
+  }
+`;
+
+// Dev-only permissive CORS on every path (unchanged behavior; deployed stages rely on
+// per-bucket CORS config instead).
+const devCorsInjection = `
+  event.response.headers["access-control-allow-origin"] = { value: "*" };
+  event.response.headers["access-control-allow-methods"] = { value: "GET, HEAD, OPTIONS, POST, PUT" };
+  event.response.headers["access-control-allow-headers"] = { value: "*" };
+`;
+
 const routerInstance = shouldUseSharedRouter
   ? sst.aws.Router.get('Router', process.env.DEV_ROUTER_DISTRIBUTION_ID!)
   : new sst.aws.Router('Router', {
@@ -117,20 +201,18 @@ const routerInstance = shouldUseSharedRouter
               },
             }
           : {}),
-      ...(!$dev
-        ? {}
-        : {
-            edge: {
-              viewerResponse: {
-                injection: `
-              // Add CORS headers for all paths in non-production environments
-              event.response.headers["access-control-allow-origin"] = { value: "*" };
-              event.response.headers["access-control-allow-methods"] = { value: "GET, HEAD, OPTIONS, POST, PUT" };
-              event.response.headers["access-control-allow-headers"] = { value: "*" };
-            `,
-              },
-            },
-          }),
+      // Attach both edge functions on every stage that owns its router (deployed +
+      // shared-dev). The viewer-request function stamps the user-file marker BEFORE SST's URI
+      // rewrite; the viewer-response function reads it to apply the CSP backstop, and
+      // additionally injects permissive CORS on personal `sst dev` stages.
+      edge: {
+        viewerRequest: {
+          injection: userFileMarkerInjection,
+        },
+        viewerResponse: {
+          injection: userFileCspInjection + ($dev ? devCorsInjection : ''),
+        },
+      },
       transform: {
         // When reusing an existing cache policy, import it into Pulumi state\
         // This prevents creating a new cache policy and instead references the existing one

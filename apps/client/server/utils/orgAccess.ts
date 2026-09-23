@@ -4,10 +4,15 @@
  * Shared utility for verifying user access to organization resources.
  * Used by org-scoped API endpoints (webhooks, GitHub connection, etc.)
  *
+ * Three tiers, widest last. State which one you mean at every call site; picking the wrong one
+ * either leaks across a tenant boundary or breaks a members' screen:
+ * - `verifyOrgOwner`      - owner only
+ * - `verifyOrgAccess`     - owner or manager
+ * - `verifyOrgMembership` - any member (shareable ACL)
+ *
  * Security:
  * - Returns NotFoundError for both missing and unauthorized (prevents enumeration)
  * - Admin users have access to all organizations
- * - Non-admin users must be owner or manager
  */
 
 import { organizationRepository } from '@bike4mind/database/infra';
@@ -53,6 +58,52 @@ export async function verifyOrgAccess(user: { id: string; isAdmin: boolean }, or
 
   if (!isOwner && !isManager) {
     // Return same error for not found and not authorized (prevent enumeration)
+    throw new NotFoundError('Organization not found');
+  }
+
+  return org;
+}
+
+/**
+ * Verify the caller OWNS the organization, returning the organization document.
+ *
+ * The strictest of the three tiers in this file - owner only, where `verifyOrgAccess` also admits
+ * the manager and `verifyOrgMembership` admits any member. Use it wherever only the party that
+ * owns the org may act: billing writes (committing the org to a charge, or changing what it pays)
+ * and org-level integration wiring (`integrations/slack/*`, where connecting or disconnecting a
+ * workspace acts for the whole tenant). A manager has agreed to neither.
+ *
+ * Non-oracular, like its siblings: a nonexistent org and an org the caller does not own both answer
+ * NotFoundError, so the route cannot be used to enumerate which organization ids exist.
+ *
+ * Four routes still spell this same bar out inline. All four answer ForbiddenError /
+ * BadRequestError after an unconditional lookup, so unlike this helper they DO leak which org ids
+ * exist; each is left alone only because changing the status it returns is a visible API change.
+ * If you touch one, move it onto this helper rather than copying the inline form again:
+ * - `organizations/subscriptions/update-seats.ts:40`
+ * - `stripe/portal.ts:43`
+ * - `organizations/[id]/admins.ts:27-29`
+ * - `organizations/[id]/manager.ts:28-32` (assign) and `:51-55` (remove)
+ *
+ * Grep for BOTH spellings when re-deriving this list. The last two write `org.userId === user.id`
+ * into an `isOwner` local and negate it later, so a search for the `!==` form alone misses them -
+ * which is how an earlier version of this comment came to call a two-entry list complete.
+ *
+ * Separately, `webhooks/github/subscriptions/index.ts:35-62` is a private copy of
+ * `verifyOrgMembership`, not of this function - fold it into that sibling, not this one.
+ */
+export async function verifyOrgOwner(user: { id: string; isAdmin: boolean }, orgId: string) {
+  if (!orgId || !isValidObjectId(orgId)) {
+    throw new BadRequestError('Invalid organization ID');
+  }
+
+  const org = await organizationRepository.findById(orgId);
+  if (!org) {
+    throw new NotFoundError('Organization not found');
+  }
+
+  // Platform admins pass through, matching every other gate in this file.
+  if (!user.isAdmin && org.userId !== user.id) {
     throw new NotFoundError('Organization not found');
   }
 
