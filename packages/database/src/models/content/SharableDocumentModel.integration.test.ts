@@ -99,30 +99,43 @@ describe('ShareableDocumentRepository.findAccessibleById', () => {
     expect(got?.id).toBe(doc.id);
   });
 
-  it('grants a user whose share carries only the legacy write permission', async () => {
-    // Raw insert: 'write' is not in the Permission enum, so a validating create() rejects it. The
-    // predicate still honours it for legacy/out-of-band rows (same pattern as
-    // OrganizationModel.membershipOrgIds.test.ts).
+  // Raw insert: 'write' is not in the Permission enum, so a validating create() rejects it. The
+  // predicate still honours it for legacy/out-of-band rows (same pattern as
+  // OrganizationModel.membershipOrgIds.test.ts).
+  it.each([
+    { arm: 'user', users: [{ userId: 'writer-1', permissions: ['write'] }], groups: [] },
+    { arm: 'group', users: [], groups: [{ groupId: 'grp-1', permissions: ['write'] }] },
+  ])('grants a $arm share carrying only the legacy write permission', async ({ users, groups }) => {
     const result = await FabFile.collection.insertOne({
       userId: 'owner-1',
       fileName: 'a.png',
       mimeType: 'image/png',
       type: KnowledgeType.FILE,
       filePath: 'a.png',
-      users: [{ userId: 'writer-1', permissions: ['write'] }],
-      groups: [],
+      users,
+      groups,
     });
     const id = String(result.insertedId);
-    const got = await fabFileRepository.shareable.findAccessibleById({ id: 'writer-1', groups: [] }, id);
+    const got = await fabFileRepository.shareable.findAccessibleById({ id: 'writer-1', groups: ['grp-1'] }, id);
     expect(got?.id).toBe(id);
   });
 
-  it('denies a user and a group member whose shares carry no permissions', async () => {
+  it.each([
+    { label: 'no permissions', permissions: [] },
+    { label: 'only non-read permissions', permissions: ['share', 'update'] },
+  ])('denies a user and a group member whose shares carry $label', async ({ permissions }) => {
     const doc = await seed({
-      users: [{ userId: 'reader-1', permissions: [] }],
-      groups: [{ groupId: 'grp-1', permissions: [] }],
+      users: [{ userId: 'reader-1', permissions }],
+      groups: [{ groupId: 'grp-1', permissions }],
     });
     const got = await fabFileRepository.shareable.findAccessibleById({ id: 'reader-1', groups: ['grp-1'] }, doc.id);
+    expect(got).toBeNull();
+  });
+
+  it('does not return a different document the caller can read', async () => {
+    await seed();
+    const other = await seed({ userId: 'owner-2' });
+    const got = await fabFileRepository.shareable.findAccessibleById({ id: 'owner-1', groups: [] }, other.id);
     expect(got).toBeNull();
   });
 
