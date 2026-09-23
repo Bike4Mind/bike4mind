@@ -170,11 +170,16 @@ describe('diffLakeMembership', () => {
     // A soft delete leaves the lake tags in place, so a tombstone still matches the membership
     // filter; only the live-only read keeps it out of the sat-through count.
     it('does not count a file soft-deleted BEFORE the window as having sat through it', async () => {
-      const { adapters: a } = adapters([], { memberIds: [], oldestEventAt: new Date('2026-05-01T00:00:00Z') });
+      // The lake holds two tagged files and no events in the window; `dead` was soft-deleted before
+      // `from`, so the live read names only `steady`. A tombstone-inclusive read would answer 2.
+      const { adapters: a } = adapters([], {
+        memberIds: ['steady'],
+        oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+      });
 
       const view = await diffLakeMembership(lake(), a);
 
-      expect(view.unchangedCount).toBe(0);
+      expect(view.unchangedCount).toBe(1);
     });
 
     it('reads LIVE members only, so a tombstone never reaches the rewind', async () => {
@@ -361,6 +366,48 @@ describe('diffLakeMembership', () => {
       const view = await diffLakeMembership(lake(), a);
 
       expect(view.to).toEqual(NOW);
+    });
+
+    it("refuses a `from` after now, rather than counting today's members for a window that already ended", async () => {
+      // No `to`: the window end clamps to now, which is BEFORE `from`. Nothing is readable about
+      // such a span, so an `unchangedCount` over it would be a confident wrong number.
+      const { adapters: a } = adapters([], {
+        memberIds: ['m1', 'm2', 'm3'],
+        oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+      });
+
+      await expect(
+        diffLakeMembership(lake(), { ...a, from: new Date('2030-01-01T00:00:00Z'), to: undefined })
+      ).rejects.toThrow(/must not be in the future/i);
+    });
+
+    it('refuses a window whose end clamps below its start even when `to` is supplied', async () => {
+      const { adapters: a } = adapters([], {
+        memberIds: ['m1', 'm2', 'm3'],
+        oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+      });
+
+      await expect(
+        diffLakeMembership(lake(), {
+          ...a,
+          from: new Date('2030-01-01T00:00:00Z'),
+          to: new Date('2031-01-01T00:00:00Z'),
+        })
+      ).rejects.toThrow(/must not be in the future/i);
+    });
+
+    it('serves an instantaneous window where `to` equals `from`', async () => {
+      const { adapters: a } = adapters([], {
+        memberIds: ['steady'],
+        oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+      });
+
+      const view = await diffLakeMembership(lake(), { ...a, to: FROM });
+
+      expect(view.to).toEqual(FROM);
+      expect(view.added).toEqual([]);
+      expect(view.removed).toEqual([]);
+      expect(view.unchangedCount).toBe(1);
     });
 
     it('resolves membership against the lake scope, prefix arm included', async () => {

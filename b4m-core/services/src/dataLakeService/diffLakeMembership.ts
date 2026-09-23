@@ -1,3 +1,5 @@
+import { isObjectIdShaped } from '@bike4mind/common';
+import { BadRequestError } from '@bike4mind/utils';
 import type {
   IDataLakeDocument,
   IFabFileRepository,
@@ -31,10 +33,6 @@ export function clampLakeMembershipDiffLimit(requested?: number): number {
   if (floored < 1) return 1;
   return Math.min(floored, LAKE_MEMBERSHIP_DIFF_MAX_LIMIT);
 }
-
-/** See `assembleLakeConfigHistory`'s guard of the same name: `findByIds` throws on a non-ObjectId,
- * and a membership event legitimately carries `system` or an API-key id as its principal. */
-const isObjectIdShaped = (id: string): boolean => /^[0-9a-fA-F]{24}$/.test(id);
 
 /** Best-effort display name, never falling back to email - the rule the config history and access
  * view both apply, since a lake accumulates principals across tenants. */
@@ -96,6 +94,12 @@ export async function diffLakeMembership(
   { db, from, to, limit, now = new Date() }: DiffLakeMembershipAdapters
 ): Promise<LakeMembershipDiffView> {
   const windowEnd = to && to.getTime() < now.getTime() ? to : now;
+  // `to` clamps to now, so a `from` in the future leaves the window ending before it starts. Every
+  // read over such a span looks empty, which would otherwise be served as a confident
+  // `unchangedCount` of today's whole membership.
+  if (windowEnd.getTime() < from.getTime()) {
+    throw new BadRequestError('`from` must not be in the future.');
+  }
   const pageSize = clampLakeMembershipDiffLimit(limit);
 
   const scope = resolveLakeMembershipScope(lake);

@@ -135,6 +135,41 @@ describe('GET /api/data-lakes/[id]/membership-diff', () => {
       );
     });
 
+    it('refuses an out-of-range calendar date instead of rolling it into the next month', async () => {
+      const { res } = makeRes();
+
+      // `new Date` turns this into March 2nd, which is a window the caller never named.
+      await expect(call(req({ id: 'lake1', from: '2026-02-30T00:00:00.000Z' }), res)).rejects.toThrow(
+        /does not exist/i
+      );
+      await expect(call(req({ id: 'lake1', from: FROM, to: '2026-06-31T00:00:00.000Z' }), res)).rejects.toThrow(
+        /does not exist/i
+      );
+      expect(h.diffLakeMembership).not.toHaveBeenCalled();
+    });
+
+    it('refuses a `from` in the future, with or without a `to`', async () => {
+      const { res } = makeRes();
+
+      // The service clamps the window end to now, so either form ends the window before it starts
+      // and the empty read would be served as a confident count of every current member.
+      await expect(call(req({ id: 'lake1', from: '2030-01-01T00:00:00.000Z' }), res)).rejects.toThrow(
+        /must not be in the future/i
+      );
+      await expect(
+        call(req({ id: 'lake1', from: '2030-01-01T00:00:00.000Z', to: '2031-01-01T00:00:00.000Z' }), res)
+      ).rejects.toThrow(/must not be in the future/i);
+      expect(h.diffLakeMembership).not.toHaveBeenCalled();
+    });
+
+    it('serves an instantaneous window where `to` equals `from`', async () => {
+      const { res, json } = makeRes();
+
+      await call(req({ id: 'lake1', from: FROM, to: FROM }), res);
+
+      expect(json).toHaveBeenCalledWith({ data: view });
+    });
+
     it('refuses a backwards window instead of serving an empty diff for it', async () => {
       const { res } = makeRes();
 
@@ -157,9 +192,11 @@ describe('GET /api/data-lakes/[id]/membership-diff', () => {
     });
 
     it('gates a registry lake on platform admin, not the org-admin rung', async () => {
-      // A fallback lake's synthetic document carries the registry config's organizationId, so
-      // resolveCanManageLake would let a customer-side org admin through.
+      // The actor this rung exists to stop: an org admin of the organization the registry config
+      // names. `resolveCanManageLake` would hand them a platform lake's history.
       h.isFallbackLake.mockReturnValue(true);
+      h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: ['org-1'] });
+      h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', name: 'Help Lake', organizationId: 'org-1' });
       const { res } = makeRes();
 
       await expect(call(req({ id: 'help', from: FROM }), res)).rejects.toThrow(/manage this data lake/i);

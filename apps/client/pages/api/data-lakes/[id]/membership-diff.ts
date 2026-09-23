@@ -28,6 +28,14 @@ const parseInstant = (raw: string | undefined, field: string): Date | undefined 
   if (!ISO_INSTANT.test(raw) || Number.isNaN(parsed.getTime())) {
     throw new BadRequestError(`\`${field}\` must be an ISO-8601 date-time with an explicit UTC offset.`);
   }
+  // V8 rolls an out-of-range day over rather than refusing it, so `2026-02-30` parses as March 2nd.
+  // Checked against the literal date fields, not a `toISOString()` round trip, which an offset
+  // legitimately shifts across midnight.
+  const [year, month, day] = raw.slice(0, 10).split('-').map(Number);
+  const asUtc = new Date(Date.UTC(year, month - 1, day));
+  if (asUtc.getUTCFullYear() !== year || asUtc.getUTCMonth() !== month - 1 || asUtc.getUTCDate() !== day) {
+    throw new BadRequestError(`\`${field}\` names a date that does not exist.`);
+  }
   return parsed;
 };
 
@@ -76,6 +84,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
 
       const fromAt = parseInstant(from, 'from');
       if (!fromAt) throw new BadRequestError('`from` is required and must be an ISO-8601 date-time.');
+      // The window end clamps to now, so a future `from` ends the window before it starts whether or
+      // not `to` was supplied - and every read over it comes back empty, which reads as stillness.
+      if (fromAt.getTime() > Date.now()) {
+        throw new BadRequestError('`from` must not be in the future.');
+      }
       const toAt = parseInstant(to, 'to');
       // A backwards window would otherwise read as 200 with empty lists and an `unchangedCount`
       // rewound over a span that was never asked about.
