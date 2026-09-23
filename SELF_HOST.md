@@ -863,14 +863,16 @@ Need help? Ask in [Discussions](https://github.com/bike4mind/bike4mind/discussio
 
 ### Agent execution service
 
-Build the app and executor from the same revision when adopting the container agent transport:
+Optional and opt-in, behind the `agent-executor` profile - a fresh install that doesn't opt in gets the rest of the app (chat, notebooks, everything else) with agent execution simply unavailable. Build the app and executor from the same revision when adopting the container agent transport:
 
 ```sh
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost build app agentexecutor
-docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile agent-executor up -d
 ```
 
-Set `AGENT_EXECUTOR_SERVICE=http://agentexecutor:8080` and generate an `AGENT_EXECUTOR_INTERNAL_SECRET` with `openssl rand -hex 32`. Both services load the same `.env.selfhost`. The executor also requires `MONGODB_URI`, `AGENT_CONTINUATION_QUEUE`, the SQS endpoint/credentials, and the same model and storage settings as the app. Its internal port is not published on the host. Hosted deployments continue using their linked Lambda function when `AGENT_EXECUTOR_SERVICE` is absent.
+Uncomment `AGENT_EXECUTOR_SERVICE=http://agentexecutor:8080` in `.env.selfhost` and generate an `AGENT_EXECUTOR_INTERNAL_SECRET` with `openssl rand -hex 32`. Both services load the same `.env.selfhost`. The executor also requires `MONGODB_URI`, `AGENT_CONTINUATION_QUEUE`, the SQS endpoint/credentials, and the same model and storage settings as the app. Its internal port is not published on the host. Hosted deployments continue using their linked Lambda function when `AGENT_EXECUTOR_SERVICE` is absent.
+
+**Upgrading an existing install:** `AGENT_EXECUTOR_SERVICE` and `AGENT_EXECUTOR_INTERNAL_SECRET` are new. An existing `.env.selfhost` predating this feature has neither set, and the `agentexecutor` container is behind the `agent-executor` profile, so `docker compose ... up -d` with your current command line brings the stack up exactly as before - the app is not gated on the executor's health. Skip the rest of this section and nothing changes. To adopt container agent execution, add the two variables above to your existing `.env.selfhost` and re-run `up -d` with `--profile agent-executor` as shown above.
 
 The executor validates its required configuration at startup. `/health` is ready only after Mongo and the configured queue are reachable. Check it inside the service:
 
