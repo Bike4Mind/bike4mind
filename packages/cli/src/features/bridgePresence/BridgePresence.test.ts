@@ -59,26 +59,44 @@ describe('BridgePresence peer-ownership gate', () => {
   let wsConnections: string[];
   let sockets: WsSocket[];
   let port: number;
-  // When set, the fake server holds every /announce response until it resolves -
-  // lets a test drive a stop() into the window after the POST is sent but before
-  // the CLI sees the 200.
-  let announceGate: Promise<void> | null;
+  // Captured POST bodies for /event, so a test can assert whether a specific
+  // event actually left the process (vs. was dropped before post()).
+  let eventBodies: string[];
+  // Response gates: while a hold flag is on, the fake server parks that path's
+  // response and pushes a releaser, letting a test drive teardown into the window
+  // between "POST received" and "200 seen".
+  let holdAnnounce: boolean;
+  let announceReleasers: Array<() => void>;
+  let holdEvent: boolean;
+  let eventReleasers: Array<() => void>;
 
   beforeEach(async () => {
     httpRequests = [];
+    eventBodies = [];
     wsConnections = [];
     sockets = [];
-    announceGate = null;
+    holdAnnounce = false;
+    announceReleasers = [];
+    holdEvent = false;
+    eventReleasers = [];
     resolveMock.mockReset();
     readFileMock.mockReset();
     warn.mockClear();
 
-    server = http.createServer(async (req, res) => {
-      const url = req.url ?? '';
-      httpRequests.push(url);
-      if (announceGate && url.startsWith('/announce')) await announceGate;
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end('{}');
+    server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', chunk => {
+        body += chunk;
+      });
+      req.on('end', async () => {
+        const url = req.url ?? '';
+        httpRequests.push(url);
+        if (url.startsWith('/event')) eventBodies.push(body);
+        if (holdAnnounce && url.startsWith('/announce')) await new Promise<void>(r => announceReleasers.push(r));
+        if (holdEvent && url.startsWith('/event')) await new Promise<void>(r => eventReleasers.push(r));
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{}');
+      });
     });
     wss = new WebSocketServer({ server });
     wss.on('connection', (socket, req) => {
@@ -286,14 +304,13 @@ describe('BridgePresence peer-ownership gate', () => {
     // the second re-check site (post-announce) must bail without publishing the
     // instanceId or opening the command WS.
     resolveMock.mockResolvedValue(OWNER(me()));
-    let releaseAnnounce!: () => void;
-    announceGate = new Promise<void>(r => (releaseAnnounce = r));
+    holdAnnounce = true;
     const presence = new BridgePresence();
 
     const startP = presence.start({ workspacePath: '/tmp/ws' });
-    await waitFor(() => httpRequests.some(u => u.startsWith('/announce')));
+    await waitFor(() => announceReleasers.length === 1);
     await presence.stop();
-    releaseAnnounce();
+    announceReleasers.forEach(r => r());
 
     await expect(startP).resolves.toBe(false);
     expect(wsConnections).toEqual([]);
@@ -371,6 +388,116 @@ describe('BridgePresence peer-ownership gate', () => {
     await expect(startP1).resolves.toBe(false);
     expect(httpRequests.filter(u => u.startsWith('/announce')).length).toBe(1);
     expect(wsConnections.length).toBe(1);
+
+    await presence.stop();
+  });
+
+  it('reconnects the command WS after a stop()+start() lands inside the connect probe (BLOCKER 1: wsConnectingGen)', async () => {
+    // gen-1 announces, then parks in the WS connect probe (holding the in-flight
+    // flag); a full stop()+start() completes; gen-2 must still connect its command
+    // WS. Pre-fix (bare `wsConnecting` boolean not reset in stop()) gen-2's
+    // connectCommandWs early-returns and nothing retries, so the session is
+    // announced but has no inbound command channel - this waitFor times out.
+    let releaseWsProbe!: (owner: ListenerOwner) => void;
+    resolveMock
+      .mockResolvedValueOnce(OWNER(me())) // gen-1 announce probe
+      .mockImplementationOnce(() => new Promise<ListenerOwner>(r => (releaseWsProbe = r))) // gen-1 WS probe parks
+      .mockResolvedValue(OWNER(me())); // gen-2: trusted throughout
+    const presence = new BridgePresence();
+
+    const ok1 = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok1).toBe(true);
+    await waitFor(() => typeof releaseWsProbe === 'function');
+    await presence.stop();
+    const ok2 = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok2).toBe(true);
+
+    await waitFor(() => wsConnections.length > 0); // the new generation's WS MUST connect
+    releaseWsProbe(OWNER(me())); // stale gen-1 probe resolves - no-op
+    await new Promise(r => setTimeout(r, 30));
+    expect(wsConnections.length).toBe(1);
+
+    await presence.stop();
+  });
+
+  it('a stale start() whose /announce POST returns after a stop()+start() does not re-publish (BLOCKER 2: post-announce gen re-check)', async () => {
+    // gen-1's /announce POST is held past a full stop()+start(); when it finally
+    // returns, the post-await generation re-check must bail. Deleting the
+    // generation term there (leaving only stopped/config, which a restart has
+    // repopulated) makes the stale start resolve true and desync instanceId.
+    resolveMock.mockResolvedValue(OWNER(me()));
+    holdAnnounce = true;
+    const presence = new BridgePresence();
+
+    const startP1 = presence.start({ workspacePath: '/tmp/ws' }); // gen-1 parks in the held /announce
+    await waitFor(() => announceReleasers.length === 1);
+    await presence.stop();
+    holdAnnounce = false; // let the fresh start's announce through
+    const ok2 = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok2).toBe(true);
+    await waitFor(() => wsConnections.length > 0);
+
+    announceReleasers[0](); // release gen-1's held /announce POST
+    await expect(startP1).resolves.toBe(false); // gen-1 must bail on the generation mismatch
+    expect(wsConnections.length).toBe(1);
+
+    await presence.stop();
+  });
+
+  it('drops a queued /event whose generation was superseded by a stop()+start() (BLOCKER 2: queued-emit gen drop)', async () => {
+    resolveMock.mockResolvedValue(OWNER(me()));
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+    await waitFor(() => wsConnections.length > 0 && httpRequests.some(u => u.startsWith('/event')));
+
+    // Hold /event responses so the queue stays occupied across the restart.
+    holdEvent = true;
+    void presence.emitEvent({ type: 'message', role: 'assistant', text: 'gen1-A' }); // task A: runs, posts, held
+    await waitFor(() => eventReleasers.length === 1);
+    const laterEmit = presence.emitEvent({ type: 'message', role: 'assistant', text: 'gen1-LATE' }); // task B: queued behind A
+
+    // Restart while task B is queued (captured under gen-1, generation now moves).
+    await presence.stop();
+    const ok2 = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok2).toBe(true);
+    await waitFor(() => wsConnections.length > 1); // gen-2 connected, gate open
+
+    holdEvent = false;
+    eventReleasers.forEach(r => r()); // release task A (and gen-2's held idle emit); task B now runs
+    await laterEmit;
+    await new Promise(r => setTimeout(r, 20));
+
+    // task B was captured under gen-1; the generation moved, so it must be dropped,
+    // never re-posted under gen-2's live+trusted gate. Deleting the generation term
+    // in emitEvent lets 'gen1-LATE' ride out under the new generation.
+    expect(eventBodies.some(b => b.includes('gen1-LATE'))).toBe(false);
+
+    await presence.stop();
+  });
+
+  it('refuses a closed-gate emit silently after a benign bridge restart (nit: post() silent refusal)', async () => {
+    // WS drops, then the reconnect probe finds no listener (benign) so the gate
+    // stays closed. An emit in this window must be refused WITHOUT a security
+    // warning - post()'s refusal is silent, and `no-listener` is not `foreign`.
+    resolveMock
+      .mockResolvedValueOnce(OWNER(me())) // announce
+      .mockResolvedValueOnce(OWNER(me())) // initial WS connect
+      .mockResolvedValue({ kind: 'no-listener' }); // reconnect: bridge simply gone
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+    await waitFor(() => wsConnections.length > 0 && httpRequests.some(u => u.startsWith('/event')));
+    const eventsBefore = httpRequests.filter(u => u.startsWith('/event')).length;
+
+    sockets[0].close(); // WS drops -> gate closes; reconnect probe (no-listener) keeps it closed, quietly
+    await waitFor(() => resolveMock.mock.calls.length >= 3);
+
+    await presence.emitEvent({ type: 'message', role: 'assistant', text: 'x' });
+    expect(httpRequests.filter(u => u.startsWith('/event')).length).toBe(eventsBefore); // refused
+    expect(warn).not.toHaveBeenCalled(); // silent throughout
 
     await presence.stop();
   });

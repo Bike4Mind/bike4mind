@@ -92,14 +92,18 @@ export class BridgePresence {
   /** Gate latch for the egress boundary. Opened only after a same-UID owner
    *  check passes for the current connection generation; `post()` refuses to
    *  put the secret on the wire while it is closed. Cleared when the command WS
-   *  drops (the real TOCTOU boundary, where the port owner could flip) and on
-   *  teardown, so `/event` + `/disconnect` can never disclose to a peer we
-   *  haven't re-verified. */
+   *  drops (the real TOCTOU boundary, where the port owner could flip). On
+   *  teardown it is cleared last, AFTER stop()'s best-effort `/disconnect` -
+   *  that POST rides the still-open gate deliberately: stop() only reaches it
+   *  when the command WS is live to the peer we verified at connect (a flipped
+   *  peer would have dropped the WS, closing the gate first). */
   private trusted = false;
-  /** In-flight guard for connectCommandWs: the trust probe is now awaited, so
-   *  without this two overlapping calls could each build a socket and leave one
-   *  untracked (see the close handler's identity check). */
-  private wsConnecting = false;
+  /** In-flight guard for connectCommandWs, scoped to the generation that owns
+   *  it: the trust probe is awaited, so without this two overlapping calls could
+   *  each build a socket and leave one untracked. Generation-scoped (not a bare
+   *  boolean) so a stop()+start() landing inside a stale connect does not block
+   *  the new generation's connect - only the same generation short-circuits. */
+  private wsConnectingGen: number | null = null;
   /** Backoff state for the command WS. Capped low - bridge is on the same
    *  machine, so reconnect latency matters. */
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -154,8 +158,12 @@ export class BridgePresence {
     this.stopped = false;
     this.started = true;
     this.generation += 1; // new generation before any await; see `generation`
+    const gen = this.generation;
 
     const config = await readBridgeConfig();
+    // A stop()+start() during the config read supersedes this start(); bail so we
+    // don't install a stale generation's config over the live one.
+    if (gen !== this.generation) return false;
     if (!config) {
       logger.debug('[tavern] cc-bridge not configured; CLI runs without tavern presence');
       return false;
@@ -192,7 +200,16 @@ export class BridgePresence {
   private async checkPeerTrust(): Promise<'trusted' | 'absent' | 'foreign' | 'undeterminable'> {
     if (typeof process.getuid !== 'function') return 'undeterminable'; // Windows: uncheckable
     const port = this.config?.port ?? DEFAULT_PORT;
-    const owner = await resolveLoopbackListenerOwner(port);
+    let owner: Awaited<ReturnType<typeof resolveLoopbackListenerOwner>>;
+    try {
+      owner = await resolveLoopbackListenerOwner(port);
+    } catch (err) {
+      // An unexpected throw from the pure probe (a bug, not an expected failure it
+      // classifies itself) - surface it at debug and fail closed rather than let
+      // it reject up through start() and silently disable presence.
+      logger.debug(`[tavern] loopback owner lookup threw: ${(err as Error).message}`);
+      return 'undeterminable';
+    }
     if (owner.kind === 'no-listener') return 'absent';
     if (owner.kind === 'unknown') return 'undeterminable';
     if (owner.uid !== process.getuid()) return 'foreign';
@@ -236,6 +253,10 @@ export class BridgePresence {
     });
     // Teardown, or a stop()+start() cycle, during the announce POST: bail
     // without publishing this superseded generation's instanceId.
+    // ponytail: if the POST already registered the session before we bailed, that
+    // instanceId is a short-lived ghost on the bridge - we never learned to
+    // /disconnect it. Left to the bridge's own idle-session GC rather than
+    // bypassing the ownership gate to disconnect a now-unverified peer.
     if (gen !== this.generation || this.stopped || !this.config) return false;
     if (!announced) {
       this.trusted = false;
@@ -381,10 +402,10 @@ export class BridgePresence {
     this.reconnectAttempts = 0;
     this.peerWarned = false;
     this.trusted = false;
-    // wsConnecting is intentionally NOT reset here: an in-flight connectCommandWs
-    // owns it and clears it in its own generation-guarded `finally`. Resetting it
-    // here would re-open the entry guard while that probe is still parked, so two
-    // connects could pass and orphan a socket.
+    // wsConnectingGen is intentionally NOT reset here: it is generation-scoped, so
+    // a stale in-flight connect only short-circuits its own generation and clears
+    // the flag in its own guarded `finally`. Clearing it here would either strand
+    // the flag or (with a bare boolean) re-open the entry guard mid-probe.
     // Reset the strict-ordered emit queue so a restart within the same CLI run
     // doesn't chain its first event onto a settled/failed promise from the
     // prior session (which could delay or reorder startup events).
@@ -433,9 +454,13 @@ export class BridgePresence {
 
   private async connectCommandWs(): Promise<void> {
     if (this.stopped || !this.config || !this.instanceId) return;
-    if (this.ws || this.wsConnecting) return; // already connected or connecting
-    this.wsConnecting = true;
     const gen = this.generation;
+    // Short-circuit only when connected, or already connecting for THIS
+    // generation. A stale connect from a superseded generation must not block
+    // this one, or a stop()+start() landing inside that stale probe would leave
+    // the new session announced but with no inbound command channel.
+    if (this.ws || this.wsConnectingGen === gen) return;
+    this.wsConnectingGen = gen;
     try {
       // Re-verify ownership before the WS URL (which also carries the secret) is
       // built, and because its frames drive the callbacks. gateEgress covers
@@ -490,12 +515,15 @@ export class BridgePresence {
       });
 
       ws.on('close', () => {
-        // A socket from a superseded generation must not touch current state: a
-        // stop()+start() cycle already reset trusted/ws for the new generation.
-        if (gen !== this.generation) return;
-        // Identity-check: only clear the tracked socket if it is still this one,
-        // so an overlapping connect's socket is never orphaned.
-        if (this.ws === ws) this.ws = null;
+        // Identity is the authoritative guard here: only the socket currently
+        // tracked as ours may touch shared state. A socket from a superseded
+        // generation (stop() closes the live socket, so its close resolves with
+        // this.ws already reassigned or null) or an overlapping connect is inert
+        // - it must not clear the live generation's trust latch or schedule a
+        // spurious reconnect. This subsumes a generation check: a stale socket is
+        // never the current this.ws.
+        if (this.ws !== ws) return;
+        this.ws = null;
         // Connection generation ended - re-verify ownership before the next
         // disclosure (the port owner could flip while we are disconnected).
         this.trusted = false;
@@ -509,7 +537,10 @@ export class BridgePresence {
         // `close` will follow; reconnect there.
       });
     } finally {
-      this.wsConnecting = false;
+      // Only clear the flag if this call still owns it. A later generation may
+      // have taken it over while this stale call was parked in the probe; its
+      // own finally will clear it.
+      if (this.wsConnectingGen === gen) this.wsConnectingGen = null;
     }
   }
 

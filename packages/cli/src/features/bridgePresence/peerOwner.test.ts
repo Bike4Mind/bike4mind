@@ -29,7 +29,8 @@ vi.mock('child_process', () => ({
   execFile: (...args: unknown[]) => (execFileMock as (...a: unknown[]) => unknown)(...args),
 }));
 
-const { parseProcNetForUid, parseLsofForUid, resolveLoopbackListenerOwner } = await import('./peerOwner.js');
+const { parseProcNetForUid, parseLsofForUid, resolveLoopbackListenerOwner, __resetLsofPathCacheForTests } =
+  await import('./peerOwner.js');
 
 // 0xBE5C === 48732 (the default bridge port); 0A === TCP_LISTEN.
 const PROC_NET_TCP = `  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
@@ -142,6 +143,7 @@ describe('resolveLoopbackListenerOwner', () => {
     readFileMock.mockReset();
     accessMock.mockReset();
     execFileMock.mockReset();
+    __resetLsofPathCacheForTests(); // the resolved lsof path is cached process-wide
   });
 
   afterEach(() => {

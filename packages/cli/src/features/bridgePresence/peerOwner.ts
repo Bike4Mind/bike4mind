@@ -1,7 +1,6 @@
 import { promises as fs, constants } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { logger } from '../../utils/Logger.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -29,20 +28,16 @@ export type ListenerOwner = { kind: 'owner'; uid: number } | { kind: 'no-listene
  * `127.0.0.1:<port>`. This is the only pre-transmission trust signal the CLI
  * has over loopback TCP: the peer is whoever holds the port, so we confirm it
  * is the same UID as this process BEFORE handing it the bridge secret.
+ *
+ * Pure platform probe: the per-platform helpers classify every EXPECTED failure
+ * into `no-listener`/`unknown` themselves. An UNEXPECTED throw (a bug) is left to
+ * propagate so the CLI-layer caller can log it and fail closed - this module
+ * deliberately does not depend on the CLI logger.
  */
 export async function resolveLoopbackListenerOwner(port: number): Promise<ListenerOwner> {
-  try {
-    if (process.platform === 'linux') return await resolveViaProcNet(port);
-    if (process.platform === 'darwin') return await resolveViaLsof(port);
-    return { kind: 'unknown' };
-  } catch (err) {
-    // The per-platform helpers already classify their expected failures; an
-    // error escaping to here is unexpected (e.g. a programming bug). Surface it
-    // at debug before the fail-closed sentinel so it isn't silently swallowed
-    // into a permanently-disabled presence.
-    logger.debug(`[tavern] loopback owner lookup failed: ${(err as Error).message}`);
-    return { kind: 'unknown' };
-  }
+  if (process.platform === 'linux') return resolveViaProcNet(port);
+  if (process.platform === 'darwin') return resolveViaLsof(port);
+  return { kind: 'unknown' };
 }
 
 async function resolveViaProcNet(port: number): Promise<ListenerOwner> {
@@ -132,15 +127,28 @@ async function resolveViaLsof(port: number): Promise<ListenerOwner> {
   return uids.size === 1 ? { kind: 'owner', uid: [...uids][0] } : { kind: 'unknown' };
 }
 
+// The lsof path can't change within a process, so resolve it once and reuse it
+// rather than re-running two fs.access() calls on every probe.
+let lsofPathCache: string | null | undefined;
+
+/** Test-only: drop the resolved-path cache so a suite can re-model a
+ *  present/absent lsof per case. Not part of the runtime contract. */
+export function __resetLsofPathCacheForTests(): void {
+  lsofPathCache = undefined;
+}
+
 async function resolveLsofPath(): Promise<string | null> {
+  if (lsofPathCache !== undefined) return lsofPathCache;
   for (const candidate of LSOF_CANDIDATES) {
     try {
       await fs.access(candidate, constants.X_OK);
+      lsofPathCache = candidate;
       return candidate;
     } catch {
       /* try next candidate */
     }
   }
+  lsofPathCache = null;
   return null;
 }
 
