@@ -75,21 +75,23 @@ const run = (logger = makeLogger()) => runOrgFeedbackSummary(message, logger as 
 
 const frames = () => h.sendToClient.mock.calls.map(call => call[2] as { status: string; errorMessage?: string });
 
+const REPORT = {
+  range: { from: message.startDate, to: message.endDate },
+  totals: { count: 7 },
+  byDay: [{ day: '2026-08-02', count: 7 }],
+  bySubject: [{ key: 'chat', count: 7 }],
+  byType: [{ key: 'bug', count: 5 }],
+  byStatus: [{ key: 'open', count: 6 }],
+  byTag: [{ key: 'slow', count: 3 }],
+  byTagTruncated: true,
+  byMember: [{ userId: 'u1', displayName: MEMBER_NAME, count: 7 }],
+  membership: { memberCount: 1, aclOnly: [], stampOnly: [] },
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.findOne.mockResolvedValue({ summaryJobId: SUMMARY_JOB_ID, status: 'pending' });
-  h.orgFeedbackReport.mockResolvedValue({
-    range: { from: message.startDate, to: message.endDate },
-    totals: { count: 7 },
-    byDay: [{ day: '2026-08-02', count: 7 }],
-    bySubject: [{ key: 'chat', count: 7 }],
-    byType: [{ key: 'bug', count: 5 }],
-    byStatus: [{ key: 'open', count: 6 }],
-    byTag: [{ key: 'slow', count: 3 }],
-    byTagTruncated: true,
-    byMember: [{ userId: 'u1', displayName: MEMBER_NAME, count: 7 }],
-    membership: { memberCount: 1, aclOnly: [], stampOnly: [] },
-  });
+  h.orgFeedbackReport.mockResolvedValue(REPORT);
   h.complete.mockImplementation(async (_model, _messages, _opts, onText) => {
     await onText(['Feedback was steady across the window.']);
   });
@@ -104,6 +106,41 @@ describe('runOrgFeedbackSummary', () => {
     expect(prompt).toContain('Total items: 7');
     expect(prompt).not.toContain(MEMBER_NAME);
     expect(prompt).not.toContain('u1');
+  });
+
+  describe('partial tag list note', () => {
+    const PARTIAL_NOTE = 'more tags exist, so do not describe this as the complete tag breakdown';
+    const promptFor = async (byTagCount: number | null, byTagTruncated: boolean) => {
+      h.orgFeedbackReport.mockResolvedValue({
+        ...REPORT,
+        byTagTruncated,
+        ...(byTagCount === null
+          ? {}
+          : { byTag: Array.from({ length: byTagCount }, (_, i) => ({ key: `tag-${i}`, count: 100 - i })) }),
+      });
+      await run();
+      return JSON.stringify(h.complete.mock.calls[0][1]);
+    };
+
+    it('says the list is a cut when the report was truncated', async () => {
+      const prompt = await promptFor(null, true);
+      expect(prompt).toContain(PARTIAL_NOTE);
+      expect(prompt).toContain('only the top 1 tags by count are listed');
+    });
+
+    it('stays quiet when the report was not truncated and every tag fits', async () => {
+      expect(await promptFor(null, false)).not.toContain(PARTIAL_NOTE);
+    });
+
+    it('stays quiet at exactly the prompt limit', async () => {
+      expect(await promptFor(20, false)).not.toContain(PARTIAL_NOTE);
+    });
+
+    it('says the list is a cut when the prompt limit drops tags the report kept', async () => {
+      const prompt = await promptFor(21, false);
+      expect(prompt).toContain(PARTIAL_NOTE);
+      expect(prompt).toContain('only the top 20 tags by count are listed');
+    });
   });
 
   it('writes the artifact and releases the window on success', async () => {

@@ -83,6 +83,11 @@ const bucketList = (rows: { key: string; count: number }[], limit = rows.length)
  * actually turns on is the fields chosen: no feedback text, no member names, no ids.
  */
 function buildPrompt(report: Awaited<ReturnType<typeof orgFeedbackReport>>) {
+  // Either cut hides tags: the report's own top-N ceiling, or this prompt's shorter one.
+  const tagsPartial = report.byTagTruncated === true || report.byTag.length > PROMPT_TAG_LIMIT;
+  const tagNote = tagsPartial
+    ? `\n(only the top ${Math.min(report.byTag.length, PROMPT_TAG_LIMIT)} tags by count are listed; more tags exist, so do not describe this as the complete tag breakdown)`
+    : '';
   return `Feedback window: ${report.range.from} to ${report.range.to}
 Total items: ${report.totals.count}
 
@@ -95,7 +100,7 @@ ${bucketList(report.byStatus)}
 By area of the product:
 ${bucketList(report.bySubject)}
 
-By tag (items with no tag are absent, so these do not sum to the total):
+By tag (items with no tag are absent, so these do not sum to the total):${tagNote}
 ${bucketList(report.byTag, PROMPT_TAG_LIMIT)}
 
 By day:
