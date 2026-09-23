@@ -99,19 +99,34 @@ export interface DataLakeAccessContext {
    * `excludedByAccessCountPrerequisitesComplete` at this file's resolvers for how this feeds that
    * gate, mirroring the grant-read and supersession prerequisites already tracked there.
    *
-   * DEFAULTS OPTIMISTIC (absent = trustworthy), DELIBERATELY, unlike `excludedByAccessCount`'s own
-   * "absent = not measured" contract (review, #3155): only `getDataLakeAccessContext()` sets this
-   * field today, so gating on an explicit `true` instead of `!== false` would flip
-   * `lakeViewComplete` to incomplete for every OTHER caller of this resolver too (they never set
-   * it), silently disabling the narrowing `sessionService/deriveRetrievalTags.ts` does when the
-   * view is complete - a real regression for a hypothetical future bug. See the test pinning this
-   * default in `getDynamicDataLakeTags.test.ts` ("omitting entitlementKeysResolved... still runs
-   * the count") before changing it.
+   * DEFAULTS OPTIMISTIC (absent = trustworthy) for `lakeViewComplete`, DELIBERATELY, unlike
+   * `excludedByAccessCount`'s own "absent = not measured" contract (review, #3155): hosts that
+   * satisfy this interface structurally (ToolContext, the research-task context) never state it, so
+   * gating on an explicit `true` instead of `!== false` would flip `lakeViewComplete` to incomplete
+   * for all of them, silently disabling the narrowing `sessionService/deriveRetrievalTags.ts` does
+   * when the view is complete - a real regression for a hypothetical future bug. See the test
+   * pinning this default in `getDynamicDataLakeTags.test.ts` before changing it.
+   *
+   * An EXCLUSION MEASUREMENT has the opposite default: it is unknown unless this field is stated -
+   * see `MeasurableDataLakeAccessContext` below, which is what makes stating it unforgettable
+   * there rather than a comment at each call site.
    */
   entitlementKeysResolved?: boolean;
   /** Optional; only used to report a swallowed dataLakes read failure (see below). */
   logger?: Logger;
 }
+
+/**
+ * A context whose builder has STATED whether the entitlement lookup succeeded - the only kind an
+ * access-derived exclusion measurement may run on (`measureIdentityNamedExclusion`).
+ *
+ * Required rather than optional here because an exclusion count built from a silently degraded key
+ * list is confidently wrong ("excluded: N (access)") where the honest answer is "unknown", and the
+ * signal is easy to forget when it rides as a second independent field. A call site that resolves
+ * keys and then measures must carry both halves; producers hand them over together (see
+ * `ChatCompletionProcess.resolveEntitlementKeys`).
+ */
+export type MeasurableDataLakeAccessContext = DataLakeAccessContext & { entitlementKeysResolved: boolean };
 
 /**
  * One accessible lake, resolved far enough to run a WHOLE-LAKE query against it (counting,
@@ -666,7 +681,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
  * so "any failure means unknown" is the simpler and equally safe contract.
  */
 export async function measureIdentityNamedExclusion(
-  context: DataLakeAccessContext,
+  context: MeasurableDataLakeAccessContext,
   identityTags: string[]
 ): Promise<number | undefined> {
   if (identityTags.length === 0) return 0;
@@ -677,8 +692,14 @@ export async function measureIdentityNamedExclusion(
   // (see `entitlementKeysResolved`'s own doc) - this function's "any failure means unknown" contract
   // extends to that upstream failure too, since a degraded key list would make an entitlement-gated
   // lake look excluded rather than unmeasured.
-  if (context.entitlementKeysResolved === false) {
-    context.logger?.warn('[dataLakes] scoped gate-excluded-lake count skipped; entitlement lookup failed this turn');
+  //
+  // Requires an explicit `true`, so a caller that reaches this measurement without stating
+  // completeness (its parameter type refuses one, but a JS host or a cast can still arrive here)
+  // gets "unknown" rather than a confident number - the type and the runtime agree on the same rule.
+  if (context.entitlementKeysResolved !== true) {
+    context.logger?.warn(
+      '[dataLakes] scoped gate-excluded-lake count skipped; entitlement lookup failed or was never vouched for this turn'
+    );
     return undefined;
   }
   const userTags = context.user.tags || [];

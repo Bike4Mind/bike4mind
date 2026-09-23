@@ -195,6 +195,10 @@ export async function resolveRetrievalLakeScopeForUser(
     },
     user: { id: user.id, tags: user.tags ?? [] },
     entitlementKeys,
+    // Always the caller's real keys: the resolution above propagates a failure instead of degrading
+    // to `[]`, so this path never has a short key list to vouch for. A future swallow-and-degrade
+    // here must set this from the same value it degrades on, not leave the `true` standing.
+    entitlementKeysResolved: true,
     logger: opts.logger,
   });
 

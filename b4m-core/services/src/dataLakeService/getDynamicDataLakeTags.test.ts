@@ -521,14 +521,15 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
       expect(res.excludedByAccessCount).toBe(0);
     });
 
-    // #3155 (review): pins the DELIBERATE default - `entitlementKeysResolved` omitted (as every
-    // call site but ChatCompletionProcess.getDataLakeAccessContext does today) must run the count,
-    // not silently treat every unaware caller as "unknown". Flipping this default to require an
-    // explicit `true` would regress `lakeViewComplete` for those callers too (deriveRetrievalTags.ts
-    // reads it to decide whether a session's tag list is narrow-able), so the default stays
-    // optimistic; this test is what makes changing it a deliberate, visible decision instead of a
-    // silent one.
-    it('omitting entitlementKeysResolved (every call site but ChatCompletionProcess, today) still runs the count', async () => {
+    // #3155 (review): pins the DELIBERATE default - `entitlementKeysResolved` omitted (as the hosts
+    // that satisfy DataLakeAccessContext structurally, ToolContext and the research-task context,
+    // still do) must run the count, not silently treat every unaware caller as "unknown". Flipping
+    // this default to require an explicit `true` would regress `lakeViewComplete` for those callers
+    // too (deriveRetrievalTags.ts reads it to decide whether a session's tag list is narrow-able),
+    // so the default stays optimistic here; this test is what makes changing it a deliberate,
+    // visible decision instead of a silent one. The identity-scoped sibling below takes the opposite
+    // default DELIBERATELY: it is telemetry-only, so refusing to measure costs nothing.
+    it('omitting entitlementKeysResolved (a structurally-satisfying host) still runs the count', async () => {
       const countGateExcludedLakes = vi.fn().mockResolvedValue(3);
       const res = await getDynamicDataLakeAccess({
         db: {
@@ -655,6 +656,7 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
           organizations: { findMembershipOrgIds: vi.fn() },
         },
         user: { tags: [] },
+        entitlementKeysResolved: true,
       },
       []
     );
@@ -672,6 +674,7 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
         },
         user: { id: 'u1', tags: ['x'] },
         entitlementKeys: ['k:pro'],
+        entitlementKeysResolved: true,
       },
       ['datalake:b']
     );
@@ -695,6 +698,7 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
           organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         },
         user: { tags: [] },
+        entitlementKeysResolved: true,
       },
       ['datalake:a']
     );
@@ -710,6 +714,7 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
           organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         },
         user: { tags: [] },
+        entitlementKeysResolved: true,
         logger,
       },
       ['datalake:a']
@@ -720,7 +725,7 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
 
   it('degrades to undefined when the dataLakes repo is unwired', async () => {
     const res = await measureIdentityNamedExclusion(
-      { db: { organizations: { findMembershipOrgIds: vi.fn() } }, user: { tags: [] } },
+      { db: { organizations: { findMembershipOrgIds: vi.fn() } }, user: { tags: [] }, entitlementKeysResolved: true },
       ['datalake:a']
     );
     expect(res).toBeUndefined();
@@ -761,6 +766,7 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
           adminSettings: { getSettingsValue: vi.fn().mockRejectedValue(new Error('settings down')) } as never,
         },
         user: { id: 'alice', tags: [] },
+        entitlementKeysResolved: true,
         logger,
       },
       ['datalake:a']
@@ -768,6 +774,31 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
     expect(res).toBeUndefined();
     expect(countGateExcludedLakes).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('enforce-flag read failed'));
+  });
+
+  // The count-consuming contract, pinned at runtime as well as in the parameter type: a caller that
+  // never vouches for its entitlement keys gets "unknown", never a number built from what may be
+  // the fail-safe empty key list. Deleting either half must fail this.
+  it('measures nothing when the caller never states entitlement-resolution completeness', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(5);
+    const logger = { warn: vi.fn() } as never;
+    // Stands in for the call site the parameter type already refuses - a new consumer wiring this
+    // count with a context that carries keys but no completeness signal.
+    const unvouchedContext = {
+      db: {
+        dataLakes: { countGateExcludedLakes } as never,
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      },
+      user: { id: 'alice', tags: [] },
+      entitlementKeys: [],
+      logger,
+    } as unknown as Parameters<typeof measureIdentityNamedExclusion>[0];
+
+    const res = await measureIdentityNamedExclusion(unvouchedContext, ['datalake:a']);
+
+    expect(res).toBeUndefined();
+    expect(countGateExcludedLakes).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('never vouched for'));
   });
 });
 
