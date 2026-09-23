@@ -3,8 +3,11 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   assertLakeAccessWithGrants: vi.fn(),
-  transferLakeOwnership: vi.fn(),
+  offerLakeOwnership: vi.fn(),
+  cancelLakeOwnershipOffer: vi.fn(),
+  findPendingLakeOwnershipOffer: vi.fn(),
   listLakeOwnershipCandidates: vi.fn(),
+  sendEmail: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
   // Records what ran inside the transaction callback, so the ordering assertions below are about
   // the real boundary rather than about the mock having been imported.
@@ -19,6 +22,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
       use: () => chain,
       get: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.GET = fns[fns.length - 1]), chain),
       post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.POST = fns[fns.length - 1]), chain),
+      delete: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((routes.DELETE = fns[fns.length - 1]), chain),
     });
     return chain;
   },
@@ -28,8 +32,17 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeAccess: h.assertLakeAccess,
     assertLakeAccessWithGrants: h.assertLakeAccessWithGrants,
-    transferLakeOwnership: h.transferLakeOwnership,
+    offerLakeOwnership: h.offerLakeOwnership,
+    cancelLakeOwnershipOffer: h.cancelLakeOwnershipOffer,
+    findPendingLakeOwnershipOffer: h.findPendingLakeOwnershipOffer,
     listLakeOwnershipCandidates: h.listLakeOwnershipCandidates,
+    // The real renderer is pure; the route test only needs to know the notifier reached the mailer,
+    // so a thumbprint subject keeps the assertion about WHO was emailed, not about the copy.
+    renderOwnershipOfferEmail: (input: { kind: string }) => ({
+      subject:
+        input.kind === 'offered' ? 'You have been offered ownership of "Lake One"' : `Ownership offer ${input.kind}`,
+      html: '',
+    }),
   },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -41,19 +54,22 @@ vi.mock('@bike4mind/database', () => ({
       h.inTransaction.push('exit');
     }
   },
-  dataLakeRepository: {},
-  // The config-audit repos this route wires (see lakeConfigAuditDb). Stubbed rather than
-  // omitted because the mock replaces the whole module: a missing export is an import-time
-  // failure, not a silent undefined.
+  dataLakeRepository: { findById: vi.fn().mockResolvedValue({ id: 'lake-oid-1', name: 'Lake One' }) },
+  // The config-audit + offer repos this route wires. Stubbed rather than omitted because the mock
+  // replaces the whole module: a missing export is an import-time failure, not a silent undefined.
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {
     findBySettingNames: vi.fn().mockResolvedValue([]),
     findAll: vi.fn().mockResolvedValue([]),
   },
   dataLakeAccessGrantRepository: { listByLake: vi.fn().mockResolvedValue([]), upsertGrant: vi.fn() },
-  userRepository: {},
+  dataLakeOwnershipOfferRepository: {},
+  // The notifier looks the addressee + lake name up here.
+  userRepository: { findById: vi.fn().mockResolvedValue({ id: 'recipient', email: 'recipient@example.com' }) },
   organizationRepository: {},
+  // NotifierTest: the real notifier is exercised below, so its mailer is stubbed at the transport.
 }));
+vi.mock('@server/utils/mailer', () => ({ default: { sendEmail: h.sendEmail } }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
 
 import handler from '../transfer-ownership';
@@ -62,62 +78,97 @@ const makeRes = () => {
   const json = vi.fn();
   return { res: { json, status: vi.fn(() => ({ json })) } as never, json };
 };
-const req = (query: Record<string, string>, body: unknown) => ({ method: 'POST', query, body }) as never;
+const req = (method: string, query: Record<string, string>, body?: unknown) =>
+  ({ method, query, body, user: { id: 'u1', name: 'Olive Owner' } }) as never;
 const call = (r: unknown, res: unknown) => (handler as (req: unknown, res: unknown) => Promise<void>)(r, res);
 
-// The POST gate's return value, forwarded WHOLE to the service.
+// The write gate's return value, forwarded WHOLE to the service.
 const LAKE = { id: 'lake-oid-1', slug: 'my-lake' };
 const GRANTS = [{ principalType: 'user', principalId: 'u9', role: 'owner' }];
+const OFFER = {
+  id: 'offer-1',
+  dataLakeId: 'lake-oid-1',
+  recipientUserId: 'newOwner',
+  offeredByUserId: 'u1',
+  status: 'pending',
+  expiresAt: new Date('2026-10-01T00:00:00Z'),
+  priorOwnerUserIds: ['u1'],
+  offeredVia: 'creator',
+};
 
 describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: [] });
-    h.transferLakeOwnership.mockResolvedValue({ newOwnerUserId: 'newOwner', demotedUserIds: ['u1'] });
+    h.offerLakeOwnership.mockResolvedValue(OFFER);
   });
 
-  it('transfers against the RESOLVED lake and returns the service result verbatim', async () => {
-    // The gate resolves id-or-slug, so the service must get the resolved lake, not the raw query
-    // value - and the grants the gate already read, so its authority check does not re-read them.
+  it('creates a PENDING OFFER against the resolved lake and returns it', async () => {
     h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
     const { res, json } = makeRes();
 
-    await call(req({ id: 'my-lake' }, { newOwnerUserId: 'newOwner' }), res);
+    await call(req('POST', { id: 'my-lake' }, { newOwnerUserId: 'newOwner' }), res);
 
-    expect(h.transferLakeOwnership).toHaveBeenCalledWith(
+    expect(h.offerLakeOwnership).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', isAdmin: false }),
       LAKE,
       GRANTS,
       'newOwner',
-      // Not expect.anything(): the config-audit repos ride one shared helper, and a route that
-      // dropped `adminSettings` would still compile (it is optional so the retention read stays
-      // best-effort) while quietly pinning every event to the floor default.
-      expect.objectContaining({
-        db: expect.objectContaining({
-          lakeConfigChangeEvents: expect.anything(),
-          adminSettings: expect.anything(),
-        }),
-      })
+      expect.objectContaining({ db: expect.objectContaining({ ownershipOffers: expect.anything() }) })
     );
-    expect(json).toHaveBeenCalledWith({ newOwnerUserId: 'newOwner', demotedUserIds: ['u1'] });
+    expect(json).toHaveBeenCalledWith({ offer: expect.objectContaining({ id: 'offer-1' }) });
   });
 
-  it('does not transfer when the access gate denies the lake', async () => {
+  it('emails the recipient after the offer commits', async () => {
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    const { res } = makeRes();
+
+    await call(req('POST', { id: 'my-lake' }, { newOwnerUserId: 'newOwner' }), res);
+
+    expect(h.sendEmail).toHaveBeenCalledTimes(1);
+    expect(h.sendEmail.mock.calls[0][0]).toBe('recipient@example.com');
+    expect(h.sendEmail.mock.calls[0][1]).toMatchObject({ subject: expect.stringContaining('offered ownership') });
+  });
+
+  it('sends the email AFTER the transaction, never inside it', async () => {
+    h.inTransaction.length = 0;
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.sendEmail.mockImplementation(async () => {
+      h.inTransaction.push('email');
+      return {};
+    });
+
+    await call(req('POST', { id: 'lake1' }, { newOwnerUserId: 'newOwner' }), makeRes().res);
+
+    expect(h.inTransaction).toEqual(['enter', 'exit', 'email']);
+  });
+
+  it('still returns the offer when the mailer throws (best-effort mail)', async () => {
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    h.sendEmail.mockRejectedValueOnce(new Error('smtp down'));
+    const { res, json } = makeRes();
+
+    await call(req('POST', { id: 'lake1' }, { newOwnerUserId: 'newOwner' }), res);
+
+    expect(json).toHaveBeenCalledWith({ offer: expect.objectContaining({ id: 'offer-1' }) });
+  });
+
+  it('does not offer when the access gate denies the lake', async () => {
     h.assertLakeAccessWithGrants.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
 
-    await expect(call(req({ id: 'lake1' }, { newOwnerUserId: 'x' }), res)).rejects.toThrow(/not found/i);
-    expect(h.transferLakeOwnership).not.toHaveBeenCalled();
+    await expect(call(req('POST', { id: 'lake1' }, { newOwnerUserId: 'x' }), res)).rejects.toThrow(/not found/i);
+    expect(h.offerLakeOwnership).not.toHaveBeenCalled();
+    expect(h.sendEmail).not.toHaveBeenCalled();
   });
 
   it('takes the acting principal from the access context, never from the request body', async () => {
     h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { id: 'lake1' }, grants: [] });
     const { res } = makeRes();
 
-    await call(req({ id: 'lake1' }, { newOwnerUserId: 'newOwner', userId: 'attacker', isAdmin: true }), res);
+    await call(req('POST', { id: 'lake1' }, { newOwnerUserId: 'newOwner', userId: 'attacker', isAdmin: true }), res);
 
-    // The actor is the ctx, not the body-supplied attacker identity; newOwnerUserId still comes from the body.
-    expect(h.transferLakeOwnership).toHaveBeenCalledWith(
+    expect(h.offerLakeOwnership).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'u1', isAdmin: false }),
       { id: 'lake1' },
       [],
@@ -130,13 +181,60 @@ describe('POST /api/data-lakes/[id]/transfer-ownership', () => {
     h.assertLakeAccessWithGrants.mockResolvedValue({ lake: { id: 'lake1' }, grants: [] });
     const { res } = makeRes();
 
-    await expect(call(req({ id: 'lake1' }, {}), res)).rejects.toThrow();
-    expect(h.transferLakeOwnership).not.toHaveBeenCalled();
+    await expect(call(req('POST', { id: 'lake1' }, {}), res)).rejects.toThrow();
+    expect(h.offerLakeOwnership).not.toHaveBeenCalled();
+  });
+
+  it('reads the grants and writes the offer inside one transaction', async () => {
+    h.inTransaction.length = 0;
+    h.assertLakeAccessWithGrants.mockImplementation(async () => {
+      h.inTransaction.push('gate');
+      return { lake: LAKE, grants: GRANTS };
+    });
+    h.offerLakeOwnership.mockImplementation(async () => {
+      h.inTransaction.push('offer');
+      return OFFER;
+    });
+
+    await call(req('POST', { id: 'lake1' }, { newOwnerUserId: 'u9' }), makeRes().res);
+
+    expect(h.inTransaction.slice(0, 4)).toEqual(['enter', 'gate', 'offer', 'exit']);
+  });
+});
+
+describe('DELETE /api/data-lakes/[id]/transfer-ownership', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: [] });
+    h.cancelLakeOwnershipOffer.mockResolvedValue({ ...OFFER, status: 'cancelled' });
+  });
+
+  it('cancels the pending offer behind the resolved lake gate and returns it', async () => {
+    h.assertLakeAccessWithGrants.mockResolvedValue({ lake: LAKE, grants: GRANTS });
+    const { res, json } = makeRes();
+
+    await call(req('DELETE', { id: 'my-lake' }), res);
+
+    expect(h.cancelLakeOwnershipOffer).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'u1' }),
+      LAKE,
+      GRANTS,
+      expect.anything()
+    );
+    expect(json).toHaveBeenCalledWith({ offer: expect.objectContaining({ status: 'cancelled' }) });
+  });
+
+  it('does not cancel when the access gate denies the lake', async () => {
+    h.assertLakeAccessWithGrants.mockRejectedValue(new Error('Data lake not found'));
+    const { res } = makeRes();
+
+    await expect(call(req('DELETE', { id: 'lake1' }), res)).rejects.toThrow(/not found/i);
+    expect(h.cancelLakeOwnershipOffer).not.toHaveBeenCalled();
   });
 });
 
 describe('GET /api/data-lakes/[id]/transfer-ownership', () => {
-  const getReq = (query: Record<string, string>) => ({ method: 'GET', query }) as never;
+  const getReq = (query: Record<string, string>) => req('GET', query);
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -147,22 +245,33 @@ describe('GET /api/data-lakes/[id]/transfer-ownership', () => {
       organizationName: 'Acme',
       candidates: [{ userId: 'u9', name: 'Carol', email: 'carol@example.com' }],
     });
+    h.findPendingLakeOwnershipOffer.mockResolvedValue(null);
   });
 
-  it('resolves candidates against the RESOLVED lake, not the raw slug', async () => {
+  it('resolves candidates against the RESOLVED lake and returns the pending offer alongside', async () => {
+    h.findPendingLakeOwnershipOffer.mockResolvedValue({
+      id: 'offer-1',
+      recipientUserId: 'u9',
+      recipientName: 'Carol',
+      expiresAt: new Date('2026-10-01T00:00:00Z'),
+    });
     const { res, json } = makeRes();
+
     await call(getReq({ id: 'my-lake' }), res);
+
     expect(h.listLakeOwnershipCandidates).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'lake-oid-1' }),
       expect.objectContaining({ userId: 'u1' }),
       expect.anything()
     );
+    expect(h.findPendingLakeOwnershipOffer).toHaveBeenCalledWith('lake-oid-1', expect.anything());
     expect(json).toHaveBeenCalledWith({
       data: {
         scope: 'organization',
         organizationName: 'Acme',
         candidates: [{ userId: 'u9', name: 'Carol', email: 'carol@example.com' }],
       },
+      pendingOffer: expect.objectContaining({ id: 'offer-1', recipientUserId: 'u9' }),
     });
   });
 
@@ -174,34 +283,12 @@ describe('GET /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('returns the empty list the service resolved rather than turning it into an error', async () => {
-    // A reader-but-not-transferrer gets an empty option set, so the modal simply shows no control -
-    // a 403 here would make the access view look broken for a legitimate curator.
     h.listLakeOwnershipCandidates.mockResolvedValue({ scope: 'organization', candidates: [] });
     const { res, json } = makeRes();
     await call(getReq({ id: 'lake1' }), res);
-    expect(json).toHaveBeenCalledWith({ data: { scope: 'organization', candidates: [] } });
-  });
-
-  // The gate has to be INSIDE the transaction, not merely before the writes. `transferLakeOwnership`
-  // decides from the grants this gate reads and then writes them, and a departure
-  // (`lapseDepartedMemberLakeAccess`) can commit in between - at which point the demotion loop would
-  // upsert the departed member back to `curator` with `expiresAt: null` over the row the departure
-  // just expired, leaving two owners. Both paths transactional turns that into a write conflict
-  // Mongo retries; a retry is only worth anything if it RE-READS, which is what this pins.
-  it('reads the grants and writes them inside one transaction', async () => {
-    h.inTransaction.length = 0;
-    h.assertLakeAccessWithGrants.mockImplementation(async () => {
-      h.inTransaction.push('gate');
-      return { lake: LAKE, grants: GRANTS };
+    expect(json).toHaveBeenCalledWith({
+      data: { scope: 'organization', candidates: [] },
+      pendingOffer: null,
     });
-    h.transferLakeOwnership.mockImplementation(async () => {
-      h.inTransaction.push('transfer');
-      return { newOwnerUserId: 'u9', demotedUserIds: [] };
-    });
-
-    const { res } = makeRes();
-    await call(req({ id: 'lake1' }, { newOwnerUserId: 'u9' }), res);
-
-    expect(h.inTransaction).toEqual(['enter', 'gate', 'transfer', 'exit']);
   });
 });

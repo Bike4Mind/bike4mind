@@ -90,6 +90,7 @@ export * from './enforceEmbeddingSpendGate';
 export * from './resolveLakeSpendAddressees';
 export * from './spendNotificationKeys';
 export * from './renderSpendNotificationEmail';
+export * from './renderOwnershipOfferEmail';
 export * from './sendDataLakeSpendNotification';
 export * from './resolveLakeAuditRetention';
 export * from './openSearchVectorSearch';
