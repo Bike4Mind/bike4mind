@@ -2902,6 +2902,7 @@ export class ChatCompletionProcess {
           image_generation: imageConfig,
           edit_image: imageConfig,
           audio_generation: audioConfig,
+          web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
         },
         model,
         organization,
