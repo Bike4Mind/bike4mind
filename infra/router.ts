@@ -109,8 +109,8 @@ const userFileCdnPrefixes = [
 // backstop exists for is unchanged.
 const USER_FILE_CSP = "default-src 'none'; sandbox allow-downloads";
 // Request header stamped in the viewer-REQUEST function to mark a user-file request; read
-// back in the viewer-response function (see below). Spoofable but harmless: a spoofed marker
-// can only ADD the restrictive CSP to the attacker's own response, never remove it.
+// back in the viewer-response function (see below). Any inbound value is cleared before the
+// prefix check so the marker stays function-owned, not client-settable.
 const USER_FILE_MARKER_HEADER = 'x-b4m-user-file';
 
 // Defense-in-depth CSP backstop for hosted/CDN-served user files. A user-supplied file
@@ -128,6 +128,7 @@ const USER_FILE_MARKER_HEADER = 'x-b4m-user-file';
 // marker. The identity prefixes are also matched directly as a fallback, so coverage never
 // regresses below the pre-marker behavior even if the marker header were dropped in transit.
 const userFileMarkerInjection = `
+  delete event.request.headers["${USER_FILE_MARKER_HEADER}"];
   var __ufUri = event.request.uri;
   var __ufPrefixes = ${JSON.stringify(userFileCdnPrefixes)};
   for (var __ufI = 0; __ufI < __ufPrefixes.length; __ufI++) {
