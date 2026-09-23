@@ -112,6 +112,91 @@ describe('LakeMembershipChangeEventModel / lakeMembershipChangeEventRepository.r
     });
   });
 
+  describe('listByLakeSince', () => {
+    const at = (offsetMs: number) => new Date(NOW.getTime() + offsetMs);
+    const seed = async () => {
+      for (const [offset, fileId] of [
+        [0, 'oldest'],
+        [1000, 'middle'],
+        [2000, 'newest'],
+      ] as const) {
+        vi.setSystemTime(at(offset));
+        await repo.record(baseInput({ fabFileId: fileId }));
+      }
+      vi.setSystemTime(at(1000));
+      await repo.record(baseInput({ dataLakeId: 'lake-2', fabFileId: 'other-lake' }));
+    };
+
+    it('returns only events strictly after the bound, newest first', async () => {
+      await seed();
+
+      const events = await repo.listByLakeSince('lake-1', at(-1));
+      expect(events.map(e => e.fabFileId)).toEqual(['newest', 'middle', 'oldest']);
+    });
+
+    it('excludes an event written exactly ON the bound, so adjacent windows do not both claim it', async () => {
+      await seed();
+
+      const events = await repo.listByLakeSince('lake-1', at(1000));
+      expect(events.map(e => e.fabFileId)).toEqual(['newest']);
+    });
+
+    it('scopes to the lake asked for', async () => {
+      await seed();
+
+      const events = await repo.listByLakeSince('lake-1', at(-1));
+      expect(events.map(e => e.fabFileId)).not.toContain('other-lake');
+    });
+
+    it('drops the OLDEST rows when the limit bites, so the newest are always in hand', async () => {
+      await seed();
+
+      const events = await repo.listByLakeSince('lake-1', at(-1), { limit: 2 });
+      expect(events.map(e => e.fabFileId)).toEqual(['newest', 'middle']);
+    });
+
+    it('is empty for a lake with no recorded changes', async () => {
+      await seed();
+
+      expect(await repo.listByLakeSince('never-touched', at(-1))).toEqual([]);
+    });
+
+    it('is empty when the whole log predates the bound', async () => {
+      await seed();
+
+      expect(await repo.listByLakeSince('lake-1', at(9000))).toEqual([]);
+    });
+
+    it('serves the windowed read from the index, sort included - no blocking SORT', async () => {
+      await seed();
+
+      const plan = await LakeMembershipChangeEventModel.find({ dataLakeId: 'lake-1', createdAt: { $gt: at(-1) } })
+        .sort({ createdAt: -1, _id: -1 })
+        .limit(2)
+        .explain('queryPlanner');
+      const winning = JSON.stringify((plan as { queryPlanner: { winningPlan: unknown } }).queryPlanner.winningPlan);
+      expect(winning).toContain('IXSCAN');
+      expect(winning).not.toContain('"stage":"SORT"');
+    });
+  });
+
+  describe('oldestEventAt', () => {
+    it("reports the lake's first retained event - how far back the log can be believed", async () => {
+      vi.setSystemTime(new Date(NOW.getTime() + 5000));
+      await repo.record(baseInput({ fabFileId: 'later' }));
+      vi.setSystemTime(NOW);
+      await repo.record(baseInput({ fabFileId: 'first' }));
+
+      expect(await repo.oldestEventAt('lake-1')).toEqual(NOW);
+    });
+
+    it('is undefined for a lake with no events - silence, not a zero point', async () => {
+      await repo.record(baseInput({ dataLakeId: 'lake-2' }));
+
+      expect(await repo.oldestEventAt('lake-1')).toBeUndefined();
+    });
+  });
+
   describe('listByLake', () => {
     it('returns only that lake, newest first', async () => {
       await repo.record(baseInput({ dataLakeId: 'lake-1', fabFileId: 'a' }));
