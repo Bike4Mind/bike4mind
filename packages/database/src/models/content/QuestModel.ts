@@ -115,6 +115,14 @@ const AnswerabilityProbeSchema = subSchema({
   probedAt: { type: Date, required: true },
 });
 
+// Count + reason only (#3055) - no lake id/name field belongs here even informally, since the
+// caller may not be permitted to know the excluded lake exists. No enum on `reason`, matching the
+// file header's rule: Zod (RetrievalSummarySchema, promptMeta.ts) is the validating contract.
+const ExcludedLakesSchema = subSchema({
+  count: { type: Number, required: true },
+  reason: { type: String, required: true },
+});
+
 // Same rationale as LakeMemorySchema above (subSchema + default:undefined to suppress
 // auto-vivification of `surfaces`/`dataLakeTags` as empty arrays, which would fail the Zod
 // re-parse since `attempted` is required). Top-level on promptMeta, not nested under
@@ -155,6 +163,9 @@ const RetrievalSummarySchema = subSchema({
   // Same shape and the same default:undefined reason as preauthorizedLakeIdsUsed above - its
   // per-arm sibling, which the two overlap by design (see both fields on the Zod side).
   grantedLakeIdsUsed: { type: [String], required: false, default: undefined },
+  // default: undefined for the same auto-vivification reason as `injected` above - and here it
+  // also preserves the presence contract that absence means NOT RECORDED, never "nothing excluded".
+  excludedLakes: { type: ExcludedLakesSchema, required: false, default: undefined },
 });
 
 // Partial-grounding-coverage detail. subSchema + default:undefined for the same reason as
@@ -371,6 +382,10 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
         urlContent: { type: Number, required: false },
         toolSchemas: { type: Number, required: false },
         userPrompt: { type: Number, required: false },
+        // Must stay in sync with the Zod PromptMeta `context.tokensBySource.lakeRetrieval` (parity
+        // test enforces it). Optional: a turn recorded before this bucket existed has no value, which
+        // readers must treat as UNKNOWN rather than as zero.
+        lakeRetrieval: { type: Number, required: false },
       },
       // Assembled context-window usage for the completed turn. Like the billing
       // audit fields above, this must be declared or Mongoose strict mode silently

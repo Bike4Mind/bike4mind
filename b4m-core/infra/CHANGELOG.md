@@ -1,5 +1,17 @@
 # @bike4mind/infra
 
+## 1.0.1
+
+### Patch Changes
+
+- [#3080](https://github.com/Bike4Mind/bike4mind/pull/3080) [`5120b05`](https://github.com/Bike4Mind/bike4mind/commit/5120b05af19d294b2f83902687049bf2f96e5c1c) Thanks [@aflordelis](https://github.com/aflordelis)! - stop MCP_VERSION hashing to a constant when its inputs go missing
+
+## 1.0.0
+
+### Major Changes
+
+- [#2930](https://github.com/Bike4Mind/bike4mind/pull/2930) [`f3f76c2`](https://github.com/Bike4Mind/bike4mind/commit/f3f76c21ef2e882fad72db3f0f36c8c5e8113065) Thanks [@jarlacut](https://github.com/jarlacut)! - gate the remaining FabFile ingest doors
+
 ## 0.10.1
 
 ### Patch Changes

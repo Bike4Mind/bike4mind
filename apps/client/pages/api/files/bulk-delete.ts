@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { fabFilesService } from '@bike4mind/services';
 import {
   changeStorageSize,
+  dataLakeRepository,
   fabFileChunkRepository,
   fabFileRepository,
   fileTagRepository,
@@ -13,6 +14,7 @@ import { FabFileChunkSearchIndex } from '@bike4mind/fab-pipeline';
 import { selfHostOpenSearchEnabled } from '@bike4mind/db-core';
 import { recomputeStatsForLakeTags } from '@server/dataLakes/recomputeStatsForLakeTags';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { getFilesStorage } from '@server/utils/storage';
 import { logEvent } from '@server/utils/analyticsLog';
 import { FileEvents } from '@bike4mind/common';
@@ -83,12 +85,16 @@ const handler = baseApi()
                 users: userRepository,
                 sessions: sessionRepository,
                 fabFileChunks: fabFileChunkRepository,
+                dataLakes: dataLakeRepository,
+                ...lakeMembershipAuditDb,
               },
               storage: getFilesStorage(),
               onDeleteComplete: async (_fabFile, sizeToDeduct) => {
                 totalSizeToDeduct += sizeToDeduct;
               },
               searchIndex: selfHostOpenSearchEnabled() ? FabFileChunkSearchIndex : undefined,
+              logger: req.logger,
+              auditPrincipal: lakeConfigAuditPrincipal(req.user, req.apiKeyInfo),
             }
           );
 

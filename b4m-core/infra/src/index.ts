@@ -46,3 +46,7 @@ export type {
   EcsServiceHealthAlarmSpec,
 } from './ecsServiceHealthAlarmSpecs.js';
 export { buildEcsServiceHealthAlarmSpec, ECS_SERVICE_HEALTH_ALARM_DEFAULTS } from './ecsServiceHealthAlarmSpecs.js';
+export type { HelpCorpusHashSources } from './helpCorpusHash.js';
+export { computeHelpCorpusHash } from './helpCorpusHash.js';
+export type { McpContentHashSources } from './mcpContentHash.js';
+export { computeMcpContentHash } from './mcpContentHash.js';

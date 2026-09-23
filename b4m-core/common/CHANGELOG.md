@@ -1,5 +1,79 @@
 # @bike4mind/common
 
+## 11.0.0
+
+### Major Changes
+
+- [#3073](https://github.com/Bike4Mind/bike4mind/pull/3073) [`3f5f10f`](https://github.com/Bike4Mind/bike4mind/commit/3f5f10f92fa61cc3155dbd669608b3cc539c5c40) Thanks [@choyno](https://github.com/choyno)! - replace implicit draft-lake activation with explicit promote and demote
+
+### Minor Changes
+
+- [#2990](https://github.com/Bike4Mind/bike4mind/pull/2990) [`0b5b296`](https://github.com/Bike4Mind/bike4mind/commit/0b5b29675bd15a076e3a4cc721ef9bb5d657b54b) Thanks [@ken-b4m](https://github.com/ken-b4m)! - migrate the corpus to text-embedding-3-small, repair blank embedding labels, and refit the retrieval floors
+
+- [#3015](https://github.com/Bike4Mind/bike4mind/pull/3015) [`38e6673`](https://github.com/Bike4Mind/bike4mind/commit/38e667337bd28b5b61dc7a1b635b9a25e6ee0df1) Thanks [@vinchi777](https://github.com/vinchi777)! - publish public GET /api/v1/me for tier, balance and entitlements
+
+- [#3066](https://github.com/Bike4Mind/bike4mind/pull/3066) [`1295822`](https://github.com/Bike4Mind/bike4mind/commit/129582275b2f94d06a2009583a4a52519f74a3c7) Thanks [@dea0030](https://github.com/dea0030)! - accept up to 4 gpt-image reference images
+
+- [#3072](https://github.com/Bike4Mind/bike4mind/pull/3072) [`044d447`](https://github.com/Bike4Mind/bike4mind/commit/044d447eeb24b1b1af3e532663c6486d49257ec3) Thanks [@onoya](https://github.com/onoya)! - give detected corpus problems a durable, triageable identity
+
+- [#3074](https://github.com/Bike4Mind/bike4mind/pull/3074) [`0485840`](https://github.com/Bike4Mind/bike4mind/commit/0485840d81f1bbc2a2925099d57c1cf832b6ad4a) Thanks [@onoya](https://github.com/onoya)! - deep-link citations to the cited passage
+
+- [#3076](https://github.com/Bike4Mind/bike4mind/pull/3076) [`db3408d`](https://github.com/Bike4Mind/bike4mind/commit/db3408dbcf750db35d815f74a435c2daa27ed3a0) Thanks [@jjmarfa](https://github.com/jjmarfa)! - give lake retrieval its own token bucket
+
+- [#3081](https://github.com/Bike4Mind/bike4mind/pull/3081) [`8039f4c`](https://github.com/Bike4Mind/bike4mind/commit/8039f4cabc06a1d8fa07121e41736f2206e61a71) Thanks [@aflordelis](https://github.com/aflordelis)! - bound auto-tagging retries and price the credit pre-flight on notebooks that can be tagged
+
+- [#3094](https://github.com/Bike4Mind/bike4mind/pull/3094) [`3720b09`](https://github.com/Bike4Mind/bike4mind/commit/3720b099adcc38f5e1d2592819088c15f7b41ce8) Thanks [@onoya](https://github.com/onoya)! - multi-select the data lakes a chat grounds on
+
+### Patch Changes
+
+- [#2827](https://github.com/Bike4Mind/bike4mind/pull/2827) [`254337c`](https://github.com/Bike4Mind/bike4mind/commit/254337c91edeefc41333a60559a15673411bea01) Thanks [@onoya](https://github.com/onoya)! - linearize the super-linear content parsers
+
+- [#2848](https://github.com/Bike4Mind/bike4mind/pull/2848) [`c6c35c3`](https://github.com/Bike4Mind/bike4mind/commit/c6c35c3ac15cf06526b4503bf4a18cef7a929b30) Thanks [@choyno](https://github.com/choyno)! - surface the credit-exhaustion classifier and emit type on both chat surfaces
+
+- [#2895](https://github.com/Bike4Mind/bike4mind/pull/2895) [`311f5cd`](https://github.com/Bike4Mind/bike4mind/commit/311f5cd69a083a3a0afc4c1a81602950086b8c83) Thanks [@aflordelis](https://github.com/aflordelis)! - consolidate OpenAI image size validation
+
+- [#3016](https://github.com/Bike4Mind/bike4mind/pull/3016) [`27173c2`](https://github.com/Bike4Mind/bike4mind/commit/27173c2de2852fcd8f6f0b04a8b5f9281ae0016e) Thanks [@vinchi777](https://github.com/vinchi777)! - distinguish a derived output cap from a declared one
+
+- [#3019](https://github.com/Bike4Mind/bike4mind/pull/3019) [`6481767`](https://github.com/Bike4Mind/bike4mind/commit/6481767f9507cf6f440f7e941c986762ef3079f0) Thanks [@vinchi777](https://github.com/vinchi777)! - mark degenerate-loop turns so they are not billed as clean successes
+
+- [#3023](https://github.com/Bike4Mind/bike4mind/pull/3023) [`f96ee0a`](https://github.com/Bike4Mind/bike4mind/commit/f96ee0a3490e75881b69c4617dd3cca60bf120f9) Thanks [@allan-gar2x](https://github.com/allan-gar2x)! - let org members create and cancel org invites
+
+- [#3025](https://github.com/Bike4Mind/bike4mind/pull/3025) [`886d895`](https://github.com/Bike4Mind/bike4mind/commit/886d8952c29b81a907fcf1455b0eb19ebd1313e1) Thanks [@aflordelis](https://github.com/aflordelis)! - persist summaryTrigger and align its enum with the values code produces
+
+- [#3077](https://github.com/Bike4Mind/bike4mind/pull/3077) [`a27d416`](https://github.com/Bike4Mind/bike4mind/commit/a27d4169b82c17089b0a8c54106babe51dc66367) Thanks [@choyno](https://github.com/choyno)! - scheduled lake health sweep with fair per-run cap
+
+- [#3087](https://github.com/Bike4Mind/bike4mind/pull/3087) [`919b705`](https://github.com/Bike4Mind/bike4mind/commit/919b7051c1ce4ae7552f93a7592e76a9727b2d0e) Thanks [@vinchi777](https://github.com/vinchi777)! - repoint What's New generation at the current repository
+
+- [#3091](https://github.com/Bike4Mind/bike4mind/pull/3091) [`280ef10`](https://github.com/Bike4Mind/bike4mind/commit/280ef104977de1c415c5dabca67c6866887d6d27) Thanks [@vinchi777](https://github.com/vinchi777)! - stamp spider bulk summarizations with a distinct trigger
+
+- [#3092](https://github.com/Bike4Mind/bike4mind/pull/3092) [`0192e3f`](https://github.com/Bike4Mind/bike4mind/commit/0192e3f70714d04a4f65f346a15145a581c80e26) Thanks [@vinchi777](https://github.com/vinchi777)! - honor configured Image Size for BFL Pro models
+
+## 10.1.0
+
+### Minor Changes
+
+- [#2949](https://github.com/Bike4Mind/bike4mind/pull/2949) [`8e31cbf`](https://github.com/Bike4Mind/bike4mind/commit/8e31cbfad875f80f372f16032f487cde1e624ce1) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - add an org-level feedback analysis report
+
+### Patch Changes
+
+- [#2977](https://github.com/Bike4Mind/bike4mind/pull/2977) [`4ce553e`](https://github.com/Bike4Mind/bike4mind/commit/4ce553ebc6d706aef224317811c004f64a8df5f3) Thanks [@dea0030](https://github.com/dea0030)! - bill 'auto' GPT-Image quality at the ceiling tier
+
+- [#2981](https://github.com/Bike4Mind/bike4mind/pull/2981) [`3593192`](https://github.com/Bike4Mind/bike4mind/commit/3593192f407f6a1a337824d2d2b1d5e9d9065a8e) Thanks [@onoya](https://github.com/onoya)! - let tool narrowing reach MCP tools
+
+- [#2991](https://github.com/Bike4Mind/bike4mind/pull/2991) [`f687f87`](https://github.com/Bike4Mind/bike4mind/commit/f687f87600e726f00d1a480d12b8e72bbe3f9691) Thanks [@dea0030](https://github.com/dea0030)! - bill edit-image for the one image it renders, not the requested n
+
+- [#3022](https://github.com/Bike4Mind/bike4mind/pull/3022) [`34443c6`](https://github.com/Bike4Mind/bike4mind/commit/34443c6911e1e96197c2f1d6306fc3ebabde5153) Thanks [@onoya](https://github.com/onoya)! - follow effective ownership for lake memory shredding
+
+## 10.0.0
+
+### Major Changes
+
+- [#2930](https://github.com/Bike4Mind/bike4mind/pull/2930) [`f3f76c2`](https://github.com/Bike4Mind/bike4mind/commit/f3f76c21ef2e882fad72db3f0f36c8c5e8113065) Thanks [@jarlacut](https://github.com/jarlacut)! - gate the remaining FabFile ingest doors
+
+### Patch Changes
+
+- [#2988](https://github.com/Bike4Mind/bike4mind/pull/2988) [`b8bd20d`](https://github.com/Bike4Mind/bike4mind/commit/b8bd20d40a1551f6b999cb84745a677984144916) Thanks [@ken-b4m](https://github.com/ken-b4m)! - pin memento embedding space and refit the 3-small floor
+
 ## 9.0.0
 
 ### Major Changes

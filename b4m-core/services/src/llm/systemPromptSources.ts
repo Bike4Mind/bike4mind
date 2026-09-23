@@ -281,14 +281,21 @@ export function resolveForcedRetrieval(mode: PromptMode | undefined, sessionFlag
 }
 
 /**
- * Whether this turn withholds OUR server-side tool auto-offers. Two independent triggers: any
- * `promptMode` (an eval/passthrough surface), or the caller's explicit `skipAutoOffers`. Unioned
- * here rather than at each gate because the rule was previously spelled out per-site and a site was
- * missed - all three auto-add sites in ChatCompletionProcess must agree, and a fourth trigger
- * should mean editing this function and nothing else.
+ * Whether this turn withholds the tools the server adds on its own - the ones the caller never
+ * named. Two independent triggers: any `promptMode` (an eval/passthrough surface), or the caller's
+ * explicit `skipAutoOffers`. Unioned here rather than at each gate because the rule was previously
+ * spelled out per-site and a site was missed - the auto-add sites in ChatCompletionProcess (the
+ * knowledge offer, navigate_view, the blog/skill gate) and `buildSharedTools`' MCP merge gate
+ * (`offerOnlyNamedTools`, see sharedToolBuilder.ts) must all agree, and a new trigger should mean
+ * editing this function and nothing else. The MCP half is the same rule, not an extra one: MCP
+ * tools are merged past the `enabledTools` filter and so are never named by the caller either.
  *
  * A force-on, not an override: `skipAutoOffers: false` under a promptMode still suppresses, because
- * a mode that promises a bare model cannot also carry the provider's tool-use preamble.
+ * a mode that promises a bare model cannot also carry the provider's tool-use preamble - and an
+ * MCP server's schemas are the largest such preamble a turn can carry. The force-on is not a dead
+ * end for a promptMode caller that wants one MCP tool: `tools: allTools` is unconditional at
+ * dispatch, and `offerOnlyNamedTools` narrows to what the caller NAMED, so naming the tool by its
+ * `server__tool` id (via `session.enabledTools`) keeps it while its unnamed siblings are withheld.
  *
  * Siblings below/above resolve the other promptMode-derived axes. Several more are still spelled out
  * inline in ChatCompletionProcess (`skipAdminPromptTemplates`, `excludeCurrentPrompt`,
@@ -334,6 +341,22 @@ export const PROMPT_SOURCE_METADATA: Record<
 };
 
 /**
+ * The prompt sources carrying lake-sourced content: forced retrieval (`knowledge_retrieval`) and the
+ * lake-memory hot card (`lake_memory`). One product concept - "what the lake put into this turn" - so
+ * they share one token bucket; the Layers table still itemizes them apart for anyone needing the split.
+ */
+export const LAKE_CONTENT_SOURCES: PromptSourceId[] = ['knowledgeRetrieval', 'lakeMemory'];
+
+/**
+ * The telemetry row NAMES those sources report as, derived from the metadata table rather than
+ * hand-copied (the same derivation SHAREABLE_PREFIX_SOURCES and DELIVERED_DETAIL_ORDER use), so
+ * renaming a source cannot leave the bucket summing a stale name.
+ */
+export const LAKE_CONTENT_LAYER_NAMES: string[] = LAKE_CONTENT_SOURCES.map(
+  source => PROMPT_SOURCE_METADATA[source].name
+);
+
+/**
  * The leading run of sources whose text is identical for every caller on this deployment -
  * `origin` of `hardcoded` or `admin`. Anything `user`/`session`/`org`/`project` ends the run,
  * because a prompt cache matches on a PREFIX: one per-caller block in front of shared content
@@ -374,6 +397,24 @@ export function markShareablePrefixBoundary(tagged: TaggedSystemMessage[]): void
 
 /** The canonical telemetry row shape; sourced from common so the two cannot drift. */
 export type SystemPromptDetail = z.infer<typeof SystemPromptDetailSchema>;
+
+/**
+ * Tokens the lake layers ACTUALLY delivered this turn, read off the per-source rows the write site
+ * already computed - never a second count of the lake messages. Conserving the total this way is what
+ * lets the caller move the tokens out of the `systemPrompts` residual without re-measuring, and a lake
+ * block the budget dropped is automatically not billed because the rows encode delivery in
+ * `wasIncluded`.
+ *
+ * `undefined` when `details` is undefined - the derivation failed, so the volume is UNKNOWN - and a
+ * number otherwise, where `0` is a real zero. That distinction is load-bearing: an absent bucket must
+ * never be read as "no lake content".
+ */
+export function lakeContentTokens(details: SystemPromptDetail[] | undefined): number | undefined {
+  if (!details) return undefined;
+  return details
+    .filter(detail => detail.wasIncluded && LAKE_CONTENT_LAYER_NAMES.includes(detail.name))
+    .reduce((sum, detail) => sum + detail.tokenCount, 0);
+}
 
 /**
  * Roll the tagged stack up into the per-source telemetry breakdown, one row per source that

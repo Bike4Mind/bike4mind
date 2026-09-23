@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/scripts",
-  "version": "0.1.77",
+  "version": "0.1.80",
   "private": true,
   "type": "module",
   "main": "index.ts",
@@ -59,10 +59,7 @@
     "count-tokens-probe": "tsx count-tokens-probe.ts",
     "retrieval:recall-probe": "tsx retrieval/recall-probe.ts",
     "retrieval:supersession-probe": "tsx retrieval/supersession-probe.ts",
-    "retrieval:capture-embeddings": "tsx retrieval/capture-embeddings.ts",
-    "retrieval:answerability-replay": "tsx retrieval/answerability-replay.ts",
-    "retrieval:model-comparison": "tsx retrieval/model-comparison.ts",
-    "retrieval:forced-floor-sweep": "tsx retrieval/forced-floor-sweep.ts"
+    "retrieval:answerability-replay": "tsx retrieval/answerability-replay.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

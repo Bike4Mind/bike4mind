@@ -311,8 +311,8 @@ const toManageableConfig = (
   // Same reasoning as canRebuild: a DB lake's settings live on its document, so this is identical
   // to canManage here - only a fallback lake needs the narrower ctx.isAdmin gate.
   canManageSettings: manageable,
-  // NOT `manageable`: erasing a memory profile is creator-or-platform-admin only, so this is the one
-  // manage-flavoured flag on a DB lake that does not track canManage. See canShredLakeMemory.
+  // NOT `manageable`: erasing a memory profile is effective-owner-or-platform-admin only, so this is
+  // the one manage-flavoured flag on a DB lake that does not track canManage. See canShredLakeMemory.
   canManageMemory,
   isOwn,
   // Owner name is a not-own label only: an own lake reads as "you", and it is set only when the
@@ -490,7 +490,7 @@ export const listDataLakes = async (
     toManageableConfig(
       dl,
       manageableById.get(dl.id) ?? false,
-      canShredLakeMemory(dl, ctx),
+      canShredLakeMemory(dl, ctx, grantsByLake.get(dl.id) ?? []),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
       canPreauthorizeById.get(dl.id) ?? false,
       ownerNames.get(dl.createdByUserId),
@@ -555,7 +555,7 @@ export const listAllDataLakes = async (
       true,
       // Admin, so the shred gate passes on every DB lake - but it is resolved through the same
       // predicate rather than hardcoded, so a change to the rule reaches this surface too.
-      canShredLakeMemory(dl, ctx),
+      canShredLakeMemory(dl, ctx, grantsByLake.get(dl.id) ?? []),
       isEffectiveOwner(dl, ctx, grantsByLake.get(dl.id)),
       canManageLake(dl, preauthorizeActor, grantsByLake.get(dl.id)),
       ownerNames.get(dl.createdByUserId),

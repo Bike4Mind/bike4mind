@@ -35,16 +35,33 @@ export interface AIImageGenerationOptions {
   image_prompt_strength?: number;
   webhook_url?: string | null;
   webhook_secret?: string | null;
+  /**
+   * Asserts that `imagePrompt`/`referenceImages` (when URLs, not data URLs) were freshly produced
+   * by `BaseStorage.getSignedUrl` in this same request - never set from a caller- or
+   * provider-supplied string. Only OpenAIImageService reads it, to let those URLs through the
+   * self-host storage-origin exemption in `downloadImageAsBuffer`. See that function's doc comment.
+   */
+  trustConfiguredStorageOrigin?: boolean;
 }
 
 /**
  * Generation options plus an optional inpainting mask; each call site passes a
  * subset. `size` is widened to OpenAIImageSize (`string`) so callers can forward
  * provider-specific sizes; only OpenAIImageService.edit reads it.
+ *
+ * `n` rides along from AIImageGenerationOptions and is ignored: an ImageEditResponse carries one
+ * dataUrl, so no implementation of edit() renders or returns more than one image. Start honoring
+ * it only once this response type can carry several, or callers get billed for images they never
+ * receive.
  */
 export type ImageEditOptions = Omit<AIImageGenerationOptions, 'size'> & {
   mask?: string | null;
   size?: OpenAIImageSize;
+  /**
+   * gpt-image style-anchor images (URLs or data URLs), appended after the edit source in the
+   * order given. Only OpenAIImageService.edit reads them; BFL and Gemini ignore them.
+   */
+  referenceImages?: string[];
 };
 
 /**

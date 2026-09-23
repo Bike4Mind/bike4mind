@@ -30,6 +30,8 @@ const breakdown: ContextBreakdown = {
     memory: 0,
     urlContent: 0,
     userMessage: 40,
+    // Pre-change turn: the volume is unknown, so the row renders a dash rather than 0.
+    lakeRetrieval: null,
   },
   layers: [
     { source: 'hardcoded', name: 'date_time_context', tokenCount: 60, wasIncluded: true },
@@ -74,6 +76,34 @@ describe('ContextBreakdownModal', () => {
     expect(screen.getByTestId('context-breakdown-categories-table').textContent).toContain('184,768');
   });
 
+  it('renders a recorded lake bucket as its own category row and bar segment', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: {
+        ...breakdown,
+        categories: { ...breakdown.categories, lakeRetrieval: 340, systemPromptBilled: 3660 },
+      },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    const rows = [...screen.getByTestId('context-breakdown-categories-table').querySelectorAll('tbody tr')];
+    const lakeRow = rows.find(row => row.querySelector('td')?.textContent === 'Lake retrieval');
+    expect(lakeRow?.querySelectorAll('td')[1].textContent).toBe('340');
+    // The shared distribution bar colours and labels the same bucket.
+    expect(screen.getByText('Lake: 340')).toBeTruthy();
+  });
+
+  it('renders an unknown lake bucket as a dash rather than a zero', () => {
+    renderModal();
+
+    const rows = [...screen.getByTestId('context-breakdown-categories-table').querySelectorAll('tbody tr')];
+    const lakeRow = rows.find(row => row.querySelector('td')?.textContent === 'Lake retrieval');
+    expect(lakeRow?.querySelectorAll('td')[1].textContent).toBe('-');
+    // A zero-token segment would misreport "unknown" as "none", so it is omitted entirely.
+    expect(screen.queryByText('Lake: 0')).toBeNull();
+  });
+
   it('does not query while closed', () => {
     renderModal(false);
 
@@ -91,6 +121,35 @@ describe('ContextBreakdownModal', () => {
     expect(screen.getByText('This turn recorded no per-layer detail.')).toBeTruthy();
     expect(screen.getByText('No tools were offered on this turn.')).toBeTruthy();
     expect(screen.getByText('No retrieval was recorded for this turn.')).toBeTruthy();
+  });
+
+  // #3055: count + reason next to the existing "lakes:" chip.
+  it('shows the excluded-lakes chip when the turn recorded an access exclusion', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: { ...breakdown, retrieval: { ...breakdown.retrieval, excludedLakes: { count: 2, reason: 'access' } } },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.getByTestId('context-breakdown-excluded-lakes-chip').textContent).toContain('excluded: 2 (access)');
+  });
+
+  it('omits the excluded-lakes chip when nothing was excluded', () => {
+    renderModal();
+
+    expect(screen.queryByTestId('context-breakdown-excluded-lakes-chip')).toBeNull();
+  });
+
+  it('omits the excluded-lakes chip on a recorded zero, not just on absence', () => {
+    mockUseQuestContextBreakdown.mockReturnValue({
+      data: { ...breakdown, retrieval: { ...breakdown.retrieval, excludedLakes: { count: 0, reason: 'access' } } },
+      isLoading: false,
+      error: null,
+    });
+    renderModal();
+
+    expect(screen.queryByTestId('context-breakdown-excluded-lakes-chip')).toBeNull();
   });
 
   it('surfaces the servers error message when the request was forbidden', () => {

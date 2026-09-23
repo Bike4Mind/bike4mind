@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 
 /**
@@ -72,6 +73,29 @@ describe('the container build asserts its output after pruning it', () => {
 });
 
 /**
+ * The Dockerfile pin above covers the container path only. The hosted path has no Dockerfile step
+ * at all - OpenNext invokes the package's own `build` script, so `postbuild` is the only hook that
+ * fires on both paths without OpenNext config of its own. Pinned here because nothing else would
+ * fail if this line were dropped: the hosted build would still succeed, just ship the compiled
+ * test routes this issue is about (bike4mind#2577).
+ */
+describe('the hosted build prunes test routes via postbuild', () => {
+  it('declares a postbuild script that runs the pruner against the standalone output', () => {
+    const pkg = JSON.parse(read('apps/client/package.json')) as { scripts: Record<string, string> };
+    expect(pkg.scripts.postbuild, 'apps/client must declare a postbuild script').toBeDefined();
+    expect(pkg.scripts.postbuild).toContain('pruneTestRoutes.mjs');
+    expect(pkg.scripts.postbuild, 'a plain next build writes no .next/standalone; postbuild must no-op then').toContain(
+      '--if-standalone'
+    );
+  });
+
+  it('enables pre/post lifecycle scripts, or postbuild above never fires', () => {
+    const npmrc = read('.npmrc');
+    expect(npmrc).toMatch(/^enable-pre-post-scripts=true$/m);
+  });
+});
+
+/**
  * The excludes themselves are dormant - Next applies them in collect-build-traces, which it
  * skips under Turbopack - so what is worth pinning is the carve-out, not the effect. Someone
  * trimming the bundle later will reach for public/** first, and it is the one directory here
@@ -99,5 +123,44 @@ describe('outputFileTracingExcludes floor', () => {
     // at request time - without pinning a literal that is now in the wrong file.
     expect(read('packages/scripts/help/utils.ts')).toContain("PUBLIC_HELP_CONTENT_DIR = 'public/help-content'");
     expect(read('apps/client/server/help/retrieval.ts')).toContain('PUBLIC_HELP_CONTENT_DIR');
+  });
+});
+
+/**
+ * @serwist/turbopack's service-worker route is compiled into the Next server function, and
+ * upstream references native `esbuild` with a static `import('esbuild')` in a branch that only
+ * runs on Windows. That one specifier put @esbuild/<platform>'s 10.9 MB binary into the
+ * deployment package on every platform. Measured: neither an outputFileTracingExcludes glob nor
+ * a Turbopack resolveAlias removes it, because an external declaration tells the packager to
+ * ship the module whole. patches/@serwist__turbopack@9.5.3.patch deletes the branch instead.
+ *
+ * Asserted against the INSTALLED package rather than the patch file: that is the artifact the
+ * build reads, so this fails whether the patch is dropped, regenerated without the deletion, or
+ * outgrown by a version bump - all three restore the 10.9 MB silently otherwise.
+ */
+describe('the serwist route keeps native esbuild out of the server function', () => {
+  const requireFromClient = createRequire(path.join(REPO_ROOT, 'apps/client/package.json'));
+
+  it('ships a @serwist/turbopack whose only esbuild import is the wasm one', () => {
+    const installed = fs.readFileSync(requireFromClient.resolve('@serwist/turbopack'), 'utf8');
+    expect(installed, 'the wasm branch must still be the one that builds the worker').toContain(
+      "import('esbuild-wasm')"
+    );
+    expect(
+      codeOnly(installed),
+      'a static import of native esbuild here re-adds @esbuild/<platform> to the Lambda'
+    ).not.toMatch(/import\(\s*'esbuild'\s*\)/);
+  });
+
+  it('registers the patch that removes the branch', () => {
+    expect(read('package.json')).toContain('"@serwist/turbopack@9.5.3": "patches/@serwist__turbopack@9.5.3.patch"');
+  });
+
+  it('does not declare native esbuild external, which is what made the packager ship it', () => {
+    const config = read('apps/client/next.config.mjs');
+    const externals = /serverExternalPackages:\s*\[[\s\S]*?\n {2}\],/.exec(config);
+    expect(externals, 'serverExternalPackages block not found').not.toBeNull();
+    expect(codeOnly(externals![0])).toContain("'esbuild-wasm'");
+    expect(codeOnly(externals![0])).not.toMatch(/'esbuild'/);
   });
 });

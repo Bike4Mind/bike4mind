@@ -769,9 +769,9 @@ const METADATA_ONLY_PROJECTION = { content: 0, chunks: 0, vector: 0, presignedUr
  *
  * Not widened here because the fix is not free and this projection is not this change's to rewrite:
  * `notes` is owner-authored free text and the tagless reader runs once per cited source on every chat
- * turn that touches a lake. `isCapturableFile` instead excludes `vectorizedOnly` from its own options
- * type, which makes the gap unrepresentable for the capture. The live reader still has it. Widen this
- * projection - or narrow that caller the same way - before relying on a `vectorizedOnly` verdict.
+ * turn that touches a lake. No caller narrows its way around the gap either - excluding
+ * `vectorizedOnly` from an options type would make it unrepresentable, and nothing does - so the live
+ * reader is the only shape it has. Widen this projection before relying on a `vectorizedOnly` verdict.
  */
 const CITABLE_PROJECTION =
   '_id deletedAt archivedAt chunkCount vectorizedChunkCount embeddingModel fileName vectorized createdAt';
@@ -1447,6 +1447,50 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { $sort: { fileCount: -1 } },
     ]);
     return result;
+  }
+
+  async claimTagRewriteByUserId(
+    userId: string,
+    tag: string,
+    newTag: string | null,
+    excludeIds: readonly string[] = []
+  ): Promise<Pick<IFabFileDocument, 'id' | 'userId' | 'tags'> | null> {
+    if (!tag) return null;
+    // The SAME anchored, escaped, case-insensitive match removeTagByUserId/updateTagsByUserId run,
+    // so a claim and the bulk mop-up behind it can never act on different file sets.
+    const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
+    // One file per call, claimed by the write itself: the returned pre-image is the state THIS
+    // write saw, so a caller minting a durable per-file fact from a bulk tag rewrite describes a
+    // transition it actually caused. A snapshot read plus updateMany cannot do that - updateMany
+    // reports one aggregate count, and two concurrent requests reading the same snapshot would
+    // both claim to have moved every file.
+    //
+    // `excludeIds` is what terminates the caller's loop: a case-only rename still matches
+    // nameRegex after the rewrite, so the caller excludes what it has already claimed rather than
+    // relying on the filter no longer matching.
+    //
+    // deletedAt conjunct, unlike those writes: a soft-deleted file is already out of every lake
+    // read, so a membership event for it would double-report against the delete door's own.
+    const filter: Record<string, unknown> = {
+      userId,
+      deletedAt: null,
+      tags: { $elemMatch: { name: nameRegex } },
+    };
+    if (excludeIds.length > 0) filter._id = { $nin: convertIds([...excludeIds]) };
+    // `$[elem]` and not `$`, matching updateTagsByUserId: the first-positional operator rewrites
+    // only the first matching element, leaving a stale copy on a file carrying the name twice.
+    const prior = newTag
+      ? await this.fabFileModel.findOneAndUpdate(
+          filter,
+          { $set: { 'tags.$[elem].name': newTag } },
+          { new: false, projection: 'userId tags', arrayFilters: [{ 'elem.name': nameRegex }] }
+        )
+      : await this.fabFileModel.findOneAndUpdate(
+          filter,
+          { $pull: { tags: { name: nameRegex } } },
+          { new: false, projection: 'userId tags' }
+        );
+    return prior ? prior.toJSON() : null;
   }
 
   async removeTagByUserId(userId: string, tag: string): Promise<number> {
@@ -2435,6 +2479,48 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
   }
 
+  /** Ceiling on one stale-space read. Far above any real lake; see the note in the docblock
+   *  below for why a lake at the cap loses nothing. */
+  private static readonly STALE_EMBEDDING_SPACE_SCAN_LIMIT = 10_000;
+
+  /**
+   * The lake's members still carrying a DIFFERENT file-level embedding space than `embeddingModel`.
+   *
+   * `$nin: [null, '', embeddingModel]` rather than `$ne` plus blank arms, for two reasons. A missing
+   * path reads as null for `$in`, so one operator covers all three blank shapes - which this
+   * deliberately leaves alone, since blank is unattributable rather than foreign. And it keeps every
+   * condition here free of a top-level `$or`: `buildDataLakeMembershipFilter`'s prefix arm IS one,
+   * so spreading it beside an `$or` of our own would silently drop the membership predicate and
+   * offer every file in the install for this lake's re-embed.
+   *
+   * `vectorizedChunkCount: {$gt: 0}` is what makes this a stale-SPACE read rather than a
+   * not-yet-embedded one: a file with no vectors has no space to leave and will be embedded in the
+   * current one unaided. It also drops a file the instant a wave resets it (the reset zeroes this
+   * count), which is what lets a caller read the count falling as progress - and is also what makes
+   * the cap below safe: a lake larger than one read re-offers its remainder on the next wave, so a
+   * capped result reads as "at least this many" rather than losing anything.
+   */
+  async findFilesOutsideEmbeddingSpaceByScope(
+    scope: DataLakeMembershipScope,
+    embeddingModel: string
+  ): Promise<{ id: string; userId: string }[]> {
+    const docs = await this.fabFileModel
+      .find(
+        {
+          ...buildDataLakeMembershipFilter(scope),
+          deletedAt: null,
+          archivedAt: null,
+          isChunking: { $ne: true },
+          vectorizedChunkCount: { $gt: 0 },
+          embeddingModel: { $nin: [null, '', embeddingModel] },
+        },
+        { _id: 1, userId: 1 }
+      )
+      .limit(FabFileRepository.STALE_EMBEDDING_SPACE_SCAN_LIMIT)
+      .lean();
+    return docs.map(d => ({ id: d._id.toString(), userId: String(d.userId) }));
+  }
+
   /**
    * The lake's convergence-stranded files: everything the kill switch left with NO searchable
    * passage, by either arm. `error:null` on both, so countFailedFilesByScope cannot see them.
@@ -2900,37 +2986,39 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     excludeIds: string[] = [],
     stampedAt?: Date,
     archiveStampToClear?: Date
-  ): Promise<number> {
+  ): Promise<string[]> {
     const base: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: stampedAt ?? { $ne: null },
     };
     if (excludeIds.length > 0) base._id = { $nin: excludeIds };
 
-    if (!archiveStampToClear) {
-      const result = await this.fabFileModel.updateMany(base, { $set: { deletedAt: null } });
-      return result.modifiedCount;
+    // Enumerate, then flip each row under its own conditional write, and report the ids that
+    // actually moved. A single updateMany is cheaper but reports one aggregate count, and the
+    // restore door mints a durable per-file membership fact from this - two restores re-entering
+    // the 'restoring' state concurrently would otherwise both claim to have revived every row.
+    // includeDeleted: the soft-delete plugin's pre('find') hook otherwise ANDs `deletedAt: null`
+    // onto the filter, which contradicts the stamp bound and matches nothing.
+    const candidates = await this.fabFileModel.find(base, null, { includeDeleted: true }).select('_id');
+    const restored: string[] = [];
+    for (const candidate of candidates) {
+      // An aggregation-pipeline $set so one atomic write covers both fields: a row stamped by THIS
+      // lake's own archive gets both cleared, any other value (a different lake's stamp, or none)
+      // only un-deletes and keeps its archive marker - the equality bound that stops this freeing
+      // a prefix-sharing sibling's independently-archived files.
+      const result = await this.fabFileModel.updateOne({ ...base, _id: candidate._id }, [
+        {
+          $set: {
+            deletedAt: null,
+            ...(archiveStampToClear
+              ? { archivedAt: { $cond: [{ $eq: ['$archivedAt', archiveStampToClear] }, null, '$archivedAt'] } }
+              : {}),
+          },
+        },
+      ]);
+      if (result.modifiedCount === 1) restored.push(candidate._id.toString());
     }
-
-    // Two parallel queries partitioned on `archivedAt`, not one update followed by another - not
-    // for snapshot isolation (Mongo gives none across separate updateMany calls), but because the
-    // shared `deletedAt: stampedAt` base filter is a barrier: once either query flips a row's
-    // `deletedAt` to null, that row no longer matches EITHER filter, so it cannot be picked up
-    // twice. A row stamped by THIS lake's own archive gets both fields cleared; any other value (a
-    // different lake's stamp, or none) only un-deletes, leaving its archive marker exactly as it
-    // was - the equality bound that keeps this from freeing a prefix-sharing sibling's
-    // independently-archived files.
-    const [ownStamp, otherStamp] = await Promise.all([
-      this.fabFileModel.updateMany(
-        { ...base, archivedAt: archiveStampToClear },
-        { $set: { deletedAt: null, archivedAt: null } }
-      ),
-      this.fabFileModel.updateMany(
-        { ...base, archivedAt: { $ne: archiveStampToClear } },
-        { $set: { deletedAt: null } }
-      ),
-    ]);
-    return ownStamp.modifiedCount + otherStamp.modifiedCount;
+    return restored;
   }
 
   async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {
@@ -2940,10 +3028,17 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // `deletedAt: null` is re-asserted in the UPDATE, not just the read above, so this is write-once
     // the way archiveByDataLakeTag already is. Without it the read-modify-write is racy: two sweeps
     // overlapping in time both select the same rows, and the loser's stamp overwrites the winner's.
-    // Harmless while both carry the same stamp, unrecoverable the moment they do not - and the
-    // return stays the ids this call selected, which is what the index removal and its re-run want.
+    // Harmless while both carry the same stamp, unrecoverable the moment they do not.
     await this.fabFileModel.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { deletedAt: at } });
-    return ids;
+    // Read back by exact stamp equality rather than returning the selected ids: `updateMany` gives
+    // no per-row outcome, and a row another door soft-deleted between the read and the write above
+    // carries that door's stamp instead. The caller mints one permanent membership row per id it is
+    // handed, so an id this call did not actually flip would become a second `removed` for a
+    // departure something else already recorded. Includes deleted rows - these all are now.
+    const flipped = await this.fabFileModel
+      .find({ _id: { $in: ids }, deletedAt: at }, { _id: 1 })
+      .setOptions({ includeDeleted: true });
+    return flipped.map(d => d._id.toString());
   }
 
   async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
@@ -3097,6 +3192,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
+  async pushTagReturningPriorState(
+    fabFileId: string,
+    tagName: string,
+    strength = 0
+  ): Promise<Pick<IFabFileDocument, 'userId' | 'tags'> | null> {
+    if (!tagName) return null;
+    // Same filtered-push semantics and exact-name matching as pushTagsByFabFileId (read its note
+    // on why case-insensitivity here would be wrong), but returning the PRE-IMAGE instead of a
+    // count. The count only says the name was absent; a caller deciding whether the file was
+    // already a data lake member through some OTHER signal needs the document the winning write
+    // saw, and reading it separately would race with a concurrent writer.
+    const prior = await this.fabFileModel.findOneAndUpdate(
+      { _id: fabFileId, 'tags.name': { $ne: tagName } },
+      { $push: { tags: { name: tagName, strength } } },
+      { new: false, projection: 'userId tags' }
+    );
+    return prior ? prior.toJSON() : null;
+  }
+
   async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
     // The schema has timestamps, so an empty $in would still rewrite updatedAt and report a
     // modification for a write that removes nothing.
@@ -3105,8 +3219,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // removals of different tags on the same file can't clobber each other. Idempotent -
     // absent names are a no-op. Exact names only, deliberately: a prefix pattern here would
     // mean building a regex from a user-chosen prefix, and an empty one matches every tag.
+    //
+    // The `tags.name` conjunct is what makes the returned count mean "a tag was removed": the
+    // schema has timestamps, so without it an unmatched $pull still rewrites updatedAt and
+    // reports modifiedCount 1. Callers that mint a durable fact from a removal (the lake
+    // membership audit trail) read this count to tell a real removal from the losing half of
+    // two concurrent removals, so an unmatched pull has to report 0.
     const result = await this.fabFileModel.updateOne(
-      { _id: fabFileId },
+      { _id: fabFileId, 'tags.name': { $in: tagNames } },
       { $pull: { tags: { name: { $in: tagNames } } } }
     );
     // A primaryTag naming a tag the file no longer carries later fails the data-lake write

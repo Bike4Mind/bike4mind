@@ -46,11 +46,11 @@ import { SettingScopeLevel, type SettingScopeConfig } from '../types/entities/Sc
 
 /**
  * The measured per-space floors, rendered for an admin-facing description (e.g. "75 for
- * text-embedding-ada-002, 49 for text-embedding-3-small").
+ * text-embedding-ada-002, 58 for text-embedding-3-small").
  *
- * Rendered rather than written out in prose because these numbers are expected to move - 49 is
- * provisional until it is re-derived against a production lake - and a description that restates
- * the table is a wrong number shown to operators the moment it drifts, with nothing failing.
+ * Rendered rather than written out in prose because these numbers move as each space is re-measured
+ * against a production lake, and a description that restates the table is a wrong number shown to
+ * operators the moment it drifts, with nothing failing.
  */
 const forcedRetrievalFloorsBySpaceSummary = Object.entries(FORCED_RETRIEVAL_MIN_SIMILARITY_PCT_BY_SPACE)
   .map(([space, pct]) => `${pct} for ${space}`)
@@ -1067,6 +1067,18 @@ export const RapidReplySettingsSchema = z.object({
 
 export type RapidReplySettings = z.infer<typeof RapidReplySettingsSchema>;
 
+/**
+ * Canonical repository and branch the What's New generator reads from.
+ *
+ * Every default in the What's New path (zod schema, settings registry, server
+ * config service, cron/backfill fallbacks, admin form seed) must resolve here.
+ * A stale slug is invisible in production: GitHubService.listMergedPullRequests
+ * returns [] for a repository outside the connection allowlist, so generation
+ * records "no PRs today" instead of an error and the surface silently goes dark.
+ */
+export const WHATS_NEW_DEFAULT_REPOSITORY = 'Bike4Mind/bike4mind';
+export const WHATS_NEW_DEFAULT_TARGET_BRANCH = 'prod';
+
 // What's New Configuration Validation Limits
 // Single source of truth for all numeric constraints used in both frontend and backend
 export const WHATS_NEW_VALIDATION_LIMITS = {
@@ -1159,11 +1171,11 @@ export const WhatsNewConfigSchema = z.object({
   repository: z
     .string()
     .regex(/^[\w.-]+\/[\w.-]+$/, 'Must be in owner/repo format (e.g., MyOrg/my-repo)')
-    .default('MillionOnMars/lumina5'),
+    .default(WHATS_NEW_DEFAULT_REPOSITORY),
   targetBranch: z
     .string()
     .regex(/^[\w./-]+$/, 'Must be a valid branch name')
-    .default('prod'),
+    .default(WHATS_NEW_DEFAULT_TARGET_BRANCH),
 
   // Custom prompt template (optional)
   promptTemplate: z
@@ -3738,7 +3750,7 @@ export const settingsMap = {
       'returns nothing on every query. Where this floor lands inside your band decides a lot - on ' +
       'one measured corpus 74 / 75 / 76 swung recall 91% / 65% / 40% - and the same 75 that is a ' +
       'cliff on one lake rejects nothing at all on another. Re-measure after changing the ' +
-      'embedding model; the sweep tool is packages/scripts/retrieval/forcedFloorSweep.ts.',
+      'embedding model.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 10,
@@ -3765,8 +3777,7 @@ export const settingsMap = {
       'space and does not need re-tuning when the embedding model changes. Lower is stricter (10 ' +
       'keeps only passages within a tenth of the way down to the median); 100 cuts at the median ' +
       'itself. It can never empty a turn - the best passage always clears its own cutoff. Ships ' +
-      'off because no magnitude has been measured yet; measure one with the sweep tool at ' +
-      'packages/scripts/retrieval/forcedFloorSweep.ts before turning it on.',
+      'off because no magnitude has been measured yet; measure one offline before turning it on.',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,
     order: 11,
@@ -4245,8 +4256,8 @@ export const settingsMap = {
       maxPRBodyLength: 500,
       maxChangelogLength: 1000,
       // GitHub repository configuration
-      repository: 'MillionOnMars/lumina5',
-      targetBranch: 'main',
+      repository: WHATS_NEW_DEFAULT_REPOSITORY,
+      targetBranch: WHATS_NEW_DEFAULT_TARGET_BRANCH,
     },
     description:
       "Configuration for automated What's New modal generation, including LLM model selection, prompt parameters, validation rules, and content sanitization limits.",

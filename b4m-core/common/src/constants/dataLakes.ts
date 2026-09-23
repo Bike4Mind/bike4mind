@@ -1,4 +1,5 @@
 import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
+import type { DataLakeStatus } from '../types/entities/DataLakeTypes';
 
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
@@ -391,6 +392,13 @@ export interface DataLakeConfig {
    * this. Absent on projections that don't resolve an actor (e.g. tag-only lookups).
    */
   canManage?: boolean;
+  /**
+   * Lake lifecycle (see `DataLakeStatus`), reader-visible - it is what tells a client a lake is
+   * still `draft` and excluded from grounding, so the manager can offer Publish/Move to
+   * draft and explain why a lake with files answers nothing. Absent for a fallback (built-in)
+   * registry lake, which has no document and no lifecycle - always serving.
+   */
+  status?: DataLakeStatus;
 }
 
 /**
@@ -540,10 +548,11 @@ export interface ManageableDataLakeConfig extends DataLakeConfig {
   canManageSettings: boolean;
   /**
    * Whether the requesting caller may ERASE this lake's extracted memory profile - an irreversible
-   * crypto-shred. Strictly narrower than `canManage`: creator or platform admin only, with no grant
-   * or org-admin rung, mirroring `DELETE /api/memory/lake/:id` exactly. Both come from the one
-   * `canShredLakeMemory` predicate so the button and the endpoint cannot drift; rendering the erase
-   * affordance on `canManage` instead offered it to curators and org admins the endpoint then 403'd.
+   * crypto-shred. Strictly narrower than `canManage`: effective owner or platform admin only, with
+   * no curator or org-admin rung, mirroring `DELETE /api/memory/lake/:id` exactly. Both come from the
+   * one `canShredLakeMemory` predicate so the button and the endpoint cannot drift; rendering the
+   * erase affordance on `canManage` instead offered it to curators and org admins the endpoint then
+   * 403'd.
    *
    * REQUIRED for the same reason as `canRebuild` and `canManageSettings`: an absent field reads as
    * falsy and hides the affordance silently instead of failing the build at the producer that forgot
@@ -735,6 +744,7 @@ export function toDataLakeConfig(dl: {
   description?: string;
   isPublic?: boolean;
   lakeMemoryEnabled?: boolean;
+  status?: DataLakeStatus;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -748,6 +758,7 @@ export function toDataLakeConfig(dl: {
     description: dl.description,
     isPublic: dl.isPublic,
     lakeMemoryEnabled: dl.lakeMemoryEnabled,
+    status: dl.status,
   };
 }
 

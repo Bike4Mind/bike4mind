@@ -100,13 +100,25 @@ describe('FabFileRepository.pullTagsByFabFileId', () => {
     expect((await FabFile.findById(id))?.updatedAt).toEqual(before?.updatedAt);
   });
 
-  // Pins the documented contract: timestamps mean a modification is reported for a write that
-  // removed nothing, so no caller may read the return as "a tag was removed".
-  it('reports a modification even when no named tag was present', async () => {
+  // Pins the documented contract the lake membership audit trail depends on: an unmatched pull
+  // reports NO modification, so a caller can read the count as "a tag was removed" rather than
+  // as "timestamps moved".
+  it('reports no modification when no named tag was present', async () => {
+    const id = await seed();
+    const before = await FabFile.findById(id);
+
+    expect(await fabFileRepository.pullTagsByFabFileId(id, ['not-on-this-file'])).toBe(0);
+    expect(await tagsOf(id)).toHaveLength(SEED_TAGS.length);
+    expect((await FabFile.findById(id))?.updatedAt).toEqual(before?.updatedAt);
+  });
+
+  // The concurrency shape the count exists for: two removals of the same tag race, the first
+  // wins, and the loser must be able to tell it removed nothing.
+  it('reports a modification for the first removal only when the same pull is repeated', async () => {
     const id = await seed();
 
-    expect(await fabFileRepository.pullTagsByFabFileId(id, ['not-on-this-file'])).toBe(1);
-    expect(await tagsOf(id)).toHaveLength(SEED_TAGS.length);
+    expect(await fabFileRepository.pullTagsByFabFileId(id, ['datalake:org:mylake'])).toBe(1);
+    expect(await fabFileRepository.pullTagsByFabFileId(id, ['datalake:org:mylake'])).toBe(0);
   });
 
   it('is idempotent - a second identical call removes nothing more', async () => {

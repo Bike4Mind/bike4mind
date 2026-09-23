@@ -13,6 +13,7 @@ import {
   isGPTImage2Model,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
+  IMAGES_PER_EDIT_REQUEST,
   toNonWebpOutputFormat,
   type ImageOutputFormat,
   type OpenAIImageBackground,
@@ -23,6 +24,7 @@ import {
   GeminiImageService,
   getSettingsMap,
   getSettingsValue,
+  downloadImageAsBuffer,
 } from '@bike4mind/utils';
 import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
@@ -32,17 +34,13 @@ import { v4 as uuidv4 } from 'uuid';
 import { NotFoundError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
 
-async function downloadImage(url: string) {
-  // Handle data URLs (base64 images)
-  if (url.startsWith('data:image/')) {
-    const base64Data = url.split(',')[1];
-    return Buffer.from(base64Data, 'base64');
-  }
-
-  // Handle regular URLs
+async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   try {
-    const response = await axios.get(url, { responseType: 'arraybuffer', timeout: 30000 });
-    return response.data;
+    // `downloadImageAsBuffer` handles data URLs and SSRF-guards http(s) ones; the LLM picks this
+    // URL, so it is caller-influenced. `trustConfiguredStorageOrigin` must only be true for a URL
+    // this module just minted via `getSignedUrl` - see `resolveImageInputUrl`.
+    const buffer = await downloadImageAsBuffer(imageUrl, { trustConfiguredStorageOrigin });
+    return buffer.toString('base64');
   } catch (error) {
     // If URL fails (expired, inaccessible, etc.), throw a more helpful error
     if (axios.isAxiosError(error)) {
@@ -57,16 +55,18 @@ async function downloadImage(url: string) {
   }
 }
 
-async function imageUrlToBase64(imageUrl: string): Promise<string> {
-  const data = await downloadImage(imageUrl);
-  const buffer = Buffer.from(data, 'binary');
-  return buffer.toString('base64');
+// Carries whether `url` was just minted by this module from `getSignedUrl` (trusted storage
+// provenance) versus a literal caller-supplied string or an unsigned `fabFile.fileUrl` fallback
+// (untrusted) - see `resolveImageInputUrl`.
+export interface ResolvedImageUrl {
+  url: string;
+  trustConfiguredStorageOrigin: boolean;
 }
 
 // Exported for testability (mirrors `processAndStoreImage` below) - the serveability
 // guard below is otherwise only reachable through the full `edit_image` toolFn, which
 // requires mocking an entire provider edit call.
-export async function getImageFromFileId(fileId: string, context: ToolContext): Promise<string> {
+export async function getImageFromFileId(fileId: string, context: ToolContext): Promise<ResolvedImageUrl> {
   if (!isObjectIdShaped(fileId)) {
     throw new Error(
       `Invalid file ID "${fileId}". Expected a MongoDB ObjectId (24-character hex string), not a filename. Please provide the file ID from the workbench, or use a full URL (https://...) to reference the image.`
@@ -103,11 +103,13 @@ export async function getImageFromFileId(fileId: string, context: ToolContext): 
   // Get signed URL if filePath exists, otherwise use fileUrl
   if (fabFile.filePath) {
     const signedUrl = await context.storage.getSignedUrl(fabFile.filePath);
-    return signedUrl;
+    // Freshly minted from `getSignedUrl` - trusted provenance for the self-host storage exemption.
+    return { url: signedUrl, trustConfiguredStorageOrigin: true };
   }
 
   if (fabFile.fileUrl) {
-    return fabFile.fileUrl;
+    // Stored verbatim, not signed by us - untrusted.
+    return { url: fabFile.fileUrl, trustConfiguredStorageOrigin: false };
   }
 
   throw new Error(`File ${fileId} has no accessible URL`);
@@ -124,9 +126,11 @@ export async function getImageFromFileId(fileId: string, context: ToolContext): 
  * previously generated image. The model learns these keys from the "Recently
  * generated images" system note assembled in ChatCompletionProcess.
  */
-async function getGeneratedImageUrl(storageKey: string, context: ToolContext): Promise<string> {
+async function getGeneratedImageUrl(storageKey: string, context: ToolContext): Promise<ResolvedImageUrl> {
   try {
-    return await context.imageGenerateStorage.getSignedUrl(storageKey);
+    const url = await context.imageGenerateStorage.getSignedUrl(storageKey);
+    // Freshly minted from `getSignedUrl` - trusted provenance for the self-host storage exemption.
+    return { url, trustConfiguredStorageOrigin: true };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     throw new Error(
@@ -144,9 +148,11 @@ async function getGeneratedImageUrl(storageKey: string, context: ToolContext): P
  *     e.g. "86cdc650-....jpg") - resolved against the image bucket
  * Source and mask share this so a generated-image key works for either.
  */
-async function resolveImageInputUrl(input: string, context: ToolContext): Promise<string> {
+async function resolveImageInputUrl(input: string, context: ToolContext): Promise<ResolvedImageUrl> {
   if (input.startsWith('http://') || input.startsWith('https://') || input.startsWith('data:')) {
-    return input;
+    // A literal caller-supplied URL - never trusted, even if it happens to share the
+    // configured storage origin.
+    return { url: input, trustConfiguredStorageOrigin: false };
   }
   if (isObjectIdShaped(input)) {
     return getImageFromFileId(input, context);
@@ -195,7 +201,7 @@ export async function processAndStoreImage(
   model: string,
   provider: string
 ): Promise<string> {
-  const buffer = await downloadImage(imageUrl);
+  const buffer = await downloadImageAsBuffer(imageUrl);
   const fileType = await fileTypeFromBuffer(buffer);
   const filename = `${uuidv4()}.${fileType?.ext}`;
   const mimeType = fileType?.mime ?? 'image/png';
@@ -266,7 +272,6 @@ export const imageEditTool: ToolDefinition = {
         image: toolImage,
         prompt,
         mask: toolMask,
-        n: toolN,
         size: toolSize,
         safety_tolerance: toolSafetyTolerance,
         steps: toolSteps,
@@ -277,7 +282,6 @@ export const imageEditTool: ToolDefinition = {
         image: string; // URL or file ID
         prompt: string;
         mask?: string; // Optional URL or file ID
-        n?: number;
         size?: string;
         safety_tolerance?: number;
         steps?: number; // BFL-specific, not in imageConfig
@@ -330,7 +334,6 @@ export const imageEditTool: ToolDefinition = {
 Please select a supported edit model in your image settings modal.`;
       }
 
-      const n = toolN ?? imageConfig?.n ?? 1;
       const size = imageConfig?.size || toolSize;
       const safety_tolerance = imageConfig?.safety_tolerance || toolSafetyTolerance;
       const output_format = toolOutputFormat ?? imageConfig?.output_format ?? 'png';
@@ -367,7 +370,11 @@ Please select a supported edit model in your image settings modal.`;
       // Same billed-model-vs-rendered-model invariant the queue path holds in ImageEdit.ts.
       await context.onStart?.('edit_image', {
         model: editModel,
-        n,
+        // The count both credit rails bill off this payload - ToolBuilder.reserveImageCredits
+        // (classic chat) and estimateGeneratedMediaUsd (agent mode). It has to be what the edit
+        // below actually renders, which is one image however many the model asked for; billing
+        // the request's n here charged for images that were never returned.
+        n: IMAGES_PER_EDIT_REQUEST,
         size,
         quality: imageConfig?.quality,
         prompt,
@@ -375,14 +382,14 @@ Please select a supported edit model in your image settings modal.`;
 
       // Resolve the source image (URL, fabFile ObjectId, or generated-image key)
       // so the model can edit a previously generated image, not just uploads.
-      const sourceImageUrl = await resolveImageInputUrl(toolImage, context);
-      const sourceBase64Image = await imageUrlToBase64(sourceImageUrl);
+      const sourceImage = await resolveImageInputUrl(toolImage, context);
+      const sourceBase64Image = await imageUrlToBase64(sourceImage.url, sourceImage.trustConfiguredStorageOrigin);
 
       // Mask (optional) uses the same resolution as the source.
       let maskBase64Image: string | null = null;
       if (toolMask) {
-        const maskImageUrl = await resolveImageInputUrl(toolMask, context);
-        maskBase64Image = await imageUrlToBase64(maskImageUrl);
+        const maskImage = await resolveImageInputUrl(toolMask, context);
+        maskBase64Image = await imageUrlToBase64(maskImage.url, maskImage.trustConfiguredStorageOrigin);
       }
 
       if (isBFLModel) {
@@ -514,7 +521,6 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           const editResponse = await service.edit(sourceBase64Image, prompt, {
             mask: maskBase64Image,
             model: editModel, // Use the configured edit model
-            n,
             size,
             quality: imageConfig?.quality,
             response_format: 'url',
@@ -583,10 +589,6 @@ Please check your BFL API key in settings and ensure it is configured correctly.
             type: 'string',
             description: 'The size of the edited image (OpenAI only)',
             enum: ['256x256', '512x512', '1024x1024'],
-          },
-          n: {
-            type: 'number',
-            description: 'Number of edited images to generate (OpenAI only)',
           },
           safety_tolerance: {
             type: 'number',

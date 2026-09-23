@@ -88,7 +88,7 @@ function makePublicArtifactRow() {
     publicId: 'pub-1',
     title: 'My Artifact',
     description: 'desc',
-    tags: ['ionq', 'weekly'],
+    tags: ['northwind', 'weekly'],
     visibility: 'public',
     commentPolicy: 'none',
     embedOrigins: undefined,
@@ -146,7 +146,7 @@ describe('GET public artifact - response scoping', () => {
     // reads disagreed. The OWNER-SCOPED property belongs to the vocabulary endpoint, not to tags on
     // an artifact document.
     const res = await getArtifact({ id: 'someone-else', isAdmin: false });
-    expect(res._getJSONData().artifact.tags).toEqual(['ionq', 'weekly']);
+    expect(res._getJSONData().artifact.tags).toEqual(['northwind', 'weekly']);
   });
 
   it('returns only public display fields to an anonymous viewer', async () => {

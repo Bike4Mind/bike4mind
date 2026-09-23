@@ -28,6 +28,7 @@ import {
   fetchAndConvertFabFiles,
 } from '@bike4mind/utils';
 import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
+import { measureIdentityNamedExclusion } from '../dataLakeService/getDynamicDataLakeTags';
 import type { FabFileNotice } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
 import {
@@ -40,7 +41,12 @@ import {
   usdToCreditsStochastic as realUsdToCreditsStochastic,
   type IMessage,
 } from '@bike4mind/common';
-import { ToolBuilder, applyQuestStatusChanges } from './tools/ToolBuilder';
+import {
+  ToolBuilder,
+  applyQuestStatusChanges,
+  type BuildToolPromptArgs,
+  type BuildToolsArgs,
+} from './tools/ToolBuilder';
 import { SYSTEM_PROMPT_PRIORITY } from './systemPromptSources';
 import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
@@ -411,6 +417,52 @@ describe('ChatCompletionProcess', () => {
 
         expect(await service.userHasAccessibleKnowledgeLake()).toBe(false);
       });
+    });
+  });
+
+  // #3055 (review): getAccessibleDataLakeAccess and the promptMeta seed's targeted measurement
+  // (measureIdentityNamedExclusion) must resolve against the SAME DataLakeAccessContext object,
+  // or getDynamicDataLakeTags.ts's per-turn membership/grant/supersession memos (WeakMap keyed on
+  // object identity) miss and re-read on a second snapshot - see dataLakeAccessContextMemo's own
+  // doc on the field.
+  describe('getDataLakeAccessContext (#3055 review - shared per-turn identity)', () => {
+    it('returns the same object across repeated calls within a turn', async () => {
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+      (service as any).db = { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } };
+
+      const first = await (service as any).getDataLakeAccessContext();
+      const second = await (service as any).getDataLakeAccessContext();
+
+      expect(first).toBe(second);
+    });
+
+    it('is the object getAccessibleDataLakeAccess already resolved with, so a later targeted measurement reads membership/grants only once total', async () => {
+      const listByPrincipal = vi.fn().mockResolvedValue([]);
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).db = {
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes: vi.fn().mockResolvedValue(0),
+        },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        dataLakeAccessGrants: { listByPrincipal, listActiveByLakes: vi.fn().mockResolvedValue([]) },
+      };
+      (service as any).user = { ...(service as any).user, id: 'alice', tags: [] };
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+
+      await (service as any).getAccessibleDataLakeAccess();
+      const contextAfter = await (service as any).getDataLakeAccessContext();
+      await measureIdentityNamedExclusion(contextAfter, ['datalake:x']);
+
+      // One call, not two: had the second call built its own context object, this memo
+      // (keyed on object identity) would miss and read a second time.
+      expect(listByPrincipal).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -1004,6 +1056,33 @@ describe('ChatCompletionProcess', () => {
       expect(findMembershipOrgIds).toHaveBeenCalled();
       // Remove the catch and this call rejects instead of returning the ownership-only shape.
       expect(access).toEqual({ lakeMemberships: [], dataLakeTags: [], dataLakeTagPrefixes: [] });
+    });
+
+    it('#3055: a countGateExcludedLakes rejection warns via the process logger, and excludedByAccessCount stays absent', async () => {
+      // Distinct from the resolver-wide failure above: findMembershipOrgIds and
+      // findActiveByUserTagsAndEntitlements both succeed here - only the count query rejects.
+      // getDynamicDataLakeAccess catches that internally and warns via its OWN `logger` param;
+      // without wiring `this.logger` through at this call site, the warn went nowhere and the
+      // count failure was indistinguishable from success.
+      (service as any).accessibleDataLakeAccessMemo = undefined;
+      (service as any).user = { ...(service as any).user, id: 'user-1' };
+      (service as any).logger = { warn: vi.fn() };
+      (service as any).db = {
+        ...(service as any).db,
+        dataLakes: {
+          findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+          countGateExcludedLakes: vi.fn().mockRejectedValue(new Error('count query timed out')),
+        },
+        organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+      };
+
+      const access = await (service as any).getAccessibleDataLakeAccess();
+
+      expect(access.excludedByAccessCount).toBeUndefined();
+      expect((service as any).logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('gate-excluded-lake count failed'),
+        expect.any(Error)
+      );
     });
 
     it('getAttachedKnowledgeFiles forwards the resolved lakeAccess as the getAccessibleFiles third argument', async () => {
@@ -2902,11 +2981,29 @@ describe('ChatCompletionProcess', () => {
       getAccessibleFilesImpl?: () => Promise<unknown>;
       dataLakeTags?: string[];
       retrievalTags?: string[];
+      // #3055: undefined (the default) means "not seeded here" - distinct from 0, which asserts a
+      // genuine measured zero. Mirrors excludedByAccessCount's own contract on the resolver.
+      excludedByAccessCount?: number;
+      // #3055 (review): wires mockDb.dataLakes.countGateExcludedLakes so a test can drive the
+      // targeted, session-scoped measurement (measureIdentityNamedExclusion) that fires when
+      // retrievalTags names a lake by identity - distinct from excludedByAccessCount above, which
+      // only ever feeds the ACCOUNT-WIDE, no-op-path number.
+      countGateExcludedLakesImpl?: (
+        userTags: string[],
+        entitlementKeys: string[],
+        organizationIds: string[] | undefined,
+        userId: string | undefined,
+        opts?: { restrictToTags?: string[] }
+      ) => number;
       promptMode?: 'raw' | 'grounded' | 'surface';
       requestTools?: string[];
       skipAutoOffers?: boolean;
       fabPromptMessages?: IMessage[];
       fabFileNotices?: FabFileNotice[];
+      // #3055 (review): datalake tags this turn admitted via preauthorization (the manage-recheck
+      // widening), so a test can pin that the targeted exclusion measurement excludes exactly
+      // these tags rather than the raw session-named list - see admittedPreauthorizedTags's own doc.
+      admittedPreauthorizedTags?: string[];
     }) => {
       mockSession.knowledgeIds = opts.knowledgeIds ?? [];
       mockSession.retrievalTags = opts.retrievalTags ?? [];
@@ -2914,6 +3011,9 @@ describe('ChatCompletionProcess', () => {
         ? vi.fn().mockImplementation(opts.getAccessibleFilesImpl)
         : vi.fn().mockResolvedValue(opts.files ?? []);
       mockDb.fabfiles = { getAccessibleFiles };
+      if (opts.countGateExcludedLakesImpl) {
+        mockDb.dataLakes = { countGateExcludedLakes: vi.fn().mockImplementation(opts.countGateExcludedLakesImpl) };
+      }
       // Seed the lake-access memo directly (same pattern as the resolveCorpusInlinePlan suite)
       // so this test controls the lake signal without exercising the DB-backed resolver.
       (service as any).accessibleDataLakeAccessMemo = {
@@ -2921,6 +3021,8 @@ describe('ChatCompletionProcess', () => {
         dataLakeTagPrefixes: [],
         scopedTagPrefixes: [],
         lakes: [],
+        admittedPreauthorizedTags: new Set(opts.admittedPreauthorizedTags ?? []),
+        ...(opts.excludedByAccessCount !== undefined ? { excludedByAccessCount: opts.excludedByAccessCount } : {}),
       };
       (service as any).getScopeFilter = vi.fn().mockReturnValue({});
 
@@ -3305,6 +3407,111 @@ describe('ChatCompletionProcess', () => {
             retrievalTags: ['datalake:not-mine'],
           });
           expect(retrieval).toMatchObject({ mode: 'optional', lakeScope: [] });
+        });
+
+        // #3055: excludedLakes travels with the same seed as lakeScope. These pin the presence
+        // contract (RetrievalSummarySchema.excludedLakes) that a hand-rolled unit fixture cannot -
+        // this is the one real writer, and its own memo fixture used to omit the field entirely
+        // (`as any`), which let the seed's `> 0` guard ship untested against a false 0-vs-absent
+        // conflation (see promptMeta.ts's own doc on this field).
+        it('records the count explicitly, including a genuine zero', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            excludedByAccessCount: 0,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('records a nonzero count', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+            excludedByAccessCount: 2,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 2, reason: 'access' } });
+        });
+
+        it('leaves excludedLakes absent - not a false zero - when the count was never measured', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:acme:handbook'],
+          });
+          expect(retrieval && 'excludedLakes' in retrieval).toBe(false);
+        });
+
+        // #3055 (review): a REAL narrowing (the session names a lake by identity) must measure
+        // exclusion against exactly the requested lake(s), not the account-wide number - which
+        // can describe a lake outside this turn's selection entirely in either direction. Both
+        // cases share one simulated world (lake 'b' is gate-excluded, 'a' is not) and differ only
+        // in which lake the session names, proving restrictToTags is what separates them - a
+        // version that ignored the restriction would return the SAME count for both.
+        const countExcludingOnlyLakeB = vi
+          .fn()
+          .mockImplementation(
+            (
+              _userTags: string[],
+              _entitlementKeys: string[],
+              _orgIds: string[] | undefined,
+              _userId: string | undefined,
+              opts?: { restrictToTags?: string[] }
+            ) => (opts?.restrictToTags?.includes('datalake:b') ? 1 : 0)
+          );
+
+        it('ignores an unrelated excluded lake when the session narrows to a different, accessible one', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:a'],
+            retrievalTags: ['datalake:a'],
+            countGateExcludedLakesImpl: countExcludingOnlyLakeB,
+          });
+          // Account-wide, lake b's exclusion would report `excluded: 1` - the whole point is that
+          // THIS turn (narrowed to a) must not carry that number forward.
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('counts the specific excluded lake the session narrows to, not an unrelated one', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:a'],
+            retrievalTags: ['datalake:b'],
+            countGateExcludedLakesImpl: countExcludingOnlyLakeB,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
+        });
+
+        // #3055 (review): a preauthorized "Test this lake" session names its own admitted lake by
+        // identity, so it would otherwise take the SAME branch as an ordinary narrowing above and
+        // ask the underlying gate query about a lake it has no notion was admitted. Both cases
+        // share the same gate-excludes-everything-named world and differ only in whether this
+        // turn's admission covers the named lake.
+        const countExcludingEverythingNamed = vi
+          .fn()
+          .mockImplementation(
+            (
+              _userTags: string[],
+              _entitlementKeys: string[],
+              _orgIds: string[] | undefined,
+              _userId: string | undefined,
+              opts?: { restrictToTags?: string[] }
+            ) => (opts?.restrictToTags?.length ? 1 : 0)
+          );
+
+        it('does not count a preauthorized lake this turn successfully admitted, even though the underlying gate excludes it', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            dataLakeTags: ['datalake:managed'],
+            retrievalTags: ['datalake:managed'],
+            admittedPreauthorizedTags: ['datalake:managed'],
+            countGateExcludedLakesImpl: countExcludingEverythingNamed,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 0, reason: 'access' } });
+        });
+
+        it('counts a preauthorized lake whose admission was not renewed this turn', async () => {
+          const { retrieval } = await runKnowledgeGatingCase({
+            // A non-empty, unrelated dataLakeTags keeps the knowledge tool offered - this turn's
+            // OWN access is fine, it is only the named lake's admission that lapsed.
+            dataLakeTags: ['datalake:other'],
+            retrievalTags: ['datalake:managed'],
+            admittedPreauthorizedTags: [],
+            countGateExcludedLakesImpl: countExcludingEverythingNamed,
+          });
+          expect(retrieval).toMatchObject({ excludedLakes: { count: 1, reason: 'access' } });
         });
       });
 
@@ -3797,6 +4004,144 @@ describe('ChatCompletionProcess', () => {
       buildToolPromptSpy.mockRestore();
 
       expect(toolAvailability).toBeTypeOf('object');
+    });
+  });
+
+  // MCP tools are merged into buildSharedTools' outgoing list AFTER its native `enabledTools`
+  // filter, so `offerOnlyNamedTools`/`sessionDisabledTools` are the only levers that reach them -
+  // and sharedToolBuilder.mcpNarrowing.test.ts only exercises buildSharedTools directly. It cannot
+  // prove ChatCompletionProcess actually passes these options on a real turn; deleting the four
+  // lines that wire them at this call site would leave that suite green.
+  describe('MCP narrowing options threaded into buildTools', () => {
+    const runWithOptions = async (opts: {
+      promptMode?: 'raw' | 'grounded' | 'surface';
+      skipAutoOffers?: boolean;
+      disabledTools?: string[];
+      connectedMcpTools?: boolean;
+      /** Have the buildTools stub apply `sessionDisabledTools`, the way buildSharedTools does. */
+      deniedFromBuild?: boolean;
+    }) => {
+      const previousDisabledTools = mockSession.disabledTools;
+      mockSession.disabledTools = opts.disabledTools;
+      const mcpTools = ['notion__search', 'notion__create_page'].map(name => ({
+        name,
+        toolFn: vi.fn(),
+        toolSchema: { name, description: name, parameters: { type: 'object', properties: {} } },
+        _isMcpTool: true,
+      }));
+      const buildMcpToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildMcpTools').mockResolvedValue({
+        mcpToolsByServer: opts.connectedMcpTools ? { notion: mcpTools } : {},
+        serverAgentConfig: {},
+      });
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockImplementation(options => {
+        if (!opts.connectedMcpTools) return [];
+        // Stands in for the real narrowing this spy replaces: buildSharedTools subtracts
+        // `sessionDisabledTools` by namespaced name (sharedToolBuilder.ts) before returning.
+        const denied = new Set(options.sessionDisabledTools ?? []);
+        const survived = opts.deniedFromBuild ? mcpTools.filter(tool => !denied.has(tool.name)) : mcpTools;
+        return options.offerOnlyNamedTools ? survived.slice(0, 1) : survived;
+      });
+      buildToolsSpy.mockClear();
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m, _msgs, _opts, cb) => cb(['Hi!'])),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      } as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = {
+        ...startQuestParams,
+        ...(opts.promptMode ? { promptMode: opts.promptMode } : {}),
+        ...(opts.skipAutoOffers ? { skipAutoOffers: true } : {}),
+        tools: [],
+        projectId: undefined,
+        organizationId: undefined,
+      };
+
+      try {
+        await service.process({ body, logger: mockLogger });
+
+        return {
+          passedOptions: buildToolsSpy.mock.calls[0]?.[0] as BuildToolsArgs | undefined,
+          toolPromptOptions: buildToolPromptSpy.mock.calls[0]?.[0] as BuildToolPromptArgs | undefined,
+        };
+      } finally {
+        // In a finally because these three spies live on ToolBuilder.prototype and
+        // `mockSession` is shared: a throw here used to leak both into every later test in the
+        // file, where the symptom is an unrelated failure far from the cause.
+        buildMcpToolsSpy.mockRestore();
+        buildToolsSpy.mockRestore();
+        buildToolPromptSpy.mockRestore();
+        mockSession.disabledTools = previousDisabledTools;
+      }
+    };
+
+    it('passes offerOnlyNamedTools: true on a promptMode turn', async () => {
+      const { passedOptions } = await runWithOptions({ promptMode: 'raw' });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
+    });
+
+    it('passes offerOnlyNamedTools: true on an explicit skipAutoOffers turn', async () => {
+      const { passedOptions } = await runWithOptions({ skipAutoOffers: true });
+      expect(passedOptions?.offerOnlyNamedTools).toBe(true);
+    });
+
+    // The default web payload (no promptMode, no skipAutoOffers) must keep reaching MCP tools -
+    // this is the regression sharedToolBuilder.mcpNarrowing.test.ts guards from the pure-function
+    // side; this pins that ChatCompletionProcess never flips the flag on for an ordinary turn.
+    it('passes offerOnlyNamedTools: false on a default turn', async () => {
+      const { passedOptions } = await runWithOptions({});
+      expect(passedOptions?.offerOnlyNamedTools).toBe(false);
+    });
+
+    it('threads session.disabledTools through as sessionDisabledTools', async () => {
+      const { passedOptions } = await runWithOptions({ disabledTools: ['notion__notion_search'] });
+      expect(passedOptions?.sessionDisabledTools).toEqual(['notion__notion_search']);
+    });
+
+    it('passes only offered MCP tools into the tool prompt after narrowing', async () => {
+      const { toolPromptOptions } = await runWithOptions({ skipAutoOffers: true, connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
+    });
+
+    it('passes every offered MCP tool into the tool prompt on a default turn', async () => {
+      const { toolPromptOptions } = await runWithOptions({ connectedMcpTools: true });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual([
+        'notion__search',
+        'notion__create_page',
+      ]);
+    });
+
+    // The intersection is against what SURVIVED the build, so it has to hold for the denylist too
+    // and not just for offerOnlyNamedTools - both narrow the same list, and the two cases above
+    // would stay green if the filter were re-derived from the flag instead of the built tools.
+    it('keeps a session-denied MCP tool out of the tool prompt', async () => {
+      const { toolPromptOptions } = await runWithOptions({
+        connectedMcpTools: true,
+        disabledTools: ['notion__create_page'],
+        deniedFromBuild: true,
+      });
+      expect(toolPromptOptions?.mcpTools.map((tool: { name: string }) => tool.name)).toEqual(['notion__search']);
     });
   });
 
@@ -4557,6 +4902,108 @@ describe('ChatCompletionProcess', () => {
       expect(mockLogger.warn).toHaveBeenCalledWith(
         expect.stringContaining('Skipping the context-overflow guard: input tokens are an estimate')
       );
+    });
+  });
+
+  // The write site promotes the lake layers out of the `systemPrompts` residual into a bucket of
+  // their own. The property that matters is conservation: the bucket is rebuilt from the layer
+  // counts already computed, so the old residual still equals `systemPrompts + lakeRetrieval` -
+  // no second count, and a lake block the budget dropped bills nothing.
+  describe('lake retrieval promoted out of the system-prompt residual', () => {
+    const chunk = { role: 'system' as const, content: 'RETRIEVED-LAKE-CHUNK' };
+    const fact = { role: 'system' as const, content: 'LAKE-MEMORY-FACT' };
+
+    // Content-keyed so a message counts the same way in the six source totals and in
+    // toPromptDetails' per-source pass; that consistency is what makes conservation checkable.
+    const tokenLengthImpl = async (messages: any[]) =>
+      (messages ?? []).reduce((sum: number, message: any) => {
+        const content = typeof message?.content === 'string' ? message.content : '';
+        if (content.includes('RETRIEVED-LAKE-CHUNK')) return sum + 25;
+        if (content.includes('LAKE-MEMORY-FACT')) return sum + 40;
+        return sum + 1;
+      }, 0);
+
+    const runWithLakeSources = async (opts: { withLakes: boolean }) => {
+      mockedCalculateTotalTokenLength.mockReset().mockImplementation(tokenLengthImpl as any);
+      mockTokenizer.countTokens.mockReset().mockResolvedValue(1);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ] as any);
+      // Return the admitted system messages BY REFERENCE, so the delivery set the write site
+      // derives from this payload actually contains them - a fixed two-message stub would report
+      // every system row as budget-excluded and the bucket would be a meaningless zero.
+      let builtMessages: IMessage[] = [];
+      mockedBuildAndSortMessages.mockImplementation(
+        async (_prev: any, contextAndSystemMessages: any[], currentUserPromptMessages: any[]) => {
+          builtMessages = [...contextAndSystemMessages, ...currentUserPromptMessages];
+          return { messages: builtMessages, messageTruncation: null } as any;
+        }
+      );
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      if (opts.withLakes) {
+        service.features.set('knowledgeRetrieval', { getContextMessages: async () => [chunk] } as any);
+        service.features.set('lakeMemory', { getContextMessages: async () => [fact] } as any);
+      }
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const call = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.context?.tokensBySource !== undefined
+      );
+      // Re-derive the residual the way the write site does, independently of the promotion:
+      // total over the payload it counted, less the user prompt (the only known non-system source).
+      const grossResidual = (await tokenLengthImpl(builtMessages)) - 1;
+      return { promptMeta: call?.[0]?.promptMeta, grossResidual };
+    };
+
+    it('moves exactly the delivered lake layer tokens into lakeRetrieval, conserving the residual', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: true });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // 25 (forced-retrieval chunk) + 40 (lake-memory card), read off the layer rows.
+      expect(tokens.lakeRetrieval).toBe(65);
+      // The two buckets still sum to the residual the turn was billed on: nothing was lost or
+      // counted twice, which is the only way a promote-don't-remeasure change can be wrong.
+      expect(tokens.systemPrompts + tokens.lakeRetrieval).toBe(grossResidual);
+      expect(tokens.systemPrompts).toBe(grossResidual - 65);
+
+      const layer = (name: string) =>
+        promptMeta.context.systemPromptDetails.find((detail: any) => detail.name === name);
+      expect(layer('knowledge_retrieval')).toMatchObject({ tokenCount: 25, wasIncluded: true });
+      expect(layer('lake_memory')).toMatchObject({ tokenCount: 40, wasIncluded: true });
+    });
+
+    it('records a real zero when the turn carried no lake layers, leaving the residual gross', async () => {
+      const { promptMeta, grossResidual } = await runWithLakeSources({ withLakes: false });
+      const tokens = promptMeta.context.tokensBySource;
+
+      // A real zero, not unknown: the layer derivation ran and found no lake content.
+      expect(tokens.lakeRetrieval).toBe(0);
+      // No lake rows, so nothing moved and the residual is the whole billed system-prompt total.
+      expect(tokens.systemPrompts).toBe(grossResidual);
     });
   });
 

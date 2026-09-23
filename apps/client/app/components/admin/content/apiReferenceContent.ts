@@ -58,7 +58,7 @@ Authorization: ApiKey b4m_live_xxxxx
 |--------|----------|-------------|
 | GET | /api/user-api-keys | List your active API keys (add \`?includeDisabled=true\` to also return revoked ones) |
 | POST | /api/api-keys/create | Create a new API key |
-| POST | /api/user-api-keys/[id]/rotate | Rotate an existing key |
+| POST | /api/user-api-keys/[id]/rotate | Rotate an existing key (an API-key caller may only rotate a key whose scopes it already holds - see Scopes below) |
 | POST | /api/user-api-keys/[id]/revoke | Revoke a key |
 | POST | /api/api-keys/[id]/set-active | Activate/deactivate a key |
 | DELETE | /api/api-keys/[id]/delete | Delete a key |
@@ -78,6 +78,10 @@ API keys can be scoped to limit access. Available scopes:
 | \`ai:generate\` | Use image/video/audio generation endpoints |
 | \`ai:chat\` | Send chat messages and use LLM endpoints |
 | \`admin:*\` | Full admin access (superuser only) |
+
+For rotate specifically, scope containment is checked literally: \`admin:*\` is not treated
+as a superset of other scopes, so an \`admin:*\`-scoped key still can't rotate a key holding
+scopes it doesn't literally list.
 
 ### Rate Limits
 
@@ -688,7 +692,16 @@ POST /api/ai/generate-image
 | model | string | Yes | Image model identifier (e.g. \`gpt-image-1\`); a request without a supported model is rejected \`422\` |
 | n | number | No | Number of images (1-10) |
 | size | string | No | Image dimensions (e.g. \`1024x1024\`) |
+| fabFileIds | string[] | No | Attached files; the first image among them is the input image |
+| referenceImageFabFileIds | string[] | No | Up to 4 gpt-image style-reference images, as fabFile ids (see below) |
 | sessionId | string | No | Existing session; a new one is created if omitted |
+
+**Style reference images** (\`gpt-image-*\` only): pass up to 4 fabFile ids in
+\`referenceImageFabFileIds\` to anchor the render on images you have already uploaded - useful
+for a consistent icon or art style across many generations. They are sent to the model in the
+order given, after the input image from \`fabFileIds\` if there is one. Every id must be one your
+API key can access and must have cleared moderation; otherwise the request is rejected rather
+than rendering a subset. Other model families ignore the field.
 
 Generation is asynchronous - the request enqueues work and returns immediately with a quest
 (no image yet). It never blocks on generation, so it is not subject to the API-gateway request
@@ -725,7 +738,7 @@ Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI
 | POST | /api/ai/transcribe | Audio/video to text (Whisper) |
 | POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
 | POST | /api/ai/generate-image | Image generation (DALL-E) |
-| POST | /api/ai/edit-image | Image editing |
+| POST | /api/ai/edit-image | Image editing (accepts \`referenceImageFabFileIds\` like generate-image) |
 | POST | /api/ai/generate-video | Video generation (Sora) |
 | POST | /api/ai/barkeep-chat | Tavern AI barkeep conversation |
 | POST | /api/ai/tavern-conversation | Tavern NPC conversation |
@@ -842,6 +855,26 @@ On the two routes above that redeem a share, \`[id]\` is the invite's **share to
 | POST | /api/help/feedback | Submit help feedback |
 | GET | /api/help/my-feedback | Get your feedback |
 | POST | /api/help/event | Log help event |
+
+---
+
+### Account (Caller Identity)
+
+#### Get the Authenticated Caller
+
+\`\`\`
+GET /api/v1/me
+\`\`\`
+
+**Required API-key scope:** \`me:read\`.
+
+Returns the caller's own id, display name, plan tier, personal credit balance, and
+entitlement keys. It takes no user id, owner id, or impersonation parameter, and
+issues no browser session \u2014 unlike \`/api/identify\`, which does both.
+
+> **This endpoint is generated from its contract.** The full response reference lives
+> in the [generated API docs](/api/v1/docs) under \`getMe\`, derived from the same
+> object the handler validates against.
 
 ---
 

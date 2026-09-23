@@ -622,7 +622,7 @@ export function useBrowsePublicDataLakes(search: string) {
   });
 }
 
-type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
+type LifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup' | 'promote' | 'demote';
 
 async function postLifecycle(id: string, action: LifecycleAction) {
   const response = await api.post(`/api/data-lakes/${id}/lifecycle`, { action });
@@ -679,6 +679,19 @@ export function useUnarchiveDataLake() {
 /** Recovers a soft-deleted (phase-1) data lake back to active (with dedup pass). */
 export function useRestoreDeletedDataLake() {
   return useLifecycleMutation('restore', 'Data lake restored', 'Failed to restore data lake');
+}
+
+/**
+ * Publishes a draft lake - the explicit, owner/admin-only replacement for the old implicit
+ * draft -> active flip. A draft lake is excluded from grounding until this runs.
+ */
+export function usePromoteDataLake() {
+  return useLifecycleMutation('promote', 'Data lake published', 'Failed to publish data lake');
+}
+
+/** Moves an active lake back to draft, pulling it out of grounding. Reverses promote. */
+export function useDemoteDataLake() {
+  return useLifecycleMutation('demote', 'Data lake moved back to draft', 'Failed to move data lake back to draft');
 }
 
 /** Phase 1 of permanent delete: soft-delete (recoverable). */
@@ -1068,11 +1081,9 @@ export function invalidateLakeFileMembershipQueries(
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.membershipDuplicates(dataLakeId) });
   // A membership change can move the lake's under-chunked count, so refresh the rebuild badge.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });
-  // A membership write can reach activateIfDraft's draft -> active flip (see
-  // removeFileFromDataLake / addFileToDataLake), which records a `system`-principal
-  // config-history row. Inert today because these hooks fire from the file wizard, where the
-  // History observer is unmounted - invalidated anyway for the same reason the lifecycle hook
-  // does it: the cost is nothing, and reasoning about which paths qualify is what rots.
+  // A membership write records no config-history row of its own any more (publishing moved to
+  // the explicit promote door), but it is invalidated anyway for the same reason the lifecycle
+  // hook does it: the cost is nothing, and reasoning about which paths qualify is what rots.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
   // Refresh the lake list to pick up the recomputed stats. fileCount counts meta-tagged
   // files only, so a membership change scoped to a prefix-only file moves rows without
@@ -1353,7 +1364,24 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
   });
 }
 
-export type LakeRebuildStatus = { underChunkedCount: number; failedCount: number };
+export type LakeRebuildStatus = {
+  underChunkedCount: number;
+  failedCount: number;
+  /**
+   * Members retrieval is withholding for being embedded in a previous embedding space, or `null`
+   * when the server could not resolve the space to compare against. Null is deliberately NOT 0: it
+   * covers a deployment with no usable embedding model AND a rolling-deploy skew against a server
+   * that predates this field, and in both the honest answer is "no count", not "nothing to do".
+   */
+  staleEmbeddingSpaceCount: number | null;
+  /**
+   * Whether the server could resolve an embedding space at all, or `null` when it did not say - an
+   * older server omits the field, which is the rolling-deploy skew and must stay silent. `false` is
+   * a configuration state that persists until an operator changes it (a self-host with no usable
+   * provider credential has no keyless fallback), not a window that closes on its own.
+   */
+  embeddingSpaceResolved: boolean | null;
+};
 
 /** Extra polls after the backlog clears, at SETTLE_MS each - about three minutes of cover. */
 const REBUILD_SETTLE_POLLS = 18;
@@ -1363,23 +1391,37 @@ export type RebuildPollState = { sawBacklog: boolean; settlePolls: number };
 export const INITIAL_REBUILD_POLL_STATE: RebuildPollState = { sawBacklog: false, settlePolls: 0 };
 
 /**
+ * The REPAIRABLE work outstanding on a lake: both counts that drain to zero as waves complete.
+ * Pure and exported for the same reason `nextRebuildPoll` is - it decides when the badge stops
+ * polling, and a closure inside the hook is not executed by anything.
+ *
+ * A re-embed is normally run on a lake whose under-chunked count is already zero, so summing is
+ * what keeps the badge alive for that wave rather than going quiet the moment it starts. A `null`
+ * stale count contributes nothing: unknown is not a backlog, and polling on it would never end.
+ */
+export const rebuildBacklog = (
+  status?: Pick<LakeRebuildStatus, 'underChunkedCount' | 'staleEmbeddingSpaceCount'>
+): number => (status?.underChunkedCount ?? 0) + (status?.staleEmbeddingSpaceCount ?? 0);
+
+/**
  * Poll cadence for the rebuild badge, as a pure function so it can be tested without mounting the
  * hook (the two defects this logic has carried both shipped because nothing executed it).
  *
- * `underChunkedCount` is the loop condition and `failedCount` deliberately is NOT: a failed file
- * never retries on its own (see countFailedFilesByScope - it is invisible to both the detection
- * query and the rescue sweep), so summing the two gives a term that can never reach zero and the
- * badge polls forever on any lake holding one. But the count alone stops too early: it drops the
- * instant a wave is RESET, minutes before those chunk jobs finish, and a job that then fails
+ * `backlog` is the sum of the two REPAIRABLE counts - under-chunked and stale-embedding-space -
+ * because each drains to zero on its own as waves complete. `failedCount` deliberately is NOT in
+ * it: a failed file never retries (see countFailedFilesByScope - it is invisible to both the
+ * detection query and the rescue sweep), so including it gives a term that can never reach zero and
+ * the badge polls forever on any lake holding one. But the counts alone stop too early: they drop
+ * the instant a wave is RESET, minutes before those chunk jobs finish, and a job that then fails
  * surfaces only in failedCount. So once the backlog clears we keep polling a bounded number of
  * extra times to catch that, then stop for good.
  */
 export function nextRebuildPoll(
-  underChunkedCount: number,
+  backlog: number,
   prev: RebuildPollState
 ): { interval: number | false; next: RebuildPollState } {
-  if (underChunkedCount > 0) {
-    const interval = underChunkedCount > 200 ? 30_000 : underChunkedCount > 50 ? 15_000 : 5_000;
+  if (backlog > 0) {
+    const interval = backlog > 200 ? 30_000 : backlog > 50 ? 15_000 : 5_000;
     return { interval, next: { sawBacklog: true, settlePolls: 0 } };
   }
   // Never had anything to rebuild in this session - nothing to settle for.
@@ -1403,39 +1445,57 @@ export function useUnderChunkedCount(dataLakeId: string | null, enabled = true) 
     queryKey: dataLakeKeys.rebuildStatus(dataLakeId ?? ''),
     queryFn: async (): Promise<LakeRebuildStatus> => {
       const res = await api.get<LakeRebuildStatus>(`/api/data-lakes/${dataLakeId}/rechunk`);
-      return { underChunkedCount: res.data.underChunkedCount, failedCount: res.data.failedCount ?? 0 };
+      return {
+        underChunkedCount: res.data.underChunkedCount,
+        failedCount: res.data.failedCount ?? 0,
+        // `?? null`, not `?? 0`: an older server omits the field entirely, and defaulting that to a
+        // zero would advertise "no stale files" on a lake nobody has measured.
+        staleEmbeddingSpaceCount: res.data.staleEmbeddingSpaceCount ?? null,
+        // Same reason, and `?? null` is load-bearing here too: absent is not `false`.
+        embeddingSpaceResolved: res.data.embeddingSpaceResolved ?? null,
+      };
     },
     enabled: enabled && !!dataLakeId,
     // Tick down as waves complete; coarser cadence while the backlog is large (each poll is a full
     // lake rescan), then a bounded settle window before going quiet. See nextRebuildPoll.
     refetchInterval: query => {
-      const { interval, next } = nextRebuildPoll(query.state.data?.underChunkedCount ?? 0, pollState.current);
+      const { interval, next } = nextRebuildPoll(rebuildBacklog(query.state.data), pollState.current);
       pollState.current = next;
       return interval;
     },
   });
 }
 
+/** Which population a rebuild wave drains. Absent means the under-chunked default, matching the
+ *  server's own default so an older caller keeps its behaviour. */
+export type LakeRebuildSelector = 'under-chunked' | 'stale-embedding-space';
+
+export type RechunkVariables = { limit?: number; select?: LakeRebuildSelector } | undefined;
+
 /**
- * Hook: re-chunk a bounded wave of the lake's under-chunked files. Server picks the worst
- * offenders first and caps the wave; call again (the badge shows `remaining`) to drain the rest.
+ * Hook: re-chunk a bounded wave of the lake's files. `select` chooses the population - the legacy
+ * oversized passages, or the members still embedded in a previous embedding space, which retrieval
+ * withholds entirely. Server picks worst-first and caps the wave; call again (the badge shows
+ * `remaining`) to drain the rest.
  */
 export function useRechunkDataLake(dataLakeId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (limit?: number) => {
+    mutationFn: async (vars: RechunkVariables) => {
+      const body = { ...(vars?.limit ? { limit: vars.limit } : {}), ...(vars?.select ? { select: vars.select } : {}) };
       const res = await api.post<{
         detected: number;
         enqueued: number;
         remaining: number;
         // Present only on the refusal arm. Typed optional because the success arm omits it entirely,
         // and read FIRST below: a paused run also returns `enqueued: 0`, which is indistinguishable
-        // from "nothing to do" on the counts alone.
+        // from "nothing to do" on the counts alone. The other refusal, an unresolvable embedding
+        // space, is a 409 and so arrives in onError instead.
         outcome?: 'paused';
-      }>(`/api/data-lakes/${dataLakeId}/rechunk`, limit ? { limit } : {});
+      }>(`/api/data-lakes/${dataLakeId}/rechunk`, body);
       return res.data;
     },
-    onSuccess: data => {
+    onSuccess: (data, vars) => {
       if (data.outcome === 'paused') {
         // A warning, not a success: the server refused and changed nothing. Without this arm the
         // refusal fell through to "All files are already chunked into passages" as a GREEN success -
@@ -1445,12 +1505,40 @@ export function useRechunkDataLake(dataLakeId: string | null) {
           'Background lake work is paused, so nothing was rebuilt. No files were changed - re-run this ' +
             'once an administrator turns convergence back on.'
         );
-      } else {
-        toast.success(
-          data.enqueued > 0
-            ? `Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`
-            : 'All files are already chunked into passages.'
+      } else if (vars?.select === 'stale-embedding-space') {
+        // Worded for what this wave actually does. "Rebuilding into passages" would be wrong here:
+        // the files are already correctly chunked, and what changes is the vector space they are
+        // searchable in - which is also why the unsearchable window is stated.
+        //
+        // Three arms, not two, and the reassuring one keys on `detected` rather than `enqueued`.
+        // `enqueued` is the wave MINUS the sends that failed and the files a worker already held,
+        // and the reset drops a wave's passages before any send can fail - so a run whose sends all
+        // failed answers 200 with `enqueued: 0` on a non-empty `detected`, and the two-arm form told
+        // the owner the lake was clean at the one moment it had just been emptied. Only
+        // `detected === 0` means there was nothing to do.
+        if (data.enqueued > 0) {
+          toast.success(
+            `Re-embedding ${data.enqueued} file(s) into the current embedding space - ${data.remaining} ` +
+              'remaining. They are unsearchable until re-indexing completes.'
+          );
+        } else if (data.detected > 0) {
+          toast.warning(
+            `${data.detected} file(s) need re-embedding but none were queued - either a worker already ` +
+              'has them, or the queue rejected them. Any the queue rejected are unsearchable until a ' +
+              're-run succeeds.'
+          );
+        } else {
+          toast.success('Every file in this lake is already in the current embedding space.');
+        }
+      } else if (data.enqueued > 0) {
+        toast.success(`Rebuilding ${data.enqueued} file(s) into passages - ${data.remaining} remaining.`);
+      } else if (data.detected > 0) {
+        toast.warning(
+          `${data.detected} file(s) need rebuilding but none were queued - either a worker already has ` +
+            'them, or the queue rejected them. Re-run this if the count does not fall.'
         );
+      } else {
+        toast.success('All files are already chunked into passages.');
       }
       if (dataLakeId) {
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.rebuildStatus(dataLakeId) });

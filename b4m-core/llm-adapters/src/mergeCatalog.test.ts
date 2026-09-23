@@ -88,6 +88,24 @@ describe('mergeCatalog: per-field-group precedence', () => {
     });
   });
 
+  /**
+   * The seeded tier states a real cap, so its ModelInfo is declared by omission of the flag.
+   * A {limits} row that says nothing about the cap must not turn it derived: mergeRows carries
+   * the seeded value forward, so the read path still has data rather than toModelInfo's default.
+   */
+  it('keeps a seeded cap declared through a {limits} row that omits one', () => {
+    const seed = seedModel();
+    expect(seed.maxOutputTokensDerived).toBeUndefined();
+
+    const merged = mergeCatalog(
+      [seed],
+      [row({ modelId: seed.id, ownedGroups: ['limits'], patch: { contextWindow: 1_000_000 } })],
+      NO_KEYS
+    );
+    expect(merged[0]).toMatchObject({ contextWindow: 1_000_000, max_tokens: seed.max_tokens });
+    expect(merged[0].maxOutputTokensDerived).toBeUndefined();
+  });
+
   it('keeps the adapter price literal: a catalog row can never contribute pricing', () => {
     const seed = seedModel();
     const merged = mergeCatalog(
@@ -256,6 +274,21 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     expect(models[0].pricing).toEqual({});
   });
 
+  it('marks a catalog-only record that declares no cap as derived', () => {
+    const { models } = mergeCatalogWithDrops([], [catalogOnly(invocable)], {
+      apiKeys: { xai: 'xai-key' },
+      isSelfHost: false,
+    });
+    expect(models[0]).toMatchObject({ max_tokens: 4096, maxOutputTokensDerived: true });
+
+    const { models: declared } = mergeCatalogWithDrops([], [catalogOnly({ ...invocable, maxOutputTokens: 32_000 })], {
+      apiKeys: { xai: 'xai-key' },
+      isSelfHost: false,
+    });
+    expect(declared[0].max_tokens).toBe(32_000);
+    expect(declared[0].maxOutputTokensDerived).toBeUndefined();
+  });
+
   it('drops and counts a record whose adapterFamily this build cannot dispatch', () => {
     // voyageai is the one ADAPTER_FAMILIES member with no completion backend.
     const { models, dropped } = mergeCatalogWithDrops([], [catalogOnly({ ...invocable, adapterFamily: 'voyageai' })], {
@@ -377,22 +410,20 @@ describe('mergeCatalog: catalog-only records and the invocability contract', () 
     expect(gated).toBe(1);
   });
 
-  it('emits a catalog-only BFL record with no key at all (the demo-key special case)', () => {
-    const { models } = mergeCatalogWithDrops(
-      [],
-      [
-        catalogOnly({
-          ...invocable,
-          id: 'flux-99',
-          vendor: 'black-forest-labs',
-          backend: ModelBackend.BFL,
-          type: 'image',
-          adapterFamily: 'bfl',
-        }),
-      ],
-      NO_KEYS
-    );
-    expect(models.map(m => m.id)).toEqual(['flux-99']);
+  it('gates a catalog-only BFL record behind a real BFL key, like every other keyed backend', () => {
+    const fluxRow = catalogOnly({
+      ...invocable,
+      id: 'flux-99',
+      vendor: 'black-forest-labs',
+      backend: ModelBackend.BFL,
+      type: 'image',
+      adapterFamily: 'bfl',
+    });
+
+    expect(mergeCatalogWithDrops([], [fluxRow], NO_KEYS).models).toEqual([]);
+    expect(
+      mergeCatalogWithDrops([], [fluxRow], { apiKeys: { bfl: 'k' }, isSelfHost: false }).models.map(m => m.id)
+    ).toEqual(['flux-99']);
   });
 
   it('never emits a catalog-only voyageai record: this build has no listing backend for it', () => {

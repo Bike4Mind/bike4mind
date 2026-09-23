@@ -88,6 +88,12 @@ export const IMAGE_SIZE_CONSTRAINTS = {
     /** Popular preset sizes shown in the UI. The API accepts any resolution meeting the constraints. */
     sizes: ['1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'] as const,
     defaultSize: '1024x1024',
+    /**
+     * Accepted by the API, and what generate sends when no size is asked for, but it is not a
+     * resolution - so it is deliberately out of `sizes`, the preset list the size picker renders.
+     * The one spelling: schemas/openai.ts and utils/imageSizes.ts both read it from here.
+     */
+    autoSize: 'auto',
     /** Constraints for custom/flexible sizes */
     constraints: {
       maxEdge: 3840,
@@ -96,6 +102,21 @@ export const IMAGE_SIZE_CONSTRAINTS = {
       edgeMultiple: 16,
       maxAspectRatio: 3,
     },
+  },
+  /** Also the only sizes the variation endpoint accepts - variations are dall-e-2 only. */
+  DALL_E_2: {
+    sizes: ['256x256', '512x512', '1024x1024'] as const,
+    defaultSize: '1024x1024',
+  },
+  /**
+   * dall-e-3 is no longer in ImageModels, but the generate path still accepts its sizes
+   * for callers holding a persisted one. Listed separately to record what each tier really
+   * accepts; isSupportedImageSize currently measures both against the union of the two
+   * (OPENAI_LEGACY_IMAGE_SIZES), so the split is documentation rather than enforcement.
+   */
+  DALL_E_3: {
+    sizes: ['1024x1024', '1792x1024', '1024x1792'] as const,
+    defaultSize: '1024x1024',
   },
 } as const;
 
@@ -550,6 +571,15 @@ export type ModelInfo = {
    * generated response.
    */
   max_tokens: number;
+  /**
+   * True when `max_tokens` above was DERIVED (toModelInfo's default for a record that
+   * declares no cap), not stated by the source. Absent means declared, so every ModelInfo
+   * built outside toModelInfo - the adapter tables, which hardcode a real cap - is correct
+   * by omission. Sizing rules must not treat a derived cap as the model's real ceiling:
+   * see resolveOutputMaxTokens, where clamping an adaptive model to the derived 4096
+   * starves its visible answer.
+   */
+  maxOutputTokensDerived?: boolean;
   can_stream?: boolean;
   /**
    * Whether the model supports the thinking feature.

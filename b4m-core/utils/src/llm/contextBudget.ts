@@ -24,7 +24,7 @@ import {
   isMediaModelType,
   type ModelInfo,
 } from '@bike4mind/common';
-import { resolveOutputMaxTokens } from '@bike4mind/llm-adapters';
+import { resolveOutputMaxTokens, usableTokenCount } from '@bike4mind/llm-adapters';
 
 /**
  * The context window a caller should reason against: the catalog's own figure, except for a media
@@ -69,14 +69,26 @@ export function effectiveContextWindow(modelInfo: Pick<ModelInfo, 'contextWindow
  * same number is the drift that made it a shared export in the first place.
  */
 export function safeInputWindow(
-  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens' | 'type'>,
+  modelInfo: Pick<ModelInfo, 'contextWindow' | 'max_tokens' | 'type' | 'maxOutputTokensDerived'>,
   requestedMaxTokens: number,
   safetyBuffer = CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS
 ): number {
   const returnsMedia = isMediaModelType(modelInfo.type);
   const contextLimit = effectiveContextWindow(modelInfo);
-  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
-  const reservedOutput = returnsMedia ? 0 : Math.min(requestedMaxTokens, modelMaxOutput);
+  // ModelInfo.max_tokens is typed `number`, but that is a claim toModelInfo makes about catalog
+  // data, not a guarantee about every caller - context-dry-run.ts builds a synthetic ModelInfo
+  // with max_tokens deliberately absent, so this has to tolerate that rather than propagate NaN.
+  const cap = usableTokenCount(modelInfo.max_tokens);
+  // The reserve has to match what the request will actually send, and resolveOutputMaxTokens
+  // declines to clamp a reasons-within-the-budget model to a DERIVED cap. Clamping here anyway
+  // would reserve 4096 against a 64000-token request and let assembly fill the difference, so
+  // prompt + max_tokens overruns the window and the provider rejects the turn.
+  const capClamps = modelInfo.maxOutputTokensDerived !== true;
+  const reservedOutput = returnsMedia
+    ? 0
+    : capClamps && cap !== undefined
+      ? Math.min(requestedMaxTokens, cap)
+      : requestedMaxTokens;
   return contextLimit - reservedOutput - safetyBuffer;
 }
 
@@ -193,7 +205,7 @@ export function computeVerbatimTokenBudget(
   requestedMaxTokens: number | undefined,
   opts: { verbatimWindowFraction: number; nonHistoryOverheadTokens: number }
 ): number {
-  const modelMaxOutput = modelInfo.max_tokens ?? 16384;
+  const modelMaxOutput = modelInfo.max_tokens;
   const safeMaxTokens = resolveOutputMaxTokens({
     requested: requestedMaxTokens,
     fallback: DEFAULT_OUTPUT_MAX_TOKENS,

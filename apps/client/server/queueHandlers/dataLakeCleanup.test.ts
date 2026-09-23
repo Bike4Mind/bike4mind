@@ -25,6 +25,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeBatchRepository: {},
   dataLakeAccessGrantRepository: {},
   dataLakeProposalRepository: {},
+  dataLakeFindingRepository: {},
   dataLakeResearchConfigRepository: {},
   dataLakeResearchRunRepository: {},
   lakeMembershipDecisionRepository: {},
@@ -72,6 +73,11 @@ describe('dataLakeCleanup consumer', () => {
           // targeting a purged lake could only ever fail, and its run history has no reader left.
           dataLakeResearchConfigs: expect.anything(),
           dataLakeResearchRuns: expect.anything(),
+          // And the detected findings (#3039), reached through `?.` for the same reason again.
+          // This port carries a retention obligation the others do not: it sweeps the excerpts of
+          // documents the lake teardown destroys globally, including those quoted by findings that
+          // belong to a DIFFERENT lake sharing the file.
+          dataLakeFindings: expect.anything(),
         }),
         logger,
       })

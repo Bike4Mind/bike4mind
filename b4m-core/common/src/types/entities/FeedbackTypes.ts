@@ -165,10 +165,21 @@ export type CreateFeedbackResponse = IFeedbackDocument & {
   contentTruncated?: boolean;
 };
 
+/** One `{ key, count }` row of a report grouping. `key` is the grouped field's value. */
+export interface FeedbackCountBucket {
+  key: string;
+  count: number;
+}
+
 /**
  * Feedback rollup: counts only, never content and never a username. The window is capped in DAYS
  * because every $facet arm groups the whole matched set in memory before its own top-N cut, so
  * the day cap is what bounds the rows those groupings accumulate over.
+ *
+ * The cap counts COVERAGE, not the gap between the bounds: every feedback window is inclusive at
+ * both ends, so a span of exactly this many days covers one instant more than that. Both sides
+ * measure it that way - the org routes read this same constant through
+ * `apps/client/server/utils/orgFeedbackWindow.ts`.
  */
 export const FEEDBACK_ROLLUP_MAX_WINDOW_DAYS = 366;
 
@@ -193,9 +204,13 @@ export function parseFeedbackRollupBound(value: string): Date {
 /**
  * GET /api/feedback/rollup query contract. There is deliberately no `userId` key: the server
  * derives the principal from the session, so `?userId=<someone-else>` is stripped here rather
- * than trusted. The window is half-open in UTC (`$gte from`, `$lt to`); buildFeedbackRollupPipeline
- * in apps/client/server/utils/feedbackRollup.ts must keep that convention, or an organization
- * rollup and the personal rollups under it disagree on the documents sitting exactly on a bound.
+ * than trusted. The window is INCLUSIVE at both ends in UTC (`$gte from`, `$lte to`): `to` is the
+ * last instant included, so a caller tiling consecutive windows counts a row on a shared bound
+ * twice. Both aggregations compose their scope through buildFeedbackWindowFilter
+ * (@bike4mind/database), which is what keeps the personal rollup and orgFeedbackReport from
+ * disagreeing about the documents sitting exactly on a bound. Agreeing on the bound is all it
+ * buys: an org total equals the personal totals under it only when those are scoped
+ * `{ userId, organizationId }`.
  */
 export const FeedbackRollupQuerySchema = z
   .object({
@@ -208,7 +223,9 @@ export const FeedbackRollupQuerySchema = z
   })
   .refine(
     query =>
-      parseFeedbackRollupBound(query.to).getTime() - parseFeedbackRollupBound(query.from).getTime() <=
+      // Strictly less than: `to` is included, so a span of exactly the cap covers the cap plus an
+      // instant. Same comparison on the org side, against the same constant.
+      parseFeedbackRollupBound(query.to).getTime() - parseFeedbackRollupBound(query.from).getTime() <
       FEEDBACK_ROLLUP_MAX_WINDOW_DAYS * ROLLUP_DAY_MS,
     {
       message: `window must not exceed ${FEEDBACK_ROLLUP_MAX_WINDOW_DAYS} days`,
@@ -223,6 +240,90 @@ export interface FeedbackRollupBucket {
   count: number;
 }
 
+/** A member named in the report, resolved to something a reader recognizes. */
+export interface OrgFeedbackMember {
+  userId: string;
+  /** `name`, else `username`, else `email`, else the raw id - never blank. */
+  displayName: string;
+}
+
+export interface OrgFeedbackMemberCount extends OrgFeedbackMember {
+  count: number;
+}
+
+/**
+ * Tag keys kept in the org report. Tags are free-form, so unlike the enum-sized groupings beside
+ * them the key space is unbounded. Shared so a client caption naming the ceiling reads the same
+ * number the server applied.
+ */
+export const ORG_FEEDBACK_BY_TAG_LIMIT = 50;
+
+/**
+ * GET /api/organizations/:id/feedback-report. Declared here rather than beside the route so the
+ * handler, the aggregate that builds it and the client hook that reads it share one shape.
+ *
+ * `membership` is not decoration: the report scopes on the UNION of the org ACL and the
+ * `Feedback.organizationId` stamp population (see `OrgMemberPopulation`), and those two disagree
+ * often enough that a count with no note of the disagreement is a number nobody can check. The
+ * one-sided lists say which members were counted on one source's word alone.
+ */
+export interface OrgFeedbackReport {
+  /** The resolved window, echoed back because the route defaults it when the caller omits it. */
+  range: { from: string; to: string };
+  totals: { count: number };
+  byDay: { day: string; count: number }[];
+  bySubject: FeedbackCountBucket[];
+  byType: FeedbackCountBucket[];
+  byStatus: FeedbackCountBucket[];
+  /** Rows carrying no tag are absent, so these counts do not sum to `totals.count`. */
+  byTag: FeedbackCountBucket[];
+  /** True when more than `ORG_FEEDBACK_BY_TAG_LIMIT` distinct tags matched, so `byTag` is a top-N
+   * cut rather than the whole key space. A fresh report always sets it either way; it is absent
+   * only on one serialized before the field existed, which is why it is optional. */
+  byTagTruncated?: boolean;
+  byMember: OrgFeedbackMemberCount[];
+  membership: {
+    /** Size of the union the report scoped on. */
+    memberCount: number;
+    /** In the org's ACL, but authoring no org-stamped content. */
+    aclOnly: OrgFeedbackMember[];
+    /** Authoring org-stamped content, but holding no ACL row. */
+    stampOnly: OrgFeedbackMember[];
+  };
+}
+
+/**
+ * One row behind a report cell, as the drill-down returns it.
+ *
+ * METADATA ONLY, by rule: no feedback text and no `promptMeta`. Verbatim stays reachable only
+ * through GET /api/feedback/:id/read, whose CASL check grants it to the reporter or a platform
+ * admin - an org owner or manager is neither, and widening that grant is exactly the escalation
+ * this report is built to avoid. Anything added here is visible to every org administrator, so
+ * the mapper that fills it is an explicit field list rather than a document spread.
+ */
+export interface OrgFeedbackItem {
+  id: string;
+  createdAt: string;
+  userId: string;
+  username: string;
+  subject: FeedbackSubject;
+  status: FeedbackStatus;
+  type?: FeedbackType;
+  tags: string[];
+  sessionId?: string;
+  questId?: string;
+  /** Tells "text expired under the 90-day TTL" apart from "this report never had text". */
+  contentStored: boolean;
+}
+
+/** GET /api/organizations/:id/feedback-report/items - one page of `OrgFeedbackItem`. */
+export interface OrgFeedbackItemPage {
+  items: OrgFeedbackItem[];
+  /** Rows matching the whole window, not just this page - the drill-down paginates. */
+  total: number;
+  limit: number;
+  offset: number;
+}
 /** One rollup dimension: its top keys by count, and whether keys were dropped to get there. */
 export interface FeedbackRollupDimension {
   buckets: FeedbackRollupBucket[];

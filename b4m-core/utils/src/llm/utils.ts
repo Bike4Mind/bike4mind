@@ -65,8 +65,8 @@ const CHARS_PER_TOKEN = 3.5;
  * model's input window rather than its output limit; see attachedContentExtractionBudget.
  *
  * Exported because it is also the DEPTH a score-distribution measurement has to inspect to be
- * measuring the served ranking (packages/scripts/retrieval/scoreDistribution.ts). A copy of the
- * number over there would let the harness and the product drift silently.
+ * measuring the served ranking. A copy of the number inside such a harness would let it and the
+ * product drift silently.
  */
 export const COSINE_SEARCH_TOP_K = 10;
 
@@ -1712,8 +1712,10 @@ export async function processFabFilesServer(
           delivered: false,
         });
       } else {
-        // Files without embeddingModel are old files that were vectorized with the default embedding
-        // model, which is text-embedding-ada-002.
+        // ada-002 is the HISTORICAL space unlabeled rows were written in, NOT the current default -
+        // the default is 3-small now, and re-deriving this value from the default would read a legacy
+        // corpus in a space it was never written in. Both models are 1536 wide, so the width guard
+        // below cannot catch that; this constant is the only thing standing in its way.
         const embeddingModel =
           (file.embeddingModel as SupportedEmbeddingModel) ?? OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
         const userVector = userVectorPrompt[embeddingModel];

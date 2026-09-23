@@ -38,12 +38,16 @@ const toDistribution = (categories: ContextBreakdown['categories']): TokenDistri
   urlContent: categories.urlContent,
   toolSchemas: categories.toolDefinitions,
   userPrompt: categories.userMessage,
+  // Omitted when null so an unknown lake volume stays absent from the bar rather than reading as a
+  // zero-token segment.
+  ...(categories.lakeRetrieval !== null ? { lakeRetrieval: categories.lakeRetrieval } : {}),
 });
 
 const CategoryTable: FC<{ breakdown: ContextBreakdown }> = ({ breakdown }) => {
   const { categories, window: contextWindow } = breakdown;
   const rows: Array<[string, number | null]> = [
     ['System prompts', billedSystemPrompt(categories)],
+    ['Lake retrieval', categories.lakeRetrieval],
     ['Tool definitions', categories.toolDefinitions],
     ['Attached files', categories.attachedFiles],
     ['Conversation history', categories.conversationHistory],
@@ -141,6 +145,13 @@ const RetrievalSummary: FC<{ retrieval: NonNullable<ContextBreakdown['retrieval'
       </Chip>
     )}
     {retrieval.dataLakeTags?.length > 0 && <Chip size="sm">lakes: {retrieval.dataLakeTags.join(', ')}</Chip>}
+    {/* Count + reason only - never a lake name, since the caller may not be permitted to know an
+        excluded lake exists (#3055). */}
+    {retrieval.excludedLakes && retrieval.excludedLakes.count > 0 && (
+      <Chip size="sm" color="warning" data-testid="context-breakdown-excluded-lakes-chip">
+        excluded: {retrieval.excludedLakes.count} ({retrieval.excludedLakes.reason})
+      </Chip>
+    )}
   </Stack>
 );
 

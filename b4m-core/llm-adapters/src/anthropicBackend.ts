@@ -937,8 +937,8 @@ export class AnthropicBackend implements ICompletionBackend {
             modelInfo: currentModelInfo,
             // Passed through as-is, matching cliCompletions: the declared `number` type is a
             // claim about catalog data, not a guarantee, and resolveOutputMaxTokens absorbs
-            // an absent cap so neither call site has to invent its own fallback. See that
-            // call site for why toModelInfo's derived substitution is the actual gap.
+            // both an absent cap and a merely derived one, so neither call site has to
+            // invent its own fallback.
             modelMaxOutputTokens: currentModelInfo.max_tokens,
           })
         : (options.maxTokens ?? DEFAULT_ANTHROPIC_MAX_TOKENS),

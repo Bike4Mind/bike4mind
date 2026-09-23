@@ -84,6 +84,7 @@ const FULL_PROMPT_META = {
       urlContent: 5,
       toolSchemas: 6,
       userPrompt: 7,
+      lakeRetrieval: 8,
     },
     systemPromptSources: [{ fileId: 'sp-1', fileName: 'admin.md', source: 'admin', priority: 1, enabled: true }],
     dedupedSystemPrompts: ['sp-1'],
@@ -145,6 +146,9 @@ const FULL_PROMPT_META = {
       scanTruncated: false,
       probedAt: new Date('2026-09-11T00:00:00.000Z'),
     },
+    // #3055: exercises the new subdoc's default:undefined behavior and its Number/String cast on
+    // the $set path, same reason as the fields above - the parity test only checks path names.
+    excludedLakes: { count: 2, reason: 'access' },
   },
   // Top-level for the same reason as `retrieval` above. The chat coverage banner keys on this
   // field surviving the round-trip, so a shape that persists but fails the Zod re-parse would
