@@ -299,7 +299,7 @@ describe('describeSearchLimitations / isPartialSearch', () => {
     // A deduplicated lake is healthy, and `partial` has to keep meaning "you did not get the whole
     // corpus" or every search against a lake holding one re-upload raises it forever.
     const s = search({ supersession: superseded() });
-    expect(describeSearchLimitations(s)).toContain('older file version(s) were not ranked');
+    expect(describeSearchLimitations(s)).toContain('were not ranked because this data lake holds a version');
     expect(isPartialSearch(s)).toBe(false);
   });
 
