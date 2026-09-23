@@ -168,6 +168,50 @@ describe('resolveTopLevelProfile', () => {
     expect(profile.defaultThoroughness).toBe('medium');
   });
 
+  it('flags allowedTools provenance so the ambient union can tell a curation from a fallback', async () => {
+    // `isSynthetic` does NOT answer "is this belt a deliberate curation" - a persisted agent
+    // with no whitelist of its own gets the org defaults and is still non-synthetic. Callers
+    // that need the distinction (see `pickEffectiveEnabledTools`) read this flag instead.
+    const fellBack = await resolveTopLevelProfile({
+      agentId: 'legacy-1',
+      loadAgent: vi.fn().mockResolvedValue(makeAgent({ id: 'legacy-1' })),
+      adminDefaults: ADMIN_DEFAULTS,
+      model: 'claude-opus',
+    });
+    expect(fellBack.isSynthetic).toBe(false);
+    expect(fellBack.allowedToolsFromDefaults).toBe(true);
+
+    // An agent that set OTHER orchestration fields but left allowedTools empty still falls
+    // back - and routes to the executor on the mention alone, so this is the easier case to hit.
+    const partiallyConfigured = await resolveTopLevelProfile({
+      agentId: 'partial-1',
+      loadAgent: vi
+        .fn()
+        .mockResolvedValue(makeAgent({ id: 'partial-1', allowedTools: [], defaultThoroughness: 'quick' })),
+      adminDefaults: ADMIN_DEFAULTS,
+      model: 'claude-opus',
+    });
+    expect(partiallyConfigured.allowedToolsFromDefaults).toBe(true);
+    expect(partiallyConfigured.allowedTools).toEqual(ADMIN_DEFAULTS.allowedTools);
+
+    const curated = await resolveTopLevelProfile({
+      agentId: 'agent-1',
+      loadAgent: vi.fn().mockResolvedValue(makeAgent({ allowedTools: ['file_read'] })),
+      adminDefaults: ADMIN_DEFAULTS,
+      model: 'claude-opus',
+    });
+    expect(curated.allowedToolsFromDefaults).toBe(false);
+
+    // Synthetic profiles are built from admin defaults by construction.
+    const agentless = await resolveTopLevelProfile({
+      agentId: undefined,
+      loadAgent: vi.fn(),
+      adminDefaults: ADMIN_DEFAULTS,
+      model: 'claude-opus',
+    });
+    expect(agentless.allowedToolsFromDefaults).toBe(true);
+  });
+
   it('applies dagEnabled: false to the persisted-agent path (P2 #3)', async () => {
     const loadAgent = vi.fn().mockResolvedValue(
       makeAgent({
@@ -364,13 +408,55 @@ describe('pickEffectiveEnabledTools - ambient payload union', () => {
     expect(pickEffectiveEnabledTools(SMART_TOOLS, exclusive, false)).toEqual(synthetic.allowedTools);
   });
 
-  it('REPLACES rather than unions for a persisted-agent profile', () => {
-    // A persisted agent's `allowedTools` is a deliberate curation, so ambient chat picks must
-    // not widen it. Agentless dispatches always resolve to a synthetic profile, so this gate
-    // only matters if a caller ever sets the ambient flag alongside an `agentId` - it bounds
-    // that blast radius instead of trusting the caller.
-    const persisted: ResolvedOrchestrationProfile = { ...synthetic, isSynthetic: false };
-    expect(pickEffectiveEnabledTools(SMART_TOOLS, persisted, true)).toEqual(SMART_TOOLS);
+  it('REPLACES rather than unions for a persisted agent that curated its own allowedTools', () => {
+    // A curated whitelist is a deliberate statement about THIS agent, so ambient chat picks
+    // must not widen it. The client pins such a selection anyway (`resolveDispatchTools` sends
+    // the agent's whitelist with the ambient flag off), so this is belt-and-braces.
+    const curated: ResolvedOrchestrationProfile = {
+      ...synthetic,
+      isSynthetic: false,
+      allowedToolsFromDefaults: false,
+    };
+    expect(pickEffectiveEnabledTools(SMART_TOOLS, curated, true)).toEqual(SMART_TOOLS);
+  });
+
+  it('UNIONS for a persisted agent whose allowedTools only fell back to admin defaults', () => {
+    // The regression this gate originally caused. `resolveTopLevelProfile` hands a persisted
+    // agent with no whitelist of its own the ORG defaults, still flagged `isSynthetic: false`.
+    // Gating the union on `isSynthetic` therefore threw that toolbelt away and ran on the bare
+    // picks. Provenance, not doc-loaded-ness, is what says whether the belt is a curation.
+    const defaultsBacked: ResolvedOrchestrationProfile = {
+      ...synthetic,
+      isSynthetic: false,
+      allowedToolsFromDefaults: true,
+    };
+    const result = pickEffectiveEnabledTools(SMART_TOOLS, defaultsBacked, true);
+    expect(new Set(result)).toEqual(new Set([...SMART_TOOLS, ...synthetic.allowedTools]));
+  });
+
+  it('keeps the org toolbelt for an @-mention that ships agentId alongside ambient picks', () => {
+    // Server-side heir to the client assertion this refactor deleted (the old
+    // `resolveDispatchTools` test for 'an agent whose whitelist is empty' checked that the org
+    // tools survived). The client no longer computes that union, so the guarantee is asserted
+    // here instead, against the exact payload shape `resolveDispatchTools.ts` now emits for a
+    // mention of an agent with no curated whitelist: the picks, flagged ambient.
+    //
+    // Two routes reach this, both real: a persona agent mentioned with an agent-mode signal
+    // active, and an agent carrying `defaultThoroughness`/`maxIterations` but an EMPTY
+    // `allowedTools`, which routes on the mention alone.
+    const mentionedAgent: ResolvedOrchestrationProfile = {
+      ...synthetic,
+      id: 'agent-1',
+      name: 'Persona Agent',
+      allowedTools: ['web_search', 'retrieve_knowledge_content', 'recharts', 'mermaid_chart'],
+      isSynthetic: false,
+      allowedToolsFromDefaults: true,
+    };
+    const result = pickEffectiveEnabledTools(['moon_phase'], mentionedAgent, true);
+    expect(result).toContain('moon_phase');
+    for (const orgTool of ['web_search', 'retrieve_knowledge_content', 'recharts', 'mermaid_chart']) {
+      expect(result).toContain(orgTool);
+    }
   });
 
   it('falls through to the profile for an ambient payload that is empty or absent', () => {

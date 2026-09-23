@@ -6,10 +6,14 @@
  * Two paths:
  *   - **Persisted agent**: `startPayload.agentId` set -> look up the IAgent and
  *     project its orchestration fields onto a `ResolvedOrchestrationProfile`.
- *     Used by the dormant `@agent` literal trigger.
+ *     Reached by any `@`-mention that routes to the executor, not only the
+ *     `@agent` literal trigger.
  *   - **Synthetic**: `startPayload.agentId` absent -> build a default profile
- *     from admin `orchestrationDefaults`. Used by the upcoming Agent-mode
- *     toggle.
+ *     from admin `orchestrationDefaults`. The Agent-mode toggle's path.
+ *
+ * A persisted profile is NOT the same as a curated one: per-field fallback means
+ * an agent that set no `allowedTools` carries the admin defaults. `allowedToolsFromDefaults`
+ * records that difference for callers that must not widen a real curation.
  *
  * Extracted into its own pure helper so the branching can be unit-tested
  * directly without dragging in Mongo/AWS/ReActAgent - matches the pattern
@@ -41,6 +45,14 @@ export interface ResolvedOrchestrationProfile {
   defaultThoroughness: 'quick' | 'medium' | 'very_thorough';
   /** Whether this profile was synthesized from admin defaults (vs sourced from a persisted IAgent). */
   isSynthetic: boolean;
+  /**
+   * Whether `allowedTools` fell back to admin defaults instead of being the agent's own
+   * curation. `isSynthetic` does NOT answer this: a persisted agent with no whitelist of its
+   * own gets the org defaults and is still non-synthetic. Callers deciding whether a belt may
+   * be widened must read provenance, not doc-loaded-ness (see `pickEffectiveEnabledTools`).
+   * Always true for synthetic profiles, which are built from admin defaults by construction.
+   */
+  allowedToolsFromDefaults?: boolean;
   /**
    * Whether `allowedTools` IS the run's toolbelt rather than a default the payload may replace.
    *
@@ -98,7 +110,10 @@ export async function resolveTopLevelProfile(args: ResolveTopLevelProfileArgs): 
       // still land on the conservative defaults instead of an empty toolbelt.
       // Per-field fallback (not whole-object) lets a partially-configured
       // agent override only the dimensions it cares about.
-      const allowedTools = agent.allowedTools?.length ? agent.allowedTools : (args.adminDefaults?.allowedTools ?? []);
+      // Captured here, not inferred later: the `dagEnabled` filter below rewrites `allowedTools`,
+      // after which the agent-vs-defaults provenance is no longer recoverable by comparison.
+      const curatedAllowedTools = agent.allowedTools?.length ? agent.allowedTools : undefined;
+      const allowedTools = curatedAllowedTools ?? args.adminDefaults?.allowedTools ?? [];
       const deniedTools = agent.deniedTools?.length ? agent.deniedTools : (args.adminDefaults?.deniedTools ?? []);
       // `dagEnabled: false` is the org-wide kill switch for `coordinate_task`
       // - applies to the persisted-agent path too, otherwise an admin couldn't
@@ -114,6 +129,7 @@ export async function resolveTopLevelProfile(args: ResolveTopLevelProfileArgs): 
         defaultThoroughness:
           agent.defaultThoroughness ?? args.adminDefaults?.defaultThoroughness ?? DEFAULT_THOROUGHNESS,
         isSynthetic: false,
+        allowedToolsFromDefaults: !curatedAllowedTools,
         // Persona for the ReActAgent - generated `systemPrompt` if present, else
         // composed from personality/identity fields. Same builder the classic
         // chat path uses, so the agent behaves identically in both paths.
@@ -134,6 +150,7 @@ export async function resolveTopLevelProfile(args: ResolveTopLevelProfileArgs): 
     maxIterations: synthetic.maxIterations,
     defaultThoroughness: synthetic.defaultThoroughness,
     isSynthetic: true,
+    allowedToolsFromDefaults: true,
   };
 }
 
@@ -165,10 +182,14 @@ export function pickEffectiveMaxIterations(
  *    than on the client, which would have to derive the org toolbelt from admin config and put
  *    that derived copy on the wire - keeps the decision next to the profile it unions against.
  *
- * The union is gated on `isSynthetic`: a persisted agent's `allowedTools` is a deliberate
- * curation, so ambient chat picks must not widen it. Agentless dispatches always land on a
- * synthetic profile (`resolveTopLevelProfile` only takes the persisted path when `agentId` is
- * set), so the gate costs nothing and bounds the blast radius if a caller ever sets both.
+ * The union is gated on PROVENANCE, not on whether an agent doc was loaded. A curated
+ * `allowedTools` is a deliberate statement about that agent, so ambient picks must not widen
+ * it; a belt that merely fell back to admin defaults (`allowedToolsFromDefaults`) is not, so
+ * they must. Gating on `isSynthetic` alone is wrong: `resolveTopLevelProfile` hands a persisted
+ * agent with no whitelist of its own the org defaults while still reporting non-synthetic, and
+ * an `@`-mention of such an agent ships `agentId` together with the ambient flag - see
+ * `resolveDispatchTools.ts`, which marks a payload ambient exactly when the mentioned agent has
+ * no whitelist to pin. Keeping these two in sync is what stops the org toolbelt being dropped.
  *
  * The profile's `deniedTools` ALWAYS wins as a final subtraction, so an admin denylist can't be
  * bypassed by shipping `enabledTools` in the payload - ambient or pinned. (For the two
@@ -203,7 +224,7 @@ function chooseToolbelt(
   payloadIsAmbient: boolean | undefined
 ): string[] {
   if (!payloadEnabledTools?.length || profile.toolsetIsExclusive) return profile.allowedTools;
-  if (payloadIsAmbient && profile.isSynthetic) {
+  if (payloadIsAmbient && (profile.isSynthetic || profile.allowedToolsFromDefaults)) {
     return [...new Set([...payloadEnabledTools, ...profile.allowedTools])];
   }
   return payloadEnabledTools;

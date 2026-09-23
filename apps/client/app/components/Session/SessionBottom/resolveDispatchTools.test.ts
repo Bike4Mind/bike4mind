@@ -118,6 +118,11 @@ describe('resolveDispatchTools agentless dispatch', () => {
   // a bare pinned payload would have stripped (buildSharedTools only surfaces named tools).
   const SMART_TOOLS: B4MLLMTools[] = ['deep_research', 'chess_engine', 'web_scrape'];
 
+  // The empty-whitelist case also covers an `@`-mention of an agent that curated no tools: the
+  // payload carries `agentId` AND the ambient flag, so the server lands on a persisted profile
+  // whose belt came from admin defaults. That the org toolbelt survives there is asserted in
+  // `agentExecutor.orchestrationProfile.test.ts` ('keeps the org toolbelt for an @-mention...'),
+  // since the union is the server's job now and this side only proves what goes on the wire.
   it.each([
     ['no agent mentioned', undefined],
     ['an agent whose whitelist is empty', [] as string[]],
