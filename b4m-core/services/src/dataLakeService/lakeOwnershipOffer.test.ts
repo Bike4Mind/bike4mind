@@ -32,6 +32,9 @@ const offerRow = (over: Partial<IDataLakeOwnershipOfferDocument> = {}): IDataLak
   ({
     id: 'offer1',
     dataLakeId: 'lake1',
+    // Matches `lake()`'s org: the accept-time org re-check compares the two, so a fixture that left
+    // this unset would make every accept case refuse on the org move rather than the case it tests.
+    organizationId: 'org1',
     offeredByUserId: 'creator',
     recipientUserId: 'recipient',
     status: 'pending',
@@ -54,23 +57,43 @@ const makeAdapters = (
     grants?: IDataLakeAccessGrantDocument[];
     org?: typeof ORG | null;
     userExists?: boolean;
+    /** Whether `users.findById` reports the platform-admin flag the accept-time re-check reads. */
+    offererIsAdmin?: boolean;
     createError?: Error;
     resolveTo?: IDataLakeOwnershipOfferDocument | null;
   } = {}
 ) => {
+  // Stateful so `expirePendingForLake` can actually retire the row a later `findPendingForLake` and a
+  // `create` would otherwise still see - that is the whole behaviour finding 1 is about.
+  let pending = over.pending ?? null;
   const create = vi.fn(async (input: Record<string, unknown>) => offerRow(input as never));
   const resolve = vi.fn(async (id: string, toStatus: string) =>
     over.resolveTo === undefined ? offerRow({ id, status: toStatus as never, resolvedAt: new Date() }) : over.resolveTo
   );
   const findById = vi.fn(async () => (over.offer === undefined ? offerRow() : over.offer));
-  const findPendingForLake = vi.fn(async () => over.pending ?? null);
+  // Honours `asOf` exactly as the repository does: with one, a lapsed row is invisible; without one it
+  // is returned raw (the "still holds the slot" read the old pre-check trusted).
+  const findPendingForLake = vi.fn(async (_dataLakeId: string, asOf?: Date) => {
+    if (!pending) return null;
+    if (asOf && pending.expiresAt.getTime() <= asOf.getTime()) return null;
+    return pending;
+  });
   const listPendingForRecipient = vi.fn(async () => over.recipientOffers ?? []);
+  const expirePendingForLake = vi.fn(async (_dataLakeId: string, asOf: Date) => {
+    if (pending && pending.status === 'pending' && pending.expiresAt.getTime() <= asOf.getTime()) {
+      pending = { ...pending, status: 'expired', resolvedAt: asOf };
+      return 1;
+    }
+    return 0;
+  });
   const upsertGrant = vi.fn(async (input: Record<string, unknown>) => grant(input as never));
   const update = vi.fn(async () => lake());
   const record = vi.fn(async () => ({}));
   const listByLake = vi.fn(async () => over.grants ?? []);
   const findByIdUser = vi.fn(async (id: string) =>
-    over.userExists === false ? null : { id, name: id === 'recipient' ? 'Recipient Name' : 'Creator Name' }
+    over.userExists === false
+      ? null
+      : { id, name: id === 'recipient' ? 'Recipient Name' : 'Creator Name', isAdmin: over.offererIsAdmin ?? false }
   );
   const findByIds = vi.fn(async (ids: string[]) => ids.map(id => ({ id, name: id })));
   const findByIdOrg = vi.fn(async () => (over.org === undefined ? ORG : over.org));
@@ -85,15 +108,25 @@ const makeAdapters = (
     create,
     resolve,
     findPendingForLake,
+    expirePendingForLake,
     findById,
     listByLake,
+    /** The live fixture row AFTER any retire, so a test can assert it is no longer pending. */
+    getPending: () => pending,
     adapters: {
       db: {
         dataLakes: { findById: findByIdLake, update },
         dataLakeAccessGrants: { upsertGrant, listByLake },
         users: { findById: findByIdUser, findByIds },
         organizations: { findById: findByIdOrg },
-        ownershipOffers: { create, findById, findPendingForLake, listPendingForRecipient, resolve },
+        ownershipOffers: {
+          create,
+          findById,
+          findPendingForLake,
+          listPendingForRecipient,
+          resolve,
+          expirePendingForLake,
+        },
         lakeConfigChangeEvents: { record },
       },
     } as never,
@@ -113,6 +146,7 @@ describe('offerLakeOwnership', () => {
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         dataLakeId: 'lake1',
+        organizationId: 'org1',
         offeredByUserId: 'creator',
         recipientUserId: 'recipient',
         status: 'pending',
@@ -120,6 +154,40 @@ describe('offerLakeOwnership', () => {
         offeredVia: 'creator',
       })
     );
+  });
+
+  it('persists the offer-time principal and the lake organization', async () => {
+    // The audit principal is resolved only by a route (it alone can tell an API key from a session),
+    // so the service must carry it verbatim onto the offer for accept to attribute the transfer to.
+    const { adapters, create } = makeAdapters();
+    const actorWithKey: LakeTransferActor = {
+      ...owner,
+      auditPrincipal: { principalKind: 'apiKey', principalId: 'key-1', onBehalfOfUserId: 'creator' },
+    };
+
+    await offerLakeOwnership(actorWithKey, lake(), [], 'recipient', adapters);
+
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org1',
+        auditPrincipal: { principalKind: 'apiKey', principalId: 'key-1', onBehalfOfUserId: 'creator' },
+      })
+    );
+  });
+
+  it('retires an expired pending offer and opens a new one over it', async () => {
+    // Finding 1: an expired row is invisible to every read but still occupies the partial unique index
+    // and the raw pre-check, wedging the lake with no UI control able to clear it. The offer must
+    // retire it, not refuse on it.
+    const expired = offerRow({ expiresAt: new Date(Date.now() - 1000) });
+    const { adapters, create, expirePendingForLake, getPending } = makeAdapters({ pending: expired });
+
+    await offerLakeOwnership(owner, lake(), [], 'recipient', adapters);
+
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(expirePendingForLake).toHaveBeenCalledWith('lake1', expect.any(Date));
+    // The old row is no longer pending, so the one-live-offer slot is free for the new one.
+    expect(getPending()?.status).toBe('expired');
   });
 
   it('expires the offer after the shared TTL', async () => {
@@ -229,15 +297,49 @@ describe('acceptLakeOwnershipOffer', () => {
 
     const result = await acceptLakeOwnershipOffer('recipient', 'offer1', adapters);
 
-    expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'recipient', role: 'owner' }));
-    expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'creator', role: 'curator' }));
+    // Both grants name the OFFERER as the granter, not the recipient who happened to accept.
+    expect(upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ principalId: 'recipient', role: 'owner', grantedByUserId: 'creator' })
+    );
+    expect(upsertGrant).toHaveBeenCalledWith(
+      expect.objectContaining({ principalId: 'creator', role: 'curator', grantedByUserId: 'creator' })
+    );
     expect(result).toMatchObject({ newOwnerUserId: 'recipient', demotedUserIds: ['creator'] });
     // The resolution lands BEFORE the grant writes, so a lost race never reaches apply.
     expect(resolve.mock.invocationCallOrder[0]).toBeLessThan(upsertGrant.mock.invocationCallOrder[0]);
-    // The audit row names the OFFERER's authority, not the recipient who accepted. `records` is the
-    // config-change sink the apply half reaches through the same adapter.
+    // The audit row names the OFFERER's authority and principal, not the recipient who accepted.
     expect(record).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'transfer-ownership', manageRung: 'creator' })
+      expect.objectContaining({
+        action: 'transfer-ownership',
+        manageRung: 'creator',
+        principalKind: 'user',
+        principalId: 'creator',
+      })
+    );
+  });
+
+  it('carries the offer-time API-key principal into the applied transfer', async () => {
+    // The route resolved an API key at OFFER time; the accept must attribute the transfer to that
+    // same principal, not to the recipient's session. Finding 3's M2 mutation (dropping the spread)
+    // turns every one of these fields back into the recipient's `user` id.
+    const { adapters, upsertGrant, record } = makeAdapters({
+      grants: [grant({ principalId: 'creator', role: 'owner' })],
+      offer: offerRow({
+        auditPrincipal: { principalKind: 'apiKey', principalId: 'key-1', onBehalfOfUserId: 'creator' },
+      }),
+    });
+
+    await acceptLakeOwnershipOffer('recipient', 'offer1', adapters);
+
+    for (const principalId of ['recipient', 'creator']) {
+      expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId, grantedByUserId: 'creator' }));
+    }
+    expect(record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        principalKind: 'apiKey',
+        principalId: 'key-1',
+        onBehalfOfUserId: 'creator',
+      })
     );
   });
 
@@ -281,9 +383,76 @@ describe('acceptLakeOwnershipOffer', () => {
     const { adapters, upsertGrant } = makeAdapters({
       offer: offerRow({ offeredByUserId: 'root', offeredVia: 'platform-admin' }),
       org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'recipient' }] },
+      offererIsAdmin: true,
     });
     await acceptLakeOwnershipOffer('recipient', 'offer1', adapters);
     expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'recipient', role: 'owner' }));
+  });
+
+  it('refuses an org-admin offer once the offerer loses ADMIN rights', async () => {
+    // Finding 2: the org-admin rung is granted through `administeredOrgIds` (billing owner / manager /
+    // appointed admin), NOT roster membership. A demoted admin still on `users[]` must not be able to
+    // demote an owner; the old `isOrgOwnershipCandidate` check let them.
+    const { adapters, upsertGrant, resolve } = makeAdapters({
+      offer: offerRow({ offeredByUserId: 'orgAdmin', offeredVia: 'org-admin' }),
+      org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'orgAdmin' }, { userId: 'recipient' }] },
+    });
+    await expect(acceptLakeOwnershipOffer('recipient', 'offer1', adapters)).rejects.toThrow(/no longer an admin/i);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('still accepts an org-admin offer while the offerer keeps admin rights', async () => {
+    // The control for the refusal above: same roster, but `adminUserIds` still names the offerer.
+    const { adapters, upsertGrant } = makeAdapters({
+      offer: offerRow({ offeredByUserId: 'orgAdmin', offeredVia: 'org-admin' }),
+      org: { userId: 'billing', adminUserIds: ['orgAdmin'], users: [{ userId: 'recipient' }] },
+      grants: [grant({ principalId: 'creator', role: 'owner' })],
+    });
+    await acceptLakeOwnershipOffer('recipient', 'offer1', adapters);
+    expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'recipient', role: 'owner' }));
+  });
+
+  it('refuses when the lake moved to PRIVATE after the offer', async () => {
+    // Finding 2: `organizationId` is stored on the offer; a lake since made personal no longer matches,
+    // and the org rungs that authorized the offer are gone.
+    const { adapters, upsertGrant, resolve } = makeAdapters({
+      offer: offerRow({ organizationId: 'org1' }),
+      lakeDoc: lake({ organizationId: undefined }),
+      grants: [grant({ principalId: 'creator', role: 'owner' })],
+    });
+    await expect(acceptLakeOwnershipOffer('recipient', 'offer1', adapters)).rejects.toThrow(
+      /moved to a different organization/i
+    );
+    expect(resolve).not.toHaveBeenCalled();
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the lake moved to a DIFFERENT organization after the offer', async () => {
+    const { adapters, upsertGrant, resolve } = makeAdapters({
+      offer: offerRow({ organizationId: 'org1' }),
+      lakeDoc: lake({ organizationId: 'org2' }),
+      grants: [grant({ principalId: 'creator', role: 'owner' })],
+    });
+    await expect(acceptLakeOwnershipOffer('recipient', 'offer1', adapters)).rejects.toThrow(
+      /moved to a different organization/i
+    );
+    expect(resolve).not.toHaveBeenCalled();
+    expect(upsertGrant).not.toHaveBeenCalled();
+  });
+
+  it('refuses a platform-admin offer once the offerer loses the admin flag', async () => {
+    // Finding 6, the P2 twin of finding 2: `platform-admin` is a live claim on the flag, not a fact
+    // snapshotted with the offer.
+    const { adapters, upsertGrant, resolve } = makeAdapters({
+      offer: offerRow({ offeredByUserId: 'root', offeredVia: 'platform-admin' }),
+      offererIsAdmin: false,
+    });
+    await expect(acceptLakeOwnershipOffer('recipient', 'offer1', adapters)).rejects.toThrow(
+      /no longer a platform admin/i
+    );
+    expect(resolve).not.toHaveBeenCalled();
+    expect(upsertGrant).not.toHaveBeenCalled();
   });
 
   it('refuses when the recipient is no longer an org member', async () => {
@@ -365,7 +534,12 @@ describe('reads', () => {
   it('findPendingLakeOwnershipOffer names the recipient', async () => {
     const { adapters } = makeAdapters({ pending: offerRow() });
     const pending = await findPendingLakeOwnershipOffer('lake1', adapters);
-    expect(pending).toMatchObject({ id: 'offer1', recipientUserId: 'recipient', recipientName: 'Recipient Name' });
+    expect(pending).toMatchObject({
+      id: 'offer1',
+      offeredByUserId: 'creator',
+      recipientUserId: 'recipient',
+      recipientName: 'Recipient Name',
+    });
     expect(pending?.expiresAt).toBeInstanceOf(Date);
   });
 

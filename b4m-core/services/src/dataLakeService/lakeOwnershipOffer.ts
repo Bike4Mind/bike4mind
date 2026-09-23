@@ -13,6 +13,7 @@ import { DATA_LAKE_OWNERSHIP_OFFER_TTL_DAYS } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
 import { resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
 import {
+  isOrgAdminOf,
   isOrgOwnershipCandidate,
   resolveLakeTransferAuthority,
   type LakeTransferActor,
@@ -36,7 +37,7 @@ export interface LakeOwnershipOfferAdapters extends LakeConfigAuditAdapters {
     organizations: Pick<IOrganizationRepository, 'findById'>;
     ownershipOffers: Pick<
       IDataLakeOwnershipOfferRepository,
-      'create' | 'findById' | 'findPendingForLake' | 'listPendingForRecipient' | 'resolve'
+      'create' | 'findById' | 'findPendingForLake' | 'listPendingForRecipient' | 'resolve' | 'expirePendingForLake'
     >;
     lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
   };
@@ -62,13 +63,20 @@ export async function offerLakeOwnership(
   // accept a recipient the transfer would reject (or vice versa).
   const { manageRung } = await authorizeLakeTransfer(actor, lake, grants, newOwnerUserId, { db });
 
+  // Retire a lapsed offer BEFORE checking for a live one. An expired `pending` row is invisible to
+  // every read but still trips both this pre-check (when read raw) and the model's partial unique
+  // index, which keys on `status` alone - so without this an unanswered offer would wedge the lake
+  // for good, with no UI control able to clear it. Resolving to `expired` frees the slot.
+  const now = new Date();
+  await db.ownershipOffers.expirePendingForLake(lake.id, now);
+
   // At most one live offer per lake. Checked here for the actionable error, and enforced again by
   // the model's partial unique index so a race between two offers is refused rather than queued.
-  if (await db.ownershipOffers.findPendingForLake(lake.id)) {
+  if (await db.ownershipOffers.findPendingForLake(lake.id, now)) {
     throw new BadRequestError(PENDING_ALREADY);
   }
 
-  const expiresAt = new Date(Date.now() + DATA_LAKE_OWNERSHIP_OFFER_TTL_DAYS * 24 * 60 * 60 * 1000);
+  const expiresAt = new Date(now.getTime() + DATA_LAKE_OWNERSHIP_OFFER_TTL_DAYS * 24 * 60 * 60 * 1000);
   try {
     return await db.ownershipOffers.create({
       dataLakeId: lake.id,
@@ -105,8 +113,11 @@ export interface AcceptLakeOwnershipOfferResult {
  *  - pending and unexpired;
  *  - the lake's effective owners still equal the snapshot (another transfer, or a departure
  *    succession, since the offer makes it STALE and it is refused rather than applied over it);
- *  - the recipient and the offerer are still org members (the offerer may have left, in which case
- *    the authority the offer was made under is gone - unless they were a platform admin).
+ *  - the lake still belongs to the organization it did at offer time;
+ *  - the offerer still holds the authority the offer was made under: current ADMIN rights for the
+ *    org-admin rung (not mere roster membership, which the offer-time gate never granted it), current
+ *    membership for the ownership rungs, current platform-admin for that rung;
+ *  - the recipient is still a member of the lake's organization.
  *
  * The offer is resolved `pending -> accepted` BEFORE the grants are written. `resolve` is atomic on
  * the status, so a concurrent accept loses and refuses rather than running the transfer twice; and
@@ -154,13 +165,43 @@ export async function acceptLakeOwnershipOffer(
     );
   }
 
-  const lakeOrg = normalizeId(lake.organizationId);
+  // The lake's owning org is part of what the offer was made under. If the lake moved - to private, or
+  // to a different org - since, the authorization premise is gone, and applying the snapshotted rung
+  // would hand over a lake `resolveLakeTransferAuthority` would refuse at offer time today.
+  const lakeOrg = normalizeId(lake.organizationId) ?? null;
+  if (lakeOrg !== (offer.organizationId ?? null)) {
+    throw new BadRequestError(
+      'The data lake has moved to a different organization since this offer was made, so it can no longer be accepted'
+    );
+  }
+
+  // The offerer's authority is re-checked, not assumed: a grant (or an offer) outlives the role that
+  // motivated it, and the pending state opens a 7-day window the old synchronous transfer never had.
+  if (offer.offeredVia === 'platform-admin') {
+    // Authorized by the flag, not by membership, so the flag itself is what has to still hold.
+    const offerer = await db.users.findById(offer.offeredByUserId);
+    if (!offerer?.isAdmin) {
+      throw new BadRequestError('The person who made this offer is no longer a platform admin');
+    }
+  }
+
   if (lakeOrg) {
     const org = await db.organizations.findById(lakeOrg);
-    // The offerer's authority is re-checked, not assumed: an org lake's rungs all require current
-    // membership, and a grant (or an offer) outlives the membership that motivated it. A platform
-    // admin is exempt - they were never authorized BY membership, which the snapshotted rung records.
-    if (offer.offeredVia !== 'platform-admin' && (!org || !isOrgOwnershipCandidate(org, offer.offeredByUserId))) {
+    if (offer.offeredVia === 'org-admin') {
+      // The org-admin rung is granted only through `administeredOrgIds` (billing owner, team manager,
+      // appointed admin) - NOT roster membership, which `isOrgOwnershipCandidate` would also accept.
+      // Re-checking the rung the offer actually used, or a demoted admin could still demote an owner.
+      if (!org || !isOrgAdminOf(org, offer.offeredByUserId)) {
+        throw new BadRequestError(
+          'The person who made this offer is no longer an admin of the organization that owns this data lake'
+        );
+      }
+    } else if (
+      offer.offeredVia !== 'platform-admin' &&
+      (!org || !isOrgOwnershipCandidate(org, offer.offeredByUserId))
+    ) {
+      // The ownership rungs (`creator`/`grant-owner`) still require the offerer to belong to the org:
+      // an owner grant outlives membership, and the offerer may have left.
       throw new BadRequestError(
         'The person who made this offer is no longer a member of the organization that owns this data lake'
       );
@@ -251,6 +292,7 @@ export async function findPendingLakeOwnershipOffer(
   const recipientName = recipient?.name || recipient?.username;
   return {
     id: offer.id,
+    offeredByUserId: offer.offeredByUserId,
     recipientUserId: offer.recipientUserId,
     ...(recipientName ? { recipientName } : {}),
     expiresAt: offer.expiresAt,

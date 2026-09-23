@@ -80,6 +80,17 @@ class DataLakeOwnershipOfferRepository
     return results.map(r => r.toJSON() as IDataLakeOwnershipOfferDocument);
   }
 
+  async expirePendingForLake(dataLakeId: string, asOf: Date): Promise<number> {
+    // `expiresAt: { $lte: asOf }` mirrors `buildPendingOfferExpiryFilter`'s `$gt` boundary exactly: a
+    // row is live while `expiresAt > asOf`, so at `expiresAt === asOf` it is already lapsed. Anything
+    // less exact and a row could sit pending-and-hidden at the boundary forever.
+    const result = await this.offerModel.updateMany(
+      { dataLakeId, status: 'pending', expiresAt: { $lte: asOf } },
+      { $set: { status: 'expired', resolvedAt: asOf } }
+    );
+    return result.modifiedCount;
+  }
+
   async resolve(
     id: string,
     toStatus: DataLakeOwnershipOfferStatus,

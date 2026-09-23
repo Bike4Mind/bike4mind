@@ -16,7 +16,11 @@ import { LAKE_CONFIG_CHANGE_PRINCIPAL_KINDS, type LakeManageRung } from './LakeC
 // drive it live in b4m-core/services, which cannot import @bike4mind/database - the same split
 // DataLakeAccessGrantModel and DataLakeSpendNotificationModel use.
 
-export const DATA_LAKE_OWNERSHIP_OFFER_STATUSES = ['pending', 'accepted', 'declined', 'cancelled'] as const;
+// `expired` is a resolved state, not a live one: an offer whose `expiresAt` has passed is retired by
+// the next offer attempt (see `expirePendingForLake`) rather than lingering as `pending`, where it
+// would still occupy the one-live-offer index while every read hid it. Kept distinct from
+// `cancelled` so the history says which side ended it - nobody answered, versus the offerer withdrew.
+export const DATA_LAKE_OWNERSHIP_OFFER_STATUSES = ['pending', 'accepted', 'declined', 'cancelled', 'expired'] as const;
 export type DataLakeOwnershipOfferStatus = (typeof DATA_LAKE_OWNERSHIP_OFFER_STATUSES)[number];
 
 /**
@@ -77,6 +81,14 @@ export interface IDataLakeOwnershipOfferRepository extends IBaseRepository<IData
   /** Every live offer addressed to a recipient, newest first - the recipient's pending-offer list. */
   listPendingForRecipient(recipientUserId: string, asOf?: Date): Promise<IDataLakeOwnershipOfferDocument[]>;
   /**
+   * Retire every PENDING offer for a lake whose `expiresAt` has passed into `expired`, returning how
+   * many rows moved. One `updateMany`, so it is atomic inside the offer transaction. Needed because
+   * the one-live-offer partial unique index keys on `status: 'pending'` alone: an expired row still
+   * holds the slot while every read passes an `asOf` that hides it, which would otherwise wedge the
+   * lake with no UI control able to clear it.
+   */
+  expirePendingForLake(dataLakeId: string, asOf: Date): Promise<number>;
+  /**
    * Atomically move an offer out of `fromStatus` (default `pending`) into `toStatus`, stamping
    * `resolvedAt`. Returns the updated row, or null when the offer was already resolved - the "did I
    * win the race" signal that makes a double accept refuse rather than run the transfer twice. The
@@ -96,6 +108,12 @@ export interface IDataLakeOwnershipOfferRepository extends IBaseRepository<IData
  */
 export interface LakePendingOwnershipOffer {
   id: string;
+  /**
+   * The offerer's id. Carried so the route can disclose the offer to the person who MADE it even if
+   * they no longer hold transfer authority (they can still cancel it, matching DELETE) - the fix for
+   * a live offer being visible only to a caller who could re-make it.
+   */
+  offeredByUserId: string;
   recipientUserId: string;
   recipientName?: string;
   expiresAt: Date;

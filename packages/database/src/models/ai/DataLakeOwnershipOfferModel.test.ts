@@ -71,8 +71,31 @@ describe('DataLakeOwnershipOfferRepository', () => {
     await repo.create(offer({ expiresAt: new Date('2026-01-01T00:00:00Z') }));
     const asOf = new Date('2026-06-01T00:00:00Z');
     expect(await repo.findPendingForLake('lake-1', asOf)).toBeNull();
-    // Without asOf the expired row is still readable - the transaction that refuses it does so by
-    // reading it, so it must be visible there.
+    // Without asOf the lapsed row is still readable RAW - `cancelLakeOwnershipOffer` reads it that way
+    // so an offer that expired can still be cancelled. The OFFER path must not rely on this read: it
+    // retires the row first (see `expirePendingForLake`), because this raw read still occupies the
+    // one-live-offer index.
+    expect((await repo.findPendingForLake('lake-1'))?.status).toBe('pending');
+  });
+
+  it('expirePendingForLake retires a lapsed row and frees the one-live-offer slot', async () => {
+    const lapsed = await repo.create(offer({ expiresAt: new Date('2026-01-01T00:00:00Z') }));
+    const asOf = new Date('2026-06-01T00:00:00Z');
+
+    expect(await repo.expirePendingForLake('lake-1', asOf)).toBe(1);
+
+    const retired = await repo.findById(lapsed.id);
+    expect(retired?.status).toBe('expired');
+    expect(retired?.resolvedAt).toEqual(asOf);
+    // A fresh offer now inserts: the partial unique index no longer sees a pending row for the lake.
+    const second = await repo.create(offer({ recipientUserId: 'bob' }));
+    expect(second.id).toBeDefined();
+    expect((await repo.findPendingForLake('lake-1'))?.recipientUserId).toBe('bob');
+  });
+
+  it('expirePendingForLake leaves a still-live row alone', async () => {
+    await repo.create(offer({ expiresAt: new Date('2026-12-01T00:00:00Z') }));
+    expect(await repo.expirePendingForLake('lake-1', new Date('2026-06-01T00:00:00Z'))).toBe(0);
     expect((await repo.findPendingForLake('lake-1'))?.status).toBe('pending');
   });
 
