@@ -8,7 +8,7 @@ import type {
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
   ChatModels,
-  escapeThinkMarkers,
+  createThinkMarkerEscaper,
   IMessage,
   MessageContentText,
   ModelBackend,
@@ -1238,6 +1238,7 @@ export class AnthropicBackend implements ICompletionBackend {
               if (requestTimeout) clearTimeout(requestTimeout);
 
               let isInThinkingBlock = false;
+              const reasoningEscaper = createThinkMarkerEscaper();
               // Collect all content blocks for preservation (thinking, text, tool_use)
               const collectedContent: Record<string, unknown>[] = [];
               // Capture usage info from message_delta event for cache stats
@@ -1377,7 +1378,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       // provider-authored and can contain marker-shaped substrings that would
                       // otherwise be indistinguishable from the real <think>/</think> we wrap
                       // around it.
-                      streamedText[event.index] = escapeThinkMarkers(thinkingText);
+                      streamedText[event.index] = reasoningEscaper.push(thinkingText);
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
@@ -1426,7 +1427,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'content_block_stop') {
                     if (isInThinkingBlock) {
                       isInThinkingBlock = false;
-                      streamedText[event.index] = '</think>';
+                      streamedText[event.index] = reasoningEscaper.flush() + '</think>';
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if (collectedContent[event.index] && collectedContent[event.index].type === 'tool_use') {
                       // Parse the complete tool input when the block ends

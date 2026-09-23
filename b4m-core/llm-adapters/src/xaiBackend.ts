@@ -1,5 +1,6 @@
 import {
   ChatModels,
+  createThinkMarkerEscaper,
   escapeThinkMarkers,
   ImageModels,
   IMessage,
@@ -574,6 +575,7 @@ export class XAIBackend implements ICompletionBackend {
 
     const func: { name?: string; id?: string; parameters?: string }[] = [];
     let isInThinkingBlock = false;
+    const reasoningEscaper = createThinkMarkerEscaper();
     let cachedTokensFromStream = 0; // Track cached tokens from streaming chunks
     // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
     // capture) - the terminal chunk of a round carries it, earlier chunks don't.
@@ -598,7 +600,7 @@ export class XAIBackend implements ICompletionBackend {
 
         // Handle reasoning content for thinking models (only if thinking is enabled)
         if (thinkingEnabled && (c.delta as any).reasoning_content) {
-          const escapedReasoning = escapeThinkMarkers((c.delta as any).reasoning_content);
+          const escapedReasoning = reasoningEscaper.push((c.delta as any).reasoning_content);
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
             streamedText[c.index] = '<think>' + escapedReasoning;
@@ -611,7 +613,7 @@ export class XAIBackend implements ICompletionBackend {
         // Handle end of reasoning content
         if (isInThinkingBlock && c.delta.content && !(c.delta as any).reasoning_content) {
           isInThinkingBlock = false;
-          streamedText[c.index] = '</think>' + (c.delta.content || '');
+          streamedText[c.index] = reasoningEscaper.flush() + '</think>' + (c.delta.content || '');
           return;
         }
 

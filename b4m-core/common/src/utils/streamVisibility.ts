@@ -37,6 +37,61 @@ export function escapeThinkMarkers(text: string): string {
   return text.replace(/<(\/?)think>/g, `<${ZERO_WIDTH_SPACE}$1think>`);
 }
 
+/** One less than the longer marker's length: the most characters a real marker prefix can span. */
+const MAX_PARTIAL_MARKER_LENGTH = THINK_CLOSE_TAG.length - 1;
+
+/** Length of the longest suffix of `text` that is a proper prefix of either marker token. */
+function partialMarkerSuffixLength(text: string): number {
+  const max = Math.min(MAX_PARTIAL_MARKER_LENGTH, text.length);
+  for (let len = max; len > 0; len--) {
+    const suffix = text.slice(-len);
+    if (THINK_OPEN_TAG.startsWith(suffix) || THINK_CLOSE_TAG.startsWith(suffix)) {
+      return len;
+    }
+  }
+  return 0;
+}
+
+export interface ThinkMarkerEscaper {
+  /** Escapes as much of `chunk` as is safe to emit now; holds back a possible marker prefix. */
+  push(chunk: string): string;
+  /** Escapes and returns whatever is still held back. Call once the reasoning span ends. */
+  flush(): string;
+}
+
+/**
+ * Stateful counterpart to escapeThinkMarkers for text that arrives in streamed pieces.
+ *
+ * escapeThinkMarkers alone is only safe on a complete string: adapters call it once per
+ * delta, but a provider is free to split a marker-shaped substring across two adjacent
+ * deltas (e.g. 'wrote <th' then 'ink> tag'). Escaping each half independently leaves both
+ * halves unescaped, and concatenating them reassembles a literal `<think>`/`</think>` that
+ * is then indistinguishable from the real control marker wrapped around the same text.
+ *
+ * This holds back any trailing substring of the buffered text that could still extend into
+ * a marker (up to `<think>`/`</think>`'s length minus one) until the next push resolves it
+ * one way or the other, or flush() is called at the end of the reasoning span.
+ */
+export function createThinkMarkerEscaper(): ThinkMarkerEscaper {
+  let pending = '';
+  return {
+    push(chunk: string): string {
+      if (!chunk) return '';
+      const combined = pending + chunk;
+      const holdLength = partialMarkerSuffixLength(combined);
+      const safeLength = combined.length - holdLength;
+      const safe = combined.slice(0, safeLength);
+      pending = combined.slice(safeLength);
+      return escapeThinkMarkers(safe);
+    },
+    flush(): string {
+      const remaining = pending;
+      pending = '';
+      return escapeThinkMarkers(remaining);
+    },
+  };
+}
+
 /**
  * The visible remainder of one reply slot, with hidden reasoning removed.
  *

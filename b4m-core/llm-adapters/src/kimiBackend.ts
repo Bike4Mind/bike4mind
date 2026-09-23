@@ -1,5 +1,6 @@
 import {
   ChatModels,
+  createThinkMarkerEscaper,
   escapeThinkMarkers,
   IMessage,
   ModelBackend,
@@ -499,6 +500,7 @@ export class KimiBackend implements ICompletionBackend {
 
     const func: { name?: string; id?: string; parameters?: string }[] = [];
     let isInThinkingBlock = false;
+    const reasoningEscaper = createThinkMarkerEscaper();
     let cachedTokensFromStream = 0;
     let streamFinishReason: string | undefined;
     // Prose, not streamedText: the monologue is wrapped into streamedText as well,
@@ -524,7 +526,7 @@ export class KimiBackend implements ICompletionBackend {
         // Ungated, for the same reason as the non-streaming path: reasoning arrives
         // by default on every current Kimi and is billed either way.
         if (deltaReasoning) {
-          const escapedReasoning = escapeThinkMarkers(deltaReasoning);
+          const escapedReasoning = reasoningEscaper.push(deltaReasoning);
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
             streamedText[c.index] = '<think>' + escapedReasoning;
@@ -541,7 +543,8 @@ export class KimiBackend implements ICompletionBackend {
         if (isInThinkingBlock && c.delta.content) {
           isInThinkingBlock = false;
           sawProse = true;
-          streamedText[c.index] = (streamedText[c.index] ?? '') + '</think>' + c.delta.content;
+          streamedText[c.index] =
+            (streamedText[c.index] ?? '') + reasoningEscaper.flush() + '</think>' + c.delta.content;
           return;
         }
 
@@ -574,7 +577,7 @@ export class KimiBackend implements ICompletionBackend {
     // truncated mid-reasoning. Without this the tag stays open and the monologue
     // bleeds into the answer after the tool recursion.
     if (isInThinkingBlock) {
-      await callback(['</think>'], {
+      await callback([reasoningEscaper.flush() + '</think>'], {
         ...splitCacheInclusiveInput(accumInputTokens + inputTokens, accumCacheReadTokens + cachedTokensFromStream),
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,

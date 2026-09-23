@@ -1,7 +1,7 @@
 import {
   BEDROCK_NO_PROMPT_CACHING_MODELS,
   ChatModels,
-  escapeThinkMarkers,
+  createThinkMarkerEscaper,
   IMessage,
   MessageContentText,
   ModelBackend,
@@ -241,6 +241,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
 
   // Track thinking block state
   private isInThinkingBlock = false;
+  private reasoningEscaper = createThinkMarkerEscaper();
   /**
    * Reasoning blocks of the assistant turn currently being translated, indexed by the
    * stream's content-block index. Reset at `message_start` and consumed by
@@ -1126,6 +1127,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       if (isMessageStart(chunk)) {
         // Reset thinking block state at the start of a new message
         this.isInThinkingBlock = false;
+        this.reasoningEscaper = createThinkMarkerEscaper();
         this.assistantReasoningBlocks = [];
         choice = {
           chunkText: '',
@@ -1175,7 +1177,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else if (isThinkingDelta(delta)) {
           // Escaped for the transcript; the replay copy in assistantReasoningBlocks stays
           // raw since it is resent to the API verbatim in tool-use loops.
-          choice.chunkText = escapeThinkMarkers(delta.thinking);
+          choice.chunkText = this.reasoningEscaper.push(delta.thinking);
           const block = this.assistantReasoningBlocks[chunk.index];
           if (block?.type === 'thinking') block.thinking += delta.thinking;
         } else if (isSignatureDelta(delta)) {
@@ -1189,7 +1191,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         choice = {
           status: ChoiceStatus.STREAM,
           index: chunk.index,
-          chunkText: this.isInThinkingBlock ? '</think>' : '',
+          chunkText: this.isInThinkingBlock ? this.reasoningEscaper.flush() + '</think>' : '',
         } as IChoice;
 
         // Reset thinking block state

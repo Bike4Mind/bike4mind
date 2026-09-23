@@ -1,4 +1,11 @@
-import { ChatModels, escapeThinkMarkers, IMessage, ModelBackend, type ModelInfo } from '@bike4mind/common';
+import {
+  ChatModels,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
+  IMessage,
+  ModelBackend,
+  type ModelInfo,
+} from '@bike4mind/common';
 import {
   ChoiceEndReason,
   ChoiceStatus,
@@ -56,6 +63,9 @@ interface MoonshotMessage {
 export default class MoonshotBedrockBackend extends BaseBedrockBackend {
   /** Streaming-only: whether an unclosed `<think>` tag has been emitted. */
   private isInThinkingBlock = false;
+
+  /** Streaming-only: buffers `reasoning_content` deltas so a split marker can't slip through. */
+  private reasoningEscaper = createThinkMarkerEscaper();
 
   /**
    * Streaming-only: extracts Kimi's native `<|tool_call...|>` tokens out of the
@@ -190,6 +200,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
     // A fresh request starts outside any thinking block, with an empty native-tool
     // buffer; see translateStreamChunk.
     this.isInThinkingBlock = false;
+    this.reasoningEscaper = createThinkMarkerEscaper();
     this.nativeToolStream = new KimiNativeToolStream();
 
     return {
@@ -305,9 +316,9 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         continue;
       }
 
-      // Escaped up front: every use below feeds a <think> block, and this is
-      // provider-authored text that can itself contain marker-shaped substrings.
-      const reasoning = escapeThinkMarkers(payload.reasoning_content ?? '');
+      // Escaped via reasoningEscaper at its use site below (streamed delta by
+      // delta, so a marker-shaped substring split across two deltas needs buffering).
+      const reasoning = payload.reasoning_content ?? '';
       const content = payload.content ?? '';
       // Bedrock Kimi does NOT populate `reasoning_content`; it inlines the monologue
       // in `content` wrapped in <reasoning>...</reasoning> -- a self-contained,
@@ -325,7 +336,8 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       if (opts.streaming) {
         // `reasoning_content` fallback spelling: merge into one <think> block.
         if (reasoning) {
-          const chunkText = this.isInThinkingBlock ? reasoning : `<think>${reasoning}`;
+          const escapedReasoning = this.reasoningEscaper.push(reasoning);
+          const chunkText = this.isInThinkingBlock ? escapedReasoning : `<think>${escapedReasoning}`;
           this.isInThinkingBlock = true;
           choices.push({ status: ChoiceStatus.STREAM, index, chunkText, ...usageForIndex });
           continue;
@@ -370,7 +382,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
             status: ChoiceStatus.END,
             statusEndReason: endReason,
             index,
-            chunkText: `</think>${content}`,
+            chunkText: `${this.reasoningEscaper.flush()}</think>${content}`,
             ...usageForIndex,
           });
           continue;

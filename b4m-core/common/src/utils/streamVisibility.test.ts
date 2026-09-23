@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { escapeThinkMarkers, hasVisibleReplyText, visibleReplyText } from './streamVisibility';
+import {
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
+  hasVisibleReplyText,
+  visibleReplyText,
+} from './streamVisibility';
 
 describe('visibleReplyText', () => {
   it('treats an empty or whitespace-only slot as nothing visible', () => {
@@ -107,6 +112,66 @@ describe('escapeThinkMarkers', () => {
     const rawReasoning = 'outer <think>inner</think> tail </think> more';
     const wrapped = `<think>${escapeThinkMarkers(rawReasoning)}</think>final`;
     expect(visibleReplyText(wrapped)).toBe('final');
+  });
+});
+
+describe('createThinkMarkerEscaper', () => {
+  it('escapes a marker fully contained in one push', () => {
+    const escaper = createThinkMarkerEscaper();
+    const escaped = escaper.push('reasoned about <think> here') + escaper.flush();
+    expect(escaped).not.toContain('<think>');
+    expect(escaped).toContain('think>');
+  });
+
+  it('defangs an open marker split across two adjacent pushes', () => {
+    const escaper = createThinkMarkerEscaper();
+    let escaped = escaper.push('wrote <th');
+    escaped += escaper.push('ink> tag, more reasoning');
+    escaped += escaper.flush();
+    expect(escaped).not.toContain('<think>');
+
+    // Reassembling through the real accumulator/visibility pipeline must not
+    // hide anything: the same reproduction the reviewer ran against the scanner.
+    const wrapped = `<think>${escaped}</think>FINAL ANSWER the user should see`;
+    expect(visibleReplyText(wrapped)).toBe('FINAL ANSWER the user should see');
+  });
+
+  it('defangs a close marker split across two adjacent pushes', () => {
+    const escaper = createThinkMarkerEscaper();
+    let escaped = escaper.push('secret prefix </thi');
+    escaped += escaper.push('nk>LEAKED SECRET');
+    escaped += escaper.flush();
+
+    const wrapped = `<think>${escaped}</think>answer`;
+    expect(visibleReplyText(wrapped)).toBe('answer');
+  });
+
+  it('holds back a partial suffix across many single-character pushes', () => {
+    const escaper = createThinkMarkerEscaper();
+    const source = 'before </think> after';
+    let escaped = '';
+    for (const char of source) {
+      escaped += escaper.push(char);
+    }
+    escaped += escaper.flush();
+
+    const wrapped = `<think>${escaped}</think>final`;
+    expect(visibleReplyText(wrapped)).toBe('final');
+  });
+
+  it('flush is a no-op when nothing is pending', () => {
+    const escaper = createThinkMarkerEscaper();
+    escaper.push('plain text');
+    expect(escaper.flush()).toBe('');
+  });
+
+  it('handles empty pushes without disturbing pending state', () => {
+    const escaper = createThinkMarkerEscaper();
+    let escaped = escaper.push('wrote <th');
+    escaped += escaper.push('');
+    escaped += escaper.push('ink>tag');
+    escaped += escaper.flush();
+    expect(escaped).not.toContain('<think>');
   });
 });
 

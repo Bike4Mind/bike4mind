@@ -1,4 +1,11 @@
-import { ChatModels, escapeThinkMarkers, IMessage, type ModelInfo, ModelBackend } from '@bike4mind/common';
+import {
+  ChatModels,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
+  IMessage,
+  type ModelInfo,
+  ModelBackend,
+} from '@bike4mind/common';
 import { ChoiceEndReason, ChoiceStatus, ICompletionOptions, ICompletionResponseChunk } from '../backend';
 import { BaseBedrockBackend } from './base';
 import { ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
@@ -39,6 +46,7 @@ export default class DeepSeekBedrockBackend extends BaseBedrockBackend {
   private isSpecialTask = false;
   /** Tracks whether the stream is currently inside a reasoning span, to emit one <think>/</think> pair per span. */
   private isInReasoningBlock = false;
+  private reasoningEscaper = createThinkMarkerEscaper();
 
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
@@ -245,6 +253,7 @@ export default class DeepSeekBedrockBackend extends BaseBedrockBackend {
 
     if (event.messageStart) {
       this.isInReasoningBlock = false;
+      this.reasoningEscaper = createThinkMarkerEscaper();
       return { done: false, chunk: { model, choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText: '' }] } };
     }
 
@@ -256,7 +265,8 @@ export default class DeepSeekBedrockBackend extends BaseBedrockBackend {
 
     if (event.contentBlockStop) {
       // Close a reasoning span that ends without a following text delta.
-      const chunkText = this.isInReasoningBlock && !this.isSpecialTask ? '</think>' : '';
+      const chunkText =
+        this.isInReasoningBlock && !this.isSpecialTask ? this.reasoningEscaper.flush() + '</think>' : '';
       this.isInReasoningBlock = false;
       return { done: false, chunk: { model, choices: [{ index: 0, status: ChoiceStatus.STREAM, chunkText }] } };
     }
@@ -308,10 +318,10 @@ export default class DeepSeekBedrockBackend extends BaseBedrockBackend {
       if (this.isSpecialTask) return ''; // Never leak chain-of-thought into a title/summary field.
       const opening = this.isInReasoningBlock ? '' : '<think>';
       this.isInReasoningBlock = true;
-      return opening + escapeThinkMarkers(delta.reasoningContent.text);
+      return opening + this.reasoningEscaper.push(delta.reasoningContent.text);
     }
     if (delta?.text !== undefined) {
-      const closing = this.isInReasoningBlock ? '</think>' : '';
+      const closing = this.isInReasoningBlock ? this.reasoningEscaper.flush() + '</think>' : '';
       this.isInReasoningBlock = false;
       return closing + delta.text;
     }
