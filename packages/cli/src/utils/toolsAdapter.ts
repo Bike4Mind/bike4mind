@@ -9,10 +9,10 @@ import {
   cliSharedTools,
   generateTools,
   getCliOnlyTools,
+  isPathAllowed,
   setShowUserQuestionFn,
   resolveEditLocalFile,
   isFuzzyEditConfirmationRequired,
-  isPathAllowed,
   type EditPlan,
   type LlmTools,
   type UserQuestionPayload,
@@ -159,10 +159,20 @@ export function wrapToolWithPermission(
       let sandboxedArgs = args;
 
       if (toolName === 'bash_execute' && args?.command && sandboxOrchestrator) {
-        const cwd = args.cwd ? path.resolve(process.cwd(), args.cwd) : process.cwd();
+        let cwd = args.cwd ? path.resolve(process.cwd(), args.cwd) : process.cwd();
+        // Resolve symlinks up front so the confinement check (isPathAllowed resolves
+        // internally) and the sandbox's writable bind (built from the string we pass)
+        // use the SAME real path - otherwise a symlinked cwd could validate while the
+        // bind points elsewhere.
+        try {
+          cwd = realpathSync(cwd);
+        } catch {
+          // Not-yet-resolvable path: keep the lexical resolution.
+        }
         const decision = sandboxOrchestrator.shouldSandbox(args.command, cwd);
 
-        if (decision.type === 'blocked') {
+        // Record + report a blocked command and return the model-facing message.
+        const blockCommand = (reason: string): string => {
           sandboxOrchestrator.recordBlocked();
           sandboxOrchestrator
             .recordViolation({
@@ -170,20 +180,39 @@ export function wrapToolWithPermission(
               command: args.command,
               blockedBy: 'config',
               timestamp: new Date(),
-              detail: decision.reason,
+              detail: reason,
             })
             .catch(() => {});
-          console.error(
-            `\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mSandbox denied this command:\x1b[0m ${decision.reason}\n`
-          );
-          return `Command blocked by sandbox: ${decision.reason}`;
+          console.error(`\n\x1b[41m\x1b[97m BLOCKED \x1b[0m \x1b[31mSandbox denied this command:\x1b[0m ${reason}\n`);
+          return `Command blocked by sandbox: ${reason}`;
+        };
+
+        if (decision.type === 'blocked') {
+          return blockCommand(decision.reason);
         }
 
         if (decision.type === 'sandbox') {
+          // Confine the writable root to the same allow-list the core file tools
+          // honor. A model-supplied cwd outside the workspace would otherwise
+          // become the sandbox's read-write bind; reject it (and drop the temp
+          // sandbox profile shouldSandbox already built) before it can execute.
+          if (!isPathAllowed(cwd, allowedDirectories).allowed) {
+            cleanupSandboxFiles(decision.wrappedCommand.cleanupPaths);
+            return blockCommand(
+              `working directory ${cwd} is outside the sandbox writable root ` +
+                `(grant it with '/add-dir ${cwd}' or run from within the workspace)`
+            );
+          }
           sandboxOrchestrator.recordSandboxed();
           isSandboxed = true;
           sandboxedArgs = {
             ...args,
+            // Hand execution the SAME realpath-resolved cwd used for the confinement
+            // check and the writable bind. Bubblewrap bakes --chdir into its command,
+            // but Seatbelt's process cwd is whatever spawn() sets, so without this the
+            // sandboxed process would run in the unresolved (symlinked) path - a silent
+            // divergence from the profile's baked writable root.
+            cwd,
             command: decision.wrappedCommand.commandString,
             _sandboxCleanup: decision.wrappedCommand.cleanupPaths,
           };
@@ -196,10 +225,20 @@ export function wrapToolWithPermission(
       // Args actually handed to execution. Defaults to effectiveArgs; the fuzzy-edit
       // gate below rebinds it to carry the approved content-hash snapshot.
       let execArgs: Record<string, unknown> = effectiveArgs;
+      // Temp sandbox profile this wrapper created (Seatbelt writes a .sb file).
+      // Cleaned once in the finally below: after the awaited command completes on
+      // the success path, and on any early-return path (plan-mode block, permission
+      // deny) that skips executeAndRecord. The success-path returns MUST `await`
+      // executeAndRecord() - a bare `return <promise>` inside try/finally runs the
+      // finally synchronously at the return, rmSync'ing this profile before the
+      // spawned sandbox-exec ever opens it (every sandboxed command would then fail).
+      // Only paths THIS wrapper set - a model-supplied `_sandboxCleanup` on the
+      // raw (unsandboxed) args must never reach rmSync(recursive, force).
+      const sandboxCleanupPaths = isSandboxed ? (sandboxedArgs?._sandboxCleanup as string[] | undefined) : undefined;
 
       /**
-       * Shared execution flow: run tool, cleanup sandbox files, capture violations,
-       * offer retry on sandbox failure, and record observation.
+       * Shared execution flow: run tool, capture violations, offer retry on
+       * sandbox failure, and record observation.
        */
       async function executeAndRecord(): Promise<string> {
         let result: string;
@@ -214,10 +253,6 @@ export function wrapToolWithPermission(
           if (!isPathAccessDenial(msg)) throw err;
           result = msg;
         }
-        // Only clean up paths THIS wrapper set on sandboxedArgs. When unsandboxed,
-        // effectiveArgs === the raw model args, so a model-supplied `_sandboxCleanup`
-        // must never reach rmSync(recursive, force).
-        cleanupSandboxFiles(isSandboxed ? sandboxedArgs?._sandboxCleanup : undefined);
         await captureViolations(isSandboxed, result, args?.command, sandboxOrchestrator);
         result = await retrySandboxFailure(
           isSandboxed,
@@ -247,131 +282,135 @@ export function wrapToolWithPermission(
         return result;
       }
 
-      // Plan mode: block tools that would mutate state (everything that's not read-only),
-      // except writes targeting the plan file. Plan-mode block runs BEFORE the
-      // permission/trust check so it overrides previously trusted tools.
-      const { useCliStore } = await import('../store/index.js');
-      const liveInteractionMode = useCliStore.getState().interactionMode;
-      // Subagents carry a ceiling; clamp to the less-permissive of it and the live
-      // mode so they never exceed the parent but still honor a mid-run plan switch.
-      const interactionMode = interactionModeOverride
-        ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
-        : liveInteractionMode;
-      if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
-        const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only — research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
-        agentContext.observationQueue.push({ toolName, result });
-        return result;
-      }
-
-      // Command-level risk gate: inspect the actual command text (not just the
-      // tool name) so a destructive command hidden behind a wrapper
-      // (`sh -c "rm -rf /"`, `sudo bash -c ...`, `curl ... | sh`) is never
-      // silently auto-run. A high-risk command ALWAYS requires an explicit
-      // prompt - this overrides host-allowlist / trust / sandbox-auto-allow /
-      // auto-accept short-circuits below. It only ever tightens: benign commands
-      // keep their existing (possibly auto-approved) behavior.
-      const commandField = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
-      const commandText = commandField ? args?.[commandField] : undefined;
-      // `classifyCommandRisk` is documented never to throw, but this call sits on the
-      // security boundary for every shell command - if it ever does, treat that as a
-      // high-risk command (force the prompt) rather than letting the error escape the
-      // permission gate and skip classification entirely.
-      let commandRisk: ReturnType<typeof classifyCommandRisk> | null = null;
-      if (typeof commandText === 'string') {
-        try {
-          commandRisk = classifyCommandRisk(commandText);
-        } catch {
-          commandRisk = { level: 'high', reasons: ['command risk analysis failed (fail closed)'] };
+      try {
+        // Plan mode: block tools that would mutate state (everything that's not read-only),
+        // except writes targeting the plan file. Plan-mode block runs BEFORE the
+        // permission/trust check so it overrides previously trusted tools.
+        const { useCliStore } = await import('../store/index.js');
+        const liveInteractionMode = useCliStore.getState().interactionMode;
+        // Subagents carry a ceiling; clamp to the less-permissive of it and the live
+        // mode so they never exceed the parent but still honor a mid-run plan switch.
+        const interactionMode = interactionModeOverride
+          ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
+          : liveInteractionMode;
+        if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
+          const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only \u2014 research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
+          agentContext.observationQueue.push({ toolName, result });
+          return result;
         }
-      }
-      const forcePromptForRisk = commandRisk?.level === 'high';
 
-      // Fuzzy-edit gate: resolve the edit ONCE, through the SAME path
-      // authorization the tool itself enforces (no raw model-supplied path is
-      // ever read here), to learn whether it resolves via the fuzzy fallback -
-      // which can write a wider span than old_string names. Such an edit is
-      // re-confirmed even under trust / auto-accept (mirroring forcePromptForRisk)
-      // so the human sees the real span. Any resolve error (auth denial, missing
-      // file, no match) leaves editPlan null: the gate forces no prompt and the
-      // real error surfaces at execution. edit_local_file is never shell-like, so
-      // this and forcePromptForRisk are mutually exclusive.
-      let editPlan: EditPlan | null = null;
-      if (
-        toolName === 'edit_local_file' &&
-        typeof args?.path === 'string' &&
-        typeof args?.old_string === 'string' &&
-        typeof args?.new_string === 'string'
-      ) {
-        try {
-          editPlan = await resolveEditLocalFile(
-            args as { path: string; old_string: string; new_string: string },
-            allowedDirectories
-          );
-        } catch {
-          editPlan = null;
+        // Command-level risk gate: inspect the actual command text (not just the
+        // tool name) so a destructive command hidden behind a wrapper
+        // (`sh -c "rm -rf /"`, `sudo bash -c ...`, `curl ... | sh`) is never
+        // silently auto-run. A high-risk command ALWAYS requires an explicit
+        // prompt - this overrides host-allowlist / trust / sandbox-auto-allow /
+        // auto-accept short-circuits below. It only ever tightens: benign commands
+        // keep their existing (possibly auto-approved) behavior.
+        const commandField = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
+        const commandText = commandField ? args?.[commandField] : undefined;
+        // `classifyCommandRisk` is documented never to throw, but this call sits on the
+        // security boundary for every shell command - if it ever does, treat that as a
+        // high-risk command (force the prompt) rather than letting the error escape the
+        // permission gate and skip classification entirely.
+        let commandRisk: ReturnType<typeof classifyCommandRisk> | null = null;
+        if (typeof commandText === 'string') {
+          try {
+            commandRisk = classifyCommandRisk(commandText);
+          } catch {
+            commandRisk = { level: 'high', reasons: ['command risk analysis failed (fail closed)'] };
+          }
         }
+        const forcePromptForRisk = commandRisk?.level === 'high';
+
+        // Fuzzy-edit gate: resolve the edit ONCE, through the SAME path
+        // authorization the tool itself enforces (no raw model-supplied path is
+        // ever read here), to learn whether it resolves via the fuzzy fallback -
+        // which can write a wider span than old_string names. Such an edit is
+        // re-confirmed even under trust / auto-accept (mirroring forcePromptForRisk)
+        // so the human sees the real span. Any resolve error (auth denial, missing
+        // file, no match) leaves editPlan null: the gate forces no prompt and the
+        // real error surfaces at execution. edit_local_file is never shell-like, so
+        // this and forcePromptForRisk are mutually exclusive.
+        let editPlan: EditPlan | null = null;
+        if (
+          toolName === 'edit_local_file' &&
+          typeof args?.path === 'string' &&
+          typeof args?.old_string === 'string' &&
+          typeof args?.new_string === 'string'
+        ) {
+          try {
+            editPlan = await resolveEditLocalFile(
+              args as { path: string; old_string: string; new_string: string },
+              allowedDirectories
+            );
+          } catch {
+            editPlan = null;
+          }
+        }
+        const forcePromptForFuzzyEdit = editPlan?.strategy != null;
+        const forcePrompt = forcePromptForRisk || forcePromptForFuzzyEdit;
+
+        // Bind the fuzzy edit's execution to the snapshot the gate just approved, so
+        // the bytes written are the ones the human confirmed. The tool refuses to
+        // apply a fuzzy edit whose content-hash no longer matches, forcing a fresh
+        // prompt (see executeWithFuzzyConfirmation). Exact edits are deterministic
+        // and need no binding.
+        if (forcePromptForFuzzyEdit && editPlan) {
+          execArgs = { ...effectiveArgs, confirmedFuzzyHash: editPlan.contentHash };
+        }
+
+        // Host allowlist (claude --allowedTools): auto-approve tools matching an
+        // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
+        const allowedPatterns = getAllowedToolPatterns();
+        if (!forcePrompt && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
+          return await executeAndRecord();
+        }
+
+        // Auto-approved, trusted, or sandbox auto-allowed
+        if (!forcePrompt && !permissionManager.needsPermission(toolName, { isSandboxed })) {
+          return await executeAndRecord();
+        }
+
+        // Auto-accept: skip permission prompt when Shift+Tab toggle is on
+        if (!forcePrompt && interactionMode === 'auto-accept') {
+          return await executeAndRecord();
+        }
+
+        // Generate preview for dangerous operations. For edit_local_file the gate
+        // already resolved the real span through the authorized preflight, so reuse
+        // that (one resolve, no extra raw-path read) instead of resolving again in
+        // generateToolPreview; fall back to the generic preview only when the edit
+        // did not resolve (auth denied, missing file, no match).
+        const basePreview =
+          toolName === 'edit_local_file' && editPlan
+            ? editPlan.diffPreview
+            : await generateToolPreview(toolName, args, isSandboxed, allowedDirectories);
+        const preview =
+          forcePromptForRisk && commandRisk
+            ? prependRiskBanner(basePreview, commandRisk.reasons)
+            : forcePromptForFuzzyEdit
+              ? prependFuzzyEditBanner(basePreview)
+              : basePreview;
+
+        // Show permission prompt and wait indefinitely for response
+        const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
+
+        if (response.action === 'deny') {
+          throw new PermissionDeniedError(toolName, args);
+        }
+
+        if (response.action === 'allow-session') {
+          permissionManager.trustToolForSession(toolName);
+        }
+
+        if (response.action === 'allow-always') {
+          await persistToolTrust(toolName, permissionManager, configStore);
+        }
+
+        return await executeAndRecord();
+      } finally {
+        cleanupSandboxFiles(sandboxCleanupPaths);
       }
-      const forcePromptForFuzzyEdit = editPlan?.strategy != null;
-      const forcePrompt = forcePromptForRisk || forcePromptForFuzzyEdit;
-
-      // Bind the fuzzy edit's execution to the snapshot the gate just approved, so
-      // the bytes written are the ones the human confirmed. The tool refuses to
-      // apply a fuzzy edit whose content-hash no longer matches, forcing a fresh
-      // prompt (see executeWithFuzzyConfirmation). Exact edits are deterministic
-      // and need no binding.
-      if (forcePromptForFuzzyEdit && editPlan) {
-        execArgs = { ...effectiveArgs, confirmedFuzzyHash: editPlan.contentHash };
-      }
-
-      // Host allowlist (claude --allowedTools): auto-approve tools matching an
-      // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
-      const allowedPatterns = getAllowedToolPatterns();
-      if (!forcePrompt && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
-        return executeAndRecord();
-      }
-
-      // Auto-approved, trusted, or sandbox auto-allowed
-      if (!forcePrompt && !permissionManager.needsPermission(toolName, { isSandboxed })) {
-        return executeAndRecord();
-      }
-
-      // Auto-accept: skip permission prompt when Shift+Tab toggle is on
-      if (!forcePrompt && interactionMode === 'auto-accept') {
-        return executeAndRecord();
-      }
-
-      // Generate preview for dangerous operations. For edit_local_file the gate
-      // already resolved the real span through the authorized preflight, so reuse
-      // that (one resolve, no extra raw-path read) instead of resolving again in
-      // generateToolPreview; fall back to the generic preview only when the edit
-      // did not resolve (auth denied, missing file, no match).
-      const basePreview =
-        toolName === 'edit_local_file' && editPlan
-          ? editPlan.diffPreview
-          : await generateToolPreview(toolName, args, isSandboxed, allowedDirectories);
-      const preview =
-        forcePromptForRisk && commandRisk
-          ? prependRiskBanner(basePreview, commandRisk.reasons)
-          : forcePromptForFuzzyEdit
-            ? prependFuzzyEditBanner(basePreview)
-            : basePreview;
-
-      // Show permission prompt and wait indefinitely for response
-      const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
-
-      if (response.action === 'deny') {
-        throw new PermissionDeniedError(toolName, args);
-      }
-
-      if (response.action === 'allow-session') {
-        permissionManager.trustToolForSession(toolName);
-      }
-
-      if (response.action === 'allow-always') {
-        await persistToolTrust(toolName, permissionManager, configStore);
-      }
-
-      return executeAndRecord();
     },
   };
 }
@@ -415,10 +454,19 @@ export function wrapTools(tools: ICompletionOptionTools[], deps: WrapToolDeps): 
 }
 
 /**
- * Detect whether a tool result indicates a sandbox-specific runtime failure.
- * Returns true for errors originating from sandbox-exec (macOS) or bwrap (Linux).
+ * Detect whether a tool result indicates a sandbox-specific runtime failure
+ * worth offering an unsandboxed retry for. Matches the sandbox markers
+ * (`sandbox-exec:`, `bwrap:`) AND a bare "Operation not permitted": on macOS a
+ * real Seatbelt denial is the denied syscall's own EPERM, printed by the tool
+ * that hit it with NO `sandbox-exec:` prefix (that prefix only appears when the
+ * profile fails to load) - a write denial reads `touch: <path>: Operation not
+ * permitted`, and a blocked connect surfaces the same EPERM. Matching only the
+ * markers would never fire for those, silently dropping the recovery offer and
+ * the `/sandbox:network on` tip. The known false positive (e.g. `kill` on a
+ * foreign pid) is accepted: it only costs a deniable retry prompt, whereas a
+ * false negative removes the recovery path entirely. Exported for unit testing.
  */
-function isSandboxFailure(isSandboxed: boolean, result: string): boolean {
+export function isSandboxFailure(isSandboxed: boolean, result: string): boolean {
   if (!isSandboxed) return false;
   return result.includes('sandbox-exec:') || result.includes('bwrap:') || result.includes('Operation not permitted');
 }
@@ -442,7 +490,11 @@ async function retrySandboxFailure(
   const retryResponse = await showPermissionPrompt(
     toolName,
     originalArgs,
-    `🛑 SANDBOX BLOCKED — This command was denied by the OS sandbox.\n\n- The sandbox prevented this operation because it violates filesystem restrictions.\n- You can retry without the sandbox, but the command will run with full system access.\n\n@@Error Details@@\n${errorSnippet}`
+    `🛑 SANDBOX BLOCKED - This command was denied by the OS sandbox.\n\n` +
+      `- The sandbox prevented this operation because it violates filesystem or network restrictions.\n` +
+      `- If this was a network call, prefer '/sandbox:network on' to allow filtered egress instead of full access.\n` +
+      `- You can retry without the sandbox, but the command will run with full system access.\n\n` +
+      `@@Error Details@@\n${errorSnippet}`
   );
 
   if (retryResponse.action !== 'deny') {
