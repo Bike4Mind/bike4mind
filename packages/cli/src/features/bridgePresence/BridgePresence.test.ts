@@ -2,20 +2,21 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import http from 'http';
 import type { AddressInfo } from 'net';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
+import type { ListenerOwner } from './peerOwner.js';
 
 // Hoisted so the vi.mock factories (themselves hoisted above imports) can
 // reference these safely.
 const { resolveMock, readFileMock, warn } = vi.hoisted(() => ({
-  resolveMock: vi.fn<(port: number) => Promise<number | null>>(),
+  resolveMock: vi.fn<(port: number) => Promise<ListenerOwner>>(),
   readFileMock: vi.fn<() => Promise<string>>(),
   warn: vi.fn(),
 }));
 
 // Owner-lookup seam - the only pre-transmission trust signal. Stub it per test
-// to model a trusted (same-UID) peer, a mismatched-UID squatter, and an
-// undeterminable owner, without touching a live socket.
+// to model a trusted (same-UID) peer, a foreign owner, a not-yet-listening
+// bridge, and an undeterminable owner, without touching a live socket.
 vi.mock('./peerOwner.js', () => ({
-  resolveLoopbackListenerUid: (port: number) => resolveMock(port),
+  resolveLoopbackListenerOwner: (port: number) => resolveMock(port),
 }));
 
 // Point readBridgeConfig at our in-process fake listener (port filled once the
@@ -36,6 +37,8 @@ vi.mock('../../utils/Logger.js', () => ({
 const { BridgePresence } = await import('./BridgePresence.js');
 
 const SECRET = 'test-hook-secret';
+const me = (): number => process.getuid!();
+const OWNER = (uid: number): ListenerOwner => ({ kind: 'owner', uid });
 
 function waitFor(pred: () => boolean, ms = 2000): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -62,6 +65,7 @@ describe('BridgePresence peer-ownership gate', () => {
     wsConnections = [];
     sockets = [];
     resolveMock.mockReset();
+    readFileMock.mockReset();
     warn.mockClear();
 
     server = http.createServer((req, res) => {
@@ -87,7 +91,7 @@ describe('BridgePresence peer-ownership gate', () => {
   });
 
   it('announces, connects and dispatches when the peer UID matches (criterion 2)', async () => {
-    resolveMock.mockResolvedValue(process.getuid!());
+    resolveMock.mockResolvedValue(OWNER(me()));
     const onSendPrompt = vi.fn();
     const presence = new BridgePresence();
     presence.setCallbacks({ onSendPrompt });
@@ -108,7 +112,7 @@ describe('BridgePresence peer-ownership gate', () => {
   });
 
   it('discloses nothing to a mismatched-UID peer (criterion 1)', async () => {
-    resolveMock.mockResolvedValue(process.getuid!() + 1);
+    resolveMock.mockResolvedValue(OWNER(me() + 1));
     const onSendPrompt = vi.fn();
     const presence = new BridgePresence();
     presence.setCallbacks({ onSendPrompt });
@@ -129,7 +133,7 @@ describe('BridgePresence peer-ownership gate', () => {
     // Trusted at announce, mismatched by the time the WS is built - exercises
     // the per-connect re-check (the TOCTOU-narrowing gate), not just the
     // announce gate.
-    resolveMock.mockResolvedValueOnce(process.getuid!()).mockResolvedValue(process.getuid!() + 1);
+    resolveMock.mockResolvedValueOnce(OWNER(me())).mockResolvedValue(OWNER(me() + 1));
     const onSendPrompt = vi.fn();
     const presence = new BridgePresence();
     presence.setCallbacks({ onSendPrompt });
@@ -147,14 +151,120 @@ describe('BridgePresence peer-ownership gate', () => {
     await presence.stop();
   });
 
-  it('fails closed when the owner is undeterminable (criterion 3)', async () => {
-    resolveMock.mockResolvedValue(null);
+  it('stays quiet (no security warning) when no bridge is listening yet (nit: absent != untrusted)', async () => {
+    resolveMock.mockResolvedValue({ kind: 'no-listener' });
     const presence = new BridgePresence();
 
     const ok = await presence.start({ workspacePath: '/tmp/ws' });
     expect(ok).toBe(false);
     expect(httpRequests).toEqual([]);
     expect(wsConnections).toEqual([]);
+    expect(warn).not.toHaveBeenCalled();
+
+    await presence.stop();
+  });
+
+  it('fails closed and warns when the owner is undeterminable (criterion 3)', async () => {
+    resolveMock.mockResolvedValue({ kind: 'unknown' });
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(false);
+    expect(httpRequests).toEqual([]);
+    expect(wsConnections).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    await presence.stop();
+  });
+
+  it('does not crash or leave a live socket when stop() lands during the trust probe (BLOCKER 1)', async () => {
+    let release!: (owner: ListenerOwner) => void;
+    resolveMock.mockImplementation(() => new Promise<ListenerOwner>(r => (release = r)));
+    const presence = new BridgePresence();
+
+    const startP = presence.start({ workspacePath: '/tmp/ws' });
+    // Let start() reach the awaited probe, then tear down mid-flight.
+    await waitFor(() => typeof release === 'function');
+    await presence.stop();
+    release(OWNER(me())); // probe resolves AFTER teardown nulled the instance state
+
+    // Pre-fix this rejected with `TypeError: reading 'workspacePath'`; now the
+    // post-await re-check returns cleanly and nothing was disclosed.
+    await expect(startP).resolves.toBe(false);
+    expect(httpRequests).toEqual([]);
+    expect(wsConnections).toEqual([]);
+  });
+
+  it('stops disclosing the secret once the port owner flips after announce (BLOCKER 3: /event + /disconnect gated)', async () => {
+    resolveMock
+      .mockResolvedValueOnce(OWNER(me())) // announce
+      .mockResolvedValueOnce(OWNER(me())) // initial WS connect
+      .mockResolvedValue(OWNER(me() + 1)); // reconnect after the owner flips
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+    await waitFor(() => wsConnections.length > 0 && httpRequests.some(u => u.startsWith('/event')));
+    const eventsBefore = httpRequests.filter(u => u.startsWith('/event')).length;
+
+    // Real bridge dies -> our WS drops -> gate closes; a foreign owner is now
+    // on the port. The reconnect probe (foreign) fires the one warning.
+    sockets[0].close();
+    await waitFor(() => warn.mock.calls.length > 0);
+
+    // The full transcript event must not leave: post() refuses while the gate
+    // is closed. Pre-fix, both of these POSTed `?secret=...` unauthenticated.
+    await presence.emitEvent({ type: 'message', role: 'assistant', text: 'TOP SECRET TRANSCRIPT' });
+    expect(httpRequests.filter(u => u.startsWith('/event')).length).toBe(eventsBefore);
+
+    await presence.stop();
+    expect(httpRequests.some(u => u.startsWith('/disconnect'))).toBe(false);
+  });
+
+  it('fails closed and warns once when getuid is unavailable (BLOCKER 5: Windows)', async () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'getuid');
+    Object.defineProperty(process, 'getuid', { value: undefined, configurable: true });
+    try {
+      const presence = new BridgePresence();
+      const ok = await presence.start({ workspacePath: '/tmp/ws' });
+      expect(ok).toBe(false);
+      expect(httpRequests).toEqual([]);
+      expect(wsConnections).toEqual([]);
+      expect(warn).toHaveBeenCalledTimes(1);
+      await presence.stop();
+    } finally {
+      if (original) Object.defineProperty(process, 'getuid', original);
+    }
+  });
+
+  it('recovers presence when an untrusted peer is later replaced by a trusted one (BLOCKER 5: recovery)', async () => {
+    resolveMock
+      .mockResolvedValueOnce(OWNER(me() + 1)) // first probe: foreign -> warn + retry
+      .mockResolvedValue(OWNER(me())); // announce-retry: trusted -> announce + WS
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(false);
+    expect(warn).toHaveBeenCalledTimes(1);
+
+    // The announce-retry (1s backoff) re-probes, now trusted, and brings the
+    // sprite up - recovery is actually observed, not just asserted in prose.
+    await waitFor(() => wsConnections.length > 0, 4000);
+    expect(httpRequests.some(u => u.startsWith('/announce') && u.includes(`secret=${SECRET}`))).toBe(true);
+
+    await presence.stop();
+  });
+
+  it('warns only once across repeated untrusted probes (BLOCKER 5: latch is not vacuous)', async () => {
+    resolveMock.mockResolvedValue(OWNER(me() + 1)); // always foreign
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(false);
+
+    // Wait for the announce-retry to fire a SECOND probe; the latch must
+    // suppress a second warning across the two untrusted probes.
+    await waitFor(() => resolveMock.mock.calls.length >= 2, 4000);
     expect(warn).toHaveBeenCalledTimes(1);
 
     await presence.stop();
