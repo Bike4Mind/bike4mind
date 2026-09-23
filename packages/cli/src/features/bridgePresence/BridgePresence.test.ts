@@ -70,6 +70,9 @@ describe('BridgePresence peer-ownership gate', () => {
   let announceReleasers: Array<() => void>;
   let holdEvent: boolean;
   let eventReleasers: Array<() => void>;
+  // Per-test override of the /announce response status, shifted per request;
+  // empty => 200. Lets a test drive a transient announce-POST failure + retry.
+  let announceStatusQueue: number[];
 
   beforeEach(async () => {
     httpRequests = [];
@@ -80,6 +83,7 @@ describe('BridgePresence peer-ownership gate', () => {
     announceReleasers = [];
     holdEvent = false;
     eventReleasers = [];
+    announceStatusQueue = [];
     resolveMock.mockReset();
     readFileMock.mockReset();
     warn.mockClear();
@@ -96,7 +100,8 @@ describe('BridgePresence peer-ownership gate', () => {
         if (url.startsWith('/event')) eventBodies.push(body);
         if (holdAnnounce && url.startsWith('/announce')) await new Promise<void>(r => announceReleasers.push(r));
         if (holdEvent && url.startsWith('/event')) await new Promise<void>(r => eventReleasers.push(r));
-        res.writeHead(200, { 'Content-Type': 'application/json' });
+        const status = url.startsWith('/announce') && announceStatusQueue.length ? announceStatusQueue.shift()! : 200;
+        res.writeHead(status, { 'Content-Type': 'application/json' });
         res.end('{}');
       });
     });
@@ -627,6 +632,77 @@ describe('BridgePresence peer-ownership gate', () => {
     await new Promise(r => setTimeout(r, 20));
     expect(eventBodies.some(b => b.includes('gen2-live'))).toBe(true);
     expect(wsConnections.length).toBe(2);
+
+    await presence.stop();
+  });
+
+  it('dispatches resolve_permission and abort commands to their callbacks', async () => {
+    resolveMock.mockResolvedValue(OWNER(me()));
+    const onResolvePermission = vi.fn();
+    const onAbort = vi.fn();
+    const presence = new BridgePresence();
+    presence.setCallbacks({ onResolvePermission, onAbort });
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+    await waitFor(() => wsConnections.length > 0);
+
+    sockets[0].send(
+      JSON.stringify({ requestId: 'r1', command: { type: 'resolve_permission', requestId: 'p1', allow: true } })
+    );
+    sockets[0].send(JSON.stringify({ command: { type: 'abort' } }));
+    await waitFor(() => onResolvePermission.mock.calls.length > 0 && onAbort.mock.calls.length > 0);
+    expect(onResolvePermission).toHaveBeenCalledWith('p1', true);
+    expect(onAbort).toHaveBeenCalledTimes(1);
+
+    await presence.stop();
+  });
+
+  it('ignores malformed and command-less frames but still handles a valid one', async () => {
+    resolveMock.mockResolvedValue(OWNER(me()));
+    const onSendPrompt = vi.fn();
+    const presence = new BridgePresence();
+    presence.setCallbacks({ onSendPrompt });
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(true);
+    await waitFor(() => wsConnections.length > 0);
+
+    sockets[0].send('not json{'); // malformed -> parse catch, ignored
+    sockets[0].send(JSON.stringify({ requestId: 'x' })); // no command field, ignored
+    sockets[0].send(JSON.stringify({ command: { type: 'send_prompt', text: 'hi' } })); // valid
+    await waitFor(() => onSendPrompt.mock.calls.length > 0);
+    expect(onSendPrompt).toHaveBeenCalledTimes(1);
+    expect(onSendPrompt).toHaveBeenCalledWith('hi');
+
+    await presence.stop();
+  });
+
+  it('runs quietly without presence when cc-bridge is not configured', async () => {
+    readFileMock.mockRejectedValue(new Error('ENOENT')); // no ~/.b4m/cc-bridge.json
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(false);
+    expect(httpRequests).toEqual([]);
+    expect(wsConnections).toEqual([]);
+    expect(resolveMock).not.toHaveBeenCalled(); // no config -> never even probes the owner
+    expect(warn).not.toHaveBeenCalled();
+
+    await presence.stop();
+  });
+
+  it('retries the announce after a transient POST failure and recovers', async () => {
+    resolveMock.mockResolvedValue(OWNER(me()));
+    announceStatusQueue = [500]; // first /announce POST fails; the retry succeeds
+    const presence = new BridgePresence();
+
+    const ok = await presence.start({ workspacePath: '/tmp/ws' });
+    expect(ok).toBe(false); // the first attempt's POST failed
+
+    // The announce-retry (1s backoff) re-announces, now 200, and brings the sprite up.
+    await waitFor(() => wsConnections.length > 0, 4000);
+    expect(httpRequests.filter(u => u.startsWith('/announce')).length).toBeGreaterThanOrEqual(2);
 
     await presence.stop();
   });

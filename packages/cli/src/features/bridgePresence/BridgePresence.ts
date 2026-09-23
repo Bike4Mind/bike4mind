@@ -282,7 +282,9 @@ export class BridgePresence {
       logger.debug(`[tavern] connectCommandWs threw: ${(err as Error).message}`)
     );
     // Initial status so the sprite doesn't sit at the default 'running'
-    // forever if the user doesn't type anything - make it explicit.
+    // forever if the user doesn't type anything - make it explicit. This rides
+    // the announce-time trust we just verified (emitEvent re-checks the generation
+    // but not ownership); acceptable within the same TOCTOU ceiling as announce.
     void this.emitEvent({ type: 'status', status: 'idle' }).catch(() => {
       /* emitEvent already logs its own failures */
     });
@@ -513,11 +515,21 @@ export class BridgePresence {
       this.ws = ws;
 
       ws.on('open', () => {
+        // Identity guard (mirrors the close handler): only the currently tracked
+        // socket may touch shared state. A late 'open' from a superseded socket
+        // must not reset the live generation's reconnect backoff.
+        if (this.ws !== ws) return;
         this.reconnectAttempts = 0;
         logger.debug('[tavern] command WS open');
       });
 
       ws.on('message', raw => {
+        // Identity guard: a frame buffered on a superseded socket (a stop()+start()
+        // cycle can leave the old socket briefly delivering frames before its close
+        // handshake completes) must not dispatch into the new session - that would
+        // run a command addressed to a torn-down session (a stale abort/prompt/
+        // permission). `this.stopped` alone misses this: a fresh start() cleared it.
+        if (this.ws !== ws) return;
         let frame: ServerCommandFrame | null = null;
         try {
           frame = JSON.parse(raw.toString()) as ServerCommandFrame;

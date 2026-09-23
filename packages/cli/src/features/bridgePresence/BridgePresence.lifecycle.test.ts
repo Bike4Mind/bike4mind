@@ -125,4 +125,35 @@ describe('BridgePresence WS-close lifecycle (mocked ws)', () => {
 
     await p.stop();
   });
+
+  it('a frame from a stale socket is not dispatched into the new session (message identity guard)', async () => {
+    resolveMock.mockResolvedValue(OWNER(me()));
+    const onSendPrompt = vi.fn();
+    const p = new BridgePresence();
+    p.setCallbacks({ onSendPrompt });
+
+    await p.start({ workspacePath: '/tmp/ws' });
+    await waitFor(() => FakeWebSocket.instances.length === 1);
+    const stale = FakeWebSocket.instances[0]; // gen-1 socket
+
+    await p.stop();
+    await p.start({ workspacePath: '/tmp/ws' });
+    await waitFor(() => FakeWebSocket.instances.length === 2); // gen-2 socket is now this.ws
+
+    // A frame buffered on the stale gen-1 socket must NOT run against gen-2
+    // (`dispatchCommand` only checks `stopped`, which the fresh start() cleared).
+    stale.fire('message', Buffer.from(JSON.stringify({ command: { type: 'send_prompt', text: 'stale' } })));
+    await new Promise(r => setTimeout(r, 30));
+    expect(onSendPrompt).not.toHaveBeenCalled();
+
+    // The live socket still dispatches, proving the guard is identity, not a global off-switch.
+    FakeWebSocket.instances[1].fire(
+      'message',
+      Buffer.from(JSON.stringify({ command: { type: 'send_prompt', text: 'live' } }))
+    );
+    await waitFor(() => onSendPrompt.mock.calls.length > 0);
+    expect(onSendPrompt).toHaveBeenCalledWith('live');
+
+    await p.stop();
+  });
 });
