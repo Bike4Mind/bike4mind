@@ -327,11 +327,11 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
       countsByKind: { 'expired-claim': 0 },
       findings: [],
     });
-    // resolvedSince, not seenSince - the two diverge for a subject dismissed before this run but
-    // re-detected by it, whose lastSeenAt advances even though its resolvedAt does not.
+    // seenSince AND resolvedSince together, not either alone - resolvedSince alone would also match
+    // a row this run never re-detected (its lastSeenAt is from an older run), and seenSince alone
+    // would also match a subject dismissed before this run but re-detected by it.
     const dismissedCall = h.listByLake.mock.calls.find(call => call[1].status === 'dismissed');
-    expect(dismissedCall?.[1]).toMatchObject({ resolvedSince: computedAt });
-    expect(dismissedCall?.[1]).not.toHaveProperty('seenSince');
+    expect(dismissedCall?.[1]).toMatchObject({ seenSince: computedAt, resolvedSince: computedAt });
   });
 
   it('does not subtract a dismissal that predates this run, even if the row was re-detected by it', async () => {

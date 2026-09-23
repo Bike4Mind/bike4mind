@@ -311,10 +311,37 @@ describe('DataLakeFindingRepository', () => {
       f => f.subject
     );
     expect(bySeenSince).toEqual(expect.arrayContaining(['dismissed before the run', 'dismissed after the run']));
+    expect(bySeenSince).toHaveLength(2);
 
     // resolvedSince keeps only the one actually dismissed at or after that instant.
     const byResolvedSince = await repo.listByLake('lake-1', { status: 'dismissed', resolvedSince: SEEN_LATER });
     expect(byResolvedSince.map(f => f.subject)).toEqual(['dismissed after the run']);
+  });
+
+  it('combines seenSince and resolvedSince to keep only rows this run counted and a later dismissal resolved', async () => {
+    // resolvedSince alone also matches a row this run never re-detected (its lastSeenAt is from an
+    // older run, so it never contributed to this run's countsByKind) - the compensation query in
+    // GET /inconsistencies needs both terms together, not either alone.
+    const stale = await repo.recordDetected(input({ subject: 'stale, not re-detected', seenAt: SEEN_FIRST }));
+    await repo.resolveFinding('lake-1', stale.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+
+    const counted = await repo.recordDetected(input({ subject: 'counted, then dismissed', seenAt: SEEN_LATER }));
+    await repo.resolveFinding('lake-1', counted.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+
+    const both = await repo.listByLake('lake-1', {
+      status: 'dismissed',
+      seenSince: SEEN_LATER,
+      resolvedSince: SEEN_LATER,
+    });
+    expect(both.map(f => f.subject)).toEqual(['counted, then dismissed']);
   });
 
   it('scopes every list to its own lake', async () => {

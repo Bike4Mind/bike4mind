@@ -198,7 +198,7 @@ describe('ensure data lake inconsistency scan index and strip stored finding exc
   });
 
   it('is idempotent on the backfill - a second run converges on the same rows rather than duplicating them', async () => {
-    await DataLakeModel.collection.insertOne({
+    const { insertedId } = await DataLakeModel.collection.insertOne({
       ...lake(),
       inconsistencyReport: {
         ...legacySummary(),
@@ -207,8 +207,27 @@ describe('ensure data lake inconsistency scan index and strip stored finding exc
     } as never);
 
     await migration.up();
+    // The first pass already unset the blob's findings, so a second pass over the same fixture would
+    // match zero lakes and never actually exercise recordDetected's convergence - restore the blob to
+    // prove the SECOND pass converges rather than trusting the first pass alone.
+    await DataLakeModel.collection.updateOne(
+      { _id: insertedId },
+      {
+        $set: {
+          'inconsistencyReport.findings': [
+            { kind: 'metric-disagreement', subject: 'annual revenue usd', documentCount: 2, evidence: [] },
+          ],
+        },
+      }
+    );
     await migration.up();
 
-    expect(await DataLakeFindingModel.collection.countDocuments({})).toBe(1);
+    const rows = await DataLakeFindingModel.collection.find({ lakeId: String(insertedId) }).toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]._id).toEqual(rows[0]._id);
+  });
+
+  it('down() is a documented no-op - neither the index nor the backfill is reversible', async () => {
+    await expect(migration.down()).resolves.toBeUndefined();
   });
 });

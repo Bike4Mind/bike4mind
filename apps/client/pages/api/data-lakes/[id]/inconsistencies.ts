@@ -113,14 +113,15 @@ const gateDeps = {
  * the stored count as-is would show a kind's count beside a findings list that no longer has that
  * subject in it - the identical shape of bug this function otherwise exists to prevent. So the
  * counts below are adjusted for exactly the rows this run reported that have since been dismissed -
- * found by `resolvedSince`, not `seenSince`: a subject a curator dismissed BEFORE this run also gets
- * its `lastSeenAt` bumped to this run's instant if the detector re-reports it (`recordDetected` never
- * touches `status`/`resolvedAt` on update, only `lastSeenAt` via `$max`), so a `seenSince`-scoped
- * dismissed-rows query would catch that pre-run dismissal too and decrement a count that never
- * included it. `resolvedAt >= computedAt` is the only thing that actually distinguishes "dismissed
- * after this run" from "already dismissed and re-seen by it". Never a blind recompute from the
- * (capped) `findings` list, which would silently regress `countsByKind` from an exact total to a
- * lower bound on any run `truncated` cut into.
+ * found by `seenSince` AND `resolvedSince` together, not either alone: `resolvedSince` alone also
+ * matches a row this run never re-detected (its `lastSeenAt` is from an older run, so it never
+ * contributed to this run's `countsByKind`), and `seenSince` alone also matches a subject a curator
+ * dismissed BEFORE this run whose `lastSeenAt` got bumped to this run's instant by a re-report
+ * (`recordDetected` never touches `status`/`resolvedAt` on update, only `lastSeenAt` via `$max`).
+ * Only `lastSeenAt >= computedAt AND resolvedAt >= computedAt` isolates "counted by this run, then
+ * dismissed after it". Never a blind recompute from the (capped) `findings` list, which would
+ * silently regress `countsByKind` from an exact total to a lower bound on any run `truncated` cut
+ * into.
  */
 async function renderStoredReport(
   lake: Pick<IDataLakeDocument, 'id' | 'inconsistencyReport' | 'inconsistencyComputedAt'>
@@ -142,6 +143,7 @@ async function renderStoredReport(
   if (computedAt) {
     const dismissedSinceRun = await dataLakeFindingRepository.listByLake(lake.id, {
       status: 'dismissed',
+      seenSince: computedAt,
       resolvedSince: computedAt,
     });
     for (const finding of dismissedSinceRun) {
