@@ -6,7 +6,7 @@ import { createMocks } from 'node-mocks-http';
  * production data and tripped Lambda's 6MB response cap (413 -> CloudFront 502 -> the UI's
  * catch-all rendering "No data found"). These guard the paging envelope that replaced it.
  *
- * Separate from counterLogs.test.ts because these mock @bike4mind/database wholesale to inspect
+ * Separate from counterLogs.e2e.test.ts because these mock @bike4mind/database wholesale to inspect
  * the facet stages and cache keys, which is incompatible with that file's real-Mongo harness.
  */
 
