@@ -99,21 +99,26 @@ export interface DataLakeAccessContext {
    * `excludedByAccessCountPrerequisitesComplete` at this file's resolvers for how this feeds that
    * gate, mirroring the grant-read and supersession prerequisites already tracked there.
    *
-   * DEFAULTS OPTIMISTIC (absent = trustworthy) for `lakeViewComplete`, DELIBERATELY, unlike
-   * `excludedByAccessCount`'s own "absent = not measured" contract (review, #3155): hosts that
-   * satisfy this interface structurally (ToolContext, the research-task context) never state it, so
-   * gating on an explicit `true` instead of `!== false` would flip `lakeViewComplete` to incomplete
-   * for all of them, silently disabling the narrowing `sessionService/deriveRetrievalTags.ts` does
-   * when the view is complete - a real regression for a hypothetical future bug. See the test
-   * pinning this default in `getDynamicDataLakeTags.test.ts` before changing it.
+   * The two outputs that read this take DIFFERENT defaults on an absent value, deliberately:
    *
-   * The IDENTITY-SCOPED measurement (`measureIdentityNamedExclusion`) takes the opposite default -
-   * unknown unless this field is stated - because it is telemetry-only and has no structural hosts
-   * to break; `MeasurableDataLakeAccessContext` below is what makes stating it unforgettable there.
-   * The ACCOUNT-WIDE `excludedByAccessCount` in this file is NOT on that stricter contract: it
-   * still seeds from `!== false`, so an unstated context gets a number rather than "unknown". Wiring
-   * a new consumer of that count off a site that degrades its keys to `[]` reintroduces the
-   * confidently-wrong count; state this field there.
+   * - `lakeViewComplete` DEFAULTS OPTIMISTIC (absent = trustworthy). Hosts that satisfy this
+   *   interface structurally (ToolContext, the research-task context) never state it, and requiring
+   *   an explicit `true` would flip them all to incomplete, silently disabling the narrowing
+   *   `sessionService/deriveRetrievalTags.ts` does when the view is complete. See the test pinning
+   *   this default in `getDynamicDataLakeTags.test.ts` before changing it.
+   * - Every EXCLUSION COUNT - account-wide (`excludedByAccessCount`) and identity-scoped
+   *   (`measureIdentityNamedExclusion`) alike - requires an explicit `true`, and reports "unknown"
+   *   otherwise. A count cannot express its own doubt: an entitlement-gated lake the caller really
+   *   holds the key for is indistinguishable from an excluded one once the keys degrade to the
+   *   fail-safe `[]`, so an unvouched context must get no number rather than a confident wrong one.
+   *   Costs nothing where a host does not state it, because nothing else reads those counts.
+   *
+   * `MeasurableDataLakeAccessContext` below carries the same rule in the type for the identity-
+   * scoped measurement, whose parameter can require it without breaking a structural host.
+   *
+   * A `true` here means the lookup did not THROW - not that the key list is provably whole. A
+   * partner-rules read that fails closed into an empty rule map shortens the keys without throwing
+   * (see `EntitlementResolution`), and this field cannot see that.
    */
   entitlementKeysResolved?: boolean;
   /** Optional; only used to report a swallowed dataLakes read failure (see below). */
@@ -138,6 +143,12 @@ export type MeasurableDataLakeAccessContext = DataLakeAccessContext & { entitlem
  * producer cannot hand over the keys and leave the signal behind - it is the shape a resolver owes
  * a `MeasurableDataLakeAccessContext` builder, so it lives beside that type rather than beside the
  * one resolver that happens to produce it (`ChatCompletionProcess.resolveEntitlementKeys`).
+ *
+ * `resolved: true` is the weaker claim "the lookup did not throw", not "these keys are provably
+ * whole". A third state exists that neither value names: the partner arm's rules read fails closed
+ * into an empty rule map instead of rejecting, so a rules-DB outage shortens the key list while
+ * this still reports `true`. Closing that needs the rules read to say it degraded, which is a
+ * separate change from this signal.
  */
 export interface EntitlementResolution {
   keys: string[];
@@ -362,14 +373,26 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // second (see the supersession catch below) - so neither flag alone can gate the count safely.
   // Stays `true` when a read is simply unwired (no grant repo): an absent adapter has nothing to
   // fail, so `reach`/`supersededOwnLakeIds` staying at their empty defaults is a complete answer,
-  // not a degraded one. Seeded from `lakeViewComplete`'s own initial value (see that declaration
-  // for the entitlement-read completeness this also carries, #3155).
+  // not a degraded one.
   //
-  // No warn here for an incomplete seed (review): the count this gates only exists inside the
+  // Seeded on an EXPLICIT `true`, unlike `lakeViewComplete` just above, which stays optimistic on
+  // an omitted signal. The two can differ because nothing reads this one but the count gate below:
+  // a context that never vouches for its entitlement keys gets an honest `undefined` count while
+  // its lake view, and every consumer of that view, is untouched. An unvouched caller whose keys
+  // silently degraded to the fail-safe `[]` would otherwise get a confident number built from a
+  // key list nobody stands behind - and a count is the one output where that is indistinguishable
+  // from a real exclusion.
+  //
+  // No warn here for an incomplete seed: the count this gates only exists inside the
   // `context.db.dataLakes` branch below, which already warns once, correctly, when it actually
   // skips the query - warning here too would double-log on a wired host, and warn about a count
   // that was never going to run at all on a registry-only one.
-  let excludedByAccessCountPrerequisitesComplete = lakeViewComplete;
+  let excludedByAccessCountPrerequisitesComplete = context.entitlementKeysResolved === true;
+  // Separates "a read this count depends on FAILED" from "this host merely never stated
+  // completeness". Both skip the count, but only the first is worth a log line: the structural
+  // hosts (ToolContext, the research-task context) never state it, and warning on every one of
+  // their turns would bury the failures this warn exists to surface.
+  let countPrerequisiteReadFailed = context.entitlementKeysResolved === false;
   if (context.db.dataLakes) {
     // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
     // legible error naming the missing adapter. Resolved only on this branch - a static-registry-
@@ -419,6 +442,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
           );
           lakeViewComplete = false;
           excludedByAccessCountPrerequisitesComplete = false;
+          countPrerequisiteReadFailed = true;
         }
         reach = await grantedLakeReachForTurn(
           context,
@@ -436,6 +460,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         // Also a count prerequisite (#3055): `reach` just fell back to empty, so a lake actually
         // exempted by that grant would otherwise be miscounted as excluded below.
         excludedByAccessCountPrerequisitesComplete = false;
+        countPrerequisiteReadFailed = true;
       }
       // The other half of the same access model: `findActiveByUserTagsAndEntitlements`'s creator arm
       // is bare provenance, and `createdByUserId` is immutable, so a creator transferred or departed
@@ -470,6 +495,7 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
         // above: `supersededOwnLakeIds` just fell back to empty, so a lake that should have LOST
         // its owner-bypass exemption would otherwise be miscounted as NOT excluded below.
         excludedByAccessCountPrerequisitesComplete = false;
+        countPrerequisiteReadFailed = true;
       }
     }
     // The repo silently drops an unusable dataLakeId from its `_id` arms instead of failing, so a
@@ -480,6 +506,10 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     const usableReachIds = usableObjectIds(reachIds, 'getDynamicDataLakeAccess.reach', context.logger);
     if (usableReachIds.length !== reachIds.length) {
       lakeViewComplete = false;
+      // Same over-count direction as the failed grants read: a dropped id is a grant exemption
+      // `reach` no longer carries, so the lake it exempted would be counted as excluded.
+      excludedByAccessCountPrerequisitesComplete = false;
+      countPrerequisiteReadFailed = true;
       context.logger?.warn('[lake-grant-guard] lake view incomplete: unusable grant id dropped', {
         received: reachIds.length,
         usable: usableReachIds.length,
@@ -556,7 +586,10 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       } catch (err) {
         context.logger?.warn('[dataLakes] gate-excluded-lake count failed; reporting as unknown', err);
       }
-    } else {
+    } else if (countPrerequisiteReadFailed) {
+      // Only an actual read failure warns. A host that simply never stated entitlement completeness
+      // also skips the count, silently: that is its standing contract, not a per-turn incident, and
+      // logging it every turn would bury the failures this line is here to surface.
       context.logger?.warn(
         '[dataLakes] gate-excluded-lake count skipped; an entitlement, enforce-flag, grant-exemption, ' +
           'or supersession prerequisite read failed this turn'
