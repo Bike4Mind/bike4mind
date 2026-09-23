@@ -7,7 +7,7 @@ import { QuestStartBodySchema } from '@bike4mind/services/llm/questStartBody';
 import {
   ContextTelemetrySchema,
   ContextTelemetryAlertsSchema,
-  SESSION_SUMMARY_TRIGGERS,
+  PERSISTED_SESSION_SUMMARY_TRIGGERS,
   SRE_ANALYSIS_COMPLETED_EVENT,
   type SreFixRequest,
 } from '@bike4mind/common';
@@ -159,7 +159,12 @@ export const SessionEvents = {
       sessionId: z.string(),
       userId: z.string().optional(),
       callTagging: z.boolean().optional(),
-      trigger: z.enum(SESSION_SUMMARY_TRIGGERS).optional(),
+      // Persisted list, not the full union: the handler stamps this straight onto the session, so
+      // accepting a decision-only reason here would store provenance for a run that never happened.
+      // Required, because the handler's write goes through $set, which drops an undefined - an event
+      // without a trigger would leave a NEW summary sitting next to the PREVIOUS run's provenance.
+      // Every publisher already passes one, and the summarizeSession chain now types it that way.
+      trigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS),
     })
   ),
   Tag: event(
