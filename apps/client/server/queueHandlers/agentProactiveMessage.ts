@@ -122,6 +122,7 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
       apiKeyTable,
       storage: getFilesStorage(),
       imageGenerateStorage: getGeneratedImageStorage(),
+      imageUrlSigningSecret: Resource.SECRET_ENCRYPTION_KEY.value,
     });
 
     await clientMessageSender.sendToClient(config.userId, Resource.websocket.managementEndpoint, {

@@ -1,4 +1,4 @@
-import { IChatHistoryItem, ISessionDocument } from '@bike4mind/common';
+import { IChatHistoryItem, ISessionDocument, stripSearchResultCardFences } from '@bike4mind/common';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
@@ -59,7 +59,9 @@ export function toExportableSession(session: ISessionDocument, chatHistory: ICha
         messages.push({
           timestamp: new Date(item.timestamp),
           role: 'assistant',
-          content: reply,
+          // Every downstream export format (CSV, XLSX, DOCX, ...) renders `content` as plain
+          // text with no way to show cards, so strip the fence at this single read boundary.
+          content: stripSearchResultCardFences(reply),
           model: item.promptMeta?.model?.name,
           tokensUsed: item.promptMeta?.tokenUsage?.outputTokens,
           creditsUsed: item.creditsUsed,
