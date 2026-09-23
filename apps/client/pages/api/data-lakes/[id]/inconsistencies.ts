@@ -107,20 +107,41 @@ const gateDeps = {
  * Matching the two statuses `countsByKind` can actually contain - never `dismissed`, since
  * `detectCorpusInconsistencies` drops a dismissed subject before counting it - keeps the response
  * internally consistent instead.
+ *
+ * That leaves one gap `status` alone cannot close: a dismissal made AFTER this run stored its
+ * summary only ever touches the row (`resolveFinding` never recomputes `countsByKind`), so serving
+ * the stored count as-is would show a kind's count beside a findings list that no longer has that
+ * subject in it - the identical shape of bug this function otherwise exists to prevent. So the
+ * counts below are adjusted for exactly the rows this run reported that have since been dismissed,
+ * found the same way the findings list itself is scoped (`seenSince` this run, matched by
+ * `lastSeenAt` since dismissing never moves it) - never a blind recompute from the (capped)
+ * `findings` list, which would silently regress `countsByKind` from an exact total to a lower bound
+ * on any run `truncated` cut into.
  */
 async function renderStoredReport(
   lake: Pick<IDataLakeDocument, 'id' | 'inconsistencyReport' | 'inconsistencyComputedAt'>
 ) {
   if (!lake.inconsistencyReport) return null;
   const computedAt = lake.inconsistencyComputedAt ?? null;
+  const seenSince = computedAt ? { seenSince: computedAt } : {};
   const findings = await dataLakeFindingRepository.listByLake(lake.id, {
     status: ['open', 'resolved'],
-    ...(computedAt ? { seenSince: computedAt } : {}),
+    ...seenSince,
     // Matches what the detector would have capped a single run's findings at, so the page bound
     // cannot cut into a run the summary says was not truncated.
     limit: dataLakeService.INCONSISTENCY_FINDINGS_CAP,
   });
-  return { ...lake.inconsistencyReport, findings, computedAt };
+
+  const dismissedSinceRun = await dataLakeFindingRepository.listByLake(lake.id, {
+    status: 'dismissed',
+    ...seenSince,
+  });
+  const countsByKind = { ...lake.inconsistencyReport.countsByKind };
+  for (const finding of dismissedSinceRun) {
+    if (countsByKind[finding.kind] > 0) countsByKind[finding.kind] -= 1;
+  }
+
+  return { ...lake.inconsistencyReport, countsByKind, findings, computedAt };
 }
 
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })

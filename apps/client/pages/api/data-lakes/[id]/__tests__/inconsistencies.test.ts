@@ -305,6 +305,44 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
     const { done } = invoke({}, 'GET');
     await expect(done).rejects.toThrow('forbidden');
   });
+
+  it('subtracts a dismissal made after the run from countsByKind, so the served count matches the served findings', async () => {
+    // `resolveFinding` never recomputes the stored summary - a dismissal only ever touches the row.
+    // Serving the stored count as-is would show a non-zero count beside a findings list that no
+    // longer contains that subject, the identical shape `seenSince` was added to close.
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report({ countsByKind: { ...report().countsByKind, 'expired-claim': 1 } }),
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    h.listByLake.mockImplementation(async (_id: string, opts: { status?: string | string[] }) =>
+      opts.status === 'dismissed' ? [{ id: 'finding-1', kind: 'expired-claim', subject: 'roadmap' }] : []
+    );
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(json.mock.calls[0][0]).toMatchObject({
+      countsByKind: { 'expired-claim': 0 },
+      findings: [],
+    });
+  });
+
+  it('never drives a count below zero for a kind that was already exhausted', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report(),
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    h.listByLake.mockImplementation(async (_id: string, opts: { status?: string | string[] }) =>
+      opts.status === 'dismissed' ? [{ id: 'finding-1', kind: 'expired-claim', subject: 'roadmap' }] : []
+    );
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(json.mock.calls[0][0]).toMatchObject({ countsByKind: { 'expired-claim': 0 } });
+  });
 });
 
 describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {

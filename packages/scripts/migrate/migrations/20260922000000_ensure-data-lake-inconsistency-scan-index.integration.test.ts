@@ -176,6 +176,27 @@ describe('ensure data lake inconsistency scan index and strip stored finding exc
     expect(await DataLakeFindingModel.collection.countDocuments({ lakeId: { $in: lakeIds } })).toBe(2);
   });
 
+  it('throws and leaves the blob in place when a finding fails to backfill, rather than unsetting it over a lost row', async () => {
+    // `evidence` missing (not just empty) is the shape `toSources` cannot handle - `.slice` on
+    // `undefined` throws, which `recordLakeFindings` isolates into `failed` rather than propagating.
+    // That is exactly the case the gate exists for: without it this legacy finding's excerpt would
+    // be unset with no row ever written for it.
+    await DataLakeModel.collection.insertOne({
+      ...lake({ slug: 'malformed-evidence' }),
+      inconsistencyComputedAt: new Date('2026-09-10T00:00:00Z'),
+      inconsistencyReport: {
+        ...legacySummary(),
+        findings: [{ kind: 'metric-disagreement', subject: 'annual revenue usd', documentCount: 2 }],
+      },
+    } as never);
+
+    await expect(migration.up()).rejects.toThrow(/failed to backfill/);
+
+    const doc = await DataLakeModel.collection.findOne({ slug: 'malformed-evidence' });
+    expect(doc?.inconsistencyReport).toHaveProperty('findings');
+    expect(await DataLakeFindingModel.collection.countDocuments({})).toBe(0);
+  });
+
   it('is idempotent on the backfill - a second run converges on the same rows rather than duplicating them', async () => {
     await DataLakeModel.collection.insertOne({
       ...lake(),

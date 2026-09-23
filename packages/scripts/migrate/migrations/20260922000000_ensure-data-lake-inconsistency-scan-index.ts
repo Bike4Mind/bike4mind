@@ -1,6 +1,7 @@
 import { DataLakeModel, dataLakeFindingRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { InconsistencyFinding } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { type MigrationFile } from './index';
 
 /**
@@ -35,7 +36,16 @@ import { type MigrationFile } from './index';
  * on (lakeId, detector, kind, subject) so re-running the backfill converges on the same rows instead
  * of duplicating them, and `$unset` on an absent path is a no-op too - the filter keeps the write off
  * documents that have nothing left to strip.
+ *
+ * A partial backfill must not reach the `$unset`. `recordLakeFindings` isolates a per-finding write
+ * failure into `failed` and never throws (the same isolation the route and sweep both gate on), so
+ * this loop checks it and throws before touching the blob - the migration then stays unrecorded
+ * (`migrationManager.ts` re-throws before marking it applied) and a re-run picks up exactly where it
+ * left off, since `recordDetected` converges rather than duplicates.
  */
+const LOG = '[ensure-data-lake-inconsistency-scan-index]';
+const logger = new Logger({ metadata: { service: 'migrate:20260922000000' } });
+
 const migration: MigrationFile = {
   id: 20260922000000,
   name: 'ensure data lake inconsistency scan index and strip stored finding excerpts',
@@ -58,12 +68,17 @@ const migration: MigrationFile = {
       // test does not otherwise cover: a report with findings but no computed date.
       const seenAt = (lake.inconsistencyComputedAt as Date | undefined) ?? new Date();
       if (findings.length > 0) {
-        await dataLakeService.recordLakeFindings(
+        const { failed } = await dataLakeService.recordLakeFindings(
           String(lake._id),
           findings,
           { detector: dataLakeService.INCONSISTENCY_DETECTOR, seenAt },
-          { db: { dataLakeFindings: dataLakeFindingRepository } }
+          { db: { dataLakeFindings: dataLakeFindingRepository }, logger }
         );
+        if (failed > 0) {
+          throw new Error(
+            `${LOG} lake ${String(lake._id)}: ${failed} of ${findings.length} legacy findings failed to backfill - aborting before stripping the blob`
+          );
+        }
       }
     }
 
