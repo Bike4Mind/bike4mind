@@ -134,6 +134,7 @@ services:
     image: softwaremill/elasticmq-native
     volumes:
       - ./elasticmq.conf:/opt/elasticmq.conf:ro
+      - sqs-data:/data
     # Loopback-only — ElasticMQ has no auth; never expose it off-host.
     # Override SQS_HOST_PORT / SQS_UI_HOST_PORT if those ports are taken.
     ports:
@@ -551,6 +552,7 @@ services:
       start_period: 20s
 
 volumes:
+  sqs-data:
   mongo-data:
   minio-data:
   ollama-data:

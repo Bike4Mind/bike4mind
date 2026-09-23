@@ -665,6 +665,31 @@ The `worker` is the only service that runs discovery on a schedule, even though 
 
 Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure. Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
 
+## Queue storage and container replacement
+
+ElasticMQ stores queue state, pending messages, and acknowledged deletions in the `sqs-data` named volume mounted at `/data`. Keep one `sqs` container as the sole writer to this H2 store. Do not scale it or mount the volume into another running broker. This is single-host persistence, not replication or protection against host/disk loss. Consumers must still tolerate duplicate deliveries.
+
+Use the same Compose project name and Docker host for every lifecycle command. The default project is `bike4mind-selfhost`, so its volume is `bike4mind-selfhost_sqs-data`; changing `-p` or `COMPOSE_PROJECT_NAME` selects a different volume.
+
+```bash
+# Replace only the broker; the named volume is retained.
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d --no-deps --force-recreate sqs
+
+# Stop and remove containers while retaining named volumes.
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost down
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
+```
+
+Do not use `down -v`, `docker volume rm`, or volume pruning when retaining work. Those operations can permanently delete the store. Before initially enabling persistence on an existing in-memory broker, stop producers and drain pending work; replacement cannot recover messages that were never stored on disk. Back up the volume only while the broker is stopped, and restore it before starting its single writer. Disabling `messages-storage` or rolling back to an in-memory configuration stops persistence; re-enabling an old store can replay its older pending state. Persisted queue attributes take precedence over declarations in `elasticmq.conf`, so inspect existing queue attributes when changing those declarations.
+
+To verify replacement with disposable state, run from a repository checkout with Python 3 and Docker Compose installed:
+
+```bash
+python3 scripts/verify-compose-queue-durability.py
+```
+
+The drill derives its broker image, configuration mount, and storage mounts from the actual `sqs` service. It uses random project names and loopback ports, starts no application or worker, and reads no `.env.selfhost`. Replacement renews anonymous volumes so a missing named-volume mount cannot accidentally pass. It proves that the same pending message ID and body survive replacement, then deletes that message and proves it stays absent after another replacement and its visibility timeout. A second project overrides only `messages-storage.enabled = false` and must lose its pending message after replacement. The script prints the UTC date, source revision, configuration hashes, image ID, commands, and outcomes, and removes only its disposable projects and volumes on exit. Run it again after changing the broker image or storage configuration.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
