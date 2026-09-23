@@ -64,9 +64,11 @@ describe('FabFile document vintage persists (schema/type parity)', () => {
 
     await FabFile.updateOne({ _id: created.id }, { $set: { documentDate: null, documentDateSource: null } });
 
+    // Asserted without a `?? null` coalesce: that would also pass if the fields came back
+    // undefined, which is the "the write was dropped entirely" outcome this test exists to catch.
     const reloaded = await FabFile.findById(created.id);
-    expect(reloaded?.documentDate ?? null).toBeNull();
-    expect(reloaded?.documentDateSource ?? null).toBeNull();
+    expect(reloaded?.documentDate).toBeNull();
+    expect(reloaded?.documentDateSource).toBeNull();
   });
 
   it('rejects a source outside the enum rather than storing an unattributable date', async () => {

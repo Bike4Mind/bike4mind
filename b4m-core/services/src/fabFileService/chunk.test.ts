@@ -465,6 +465,36 @@ describe('chunkFabfile', () => {
       expect(persisted().documentDateSource).toBe(DocumentDateSource.DRIVE_CREATED);
     });
 
+    // The pair is an all-or-nothing unit: acceptDocumentDate only ever yields date AND source
+    // together, and this branch is the one place that could have re-emitted a source on its own.
+    it('does not preserve a Drive source that has no date behind it', async () => {
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        documentDate: null,
+        documentDateSource: DocumentDateSource.DRIVE_CREATED,
+      });
+      withChunkerDate({ date: new Date('2020-05-06T00:00:00.000Z'), source: DocumentDateSource.DOCUMENT_PROPERTIES });
+
+      await run();
+
+      expect(persisted().documentDate).toEqual(new Date('2020-05-06T00:00:00.000Z'));
+      expect(persisted().documentDateSource).toBe(DocumentDateSource.DOCUMENT_PROPERTIES);
+    });
+
+    it('clears an unattributable Drive source when this pass finds no vintage either', async () => {
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        documentDate: null,
+        documentDateSource: DocumentDateSource.DRIVE_CREATED,
+      });
+      withChunkerDate(undefined);
+
+      await run();
+
+      expect(persisted().documentDate).toBeNull();
+      expect(persisted().documentDateSource).toBeNull();
+    });
+
     it('lets a content-derived vintage replace a content-derived one', async () => {
       // Precedence among sources that did read the document's own bytes: the latest pass wins,
       // for the same reason serverTextHash is rewritten - the stored value describes bytes that

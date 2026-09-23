@@ -61,8 +61,16 @@ function parseIsoDatePrefix(raw: string): Date | null {
   );
   const date = new Date(ms);
   // Date.UTC rolls overflow forward (month 13 becomes January of the next year), so a round-trip
-  // check is what rejects "2019-13-45" rather than silently shifting it.
-  if (date.getUTCMonth() !== Number(month) - 1 || date.getUTCDate() !== Number(day)) return null;
+  // check is what rejects "2019-13-45" rather than silently shifting it. The YEAR is round-tripped
+  // for a different reason: Date.UTC maps a two-digit year onto 1900-1999, so "0099-03-04" would
+  // otherwise become a perfectly plausible 1999-03-04 and sail through the window below.
+  if (
+    date.getUTCFullYear() !== Number(year) ||
+    date.getUTCMonth() !== Number(month) - 1 ||
+    date.getUTCDate() !== Number(day)
+  ) {
+    return null;
+  }
   return date;
 }
 
@@ -101,7 +109,11 @@ export function parsePdfInfoDate(raw: unknown): Date | null {
     Number(second ?? '0')
   );
   const utc = new Date(ms);
-  if (utc.getUTCMonth() !== monthIndex || utc.getUTCDate() !== dayOfMonth) return null;
+  // Year included for the same reason as in parseIsoDatePrefix: `D:00990304` would otherwise be
+  // remapped to a credible 1999-03-04 by Date.UTC's two-digit-year rule.
+  if (utc.getUTCFullYear() !== Number(year) || utc.getUTCMonth() !== monthIndex || utc.getUTCDate() !== dayOfMonth) {
+    return null;
+  }
 
   if (offsetSign) {
     const offsetMs = (Number(offsetHour ?? '0') * 60 + Number(offsetMinute ?? '0')) * 60 * 1000;
@@ -115,10 +127,11 @@ export function parsePdfInfoDate(raw: unknown): Date | null {
  * PowerPoint stamp on save). Falls back to `dc:date`, which some producers write instead.
  */
 export function parseOoxmlCoreCreated(xml: string): Date | null {
-  const match =
-    /<(?:dcterms:)?created\b[^>]*>([^<]+)<\/(?:dcterms:)?created>/i.exec(xml) ??
-    /<dc:date\b[^>]*>([^<]+)<\/dc:date>/i.exec(xml);
-  return match ? parseIsoDatePrefix(match[1]) : null;
+  const created = /<(?:dcterms:)?created\b[^>]*>([^<]+)<\/(?:dcterms:)?created>/i.exec(xml);
+  const dcDate = /<dc:date\b[^>]*>([^<]+)<\/dc:date>/i.exec(xml);
+  // Both are parsed, not just the first that MATCHES: a producer writing a locale date into
+  // dcterms:created would otherwise suppress a well-formed dc:date sitting right beside it.
+  return (created && parseIsoDatePrefix(created[1])) ?? (dcDate ? parseIsoDatePrefix(dcDate[1]) : null);
 }
 
 /**
@@ -160,10 +173,17 @@ export function parseFrontmatterDate(text: string): Date | null {
  * skipping the check.
  */
 export function acceptDocumentDate(
-  date: Date | null,
+  date: Date | string | null | undefined,
   source: DocumentDateSource,
   now: number = Date.now()
 ): ExtractedDocumentDate | undefined {
-  if (!date || !isPlausibleDocumentDate(date, now)) return undefined;
-  return { date, source };
+  // A string is accepted because a producer's TYPES can lie: SheetJS declares Props.CreatedDate as
+  // Date, but its BIFF8 (.xls) reader hands back an ISO string - which reached getTime() as a
+  // TypeError and cost the file every one of its chunks, not just its vintage. Normalising here
+  // rather than at each call site is the same reason the plausibility check lives here.
+  // Strings go through the anchored ISO parser, never `new Date(...)`, so a non-date string is
+  // refused rather than guessed at.
+  const parsed = typeof date === 'string' ? parseIsoDatePrefix(date) : date;
+  if (!parsed || !isPlausibleDocumentDate(parsed, now)) return undefined;
+  return { date: parsed, source };
 }

@@ -623,16 +623,43 @@ describe('getExtractedText (lake admission fingerprint source, #1679)', () => {
 describe('chunkFile captures a document date', () => {
   const PPTX_MIME = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 
-  async function buildDatedPptx(coreXmlBody: string | null): Promise<Buffer> {
+  async function buildDatedPptx(
+    coreXmlBody: string | null,
+    compression: 'STORE' | 'DEFLATE' = 'STORE'
+  ): Promise<Buffer> {
     const zip = new JSZip();
     zip.file('ppt/slides/slide1.xml', '<?xml version="1.0"?><p:sld xmlns:a="x"><a:t>Slide text</a:t></p:sld>');
     if (coreXmlBody !== null) {
       zip.file(
         'docProps/core.xml',
-        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties>${coreXmlBody}</cp:coreProperties>`
+        // Padded so DEFLATE actually emits a compressed stream there is something to damage; a
+        // few hundred bytes is also the realistic size of a real core.xml.
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><cp:coreProperties>${coreXmlBody}` +
+          `<cp:keywords>${'quarterly revenue '.repeat(40)}</cp:keywords></cp:coreProperties>`
       );
     }
-    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
+    return Buffer.from(await zip.generateAsync({ type: 'nodebuffer', compression }));
+  }
+
+  /**
+   * Damage one entry's compressed payload in place, leaving every zip header intact, so the file
+   * opens and lists normally and only fails when that entry is actually inflated. Corrupting the
+   * headers instead would fail the container load and prove nothing about the guard under test.
+   */
+  function corruptZipEntryPayload(zipBuffer: Buffer, entryName: string): Buffer {
+    const damaged = Buffer.from(zipBuffer);
+    const name = Buffer.from(entryName, 'utf8');
+    for (let i = 0; i + 30 <= damaged.length; i++) {
+      if (damaged.readUInt32LE(i) !== 0x04034b50) continue;
+      const nameLength = damaged.readUInt16LE(i + 26);
+      const extraLength = damaged.readUInt16LE(i + 28);
+      if (nameLength !== name.length || !damaged.subarray(i + 30, i + 30 + nameLength).equals(name)) continue;
+      // Past the first deflate block's header, so the inflater starts fine and then hits garbage.
+      const payloadStart = i + 30 + nameLength + extraLength + 6;
+      damaged.fill(0, payloadStart, payloadStart + 16);
+      return damaged;
+    }
+    throw new Error(`fixture error: no local file header for ${entryName}`);
   }
 
   let chunker: SmartChunker;
@@ -680,6 +707,139 @@ describe('chunkFile captures a document date', () => {
     const pptx = await buildDatedPptx('<dcterms:created>1601-01-01T00:00:00Z</dcterms:created>');
     await chunker.chunkFile(pptx, PPTX_MIME);
     expect(chunker.getDocumentDate()).toBeUndefined();
+  });
+
+  // Regression: the OOXML read is a best-effort side read of an AUXILIARY part, so a core.xml the
+  // inflater cannot decompress must cost the file its vintage and NOTHING else. Before the guard in
+  // readOoxmlDocumentDate, readZipEntryBounded's rejection propagated out of chunkFile and the
+  // document produced zero chunks - unsearchable because of a few bad bytes in a metadata entry.
+  it('still chunks an OOXML container whose core.xml cannot be decompressed', async () => {
+    const pptx = corruptZipEntryPayload(
+      await buildDatedPptx('<dcterms:created>2019-03-04T09:15:00Z</dcterms:created>', 'DEFLATE'),
+      'docProps/core.xml'
+    );
+    const chunks = await chunker.chunkFile(pptx, PPTX_MIME);
+    expect(chunks.length).toBeGreaterThan(0);
+    expect(chunks.map(c => c.text).join(' ')).toContain('Slide text');
+    expect(chunker.getDocumentDate()).toBeUndefined();
+  });
+
+  // Regression: SheetJS declares `Props.CreatedDate` as a Date, but its BIFF8 (.xls) reader returns
+  // an ISO STRING - so the funnel's getTime() threw a TypeError and chunkFile rejected, costing the
+  // file every chunk. Typecheck stays green on this, which is why it needs a test on the real
+  // reader rather than a hand-shaped fixture.
+  describe('legacy .xls (BIFF8), whose properties reader returns a string', () => {
+    const XLS_MIME = 'application/vnd.ms-excel';
+
+    async function buildDatedWorkbook(bookType: 'biff8' | 'xlsx', createdDate: Date): Promise<Buffer> {
+      const { utils, write } = await import('xlsx');
+      const workbook = utils.book_new();
+      utils.book_append_sheet(
+        workbook,
+        utils.aoa_to_sheet([
+          ['Region', 'Revenue'],
+          ['North', 42],
+        ]),
+        'Sheet1'
+      );
+      // Set on the WORKBOOK, not passed as a write option: the BIFF8 writer ignores opts.Props and
+      // emits no summary stream at all, which makes every assertion below pass vacuously.
+      workbook.Props = { CreatedDate: createdDate };
+      return Buffer.from(write(workbook, { type: 'buffer', bookType }) as ArrayBuffer);
+    }
+
+    // Guards the fixture itself: if a SheetJS upgrade ever makes the legacy reader return a real
+    // Date, this fails and the string branch above is no longer being exercised by these tests.
+    it('fixture check: the legacy reader really does hand back a string', async () => {
+      const { read } = await import('xlsx');
+      const xls = await buildDatedWorkbook('biff8', new Date('2019-03-04T00:00:00Z'));
+      expect(typeof read(xls, { type: 'buffer' }).Props?.CreatedDate).toBe('string');
+    });
+
+    it('captures the created date and still produces chunks', async () => {
+      const xls = await buildDatedWorkbook('biff8', new Date('2019-03-04T00:00:00Z'));
+      const chunks = await chunker.chunkFile(xls, XLS_MIME);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toEqual({
+        date: new Date('2019-03-04T00:00:00.000Z'),
+        source: DocumentDateSource.DOCUMENT_PROPERTIES,
+      });
+    });
+
+    // The .xlsx reader returns a real Date for the same workbook, so both branches of the
+    // normalisation are exercised against the library rather than against an assumption about it.
+    it('captures the same date from the OOXML reader, which returns a Date', async () => {
+      const xlsx = await buildDatedWorkbook('xlsx', new Date('2019-03-04T00:00:00Z'));
+      const chunks = await chunker.chunkFile(xlsx, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toEqual({
+        date: new Date('2019-03-04T00:00:00.000Z'),
+        source: DocumentDateSource.DOCUMENT_PROPERTIES,
+      });
+    });
+
+    it('refuses an implausible created date from the legacy reader too', async () => {
+      const xls = await buildDatedWorkbook('biff8', new Date('1601-01-01T00:00:00Z'));
+      const chunks = await chunker.chunkFile(xls, XLS_MIME);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toBeUndefined();
+    });
+  });
+
+  // The PDF path is the only one whose extractor lives behind a third-party reader we do not pin
+  // ourselves (unpdf vendors its own pdf.js). parsePdfInfoDate refuses a non-string outright, so a
+  // reader upgrade that starts handing back a Date object would kill this path with no error
+  // anywhere - the vintage would simply stop appearing. This drives the REAL reader to catch that.
+  describe('PDF info dictionary, read through the real unpdf reader', () => {
+    /** A minimal but structurally valid single-page PDF with `CreationDate` in its Info dict. */
+    function buildPdf(creationDate: string | null): Buffer {
+      const content = 'BT /F1 24 Tf 72 700 Td (Quarterly revenue report) Tj ET';
+      const objects = [
+        '<</Type/Catalog/Pages 2 0 R>>',
+        '<</Type/Pages/Kids[3 0 R]/Count 1>>',
+        '<</Type/Page/Parent 2 0 R/MediaBox[0 0 612 792]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>',
+        `<</Length ${content.length}>>\nstream\n${content}\nendstream`,
+        '<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>',
+        creationDate === null ? '<</Producer(test)>>' : `<</CreationDate(${creationDate})>>`,
+      ];
+
+      let pdf = '%PDF-1.4\n';
+      const offsets: number[] = [];
+      objects.forEach((body, i) => {
+        offsets.push(pdf.length);
+        pdf += `${i + 1} 0 obj\n${body}\nendobj\n`;
+      });
+      // A real xref table, not a broken one pdf.js would silently rebuild: the point of this
+      // fixture is to exercise the reader's normal path, not its recovery path.
+      const xrefStart = pdf.length;
+      pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+      for (const offset of offsets) pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+      pdf += `trailer\n<</Size ${objects.length + 1}/Root 1 0 R/Info 6 0 R>>\nstartxref\n${xrefStart}\n%%EOF\n`;
+      return Buffer.from(pdf, 'latin1');
+    }
+
+    it('reads CreationDate out of a real PDF and still extracts its text', async () => {
+      const chunks = await chunker.chunkFile(buildPdf('D:20190304091500Z'), 'application/pdf');
+      expect(chunks.map(c => c.text).join(' ')).toContain('Quarterly revenue report');
+      expect(chunker.getDocumentDate()).toEqual({
+        date: new Date('2019-03-04T09:15:00.000Z'),
+        source: DocumentDateSource.PDF_METADATA,
+      });
+    });
+
+    // Guards the fixture against a reader upgrade: parsePdfInfoDate takes `unknown` and refuses
+    // anything that is not a string, so if this ever stops being a string the test above would
+    // start passing vacuously rather than failing.
+    it('fixture check: the reader hands back CreationDate as a string', async () => {
+      const { getDocumentProxy } = await import('unpdf');
+      const { info } = await getDocumentProxy(new Uint8Array(buildPdf('D:20190304091500Z'))).then(p => p.getMetadata());
+      expect(typeof (info as unknown as Record<string, unknown>).CreationDate).toBe('string');
+    });
+
+    it('leaves the slot empty for a PDF whose Info dict carries no CreationDate', async () => {
+      await chunker.chunkFile(buildPdf(null), 'application/pdf');
+      expect(chunker.getDocumentDate()).toBeUndefined();
+    });
   });
 
   // A chunker instance is reused across files in the ingest loop, so a stale date surviving into

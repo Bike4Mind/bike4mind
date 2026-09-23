@@ -109,6 +109,39 @@ describe('parseOoxmlCoreCreated', () => {
     expect(parseOoxmlCoreCreated(coreXml('<dc:creator>Someone</dc:creator>'))).toBeNull();
     expect(parseOoxmlCoreCreated(coreXml('<dcterms:created></dcterms:created>'))).toBeNull();
   });
+
+  // The fallback keys on whether created PARSES, not on whether it matches: a producer writing a
+  // locale date into created must not suppress a well-formed dc:date sitting beside it.
+  it('falls back to dc:date when created is present but unparseable', () => {
+    const xml = coreXml('<dcterms:created>03/04/2019</dcterms:created><dc:date>2021-06-06T00:00:00Z</dc:date>');
+    expect(iso(parseOoxmlCoreCreated(xml))).toBe('2021-06-06T00:00:00.000Z');
+  });
+
+  it('returns null when neither element parses', () => {
+    const xml = coreXml('<dcterms:created>03/04/2019</dcterms:created><dc:date>not a date</dc:date>');
+    expect(parseOoxmlCoreCreated(xml)).toBeNull();
+  });
+});
+
+// Date.UTC maps a two-digit year onto 1900-1999, so a garbage year would otherwise arrive as a
+// perfectly plausible one and pass the window check downstream.
+describe('two-digit year remapping is refused, not accepted as 19xx', () => {
+  it('rejects a sub-100 year in a PDF info date', () => {
+    expect(parsePdfInfoDate('D:00990304')).toBeNull();
+    expect(parsePdfInfoDate('D:00010304')).toBeNull();
+  });
+
+  it('rejects a sub-100 year in an ISO prefix, via both parsers that use it', () => {
+    expect(parseOoxmlCoreCreated('<dcterms:created>0099-03-04</dcterms:created>')).toBeNull();
+    expect(parseFrontmatterDate('---\ndate: 0099-03-04\n---\n')).toBeNull();
+  });
+
+  it('still accepts a real four-digit year', () => {
+    expect(iso(parsePdfInfoDate('D:20190304'))).toBe('2019-03-04T00:00:00.000Z');
+    expect(iso(parseOoxmlCoreCreated('<dcterms:created>2019-03-04</dcterms:created>'))).toBe(
+      '2019-03-04T00:00:00.000Z'
+    );
+  });
 });
 
 describe('parseFrontmatterDate', () => {
@@ -171,5 +204,27 @@ describe('acceptDocumentDate', () => {
   it('drops a null candidate and one outside the window', () => {
     expect(acceptDocumentDate(null, DocumentDateSource.PDF_METADATA, now)).toBeUndefined();
     expect(acceptDocumentDate(new Date('1970-01-01T00:00:00Z'), DocumentDateSource.DRIVE_CREATED, now)).toBeUndefined();
+  });
+
+  // SheetJS's BIFF8 (.xls) reader returns Props.CreatedDate as an ISO string despite declaring it
+  // as a Date. Before this, getTime() threw a TypeError and the whole chunk pass rejected.
+  it('normalises an ISO string candidate instead of throwing on it', () => {
+    expect(acceptDocumentDate('2019-03-04T00:00:00Z', DocumentDateSource.DOCUMENT_PROPERTIES, now)).toEqual({
+      date: new Date('2019-03-04T00:00:00.000Z'),
+      source: DocumentDateSource.DOCUMENT_PROPERTIES,
+    });
+    expect(acceptDocumentDate(undefined, DocumentDateSource.DOCUMENT_PROPERTIES, now)).toBeUndefined();
+  });
+
+  // Strings go through the anchored ISO parser, never `new Date(...)`: the constructor's non-ISO
+  // fallback is implementation-defined and would let a guess become a stored vintage.
+  it('refuses a string that is not an anchored ISO date', () => {
+    for (const raw of ['Q3 budget', '12', '03/04/2019', '']) {
+      expect(acceptDocumentDate(raw, DocumentDateSource.DOCUMENT_PROPERTIES, now)).toBeUndefined();
+    }
+  });
+
+  it('still applies the plausibility window to a string candidate', () => {
+    expect(acceptDocumentDate('1601-01-01T00:00:00Z', DocumentDateSource.DOCUMENT_PROPERTIES, now)).toBeUndefined();
   });
 });

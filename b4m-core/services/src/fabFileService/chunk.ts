@@ -180,7 +180,13 @@ export const prepareFabFileChunks = async (
   // whose dcterms:created is effectively "now", which is exactly the ingestion-time-as-vintage
   // answer this field exists to avoid. And on a miss (a Doc exports to bare text) there is nothing
   // to re-read on a later pass, so clearing it would lose the vintage permanently.
-  const keepsIngestVintage = fabFile.documentDateSource === DocumentDateSource.DRIVE_CREATED;
+  //
+  // The date is required alongside the source, not just the source: `documentDateSource` is never
+  // meaningful on its own (see FabFileTypes), and without this a row carrying a DRIVE_CREATED
+  // source with no date would be rewritten with that source and a null date on every pass, keeping
+  // an unattributable state alive instead of letting this pass replace it.
+  const keepsIngestVintage =
+    fabFile.documentDateSource === DocumentDateSource.DRIVE_CREATED && fabFile.documentDate != null;
 
   return {
     fabFileId: fabFile.id,

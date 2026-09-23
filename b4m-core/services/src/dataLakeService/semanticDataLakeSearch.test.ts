@@ -422,6 +422,34 @@ describe('semanticDataLakeSearch bounded scan + honest accounting', () => {
     expect(result.scan.chunksScanned).toBeGreaterThanOrEqual(1);
   });
 
+  // The lake-scoped entrypoint builds its own fileById map, separate from the file-scoped one and
+  // from the ANN path's rows. All three have to carry the vintage; only this one is reached here.
+  it('carries the parent file vintage through the lake-scoped scan', async () => {
+    const documentDate = new Date('2019-03-04T00:00:00.000Z');
+    const dated = [{ id: 'f1', fileName: 'Dated.pdf', tags: [], documentDate }];
+    const result = await semanticDataLakeSearch(baseParams(), {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: dated, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 1)) },
+      },
+    } as never);
+
+    expect(result.results).not.toHaveLength(0);
+    expect(result.results[0].documentDate).toEqual(documentDate);
+  });
+
+  it('leaves the vintage null on the lake-scoped path for a file that has none', async () => {
+    const result = await semanticDataLakeSearch(baseParams(), {
+      db: {
+        fabfiles: { search: filesAdapter([{ data: oneFile, hasMore: false, total: 1 }]) },
+        fabfilechunks: { findVectorsByFabFileIds: pagingChunkMock(chunkRows('f1', 1)) },
+      },
+    } as never);
+
+    expect(result.results).not.toHaveLength(0);
+    expect(result.results[0].documentDate).toBeNull();
+  });
+
   it('asks for a fileName order, the sort the file walk needs to be a total order', async () => {
     // The sort literal is hardcoded inside the paging loop (semanticDataLakeSearch.ts), so pinning
     // the first call pins every page - a one-page fixture is sufficient here. buildFabFileSearchQuery
@@ -1208,7 +1236,7 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
   });
 
   const scopedAdapters = (opts: {
-    files?: { id: string; fileName: string; tags?: { name: string }[] }[];
+    files?: { id: string; fileName: string; tags?: { name: string }[]; createdAt?: Date; documentDate?: Date | null }[];
     chunks?: { id: string; fabFileId: string; vector: number[]; text: string }[];
   }) => {
     const getAccessibleFiles = vi.fn().mockResolvedValue(opts.files ?? []);
@@ -1250,6 +1278,36 @@ describe('fileScopedSemanticSearch (allow-list scope)', () => {
     expect(findVectorsByFabFileIds.mock.calls[0][0]).toEqual(['in-scope']);
     expect(result.results).toHaveLength(1);
     expect(result.results[0].fileId).toBe('in-scope');
+  });
+
+  // The scan path shapes its rows in a different place from the ANN path (which annVectorSearch.test
+  // covers), so the field can be carried on one and dropped on the other with nothing failing: an
+  // undated passage header is indistinguishable from a document that genuinely has no vintage.
+  it('carries the parent file vintage onto the rows it shapes', async () => {
+    const documentDate = new Date('2019-03-04T00:00:00.000Z');
+    const files = [{ id: 'in-scope', fileName: 'InScope.pdf', tags: [], documentDate }];
+    const { adapters } = scopedAdapters({
+      files,
+      chunks: [{ id: 'ch1', fabFileId: 'in-scope', vector: [1, 0], text: 'scoped content' }],
+    });
+
+    const result = await fileScopedSemanticSearch(scopedParams(['in-scope']), adapters as never);
+
+    expect(result.results[0].documentDate).toEqual(documentDate);
+  });
+
+  // null, not undefined - the field is required on SemanticChunkResult precisely so a producer
+  // cannot omit it silently, and the render channels read null as "undated".
+  it('normalises a file with no vintage to null rather than leaving it undefined', async () => {
+    const { adapters } = scopedAdapters({
+      files: [{ id: 'in-scope', fileName: 'InScope.pdf', tags: [] }],
+      chunks: [{ id: 'ch1', fabFileId: 'in-scope', vector: [1, 0], text: 'scoped content' }],
+    });
+
+    const result = await fileScopedSemanticSearch(scopedParams(['in-scope']), adapters as never);
+
+    expect(result.results[0].documentDate).toBeNull();
+    expect('documentDate' in result.results[0]).toBe(true);
   });
 
   it('empty scope returns empty WITHOUT any DB access (scoped-to-nothing contract)', async () => {

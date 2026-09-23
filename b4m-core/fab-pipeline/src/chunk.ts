@@ -502,18 +502,28 @@ export class SmartChunker {
    * Takes an already-open zip so the PPTX path does not pay for a second load. Read through
    * readZipEntryBounded like every other entry in this file: core.xml is a few hundred bytes in
    * any real document, so anything claiming more than the cap is a compression bomb, not metadata.
+   *
+   * Guarded like its sibling readPdfDocumentDate, and for the same reason: this is a best-effort
+   * side read of an AUXILIARY part. readZipEntryBounded rejects when jszip's inflater errors, so
+   * without the boundary one corrupt core.xml entry would cost the document every one of its
+   * chunks - the exact opposite of this function's contract.
    */
   private async readOoxmlDocumentDate(zip: JSZip): Promise<ExtractedDocumentDate | undefined> {
     const entry = zip.files[OOXML_CORE_PROPERTIES_PATH];
     if (!entry) return undefined;
-    const read = await readZipEntryBounded(entry as unknown as BoundedZipEntry, MAX_OOXML_CORE_XML_BYTES);
-    if (!read.ok) {
-      this.logger.warn(
-        `${OOXML_CORE_PROPERTIES_PATH} exceeded ${MAX_OOXML_CORE_XML_BYTES} bytes; no document date read`
-      );
+    try {
+      const read = await readZipEntryBounded(entry as unknown as BoundedZipEntry, MAX_OOXML_CORE_XML_BYTES);
+      if (!read.ok) {
+        this.logger.warn(
+          `${OOXML_CORE_PROPERTIES_PATH} exceeded ${MAX_OOXML_CORE_XML_BYTES} bytes; no document date read`
+        );
+        return undefined;
+      }
+      return acceptDocumentDate(parseOoxmlCoreCreated(read.text), DocumentDateSource.DOCUMENT_PROPERTIES);
+    } catch (error) {
+      this.logger.warn(`Could not read ${OOXML_CORE_PROPERTIES_PATH} for a document date: ${(error as Error).message}`);
       return undefined;
     }
-    return acceptDocumentDate(parseOoxmlCoreCreated(read.text), DocumentDateSource.DOCUMENT_PROPERTIES);
   }
 
   // Chunks PDF content into pieces that fit within the model's token limit
@@ -895,7 +905,9 @@ export class SmartChunker {
 
     // SheetJS already parses the workbook's properties, so this needs no second pass over the
     // container - and unlike a docProps/core.xml read it also covers legacy .xls, whose created
-    // date lives in an OLE summary stream rather than in any XML.
+    // date lives in an OLE summary stream rather than in any XML. That legacy reader returns the
+    // date as an ISO STRING despite the `CreatedDate?: Date` declaration, which is why
+    // acceptDocumentDate takes `Date | string`; do not narrow this to the declared type.
     this.lastDocumentDate = acceptDocumentDate(
       workbook.Props?.CreatedDate ?? null,
       DocumentDateSource.DOCUMENT_PROPERTIES

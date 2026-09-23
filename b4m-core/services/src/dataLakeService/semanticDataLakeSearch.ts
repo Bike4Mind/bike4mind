@@ -1004,7 +1004,6 @@ async function rankChunksForFiles(args: {
       relativePath: file?.relativePath,
       driveFileId: file?.driveFileId,
       createdAt: file?.createdAt,
-      documentDate: file?.documentDate,
       userId: file?.userId,
       // The curator ruling the collapse reads as its top tier. This projection is the LAST hop
       // before the partition, so a field carried faithfully by both `fileById` builders and
