@@ -195,7 +195,10 @@ export function wrapToolWithPermission(
           // sandbox profile shouldSandbox already built) before it can execute.
           if (!isPathAllowed(cwd, allowedDirectories).allowed) {
             cleanupSandboxFiles(decision.wrappedCommand.cleanupPaths);
-            return blockCommand(`working directory ${cwd} is outside the sandbox writable root`);
+            return blockCommand(
+              `working directory ${cwd} is outside the sandbox writable root ` +
+                `(grant it with '/add-dir ${cwd}' or run from within the workspace)`
+            );
           }
           sandboxOrchestrator.recordSandboxed();
           isSandboxed = true;
