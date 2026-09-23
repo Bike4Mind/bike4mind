@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { readConsentRegion, REGION_COOKIE } from './consentRegion';
+import { readConsentRegion, readSharedConsent, REGION_COOKIE, DECISION_COOKIE } from './consentRegion';
 
 function setCookie(raw: string) {
   document.cookie = raw;
@@ -25,8 +25,7 @@ describe('readConsentRegion', () => {
     expect(readConsentRegion()).toBe('eu');
   });
 
-  // The fail-safe direction: a fork, a direct arrival, or a visitor whose
-  // marketing-site hop never happened must be asked, not assumed.
+  // A fork, or a visitor whose marketing-site hop never happened, must be asked.
   it("falls back to 'eu' when the cookie is absent", () => {
     expect(readConsentRegion()).toBe('eu');
   });
@@ -46,5 +45,41 @@ describe('readConsentRegion', () => {
     setCookie('b4m_utm=%7B%7D');
     setCookie(`${REGION_COOKIE}=row`);
     expect(readConsentRegion()).toBe('row');
+  });
+});
+
+describe('readSharedConsent', () => {
+  afterEach(clearCookies);
+
+  it('reads a decline made on the marketing site', () => {
+    setCookie(`${DECISION_COOKIE}=denied`);
+    expect(readSharedConsent()).toBe('denied');
+  });
+
+  it('reads an acceptance made on the marketing site', () => {
+    setCookie(`${DECISION_COOKIE}=granted`);
+    expect(readSharedConsent()).toBe('granted');
+  });
+
+  it('returns null when no decision has been published', () => {
+    expect(readSharedConsent()).toBeNull();
+  });
+
+  // A truncated or tampered value must fall through to the region, never read as consent.
+  it('returns null for an unrecognized value', () => {
+    setCookie(`${DECISION_COOKIE}=grante`);
+    expect(readSharedConsent()).toBeNull();
+  });
+
+  it('does not match a different cookie whose name starts the same way', () => {
+    setCookie(`${DECISION_COOKIE}-test=granted`);
+    expect(readSharedConsent()).toBeNull();
+  });
+
+  it('is independent of the region cookie', () => {
+    setCookie(`${REGION_COOKIE}=row`);
+    setCookie(`${DECISION_COOKIE}=denied`);
+    expect(readConsentRegion()).toBe('row');
+    expect(readSharedConsent()).toBe('denied');
   });
 });
