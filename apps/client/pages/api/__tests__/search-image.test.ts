@@ -216,8 +216,8 @@ describe('GET /api/search-image', () => {
     expect(res.headers['X-Content-Type-Options']).toBe('nosniff');
     // `private`, not `public`: one user's search thumbnails must not land in a shared cache.
     expect(res.headers['Cache-Control']).toMatch(/^private, max-age=\d+$/);
-    // stripImageUrlSignature must run before the upstream fetch: the app's own b4mExp/b4mSig
-    // params are never the app's business to send to a third-party host.
+    // stripImageUrlSignature must run before the upstream fetch: the app's own b4mSig
+    // param is never the app's business to send to a third-party host.
     expect(fetchMock.mock.calls[0]?.[0]).toBe('https://cdn.example.com/a.webp');
   });
 

@@ -40,8 +40,9 @@ export interface BuildSubagentToolConfigInput {
   audioConfig?: Partial<AudioGenerationToolCall>;
   /**
    * Signs web_search image URLs for this subagent - see WebSearchToolConfig.imageUrlSigningSecret.
-   * Omit only when the caller genuinely has no secret (images then fail verification and render
-   * as "Image unavailable"), never to save a line - see performWebSearch/ChatCompletionProcess.
+   * Omit only when the caller genuinely has no secret (performWebSearch then degrades to plain
+   * prose - no image search, no cards prompt - rather than paying for images it can't verify),
+   * never to save a line - see performWebSearch/ChatCompletionProcess.
    */
   imageUrlSigningSecret?: string;
 }

@@ -11,8 +11,9 @@ export interface WebSearchToolConfig {
    * Signs every image URL shown to the model so `/api/search-image` can verify one came from an
    * actual search result before fetching it server-side, rather than trusting the model's copy of
    * it unconditionally. Reuses SECRET_ENCRYPTION_KEY (see ChatCompletionFeatures.telemetryHmacSecret
-   * for the same pattern) - no dedicated secret needed. A caller that leaves this unset gets images
-   * that fail verification and render as "Image unavailable" rather than an insecure fallback.
+   * for the same pattern) - no dedicated secret needed. A caller that leaves this unset (or an
+   * empty/placeholder value) degrades to plain prose: no image search, no cards prompt, rather
+   * than paying for images that would only fail verification and render as "Image unavailable".
    */
   imageUrlSigningSecret?: string;
 }
@@ -159,8 +160,11 @@ export async function performWebSearch(
           withImages && result.images?.length
             ? `Images: ${result.images.map(url => signImageUrl(url, imageUrlSigningSecret)).join(' | ')}\n`
             : '';
+        // A hostile page's own title/snippet can carry raw newlines, same risk stripNewlines
+        // already closes for the image pool's fields - here it would let a snippet forge a fake
+        // numbered entry or a fake "Images:" line in this line-structured output.
         return (
-          `${index + 1}. **${result.title}**\n${result.snippet}\n` +
+          `${index + 1}. **${stripNewlines(result.title)}**\n${stripNewlines(result.snippet)}\n` +
           imageLine +
           `Source: [${safeHostname(result.url)}](${result.url})\n`
         );

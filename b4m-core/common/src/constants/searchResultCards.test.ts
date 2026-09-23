@@ -38,4 +38,22 @@ describe('stripSearchResultCardFences', () => {
     const input = 'Some code:\n```js\nconsole.log(1);\n```\nDone.';
     expect(stripSearchResultCardFences(input)).toBe(input);
   });
+
+  it('ignores a fence marker that is not at the start of a line, leaving both it and an unrelated code block untouched', () => {
+    // "```b4m_cards" appears mid-line here (after "see "), which is never a valid CommonMark
+    // fence opener - an unanchored match would incorrectly treat it as one and delete everything
+    // up to (and including) the unrelated ```js block that follows.
+    const input = 'see ```b4m_cards inline and ```js\ncode\n``` end';
+    expect(stripSearchResultCardFences(input)).toBe(input);
+  });
+
+  it('does not treat a backtick run embedded mid-line inside the card JSON as the closing fence', () => {
+    const input = `Before.\n${'```b4m_cards\n{"note":"x```y"}\n```'}\nAfter.`;
+    expect(stripSearchResultCardFences(input)).toBe('Before.\n\nAfter.');
+  });
+
+  it('requires a same-or-longer backtick run to close a longer opening fence, ignoring a shorter run inside the body', () => {
+    const input = 'Before.\n````b4m_cards\n{"note":"```embedded```"}\n````\nAfter.';
+    expect(stripSearchResultCardFences(input)).toBe('Before.\n\nAfter.');
+  });
 });

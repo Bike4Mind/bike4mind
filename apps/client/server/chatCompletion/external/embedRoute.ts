@@ -285,7 +285,12 @@ async function buildEmbedServerTools(args: {
     enabledTools,
     getAbortSignal,
     toolAvailability,
-    config: { web_search: { imageUrlSigningSecret: Config.SECRET_ENCRYPTION_KEY || '' } },
+    // Leave imageUrlSigningSecret unset: the embed widget has no card renderer
+    // (server/embed/embedWidgetPage.ts appends reply text verbatim into a text bubble) and no
+    // JWT for an anonymous visitor to hit the (jwtOnly) image proxy with, so a signed secret here
+    // would only make web_search pay for an image search whose fence prints as raw JSON to the
+    // visitor. An unset secret makes performWebSearch degrade to plain prose instead.
+    config: { web_search: {} },
   });
   return tools && tools.length > 0 ? tools : undefined;
 }
