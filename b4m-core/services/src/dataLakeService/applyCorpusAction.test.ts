@@ -73,6 +73,13 @@ function makeDeps(
           findById: vi.fn(async (id: string) => files[id] ?? null),
           setLakeSupersession,
           clearLakeSupersession,
+          // Mirrors what the real repository method reads off `supersededInLakes` - select:false on
+          // the schema means the cycle walk can no longer read it straight off `findById`.
+          getLakeSupersessionWinner: vi.fn(async (id: string, lakeId: string) => {
+            const file = files[id] as
+              { supersededInLakes?: { dataLakeId: string; supersededByFabFileId: string }[] } | undefined;
+            return file?.supersededInLakes?.find(r => r.dataLakeId === lakeId)?.supersededByFabFileId ?? null;
+          }),
         },
         dataLakeFindings: { findById: vi.fn(async () => over.finding ?? finding()) },
         dataLakeCorpusActions: { record },

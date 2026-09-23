@@ -872,6 +872,9 @@ async function collectScopedFiles(args: {
         dataLakeTagPrefixes: args.dataLakeTagPrefixes,
         lakeMemberships: args.lakeMemberships,
         excludeContent: true,
+        // supersededInLakes is select:false by default; this walk is the lake-scoped collapse's
+        // own read, so it opts back in - see FabFileModel.executeSearch.
+        includeSupersessionRulings: true,
         // Retrieval exclusion (caller-driven) - best-effort DB pre-filter; the authoritative
         // in-memory pass below guarantees excluded files are dropped before any chunk load.
         ...args.retrievalFilter,

@@ -862,6 +862,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
       vectorizedOnly?: boolean;
+      /** See executeSearch - opts a lake-scoped search back into curator ruling metadata. */
+      includeSupersessionRulings?: boolean;
     }
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });
@@ -876,6 +878,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       skip: number;
       limit: number;
       excludeContent?: boolean;
+      includeSupersessionRulings?: boolean;
     },
     pageSize: number
   ) {
@@ -887,6 +890,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
     if (query.excludeContent) {
       findQuery.select({ content: 0, chunks: 0, vector: 0 });
+    }
+
+    // supersededInLakes is `select: false` on the schema (see FabFileSchema) - a plain search never
+    // returns it. The curator-supersession collapse (partitionBySupersession) is the one consumer
+    // that needs it, so its callers opt in explicitly rather than every search exposing curator
+    // ruling metadata by default.
+    if (query.includeSupersessionRulings) {
+      findQuery.select('+supersededInLakes');
     }
 
     // Mirror collation on the count query so total can never diverge from the
@@ -3301,6 +3312,16 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     );
     return result.matchedCount > 0;
   }
+
+  async getLakeSupersessionWinner(fabFileId: string, dataLakeId: string): Promise<string | null> {
+    // supersededInLakes is select:false - a plain findById would no longer see it, and the
+    // write-time cycle walk (applyCorpusAction.wouldCloseSupersessionCycle) is the one internal
+    // caller that needs it outside the collapse's own search. `+supersededInLakes`, the same
+    // explicit opt-in executeSearch uses, is what actually overrides the schema default here - an
+    // object-style inclusion projection on a sub-path does not.
+    const doc = await this.fabFileModel.findById(fabFileId).select('+supersededInLakes').lean();
+    return doc?.supersededInLakes?.find(r => r.dataLakeId === dataLakeId)?.supersededByFabFileId ?? null;
+  }
 }
 
 // Non-destructive AI-edit history for binary Office documents. `_id: false` keeps entries
@@ -3450,7 +3471,13 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     driveConnectionId: { type: String },
     // Curator supersession rulings, one per lake - see IFabFile.supersededInLakes. `default:
     // undefined` so an unruled file stores no empty array, matching `versions` above.
-    supersededInLakes: { type: [LakeSupersessionSchema], default: undefined },
+    // `select: false`: this is control-plane data (who ruled, when, which lake), never something a
+    // client renders, and toJSON is not a boundary (see the comment there) - a schema-level default
+    // exclusion is what actually keeps every PLAIN read/update from round-tripping it, rather than
+    // relying on every caller to remember to strip it. The two readers the curator-supersession
+    // collapse depends on (FabFileRepository.executeSearch, via `search`) opt back in explicitly
+    // with `includeSupersessionRulings` - see fabFileSearchQuery.ts.
+    supersededInLakes: { type: [LakeSupersessionSchema], select: false, default: undefined },
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
@@ -3471,12 +3498,12 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
           delete ret.content;
         }
         // supersededInLakes is deliberately NOT stripped here. toJSON is not a client boundary -
-        // BaseRepository.findById and FabFileRepository.executeSearch both return doc.toJSON(),
-        // and those are exactly the reads the curator-supersession collapse (partitionBySupersession)
-        // depends on. Stripping it here made every ruling invisible to retrieval too. The field is
-        // instead stripped at the actual HTTP boundary, in fabFileService's generateSignedUrl - the
-        // single choke point every outward-facing file read (get/list/search/byIds/the shared-lake
-        // fallback) already passes through before a FabFile reaches a response body.
+        // BaseRepository.findById and FabFileRepository.executeSearch both return doc.toJSON(), and
+        // executeSearch is one of the two reads the curator-supersession collapse
+        // (partitionBySupersession) depends on. Stripping it here made every ruling invisible to
+        // retrieval too. The real boundary is the schema's `select: false` on the field itself (see
+        // its own comment): every plain read/update omits it by default, and only the collapse's own
+        // `search` calls opt back in via `includeSupersessionRulings`.
       },
     },
     toObject: {

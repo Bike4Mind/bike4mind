@@ -2642,6 +2642,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           // the session actually named a lake; see the `lakeScoped` note above.
           restrictToDataLake: lakeScoped,
           excludeContent: true, // metadata only; chunk text + vectors fetched below
+          // supersededInLakes is select:false by default; forced retrieval feeds the same
+          // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
+          // FabFileModel.executeSearch.
+          includeSupersessionRulings: true,
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.
           ...this.retrievalFilter,

@@ -1131,6 +1131,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
        * See buildFabFileSearchQuery.options.lacksContentPrefixTags.
        */
       lacksContentPrefixTags?: string[];
+      /**
+       * Opts back into `supersededInLakes`, `select: false` on the schema by default. Only the
+       * curator-supersession collapse's own callers should pass this - see
+       * buildFabFileSearchQuery.options.includeSupersessionRulings.
+       */
+      includeSupersessionRulings?: boolean;
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
@@ -1149,6 +1155,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       skip: number;
       limit: number;
       excludeContent?: boolean;
+      includeSupersessionRulings?: boolean;
     },
     pageSize: number
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
@@ -1353,6 +1360,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   setLakeSupersession?(fabFileId: string, entry: LakeSupersession): Promise<boolean>;
   /** Drop one lake's ruling, restoring the file to ranking. Returns whether a ruling was removed. */
   clearLakeSupersession?(fabFileId: string, dataLakeId: string): Promise<boolean>;
+  /**
+   * The id `fabFileId` is ruled superseded-by, for `dataLakeId` only, or null when there is no such
+   * file or no such ruling. `supersededInLakes` is `select: false` on the schema, so this is the
+   * write-time cycle-detection walk's own explicit opt-in - `findById` alone no longer surfaces it.
+   */
+  getLakeSupersessionWinner?(fabFileId: string, dataLakeId: string): Promise<string | null>;
 
   /**
    * The single-name variant of `pushTagsByFabFileId` that returns the PRE-IMAGE of the file the

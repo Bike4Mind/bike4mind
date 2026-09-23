@@ -91,7 +91,9 @@ export interface ApplyCorpusActionAdapters {
     SetDataLakeFileTagsAdapters['db'] & {
       // Required here, though the shared interface declares them optional (see the field's own
       // doc comment in FabFileTypes.ts) - this door cannot function without a real implementation.
-      fabFiles: Required<Pick<IFabFileRepository, 'setLakeSupersession' | 'clearLakeSupersession'>>;
+      fabFiles: Required<
+        Pick<IFabFileRepository, 'setLakeSupersession' | 'clearLakeSupersession' | 'getLakeSupersessionWinner'>
+      >;
       // Widens the multi-lake ambiguity guard beyond meta-tags - see `candidateAttributionLakes`.
       dataLakes: Pick<IDataLakeRepository, 'findIdsCreatedBy'>;
       dataLakeFindings: Pick<IDataLakeFindingRepository, 'findById'>;
@@ -272,15 +274,14 @@ async function wouldCloseSupersessionCycle(
   keepFabFileId: string,
   retireFabFileId: string,
   lakeId: string,
-  db: { fabFiles: Pick<IFabFileRepository, 'findById'> }
+  db: { fabFiles: Required<Pick<IFabFileRepository, 'getLakeSupersessionWinner'>> }
 ): Promise<boolean> {
   const seen = new Set<string>([retireFabFileId]);
   let current: string | undefined = keepFabFileId;
   for (let step = 0; current && step < SUPERSESSION_CYCLE_WALK_LIMIT; step += 1) {
     if (seen.has(current)) return false; // a cycle not involving retireFabFileId - not this write's problem
     seen.add(current);
-    const file = await db.fabFiles.findById(current);
-    const winner = file?.supersededInLakes?.find(r => r.dataLakeId === lakeId)?.supersededByFabFileId;
+    const winner = await db.fabFiles.getLakeSupersessionWinner(current, lakeId);
     if (!winner) return false;
     if (winner === retireFabFileId) return true;
     current = winner;

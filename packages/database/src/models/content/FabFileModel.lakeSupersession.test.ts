@@ -33,7 +33,10 @@ describe('FabFileRepository lake supersession', () => {
     fileId = doc._id.toString();
   });
 
-  const stored = async () => (await FabFile.findById(fileId).lean())?.supersededInLakes ?? [];
+  // `supersededInLakes` is `select: false` - the raw driver assertions in this file opt back in
+  // explicitly, same as the repository's own internal readers do.
+  const stored = async () =>
+    (await FabFile.findById(fileId).select('+supersededInLakes').lean())?.supersededInLakes ?? [];
 
   it('stores nothing until a curator rules', async () => {
     expect(await stored()).toEqual([]);
@@ -81,12 +84,54 @@ describe('FabFileRepository lake supersession', () => {
     expect(await repo.setLakeSupersession('64b7f9c2d1e4a5b6c7d8e9f0', ruling())).toBe(false);
   });
 
-  it('is visible through the repository read the curator-supersession collapse relies on', async () => {
+  it('is select:false - a plain findById does not surface it', async () => {
     await repo.setLakeSupersession(fileId, ruling());
 
     const found = await repo.findById(fileId);
-    expect(found?.supersededInLakes).toMatchObject([
-      { dataLakeId: 'lake-1', supersededByFabFileId: 'winner-1', decidedByUserId: 'curator-1' },
-    ]);
+    expect(found?.supersededInLakes).toBeUndefined();
+  });
+
+  it(
+    'is visible through executeSearch (via search) when the caller opts in - the read the ' +
+      'curator-supersession collapse actually depends on',
+    async () => {
+      await repo.setLakeSupersession(fileId, ruling());
+
+      const withoutOptIn = await repo.search(
+        'owner-1',
+        '',
+        {},
+        { page: 1, limit: 10 },
+        { by: 'fileName', direction: 'asc' },
+        { textSearch: false }
+      );
+      expect(withoutOptIn.data.find(f => f.id === fileId)?.supersededInLakes).toBeUndefined();
+
+      const withOptIn = await repo.search(
+        'owner-1',
+        '',
+        {},
+        { page: 1, limit: 10 },
+        { by: 'fileName', direction: 'asc' },
+        { textSearch: false, includeSupersessionRulings: true }
+      );
+      expect(withOptIn.data.find(f => f.id === fileId)?.supersededInLakes).toMatchObject([
+        { dataLakeId: 'lake-1', supersededByFabFileId: 'winner-1', decidedByUserId: 'curator-1' },
+      ]);
+    }
+  );
+
+  it('getLakeSupersessionWinner returns the ruled winner for the named lake only', async () => {
+    await repo.setLakeSupersession(fileId, ruling());
+    await repo.setLakeSupersession(fileId, ruling({ dataLakeId: 'lake-2', supersededByFabFileId: 'winner-9' }));
+
+    expect(await repo.getLakeSupersessionWinner!(fileId, 'lake-1')).toBe('winner-1');
+    expect(await repo.getLakeSupersessionWinner!(fileId, 'lake-2')).toBe('winner-9');
+    expect(await repo.getLakeSupersessionWinner!(fileId, 'lake-3')).toBeNull();
+  });
+
+  it('getLakeSupersessionWinner returns null for a file with no ruling or that does not exist', async () => {
+    expect(await repo.getLakeSupersessionWinner!(fileId, 'lake-1')).toBeNull();
+    expect(await repo.getLakeSupersessionWinner!('64b7f9c2d1e4a5b6c7d8e9f0', 'lake-1')).toBeNull();
   });
 });
