@@ -157,6 +157,21 @@ export interface FabFileChunkPolicyConflict {
   detectedAt: Date;
 }
 
+/**
+ * One curator ruling that a lake member has been superseded by a sibling in the same lake.
+ *
+ * Carries who and when because it is the audit trail's anchor on the FILE: the corpus-action
+ * event names the ruling as it was made, this names the ruling as it now stands, and a reader
+ * comparing them can tell a stale event from the live state.
+ */
+export interface LakeSupersession {
+  dataLakeId: string;
+  /** The sibling that displaces this file in ranking. Must be a member of the same lake. */
+  supersededByFabFileId: string;
+  decidedByUserId: string;
+  decidedAt: Date;
+}
+
 export interface IFabFile {
   userId: string;
   fileName: string;
@@ -467,6 +482,26 @@ export interface IFabFile {
   sourceLakeId?: string;
   /** The OrgGoogleDriveConnection that ingested this file (provenance). */
   driveConnectionId?: string;
+
+  /**
+   * Curator rulings that this file is an older generation of some sibling, one per lake.
+   *
+   * The explicit half of the retrieval-time supersession collapse (see
+   * `dataLakeService/supersession.ts`). That collapse derives supersession from a tiered PATH
+   * identity key plus recency, which can only ever relate two files that already look like the
+   * same source document - a curator looking at two documents that flatly contradict each other
+   * has no way to say so, because they share no key. This is where that judgement lands, and
+   * `partitionBySupersession` reads it as a tier above every derived one.
+   *
+   * Lake-scoped, because membership is: a file can belong to two lakes and a ruling made by one
+   * lake's curator must not suppress it in the other. Keyed on `dataLakeId` - a later ruling in
+   * the same lake replaces the earlier one rather than stacking.
+   *
+   * SUPPRESSION, NOT DELETION, exactly like the derived collapse: the member leaves ranking, not
+   * the corpus, and `retrieve_knowledge_content` still reaches it by id or name. That is what
+   * makes the ruling recoverable when a curator gets it wrong.
+   */
+  supersededInLakes?: LakeSupersession[];
 
   sessionId?: string; // For session summaries
 
@@ -1096,6 +1131,12 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
        * See buildFabFileSearchQuery.options.lacksContentPrefixTags.
        */
       lacksContentPrefixTags?: string[];
+      /**
+       * Opts back into `supersededInLakes`, `select: false` on the schema by default. Only the
+       * curator-supersession collapse's own callers should pass this - see
+       * buildFabFileSearchQuery.options.includeSupersessionRulings.
+       */
+      includeSupersessionRulings?: boolean;
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 
@@ -1114,6 +1155,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       skip: number;
       limit: number;
       excludeContent?: boolean;
+      includeSupersessionRulings?: boolean;
     },
     pageSize: number
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
@@ -1297,6 +1339,33 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * name already present fails its filter, so it neither counts nor bumps updatedAt.
    */
   pushTagsByFabFileId(fabFileId: string, tagNames: string[], strength?: number): Promise<number>;
+
+  /**
+   * Record, or replace, one lake's curator ruling that `fabFileId` is superseded by a sibling.
+   *
+   * Keyed on `(fabFileId, dataLakeId)` and idempotent on it: re-ruling in the same lake overwrites
+   * in place, so the array holds at most one entry per lake and a double-click cannot mint two.
+   * Returns false when no file matched.
+   *
+   * Nothing here validates that the winner is a member of the lake, or that it even exists - the
+   * door (`applyCorpusAction`) does, and `partitionBySupersession` independently declines to honor
+   * a ruling whose winner is not in the scoped set. Both matter: the door refuses a bad ruling at
+   * write time, the collapse refuses to act on one that went bad afterwards.
+   */
+  // Optional, unlike the rest of this interface's mutation methods: IFabFileRepository is
+  // exported, and an external implementer written before #3046 has no reason to have these two.
+  // Marking them optional keeps that implementer source-compatible - every internal caller that
+  // actually needs them (applyCorpusAction) requires them locally via `Required<Pick<...>>`
+  // instead of leaning on this interface being universally implemented.
+  setLakeSupersession?(fabFileId: string, entry: LakeSupersession): Promise<boolean>;
+  /** Drop one lake's ruling, restoring the file to ranking. Returns whether a ruling was removed. */
+  clearLakeSupersession?(fabFileId: string, dataLakeId: string): Promise<boolean>;
+  /**
+   * The id `fabFileId` is ruled superseded-by, for `dataLakeId` only, or null when there is no such
+   * file or no such ruling. `supersededInLakes` is `select: false` on the schema, so this is the
+   * write-time cycle-detection walk's own explicit opt-in - `findById` alone no longer surfaces it.
+   */
+  getLakeSupersessionWinner?(fabFileId: string, dataLakeId: string): Promise<string | null>;
 
   /**
    * The single-name variant of `pushTagsByFabFileId` that returns the PRE-IMAGE of the file the

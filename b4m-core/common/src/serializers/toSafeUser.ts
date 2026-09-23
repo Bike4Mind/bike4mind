@@ -209,10 +209,25 @@ export function redactUserSecretsForSelf(
       disconnectReason: n.disconnectReason,
     };
   }
-  // Slack -> keep everything except the user token.
+  // Slack -> allowlist, like every other block here, so a field added to the
+  // settings type (it already carries slackUserToken/slackUserScopes/lastUsedAgent)
+  // does not reach the browser until named on purpose. These are exactly the fields
+  // the settings UI reads, and exactly the ones SlackSettingsSchema accepts on write
+  // (pages/api/users/[id]/slack-settings.ts) -- keep the two in sync, or the UI saves
+  // a value it can never read back and drops it on the next round-trip.
   if (user.slackSettings) {
-    const { slackUserToken: _drop, ...rest } = user.slackSettings;
-    u.slackSettings = rest;
+    const s = user.slackSettings;
+    u.slackSettings = {
+      slackUserId: s.slackUserId,
+      defaultNotebookId: s.defaultNotebookId,
+      autoCreateNotebook: s.autoCreateNotebook,
+      notebookNamePrefix: s.notebookNamePrefix,
+      defaultProjectId: s.defaultProjectId,
+      agentNotebookRouting: s.agentNotebookRouting,
+      keywordRouting: s.keywordRouting,
+      customAgentId: s.customAgentId,
+      githubNotifications: s.githubNotifications,
+    };
   }
   // Auth providers -> allowlist, like every other block here, so a field added to the
   // provider type (it already carries samlNameId/samlSessionIndex/oktaIdentityProviderId/

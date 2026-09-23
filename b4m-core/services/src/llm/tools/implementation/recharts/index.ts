@@ -1,5 +1,6 @@
 import { RechartsChartType, RechartsChartTypeList } from '@bike4mind/common';
 import { ToolDefinition } from '../../base/types';
+import { escapeArtifactBodyJson, sanitizeArtifactTitle } from '../../utils/artifactEmission';
 
 interface RechartsParams {
   data: Array<Record<string, any>>;
@@ -80,10 +81,14 @@ const executeRechartsGeneration = async (parameters: RechartsParams): Promise<st
     },
   };
 
+  // Model-controlled; an unescaped quote here would close the attribute and let the
+  // rest of the title be read as further attributes (e.g. an injected type=).
+  const artifactTitle = sanitizeArtifactTitle(parameters.title || 'Chart');
+
   return `Here's the chart you requested:
 
-<artifact identifier="chart-${Date.now()}" type="application/vnd.ant.recharts" title="${parameters.title || 'Chart'}">
-${JSON.stringify(artifactData, null, 2)}
+<artifact identifier="chart-${Date.now()}" type="application/vnd.ant.recharts" title="${artifactTitle}">
+${escapeArtifactBodyJson(JSON.stringify(artifactData, null, 2))}
 </artifact>`;
 };
 

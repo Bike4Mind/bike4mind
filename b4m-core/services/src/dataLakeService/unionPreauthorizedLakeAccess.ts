@@ -5,6 +5,23 @@ import type { ResolvedLakeAccess } from './getDynamicDataLakeTags';
 import type { ResolvedLakeAccessSet } from './narrowLakeAccessToSession';
 
 /**
+ * `unionPreauthorizedLakeAccess`'s return shape, widened with which datalake tags this call
+ * actually admitted (successfully revalidated against `filterStillManagedLakes`), as opposed to
+ * `preauthorizedLakeIds` - the raw, unvetted session record.
+ *
+ * Exists because `excludedByAccessCount`/`measureIdentityNamedExclusion` (#3055) have no way to
+ * tell a preauthorization-admitted lake apart from a genuinely gate-excluded one - both are
+ * "reachable outside the normal gate" from their point of view, but only one was actually
+ * searched this turn. A caller measuring exclusion against a specific session-named lake must
+ * subtract THIS set from the identity tags it measures, or an admitted lake reports as excluded
+ * even though the turn searched it. See `ChatCompletionProcess`'s promptMeta seed for the call
+ * site this exists for.
+ */
+export type ResolvedLakeAccessSetWithAdmissions = ResolvedLakeAccessSet & {
+  admittedPreauthorizedTags: Set<string>;
+};
+
+/**
  * Adds a session's pre-authorized lakes (manager-but-not-member admission) into an
  * already-resolved access set, as SCOPED (dynamic) entries - a pre-authorized lake is always a
  * DB lake, never a registry one. Authorization happened first at session-create time (see
@@ -28,17 +45,27 @@ export async function unionPreauthorizedLakeAccess(
   preauthorizedLakeIds: string[] | undefined,
   actorUserId: string,
   db: { dataLakes?: Pick<IDataLakeRepository, 'findById'> } & ManageRecheckAdapter
-): Promise<ResolvedLakeAccessSet> {
-  if (!preauthorizedLakeIds || preauthorizedLakeIds.length === 0 || !db.dataLakes) return access;
+): Promise<ResolvedLakeAccessSetWithAdmissions> {
+  // `excludedByAccessCount` (the ACCOUNT-WIDE number, #3055) rides through via `...access` in every
+  // return below deliberately uncorrected: it is counted upstream from org-membership/public
+  // visibility, and a manage-but-not-member preauthorized lake is (by definition of "not a member")
+  // not a candidate for that count. `admittedPreauthorizedTags` is what lets the TARGETED,
+  // session-scoped count (measureIdentityNamedExclusion) correct for the residual case - a
+  // preauthorized lake that is ALSO public and gate-dropped - without recomputing the account-wide
+  // number after every union. See this file's own `ResolvedLakeAccessSetWithAdmissions` doc.
+  const noAdmissions = { admittedPreauthorizedTags: new Set<string>() };
+  if (!preauthorizedLakeIds || preauthorizedLakeIds.length === 0 || !db.dataLakes) {
+    return { ...access, ...noAdmissions };
+  }
   const existingIds = new Set(access.lakes.map(l => l.id));
   const missingIds = preauthorizedLakeIds.filter(id => !existingIds.has(id));
-  if (missingIds.length === 0) return access;
+  if (missingIds.length === 0) return { ...access, ...noAdmissions };
 
   const dataLakes = db.dataLakes;
   const fetched = await Promise.all(missingIds.map(id => dataLakes.findById(id)));
   const active = fetched.filter((lake): lake is IDataLakeDocument => !!lake && lake.status === 'active');
   const activeLakes = await filterStillManagedLakes(active, actorUserId, db);
-  if (activeLakes.length === 0) return access;
+  if (activeLakes.length === 0) return { ...access, ...noAdmissions };
 
   const newEntries: ResolvedLakeAccess[] = activeLakes.map(lake => ({
     id: lake.id,
@@ -60,5 +87,8 @@ export async function unionPreauthorizedLakeAccess(
     dataLakeTags: Array.from(dataLakeTags),
     scopedTagPrefixes: Array.from(scopedTagPrefixes),
     lakes: [...access.lakes, ...newEntries],
+    // Only the entries THIS call successfully revalidated - never the raw `preauthorizedLakeIds`
+    // input, which may still name a lake `filterStillManagedLakes` just dropped above.
+    admittedPreauthorizedTags: new Set(newEntries.map(e => e.datalakeTag)),
   };
 }

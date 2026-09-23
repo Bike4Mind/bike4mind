@@ -37,3 +37,36 @@ export function settleToolCallCredits<T extends SettleableFunctionCall>(
     return fc;
   });
 }
+
+/**
+ * Stands in for a charge whose model could not be resolved, so the charging-model set can
+ * record THAT a model is unknown rather than staying silent about it. Today the only such
+ * path is a delegate_to_agent whose subagent model is absent from `availableModels`:
+ * delegateToAgent drops the usage event but still fires onCredits with the charge, so the
+ * credits reach the row while the model never does.
+ *
+ * Not a model id and never written to the ledger - resolveAggregateToolModel maps it back
+ * to undefined. See ToolBuilder.reserveToolCredits for the one site that adds it.
+ */
+export const UNATTRIBUTED_TOOL_CHARGE = '(unattributed)';
+
+/**
+ * Pick the model to stamp on a quest's single aggregate `tool_usage` ledger row.
+ *
+ * The row sums every charging tool call in the quest, so it can name a model only when
+ * exactly one model charged and every charge in the row is accounted for. Anything else
+ * returns undefined - two or more models, nothing charged, or a charge whose model was
+ * unresolvable (UNATTRIBUTED_TOOL_CHARGE, which poisons an otherwise single-model set
+ * precisely because the row's credits then cover a model the set never learned). An
+ * aggregate that names one of several models reads as authoritative while being wrong,
+ * and the ledger renders an absent model plainly; it is never the quest's own chat model,
+ * which is what the row used to carry regardless of which tool incurred the cost.
+ *
+ * Per-call provider/model attribution is not lost either way: it lives on the
+ * `feature: 'tool'` usage events (ToolBuilder.buildToolUsageEvent).
+ */
+export function resolveAggregateToolModel(chargedModels: Iterable<string>): string | undefined {
+  const distinct = Array.from(new Set(chargedModels));
+  if (distinct.length !== 1) return undefined;
+  return distinct[0] === UNATTRIBUTED_TOOL_CHARGE ? undefined : distinct[0];
+}

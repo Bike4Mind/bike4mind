@@ -5,6 +5,7 @@ import type { CustomCommand } from './types.js';
 import { parseCommandFile, extractCommandName } from '../utils/commandParser.js';
 import { findMarkdownFiles } from '../utils/findMarkdownFiles.js';
 import { RemoteSkillSource } from './RemoteSkillSource.js';
+import { isReservedCommandName } from '../config/commands.js';
 
 /**
  * Store for managing custom slash commands
@@ -22,7 +23,12 @@ export class CustomCommandStore {
   private commands: Map<string, CustomCommand> = new Map();
   private globalCommandsDirs: string[];
   private projectCommandsDirs: string[];
+  private projectRoot: string;
   private remoteSource?: RemoteSkillSource;
+  // Live feature/plugin command names, injected once the FeatureModuleRegistry is
+  // built (post-bootstrap). Lets the load gate reject a project command that
+  // shadows a runtime plugin command, not just the static reserved set.
+  private getFeatureCommandNames?: () => ReadonlySet<string>;
   /**
    * Whether the project root is trusted. When false, project command/skill
    * directories are NOT scanned (folder-trust gate) - only global and remote
@@ -35,6 +41,7 @@ export class CustomCommandStore {
     this.remoteSource = options.remoteSource;
     const home = os.homedir();
     const root = projectRoot || process.cwd();
+    this.projectRoot = root;
 
     // Global commands directories (loaded first, later directories override earlier)
     // Supports Bike4Mind commands, Claude Code commands, and Claude Code skills
@@ -89,6 +96,31 @@ export class CustomCommandStore {
    */
   setRemoteSource(source: RemoteSkillSource | undefined): void {
     this.remoteSource = source;
+  }
+
+  /**
+   * Wire the live feature/plugin command-name source. The registry is built
+   * after the initial `loadCommands()`, so the caller also runs
+   * `pruneReservedProjectCommands()` afterward to drop any project command that
+   * loaded (pre-registry) under a name that is now a runtime plugin command.
+   */
+  setReservedNameSource(getNames: () => ReadonlySet<string>): void {
+    this.getFeatureCommandNames = getNames;
+  }
+
+  /**
+   * Remove project commands whose name is now reserved by a runtime plugin
+   * command. Idempotent; a no-op until `setReservedNameSource` is wired.
+   */
+  pruneReservedProjectCommands(): void {
+    if (!this.getFeatureCommandNames) return;
+    const featureNames = this.getFeatureCommandNames();
+    for (const [name, cmd] of this.commands) {
+      if (cmd.source === 'project' && isReservedCommandName(name, featureNames)) {
+        this.commands.delete(name);
+        console.warn(`Ignoring project command "${name}": name is reserved (built-in or feature command)`);
+      }
+    }
   }
 
   /**
@@ -156,7 +188,9 @@ export class CustomCommandStore {
         return;
       }
 
-      const commandFiles = await findMarkdownFiles(directory);
+      // Project dirs live inside the (untrusted) clone: refuse a symlink whose
+      // target escapes the project root. Global dirs stay unconstrained.
+      const commandFiles = await findMarkdownFiles(directory, source === 'project' ? this.projectRoot : undefined);
 
       for (const filePath of commandFiles) {
         try {
@@ -198,6 +232,15 @@ export class CustomCommandStore {
       return;
     }
 
+    // A project file lives in the (untrusted) clone: it may not claim a reserved
+    // name (a built-in or feature command) or it would shadow that command at
+    // dispatch. Global files are the user's own and stay unconstrained; remote
+    // skills are filtered at fetch time in RemoteSkillSource.
+    if (source === 'project' && isReservedCommandName(commandName, this.getFeatureCommandNames?.())) {
+      console.warn(`Ignoring project command "${commandName}": name is reserved (built-in or feature command)`);
+      return;
+    }
+
     const fileContent = await fs.readFile(filePath, 'utf-8');
     const command = parseCommandFile(fileContent, filePath, commandName, source);
 
@@ -231,12 +274,38 @@ export class CustomCommandStore {
   }
 
   /**
+   * Resolve a command for model-reachable execution (the `skill` tool). Unlike
+   * getCommand, this refuses any command whose name is currently reserved by a
+   * built-in or live feature/plugin command - the same gate `mergeCommands`
+   * applies at dispatch - so no execution path can run a repo-planted `project`
+   * (or `remote`) command that shadows a plugin, even when the load-time prune
+   * ran against a stale registry (e.g. a plugin enabled after boot). Reads the
+   * live reserved-name source on each call, falling back to the static reserved
+   * set before the registry is wired.
+   */
+  getModelReachableCommand(name: string): CustomCommand | undefined {
+    if (isReservedCommandName(name, this.getFeatureCommandNames?.())) return undefined;
+    return this.commands.get(name);
+  }
+
+  /**
    * Gets all loaded commands
    *
    * @returns Array of all custom commands
    */
   getAllCommands(): CustomCommand[] {
     return Array.from(this.commands.values());
+  }
+
+  /**
+   * All commands the model may invoke: the loaded set minus any whose name is
+   * currently reserved (a built-in or live feature/plugin command). The plural
+   * mirror of getModelReachableCommand - feed it to the skills-prompt builder so
+   * the model is never advertised a `global`/`remote` skill that shadows a plugin
+   * and would be refused at the dispatch chokepoint (display matches dispatch).
+   */
+  getModelReachableCommands(): CustomCommand[] {
+    return this.getAllCommands().filter(cmd => !isReservedCommandName(cmd.name, this.getFeatureCommandNames?.()));
   }
 
   /**

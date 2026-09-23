@@ -23,6 +23,7 @@ const access = (): ResolvedLakeAccessSet => ({
   dataLakeTagPrefixes: ['alpha:'], // OPEN bucket - registry-sourced only
   scopedTagPrefixes: ['beta:'], // owner/org-scoped bucket
   lakes: [lake('alpha', 'registry'), lake('beta', 'dynamic')] as ResolvedLakeAccessSet['lakes'],
+  excludedByAccessCount: 0,
 });
 
 describe('narrowLakeAccessToSession', () => {
@@ -37,6 +38,27 @@ describe('narrowLakeAccessToSession', () => {
 
     const complete = { ...access(), lakeViewComplete: true };
     expect(narrowLakeAccessToSession(complete, ['datalake:beta']).lakeViewComplete).toBe(true);
+  });
+
+  /**
+   * #3055: a NARROWED session cannot honestly claim the account-wide count as its
+   * own - the caller can access lake `alpha`, could be excluded from some unrelated lake `zulu`
+   * elsewhere in the org, and a session scoped to `alpha` alone must not report `zulu`'s exclusion
+   * as if it were in this turn's scope. Dropping to undefined (not measured) is the honest answer;
+   * reporting the account-wide number would be a false claim about THIS turn.
+   */
+  it('drops excludedByAccessCount to undefined on an actual narrowing, never the account-wide number', () => {
+    const withExclusions = { ...access(), excludedByAccessCount: 3 };
+    expect(narrowLakeAccessToSession(withExclusions, ['datalake:beta']).excludedByAccessCount).toBeUndefined();
+  });
+
+  /**
+   * The no-op path (session names no lake at all) returns the input object outright - nothing was
+   * narrowed away, so the account-wide count still describes exactly this turn's scope.
+   */
+  it('carries excludedByAccessCount through the no-op path unchanged', () => {
+    const withExclusions = { ...access(), excludedByAccessCount: 3 };
+    expect(narrowLakeAccessToSession(withExclusions, undefined).excludedByAccessCount).toBe(3);
   });
 
   it('keeps only the session lake, dropping the other lake from every bucket', () => {
@@ -77,12 +99,19 @@ describe('narrowLakeAccessToSession', () => {
     // Prefixes match BY VALUE (see narrowLakeAccessToSession), so a colliding prefix survives on
     // the retained lake's behalf. Subtractive still holds - nothing new is granted - but the
     // narrowing is weaker than the lake list suggests. Pinning today's behavior deliberately.
+    // Built from access() rather than a bare object literal + cast, so a future required field on
+    // ResolvedLakeAccessSet cannot slip through here uncaught the way excludedByAccessCount once
+    // did (#3055) - a cast literal satisfies the type whether or not the field is present.
     const colliding: ResolvedLakeAccessSet = {
+      ...access(),
       dataLakeTags: ['datalake:alpha', 'datalake:beta'],
       dataLakeTagPrefixes: ['alpha:'],
       scopedTagPrefixes: [],
-      lakes: [lake('alpha', 'registry'), { ...lake('beta', 'dynamic'), fileTagPrefix: 'alpha:' }],
-    } as ResolvedLakeAccessSet;
+      lakes: [
+        lake('alpha', 'registry'),
+        { ...lake('beta', 'dynamic'), fileTagPrefix: 'alpha:' },
+      ] as ResolvedLakeAccessSet['lakes'],
+    };
     const out = narrowLakeAccessToSession(colliding, ['datalake:beta']);
     expect(out.lakes.map(l => l.datalakeTag)).toEqual(['datalake:beta']);
     // alpha: survives because retained beta claims the same prefix value.

@@ -106,7 +106,13 @@ export const removeFileFromDataLake = async (
   fabFileId: string,
   { db, logger }: RemoveFileFromDataLakeAdapters,
   opts: MembershipOriginOptions = {}
-): Promise<{ success: true; fileCount: number; totalSizeBytes: number; restoreTokenMinted: boolean }> => {
+): Promise<{
+  success: true;
+  fileCount: number;
+  totalSizeBytes: number;
+  restoreTokenMinted: boolean;
+  statsUpdated: boolean;
+}> => {
   const lake = await db.dataLakes.findById(dataLakeId);
   if (!lake) {
     throw new NotFoundError('Data lake not found');
@@ -143,6 +149,26 @@ export const removeFileFromDataLake = async (
     });
   }
 
-  const stats = await recomputeLakeStats(lake, { db, logger });
-  return { success: true, ...stats, restoreTokenMinted };
+  // Best-effort, like the restore record above: the membership pull has already committed by this
+  // point, so a recompute failure must not turn a real removal into a thrown error - a caller
+  // walking a list (a curator merge, or applyAdmissionDecision's bulk decline) needs every
+  // committed removal to actually surface as committed, not silently dropped from what it reports.
+  // The lake's last-known counts stand in until the next successful recompute self-heals them.
+  let stats = {
+    fileCount: lake.fileCount ?? 0,
+    totalSizeBytes: lake.totalSizeBytes ?? 0,
+    totalChunkedChars: lake.totalChunkedChars ?? 0,
+  };
+  let statsUpdated = false;
+  try {
+    stats = await recomputeLakeStats(lake, { db, logger });
+    statsUpdated = true;
+  } catch (err) {
+    logger?.warn?.('[dataLakes] file removed from lake but stats recompute failed', {
+      dataLakeId: lake.id,
+      fabFileId,
+      err,
+    });
+  }
+  return { success: true, ...stats, restoreTokenMinted, statsUpdated };
 };

@@ -6,6 +6,9 @@
  * Flow:
  * 1. External product (VibesWire, VibesTrader...) redirects user here with PKCE params.
  * 2. If the user is already logged in -> generate auth code -> redirect back to the product.
+ *    - First-party clients (and relying-party clients with a remembered consent) redirect
+ *      silently. A relying-party client with no covering grant gets an Allow/Deny consent screen
+ *      first; only Allow mints the code.
  * 3. If the user is NOT logged in -> send to /login with this URL as `redirectTo`.
  *    - Email/password login reads `redirectTo` from the URL and returns here.
  *    - Social/SSO login leaves the SPA, so MultiStepLogin appends `redirectTo`
@@ -18,15 +21,21 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { CircularProgress, Box, Typography, Button } from '@mui/joy';
+import { CircularProgress, Box, Typography, Button, List, ListItem } from '@mui/joy';
+
+interface ConsentInfo {
+  clientName: string;
+  scopes: string[];
+}
 
 const OAuthAuthorizePage = () => {
   const navigate = useNavigate();
   const search = useSearch({ strict: false }) as Record<string, string | undefined>;
   const { accessToken, resetTokens } = useAccessToken();
 
-  const [status, setStatus] = useState<'idle' | 'authorizing' | 'error'>('idle');
+  const [status, setStatus] = useState<'idle' | 'authorizing' | 'consent' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [consentInfo, setConsentInfo] = useState<ConsentInfo | null>(null);
   const didRun = useRef(false);
 
   const {
@@ -38,25 +47,17 @@ const OAuthAuthorizePage = () => {
     code_challenge,
     code_challenge_method,
     nonce,
+    prompt,
   } = search;
 
   // Basic param validation
   // PKCE is optional - confidential clients (e.g. Cognito) use client_secret instead
   const paramsValid = client_id && redirect_uri && response_type === 'code';
 
-  useEffect(() => {
-    if (!paramsValid) return;
-
-    if (!accessToken) {
-      const currentUrl = window.location.pathname + window.location.search;
-      navigate({ to: '/login', search: { redirectTo: currentUrl } });
-      return;
-    }
-
-    if (status !== 'idle' || didRun.current) return;
-    didRun.current = true;
+  // Request an auth code. `consent` is true only after the user clicks Allow. A relying-party
+  // client with no covering grant comes back with { consent_required } instead of a code.
+  const requestCode = (consent?: boolean) => {
     setStatus('authorizing');
-
     fetch('/api/oauth/code', {
       method: 'POST',
       headers: {
@@ -71,6 +72,8 @@ const OAuthAuthorizePage = () => {
         code_challenge,
         code_challenge_method,
         nonce,
+        prompt,
+        ...(consent ? { consent: true } : {}),
       }),
     })
       .then(async r => {
@@ -88,10 +91,15 @@ const OAuthAuthorizePage = () => {
       .then(result => {
         if (!result) return; // Redirecting to login after token reset
 
-        const { code, error, error_description } = result;
+        const { code, consent_required, client_name, scopes, error, error_description } = result;
         if (error) {
           setStatus('error');
           setErrorMsg(error_description || error);
+          return;
+        }
+        if (consent_required) {
+          setConsentInfo({ clientName: client_name || client_id!, scopes: scopes || [] });
+          setStatus('consent');
           return;
         }
 
@@ -104,6 +112,28 @@ const OAuthAuthorizePage = () => {
         setStatus('error');
         setErrorMsg(err.message);
       });
+  };
+
+  // OAuth 4.1.2.1: a denied consent returns the user to the client with error=access_denied.
+  const denyConsent = () => {
+    const url = new URL(redirect_uri!);
+    url.searchParams.set('error', 'access_denied');
+    if (state) url.searchParams.set('state', state);
+    window.location.href = url.toString();
+  };
+
+  useEffect(() => {
+    if (!paramsValid) return;
+
+    if (!accessToken) {
+      const currentUrl = window.location.pathname + window.location.search;
+      navigate({ to: '/login', search: { redirectTo: currentUrl } });
+      return;
+    }
+
+    if (status !== 'idle' || didRun.current) return;
+    didRun.current = true;
+    requestCode();
   }, [accessToken, status, paramsValid]);
 
   if (!paramsValid) {
@@ -152,6 +182,41 @@ const OAuthAuthorizePage = () => {
     );
   }
 
+  if (status === 'consent' && consentInfo) {
+    return (
+      <Box
+        sx={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '100vh',
+          gap: 2,
+          px: 2,
+          textAlign: 'center',
+        }}
+      >
+        <Typography level="h4">Authorize {consentInfo.clientName}</Typography>
+        <Typography level="body-sm" color="neutral">
+          {consentInfo.clientName} is requesting access to your Bike4Mind account:
+        </Typography>
+        <List sx={{ maxWidth: 360 }} data-testid="oauth-consent-scopes">
+          {consentInfo.scopes.map(s => (
+            <ListItem key={s}>{s}</ListItem>
+          ))}
+        </List>
+        <Box sx={{ display: 'flex', gap: 2 }}>
+          <Button variant="plain" color="neutral" data-testid="oauth-consent-deny-btn" onClick={denyConsent}>
+            Deny
+          </Button>
+          <Button variant="solid" data-testid="oauth-consent-allow-btn" onClick={() => requestCode(true)}>
+            Allow
+          </Button>
+        </Box>
+      </Box>
+    );
+  }
+
   return (
     <Box
       sx={{
@@ -165,7 +230,7 @@ const OAuthAuthorizePage = () => {
     >
       <CircularProgress size="lg" />
       <Typography level="body-sm" color="neutral">
-        {status === 'authorizing' ? 'Authorizing…' : 'Signing you in…'}
+        {status === 'authorizing' ? 'Authorizing...' : 'Signing you in...'}
       </Typography>
     </Box>
   );

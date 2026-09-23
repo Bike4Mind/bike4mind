@@ -98,7 +98,7 @@ import { ToolCacheManager } from './tools/ToolCacheManager';
 import { ToolValidator } from './tools/ToolValidator';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { mergeRetrievalSummary } from './tools/retrievalSummaryMerge';
-import { settleToolCallCredits } from './settleToolCredits';
+import { resolveAggregateToolModel, settleToolCallCredits } from './settleToolCredits';
 import { resolvePersonalCorpusOnly } from './resolvePersonalCorpusOnly';
 import { toolsUsedToFunctionCalls } from './toolsUsedToFunctionCalls';
 import { appendStreamedChunk, shouldStampFirstVisibleToken } from './streamedReplyAccumulator';
@@ -108,8 +108,11 @@ import { LATTICE_TOOL_NAMES } from './tools';
 import {
   getDynamicDataLakeAccess,
   lakeMembershipsFrom,
+  measureIdentityNamedExclusion,
   warnIfManyLakeMemberships,
+  type DataLakeAccessContext,
 } from '../dataLakeService/getDynamicDataLakeTags';
+import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import {
   buildElisionStamp,
   truncateElisionText,
@@ -167,11 +170,14 @@ import {
 } from './systemPromptSources';
 import { buildSystemPromptText, type SystemPromptTextDisclosure } from './systemPromptDisclosure';
 import { vetPreauthorizedLakeIds } from './vetPreauthorizedLakeIds';
-import { unionPreauthorizedLakeAccess } from '../dataLakeService/unionPreauthorizedLakeAccess';
+import {
+  unionPreauthorizedLakeAccess,
+  type ResolvedLakeAccessSetWithAdmissions,
+} from '../dataLakeService/unionPreauthorizedLakeAccess';
 import {
   narrowLakeAccessToSession,
   sessionGroundsOnNoLake,
-  type ResolvedLakeAccessSet,
+  sessionNamesALake,
 } from '../dataLakeService/narrowLakeAccessToSession';
 import { renderCallerPromptMessages } from './renderCallerPromptBlock';
 import { buildInsufficientCreditsMessage, buildMemberCreditCapMessage } from './insufficientCreditsMessage';
@@ -858,12 +864,44 @@ export class ChatCompletionProcess {
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
+   * Set only in `resolveEntitlementKeys()`'s catch branch; read by `getDataLakeAccessContext()` to
+   * set `DataLakeAccessContext.entitlementKeysResolved` - see that field's own doc for the "THREW
+   * vs. legitimately empty" distinction this exists to carry (#3155).
+   *
+   * NOT the same axis as `entitlementsResolved` above (review: the two names read as near-synonyms
+   * but answer different questions) - that one means "an attempt has been made this process, so the
+   * memo is populated" and is `true` in BOTH the success and the failure branch of
+   * `resolveEntitlementKeys()`. This one means "that attempt actually succeeded." Never read
+   * `entitlementsResolved: true` as proof the keys are trustworthy - check this field instead.
+   */
+  private entitlementResolutionFailed = false;
+  /**
+   * Single-flight guard for `resolveEntitlementKeys()` (review, #3155): the resolution check
+   * (`entitlementsResolved`) only flips to `true` AFTER the `await`, so two callers racing before
+   * it settles previously both re-entered the try/catch and both wrote the shared
+   * `entitlementKeys`/`entitlementResolutionFailed` fields - whichever settled LAST won, so a
+   * failure racing behind a success could overwrite healthy keys with the fail-safe `[]` and
+   * suppress a healthy turn's telemetry. Caching the in-flight PROMISE (set synchronously, before
+   * any `await`) closes the window: every racing caller awaits the same one settlement.
+   */
+  private entitlementKeysPromise?: Promise<string[]>;
+  /**
    * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
    * (userHasAccessibleKnowledgeLake), the corpus inline-defer plan (resolveCorpusInlinePlan) and
    * the retrieval seed's `lakeScope`, so none of them can disagree - it is the SAME access the
    * knowledge tool resolves with.
    */
-  private accessibleDataLakeAccessMemo: ResolvedLakeAccessSet | undefined;
+  private accessibleDataLakeAccessMemo: ResolvedLakeAccessSetWithAdmissions | undefined;
+  /**
+   * The SAME `DataLakeAccessContext` object for the whole turn (#3055), so every call into
+   * `getDynamicDataLakeTags.ts`'s per-turn memos (membershipOrgIdsForTurn, grantedLakeReachForTurn,
+   * supersededOwnLakeIdsForTurn - see scopedAsyncMemo's WeakMap-on-identity doc) shares one
+   * membership/grant/supersession snapshot. A second call site building its own object literal with
+   * the same field VALUES still misses every one of those memos on object IDENTITY, forcing a second
+   * read that can observe a different snapshot (e.g. a grant revoked between the two reads) and
+   * disagree with the first about what this caller can reach.
+   */
+  private dataLakeAccessContextMemo: DataLakeAccessContext | undefined;
   /**
    * This turn's VETTED `session.preauthorizedLakeIds` (see vetPreauthorizedLakeIds), captured on a
    * field because `getAccessibleDataLakeAccess` is a session-less private method and its consumers
@@ -900,6 +938,10 @@ export class ChatCompletionProcess {
   // ToolBuilder.reserveToolCredits). Settled per-call below so a tool invoked more
   // than once in a turn bills the sum of every call.
   private toolCreditsMap: Map<string, number[]> = new Map();
+  // Distinct models that charged tool credits this turn (see ToolBuilder.reserveToolCredits).
+  // The quest writes ONE aggregate tool_usage ledger row, so it can only name a model
+  // honestly when this holds exactly one - see the settlement block below.
+  private toolCreditModels: Set<string> = new Set();
   private subagentTelemetryData: SubagentTelemetryData[] = [];
   // Credit reservation tracking (pre-reserve/reconcile pattern)
   private reservedCredits: number = 0;
@@ -955,25 +997,35 @@ export class ChatCompletionProcess {
    * memoizing the result (an empty list is a valid, memoizable result). Both the forced
    * retrieval feature and the tool path read these keys to gate entitlement-scoped lakes.
    * No injection => empty keys => tag-only matching (the neutral default).
+   *
+   * SINGLE-FLIGHT (review, #3155): `entitlementKeysPromise` is cached synchronously, before the
+   * first `await`, so two callers racing before resolution settles converge on the SAME promise
+   * instead of each running the try/catch independently - see that field's own doc for the race
+   * this closes.
    */
   public async resolveEntitlementKeys(): Promise<string[]> {
-    if (!this.entitlementsResolved) {
-      try {
-        this.entitlementKeys = (await this.getEntitlements?.(this.user)) ?? [];
-      } catch (err) {
-        // Fail-safe: an entitlement-resolution failure (e.g. a subscription DB read error)
-        // must NEVER break the chat turn. Degrade to tag-only matching - exactly the pre-Q3b
-        // behavior. Entitlement-gated lakes (libonc) fail closed; tag-gated lakes (Opti)
-        // and the entire main-app chat path are unaffected. This is what keeps wiring
-        // getEntitlements into the shared chat defaults a non-regression for every surface.
-        this.logger.warn(
-          `Entitlement resolution failed; falling back to tag-only lake access: ${(err as Error)?.message}`
-        );
-        this.entitlementKeys = [];
-      }
-      this.entitlementsResolved = true;
+    if (this.entitlementsResolved) return this.entitlementKeys;
+    if (!this.entitlementKeysPromise) {
+      this.entitlementKeysPromise = (async () => {
+        try {
+          this.entitlementKeys = (await this.getEntitlements?.(this.user)) ?? [];
+        } catch (err) {
+          // Fail-safe: an entitlement-resolution failure (e.g. a subscription DB read error)
+          // must NEVER break the chat turn. Degrade to tag-only matching - exactly the pre-Q3b
+          // behavior. Entitlement-gated lakes (libonc) fail closed; tag-gated lakes (Opti)
+          // and the entire main-app chat path are unaffected. This is what keeps wiring
+          // getEntitlements into the shared chat defaults a non-regression for every surface.
+          this.logger.warn(
+            `Entitlement resolution failed; falling back to tag-only lake access: ${(err as Error)?.message}`
+          );
+          this.entitlementKeys = [];
+          this.entitlementResolutionFailed = true;
+        }
+        this.entitlementsResolved = true;
+        return this.entitlementKeys;
+      })();
     }
-    return this.entitlementKeys;
+    return this.entitlementKeysPromise;
   }
 
   /**
@@ -993,20 +1045,39 @@ export class ChatCompletionProcess {
   }
 
   /**
+   * The one `DataLakeAccessContext` object for the turn (#3055) - built once, reused by every
+   * caller that needs to share `getDynamicDataLakeTags.ts`'s per-turn memos with
+   * `getAccessibleDataLakeAccess`'s own resolution. See `dataLakeAccessContextMemo`'s doc for why
+   * identity, not field equality, is what those memos key on.
+   */
+  private async getDataLakeAccessContext(): Promise<DataLakeAccessContext> {
+    if (this.dataLakeAccessContextMemo === undefined) {
+      const entitlementKeys = await this.resolveEntitlementKeys();
+      this.dataLakeAccessContextMemo = {
+        db: this.db,
+        user: this.user,
+        entitlementKeys,
+        // #3155: lets the exclusion-telemetry count tell a legitimately empty entitlement list
+        // apart from a failed lookup - see `entitlementResolutionFailed`'s own doc.
+        entitlementKeysResolved: !this.entitlementResolutionFailed,
+        // Without this, a countGateExcludedLakes failure warns into a void: the resolver
+        // swallows it internally (never throws), so this call's own try/catch never sees it.
+        logger: this.logger,
+      };
+    }
+    return this.dataLakeAccessContextMemo;
+  }
+
+  /**
    * The caller's resolved data-lake access (owned + org + shared/entitlement-gated lakes they can
    * reach), memoized per turn. This is the SAME resolver the knowledge tool executes with, so the
    * tool-offer and the inline-defer decisions can never disagree. Fail-safe: any error degrades to
    * empty access (treated as "no lake"), never breaks the turn.
    */
-  private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSet> {
+  private async getAccessibleDataLakeAccess(): Promise<ResolvedLakeAccessSetWithAdmissions> {
     if (this.accessibleDataLakeAccessMemo === undefined) {
       try {
-        const entitlementKeys = await this.resolveEntitlementKeys();
-        const resolved = await getDynamicDataLakeAccess({
-          db: this.db,
-          user: this.user,
-          entitlementKeys,
-        });
+        const resolved = await getDynamicDataLakeAccess(await this.getDataLakeAccessContext());
         // Same union the retrieval and tool doors run, so all three agree on what this session can
         // reach; it re-derives the manage gate per call, so a revoked maintainer's memo comes back
         // un-widened exactly as it would have before the admission.
@@ -1025,6 +1096,9 @@ export class ChatCompletionProcess {
           dataLakeTagPrefixes: [],
           scopedTagPrefixes: [],
           lakes: [],
+          // excludedByAccessCount omitted, not 0: resolution failed outright, so whether access
+          // shaped anything is unknown, not "nothing was excluded" (#3055).
+          admittedPreauthorizedTags: new Set(),
         };
       }
     }
@@ -2684,6 +2758,7 @@ export class ChatCompletionProcess {
         imageProcessorLambdaName: this.imageProcessorLambdaName,
         getMcpClient: this.getMcpClient,
         toolCreditsMap: this.toolCreditsMap,
+        toolCreditModels: this.toolCreditModels,
         subagentTelemetryData: this.subagentTelemetryData,
         sendStatusUpdate: (q, status, options) => this.sendStatusUpdate(q, status, options),
         onToolPreamble: this.onToolPreamble,
@@ -2805,6 +2880,7 @@ export class ChatCompletionProcess {
           image_generation: imageConfig,
           edit_image: imageConfig,
           audio_generation: audioConfig,
+          web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
         },
         model,
         organization,
@@ -2904,16 +2980,54 @@ export class ChatCompletionProcess {
         // itself, which reads an empty scope as "no opinion". Fail direction is inherited from
         // getAccessibleDataLakeAccess, which degrades to empty access rather than throwing, so a
         // lake-resolution outage records an empty scope and the replay skips the turn.
-        const lakeScope =
+        const accessForSeed =
           this.personalCorpusOnly || sessionGroundsOnNoLake(session.retrievalTags, session.lakeScopeExplicit)
-            ? []
-            : narrowLakeAccessToSession(await this.getAccessibleDataLakeAccess(), session.retrievalTags).dataLakeTags;
+            ? undefined
+            : await this.getAccessibleDataLakeAccess();
+        const narrowedAccess =
+          accessForSeed === undefined ? undefined : narrowLakeAccessToSession(accessForSeed, session.retrievalTags);
+        const lakeScope = narrowedAccess?.dataLakeTags ?? [];
+        // Access-excluded count travels with the same resolution as lakeScope (#3055), but a REAL
+        // narrowing (the session named a specific lake) cannot reuse the account-wide count
+        // narrowLakeAccessToSession deliberately clears in that case: the account-wide number can
+        // describe an unrelated lake outside this turn's selection. Instead, measure precisely
+        // which of the session's OWN identity-named lakes (if any) are gate-excluded - see
+        // measureIdentityNamedExclusion's own doc for why this is a separate, targeted query
+        // rather than something narrowLakeAccessToSession itself can answer. The no-op path
+        // (session names no lake) skips the targeted query entirely and keeps the account-wide
+        // number, since nothing was narrowed away from it.
+        //
+        // Passes the SAME `DataLakeAccessContext` object `getAccessibleDataLakeAccess` (called just
+        // above, via `accessForSeed`) already resolved with, not a fresh literal - the two calls
+        // share getDynamicDataLakeTags.ts's per-turn membership/grant/supersession memos only on
+        // object identity, so a second object here would silently re-read on a second snapshot.
+        //
+        // Excludes any tag THIS TURN successfully admitted via preauthorization
+        // (`admittedPreauthorizedTags`, #3055 review) - never the raw session-named tags. A
+        // preauthorized "Test this lake" session names its own lake by identity, and
+        // `measureIdentityNamedExclusion`'s underlying gate query has no notion of that admission,
+        // so left unfiltered it reports a lake the turn actually searched as excluded.
+        const identityTagsToMeasure = datalakeTagsFrom(session.retrievalTags ?? []).filter(
+          tag => !accessForSeed?.admittedPreauthorizedTags.has(tag)
+        );
+        const excludedByAccessCount =
+          accessForSeed !== undefined && sessionNamesALake(accessForSeed, session.retrievalTags)
+            ? await measureIdentityNamedExclusion(await this.getDataLakeAccessContext(), identityTagsToMeasure)
+            : narrowedAccess?.excludedByAccessCount;
+        // Written whenever the count was actually measured - INCLUDING a genuine zero, per this
+        // field's own absence contract (RetrievalSummarySchema.excludedLakes: absent means not
+        // recorded, never "nothing excluded"). A personal-corpus turn, a turn that grounds on no
+        // lake, or a failed count query (excludedByAccessCount undefined) all correctly stay
+        // unrecorded rather than reporting a zero that was never measured.
+        const excludedLakes =
+          excludedByAccessCount !== undefined ? { count: excludedByAccessCount, reason: 'access' as const } : undefined;
         quest.promptMeta.retrieval = mergeRetrievalSummary(quest.promptMeta.retrieval, {
           attempted: false,
           mode: forcedRetrievalEnabled ? 'forced' : 'optional',
           surfaces: [],
           dataLakeTags: [],
           lakeScope,
+          ...(excludedLakes ? { excludedLakes } : {}),
           // Recorded only when the tool was offered: a forced-only turn never had a section to
           // ship, and writing `false` there would pad the A/B's control arm with turns that were
           // never in the experiment.
@@ -4124,6 +4238,7 @@ export class ChatCompletionProcess {
             // settleToolCallCredits and billed as its cost. Clear it so only the surviving
             // attempt's delivered tools settle.
             this.toolCreditsMap.clear();
+            this.toolCreditModels.clear();
 
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] === ${
@@ -5219,10 +5334,14 @@ export class ChatCompletionProcess {
                 .filter(fc => fc.creditsUsed && fc.creditsUsed > 0)
                 .map(fc => fc.name)
                 .join(', ');
+              // NOT currentModel.id: the charge belongs to whatever model the tools ran
+              // on. One aggregate row can only name it when a single model charged (see
+              // resolveAggregateToolModel).
+              const toolUsageModel = resolveAggregateToolModel(this.toolCreditModels);
               await subtractCredits(
                 {
                   type: 'tool_usage',
-                  model: currentModel.id,
+                  model: toolUsageModel,
                   sessionId: quest.sessionId,
                   questId: quest.id,
                   ownerId: this.reservedCreditsOwnerId || this.user.id,

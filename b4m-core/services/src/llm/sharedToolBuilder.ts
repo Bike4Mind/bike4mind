@@ -360,6 +360,7 @@ export function buildSharedTools(
       image_generation: config.image_generation,
       edit_image: config.image_generation,
       audio_generation: config.audio_generation,
+      web_search: config.web_search,
     },
     model,
     imageProcessorLambdaName,
