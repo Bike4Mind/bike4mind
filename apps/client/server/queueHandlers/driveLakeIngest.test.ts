@@ -2224,6 +2224,42 @@ describe('driveLakeIngest consumer', () => {
       });
     });
 
+    // The full-walk arm pins this too, but the two arms reach createFabFile through different
+    // Drive reads: the changes feed has its own field list and its own DriveFile mapping, so
+    // `createdTime` can fall out of the incremental path alone and leave every file a re-sync
+    // brings in undated, with the full-walk test still green.
+    it('carries the Drive vintage pair into createFabFile on the incremental arm too', async () => {
+      withCursor();
+      h.listChanges.mockResolvedValue({
+        changes: [
+          {
+            fileId: 'd1',
+            removed: false,
+            file: {
+              id: 'd1',
+              name: 'Quarterly review',
+              mimeType: 'application/vnd.google-apps.document',
+              parents: ['FOLDER'],
+              createdTime: '2019-03-04T09:15:00.000Z',
+            },
+          },
+        ],
+        newStartPageToken: 'cursor-1',
+      });
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.createFabFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveFileId: 'd1',
+          documentDate: new Date('2019-03-04T09:15:00.000Z'),
+          documentDateSource: DocumentDateSource.DRIVE_CREATED,
+        }),
+        expect.anything()
+      );
+    });
+
     it('ignores a changed file that does not resolve under the connected root (Drive-wide feed, folder-scoped lake)', async () => {
       withCursor();
       h.listChanges.mockResolvedValue({

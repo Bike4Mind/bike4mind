@@ -4,13 +4,19 @@ import type { DocumentDateSource } from '@bike4mind/common';
 export type ExtractedDocumentDate = { date: Date; source: DocumentDateSource };
 
 /**
- * Earliest vintage we treat as a real signal.
+ * Earliest vintage we treat as a real signal, INCLUSIVE.
  *
- * The producers we read from all have a "zero" that parses as a perfectly valid date: Windows
- * FILETIME zero is 1601-01-01, the Unix epoch is 1970-01-01, and the zip/OOXML epoch is 1980-01-01.
+ * The producers we read from have "zeros" that parse as perfectly valid dates: Windows FILETIME
+ * zero is 1601-01-01 and the Unix epoch is 1970-01-01. Both sit below this floor and are refused.
  * A born-digital document predating 1980 is vanishingly rare, and a digitised older document gets
  * its SCAN date in metadata rather than its authored one, so nothing real is lost by refusing the
  * whole range - whereas admitting it means shipping "dated 1601-01-01" into a passage header.
+ *
+ * The boundary lands on 1980 because that is also the zip/OOXML epoch, but the epoch INSTANT is
+ * deliberately admitted rather than refused: it is a DOS entry-mtime zero, and nothing here reads
+ * a zip entry's mtime - every parser below reads a date a producer wrote out as text. So refusing
+ * 1980-01-01 would buy no protection and would drop a genuinely-authored 1980-01-01 document.
+ * Pinned in documentDate.test.ts.
  */
 const EARLIEST_PLAUSIBLE_DOCUMENT_DATE = Date.UTC(1980, 0, 1);
 

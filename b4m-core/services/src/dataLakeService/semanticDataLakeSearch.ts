@@ -447,9 +447,14 @@ interface RankableFile {
    * The document's OWN vintage (#3048) - the one date that IS surfaced to the model, unlike
    * `createdAt` above. Carried purely so the passage header can show it: supersession ranking
    * still keys on `createdAt`, because which COPY we ingested last is a different question from
-   * when the document was written. Both builders below must carry it.
+   * when the document was written.
+   *
+   * REQUIRED, unlike its neighbours here: this is the only field on this shape that the model
+   * actually reads, and omitting it is invisible - the passage simply renders undated, which is
+   * also the legitimate output for a file that has no vintage. A builder must say `null` and mean
+   * it rather than reach that state by forgetting the field.
    */
-  documentDate?: Date | null;
+  documentDate: Date | null;
   /**
    * The only record of which embedding space a file's chunks live in - chunks carry no model of
    * their own. Width alone cannot separate ada-002 from text-embedding-3-small (both 1536), so
@@ -1668,7 +1673,7 @@ async function lakeScopedSearch(
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
         createdAt: f.createdAt,
-        documentDate: f.documentDate,
+        documentDate: f.documentDate ?? null,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
@@ -1801,7 +1806,7 @@ async function fileScopedSearch(
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
         createdAt: f.createdAt,
-        documentDate: f.documentDate,
+        documentDate: f.documentDate ?? null,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,

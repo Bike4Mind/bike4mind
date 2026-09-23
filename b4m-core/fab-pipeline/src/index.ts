@@ -1,5 +1,8 @@
 export * from './chunk';
-export * from './documentDate';
+// Only the funnel is published. The individual parsers behind it are an implementation detail of
+// the chunker, and exporting them from a versioned package invites a caller to skip the
+// plausibility window that acceptDocumentDate exists to enforce.
+export { acceptDocumentDate, type ExtractedDocumentDate } from './documentDate';
 export * from './embeddings';
 export * from './ingest';
 export * from './ssrfProtection';

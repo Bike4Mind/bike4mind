@@ -63,6 +63,20 @@ const OOXML_CORE_PROPERTIES_PATH = 'docProps/core.xml';
 /** Real core properties run to a few hundred bytes; a megabyte of them is a bomb, not metadata. */
 const MAX_OOXML_CORE_XML_BYTES = 256 * 1024;
 
+/**
+ * Is this an OOXML container (a zip), as opposed to a legacy OLE workbook or a bare CSV?
+ *
+ * Read from the bytes rather than from the mime type because the spreadsheet path is handed both:
+ * a `.xlsx` keeps its authored date in `docProps/core.xml`, a `.xls` in an OLE summary stream, and
+ * they need different readers. `PK\x03\x04` is the zip local file header, which every OOXML
+ * container starts with.
+ */
+function isZipContainer(content: Buffer): boolean {
+  return (
+    content.length >= 4 && content[0] === 0x50 && content[1] === 0x4b && content[2] === 0x03 && content[3] === 0x04
+  );
+}
+
 /** unpdf's document proxy, named here so the metadata side-read reads as one thing. */
 type PdfDocumentProxy = Awaited<ReturnType<typeof getDocumentProxy>>;
 
@@ -530,6 +544,41 @@ export class SmartChunker {
     }
   }
 
+  /**
+   * A workbook's authored date, read from whichever place its container actually keeps one.
+   *
+   * An `.xlsx` goes through `readOoxmlDocumentDate` like the docx and pptx paths rather than
+   * through SheetJS's parsed `Props`, because the two disagree on an offset-bearing date and only
+   * one of them matches what the header renders. SheetJS builds `Props.CreatedDate` with
+   * `new Date(...)`, i.e. a true UTC instant, so `<dcterms:created>2019-03-04T00:00:00+08:00` came
+   * back as 2019-03-03 - while the byte-identical `core.xml` inside a `.docx` rendered 2019-03-04.
+   * `parseOoxmlCoreCreated` ignores the offset, which is what makes one authored date render the
+   * same day whatever container carried it (see parsePdfInfoDate for the same contract). It also
+   * picks up the `dc:date` fallback that SheetJS's property reader does not.
+   *
+   * Legacy `.xls` keeps the SheetJS read: it has no `core.xml` at all - its created date lives in
+   * an OLE summary stream - and that reader returns the date as an ISO STRING despite the
+   * `CreatedDate?: Date` declaration, which is why acceptDocumentDate takes `Date | string`. Do
+   * not narrow this to the declared type.
+   */
+  private async readWorkbookDocumentDate(
+    content: Buffer,
+    sheetJsCreatedDate: Date | string | undefined
+  ): Promise<ExtractedDocumentDate | undefined> {
+    if (!isZipContainer(content)) {
+      return acceptDocumentDate(sheetJsCreatedDate ?? null, DocumentDateSource.DOCUMENT_PROPERTIES);
+    }
+    try {
+      return await this.readOoxmlDocumentDate(await JSZip.loadAsync(content));
+    } catch (error) {
+      // Guarded for the same reason readOoxmlDocumentDate guards its own read: SheetJS has already
+      // parsed the workbook by this point, so a container this second opener chokes on must cost
+      // the file its vintage and nothing else.
+      this.logger.warn(`Could not open the workbook container for a document date: ${(error as Error).message}`);
+      return undefined;
+    }
+  }
+
   // Chunks PDF content into pieces that fit within the model's token limit
   private async chunkPDF(content: Buffer): Promise<Chunk[]> {
     // Convert the Buffer to Uint8Array and get the PDF document proxy
@@ -907,15 +956,7 @@ export class SmartChunker {
 
     const workbook = read(content, { type: 'buffer' });
 
-    // SheetJS already parses the workbook's properties, so this needs no second pass over the
-    // container - and unlike a docProps/core.xml read it also covers legacy .xls, whose created
-    // date lives in an OLE summary stream rather than in any XML. That legacy reader returns the
-    // date as an ISO STRING despite the `CreatedDate?: Date` declaration, which is why
-    // acceptDocumentDate takes `Date | string`; do not narrow this to the declared type.
-    this.lastDocumentDate = acceptDocumentDate(
-      workbook.Props?.CreatedDate ?? null,
-      DocumentDateSource.DOCUMENT_PROPERTIES
-    );
+    this.lastDocumentDate = await this.readWorkbookDocumentDate(content, workbook.Props?.CreatedDate);
 
     // Canonical extracted text for the fingerprint: every sheet's rows serialized deterministically,
     // independent of chunkTokenLimit. The chunk OUTPUT below flips between whole-row and per-cell

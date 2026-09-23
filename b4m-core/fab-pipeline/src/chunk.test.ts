@@ -834,8 +834,9 @@ describe('chunkFile captures a document date', () => {
   // an ISO STRING - so the funnel's getTime() threw a TypeError and chunkFile rejected, costing the
   // file every chunk. Typecheck stays green on this, which is why it needs a test on the real
   // reader rather than a hand-shaped fixture.
-  describe('legacy .xls (BIFF8), whose properties reader returns a string', () => {
+  describe('spreadsheets, whose two container formats keep the authored date in different places', () => {
     const XLS_MIME = 'application/vnd.ms-excel';
+    const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
     async function buildDatedWorkbook(bookType: 'biff8' | 'xlsx', createdDate: Date): Promise<Buffer> {
       const { utils, write } = await import('xlsx');
@@ -876,7 +877,7 @@ describe('chunkFile captures a document date', () => {
     // normalisation are exercised against the library rather than against an assumption about it.
     it('captures the same date from the OOXML reader, which returns a Date', async () => {
       const xlsx = await buildDatedWorkbook('xlsx', new Date('2019-03-04T00:00:00Z'));
-      const chunks = await chunker.chunkFile(xlsx, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
       expect(chunks.length).toBeGreaterThan(0);
       expect(chunker.getDocumentDate()).toEqual({
         date: new Date('2019-03-04T00:00:00.000Z'),
@@ -887,6 +888,54 @@ describe('chunkFile captures a document date', () => {
     it('refuses an implausible created date from the legacy reader too', async () => {
       const xls = await buildDatedWorkbook('biff8', new Date('1601-01-01T00:00:00Z'));
       const chunks = await chunker.chunkFile(xls, XLS_MIME);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toBeUndefined();
+    });
+
+    /**
+     * Rewrite a real workbook's `docProps/core.xml`, leaving every other entry untouched, so the
+     * container stays a workbook SheetJS can parse while the property under test is controlled.
+     * Building the core.xml by hand is the only way to reach these cases: every writer in the wild
+     * - SheetJS's included - emits `Z`, which is exactly why the offset bug stayed invisible.
+     */
+    async function xlsxWithCoreXml(coreXmlBody: string): Promise<Buffer> {
+      const zip = await JSZip.loadAsync(await buildDatedWorkbook('xlsx', new Date('2001-01-01T00:00:00Z')));
+      zip.file(
+        'docProps/core.xml',
+        `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+          `<cp:coreProperties xmlns:cp="x" xmlns:dc="x" xmlns:dcterms="x">${coreXmlBody}</cp:coreProperties>`
+      );
+      return Buffer.from(await zip.generateAsync({ type: 'nodebuffer' }));
+    }
+
+    // The regression this whole split exists for: SheetJS builds Props.CreatedDate with
+    // `new Date(...)`, a true UTC instant, so this rendered 2019-03-03 while the byte-identical
+    // core.xml inside a .docx rendered 2019-03-04. One authored day must render the same whatever
+    // container carried it - see the cross-format test in documentDate.test.ts.
+    it('renders the authored day for an offset-bearing core.xml, not the UTC one', async () => {
+      const xlsx = await xlsxWithCoreXml('<dcterms:created>2019-03-04T00:00:00+08:00</dcterms:created>');
+      const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()?.date.toISOString().slice(0, 10)).toBe('2019-03-04');
+    });
+
+    // The other thing reading core.xml directly buys: SheetJS's property reader has no dc:date
+    // fallback, so a producer that writes only that one was previously undated.
+    it('reads a core.xml carrying only dc:date', async () => {
+      const xlsx = await xlsxWithCoreXml('<dc:date>2019-03-04T09:30:00Z</dc:date>');
+      const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toEqual({
+        date: new Date('2019-03-04T09:30:00.000Z'),
+        source: DocumentDateSource.DOCUMENT_PROPERTIES,
+      });
+    });
+
+    // A .xlsx whose core.xml offers nothing is undated, rather than falling back to the SheetJS
+    // Props path this split exists to keep it off.
+    it('leaves a .xlsx undated when its core.xml carries no date', async () => {
+      const xlsx = await xlsxWithCoreXml('<dc:title>Quarterly review</dc:title>');
+      const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
       expect(chunks.length).toBeGreaterThan(0);
       expect(chunker.getDocumentDate()).toBeUndefined();
     });

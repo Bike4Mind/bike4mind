@@ -19,8 +19,12 @@ export interface AnnSearchAdapter {
 export interface AnnRankableFile {
   fileName: string;
   fileTags: string[];
-  /** The source document's own vintage (#3048), carried through for the passage header. */
-  documentDate?: Date | null;
+  /**
+   * The source document's own vintage (#3048), carried through for the passage header. Required
+   * for the same reason as on `RankableFile`: a builder that omits it renders an undated passage,
+   * which is indistinguishable from the legitimate no-vintage case and so fails silently.
+   */
+  documentDate: Date | null;
 }
 
 export interface AnnVectorSearchResult {
@@ -129,6 +133,9 @@ export async function annVectorSearch(args: {
       fileId: hit.fabFileId,
       fileName: file.fileName,
       fileTags: file.fileTags,
+      // `?? null` despite the field now being required above: the type stops a TYPED builder from
+      // dropping it, this stops an undefined reaching the row from a structurally-typed caller.
+      // SemanticChunkResult's contract is null-for-undated, and the render channels key on it.
       documentDate: file.documentDate ?? null,
       chunkText: hit.text,
       score,
