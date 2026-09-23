@@ -7,7 +7,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 // but mirror the sibling ensure-*-index tests' guard so this stays robust if that changes.
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260922000000_ensure-data-lake-inconsistency-scan-index';
+import migration from './20260922000002_ensure-data-lake-inconsistency-scan-index';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND hooks.
 vi.setConfig({ testTimeout: MONGO_TEST_TIMEOUT_MS, hookTimeout: MONGO_TEST_TIMEOUT_MS });

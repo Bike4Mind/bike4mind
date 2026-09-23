@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { buildHookContext, executeHooks, type HookContext } from './hookExecutor.js';
 import type { HookMatcher } from './types.js';
 import type { ShellRunnerResult } from '../utils/shellRunner.js';
+import type { ShellCommandPermissionDeps } from '../utils/commandPermission.js';
 
 // Mock shellRunner
 vi.mock('../utils/shellRunner.js', () => ({
@@ -16,6 +17,15 @@ vi.mock('../utils/shellRunner.js', () => ({
 import { runShellCommand } from '../utils/shellRunner.js';
 
 const mockRunShellCommand = vi.mocked(runShellCommand);
+
+// A permission stub that never prompts (needsPermission -> false), so these
+// dispatch-focused tests keep their pre-gate behavior: the shell command runs.
+// Threaded into every executeHooks call because `perm` is now required (a
+// forgotten wiring is a type error, not a silent unprompted bypass).
+const ALLOW_ALL = {
+  permissionManager: { needsPermission: () => false },
+  promptFn: async () => ({ action: 'allow-once' as const }),
+} as unknown as ShellCommandPermissionDeps;
 
 function shellResult(overrides: Partial<ShellRunnerResult> = {}): ShellRunnerResult {
   return { exitCode: 0, stdout: '', stderr: '', timedOut: false, ...overrides };
@@ -166,12 +176,12 @@ describe('hookExecutor', () => {
     });
 
     it('should return { decision: "allow" } when hooks array is undefined', async () => {
-      const result = await executeHooks(undefined, baseContext);
+      const result = await executeHooks(undefined, baseContext, ALLOW_ALL);
       expect(result).toEqual({ decision: 'allow' });
     });
 
     it('should return { decision: "allow" } when hooks array is empty', async () => {
-      const result = await executeHooks([], baseContext);
+      const result = await executeHooks([], baseContext, ALLOW_ALL);
       expect(result).toEqual({ decision: 'allow' });
     });
 
@@ -187,7 +197,7 @@ describe('hookExecutor', () => {
         },
       ];
 
-      const result = await executeHooks(hooks, baseContext);
+      const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
       // No matchers match "Bash", so no hooks are executed
       expect(result).toEqual({ decision: 'allow' });
     });
@@ -203,7 +213,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result).toEqual({
           decision: 'deny',
           reason: 'Operation not allowed',
@@ -220,7 +230,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result).toEqual({
           decision: 'deny',
           reason: 'Hook blocked execution',
@@ -238,7 +248,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result.decision).toBe('allow');
         expect(result.updatedInput).toEqual({ validated: true });
       });
@@ -254,7 +264,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result).toEqual({ decision: 'block', reason: 'Critical error detected' });
       });
 
@@ -279,7 +289,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         // First deny should win
         expect(result.decision).toBe('deny');
         expect(result.reason).toBe('First hook denied');
@@ -306,7 +316,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result.decision).toBe('block');
         expect(result.reason).toBe('Critical block');
       });
@@ -338,7 +348,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result.decision).toBe('allow');
         // Later hooks should override earlier ones for same keys
         expect(result.updatedInput).toEqual({
@@ -356,7 +366,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result).toEqual({ decision: 'allow' });
       });
 
@@ -371,7 +381,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result).toEqual({ decision: 'allow' });
         expect(consoleSpy).toHaveBeenCalledWith('Hook exited with code 1: Some error');
         consoleSpy.mockRestore();
@@ -387,7 +397,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result).toEqual({ decision: 'allow' });
       });
 
@@ -402,7 +412,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result.decision).toBe('allow');
       });
     });
@@ -421,7 +431,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, { ...baseContext, tool_name: 'Bash' });
+        const result = await executeHooks(hooks, { ...baseContext, tool_name: 'Bash' }, ALLOW_ALL);
         expect(result.decision).toBe('deny'); // Hook matched and denied
       });
 
@@ -433,7 +443,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, { ...baseContext, tool_name: 'Bash' });
+        const result = await executeHooks(hooks, { ...baseContext, tool_name: 'Bash' }, ALLOW_ALL);
         expect(result.decision).toBe('allow'); // No hook matched
       });
 
@@ -445,7 +455,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, { ...baseContext, tool_name: 'bash_execute' });
+        const result = await executeHooks(hooks, { ...baseContext, tool_name: 'bash_execute' }, ALLOW_ALL);
         expect(result.decision).toBe('deny'); // Hook matched
       });
 
@@ -457,15 +467,15 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const resultEdit = await executeHooks(hooks, { ...baseContext, tool_name: 'Edit' });
+        const resultEdit = await executeHooks(hooks, { ...baseContext, tool_name: 'Edit' }, ALLOW_ALL);
         expect(resultEdit.decision).toBe('deny');
 
-        const resultWrite = await executeHooks(hooks, { ...baseContext, tool_name: 'Write' });
+        const resultWrite = await executeHooks(hooks, { ...baseContext, tool_name: 'Write' }, ALLOW_ALL);
         expect(resultWrite.decision).toBe('deny');
 
         // For Bash, no hook should match, so no runShellCommand call
         mockRunShellCommand.mockClear();
-        const resultBash = await executeHooks(hooks, { ...baseContext, tool_name: 'Bash' });
+        const resultBash = await executeHooks(hooks, { ...baseContext, tool_name: 'Bash' }, ALLOW_ALL);
         expect(resultBash.decision).toBe('allow'); // No match
         expect(mockRunShellCommand).not.toHaveBeenCalled();
       });
@@ -478,10 +488,10 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, { ...baseContext, tool_name: 'mcp__github__create_issue' });
+        const result = await executeHooks(hooks, { ...baseContext, tool_name: 'mcp__github__create_issue' }, ALLOW_ALL);
         expect(result.decision).toBe('deny');
 
-        const resultNoMatch = await executeHooks(hooks, { ...baseContext, tool_name: 'mcp__UPPER__method' });
+        const resultNoMatch = await executeHooks(hooks, { ...baseContext, tool_name: 'mcp__UPPER__method' }, ALLOW_ALL);
         expect(resultNoMatch.decision).toBe('allow'); // [a-z]+ doesn't match UPPER
       });
 
@@ -493,7 +503,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result.decision).toBe('deny');
       });
 
@@ -510,7 +520,7 @@ describe('hookExecutor', () => {
           tool_name: undefined,
         };
 
-        const result = await executeHooks(hooks, contextWithoutTool);
+        const result = await executeHooks(hooks, contextWithoutTool, ALLOW_ALL);
         // When tool_name is undefined, shouldMatch logic returns true
         expect(result.decision).toBe('deny');
       });
@@ -524,7 +534,7 @@ describe('hookExecutor', () => {
         ];
 
         // Should not throw, should just not match
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result.decision).toBe('allow');
       });
     });
@@ -541,7 +551,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result).toEqual({ decision: 'allow' });
         expect(consoleSpy).toHaveBeenCalledWith('Hook execution error: spawn ENOENT');
         consoleSpy.mockRestore();
@@ -557,7 +567,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result.decision).toBe('deny');
         expect(result.reason).toContain('timed out');
       });
@@ -585,7 +595,7 @@ describe('hookExecutor', () => {
           },
         ];
 
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result.decision).toBe('allow');
         // Both matchers match, so both hooks run and inputs are merged
         expect(result.updatedInput).toEqual({
@@ -607,7 +617,7 @@ describe('hookExecutor', () => {
         ];
 
         // No runShellCommand should be called for prompt hooks
-        const result = await executeHooks(hooks, baseContext);
+        const result = await executeHooks(hooks, baseContext, ALLOW_ALL);
         expect(result).toEqual({ decision: 'allow' });
         expect(mockRunShellCommand).not.toHaveBeenCalled();
       });

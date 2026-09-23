@@ -121,6 +121,80 @@ describe('SelfHostWorker', () => {
     worker.stop();
   });
 
+  it('retries returned batch failures while acknowledging other received messages', async () => {
+    const worker = new SelfHostWorker(mockLogger);
+    const bad = makeMessage({ MessageId: 'bad', ReceiptHandle: 'rc-bad' });
+    const good = makeMessage({ MessageId: 'good', ReceiptHandle: 'rc-good' });
+    const dispatch = vi.fn(async (event: { Records: { messageId: string }[] }) => ({
+      batchItemFailures: event.Records[0].messageId === 'bad' ? [{ itemIdentifier: 'bad' }] : [],
+    }));
+    drainOnce(worker, [bad, good]);
+    worker.registerQueueHandler('q', 'http://sqs/q', dispatch);
+
+    worker.start();
+
+    await vi.waitFor(() => expect(mockReceiveFromQueue).toHaveBeenCalledTimes(2));
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(mockDeleteFromQueue.mock.calls).toEqual([['http://sqs/q', 'rc-good']]);
+  });
+
+  it('acknowledges a redelivered batch failure only after successful processing', async () => {
+    const worker = new SelfHostWorker(mockLogger);
+    const dispatch = vi
+      .fn()
+      .mockResolvedValueOnce({ batchItemFailures: [{ itemIdentifier: 'm1' }] })
+      .mockResolvedValueOnce({ batchItemFailures: [] });
+    mockReceiveFromQueue
+      .mockResolvedValueOnce([makeMessage()])
+      .mockResolvedValueOnce([
+        makeMessage({ ReceiptHandle: 'retry-receipt', Attributes: { ApproximateReceiveCount: '2' } }),
+      ])
+      .mockImplementationOnce(async () => {
+        await worker.stop();
+        return [];
+      });
+    worker.registerQueueHandler('q', 'http://sqs/q', dispatch);
+
+    worker.start();
+
+    await vi.waitFor(() => expect(mockReceiveFromQueue).toHaveBeenCalledTimes(3));
+    expect(dispatch).toHaveBeenCalledTimes(2);
+    expect(mockDeleteFromQueue.mock.calls).toEqual([['http://sqs/q', 'retry-receipt']]);
+  });
+
+  it.each([undefined, null, {}, { statusCode: 200 }, { batchItemFailures: [] }, { batchItemFailures: null }])(
+    'acknowledges successful handler response %j',
+    async result => {
+      const worker = new SelfHostWorker(mockLogger);
+      drainOnce(worker, [makeMessage()]);
+      worker.registerQueueHandler('q', 'http://sqs/q', vi.fn().mockResolvedValue(result));
+
+      worker.start();
+
+      await vi.waitFor(() => expect(mockReceiveFromQueue).toHaveBeenCalledTimes(2));
+      expect(mockDeleteFromQueue.mock.calls).toEqual([['http://sqs/q', 'r1']]);
+    }
+  );
+
+  it.each([
+    { batchItemFailures: 'invalid' },
+    { batchItemFailures: {} },
+    { batchItemFailures: [null] },
+    { batchItemFailures: [{}] },
+    { batchItemFailures: [{ itemIdentifier: '' }] },
+    { batchItemFailures: [{ itemIdentifier: null }] },
+    { batchItemFailures: [{ itemIdentifier: 'another-message' }] },
+  ])('retains a message when its partial batch response is malformed: %j', async result => {
+    const worker = new SelfHostWorker(mockLogger);
+    drainOnce(worker, [makeMessage()]);
+    worker.registerQueueHandler('q', 'http://sqs/q', vi.fn().mockResolvedValue(result));
+
+    worker.start();
+
+    await vi.waitFor(() => expect(mockReceiveFromQueue).toHaveBeenCalledTimes(2));
+    expect(mockDeleteFromQueue).not.toHaveBeenCalled();
+  });
+
   it('names every polled queue and scheduled task in its boot log', async () => {
     // The only signal a self-host operator has that a consumer was skipped (its env var unset,
     // so main.ts warned and moved on) is which names this line does NOT contain. A count alone
