@@ -282,6 +282,40 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
       expect(json.mock.calls[0][0].beliefRecorded).toBe(false);
     });
 
+    it('surfaces WHY memory declined, in the same shape the replay route returns', async () => {
+      // A bare false cannot tell "an operator turned lake memory off" from "you left the note
+      // empty", and those are opposite things to show a curator - one is a system state they cannot
+      // act on, the other is a thing they can fix by typing.
+      h.recordFindingResolutionBelief.mockResolvedValue({ recorded: false, reason: 'no-resolution' });
+
+      const { json, done } = invoke({ action: 'resolve', resolution: 'settled' });
+      await done;
+
+      expect(json.mock.calls[0][0].beliefSkipReason).toBe('no-resolution');
+    });
+
+    it('omits the reason on success, so a caller can treat its presence as the failure signal', async () => {
+      const { json, done } = invoke({ action: 'resolve', resolution: 'settled' });
+      await done;
+
+      expect(json.mock.calls[0][0].beliefRecorded).toBe(true);
+      expect(json.mock.calls[0][0]).not.toHaveProperty('beliefSkipReason');
+    });
+
+    it('stamps the shred fence before its own I/O', async () => {
+      // Taken on arrival, ahead of the access gate, the finding read and the CAS write - a purge
+      // landing in any of those windows must refuse the belief rather than lift its own tombstone.
+      const before = Date.now();
+      const { done } = invoke({ action: 'resolve', resolution: 'settled' });
+      await done;
+      const after = Date.now();
+
+      const { startedAt } = h.recordFindingResolutionBelief.mock.calls[0][0];
+      expect(startedAt).toBeInstanceOf(Date);
+      expect(startedAt.getTime()).toBeGreaterThanOrEqual(before);
+      expect(startedAt.getTime()).toBeLessThanOrEqual(after);
+    });
+
     it('still returns the committed ruling when the memory write THROWS', async () => {
       // The whole reason the call is wrapped. The resolution is already durable at this point, so a
       // memory-subsystem fault must not surface as a failed request: the curator would retry and hit

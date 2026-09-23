@@ -297,6 +297,28 @@ describe('MemoryLedgerRepository', () => {
       expect(coverage.factCount).toBe(1);
     });
 
+    it('counts a fact whose sources array is EMPTY, without the $reduce swallowing the event', async () => {
+      // The empty-input branch of the `$reduce` that unions the sources arrays. Distinct from the
+      // provenance-only case above: there the array has an entry the `$filter` rejects, here there
+      // is nothing to fold at all. An aggregation that mishandled it would drop the event from
+      // `factCount` too, under-reporting a lake's memory rather than over-reporting its documents.
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:nosources',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'VE0',
+          subject: 'fact-a',
+          sources: [],
+        })
+      );
+
+      const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:nosources', 'owner1');
+      expect(coverage.sourceDocumentCount).toBe(0);
+      expect(coverage.factCount).toBe(1);
+    });
+
     it('reports zero coverage for a lake with no ledger events at all', async () => {
       const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:none', 'owner1');
       expect(coverage).toEqual({ lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 });

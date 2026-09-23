@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { LAKE_MEMORY_FINDING_SOURCE_PREFIX } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
@@ -45,6 +45,8 @@ const finding = {
 
 // The module takes full Mongoose documents; these fixtures carry only the fields it reads, so the
 // call site is cast the way this directory's sibling suites cast theirs.
+const REQUEST_AT = new Date('2026-09-23T00:00:00.000Z');
+
 const run = (overrides: Record<string, unknown> = {}) =>
   recordFindingResolutionBelief(
     {
@@ -52,6 +54,7 @@ const run = (overrides: Record<string, unknown> = {}) =>
       finding,
       status: 'resolved',
       resolution: 'Different fiscal years; both are current.',
+      startedAt: REQUEST_AT,
       ...overrides,
     } as never,
     { logger } as never
@@ -67,6 +70,10 @@ beforeEach(() => {
   h.createLedgerAppendSession.mockResolvedValue({ append: h.append });
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe('recordFindingResolutionBelief (#3049)', () => {
   it('writes under the LAKE principal, keyed to the lake tag and encrypted to the lake creator', async () => {
     // Not the curator. A belief under the curator's own principal is invisible to `recallLakeMemory`,
@@ -79,6 +86,66 @@ describe('recordFindingResolutionBelief (#3049)', () => {
     expect(sessionParams.principal).toEqual({ kind: 'lake', id: 'datalake:acme-research' });
     expect(sessionParams.ownerUserId).toBe('lake-creator');
     expect(sessionParams.startedAt).toBeInstanceOf(Date);
+  });
+
+  it('stamps the shred fence at the REQUEST instant, not after its own I/O', async () => {
+    // The fence refuses a write only when `destroyedAt >= startedAt`, and LIFTS the tombstone when
+    // `destroyedAt < startedAt`. So a `new Date()` taken down at the append would be LATER than a
+    // purge landing during these awaits: the erased principal would be re-keyed and a human-reviewed
+    // belief appended after the erase. Every await between the request and the write is such a
+    // window, so each mock advances the clock - a regression to a locally-taken instant fails here.
+    vi.useFakeTimers();
+    vi.setSystemTime(REQUEST_AT);
+    h.getSettingsValue.mockImplementation(async () => {
+      vi.setSystemTime(new Date('2026-09-23T00:00:05.000Z'));
+      return true;
+    });
+    h.getEffectiveLLMApiKeys.mockImplementation(async () => {
+      vi.setSystemTime(new Date('2026-09-23T00:00:10.000Z'));
+      return {};
+    });
+    h.embed.mockImplementation(async () => {
+      vi.setSystemTime(new Date('2026-09-23T00:00:20.000Z'));
+      return [0.1, 0.2];
+    });
+
+    await expect(run({ startedAt: REQUEST_AT })).resolves.toEqual({ recorded: true });
+
+    const [sessionParams] = h.createLedgerAppendSession.mock.calls[0];
+    expect(sessionParams.startedAt).toBe(REQUEST_AT);
+    // The point of the assertion above, stated as the property it protects: the fence instant is
+    // strictly earlier than the moment of the write, so the intervening window is fenced at all.
+    expect(sessionParams.startedAt.getTime()).toBeLessThan(Date.now());
+  });
+
+  it('keys the belief on the FINDING, so two findings ruled alike cannot overwrite each other', async () => {
+    // Without an explicit subject the ledger derives one from the fact's words, and an `assert`
+    // REPLACES the belief it lands on - so two same-kind findings closed with the same note would
+    // fold into one and the second would silently take the first's fact and provenance.
+    await run();
+    expect(h.append.mock.calls[0][0].subject).toBe(`${LAKE_MEMORY_FINDING_SOURCE_PREFIX}finding-7`);
+
+    // Same kind, same status, byte-identical note: the collision case. Different findings, so they
+    // must stay different beliefs.
+    await run({ finding: { ...finding, id: 'finding-8' } });
+    const [first, second] = h.append.mock.calls.map(call => call[0]);
+    expect(first.summary).toBe(second.summary);
+    expect(second.subject).not.toBe(first.subject);
+  });
+
+  it('bounds the embed, so a hung provider cannot hold the response past the Lambda budget', async () => {
+    // The ruling is already committed by the time this runs, so an unbounded await means no response
+    // on a request that durably succeeded - and the client's retry then 400s on the double-resolve
+    // guard. Timing out degrades to the vectorless belief a missing API key already produces.
+    vi.useFakeTimers();
+    h.embed.mockImplementation(() => new Promise(() => {})); // never settles
+
+    const pending = run();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    await expect(pending).resolves.toEqual({ recorded: true });
+    expect(h.append.mock.calls[0][0].embedding).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalled();
   });
 
   it('claims the human-reviewed tier, which only a human-authored belief may', async () => {
@@ -208,6 +275,16 @@ describe('recordFindingResolutionBelief (#3049)', () => {
     await run();
 
     expect(h.embed).toHaveBeenCalledWith(h.append.mock.calls[0][0].summary);
+  });
+
+  it('passes a SUCCESSFUL vector through to the append', async () => {
+    // The sibling cases cover only the undefined and throwing outcomes, which both assert the same
+    // `embedding: undefined`. Without this one, an embedder wired to a variable that is never read
+    // would pass every test in the file while writing every belief vectorless.
+    h.embed.mockResolvedValue([0.11, 0.22, 0.33]);
+
+    await expect(run()).resolves.toEqual({ recorded: true });
+    expect(h.append.mock.calls[0][0].embedding).toEqual([0.11, 0.22, 0.33]);
   });
 });
 

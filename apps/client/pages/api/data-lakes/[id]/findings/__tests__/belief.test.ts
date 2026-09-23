@@ -157,4 +157,30 @@ describe('POST /api/data-lakes/[id]/findings/[findingId]/belief (#3049)', () => 
     await expect(invoke('not-an-object-id').done).rejects.toThrow(/not found/i);
     expect(h.findById).toHaveBeenCalledWith('not-an-object-id');
   });
+
+  it('stamps the shred fence before its own I/O', async () => {
+    // The instant must predate the access gate, the finding read and the settings read inside the
+    // recorder - a purge landing in any of those windows has to refuse the write rather than lift
+    // its own tombstone. Bracketed rather than compared to a fixed value so the assertion says the
+    // thing that matters: taken on arrival, not on the way to the append.
+    const before = Date.now();
+    await invoke().done;
+    const after = Date.now();
+
+    const { startedAt } = h.recordFindingResolutionBelief.mock.calls[0][0];
+    expect(startedAt).toBeInstanceOf(Date);
+    expect(startedAt.getTime()).toBeGreaterThanOrEqual(before);
+    expect(startedAt.getTime()).toBeLessThanOrEqual(after);
+  });
+
+  it('PROPAGATES a recorder fault instead of swallowing it, unlike the resolve sibling', async () => {
+    // The asymmetry is deliberate and worth pinning: the resolve route swallows because its ruling
+    // is already committed and a 500 would report a durable write as not having happened. This route
+    // commits nothing, so failing loudly costs nothing and is honest about a memory subsystem that
+    // is down - and a retro-fill is safe to retry. A `catch` added here would be a silent success on
+    // a belief that was never written.
+    h.recordFindingResolutionBelief.mockRejectedValue(new Error('ledger unreachable'));
+
+    await expect(invoke().done).rejects.toThrow(/ledger unreachable/i);
+  });
 });

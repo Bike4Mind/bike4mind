@@ -1,4 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
+import { isDocumentSource } from '@bike4mind/common';
 import {
   agentRepository,
   dataLakeAccessGrantRepository,
@@ -360,10 +361,17 @@ handler.get(async (req, res) => {
   let withheldOrphans = 0;
   if (kind === 'lake') {
     const survivingSources = createSurvivingSourcesResolver({ fabfiles: fabFileRepository });
-    const surviving = await survivingSources([...new Set(profile.beliefs.flatMap(b => b.sources ?? []))]);
-    // A source-less belief is kept: nothing was destroyed, so it is not an orphan.
+    // Documents only, on both sides of this check. A curator-resolution belief also cites the finding
+    // it was decided on (#3049), which is not a FabFile: feeding it to the resolver logs `skipping ids
+    // that cannot address a row by _id` on every read, and counting it as a source would make such a
+    // belief permanently un-orphanable - it would outlive the destruction of every document it names,
+    // which is the exact disclosure this block exists to close.
+    const documentSources = (belief: (typeof profile.beliefs)[number]): string[] =>
+      (belief.sources ?? []).filter(isDocumentSource);
+    const surviving = await survivingSources([...new Set(profile.beliefs.flatMap(documentSources))]);
+    // A belief citing no DOCUMENT is kept: nothing was destroyed, so it is not an orphan.
     const kept = profile.beliefs.filter(b => {
-      const sources = b.sources ?? [];
+      const sources = documentSources(b);
       return sources.length === 0 || sources.some(sourceId => surviving.has(sourceId));
     });
     withheldOrphans = profile.beliefs.length - kept.length;

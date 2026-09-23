@@ -335,3 +335,68 @@ describe('writeFactToLedger - shred fence instant', () => {
     expect(written).toBe(false);
   });
 });
+
+describe('createLedgerAppendSession - explicit subject (#3049)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    appendMemoryEventMock.mockResolvedValue({ seq: 0, hash: 'h', prevHash: null });
+  });
+
+  it('keys on the caller subject instead of the fact text, and skips the profile read entirely', async () => {
+    // A writer whose facts have a natural key does not need the semantic search - it already knows
+    // which belief this is. Skipping the read is not just an optimization: it is what keeps the
+    // whole-chain decrypt off a request path that runs after a user's write is already committed.
+    const session = await createLedgerAppendSession(LAKE);
+
+    await session.append({
+      summary: 'A curator reviewed and resolved a duplicate-content finding, and recorded: same report',
+      evidenceTier: 'human-reviewed',
+      embedding: [1, 0, 0],
+      subject: 'finding:abc123',
+    });
+
+    expect(readProfileMock).not.toHaveBeenCalled();
+    expect(callSubject(0)).toBe('finding:abc123');
+    // Plaintext, so the ledger hashes it on the way to rest like any other subject. Passing it as
+    // already-hashed would store a double-hash and fork on every single write.
+    expect(callHashed(0)).toBe(false);
+  });
+
+  it('gives two identically-worded facts DIFFERENT subjects when the caller keys them apart', async () => {
+    // The collision the derived subject cannot avoid: `resolveSubject` is a token bag, so the same
+    // wording is the same belief no matter what it is about, and an assert replaces.
+    const session = await createLedgerAppendSession(LAKE);
+    const summary = 'A curator reviewed and dismissed a duplicate-content finding, and recorded: not a duplicate';
+
+    await session.append({ summary, evidenceTier: 'human-reviewed', embedding: [1, 0, 0], subject: 'finding:a' });
+    await session.append({ summary, evidenceTier: 'human-reviewed', embedding: [1, 0, 0], subject: 'finding:b' });
+
+    expect(callSubject(0)).toBe('finding:a');
+    expect(callSubject(1)).toBe('finding:b');
+    // Without the explicit key these two would have coalesced: same wording, and near-identical
+    // vectors well over the de-dup threshold.
+    expect(resolveSubject({ fact: summary })).toBeTruthy();
+  });
+
+  it('never lets a keyed belief become a de-dup target for a later derived fact', async () => {
+    // The collision arriving from the other direction: an extracted fact that happens to embed close
+    // to the curator's belief must not assert onto it, which would replace a human ruling with a
+    // machine extraction at a lower evidence tier.
+    readProfileMock.mockResolvedValue(null);
+    const session = await createLedgerAppendSession(LAKE);
+
+    await session.append({
+      summary: 'A curator reviewed and resolved a metric-disagreement finding, and recorded: fiscal years differ',
+      evidenceTier: 'human-reviewed',
+      embedding: [1, 0, 0],
+      subject: 'finding:xyz',
+    });
+    await session.append({
+      summary: 'The fiscal years differ between the two revenue reports',
+      evidenceTier: 'engineering-proxy',
+      embedding: [1, 0, 0],
+    });
+
+    expect(callSubject(1)).not.toBe('finding:xyz');
+  });
+});

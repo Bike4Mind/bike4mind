@@ -1,13 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLakes/dataLakeScopes';
+import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { dataLakeService } from '@bike4mind/services';
-import { dataLakeRepository, dataLakeAccessGrantRepository, dataLakeFindingRepository } from '@bike4mind/database';
+import { dataLakeFindingRepository } from '@bike4mind/database';
 import { LAKE_FINDING_RESOLUTION_MAX_CHARS, type LakeFindingTerminalStatus } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
-import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { loadFindingForLake } from '@server/dataLakes/loadFindingForLake';
 import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingResolutionBelief';
 
 /**
@@ -54,26 +53,26 @@ const UpdateBody = z.discriminatedUnion('action', [
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .post(async (req: Request, res) => {
-    assertDataLakeWriteScope(req);
+    // Before the first await: the crypto-shred fence refuses a write only when the purge lands at or
+    // after this instant, so stamping it later would let a purge that landed mid-request lift its own
+    // tombstone. See `recordFindingResolutionBelief`'s `startedAt`.
+    const startedAt = new Date();
     const { id, findingId } = req.query as { id: string; findingId: string };
-    const body = UpdateBody.parse(req.body);
-    const ctx = await toAccessContext(req);
 
-    const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, {
-      db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
-    });
-
-    // Belongs-to-lake is checked here rather than trusted from the path: the gate above authorized a
-    // LAKE, so without this a caller who manages one lake could rule on any finding id in the
-    // database by quoting their own lake in the URL. Not-found rather than forbidden, so the refusal
-    // leaks nothing about findings in lakes the caller cannot see.
+    // Scope, lake-write access and belongs-to-lake, shared with the `/belief` sibling. The
+    // cross-lake check is what stops a caller who manages one lake from ruling on any finding id in
+    // the database by quoting their own lake in the URL.
     //
-    // The mutations below ALSO carry `lake.id` as a filter term, so the rule holds without this
-    // read. It stays because the two answer different questions: the filter refuses the write, this
-    // decides the STATUS - without it a cross-lake id and an already-resolved one both come back as
-    // the same null, and the 404/400 split below could not tell them apart without leaking which.
-    const existing = await dataLakeFindingRepository.findById(findingId);
-    if (!existing || existing.lakeId !== lake.id) throw new NotFoundError('Finding not found');
+    // The mutations below ALSO carry `lake.id` as a filter term, so the rule holds without the
+    // finding read. It stays because the two answer different questions: the filter refuses the
+    // write, this decides the STATUS - without it a cross-lake id and an already-resolved one both
+    // come back as the same null, and the 404/400 split below could not tell them apart without
+    // leaking which.
+    const { lake, ctx } = await loadFindingForLake(req, { lakeId: id, findingId });
+
+    // AFTER the gates, deliberately: an unauthorized caller learns nothing about their own payload,
+    // and by the time a 400 is reachable the caller has already proven they manage this lake.
+    const body = UpdateBody.parse(req.body);
 
     if (body.action === 'assign') {
       // Shape-validated only. Whether the assignee can actually MANAGE this lake is deliberately not
@@ -116,7 +115,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       // `resolved.resolution` rather than `body.resolution`: the belief must quote what was
       // actually COMMITTED, and the repository normalizes an absent note to null on the way in.
       // Same source the standalone belief route reads, so the two cannot drift.
-      { lake, finding: resolved, status, resolution: resolved.resolution },
+      { lake, finding: resolved, status, resolution: resolved.resolution, startedAt },
       { logger: req.logger }
     ).catch((err: unknown) => {
       req.logger.warn('[lakeMemory] could not record the curator resolution as a belief', {
@@ -127,9 +126,13 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       return null;
     });
 
-    // Reported rather than silent, so a curator who wrote a note can see whether it reached memory -
-    // and so the surface can say why not (lake memory is off) instead of implying it worked.
-    return res.json({ data: resolved, beliefRecorded: belief?.recorded ?? false });
+    // Reported rather than silent, so a curator who wrote a note can see whether it reached memory.
+    // The REASON rides along additively, in the same shape the `/belief` sibling returns, because a
+    // bare false cannot tell "lake memory is off" from "you left the note empty" - and those are
+    // opposite things to show a curator. Absent on success and on the unforeseen-throw path above,
+    // where there is no reason to report.
+    const beliefReason = belief && !belief.recorded ? { beliefSkipReason: belief.reason } : {};
+    return res.json({ data: resolved, beliefRecorded: belief?.recorded ?? false, ...beliefReason });
   });
 
 export const config = { api: { externalResolver: true } };

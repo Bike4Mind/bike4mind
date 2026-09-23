@@ -9,7 +9,7 @@ import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
-import { createMementoEmbedder } from '@server/memory/mementoEmbedder';
+import { createMementoEmbedder, type MementoEmbedder } from '@server/memory/mementoEmbedder';
 
 /**
  * Why a resolution did not become a belief. Every one of these is an ordinary outcome, not a fault -
@@ -24,6 +24,56 @@ export type BeliefSkipReason =
   | 'shred-fence';
 
 export type RecordBeliefResult = { recorded: true } | { recorded: false; reason: BeliefSkipReason };
+
+/**
+ * How long the belief path waits for an embedding vector before writing the belief without one.
+ *
+ * The resolve route awaits this AFTER the ruling is already committed, inside a 60 s server Lambda
+ * (`infra/web.ts`), and `OpenAIEmbeddingService` sets no timeout of its own. Unbounded, a stalled
+ * provider means no response on a request whose durable write already succeeded - and the client's
+ * retry then 400s on the double-resolve guard the route is at pains to avoid.
+ *
+ * 10s is two orders of magnitude above a healthy embed and a small fraction of the budget, so it
+ * fires only on a genuinely hung provider. It degrades to exactly the outcome a missing API key
+ * already produces - a vectorless belief, still recallable on the lexical scorer - which is why
+ * timing out is safe here: a belief that ranks on a weaker signal beats a lost response.
+ */
+const EMBED_TIMEOUT_MS = 10_000;
+
+/**
+ * Resolve the fact's vector, or `undefined` if the provider fails or outruns `EMBED_TIMEOUT_MS`.
+ * Never throws and never leaves a timer pending (which would hold the Lambda's event loop open past
+ * the response).
+ */
+async function embedWithinBudget(embed: MementoEmbedder, fact: string, logger: Logger): Promise<number[] | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      embed(fact),
+      new Promise<undefined>(resolve => {
+        timer = setTimeout(() => {
+          logger.warn(
+            `[lakeMemory] embedding a curator resolution exceeded ${EMBED_TIMEOUT_MS}ms; writing it without a vector`
+          );
+          resolve(undefined);
+        }, EMBED_TIMEOUT_MS);
+      }),
+    ]);
+  } catch (err: unknown) {
+    // Logged rather than swallowed: nothing backfills a vector onto an event written without one
+    // (`reembedMementos.ts:180` skips them), so a belief that misses its vector here misses it
+    // permanently and ranks on lexical overlap forever. Still best-effort - a weaker belief beats
+    // losing the curator's decision.
+    logger.warn(
+      `[lakeMemory] could not embed a curator resolution; writing it without a vector: ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+    return undefined;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * The sentence a curator's ruling contributes to lake memory.
@@ -81,10 +131,25 @@ export async function recordFindingResolutionBelief(
     finding: IDataLakeFindingDocument;
     status: LakeFindingTerminalStatus;
     resolution: string | null | undefined;
+    /**
+     * When the REQUEST arrived - not when this function runs, and not when it reaches the append.
+     *
+     * The crypto-shred fence refuses a write only when `destroyedAt >= startedAt`, and LIFTS the
+     * tombstone when `destroyedAt < startedAt` (`MemoryPrincipalKeyModel`). So a value stamped after
+     * this function's own awaits - the settings read, the key table, the embedding call - would be
+     * later than a purge landing in that window: the fence would mint a fresh DEK and append a
+     * `human-reviewed` belief AFTER the erase that was meant to take it. `DELETE /api/memory/lake/:id`
+     * destroys exactly this principal while leaving the lake active, so a resolve click racing a
+     * purge is a real interleaving, and nothing downstream refuses the write.
+     *
+     * Required with no default, for the reason `createLedgerAppendSession` gives: a default would
+     * silently disable the fence for every caller whose work began earlier, which is all of them.
+     */
+    startedAt: Date;
   },
   deps: { logger: Logger }
 ): Promise<RecordBeliefResult> {
-  const { lake, finding, status } = params;
+  const { lake, finding, status, startedAt } = params;
   const { logger } = deps;
 
   const resolution = params.resolution?.trim();
@@ -141,23 +206,12 @@ export async function recordFindingResolutionBelief(
     { logger }
   );
   const embed = createMementoEmbedder(apiKeyTable, logger);
-  const embedding = await embed(fact).catch((err: unknown) => {
-    // Logged rather than swallowed: nothing backfills a vector onto an event written without one
-    // (`reembedMementos.ts:180` skips them), so a belief that misses its vector here misses it
-    // permanently and ranks on lexical overlap forever. Still best-effort - a weaker belief beats
-    // losing the curator's decision.
-    logger.warn(
-      `[lakeMemory] could not embed a curator resolution; writing it without a vector: ${
-        err instanceof Error ? err.message : String(err)
-      }`
-    );
-    return undefined;
-  });
+  const embedding = await embedWithinBudget(embed, fact, logger);
 
   const session = await createLedgerAppendSession({
     principal: { kind: 'lake', id: lake.datalakeTag },
     ownerUserId,
-    startedAt: new Date(),
+    startedAt,
   });
 
   const written = await session.append({
@@ -168,6 +222,13 @@ export async function recordFindingResolutionBelief(
     evidenceTier: 'human-reviewed',
     sources,
     embedding,
+    // KEYED ON THE FINDING, not on the sentence. The default subject is a token bag derived from
+    // `summary`, and an assert REPLACES the belief it lands on - so two findings of the same kind
+    // ruled with the same note would fold into one, the second silently taking the first's fact and
+    // provenance. Keying on the finding makes the identity match what a belief here actually IS: one
+    // finding's ruling. Re-ruling one finding still coalesces (the curator's latest word wins, which
+    // is what the replay route is for), and distinct findings never can.
+    subject: findingSourceRef(finding.id),
   });
 
   // False, not an error: the lake's key was destroyed while this was in flight, so there is nothing

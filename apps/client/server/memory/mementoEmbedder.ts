@@ -17,9 +17,11 @@ type ApiKeyTable = Parameters<typeof resolveEmbeddingConfig>[1];
  * rejects it silently rather than erroring. One place to get the space right, so a second writer
  * cannot get it wrong.
  *
- * Takes the key table rather than resolving one, because both callers already hold it for other
- * work - `extractLakeMemory` passes the same table to the extraction service - and a helper that
- * fetched its own would double that read.
+ * Takes the key table rather than resolving one so the read stays the CALLER's to place.
+ * `extractLakeMemory` already holds a table it passes to the extraction service, and resolving a
+ * second one here would double that read; `recordFindingResolutionBelief` fetches a table solely to
+ * call this, and pays for it on the request path where the cost is visible rather than buried in a
+ * helper. Same reason either way: this helper owns the embedding SPACE, not the key lookup.
  *
  * NEVER THROWS, and the caller is expected to carry on without a vector: with no usable provider key
  * this returns an embedder that resolves undefined for every call. A vectorless event is still
