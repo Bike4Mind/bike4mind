@@ -323,6 +323,13 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const sandboxOrchestrator = new SandboxOrchestrator(sandboxConfig, sandboxRuntime, proxyManager);
     permissionManager.setSandboxState(sandboxConfig.mode, sandboxOrchestrator.isActive());
 
+    // Start the proxy when network filtering is on; otherwise getProxyEnv() stays
+    // empty and the runtime grants raw egress, silently ignoring allowedDomains
+    // (mirrors buildSandbox for the interactive path).
+    if (sandboxConfig.enabled && sandboxConfig.mode !== 'disabled' && sandboxConfig.network.enabled) {
+      await sandboxOrchestrator.startProxy();
+    }
+
     // Agent context for observation tracking
     const agentContext: AgentContext = {
       currentAgent: null,

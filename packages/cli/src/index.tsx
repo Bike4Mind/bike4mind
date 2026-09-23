@@ -3364,6 +3364,36 @@ function CliApp() {
         break;
       }
 
+      case 'sandbox:network': {
+        if (!state.sandboxOrchestrator) {
+          console.log('Sandbox not initialized');
+          break;
+        }
+        const netArg = args[0];
+        if (netArg !== 'on' && netArg !== 'off') {
+          console.log('Usage: /sandbox:network <on|off>');
+          break;
+        }
+        const enableNet = netArg === 'on';
+        state.sandboxOrchestrator.setNetworkEnabled(enableNet);
+        if (enableNet) {
+          await state.sandboxOrchestrator.startProxy();
+          const pm = state.sandboxOrchestrator.getProxyManager();
+          if (pm?.isRunning()) {
+            console.log(`🌐 Network proxy started on port ${pm.getPort()}`);
+          }
+        } else {
+          await state.sandboxOrchestrator.stopProxy();
+        }
+        state.permissionManager?.setSandboxState(
+          state.sandboxOrchestrator.getMode(),
+          state.sandboxOrchestrator.isActive()
+        );
+        await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
+        console.log(`Sandbox network ${enableNet ? 'enabled (filtered via proxy)' : 'disabled (fail-closed)'}`);
+        break;
+      }
+
       case 'sandbox:trust-domain': {
         if (!state.sandboxOrchestrator) {
           console.log('Sandbox not initialized');

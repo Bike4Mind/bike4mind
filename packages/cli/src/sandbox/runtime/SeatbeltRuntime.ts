@@ -62,11 +62,19 @@ export class SeatbeltRuntime implements SandboxRuntime {
       '',
     ];
 
-    // Network egress is fail-closed: deny it unless explicitly enabled (proxy
-    // handles filtering when on). Covers inbound/outbound/bind.
+    // Network egress is fail-closed: deny IP traffic unless explicitly enabled
+    // (the proxy handles filtering when on). Seatbelt's `network*` class covers
+    // AF_UNIX too, so a bare `(deny network*)` would also sever local IPC
+    // (ssh-agent, gpg-agent, a unix-socket postgres/redis, docker.sock). Re-allow
+    // local unix sockets AFTER the deny - Seatbelt is last-match-wins - so only IP
+    // egress is blocked. This also keeps parity with Linux, whose --unshare-net
+    // isolates IP but not AF_UNIX.
     if (!options.networkEnabled) {
-      lines.push('; Deny network access (fail-closed)');
+      lines.push('; Deny IP network access (fail-closed), keep local unix sockets');
       lines.push('(deny network*)');
+      lines.push('(allow network-outbound (remote unix-socket))');
+      lines.push('(allow network-inbound (local unix-socket))');
+      lines.push('(allow network-bind (local unix-socket))');
       lines.push('');
     }
 

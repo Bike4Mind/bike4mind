@@ -122,6 +122,11 @@ export class SandboxOrchestrator {
     this.config = config;
   }
 
+  /** Enable or disable network egress (does not persist - caller must save). */
+  setNetworkEnabled(enabled: boolean): void {
+    this.config.network.enabled = enabled;
+  }
+
   /** Get the ProxyManager instance (if any) */
   getProxyManager(): ProxyManager | null {
     return this.proxyManager;

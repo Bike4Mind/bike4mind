@@ -201,10 +201,16 @@ export function wrapToolWithPermission(
       }
 
       const effectiveArgs = isSandboxed ? sandboxedArgs : args;
+      // Temp sandbox profile this wrapper created (Seatbelt writes a .sb file).
+      // Cleaned once in the finally below so it never leaks on an early-return
+      // path (plan-mode block, permission deny) that skips executeAndRecord.
+      // Only paths THIS wrapper set - a model-supplied `_sandboxCleanup` on the
+      // raw (unsandboxed) args must never reach rmSync(recursive, force).
+      const sandboxCleanupPaths = isSandboxed ? (sandboxedArgs?._sandboxCleanup as string[] | undefined) : undefined;
 
       /**
-       * Shared execution flow: run tool, cleanup sandbox files, capture violations,
-       * offer retry on sandbox failure, and record observation.
+       * Shared execution flow: run tool, capture violations, offer retry on
+       * sandbox failure, and record observation.
        */
       async function executeAndRecord(): Promise<string> {
         let result: string;
@@ -219,10 +225,6 @@ export function wrapToolWithPermission(
           if (!isPathAccessDenial(msg)) throw err;
           result = msg;
         }
-        // Only clean up paths THIS wrapper set on sandboxedArgs. When unsandboxed,
-        // effectiveArgs === the raw model args, so a model-supplied `_sandboxCleanup`
-        // must never reach rmSync(recursive, force).
-        cleanupSandboxFiles(isSandboxed ? sandboxedArgs?._sandboxCleanup : undefined);
         await captureViolations(isSandboxed, result, args?.command, sandboxOrchestrator);
         result = await retrySandboxFailure(
           isSandboxed,
@@ -252,83 +254,87 @@ export function wrapToolWithPermission(
         return result;
       }
 
-      // Plan mode: block tools that would mutate state (everything that's not read-only),
-      // except writes targeting the plan file. Plan-mode block runs BEFORE the
-      // permission/trust check so it overrides previously trusted tools.
-      const { useCliStore } = await import('../store/index.js');
-      const liveInteractionMode = useCliStore.getState().interactionMode;
-      // Subagents carry a ceiling; clamp to the less-permissive of it and the live
-      // mode so they never exceed the parent but still honor a mid-run plan switch.
-      const interactionMode = interactionModeOverride
-        ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
-        : liveInteractionMode;
-      if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
-        const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only — research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
-        agentContext.observationQueue.push({ toolName, result });
-        return result;
-      }
-
-      // Command-level risk gate: inspect the actual command text (not just the
-      // tool name) so a destructive command hidden behind a wrapper
-      // (`sh -c "rm -rf /"`, `sudo bash -c ...`, `curl ... | sh`) is never
-      // silently auto-run. A high-risk command ALWAYS requires an explicit
-      // prompt - this overrides host-allowlist / trust / sandbox-auto-allow /
-      // auto-accept short-circuits below. It only ever tightens: benign commands
-      // keep their existing (possibly auto-approved) behavior.
-      const commandField = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
-      const commandText = commandField ? args?.[commandField] : undefined;
-      // `classifyCommandRisk` is documented never to throw, but this call sits on the
-      // security boundary for every shell command - if it ever does, treat that as a
-      // high-risk command (force the prompt) rather than letting the error escape the
-      // permission gate and skip classification entirely.
-      let commandRisk: ReturnType<typeof classifyCommandRisk> | null = null;
-      if (typeof commandText === 'string') {
-        try {
-          commandRisk = classifyCommandRisk(commandText);
-        } catch {
-          commandRisk = { level: 'high', reasons: ['command risk analysis failed (fail closed)'] };
+      try {
+        // Plan mode: block tools that would mutate state (everything that's not read-only),
+        // except writes targeting the plan file. Plan-mode block runs BEFORE the
+        // permission/trust check so it overrides previously trusted tools.
+        const { useCliStore } = await import('../store/index.js');
+        const liveInteractionMode = useCliStore.getState().interactionMode;
+        // Subagents carry a ceiling; clamp to the less-permissive of it and the live
+        // mode so they never exceed the parent but still honor a mid-run plan switch.
+        const interactionMode = interactionModeOverride
+          ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
+          : liveInteractionMode;
+        if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
+          const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only \u2014 research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
+          agentContext.observationQueue.push({ toolName, result });
+          return result;
         }
-      }
-      const forcePromptForRisk = commandRisk?.level === 'high';
 
-      // Host allowlist (claude --allowedTools): auto-approve tools matching an
-      // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
-      const allowedPatterns = getAllowedToolPatterns();
-      if (!forcePromptForRisk && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
+        // Command-level risk gate: inspect the actual command text (not just the
+        // tool name) so a destructive command hidden behind a wrapper
+        // (`sh -c "rm -rf /"`, `sudo bash -c ...`, `curl ... | sh`) is never
+        // silently auto-run. A high-risk command ALWAYS requires an explicit
+        // prompt - this overrides host-allowlist / trust / sandbox-auto-allow /
+        // auto-accept short-circuits below. It only ever tightens: benign commands
+        // keep their existing (possibly auto-approved) behavior.
+        const commandField = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
+        const commandText = commandField ? args?.[commandField] : undefined;
+        // `classifyCommandRisk` is documented never to throw, but this call sits on the
+        // security boundary for every shell command - if it ever does, treat that as a
+        // high-risk command (force the prompt) rather than letting the error escape the
+        // permission gate and skip classification entirely.
+        let commandRisk: ReturnType<typeof classifyCommandRisk> | null = null;
+        if (typeof commandText === 'string') {
+          try {
+            commandRisk = classifyCommandRisk(commandText);
+          } catch {
+            commandRisk = { level: 'high', reasons: ['command risk analysis failed (fail closed)'] };
+          }
+        }
+        const forcePromptForRisk = commandRisk?.level === 'high';
+
+        // Host allowlist (claude --allowedTools): auto-approve tools matching an
+        // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
+        const allowedPatterns = getAllowedToolPatterns();
+        if (!forcePromptForRisk && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
+          return executeAndRecord();
+        }
+
+        // Auto-approved, trusted, or sandbox auto-allowed
+        if (!forcePromptForRisk && !permissionManager.needsPermission(toolName, { isSandboxed })) {
+          return executeAndRecord();
+        }
+
+        // Auto-accept: skip permission prompt when Shift+Tab toggle is on
+        if (!forcePromptForRisk && interactionMode === 'auto-accept') {
+          return executeAndRecord();
+        }
+
+        // Generate preview for dangerous operations
+        const basePreview = await generateToolPreview(toolName, args, isSandboxed);
+        const preview =
+          forcePromptForRisk && commandRisk ? prependRiskBanner(basePreview, commandRisk.reasons) : basePreview;
+
+        // Show permission prompt and wait indefinitely for response
+        const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
+
+        if (response.action === 'deny') {
+          throw new PermissionDeniedError(toolName, args);
+        }
+
+        if (response.action === 'allow-session') {
+          permissionManager.trustToolForSession(toolName);
+        }
+
+        if (response.action === 'allow-always') {
+          await persistToolTrust(toolName, permissionManager, configStore);
+        }
+
         return executeAndRecord();
+      } finally {
+        cleanupSandboxFiles(sandboxCleanupPaths);
       }
-
-      // Auto-approved, trusted, or sandbox auto-allowed
-      if (!forcePromptForRisk && !permissionManager.needsPermission(toolName, { isSandboxed })) {
-        return executeAndRecord();
-      }
-
-      // Auto-accept: skip permission prompt when Shift+Tab toggle is on
-      if (!forcePromptForRisk && interactionMode === 'auto-accept') {
-        return executeAndRecord();
-      }
-
-      // Generate preview for dangerous operations
-      const basePreview = await generateToolPreview(toolName, args, isSandboxed);
-      const preview =
-        forcePromptForRisk && commandRisk ? prependRiskBanner(basePreview, commandRisk.reasons) : basePreview;
-
-      // Show permission prompt and wait indefinitely for response
-      const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
-
-      if (response.action === 'deny') {
-        throw new PermissionDeniedError(toolName, args);
-      }
-
-      if (response.action === 'allow-session') {
-        permissionManager.trustToolForSession(toolName);
-      }
-
-      if (response.action === 'allow-always') {
-        await persistToolTrust(toolName, permissionManager, configStore);
-      }
-
-      return executeAndRecord();
     },
   };
 }

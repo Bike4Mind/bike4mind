@@ -730,4 +730,61 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
     expect(orchestrator.recordBlocked).not.toHaveBeenCalled();
     expect(toolFn).toHaveBeenCalledTimes(1);
   });
+
+  // Point shouldSandbox at a real temp file standing in for the Seatbelt .sb
+  // profile, so cleanup is observable via the filesystem rather than a bare [].
+  async function orchestratorWithProfile(): Promise<{ orchestrator: SandboxOrchestrator; profile: string }> {
+    const orchestrator = createOrchestrator();
+    const profile = path.join(await fs.mkdtemp(path.join(tmpdir(), 'b4m-sb-')), 'sandbox.sb');
+    await fs.writeFile(profile, '(version 1)');
+    (orchestrator.shouldSandbox as ReturnType<typeof vi.fn>).mockReturnValue({
+      type: 'sandbox',
+      wrappedCommand: { commandString: 'sandboxed-command', cleanupPaths: [profile] },
+    });
+    return { orchestrator, profile };
+  }
+
+  it('cleans up the temp profile and records a violation when cwd is rejected', async () => {
+    const { orchestrator, profile } = await orchestratorWithProfile();
+    const outside = path.join(path.parse(process.cwd()).root, 'definitely-outside-workspace');
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    const result = await wrapped.toolFn({ command: 'ls', cwd: outside });
+
+    expect(result).toContain('outside the sandbox writable root');
+    expect(existsSync(profile)).toBe(false); // profile not leaked on the reject path
+    expect(orchestrator.recordViolation).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'filesystem', blockedBy: 'config' })
+    );
+    expect(toolFn).not.toHaveBeenCalled();
+  });
+
+  it('records a blocked decision as a violation and never runs the command', async () => {
+    const orchestrator = createOrchestrator();
+    (orchestrator.shouldSandbox as ReturnType<typeof vi.fn>).mockReturnValue({
+      type: 'blocked',
+      reason: 'excluded command',
+    });
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    const result = await wrapped.toolFn({ command: 'docker run x' });
+
+    expect(result).toContain('Command blocked by sandbox: excluded command');
+    expect(orchestrator.recordBlocked).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recordViolation).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'filesystem', blockedBy: 'config' })
+    );
+    expect(orchestrator.recordSandboxed).not.toHaveBeenCalled();
+    expect(toolFn).not.toHaveBeenCalled();
+  });
+
+  it('cleans up the temp profile on the happy path', async () => {
+    const { orchestrator, profile } = await orchestratorWithProfile();
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    await wrapped.toolFn({ command: 'ls' });
+
+    expect(existsSync(profile)).toBe(false);
+    expect(toolFn).toHaveBeenCalledTimes(1);
+  });
 });
