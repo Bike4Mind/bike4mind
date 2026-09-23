@@ -1,4 +1,4 @@
-import { sourceIdentityKeyFor, type SourceIdentityTier } from '@bike4mind/common';
+import { sourceIdentityKeyFor, type LakeSupersession, type SourceIdentityTier } from '@bike4mind/common';
 import { attributeFileToLakeIds, type AttributableLake } from './attributeAccessedLakes';
 import { toSingleLine } from './renderDataLakePromptBlock';
 
@@ -41,13 +41,22 @@ import { toSingleLine } from './renderDataLakePromptBlock';
 const SAMPLE_CAP = 5;
 
 /**
- * Which identity signal produced a group key, most to least trustworthy. Reported per collapse
- * because the weakest tier is the one that can be wrong (see the module comment).
- *
- * An alias, not a second declaration: the tiers are the shared `sourceIdentityKeyFor` derivation's,
- * and this name is kept because the collapse's report field and its prose both read "supersession".
+ * A ruling a curator made by hand, reviewing a detected corpus problem. Above every derived tier
+ * and never produced by `sourceIdentityKeyFor`: the derived tiers all answer "do these two look
+ * like the same source document", and a curator is answering a different question - which of two
+ * documents that CONTRADICT each other is current. Two such documents routinely share no identity
+ * key at all, which is why no derived tier can express the ruling.
  */
-export type SupersessionTier = SourceIdentityTier;
+export const CURATOR_SUPERSESSION_TIER = 'curator' as const;
+
+/**
+ * Which signal produced a suppression, most to least trustworthy. Reported per collapse because
+ * the weakest tier is the one that can be wrong (see the module comment).
+ *
+ * The derived tiers are `sourceIdentityKeyFor`'s own, aliased rather than re-declared so the two
+ * cannot drift; `curator` is this module's, and sits above all of them.
+ */
+export type SupersessionTier = SourceIdentityTier | typeof CURATOR_SUPERSESSION_TIER;
 
 /** The per-file facts the collapse reads. A subset of what `RankableFile` already carries. */
 export type SupersedableFile = {
@@ -61,6 +70,12 @@ export type SupersedableFile = {
   /** Drive ingest only - its own doc comment calls it the stable dedup key within a lake. */
   driveFileId?: string;
   createdAt?: Date | string | null;
+  /**
+   * Curator rulings, one per lake (IFabFile.supersededInLakes). Read straight off the file row the
+   * ranking path already loaded, deliberately: a separate collection would put a query on the hot
+   * retrieval path for a fact that is almost always absent.
+   */
+  supersededInLakes?: LakeSupersession[];
 };
 
 export interface SupersessionReport {
@@ -106,6 +121,47 @@ function winsOver(candidate: SupersedableFile, incumbent: SupersedableFile): boo
 }
 
 /**
+ * The winner a file's ruling names, or null when the ruling must not be honored.
+ *
+ * Three ways a ruling is declined, and all three fail in the SAME direction - the file keeps
+ * ranking - because the alternative is a lake silently contributing nothing for a subject:
+ *
+ *  - the winner is not in the scoped set (purged, removed from the lake, withheld mid-reindex);
+ *  - the ruling points at the file itself;
+ *  - following the chain of rulings comes back round to the file.
+ *
+ * The CYCLE case is the one that needs the walk rather than a self-check. The door refuses a ruling
+ * whose winner is already ruled behind the loser, but rulings are made one finding at a time and
+ * two curators - or one curator on two findings - can still close a loop that neither call could
+ * see whole. Every file in a cycle would otherwise be suppressed by the next, and the subject would
+ * leave the corpus entirely. Bounded by `byId.size` steps, so a malformed chain cannot spin.
+ */
+function resolveRuling<T extends SupersedableFile>(
+  file: T,
+  lakeId: string,
+  byId: ReadonlyMap<string, T>
+): string | null {
+  const ruling = file.supersededInLakes?.find(r => r.dataLakeId === lakeId);
+  if (!ruling) return null;
+
+  // The IMMEDIATE winner must be in the scoped set; that is the inert-ruling guard, and it is the
+  // only step for which leaving the set matters. A ruling is about this file and its winner, so a
+  // winner that is itself ruled behind something out of scope is still a winner here.
+  if (!byId.has(ruling.supersededByFabFileId)) return null;
+
+  // Walk the rest purely to detect a loop back to this file. Leaving the scoped set ENDS the walk
+  // without declining anything - an out-of-scope link cannot close a cycle.
+  const seen = new Set<string>([file.id]);
+  let current: string | undefined = ruling.supersededByFabFileId;
+  while (current) {
+    if (seen.has(current)) return null;
+    seen.add(current);
+    current = byId.get(current)?.supersededInLakes?.find(r => r.dataLakeId === lakeId)?.supersededByFabFileId;
+  }
+  return ruling.supersededByFabFileId;
+}
+
+/**
  * Split a scoped file set into the newest generation of each source document and the older
  * generations it supersedes, PER LAKE. Pure; no I/O.
  *
@@ -116,20 +172,49 @@ function winsOver(candidate: SupersedableFile, incumbent: SupersedableFile): boo
  * without a single owning lake there is no scope in which "the same document" is even well defined,
  * and the wrong answer here silently drops a document from retrieval.
  *
+ * Two sources of suppression, checked in this order:
+ *
+ *  1. A CURATOR ruling on the file for its attributed lake (`supersededInLakes`), which wins
+ *     outright. A human looked at the pair and said which is current; no derived key can overrule
+ *     that, and a ruled file must not then go on to win an identity group and suppress a third
+ *     member on the strength of a generation the curator just retired.
+ *  2. The derived identity collapse, unchanged, and skipped entirely when `identityTiers` is false.
+ *
+ * `identityTiers` exists because the two halves warrant different defaults. The derived collapse
+ * ships off by default at its forced-retrieval caller (`EnableRetrievalSupersessionCollapse`) -
+ * its weakest tier is a bare file name and it can be wrong. A curator ruling carries no such
+ * doubt, so it applies whether or not that setting is on, and the flag is what lets one caller ask
+ * for the rulings alone. Defaults to true, so every existing caller is unchanged.
+ *
+ * A ruling is honored ONLY while its winner is in the scoped set. That is the same invariant the
+ * callers already order their partitions around - a winner that cannot be served must never
+ * suppress a sibling that can - and here it doubles as the retention guard: a winner that was
+ * purged, removed from the lake or withheld mid-reindex leaves the ruling inert and the older
+ * document ranking, rather than the lake silently contributing nothing for that subject. It is
+ * also why no sweep chases stale rulings when a document is destroyed.
+ *
  * Scope order is preserved in both outputs, so a caller's downstream sampling stays stable.
  */
 export function partitionBySupersession<T extends SupersedableFile>(
   files: readonly T[],
-  lakeScope: { lakes: readonly AttributableLake[] }
+  lakeScope: { lakes: readonly AttributableLake[]; identityTiers?: boolean }
 ): { servable: T[]; superseded: SupersededEntry<T>[] } {
   const lakes = [...lakeScope.lakes];
+  const identityTiersEnabled = lakeScope.identityTiers ?? true;
+  const byId = new Map(files.map(f => [f.id, f]));
   const winners = new Map<string, T>();
-  const keyed: { file: T; identity: { key: string; tier: SupersessionTier } | null }[] = [];
+  const keyed: {
+    file: T;
+    identity: { key: string; tier: SupersessionTier } | null;
+    ruledBy: string | null;
+  }[] = [];
 
   for (const file of files) {
     const lakeIds = attributeFileToLakeIds(file.fileTags ?? [], lakes, file.userId);
-    const identity = lakeIds.length === 1 ? sourceIdentityKeyFor(file, lakeIds[0]) : null;
-    keyed.push({ file, identity });
+    const lakeId = lakeIds.length === 1 ? lakeIds[0] : null;
+    const ruledBy = lakeId ? resolveRuling(file, lakeId, byId) : null;
+    const identity = !ruledBy && identityTiersEnabled && lakeId ? sourceIdentityKeyFor(file, lakeId) : null;
+    keyed.push({ file, identity, ruledBy });
     if (!identity) continue;
     const incumbent = winners.get(identity.key);
     if (!incumbent || winsOver(file, incumbent)) winners.set(identity.key, file);
@@ -137,7 +222,11 @@ export function partitionBySupersession<T extends SupersedableFile>(
 
   const servable: T[] = [];
   const superseded: SupersededEntry<T>[] = [];
-  for (const { file, identity } of keyed) {
+  for (const { file, identity, ruledBy } of keyed) {
+    if (ruledBy) {
+      superseded.push({ file, tier: CURATOR_SUPERSESSION_TIER, supersededBy: ruledBy });
+      continue;
+    }
     const winner = identity && winners.get(identity.key);
     if (!winner || !identity || winner.id === file.id) servable.push(file);
     else superseded.push({ file, tier: identity.tier, supersededBy: winner.id });
@@ -182,9 +271,15 @@ export function describeSupersession(report: SupersessionReport | undefined): st
   if (!report?.partial) return null;
   // The recovery instruction is what makes the weak file-name tier acceptable at all - see the
   // module comment.
+  // Deliberately NOT "a newer version of the same source document" any more. That was true when
+  // every tier was a derived identity match, and is false for a `curator` entry: a curator rules on
+  // two documents that CONTRADICT each other, which is the whole reason that tier exists, and they
+  // are typically neither the same document nor ordered by age. The sample names the tier, so the
+  // reader can tell which kind each one is rather than being told the wrong thing about all of them.
   return (
-    `${report.count} older file version(s) were not ranked because the same data lake holds a newer ` +
-    `version of the same source document: ${formatSupersededSample(report.sample, report.count)}. They are still ` +
+    `${report.count} document(s) were not ranked because this data lake holds a version that supersedes ` +
+    'them - either a newer generation of the same source document, or a curator\'s explicit ruling ' +
+    `(shown as "matched by curator"): ${formatSupersededSample(report.sample, report.count)}. They are still ` +
     'in the knowledge base - retrieve one by id or name if you need the superseded version specifically.'
   );
 }

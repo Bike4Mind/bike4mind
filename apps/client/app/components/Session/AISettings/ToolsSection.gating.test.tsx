@@ -8,9 +8,9 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * Regression coverage for the per-mode tool gating in ToolsSection.
  *
  * The key invariant is now a NEGATIVE one: Agent mode must NOT dim Smart Tools.
- * An agentless agent-executor run carries the user's Smart Tools unioned with
- * the agent-mode defaults (see `resolveDispatchTools`), so no toggle below is
- * ignored and greying one would be a lie. The blocks below keep the mocks for
+ * An agentless agent-executor run ships the user's Smart Tools as ambient picks and the
+ * executor unions them onto the agent-mode defaults (`pickEffectiveEnabledTools`), so no
+ * toggle below is ignored and greying one would be a lie. The blocks below keep the mocks for
  * the inputs that used to drive that dimming - the bolt, Smart Routing 'auto',
  * the draft text, liveAI - so re-introducing any of those paths fails here.
  *

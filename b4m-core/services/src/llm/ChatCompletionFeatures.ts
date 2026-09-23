@@ -66,6 +66,8 @@ import {
   materializePromptMetaSession,
   ModelBackend,
   type SupportedEmbeddingModel,
+  PersistedSessionSummaryTrigger,
+  SessionSummaryTrigger,
 } from '@bike4mind/common';
 import {
   getDynamicDataLakeAccess,
@@ -89,6 +91,7 @@ import { partitionByIndexAvailability } from '../dataLakeService/retrievalUnavai
 import {
   buildSupersessionReport,
   formatSupersededSample,
+  CURATOR_SUPERSESSION_TIER,
   partitionBySupersession,
   type SupersessionReport,
 } from '../dataLakeService/supersession';
@@ -384,7 +387,7 @@ export interface IChatCompletionServiceOptions {
    * Used to turn `session.systemPromptId` into the session's authored prompt on every entry point.
    */
   loadSystemPromptById?: (promptId: string) => Promise<string | null>;
-  summarizeSession: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
+  summarizeSession: (sessionId: string, trigger: PersistedSessionSummaryTrigger) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
     serverName: string;
@@ -1499,6 +1502,15 @@ export interface SummarizationCheckContext {
 }
 
 /**
+ * The verdict and the reason, correlated: only a decision to summarize carries a trigger a document
+ * may keep. 'throttling' lives on the false arm alone - it is the reason a run did NOT happen, so it
+ * names no provenance and no write boundary accepts it (see PERSISTED_SESSION_SUMMARY_TRIGGERS).
+ */
+export type SummarizationDecision =
+  | [shouldSummarize: true, trigger: PersistedSessionSummaryTrigger]
+  | [shouldSummarize: false, trigger: SessionSummaryTrigger | undefined];
+
+/**
  * Decide whether a session is due for re-summarization. Shared by the chat path
  * (`SummarizeNotebookFeature`) and the image-gen path so that image-only sessions
  * also accumulate long-term context. The actual summarization is published as an
@@ -1513,7 +1525,7 @@ export interface SummarizationCheckContext {
 export async function shouldSummarizeSession(
   session: ISessionDocument,
   ctx: SummarizationCheckContext
-): Promise<[boolean, ISessionDocument['summaryTrigger']]> {
+): Promise<SummarizationDecision> {
   if (session.summaryAt) {
     const minutesSinceLastSummary = (Date.now() - session.summaryAt.getTime()) / (1000 * 60);
     if (minutesSinceLastSummary < SUMMARIZATION_CONFIG.minTimeBetweenSummaries) {
@@ -1562,14 +1574,16 @@ export class SummarizeNotebookFeature implements ChatCompletionFeature {
   }
 
   async onComplete({ quest, session }: { quest: IChatHistoryItemDocument; session: ISessionDocument }): Promise<void> {
-    const [shouldSummarize, trigger] = await shouldSummarizeSession(session, {
+    // Indexed, not destructured: the tuple's arms correlate the verdict with the trigger, and
+    // destructuring drops that correlation - only decision[0] narrows decision[1] to a persisted one.
+    const decision = await shouldSummarizeSession(session, {
       db: this.chatCompletion.db,
       logger: this.logger,
     });
 
-    if (shouldSummarize) {
+    if (decision[0]) {
       this.logger.info(`Triggering notebook summarization job for session ${quest.sessionId}`);
-      this.chatCompletion.summarizeSession(quest.sessionId, trigger);
+      this.chatCompletion.summarizeSession(quest.sessionId, decision[1]);
     } else {
       this.logger.debug(`Skipping summarization for session ${quest.sessionId} - criteria not met`);
     }
@@ -2060,8 +2074,9 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // file-name tier and the reader is the only one who can tell.
       const named = formatSupersededSample(coverage.superseded, coverage.filesSupersededCollapsed);
       reasons.push(
-        `${coverage.filesSupersededCollapsed} older document version(s) were not ranked because this lake holds a ` +
-          `newer version of the same source document (${named}) - they are still retrievable by id or name`
+        `${coverage.filesSupersededCollapsed} document(s) were not ranked because this lake holds a version that ` +
+          "supersedes them - a newer generation of the same source document, or a curator's explicit ruling " +
+          `("matched by curator") (${named}) - they are still retrievable by id or name`
       );
     }
     if (coverage.chunksSkippedDimMismatch > 0) {
@@ -2640,6 +2655,10 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           // the session actually named a lake; see the `lakeScoped` note above.
           restrictToDataLake: lakeScoped,
           excludeContent: true, // metadata only; chunk text + vectors fetched below
+          // supersededInLakes is select:false by default; forced retrieval feeds the same
+          // curator-supersession collapse as semanticDataLakeSearch, so it opts back in - see
+          // FabFileModel.executeSearch.
+          includeSupersessionRulings: true,
           // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
           // so this arm agrees with the surface's document-listing predicate. No-op when unset.
           ...this.retrievalFilter,
@@ -2727,17 +2746,32 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // the servable older generation and leave the lake contributing nothing for that document.
       // Off unless the admin setting says otherwise - the weakest identity tier is a bare file
       // name, so this ships default-off (see EnableRetrievalSupersessionCollapse).
+      // Gates the DERIVED identity tiers only. A curator's explicit ruling (#3046) carries none of
+      // the doubt this setting exists for - the weakest derived tier is a bare file name, a ruling
+      // is a human who read both documents - so it applies either way, which is why the partition
+      // now runs whenever there is a lake to attribute against rather than only when this is on.
       const supersessionCollapseEnabled = await this.readSupersessionCollapseSetting();
       // Named, rather than inlined into the ternary, because the audit trail needs the RAN /
       // did-not-run distinction that the count alone cannot carry: `supersession.count` is 0 both
       // when the collapse ran and suppressed nothing and when it never ran at all, and persisting
       // the second as 0 would claim the corpus was checked for superseded generations when it
       // never was - see ILakeAccessEvent.filesSupersededCollapsed's tri-state contract.
+      //
+      // Still the SETTING, not merely `lakes.length`, now that the partition also applies curator
+      // rulings with the setting off. That field is about the DERIVED collapse specifically: its
+      // contract is that absence means this corpus was never examined for older GENERATIONS of the
+      // same document, and a curator-ruling-only pass does not examine it for those. Reporting 0
+      // there would deny generations the run never looked for.
       const collapseRan = supersessionCollapseEnabled && lakes.length > 0;
-      const collapse = collapseRan
+      // The PARTITION runs whenever there is a lake to attribute against, which is wider than
+      // `collapseRan`: a curator ruling carries none of the doubt the admin setting exists for, so
+      // it is honored with the derived tiers switched off. `identityTiers` is what keeps that pass
+      // from doing the tiered collapse the setting declined.
+      const partitionRan = lakes.length > 0;
+      const collapse = partitionRan
         ? partitionBySupersession(
             modelMatchedFiles.map(f => ({ ...f, fileTags: f.tags?.map(t => t.name) ?? [] })),
-            { lakes }
+            { lakes, identityTiers: supersessionCollapseEnabled }
           )
         : { servable: modelMatchedFiles, superseded: [] };
       const scanCandidates = collapse.servable;
@@ -2745,7 +2779,14 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
       // The audit value, resolved once here and used by every write site below. Deliberately NOT
       // read off `coverage.filesSupersededCollapsed`, which is the user-facing coverage note's
       // number and flattens the two zeroes above into one.
-      const auditSupersededCollapsed = collapseRan ? supersession.count : undefined;
+      // DERIVED suppressions only, for the same reason `collapseRan` is setting-gated: a curator
+      // ruling is not a generation this pass found, and folding the two into one number would make
+      // the field mean something different depending on how a lake happens to be curated. The
+      // curator half has its own, richer trail - DataLakeCorpusActionModel names who ruled and on
+      // what, which a count could not.
+      const auditSupersededCollapsed = collapseRan
+        ? collapse.superseded.filter(e => e.tier !== CURATOR_SUPERSESSION_TIER).length
+        : undefined;
       if (supersession.count > 0) {
         this.logger.warn(`🔒 Forced retrieval: suppressed ${supersession.count} superseded document(s) before ranking`);
       }

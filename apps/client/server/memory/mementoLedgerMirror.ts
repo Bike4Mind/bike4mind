@@ -1,5 +1,6 @@
 import { memoryLedgerRepository, memoryPrincipalKeyRepository, userRepository } from '@bike4mind/database';
 import {
+  isDocumentSource,
   isExperimentalFeatureEnabled,
   MEMENTO_DEDUP_SIMILARITY,
   type HasExperimentalFeatures,
@@ -79,6 +80,20 @@ export interface LedgerAppendSession {
     evidenceTier: EvidenceTier;
     sources?: string[];
     embedding?: number[];
+    /**
+     * The belief's identity, stated outright instead of derived from `summary`. Plaintext - it is
+     * hashed on the way to rest like any other subject.
+     *
+     * For a writer whose facts have a NATURAL key, which content-derived subjects cannot express:
+     * `resolveSubject` is a token bag, so two facts worded identically are one belief no matter what
+     * they are about, and an `assert` REPLACES, so the second silently takes the first's fact and
+     * provenance. A curator's resolution belief is keyed on its finding for exactly that reason
+     * (#3049) - re-ruling one finding coalesces, and two findings ruled with the same note do not.
+     *
+     * Bypasses the semantic de-dup entirely: the caller has already answered the question the
+     * embedding search exists to answer.
+     */
+    subject?: string;
   }): Promise<boolean>;
 }
 
@@ -144,6 +159,15 @@ export async function createLedgerAppendSession(params: {
       const profile = await store.readProfile(params.principal);
       for (const belief of profile?.beliefs ?? []) {
         if (belief.shredded || !belief.embedding?.length) continue;
+        // A PROVENANCE-KEYED belief (one carrying a non-document source, e.g. `finding:<id>`) is never
+        // a de-dup candidate. It was written under an explicit subject precisely so content similarity
+        // could not overrule its identity, and an assert REPLACES fact, evidenceTier and sources
+        // (`ledger.ts` foldEvents) - so letting a later extracted fact coalesce onto a curator's
+        // `human-reviewed` ruling would rewrite it as an `engineering-proxy` one. This is the same
+        // exclusion the same-run set makes below, from the PERSISTED direction: without both, the
+        // collision simply waits for the next session. Replay still coalesces via the explicit
+        // subject, which bypasses this set entirely.
+        if ((belief.sources ?? []).some(source => !isDocumentSource(source))) continue;
         // A folded belief's id IS its stored subject HMAC (subjects are never kept in plaintext), so it
         // re-asserts with subjectIsHashed to avoid a double-hash that would fork instead of coalesce.
         entries.push({
@@ -167,11 +191,16 @@ export async function createLedgerAppendSession(params: {
 
   return {
     async append(fact) {
-      const derivedSubject = resolveSubject({ fact: fact.summary });
+      // An EXPLICIT subject IS the belief's identity, so it short-circuits both the derivation and
+      // the de-dup search below: the caller has already said which belief this is, and a semantic
+      // match could only overrule it onto a different one. It also skips `ensureProfileLoaded`, so
+      // such a writer never pays the whole-chain decrypt.
+      const explicitSubject = fact.subject?.trim();
+      const derivedSubject = explicitSubject || resolveSubject({ fact: fact.summary });
       if (!derivedSubject) return true; // nothing to key on (content-free summary); not a refusal
 
       let match: DedupEntry | null = null;
-      if (fact.embedding?.length) {
+      if (!explicitSubject && fact.embedding?.length) {
         await ensureProfileLoaded();
         match = bestDedupMatch(entries, fact.embedding);
       }
@@ -224,7 +253,11 @@ export async function createLedgerAppendSession(params: {
       // Keep the in-memory set current so a later fact in this run coalesces with this one, exactly as
       // the per-fact profile re-read used to. On a coalesce the assert's embedding wins (mirrors the
       // fold), so update it; a genuinely new belief joins the set under its plaintext derived subject.
-      if (fact.embedding?.length) {
+      // An explicitly-keyed belief is deliberately NOT tracked: joining the set would make it a
+      // coalesce target for a later content-derived fact in this run, and that assert would replace
+      // the caller's keyed belief with an extracted one - the precise collision the explicit subject
+      // was passed to prevent, just arriving from the other direction.
+      if (fact.embedding?.length && !explicitSubject) {
         if (match) {
           match.embedding = fact.embedding;
           match.fact = fact.summary;

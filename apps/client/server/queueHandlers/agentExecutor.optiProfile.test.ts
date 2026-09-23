@@ -122,3 +122,26 @@ describe('opti profile x pickEffectiveEnabledTools', () => {
     expect(pickEffectiveEnabledTools(['image_generation'], profile)).toEqual(resolveOptiAgentTools(PREMIUM_TOOLS));
   });
 });
+
+describe('opti profile x ambient chat picks', () => {
+  // Every agentless send from the chat composer now ships the user's Smart Tools marked
+  // ambient. On this surface the exclusive toolset still wins, so the OUTCOME is unchanged -
+  // what the marker buys is that the executor stops logging a "payload ignored" warn for a
+  // payload nobody pinned. See the warn in `agentExecutor.ts`.
+  const SMART_TOOLS = ['deep_research', 'web_scrape'];
+
+  it('discards ambient picks exactly as it discards pinned ones', () => {
+    const profile = build();
+    const expected = resolveOptiAgentTools(PREMIUM_TOOLS);
+    expect(pickEffectiveEnabledTools(SMART_TOOLS, profile, true)).toEqual(expected);
+    expect(pickEffectiveEnabledTools(SMART_TOOLS, profile, false)).toEqual(expected);
+  });
+
+  it('never unions ambient picks into the walk, even ones the denylist does not cover', () => {
+    // The walk only works if its toolset is exactly what the profile declares: widening it
+    // invites the loop off task just as narrowing it strands the loop midway.
+    const profile = build();
+    const result = pickEffectiveEnabledTools(SMART_TOOLS, profile, true);
+    for (const tool of SMART_TOOLS) expect(result).not.toContain(tool);
+  });
+});

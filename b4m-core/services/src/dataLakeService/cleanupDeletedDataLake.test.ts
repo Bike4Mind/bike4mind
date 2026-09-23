@@ -28,6 +28,9 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
     deleteForLake: vi.fn(async () => 0),
     deleteForPurgedDocuments: vi.fn(async () => 0),
   },
+  dataLakeCorpusActions: {
+    deleteForLake: vi.fn(async () => 0),
+  },
   batches: {
     find: vi.fn(async () => [] as never),
     delete: vi.fn(async () => {}),
@@ -161,6 +164,23 @@ describe('cleanupDeletedDataLake', () => {
     // Not just tidiness: a finding stores excerpts of the documents this sweep just hard-deleted,
     // so leaving the rows behind would keep quoting a corpus that no longer exists.
     expect(db.dataLakeFindings.deleteForLake).toHaveBeenCalledWith('lake-1');
+  });
+
+  it("cascade-drops the lake's curator corpus-action trail (#3046), before the lake record itself", async () => {
+    const db = makeDb();
+    const order: string[] = [];
+    db.dataLakeCorpusActions.deleteForLake = vi.fn(async () => {
+      order.push('corpusActions');
+      return 0;
+    });
+    db.dataLakes.delete = vi.fn(async () => {
+      order.push('lake');
+    });
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(db.dataLakeCorpusActions.deleteForLake).toHaveBeenCalledWith('lake-1');
+    expect(order).toEqual(['corpusActions', 'lake']);
   });
 
   it("sweeps each destroyed document's findings GLOBALLY, so a co-tagged lake keeps no excerpt of it", async () => {
