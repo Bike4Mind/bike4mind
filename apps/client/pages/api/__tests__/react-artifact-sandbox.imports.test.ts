@@ -1,5 +1,4 @@
 import vm from 'node:vm';
-import { performance } from 'node:perf_hooks';
 import { describe, it, expect } from 'vitest';
 import type { NextApiRequest, NextApiResponse } from 'next';
 import handler from '../react-artifact-sandbox';
@@ -432,22 +431,6 @@ const GROWTH_INPUTS: Record<string, (n: number) => string> = {
 };
 const OPS_PER_CHAR = 32;
 
-function legacyPipeline(code: string): string {
-  const stripped = legacyStrip(code);
-  legacyRelative(stripped);
-  return legacyRewrite(stripped);
-}
-
-async function bestOf3(run: () => unknown): Promise<number> {
-  let best = Infinity;
-  for (let i = 0; i < 3; i++) {
-    const t0 = performance.now();
-    await run();
-    best = Math.min(best, performance.now() - t0);
-  }
-  return best;
-}
-
 describe('growth: the emitted script stays linear on adversarial input', () => {
   for (const [name, make] of Object.entries(GROWTH_INPUTS)) {
     it(`scans at most ${OPS_PER_CHAR} chars per input char for "${name}" up to n=32000`, async () => {
@@ -463,12 +446,18 @@ describe('growth: the emitted script stays linear on adversarial input', () => {
     });
   }
 
-  // Shows the inputs are adversarial without a host-dependent ms threshold: 4x the input costs the
-  // legacy regexes ~16x the time (quadratic); linear code would cost ~4x.
-  it('control: the legacy regexes grow quadratically on the same input', async () => {
-    const make = GROWTH_INPUTS['import x\\n'];
-    const small = await bestOf3(() => legacyPipeline(make(4000)));
-    const large = await bestOf3(() => legacyPipeline(make(16000)));
-    expect(large / small).toBeGreaterThan(8);
+  // Deterministic stand-in for timing the legacy code: with a `from` trailer appended, the legacy
+  // clause regex (legacyRewrite's pattern) matches from EVERY import through to end of input, so
+  // without the trailer each of the n attempts reads the rest of the input before failing.
+  it('control: the legacy clause regex scans to end of input from every import', () => {
+    const code = GROWTH_INPUTS['import x\\n'](200) + "from 'y'";
+    const legacyClause = /import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/y;
+    let starts = 0;
+    for (let at = code.indexOf('import'); at !== -1; at = code.indexOf('import', at + 1)) {
+      legacyClause.lastIndex = at;
+      expect(legacyClause.exec(code)?.[0].length, `start ${at}`).toBe(code.length - at);
+      starts++;
+    }
+    expect(starts).toBe(200);
   });
 });
