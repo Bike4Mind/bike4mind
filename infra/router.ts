@@ -125,8 +125,12 @@ const USER_FILE_MARKER_HEADER = 'x-b4m-user-file';
 // this backstop exists to cover. So we stamp a marker in the viewer-REQUEST injection, which
 // SST emits as the FIRST statement of the routing function (before its own rewrite), where
 // the URI is still the original prefix; the viewer-response function then keys off that
-// marker. The identity prefixes are also matched directly as a fallback, so coverage never
-// regresses below the pre-marker behavior even if the marker header were dropped in transit.
+// marker. The identity prefixes are also matched directly as a fallback, so on deployed
+// stages (routePrefix = '') coverage never regresses below the pre-marker behavior even if
+// the marker header were dropped in transit. That fallback is dead on `sst dev --stage
+// shared-dev`: routePrefix is `/shared-dev`, SST strips it during its rewrite, so the
+// response-time URI surfaces bare (e.g. /profile-photos/...) while the fallback compares
+// against the routePrefix-baked /shared-dev/profile-photos/. There, the marker is load-bearing.
 const userFileMarkerInjection = `
   var __ufUri = event.request.uri;
   var __ufPrefixes = ${JSON.stringify(userFileCdnPrefixes)};
