@@ -143,23 +143,31 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     // LUCIDE_WRAPPER_FN in reactArtifactDeps.ts) so preview and published output stay identical.
     ${LUCIDE_WRAPPER_FN}
 
-    // One-fixture check that the serialized scanner loaded and still pairs semicolon-less imports.
+    // Probes every scanner entry point the render path calls, so a bundler-introduced free
+    // reference in any one of them surfaces here instead of as a ReferenceError mid-render.
     function importScannerFault() {
       // typeof guards: if the factory block failed to parse, neither variable was ever declared.
       if (typeof importScanner === 'undefined' || !importScanner) {
         var why = typeof importScannerError === 'string' && importScannerError ? importScannerError : 'factory did not run';
         return 'Import scanner failed to load: ' + why;
       }
-      var probe = importScanner.scanImportStatements("import a from 'x' import { b as c } from 'y'");
-      if (probe.length !== 2 || probe[1].clause !== '{ b as c }' || probe[1].specifier !== 'y') {
-        return 'Import scanner self-check failed';
+      try {
+        var probe = importScanner.scanImportStatements("import a from 'x' import { b as c } from 'y'");
+        var ok = probe.length === 2 && probe[1].clause === '{ b as c }' && probe[1].specifier === 'y' &&
+          importScanner.stripTypeOnlyImports("import type T from 't';import { type U, v } from 'u';") === "import { v } from 'u';" &&
+          importScanner.findRelativeImport("import a from './a'") === './a' &&
+          importScanner.renameAsBindings('{ b as c, d }') === '{ b: c, d }' &&
+          importScanner.replaceImportStatements("import a from 'x'", {}, function (st) { return st.specifier; }) === 'x';
+        return ok ? '' : 'Import scanner self-check failed';
+      } catch (e) {
+        return 'Import scanner self-check failed: ' + String((e && e.message) || e);
       }
-      return '';
     }
 
     // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
-    // const-destructure is a syntax error). Kept in sync with the publish transpiler.
-    function renameNamed(clause) { return clause.replace(/(\\w+)\\s+as\\s+(\\w+)/g, '$1: $2'); }
+    // const-destructure is a syntax error). Same match set as the unanchored global regex this
+    // replaced, but linear; the publish transpiler instead normalizes each comma-split specifier.
+    function renameNamed(clause) { return importScanner.renameAsBindings(clause); }
 
     // Statement boundaries come from the shared scanner; this callback is sandbox-local and differs
     // from the publish transpiler's (every react import is dropped here, React being a global).

@@ -34,8 +34,8 @@ const HTML = sandboxHtml();
 const FACTORY_BLOCK = inlineScript(HTML, 'var importScanner = null;');
 const MAIN_BLOCK = inlineScript(HTML, 'function renderArtifact(');
 
-// Counts characters the scanner inspects through String/RegExp built-ins. Plain `source[i]`
-// reads cannot be intercepted, which is what the wall-clock ceiling below backstops.
+// Counts characters the scanner inspects through String/RegExp built-ins (RegExp#test goes through
+// the patched exec). Plain index reads cannot be intercepted, so countedFactory rewrites them.
 const OP_COUNTER = `
 var __ops = 0;
 (function () {
@@ -60,6 +60,11 @@ var __ops = 0;
   };
 })();
 `;
+
+/** The factory with every `source[...]` / `clause[...]` char read also bumping `__ops`. */
+function countedFactory(src: string): string {
+  return src.replace(/\b(source|clause)\[/g, '(__ops++, $1)[');
+}
 
 interface SandboxGlobals {
   importScanner: ImportScanner | null;
@@ -102,8 +107,13 @@ function bootSandbox(opts: { factoryBlock?: string; mainBlock?: string; countOps
       },
     },
   });
-  if (opts.countOps) vm.runInContext(OP_COUNTER, context);
-  vm.runInContext(opts.factoryBlock ?? FACTORY_BLOCK, context);
+  let factoryBlock = opts.factoryBlock ?? FACTORY_BLOCK;
+  if (opts.countOps) {
+    vm.runInContext(OP_COUNTER, context);
+    const src = factoryBlock.slice(factoryBlock.indexOf('(') + 1, factoryBlock.lastIndexOf(')()'));
+    factoryBlock = factoryBlock.split(src).join(countedFactory(src));
+  }
+  vm.runInContext(factoryBlock, context);
   vm.runInContext(opts.mainBlock ?? MAIN_BLOCK, context);
   const globals = context as unknown as SandboxGlobals;
   return {
@@ -188,6 +198,12 @@ const REQUIRED_CASES: readonly string[] = [
   "export { y } from '../b';",
   "import './side';",
   "const c = require('./c');",
+  "import { a as  as } from 'm';",
+  "import { x asb y, p as q, as as as } from 'm';",
+  "import D, { a as b, c } from 'm';",
+  "import { a\u2028as\u00a0b, c\nas\td } from 'm';",
+  "import { a as } from 'm';",
+  "import { a as, b } from 'm';",
 ];
 
 function lcg(seed: number): () => number {
@@ -318,6 +334,21 @@ describe('emitted sandbox script: import scanner', () => {
   });
 });
 
+describe('renameAsBindings', () => {
+  it('matches the legacy /(\\w+)\\s+as\\s+(\\w+)/g replace on random clauses', () => {
+    const rand = lcg(0x5eed);
+    const atoms = ['a', 'as', 'b1', '_', ' ', '  ', '\n', '\t', '\u00a0', '\u2028', ',', '{', '}', 'asb', '!', '$'];
+    const scanner = bootSandbox().globals.importScanner as ImportScanner;
+    const mismatches: string[] = [];
+    for (let i = 0; i < 5000; i++) {
+      let clause = '';
+      for (let j = Math.floor(rand() * 12); j > 0; j--) clause += atoms[Math.floor(rand() * atoms.length)];
+      if (scanner.renameAsBindings(clause) !== clause.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2')) mismatches.push(clause);
+    }
+    expect(mismatches).toEqual([]);
+  });
+});
+
 describe('vacuity: the checks above fail when the emitted script is wrong', () => {
   const swapFactory = (mutate: (src: string) => string) => {
     const mutated = mutate(IMPORT_SCANNER_FACTORY_SRC);
@@ -349,6 +380,34 @@ describe('vacuity: the checks above fail when the emitted script is wrong', () =
     expect(errors[0]).toContain('hostOnlyHelper');
   });
 
+  it('a scanner function that faults only when called is caught by the in-iframe self-check', async () => {
+    const factoryBlock = swapFactory(src =>
+      src.replace(/function renameAsBindings\((\w+)\) \{/, m => `${m} hostOnlyHelper();`)
+    );
+    const sandbox = bootSandbox({ factoryBlock });
+    expect(sandbox.globals.importScanner).not.toBeNull();
+    const { transformed, errors } = await sandbox.render("import a from 'x';\nexport default a;");
+    expect(transformed).toBeUndefined();
+    expect(errors).toEqual([expect.stringContaining('hostOnlyHelper')]);
+  });
+
+  it('counting index reads leaves the scanner behaviour unchanged', () => {
+    expect(countedFactory(IMPORT_SCANNER_FACTORY_SRC)).not.toBe(IMPORT_SCANNER_FACTORY_SRC);
+    expect(divergences(bootSandbox({ countOps: true }))).toEqual({ strip: [], relative: [], rewrite: [] });
+  });
+
+  it('a rename that rescans a word from every start position blows the op budget', async () => {
+    const factoryBlock = swapFactory(src =>
+      src.replace(/out \+= clause\.slice\(at, runEnd\);\s*at = runEnd;/, 'out += clause[at]; at++;')
+    );
+    const code = GROWTH_INPUTS['long-word clause'](2000);
+    const sandbox = bootSandbox({ factoryBlock, countOps: true });
+    sandbox.globals.__ops = 0;
+    const { transformed } = await sandbox.render(code);
+    expect(transformed).toBe(bootSandbox().globals.rewriteImportsForSandbox(code));
+    expect(sandbox.globals.__ops).toBeGreaterThan(OPS_PER_CHAR * code.length);
+  });
+
   it('the op counter sees a quadratic scan', () => {
     const context = vm.createContext({});
     vm.runInContext(OP_COUNTER, context);
@@ -367,9 +426,11 @@ const GROWTH_INPUTS: Record<string, (n: number) => string> = {
   'import x\\n': n => 'import x\n'.repeat(n),
   'import type x\\n': n => 'import type x\n'.repeat(n),
   '{-heavy clause': n => `import ${'{'.repeat(n)} from 'x'\n`,
+  'long-word clause': n => `import { ${'a'.repeat(n)} } from 'x'\n`,
+  'long-word mixed clause': n => `import D, { ${'a'.repeat(n)} as } from 'x'\n`,
+  'spaced as-chain clause': n => `import { ${'a as '.repeat(n)}! } from 'x'\n`,
 };
 const OPS_PER_CHAR = 32;
-const CEILING_MS = 250;
 
 function legacyPipeline(code: string): string {
   const stripped = legacyStrip(code);
@@ -394,20 +455,20 @@ describe('growth: the emitted script stays linear on adversarial input', () => {
         const code = make(n);
         const sandbox = bootSandbox({ countOps: true });
         sandbox.globals.__ops = 0;
-        await sandbox.render(code);
+        const { transformed, errors } = await sandbox.render(code);
+        expect(errors, `n=${n}`).toEqual([]);
+        expect(transformed, `n=${n}`).toBeDefined();
         expect(sandbox.globals.__ops, `n=${n}`).toBeLessThanOrEqual(OPS_PER_CHAR * code.length);
       }
     });
-
-    it(`renders "${name}" at n=16000 under ${CEILING_MS}ms`, async () => {
-      const code = make(16000);
-      const ms = await bestOf3(() => bootSandbox().render(code));
-      expect(ms).toBeLessThan(CEILING_MS);
-    });
   }
 
-  it('control: the legacy regexes exceed the ceiling at n=16000', async () => {
-    const ms = await bestOf3(() => legacyPipeline(GROWTH_INPUTS['import x\\n'](16000)));
-    expect(ms).toBeGreaterThan(CEILING_MS);
+  // Shows the inputs are adversarial without a host-dependent ms threshold: 4x the input costs the
+  // legacy regexes ~16x the time (quadratic); linear code would cost ~4x.
+  it('control: the legacy regexes grow quadratically on the same input', async () => {
+    const make = GROWTH_INPUTS['import x\\n'];
+    const small = await bestOf3(() => legacyPipeline(make(4000)));
+    const large = await bestOf3(() => legacyPipeline(make(16000)));
+    expect(large / small).toBeGreaterThan(8);
   });
 });

@@ -15,8 +15,9 @@ import { PUBLISH_HOST } from './validateBundle';
  * self-contained, INERT, eval-free HTML bundle the existing publisher can serve unchanged.
  *
  * This is the SERVER-SIDE counterpart of the in-app render at
- * `apps/client/pages/api/react-artifact-sandbox.ts` (inert mode): same import-rewrite +
- * default-export unwrap + hook-injection steps, and the same transpiler (`@babel/standalone`,
+ * `apps/client/pages/api/react-artifact-sandbox.ts` (inert mode): same import scan (the rewrite
+ * callbacks differ, see replaceImportStatements below) + default-export unwrap + hook-injection
+ * steps, and the same transpiler (`@babel/standalone`,
  * classic runtime) - but the JSX->`React.createElement` step runs once here at publish instead of
  * in the browser, so the published bundle matches the chat preview. The emitted
  * bundle uses only an inline `<script>` (no eval/new Function/document.write/string timers) plus

@@ -4,7 +4,9 @@
  * (`apps/client/server/services/publish/transpileReactArtifact.ts`) and the sandbox preview
  * (`apps/client/pages/api/react-artifact-sandbox.ts`). All three used to run backtracking regexes
  * over artifact source of unbounded size; the helpers here keep the same match sets without the
- * quadratic rescans and without a clause-length cap.
+ * quadratic rescans and without a clause-length cap. A fourth consumer, codeImportDependencies
+ * (the editor's dependency list in ReactArtifactViewer), deliberately matches more: it replaced a
+ * single-line regex, so multi-line clauses now count too.
  */
 
 export interface ImportStatement {
@@ -38,6 +40,7 @@ export interface ImportScanner {
   braceSpan(text: string, greedy?: boolean): { open: number; close: number } | null;
   stripTypeOnlyImports(source: string): string;
   findRelativeImport(source: string): string | null;
+  renameAsBindings(clause: string): string;
 }
 
 /* eslint-disable no-var -- `var` keeps the serialized body free of anything a compiler might downlevel */
@@ -308,6 +311,40 @@ export function createImportScanner(): ImportScanner {
     return required ? required[1] : null;
   }
 
+  /** `clause.replace(/(\w+)\s+as\s+(\w+)/g, '$1: $2')` without the regex's rescan of a long word
+   *  from every start position. A match can only begin at the start of a word run, since a shorter
+   *  `\w+` would be followed by another word char instead of the required `\s`. */
+  function renameAsBindings(clause: string): string {
+    var out = '';
+    var at = 0;
+    var n = clause.length;
+    while (at < n) {
+      if (!WORD.test(clause[at])) {
+        out += clause[at++];
+        continue;
+      }
+      var runEnd = at;
+      while (runEnd < n && WORD.test(clause[runEnd])) runEnd++;
+      var p = runEnd;
+      while (p < n && WS.test(clause[p])) p++;
+      if (p > runEnd && clause.startsWith('as', p)) {
+        p += 2;
+        var ws2 = p;
+        while (p < n && WS.test(clause[p])) p++;
+        var aliasAt = p;
+        while (p < n && WORD.test(clause[p])) p++;
+        if (ws2 < aliasAt && aliasAt < p) {
+          out += clause.slice(at, runEnd) + ': ' + clause.slice(aliasAt, p);
+          at = p;
+          continue;
+        }
+      }
+      out += clause.slice(at, runEnd);
+      at = runEnd;
+    }
+    return out;
+  }
+
   return {
     terminatorAt: terminatorAt,
     scanImportStatements: scanImportStatements,
@@ -315,6 +352,7 @@ export function createImportScanner(): ImportScanner {
     braceSpan: braceSpan,
     stripTypeOnlyImports: stripTypeOnlyImports,
     findRelativeImport: findRelativeImport,
+    renameAsBindings: renameAsBindings,
   };
 }
 /* eslint-enable no-var */
