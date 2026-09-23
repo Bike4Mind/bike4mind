@@ -155,6 +155,19 @@ describe('LakeMembershipChangeEventModel / lakeMembershipChangeEventRepository.r
       expect(events.map(e => e.fabFileId)).toEqual(['newest', 'middle']);
     });
 
+    it('breaks a same-millisecond tie on _id, so the reader can recover write order', async () => {
+      // The diff reader reverses this page rather than re-sorting it, which only names the right
+      // end state while the tie falls back to _id. Monotonic ObjectIds make that write order.
+      vi.setSystemTime(at(0));
+      await repo.record(baseInput({ fabFileId: 'tied-first' }));
+      await repo.record(baseInput({ fabFileId: 'tied-second' }));
+
+      const events = await repo.listByLakeSince('lake-1', at(-1));
+      const tied = events.filter(e => e.fabFileId.startsWith('tied-'));
+      expect(tied.map(e => e.fabFileId)).toEqual(['tied-second', 'tied-first']);
+      expect(tied[0].createdAt.getTime()).toBe(tied[1].createdAt.getTime());
+    });
+
     it('is empty for a lake with no recorded changes', async () => {
       await seed();
 
