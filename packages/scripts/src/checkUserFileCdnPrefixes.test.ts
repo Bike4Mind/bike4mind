@@ -36,7 +36,14 @@ function readCspPrefixes(contents: string): string[] {
   return [...block[1].matchAll(/'\/([a-z0-9-]+)\/'/g)].map(m => m[1]);
 }
 
-/** The names inside `router.routeBucket(`${routePrefix}/generated`, ...)` in infra/buckets.ts. */
+/**
+ * The names inside `router.routeBucket(`${routePrefix}/generated`, ...)` in infra/buckets.ts.
+ * Matches every `routeBucket(...)` call indiscriminately - it assumes all of them are
+ * user-file routes, which holds today but isn't enforced. A future non-user-file
+ * `routeBucket` route would be swept in here and forced into `userFileCdnPrefixes` just to
+ * keep this test green; it should instead get its own exemption set, alongside
+ * `OVERLAY_ONLY_PREFIXES` above.
+ */
 function readRouteBucketPrefixes(contents: string): string[] {
   return [...contents.matchAll(/routeBucket\(`\$\{routePrefix\}\/([a-z0-9-]+)`/g)].map(m => m[1]);
 }
