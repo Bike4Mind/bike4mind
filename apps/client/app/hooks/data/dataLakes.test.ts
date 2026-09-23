@@ -1407,6 +1407,24 @@ describe('useTransferLakeOwnership cache invalidation', () => {
 
     expect(toast.error).toHaveBeenCalledWith('An organization admin cannot transfer a data lake to themselves');
   });
+
+  it('refreshes the picker on a FAILED offer too, so a stale pending state cannot stick', async () => {
+    // Finding 5: a refusal can mean the dialog's cached state is stale ("already has a pending
+    // offer", the offer was cancelled elsewhere). Only invalidating on success left dead controls.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockRejectedValueOnce(new Error('This data lake already has a pending ownership offer'));
+
+    const { result } = renderHook(() => useTransferLakeOwnership(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ id: 'lake1', newOwnerUserId: 'u9' })).rejects.toThrow();
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
+  });
 });
 
 describe('useCancelLakeOwnershipOffer', () => {
@@ -1423,6 +1441,24 @@ describe('useCancelLakeOwnershipOffer', () => {
     });
 
     expect(apiDelete).toHaveBeenCalledWith('/api/data-lakes/lake1/transfer-ownership');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
+  });
+
+  it('refreshes the picker on a FAILED cancel too', async () => {
+    // The recipient may have accepted just before the offerer clicked Cancel: the 404 must refresh
+    // the stale "Cancel offer" state rather than leave a button that can never succeed.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiDelete.mockRejectedValueOnce(new Error('This data lake has no pending ownership offer'));
+
+    const { result } = renderHook(() => useCancelLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ id: 'lake1' })).rejects.toThrow();
+    });
+
     const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
     expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-candidates', 'lake1']));
   });
@@ -1449,6 +1485,26 @@ describe('useAcceptLakeOwnershipOffer cache invalidation', () => {
     expect(keys).toContain(JSON.stringify(['data-lakes']));
     expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
   });
+
+  it('refreshes the offers and the lake on a FAILED accept too', async () => {
+    // An expired or stale offer fails the accept; the banner must drop it rather than keep offering
+    // something the server will keep refusing.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockRejectedValueOnce(new Error('This ownership offer has expired'));
+
+    const { result } = renderHook(() => useAcceptLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ offerId: 'o1', dataLakeId: 'lake1' })).rejects.toThrow();
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-offers']));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'access', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeConfigHistory', 'lake1']));
+  });
 });
 
 describe('useDeclineLakeOwnershipOffer', () => {
@@ -1469,6 +1525,22 @@ describe('useDeclineLakeOwnershipOffer', () => {
     expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-offers']));
     // Nothing changed hands, so the lake list is NOT refetched for a decline.
     expect(keys).not.toContain(JSON.stringify(['data-lakes']));
+  });
+
+  it('refreshes the offers list on a FAILED decline too', async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    apiPost.mockRejectedValueOnce(new Error('This ownership offer is no longer open'));
+
+    const { result } = renderHook(() => useDeclineLakeOwnershipOffer(), { wrapper });
+    await act(async () => {
+      await expect(result.current.mutateAsync({ offerId: 'o1' })).rejects.toThrow();
+    });
+
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    expect(keys).toContain(JSON.stringify(['data-lakes', 'ownership-offers']));
   });
 });
 

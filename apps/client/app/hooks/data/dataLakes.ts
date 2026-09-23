@@ -313,7 +313,10 @@ export function useTransferLakeOwnership() {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
       toast.success('Ownership offer sent');
     },
-    onError: (error: Error) => {
+    onError: (error: Error, { id }) => {
+      // A refusal can be the stale-state kind ("already has a pending offer", "the member list
+      // changed"): refetch so the dialog shows what the server sees instead of dead controls.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
       // This endpoint's rejections are the actionable kind ("name another member", "must belong to
       // the organization that owns this data lake").
       const refusal = serverRefusalMessage(error);
@@ -336,7 +339,11 @@ export function useCancelLakeOwnershipOffer() {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
       toast.success('Ownership offer cancelled');
     },
-    onError: (error: Error) => {
+    onError: (error: Error, { id }) => {
+      // A cancel that loses a race (the recipient already accepted) 404s; refetch so a stale "Cancel
+      // offer" button that can never succeed is replaced by the real state.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
       const refusal = serverRefusalMessage(error);
       toast.error(refusal || error.message || 'Failed to cancel the ownership offer');
     },
@@ -383,7 +390,13 @@ export function useAcceptLakeOwnershipOffer() {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
       toast.success('Data lake ownership transferred');
     },
-    onError: (error: Error) => {
+    onError: (error: Error, { dataLakeId }) => {
+      // A failed accept (expired, stale, withdrawn) means the banner's list is out of date; refetch it
+      // and the lake so the recipient is not left staring at an offer the server has already closed.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
       const refusal = serverRefusalMessage(error);
       toast.error(refusal || error.message || 'Failed to accept the ownership offer');
     },
@@ -406,6 +419,9 @@ export function useDeclineLakeOwnershipOffer() {
       toast.success('Ownership offer declined');
     },
     onError: (error: Error) => {
+      // The offer may already be gone (cancelled, or accepted elsewhere); refresh the banner so it
+      // stops showing an offer the server will refuse.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
       const refusal = serverRefusalMessage(error);
       toast.error(refusal || error.message || 'Failed to decline the ownership offer');
     },

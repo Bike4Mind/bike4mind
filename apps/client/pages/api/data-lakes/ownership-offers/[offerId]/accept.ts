@@ -33,6 +33,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
       })
     );
 
+    const counterpartName = req.user?.name || req.user?.username;
+
     // After commit: tell the offerer. Best-effort - the offerer's address is not the recipient's
     // problem, and the notifier swallows its own failures.
     await sendLakeOwnershipOfferEmail(
@@ -40,10 +42,26 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
         kind: 'accepted',
         toUserId: result.offer.offeredByUserId,
         dataLakeId: result.offer.dataLakeId,
-        ...(req.user?.name || req.user?.username ? { counterpartName: req.user.name || req.user.username } : {}),
+        ...(counterpartName ? { counterpartName } : {}),
       },
       { logger: req.logger }
     );
+
+    // And tell each prior owner who was DEMOTED by this transfer - otherwise the org-admin succession
+    // case moves ownership out from under someone who was party to it, the same consent gap the
+    // offer exists to close, one party over. The offerer is skipped: they already have the mail above.
+    for (const demotedUserId of result.demotedUserIds) {
+      if (demotedUserId === result.offer.offeredByUserId) continue;
+      await sendLakeOwnershipOfferEmail(
+        {
+          kind: 'accepted',
+          toUserId: demotedUserId,
+          dataLakeId: result.offer.dataLakeId,
+          ...(counterpartName ? { counterpartName } : {}),
+        },
+        { logger: req.logger }
+      );
+    }
 
     return res.json({
       data: { newOwnerUserId: result.newOwnerUserId, demotedUserIds: result.demotedUserIds },

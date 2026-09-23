@@ -135,6 +135,22 @@ describe('POST /api/data-lakes/ownership-offers/:offerId/accept', () => {
     );
   });
 
+  it('also emails a demoted prior owner who is not the offerer', async () => {
+    // Finding 7: an org admin can offer a lake the owner controls; when the recipient accepts, that
+    // owner is demoted and must be told.
+    h.acceptLakeOwnershipOffer.mockResolvedValue({
+      newOwnerUserId: 'recipient',
+      demotedUserIds: ['prior-owner'],
+      offer: OFFER,
+    });
+    const { res } = makeRes();
+
+    await call(acceptHandler, req('POST', { offerId: 'offer-1' }), res);
+
+    // One to the offerer, one to the demoted prior owner.
+    expect(h.sendEmail).toHaveBeenCalledTimes(2);
+  });
+
   it('propagates the not-found refusal for a non-recipient', async () => {
     h.acceptLakeOwnershipOffer.mockRejectedValue(new Error('Ownership offer not found'));
     const { res } = makeRes();

@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   cancelLakeOwnershipOffer: vi.fn(),
   findPendingLakeOwnershipOffer: vi.fn(),
   listLakeOwnershipCandidates: vi.fn(),
+  resolveLakeTransferAuthority: vi.fn(),
   sendEmail: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
   // Records what ran inside the transaction callback, so the ordering assertions below are about
@@ -36,6 +37,7 @@ vi.mock('@bike4mind/services', () => ({
     cancelLakeOwnershipOffer: h.cancelLakeOwnershipOffer,
     findPendingLakeOwnershipOffer: h.findPendingLakeOwnershipOffer,
     listLakeOwnershipCandidates: h.listLakeOwnershipCandidates,
+    resolveLakeTransferAuthority: h.resolveLakeTransferAuthority,
     // The real renderer is pure; the route test only needs to know the notifier reached the mailer,
     // so a thumbprint subject keeps the assertion about WHO was emailed, not about the copy.
     renderOwnershipOfferEmail: (input: { kind: string }) => ({
@@ -239,7 +241,13 @@ describe('GET /api/data-lakes/[id]/transfer-ownership', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: false, administeredOrgIds: [] });
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', organizationId: 'orgA' });
+    // The GET now takes the grants with the lake, so the pending-offer disclosure can decide whether
+    // the caller could have made the offer without a second query.
+    h.assertLakeAccessWithGrants.mockResolvedValue({
+      lake: { id: 'lake-oid-1', organizationId: 'orgA' },
+      grants: [],
+    });
+    h.resolveLakeTransferAuthority.mockReturnValue({ allowed: true, isOwner: false, viaOrgAdminOnly: false });
     h.listLakeOwnershipCandidates.mockResolvedValue({
       scope: 'organization',
       organizationName: 'Acme',
@@ -276,10 +284,65 @@ describe('GET /api/data-lakes/[id]/transfer-ownership', () => {
   });
 
   it('does not disclose a lake the caller cannot even read', async () => {
-    h.assertLakeAccess.mockRejectedValue(new Error('Data lake not found'));
+    h.assertLakeAccessWithGrants.mockRejectedValue(new Error('Data lake not found'));
     const { res } = makeRes();
     await expect(call(getReq({ id: 'lake1' }), res)).rejects.toThrow(/not found/i);
     expect(h.listLakeOwnershipCandidates).not.toHaveBeenCalled();
+  });
+
+  it('hides the pending offer from a caller who could not transfer the lake', async () => {
+    // Finding 4: the pending row names the next owner, so a reader gets the candidate list (empty for
+    // them) but never the offer.
+    h.findPendingLakeOwnershipOffer.mockResolvedValue({
+      id: 'offer-1',
+      recipientUserId: 'u9',
+      recipientName: 'Carol',
+      expiresAt: new Date('2026-10-01T00:00:00Z'),
+    });
+    h.resolveLakeTransferAuthority.mockReturnValue({ allowed: false, isOwner: false, viaOrgAdminOnly: false });
+    const { res, json } = makeRes();
+
+    await call(getReq({ id: 'my-lake' }), res);
+
+    expect(json).toHaveBeenCalledWith(expect.objectContaining({ pendingOffer: null }));
+  });
+
+  it('shows the pending offer to its own recipient even without transfer authority', async () => {
+    h.findPendingLakeOwnershipOffer.mockResolvedValue({
+      id: 'offer-1',
+      offeredByUserId: 'u9',
+      recipientUserId: 'u1',
+      recipientName: 'Olive',
+      expiresAt: new Date('2026-10-01T00:00:00Z'),
+    });
+    h.resolveLakeTransferAuthority.mockReturnValue({ allowed: false, isOwner: false, viaOrgAdminOnly: false });
+    const { res, json } = makeRes();
+
+    await call(getReq({ id: 'my-lake' }), res);
+
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ pendingOffer: expect.objectContaining({ id: 'offer-1' }) })
+    );
+  });
+
+  it('shows the pending offer to its OFFERER even after they lose transfer authority', async () => {
+    // The offerer can still cancel it (DELETE allows them), so the control that does that must be
+    // reachable from the dialog.
+    h.findPendingLakeOwnershipOffer.mockResolvedValue({
+      id: 'offer-1',
+      offeredByUserId: 'u1',
+      recipientUserId: 'u9',
+      recipientName: 'Carol',
+      expiresAt: new Date('2026-10-01T00:00:00Z'),
+    });
+    h.resolveLakeTransferAuthority.mockReturnValue({ allowed: false, isOwner: false, viaOrgAdminOnly: false });
+    const { res, json } = makeRes();
+
+    await call(getReq({ id: 'my-lake' }), res);
+
+    expect(json).toHaveBeenCalledWith(
+      expect.objectContaining({ pendingOffer: expect.objectContaining({ id: 'offer-1' }) })
+    );
   });
 
   it('returns the empty list the service resolved rather than turning it into an error', async () => {

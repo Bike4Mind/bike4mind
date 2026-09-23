@@ -45,7 +45,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
     const ctx = await toAccessContext(req);
 
     // Same not-found-style read gate as the writes: a lake the caller cannot see is not disclosed.
-    const lake = await dataLakeService.assertLakeAccess(id, ctx, {
+    // The grants come back with it so the pending-offer disclosure below costs no extra read.
+    const { lake, grants } = await dataLakeService.assertLakeAccessWithGrants(id, ctx, {
       db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
     });
 
@@ -56,7 +57,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_OR_SHARE_SCOPES })
         organizations: organizationRepository,
       },
     });
-    const pendingOffer = await dataLakeService.findPendingLakeOwnershipOffer(lake.id, { db: lakeOwnershipOfferDb });
+    const offer = await dataLakeService.findPendingLakeOwnershipOffer(lake.id, { db: lakeOwnershipOfferDb });
+    // Disclose the live offer only to someone who could have made it, or to its offerer. The row names
+    // who is about to become owner, which a mere reader of the lake (a reader grantee, an org member on
+    // an org-visible lake, a `datalake:read` key) has no business learning - the member roster this
+    // dialog lists is manager-only for the same reason.
+    const pendingOffer =
+      offer &&
+      (dataLakeService.resolveLakeTransferAuthority(lake, ctx, grants).allowed ||
+        offer.recipientUserId === ctx.userId ||
+        offer.offeredByUserId === ctx.userId)
+        ? offer
+        : null;
 
     return res.json({ data, pendingOffer });
   })
