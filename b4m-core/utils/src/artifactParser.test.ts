@@ -248,14 +248,21 @@ describe('parseArtifacts - graphically-empty SVG suppression', () => {
 
   it('leaves an unterminated comment in place, scaling linearly', () => {
     // Openings with no closer: the shape that made the old /<!--[\s\S]*?-->/g re-scan to
-    // the end of the input from every one of them. The pre-fix code takes ~70ms at
-    // small=10000 and ~285ms at its double, so it breaches the ratio ceiling rather than
-    // hanging the runner.
+    // the end of the input from every one of them. Sized so pre-fix breaches the 500ms
+    // small-input ceiling outright instead of a ratio a loaded runner's noise can flip:
+    // measured in-suite on a quiet host, pre-fix breaches the ceiling by about 2.8x at
+    // n=64000, against 0.90/1.79ms for the current scan; the raised floor below is belt
+    // and braces.
+    // Size this shape by running it IN the suite, not standalone: the same pre-fix call
+    // runs slower standalone than it does here, because earlier tests have already
+    // warmed the JIT, and sizing from the standalone figure would leave less headroom
+    // over the ceiling.
     assertLinearGrowth(
       n => '<svg>' + '<!--'.repeat(n) + '</svg>',
-      10000,
+      64000,
       out => expect(out).toBe('false'),
-      input => String(isSvgGraphicallyEmpty(input))
+      input => String(isSvgGraphicallyEmpty(input)),
+      150
     );
   });
 
@@ -440,15 +447,19 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     for (const label of ['html', 'svg', 'tsx', 'json', 'mermaid']) {
       // Sized so EVERY label fails on the 500ms ceiling pre-fix, not on the growth ratio:
       // the ratio's true quadratic value is 4.0 and the check is < 3, but a 30000-char run
-      // cost four of these labels only 49-151ms, and a MIN_BASELINE_MS floor that low leaves
-      // a noisy baseline read enough room to pass against unfixed code. At 180000 the
-      // pre-fix core parser needs ~1800ms on svg/tsx/json and ~5400ms on html (mermaid was
-      // already over at 30000, at ~1680ms), while the current one needs a millisecond or two
-      // either side, so the budget is really GC noise in the measured window.
+      // costs four of these labels far less than a 180000-char one, and a MIN_BASELINE_MS
+      // floor that low leaves a noisy baseline read enough room to pass against unfixed
+      // code. Measured in-suite on a quiet host, pre-fix html breaches the 500ms ceiling
+      // by about 9.3x at n=180000; the loop aborts on that first label, so the other
+      // labels are not independently measured here - they are the same shape and the
+      // same size, differing only in the fence label. The current parser needs a
+      // millisecond or two either side, so the budget is really GC noise in the
+      // measured window.
       // At this size the fixed parser's baseline is a fraction of a millisecond for four
       // of the five labels, so the ratio collapses into an absolute budget that measures
       // shared-runner noise; the real guard here is the 500ms small-input ceiling above,
-      // which pre-fix code breaches by 3-11x, so raise the floor for this call only.
+      // which pre-fix code breaches several times over, so raise the floor for this call
+      // only.
       assertLinearGrowth(
         n => '```' + label + '\n' + '\n'.repeat(n) + 'x',
         180000,
@@ -532,11 +543,18 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 
   it('leaves an unterminated html fence untouched, scaling linearly', () => {
     // Many <!DOCTYPE occurrences and no </html> anywhere, so the pre-fix bare-document
-    // pattern re-scanned to the end of the input from each one. Sized off this copy's
-    // own constant, not the client twin's: at n=1600 pre-fix core runs 3ms, which the
-    // MIN_BASELINE_MS floor keeps well inside the ratio, but 50ms at 6400 and 201ms at
-    // 12800, ratio ~4.0. The current parser is 0.3ms and 0.6ms.
-    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 6400);
+    // pattern re-scanned to the end of the input from each one. Sized so pre-fix breaches
+    // the 500ms small-input ceiling outright instead of a ratio a loaded runner's noise
+    // can flip: measured in-suite on a quiet host, pre-fix breaches the ceiling by about
+    // 1.85x at n=28000 alone, current runs 0.5/1.0ms; the raised floor below is belt and
+    // braces.
+    assertLinearGrowth(
+      n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n),
+      28000,
+      (out, input) => expect(out).toBe(input),
+      convertCodeBlocksToArtifacts,
+      150
+    );
   });
 
   it('leaves an unterminated html fence with no promotable markup untouched', () => {
@@ -587,10 +605,19 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
 
     it('stays linear on a long run of mermaid openers that never close, scaling linearly', () => {
       // One opener every 11 characters and no closer anywhere: the old regex started a fresh
-      // lazy scan to the end of the input from each one. Measured on this shape it runs 399ms
-      // at n=10000 and 1590ms at 20000, so pre-fix it breaches the ratio (with the baseline
-      // itself near the small-input ceiling); the index scan is 0.7ms and 1.2ms.
-      assertLinearGrowth(n => '```mermaidZ'.repeat(n), 10000);
+      // lazy scan to the end of the input from each one. Sized so pre-fix breaches the 500ms
+      // small-input ceiling outright instead of a ratio a loaded runner's noise can flip:
+      // measured in-suite on a quiet host, pre-fix breaches the ceiling by about 1.9x at
+      // n=16000 alone; current runs 1.3ms and 2.3ms on this quiet host (the doubled side
+      // is load-sensitive on a busier host, which is the whole reason the ratio is not
+      // the guard here); the raised floor below is belt and braces.
+      assertLinearGrowth(
+        n => '```mermaidZ'.repeat(n),
+        16000,
+        (out, input) => expect(out).toBe(input),
+        convertCodeBlocksToArtifacts,
+        150
+      );
     });
   });
 });
@@ -669,18 +696,27 @@ describe('convertCodeBlocksToArtifacts - bare html document promotion', () => {
     // openings inside an unterminated fence. This test only cares about growth, not
     // the output shape (the first two get promoted, the third stays a code block
     // since its fence never closes), so it skips the output equality check.
-    // Sizes are set by the widest old-vs-new gap that still leaves the current parser
-    // far inside the ratio budget. The first shape promotes every document, so its
-    // output allocation is what costs: at n=22000 the current parser itself ran 20-60ms
-    // a side and the ratio went marginal, flaking. Each size has to be large enough that
-    // the pre-fix parser breaks the ratio ceiling on its own: the first shape needs 6000
-    // (at 3000 it ran 13/52ms, ratio 2.1, and passed pre-fix). Pre-fix core at these sizes
-    // runs 52/207ms, 32/132ms and 86/340ms, ratio ~3.9 each, against 1.1/2.1ms, 0.1/0.2ms
-    // and 0.2/0.4ms now.
+    // Sized (as with the long-whitespace-run test above) so pre-fix code breaches the
+    // 500ms small-input ceiling outright instead of tripping a ratio: at a small size
+    // where pre-fix is merely slow, the current parser's own cost is a few milliseconds,
+    // so an unraised floor turns the ratio into an absolute ~75ms budget on the doubled
+    // run that a loaded shared runner can miss on noise alone. Measured in-suite on a
+    // quiet host, pre-fix core breaches the ceiling by about 2.2x at n=28000 alone on
+    // the first shape (the call aborts at the first shape, so the other two sizes are
+    // not independently measured here), against 4.7/10.6ms, 0.5/0.9ms and 0.5/1.0ms
+    // now. The first shape promotes every document, so its output allocation dominates
+    // and its cost swings with host load, which is the reading the raised floor stops
+    // the ratio from turning into a verdict now that the ceiling is the real guard.
     const noOutputCheck = () => {};
-    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 6000, noOutputCheck);
-    assertLinearGrowth(n => '<html>\n'.repeat(n), 6000, noOutputCheck);
-    assertLinearGrowth(n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n), 6400, noOutputCheck);
+    assertLinearGrowth(n => '<html></html>\n'.repeat(n), 28000, noOutputCheck, convertCodeBlocksToArtifacts, 150);
+    assertLinearGrowth(n => '<html>\n'.repeat(n), 32000, noOutputCheck, convertCodeBlocksToArtifacts, 150);
+    assertLinearGrowth(
+      n => '```html\n' + '<!DOCTYPE html>\n'.repeat(n),
+      22000,
+      noOutputCheck,
+      convertCodeBlocksToArtifacts,
+      150
+    );
   });
 });
 

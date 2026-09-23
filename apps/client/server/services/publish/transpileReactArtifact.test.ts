@@ -709,6 +709,27 @@ describe('stripTypeOnlyImports differential vs the original brace regexes', () =
   it('is not vacuous: the pass actually rewrites most of these', () => {
     expect(CASES.filter(src => stripTypeOnlyImports(src) !== src).length).toBeGreaterThan(10);
   });
+
+  it('mutation control: dropping the `(?!as\\b)` guard from the type-only filter disagrees with the original', () => {
+    const mutated = (source: string): string =>
+      source
+        .replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*;?/g, '')
+        .replace(/import\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]\s*;?/g, (stmt: string, clause: string) => {
+          const braceMatch = clause.match(/\{([\s\S]*?)\}/);
+          if (!braceMatch) return stmt;
+          const kept = braceMatch[1]
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean)
+            // BUG: no `(?!as\b)` guard, so `type as T` (a specifier named `type`) reads as type-only.
+            .filter(spec => !/^type\s+\w/.test(spec));
+          const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
+          if (!kept.length && !beforeBrace) return '';
+          return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
+        });
+    const diffs = CASES.filter(src => mutated(src) !== originalStripTypeOnlyImports(src));
+    expect(diffs.length).toBeGreaterThan(0);
+  });
 });
 
 /**
