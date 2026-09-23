@@ -30,7 +30,8 @@ function assertLinearGrowth(
   build: (n: number) => string,
   small: number,
   checkOutput: (out: string, input: string) => void = (out, input) => expect(out).toBe(input),
-  run: (input: string) => string = convertCodeBlocksToArtifacts
+  run: (input: string) => string = convertCodeBlocksToArtifacts,
+  minBaselineMs: number = MIN_BASELINE_MS
 ) {
   // Best of three, not a single timing: a GC pause landing in one measured window is
   // worth more than the whole budget here (the current parser needs single-digit
@@ -51,7 +52,7 @@ function assertLinearGrowth(
   expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
 
   const doubledMs = measure(small * 2);
-  const ratio = doubledMs / Math.max(baselineMs, MIN_BASELINE_MS);
+  const ratio = doubledMs / Math.max(baselineMs, minBaselineMs);
   expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
 }
 
@@ -444,7 +445,17 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
       // pre-fix core parser needs ~1800ms on svg/tsx/json and ~5400ms on html (mermaid was
       // already over at 30000, at ~1680ms), while the current one needs a millisecond or two
       // either side, so the budget is really GC noise in the measured window.
-      assertLinearGrowth(n => '```' + label + '\n' + '\n'.repeat(n) + 'x', 180000);
+      // At this size the fixed parser's baseline is a fraction of a millisecond for four
+      // of the five labels, so the ratio collapses into an absolute budget that measures
+      // shared-runner noise; the real guard here is the 500ms small-input ceiling above,
+      // which pre-fix code breaches by 3-11x, so raise the floor for this call only.
+      assertLinearGrowth(
+        n => '```' + label + '\n' + '\n'.repeat(n) + 'x',
+        180000,
+        (out, input) => expect(out).toBe(input),
+        convertCodeBlocksToArtifacts,
+        150
+      );
     }
   });
 
