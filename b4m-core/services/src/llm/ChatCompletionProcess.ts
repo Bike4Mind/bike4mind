@@ -864,10 +864,9 @@ export class ChatCompletionProcess {
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
-   * True only when `resolveEntitlementKeys()` fell back to `[]` because the injected
-   * `getEntitlements` THREW, not because it legitimately returned no keys (#3155). Read by
-   * `getDataLakeAccessContext()` to set `entitlementKeysResolved: false`, which tells the exclusion-
-   * telemetry count to report "unknown" instead of miscounting an entitlement-gated lake as excluded.
+   * Set only in `resolveEntitlementKeys()`'s catch branch; read by `getDataLakeAccessContext()` to
+   * set `DataLakeAccessContext.entitlementKeysResolved` - see that field's own doc for the "THREW
+   * vs. legitimately empty" distinction this exists to carry (#3155).
    *
    * NOT the same axis as `entitlementsResolved` above (review: the two names read as near-synonyms
    * but answer different questions) - that one means "an attempt has been made this process, so the
@@ -876,6 +875,16 @@ export class ChatCompletionProcess {
    * `entitlementsResolved: true` as proof the keys are trustworthy - check this field instead.
    */
   private entitlementResolutionFailed = false;
+  /**
+   * Single-flight guard for `resolveEntitlementKeys()` (review, #3155): the resolution check
+   * (`entitlementsResolved`) only flips to `true` AFTER the `await`, so two callers racing before
+   * it settles previously both re-entered the try/catch and both wrote the shared
+   * `entitlementKeys`/`entitlementResolutionFailed` fields - whichever settled LAST won, so a
+   * failure racing behind a success could overwrite healthy keys with the fail-safe `[]` and
+   * suppress a healthy turn's telemetry. Caching the in-flight PROMISE (set synchronously, before
+   * any `await`) closes the window: every racing caller awaits the same one settlement.
+   */
+  private entitlementKeysPromise?: Promise<string[]>;
   /**
    * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
    * (userHasAccessibleKnowledgeLake), the corpus inline-defer plan (resolveCorpusInlinePlan) and
@@ -988,26 +997,35 @@ export class ChatCompletionProcess {
    * memoizing the result (an empty list is a valid, memoizable result). Both the forced
    * retrieval feature and the tool path read these keys to gate entitlement-scoped lakes.
    * No injection => empty keys => tag-only matching (the neutral default).
+   *
+   * SINGLE-FLIGHT (review, #3155): `entitlementKeysPromise` is cached synchronously, before the
+   * first `await`, so two callers racing before resolution settles converge on the SAME promise
+   * instead of each running the try/catch independently - see that field's own doc for the race
+   * this closes.
    */
   public async resolveEntitlementKeys(): Promise<string[]> {
-    if (!this.entitlementsResolved) {
-      try {
-        this.entitlementKeys = (await this.getEntitlements?.(this.user)) ?? [];
-      } catch (err) {
-        // Fail-safe: an entitlement-resolution failure (e.g. a subscription DB read error)
-        // must NEVER break the chat turn. Degrade to tag-only matching - exactly the pre-Q3b
-        // behavior. Entitlement-gated lakes (libonc) fail closed; tag-gated lakes (Opti)
-        // and the entire main-app chat path are unaffected. This is what keeps wiring
-        // getEntitlements into the shared chat defaults a non-regression for every surface.
-        this.logger.warn(
-          `Entitlement resolution failed; falling back to tag-only lake access: ${(err as Error)?.message}`
-        );
-        this.entitlementKeys = [];
-        this.entitlementResolutionFailed = true;
-      }
-      this.entitlementsResolved = true;
+    if (this.entitlementsResolved) return this.entitlementKeys;
+    if (!this.entitlementKeysPromise) {
+      this.entitlementKeysPromise = (async () => {
+        try {
+          this.entitlementKeys = (await this.getEntitlements?.(this.user)) ?? [];
+        } catch (err) {
+          // Fail-safe: an entitlement-resolution failure (e.g. a subscription DB read error)
+          // must NEVER break the chat turn. Degrade to tag-only matching - exactly the pre-Q3b
+          // behavior. Entitlement-gated lakes (libonc) fail closed; tag-gated lakes (Opti)
+          // and the entire main-app chat path are unaffected. This is what keeps wiring
+          // getEntitlements into the shared chat defaults a non-regression for every surface.
+          this.logger.warn(
+            `Entitlement resolution failed; falling back to tag-only lake access: ${(err as Error)?.message}`
+          );
+          this.entitlementKeys = [];
+          this.entitlementResolutionFailed = true;
+        }
+        this.entitlementsResolved = true;
+        return this.entitlementKeys;
+      })();
     }
-    return this.entitlementKeys;
+    return this.entitlementKeysPromise;
   }
 
   /**
@@ -1039,8 +1057,8 @@ export class ChatCompletionProcess {
         db: this.db,
         user: this.user,
         entitlementKeys,
-        // #3155: tells the exclusion-telemetry count apart a legitimately empty entitlement list
-        // from a failed lookup - see `entitlementResolutionFailed`'s own doc.
+        // #3155: lets the exclusion-telemetry count tell a legitimately empty entitlement list
+        // apart from a failed lookup - see `entitlementResolutionFailed`'s own doc.
         entitlementKeysResolved: !this.entitlementResolutionFailed,
         // Without this, a countGateExcludedLakes failure warns into a void: the resolver
         // swallows it internally (never throws), so this call's own try/catch never sees it.
