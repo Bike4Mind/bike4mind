@@ -1,5 +1,5 @@
 import mongoose, { Model, Schema } from 'mongoose';
-import { IMongoDocument } from '@bike4mind/common';
+import { IMongoDocument, LAKE_MEMORY_FINDING_SOURCE_PREFIX } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 const ModelName = 'MemoryLedgerEvent';
@@ -324,7 +324,17 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
           factCount: { $size: '$subjects' },
           sourceDocumentCount: {
             $size: {
-              $reduce: { input: '$sourcesArrays', initialValue: [], in: { $setUnion: ['$$value', '$$this'] } },
+              // DOCUMENTS only. A `sources` entry may also be provenance - a curator-resolution
+              // belief names the finding it was decided on (#3049) - and counting those here would
+              // silently inflate a number the lake-memory health card shows as "source documents".
+              // Prefix test rather than a FabFile lookup: this runs over the whole chain, and the
+              // prefix is the contract (LAKE_MEMORY_FINDING_SOURCE_PREFIX in @bike4mind/common).
+              $filter: {
+                input: {
+                  $reduce: { input: '$sourcesArrays', initialValue: [], in: { $setUnion: ['$$value', '$$this'] } },
+                },
+                cond: { $ne: [{ $indexOfCP: ['$$this', LAKE_MEMORY_FINDING_SOURCE_PREFIX] }, 0] },
+              },
             },
           },
         },

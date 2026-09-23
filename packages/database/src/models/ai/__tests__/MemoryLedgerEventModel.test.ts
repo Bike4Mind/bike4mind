@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import { LAKE_MEMORY_FINDING_SOURCE_PREFIX } from '@bike4mind/common';
 import { setupMongoTest } from '../../../__test__/utils';
 import MemoryLedgerEventModel, { memoryLedgerRepository, type IMemoryLedgerEvent } from '../MemoryLedgerEventModel';
 
@@ -248,6 +249,52 @@ describe('MemoryLedgerRepository', () => {
 
       const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:purged', 'owner1');
       expect(coverage).toEqual({ lastBuiltAt: null, factCount: 0, sourceDocumentCount: 0 });
+    });
+
+    it('counts DOCUMENTS only, never a provenance ref, so the health card is not inflated (#3049)', async () => {
+      // A curator-resolution belief names the finding it was decided on alongside the documents
+      // involved. `sourceDocumentCount` is a raw distinct count of the `sources` union, so without
+      // the prefix filter the finding ref would be counted as if it were a source document - a
+      // number a human reads off the lake-memory health card, wrong by one per ruling and with
+      // nothing anywhere to flag it.
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:prov',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'V0',
+          subject: 'fact-a',
+          sources: ['doc-1', 'doc-2', `${LAKE_MEMORY_FINDING_SOURCE_PREFIX}finding-7`],
+          at: '2026-09-01T00:00:00.000Z',
+        })
+      );
+
+      const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:prov', 'owner1');
+      expect(coverage.sourceDocumentCount).toBe(2);
+      // The belief itself still counts as a fact - only its provenance ref is excluded.
+      expect(coverage.factCount).toBe(1);
+    });
+
+    it('reports zero source documents for a belief carrying nothing but a provenance ref', async () => {
+      // Not a shape this codebase writes (the belief always carries its finding's documents too),
+      // but the filter must not fall back to counting the ref when it is the only entry - that
+      // would resurrect the inflation for exactly the edge case nobody looks at.
+      await memoryLedgerRepository.tryInsert(
+        sealedEvent({
+          principalKind: 'lake',
+          principalId: 'lake:provonly',
+          ownerUserId: 'owner1',
+          seq: 0,
+          hash: 'VO0',
+          subject: 'fact-a',
+          sources: [`${LAKE_MEMORY_FINDING_SOURCE_PREFIX}finding-9`],
+        })
+      );
+
+      const coverage = await memoryLedgerRepository.aggregateLakeMemoryCoverage('lake', 'lake:provonly', 'owner1');
+      expect(coverage.sourceDocumentCount).toBe(0);
+      expect(coverage.factCount).toBe(1);
     });
 
     it('reports zero coverage for a lake with no ledger events at all', async () => {

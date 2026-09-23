@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   resolveFinding: vi.fn(),
   assignFinding: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'curator-1', isAdmin: false })),
+  recordFindingResolutionBelief: vi.fn(async () => ({ recorded: true })),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -52,9 +53,16 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+// Mocked to keep this a route test, but ALSO because the real module reaches into
+// `@bike4mind/database` for repositories this file's mock does not declare - leaving it real would
+// fail every case here with a missing-export error rather than anything about the route.
+vi.mock('@server/dataLakes/recordFindingResolutionBelief', () => ({
+  recordFindingResolutionBelief: h.recordFindingResolutionBelief,
+}));
 
 import handler from '../[findingId]';
 
+const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 const lake = { id: 'lakeDoc1' };
 const existing = { id: 'f1', lakeId: 'lakeDoc1', status: 'open' };
 
@@ -64,7 +72,7 @@ const invoke = (body: Record<string, unknown>, findingId = 'f1') => {
   return {
     json,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
-      { method: 'POST', query: { id: 'lake1', findingId }, body, user: { id: 'curator-1' } },
+      { method: 'POST', query: { id: 'lake1', findingId }, body, user: { id: 'curator-1' }, logger },
       res
     ),
   };
@@ -76,6 +84,9 @@ beforeEach(() => {
   h.findById.mockResolvedValue(existing);
   h.resolveFinding.mockImplementation(async (_lakeId, _id, input) => ({ ...existing, ...input }));
   h.assignFinding.mockImplementation(async (_lakeId, _id, assigneeUserId) => ({ ...existing, assigneeUserId }));
+  // clearAllMocks wipes call history but KEEPS an implementation set here, so re-arm the default
+  // every test rather than letting one case's override leak into the next.
+  h.recordFindingResolutionBelief.mockResolvedValue({ recorded: true });
 });
 
 describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
@@ -217,5 +228,72 @@ describe('POST /api/data-lakes/[id]/findings/[findingId] (#3039)', () => {
     await expect(invoke({ action: 'resolve' }, 'not-an-object-id').done).rejects.toThrow(/not found/i);
     expect(h.findById).toHaveBeenCalledWith('not-an-object-id');
     expect(h.resolveFinding).not.toHaveBeenCalled();
+  });
+
+  describe('projecting the ruling into lake memory (#3049)', () => {
+    it('records the belief AFTER the row is committed, from the resolved row and the caller note', async () => {
+      const { json, done } = invoke({ action: 'resolve', resolution: 'different fiscal years; both current' });
+      await done;
+
+      expect(h.recordFindingResolutionBelief).toHaveBeenCalledTimes(1);
+      const [params] = h.recordFindingResolutionBelief.mock.calls[0];
+      expect(params.lake).toBe(lake);
+      expect(params.status).toBe('resolved');
+      expect(params.resolution).toBe('different fiscal years; both current');
+      // The COMMITTED row, not the pre-write read: the belief must describe what was actually
+      // stored, and `existing` is still `open` at that point.
+      expect(params.finding.status).toBe('resolved');
+      expect(json.mock.calls[0][0].beliefRecorded).toBe(true);
+    });
+
+    it('carries a dismissal through as a dismissal, not as a resolve', async () => {
+      // Both terminal statuses are a human's word about the corpus and both belong in memory, but
+      // they say opposite things - a belief that reported every ruling as "resolved" would tell the
+      // next session a problem was fixed when a curator had judged there was no problem.
+      const { done } = invoke({ action: 'dismiss', resolution: 'not a duplicate; different regions' });
+      await done;
+
+      expect(h.recordFindingResolutionBelief.mock.calls[0][0].status).toBe('dismissed');
+    });
+
+    it('never reaches memory when the ruling itself did not commit', async () => {
+      // Ordering, pinned: a belief written for a resolution the CAS rejected would put a decision
+      // into lake memory that no finding row backs.
+      h.resolveFinding.mockResolvedValue(null);
+
+      await expect(invoke({ action: 'resolve', resolution: 'x' }).done).rejects.toThrow(/already been ruled on/i);
+      expect(h.recordFindingResolutionBelief).not.toHaveBeenCalled();
+    });
+
+    it('leaves the assign path alone - an assignment is not a decision about the corpus', async () => {
+      const { done } = invoke({ action: 'assign', assigneeUserId: 'curator-2' });
+      await done;
+
+      expect(h.recordFindingResolutionBelief).not.toHaveBeenCalled();
+    });
+
+    it('reports beliefRecorded false when memory declined, without failing the ruling', async () => {
+      h.recordFindingResolutionBelief.mockResolvedValue({ recorded: false, reason: 'lake-disabled' });
+
+      const { json, done } = invoke({ action: 'resolve', resolution: 'settled' });
+      await done;
+
+      expect(json.mock.calls[0][0].data.status).toBe('resolved');
+      expect(json.mock.calls[0][0].beliefRecorded).toBe(false);
+    });
+
+    it('still returns the committed ruling when the memory write THROWS', async () => {
+      // The whole reason the call is wrapped. The resolution is already durable at this point, so a
+      // memory-subsystem fault must not surface as a failed request: the curator would retry and hit
+      // the double-resolve guard, and the row would look unruled to them while being ruled in Mongo.
+      h.recordFindingResolutionBelief.mockRejectedValue(new Error('ledger unreachable'));
+
+      const { json, done } = invoke({ action: 'resolve', resolution: 'settled' });
+      await done;
+
+      expect(json.mock.calls[0][0].data.status).toBe('resolved');
+      expect(json.mock.calls[0][0].beliefRecorded).toBe(false);
+      expect(logger.warn).toHaveBeenCalled();
+    });
   });
 });

@@ -5,14 +5,14 @@ import {
   fabFileChunkRepository,
   fabFileRepository,
 } from '@bike4mind/database';
-import { LAKE_MEMORY_EXTRACTION_LEASE_MS, MEMENTO_EMBEDDING_MODEL, toMementoVector } from '@bike4mind/common';
+import { LAKE_MEMORY_EXTRACTION_LEASE_MS } from '@bike4mind/common';
 import { apiKeyService, dataLakeService } from '@bike4mind/services';
 import { LakeMemoryExtractionService } from '@bike4mind/services/llm';
-import { EmbeddingFactory, getProviderFromModel, resolveEmbeddingConfig } from '@bike4mind/fab-pipeline';
 import { getSettingsByNames } from '@bike4mind/utils';
 import type { EvidenceTier } from '@bike4mind/memory';
 import type { Logger } from '@bike4mind/observability';
 import { createLedgerAppendSession } from '@server/memory/mementoLedgerMirror';
+import { createMementoEmbedder } from '@server/memory/mementoEmbedder';
 
 /**
  * Reserved curator-tag markers that promote a lake document's facts to the `human-reviewed` tier. A
@@ -165,18 +165,9 @@ export async function extractLakeMemoryForBatch(
       { logger }
     );
 
-    // Embed each fact in the MEMENTO space (the ledger's own corpus, pinned to MEMENTO_EMBEDDING_MODEL).
-    // Best-effort: with no key we write facts WITHOUT a vector - they stay lexically recallable and the
-    // re-embed backfill vectorizes them once a key is present (mirrors createMemento's V2 write).
-    let embed: (text: string) => Promise<number[] | undefined> = async () => undefined;
-    const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-    const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
-    if (missing) {
-      logger.warn(`[lakeMemory] no ${provider} key for ${MEMENTO_EMBEDDING_MODEL}; writing facts without vectors`);
-    } else {
-      const svc = new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
-      embed = async text => toMementoVector(await svc.generateEmbedding(text));
-    }
+    // Embed each fact in the MEMENTO space (the ledger's own corpus). Best-effort: with no key we
+    // write facts WITHOUT a vector, which stay lexically recallable.
+    const embed = createMementoEmbedder(apiKeyTable, logger);
 
     const extractor = new LakeMemoryExtractionService(logger);
 

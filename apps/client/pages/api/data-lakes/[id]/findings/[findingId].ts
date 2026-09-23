@@ -3,11 +3,12 @@ import { DATA_LAKE_READ_SCOPES, assertDataLakeWriteScope } from '@server/dataLak
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import { dataLakeRepository, dataLakeAccessGrantRepository, dataLakeFindingRepository } from '@bike4mind/database';
-import { LAKE_FINDING_RESOLUTION_MAX_CHARS } from '@bike4mind/common';
+import { LAKE_FINDING_RESOLUTION_MAX_CHARS, type LakeFindingTerminalStatus } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { recordFindingResolutionBelief } from '@server/dataLakes/recordFindingResolutionBelief';
 
 /**
  * The two state changes a curator can make, as a discriminated union rather than a partial patch:
@@ -41,7 +42,12 @@ const UpdateBody = z.discriminatedUnion('action', [
  * DETECT, DO NOT REJECT (#2242). Resolving or dismissing a finding records a HUMAN'S JUDGEMENT and
  * mutates nothing else: no document is removed, re-chunked, re-ingested or gated as a result. If a
  * later issue wants a resolution to change a corpus, that has to be argued on its own merits - it
- * is not something this route may be quietly widened into.
+ * is not something this route may be quietly widened into. Corpus change gets a door of its own (#3046).
+ *
+ * A resolution carrying a note is ALSO projected into the lake's memory as a belief (#3049), which
+ * is inside that guardrail rather than an exception to it: the corpus is untouched, and what gets
+ * written is the curator's own sentence about it. Best-effort and last, after the row is committed -
+ * see `recordFindingResolutionBelief` for why the ruling must never depend on the memory write.
  *
  * MANAGE-gated via `assertLakeWriteAccess`, matching the list route and `inconsistencies.ts`.
  */
@@ -81,8 +87,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       return res.json({ data: assigned });
     }
 
+    const status: LakeFindingTerminalStatus = body.action === 'resolve' ? 'resolved' : 'dismissed';
     const resolved = await dataLakeFindingRepository.resolveFinding(lake.id, findingId, {
-      status: body.action === 'resolve' ? 'resolved' : 'dismissed',
+      status,
       resolvedByUserId: ctx.userId,
       resolvedAt: new Date(),
       resolution: body.resolution,
@@ -99,7 +106,30 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
       throw new BadRequestError('This finding has already been ruled on');
     }
 
-    return res.json({ data: resolved });
+    // The ruling is committed; this projects it into lake memory so the next session inherits it.
+    // Deliberately AFTER the write and deliberately swallowing: `recordFindingResolutionBelief` does
+    // not throw on a memory-subsystem failure, and the `catch` is the backstop for the unforeseen
+    // (an import-time fault, a repository that throws outside its own guard). Failing the request
+    // here would report a resolution that is already durably recorded as not having happened, and
+    // the retry would 400 on the double-resolve guard.
+    const belief = await recordFindingResolutionBelief(
+      // `resolved.resolution` rather than `body.resolution`: the belief must quote what was
+      // actually COMMITTED, and the repository normalizes an absent note to null on the way in.
+      // Same source the standalone belief route reads, so the two cannot drift.
+      { lake, finding: resolved, status, resolution: resolved.resolution },
+      { logger: req.logger }
+    ).catch((err: unknown) => {
+      req.logger.warn('[lakeMemory] could not record the curator resolution as a belief', {
+        dataLakeId: lake.id,
+        findingId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    });
+
+    // Reported rather than silent, so a curator who wrote a note can see whether it reached memory -
+    // and so the surface can say why not (lake memory is off) instead of implying it worked.
+    return res.json({ data: resolved, beliefRecorded: belief?.recorded ?? false });
   });
 
 export const config = { api: { externalResolver: true } };

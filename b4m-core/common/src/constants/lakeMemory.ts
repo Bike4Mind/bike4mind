@@ -31,3 +31,26 @@ export const LAKE_RECALL_K_DEFAULT = 24;
  * magnitude, not a byte budget.
  */
 export const LAKE_RECALL_K_MAX = 200;
+
+/**
+ * Prefix marking a ledger `sources` entry that is PROVENANCE rather than a source document.
+ *
+ * Every other writer puts bare FabFile ids in a memory event's `sources`, and two readers lean on
+ * that: `lakeSourceReachability` resolves each id against the FabFile collection, and
+ * `aggregateLakeMemoryCoverage` counts the distinct union as "source documents". A curator's
+ * resolution belief (#3049) also has to name the FINDING it came from, which is not a document - so
+ * it goes in prefixed, and the coverage count filters the prefixed entries back out.
+ *
+ * Reachability needs no such filter: a finding's own document ids ride in the same array, so the
+ * belief stays citable on those and the unresolvable prefixed id is simply never reachable. Shred
+ * needs none either - `markSourceShredded` matches an exact string, so this doubles as the key that
+ * retracts a belief when its finding goes away.
+ *
+ * MUST STAY IN SYNC with the `$filter` in `MemoryLedgerEventModel.aggregateLakeMemoryCoverage`,
+ * which is the one reader that would otherwise miscount these - `aggregateLakeMemoryCoverage`'s cases
+ * in `MemoryLedgerEventModel.test.ts` pin the two together against a real Mongo.
+ */
+export const LAKE_MEMORY_FINDING_SOURCE_PREFIX = 'finding:';
+
+/** The `sources` entry naming the finding a belief was decided on. */
+export const findingSourceRef = (findingId: string): string => `${LAKE_MEMORY_FINDING_SOURCE_PREFIX}${findingId}`;
