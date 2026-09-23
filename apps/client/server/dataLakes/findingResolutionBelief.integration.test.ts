@@ -44,9 +44,16 @@ vi.mock('@server/memory/factCipher', async importOriginal => ({
   createKeyProvider: () => h.keyring.provider,
 }));
 vi.mock('@server/memory/mementoEmbedder', () => ({ createMementoEmbedder: () => h.embed }));
+// Recall's QUERY embedder, distinct from the write-path one above. Stubbed to an empty vector so
+// recall degrades to the lexical scorer: deterministic, and it keeps the cosine floor (calibrated for
+// a real embedding space) out of a test that is about source filtering, not ranking.
+vi.mock('@server/memory/mementoQueryEmbedding', () => ({
+  embedMementoQuery: vi.fn(async () => ({ vector: [] as number[], model: '' })),
+}));
 
 import { recordFindingResolutionBelief } from './recordFindingResolutionBelief';
 import { createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
+import { recallLakeMemory } from '@server/memory/recallLakeMemory';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 
@@ -121,6 +128,50 @@ describe("a curator's ruling, from the click to the model's turn (#3049)", () =>
 
     const [belief] = (await readLakeProfile())!.beliefs;
     expect(belief.sources).toEqual(['file-a', 'file-b', findingSourceRef('finding-7')]);
+  });
+
+  it('comes back through the REAL recall hop, with the finding ref kept out of the id lookup', async () => {
+    // The hop the other cases skip by reading the profile directly. `recallLakeMemory` is where the
+    // belief's `finding:` ref meets a FabFile-only resolver, so it is the one seam that proves the
+    // provenance entry does not cost the belief its recall - and the `isDocumentSource` filter that
+    // makes that true (`recallLakeMemory.ts:133`) has no other test.
+    await record();
+
+    const resolveReachableSources = vi.fn(async (ids: string[]) => new Set(ids));
+    const recalled = await recallLakeMemory({
+      userId: 'some-chat-user',
+      query: 'fiscal years revenue',
+      lakes: [{ datalakeTag: LAKE_TAG, ownerUserId: OWNER }],
+      k: 24,
+      resolveReachableSources,
+    } as never);
+
+    expect(recalled).toHaveLength(1);
+    expect(recalled[0].fact).toContain('Different fiscal years; both are current.');
+
+    // The load-bearing half: the resolver is FabFile-only, so handing it `finding:finding-7` logs
+    // `skipping ids that cannot address a row by _id` on every recall turn. Asserting on the argument
+    // rather than only on the result is what catches a deleted filter - the belief would still be
+    // recalled via its document ids, so an outcome-only assertion passes either way.
+    const lookedUp = resolveReachableSources.mock.calls[0][0];
+    expect(lookedUp).toEqual(expect.arrayContaining(['file-a', 'file-b']));
+    expect(lookedUp).not.toContain(findingSourceRef('finding-7'));
+  });
+
+  it('drops a belief whose only DOCUMENT source has become unreachable', async () => {
+    // The reachability gate still bites through the filter: the `finding:` ref must not be able to
+    // keep an otherwise-orphaned belief alive, which is what counting it as a source would do.
+    await record();
+
+    const recalled = await recallLakeMemory({
+      userId: 'some-chat-user',
+      query: 'fiscal years revenue',
+      lakes: [{ datalakeTag: LAKE_TAG, ownerUserId: OWNER }],
+      k: 24,
+      resolveReachableSources: async () => new Set<string>(),
+    } as never);
+
+    expect(recalled).toEqual([]);
   });
 
   it('coalesces a REPLAY of the same finding onto one belief, with the latest wording', async () => {

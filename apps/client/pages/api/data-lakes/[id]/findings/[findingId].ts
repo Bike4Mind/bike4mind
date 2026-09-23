@@ -132,10 +132,15 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     });
 
     // Reported rather than silent, so a curator who wrote a note can see whether it reached memory.
-    // The REASON rides along additively, in the same shape the `/belief` sibling returns, because a
-    // bare false cannot tell "lake memory is off" from "you left the note empty" - and those are
-    // opposite things to show a curator. Absent on success and on the unforeseen-throw path above,
-    // where there is no reason to report.
+    // The REASON rides along additively, because a bare false cannot tell "lake memory is off" from
+    // "you left the note empty" - and those are opposite things to show a curator. Absent on success
+    // and on the unforeseen-throw path above, where there is no reason to report.
+    //
+    // DELIBERATELY NOT the `/belief` sibling's shape, which returns the writer's own result nested as
+    // `{ data: { recorded, reason? } }`. Here the resolved FINDING is the payload and the belief
+    // outcome is metadata beside it, so it flattens to `beliefRecorded`/`beliefSkipReason`; there the
+    // belief outcome IS the payload. Same information, different subject - folding them into one
+    // shape would make one of the two routes lie about what it returns.
     const beliefReason = belief && !belief.recorded ? { beliefSkipReason: belief.reason } : {};
     return res.json({ data: resolved, beliefRecorded: belief?.recorded ?? false, ...beliefReason });
   });

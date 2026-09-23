@@ -11,11 +11,14 @@ type ApiKeyTable = Parameters<typeof resolveEmbeddingConfig>[1];
 /**
  * Build an embedder for the MEMENTO space, pinned to `MEMENTO_EMBEDDING_MODEL`.
  *
- * Shared by the ledger's writers (`extractLakeMemory`, `recordFindingResolutionBelief`) rather than
+ * Shared by the two LAKE writers (`extractLakeMemory`, `recordFindingResolutionBelief`) rather than
  * inlined at each, because the pin is the whole point: a vector written in a different space is not
  * comparable to the ones recall scores against, and the cosine floor calibrated for this space
- * rejects it silently rather than erroring. One place to get the space right, so a second writer
- * cannot get it wrong.
+ * rejects it silently rather than erroring.
+ *
+ * NOT the single place the space is pinned, though it is for those two: `reembedMementos.ts:41-51`
+ * resolves the same provider and builds the same factory independently, because it re-encodes into
+ * the space rather than writing into it. Changing `MEMENTO_EMBEDDING_MODEL` means checking both.
  *
  * Takes the key table rather than resolving one so the read stays the CALLER's to place.
  * `extractLakeMemory` already holds a table it passes to the extraction service, and resolving a
@@ -35,7 +38,7 @@ export function createMementoEmbedder(apiKeyTable: ApiKeyTable, logger: Logger):
   const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
   const { config, missing } = resolveEmbeddingConfig(provider, apiKeyTable);
   if (missing) {
-    logger.warn(`[lakeMemory] no ${provider} key for ${MEMENTO_EMBEDDING_MODEL}; writing facts without vectors`);
+    logger.warn(`[Mementos V2] no ${provider} key for ${MEMENTO_EMBEDDING_MODEL}; writing facts without vectors`);
     return async () => undefined;
   }
   const svc = new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);

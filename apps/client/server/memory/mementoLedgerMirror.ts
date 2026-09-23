@@ -1,5 +1,6 @@
 import { memoryLedgerRepository, memoryPrincipalKeyRepository, userRepository } from '@bike4mind/database';
 import {
+  isDocumentSource,
   isExperimentalFeatureEnabled,
   MEMENTO_DEDUP_SIMILARITY,
   type HasExperimentalFeatures,
@@ -158,6 +159,15 @@ export async function createLedgerAppendSession(params: {
       const profile = await store.readProfile(params.principal);
       for (const belief of profile?.beliefs ?? []) {
         if (belief.shredded || !belief.embedding?.length) continue;
+        // A PROVENANCE-KEYED belief (one carrying a non-document source, e.g. `finding:<id>`) is never
+        // a de-dup candidate. It was written under an explicit subject precisely so content similarity
+        // could not overrule its identity, and an assert REPLACES fact, evidenceTier and sources
+        // (`ledger.ts` foldEvents) - so letting a later extracted fact coalesce onto a curator's
+        // `human-reviewed` ruling would rewrite it as an `engineering-proxy` one. This is the same
+        // exclusion the same-run set makes below, from the PERSISTED direction: without both, the
+        // collision simply waits for the next session. Replay still coalesces via the explicit
+        // subject, which bypasses this set entirely.
+        if ((belief.sources ?? []).some(source => !isDocumentSource(source))) continue;
         // A folded belief's id IS its stored subject HMAC (subjects are never kept in plaintext), so it
         // re-asserts with subjectIsHashed to avoid a double-hash that would fork instead of coalesce.
         entries.push({

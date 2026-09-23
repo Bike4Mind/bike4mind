@@ -381,6 +381,13 @@ handler.get(async (req, res) => {
   // Strip the embedding from each belief before serializing. A vector is 512 floats (~1MB across a
   // real user's beliefs) that no reader of this endpoint needs - and, like the /api/mementos 502, an
   // unbounded vector payload is how this route would eventually blow the Lambda response limit.
+  //
+  // `sources` is NOT filtered here, deliberately: a curator-resolution belief's `finding:<id>` entry
+  // (#3049) goes over the wire alongside the FabFile ids. Stripping it would leave a `human-reviewed`
+  // belief with no way to say which finding it came from, which is the one piece of provenance a
+  // reader of this endpoint would actually want. The cost is that a consumer of `belief.sources`
+  // cannot assume every entry addresses a FabFile - use `isDocumentSource` before any id lookup, as
+  // the orphan check above does.
   const lean = ({ embedding: _e, ...b }: (typeof served.beliefs)[number]) => b;
   const leanProfile = { ...served, beliefs: served.beliefs.map(lean) };
   // Reported rather than filtered silently, so a reader can tell a small profile from a censored one.

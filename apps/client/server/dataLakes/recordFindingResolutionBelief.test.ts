@@ -1,5 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { LAKE_MEMORY_FINDING_SOURCE_PREFIX } from '@bike4mind/common';
+import {
+  LAKE_FACT_MAX_CHARS,
+  LAKE_FINDING_RESOLUTION_MAX_CHARS,
+  LAKE_MEMORY_FINDING_SOURCE_PREFIX,
+} from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   getSettingsValue: vi.fn(),
@@ -148,6 +152,18 @@ describe('recordFindingResolutionBelief (#3049)', () => {
     expect(logger.warn).toHaveBeenCalled();
   });
 
+  it('leaves no pending timer when the embed SUCCEEDS, so the Lambda can settle', async () => {
+    // The case the timeout test above cannot see. `Promise.race` resolves on the fast embed and
+    // abandons the loser, but the 10s timer it created stays armed unless the `finally` clears it -
+    // and a pending timer holds the Lambda's event loop open long past the response it already sent.
+    vi.useFakeTimers();
+    h.embed.mockResolvedValue([0.1, 0.2]);
+
+    await expect(run()).resolves.toEqual({ recorded: true });
+
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('claims the human-reviewed tier, which only a human-authored belief may', async () => {
     await run();
 
@@ -179,6 +195,17 @@ describe('recordFindingResolutionBelief (#3049)', () => {
     await run({ finding: { ...finding, sources: [finding.sources[0], finding.sources[0]] } });
 
     expect(h.append.mock.calls[0][0].sources).toEqual(['file-a', `${LAKE_MEMORY_FINDING_SOURCE_PREFIX}finding-7`]);
+  });
+
+  it('refuses a finding with no document sources instead of reporting an unrecallable success', async () => {
+    // The belief's only source would be the `finding:` ref, which `recallLakeMemory` filters out of
+    // the reachability set - so it would be written, reported `recorded: true`, and then never
+    // surface. Reporting a success the curator can never observe is worse than naming the refusal.
+    const result = await run({ finding: { ...finding, sources: [] } });
+
+    expect(result).toEqual({ recorded: false, reason: 'no-citable-source' });
+    expect(h.append).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
   });
 
   it('refuses to invent a belief when the curator left no note', async () => {
@@ -310,6 +337,28 @@ describe('composeFindingResolutionFact', () => {
 
     expect(resolved).not.toEqual(dismissed);
     expect(dismissed).toContain('dismissed');
+  });
+
+  it('composes within the injection cap, so the embedded text is the text the model reads', async () => {
+    // Injection clips every lake fact to LAKE_FACT_MAX_CHARS (`sanitizeLakeFact`), but the belief is
+    // embedded and ranked at FULL length - so a note written to its own 500-char limit composed to
+    // ~590 and spent its tail steering retrieval toward words the model never saw.
+    const maxNote = 'x'.repeat(LAKE_FINDING_RESOLUTION_MAX_CHARS);
+    const fact = composeFindingResolutionFact({ kind: 'metric-disagreement' }, 'resolved', maxNote);
+
+    expect(fact.length).toBeLessThanOrEqual(LAKE_FACT_MAX_CHARS);
+    // The frame survives whole - it is what marks the sentence as a human ruling rather than an
+    // extracted claim, so clipping it would cost the tier signal the belief exists to carry.
+    expect(fact).toContain('A curator reviewed and resolved a metric-disagreement finding');
+  });
+
+  it('leaves a note that already fits completely untouched', async () => {
+    // The cap must not become a silent rewrite of ordinary notes: only a maximal one should lose
+    // anything. Without this, clipping at the wrong offset would go unnoticed.
+    const note = 'Different fiscal years; both are current.';
+    const fact = composeFindingResolutionFact({ kind: 'metric-disagreement' }, 'resolved', note);
+
+    expect(fact.endsWith(note)).toBe(true);
   });
 
   it('keeps the normalized grouping subject OUT of the prompt text', async () => {

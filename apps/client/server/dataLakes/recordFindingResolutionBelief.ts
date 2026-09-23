@@ -1,5 +1,6 @@
 import {
   findingSourceRef,
+  LAKE_FACT_MAX_CHARS,
   type IDataLakeDocument,
   type IDataLakeFindingDocument,
   type LakeFindingTerminalStatus,
@@ -21,6 +22,7 @@ export type BeliefSkipReason =
   | 'lake-disabled'
   | 'memory-gate-unreadable'
   | 'lake-has-no-memory-principal'
+  | 'no-citable-source'
   | 'shred-fence';
 
 export type RecordBeliefResult = { recorded: true } | { recorded: false; reason: BeliefSkipReason };
@@ -61,9 +63,10 @@ async function embedWithinBudget(embed: MementoEmbedder, fact: string, logger: L
     ]);
   } catch (err: unknown) {
     // Logged rather than swallowed: nothing backfills a vector onto an event written without one
-    // (`reembedMementos.ts:180` skips them), so a belief that misses its vector here misses it
-    // permanently and ranks on lexical overlap forever. Still best-effort - a weaker belief beats
-    // losing the curator's decision.
+    // (`reembedMementos.ts:180` skips them), so a belief that misses its vector here ranks on lexical
+    // overlap until a replay re-asserts it - `POST .../belief` re-runs this writer, re-embeds and
+    // re-asserts, which is the retrofit door. Still best-effort - a weaker belief beats losing the
+    // curator's decision.
     logger.warn(
       `[lakeMemory] could not embed a curator resolution; writing it without a vector: ${
         err instanceof Error ? err.message : String(err)
@@ -87,6 +90,14 @@ async function embedWithinBudget(embed: MementoEmbedder, fact: string, logger: L
  * `subject` is deliberately NOT included even though the finding carries one: it is a normalized
  * grouping KEY (lowercased, punctuation stripped), not prose, and reads as mangled text in a prompt.
  *
+ * BOUNDED TO `LAKE_FACT_MAX_CHARS`, and the clip lands on the NOTE rather than the composed sentence.
+ * Injection clips every fact to that length (`sanitizeLakeFact`), so a note written to its own 500-char
+ * limit composed to ~590 and lost its tail on the way into the turn - while the belief was embedded
+ * and ranked at full length, letting text the model never sees steer retrieval. Clipping here instead
+ * keeps the embedded text and the injected text the same string. The frame is preserved in full
+ * because it is what marks the sentence as a human ruling; the curator's own words are what give, and
+ * the finding row keeps the note untruncated either way - it stays the single account of the decision.
+ *
  * Pure and total, and exported for its test - the wording is the product here, not an implementation
  * detail.
  */
@@ -96,7 +107,10 @@ export function composeFindingResolutionFact(
   resolution: string
 ): string {
   const verdict = status === 'dismissed' ? 'reviewed and dismissed' : 'reviewed and resolved';
-  return `A curator ${verdict} a ${finding.kind} finding in this data lake, and recorded: ${resolution}`;
+  const frame = `A curator ${verdict} a ${finding.kind} finding in this data lake, and recorded: `;
+  // A pathological `kind` could in principle leave no room at all; never produce a negative slice.
+  const room = Math.max(0, LAKE_FACT_MAX_CHARS - frame.length);
+  return `${frame}${resolution.slice(0, room).trimEnd()}`;
 }
 
 /**
@@ -132,7 +146,14 @@ export async function recordFindingResolutionBelief(
     status: LakeFindingTerminalStatus;
     resolution: string | null | undefined;
     /**
-     * When the REQUEST arrived - not when this function runs, and not when it reaches the append.
+     * HANDLER ENTRY - not when this function runs, and not when it reaches the append.
+     *
+     * Named precisely because the gap matters: the route stamps it on its first line, which is already
+     * after `baseApi` has awaited `connectDB`, the auth/api-key chain and `requireFeatureEnabled`
+     * (`baseApi.ts:138-188`). A purge completing inside THAT window still has `destroyedAt < startedAt`
+     * and lifts the tombstone. Closing it would mean stamping before `connectDB`, in middleware, for
+     * every route; the window left open is milliseconds of middleware rather than the settings read,
+     * key-table fetch and embedding call the fence was introduced to cover.
      *
      * The crypto-shred fence refuses a write only when `destroyedAt >= startedAt`, and LIFTS the
      * tombstone when `destroyedAt < startedAt` (`MemoryPrincipalKeyModel`). So a value stamped after
@@ -195,10 +216,24 @@ export async function recordFindingResolutionBelief(
   // PROVENANCE, and both halves earn their place. The finding's documents keep the belief citable:
   // `recallLakeMemory` drops any belief whose sources are all unreachable, so a ruling carrying only
   // the finding ref would be written and then never recalled. The finding ref itself is what ties
-  // the belief back to the problem it answers, and doubles as the shred key that retracts it if the
-  // finding is ever purged.
-  const sources = [...new Set(finding.sources.map(source => source.fabFileId))];
-  sources.push(findingSourceRef(finding.id));
+  // the belief back to the problem it answers, and COULD be wired as the shred key that retracts it
+  // if the finding is ever purged - nothing passes a `finding:` value to `markSourceShredded` today,
+  // so that is a door left open, not one in use.
+  const documentSources = [...new Set(finding.sources.map(source => source.fabFileId))];
+
+  // No citable document means no recall, by the reachability gate above: the belief would be written,
+  // reported as recorded, and then silently never surface. That is the same "invisible storage of a
+  // human's words" the disabled-memory gates refuse, so it refuses here too rather than reporting a
+  // success the curator can never observe. The finding row still carries the resolution.
+  if (documentSources.length === 0) {
+    logger.warn('[lakeMemory] finding has no document sources; its resolution cannot be recalled as a belief', {
+      dataLakeId: lake.id,
+      findingId: finding.id,
+    });
+    return { recorded: false, reason: 'no-citable-source' };
+  }
+
+  const sources = [...documentSources, findingSourceRef(finding.id)];
 
   const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(
     ownerUserId,

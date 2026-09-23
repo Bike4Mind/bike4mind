@@ -53,12 +53,24 @@ export const LAKE_RECALL_K_MAX = 200;
  * that up today - no caller passes a `finding:` id to `markSourceShredded`, which is keyed on
  * FabFile ids throughout - so this is a door that COULD be opened, not one that is.
  *
- * MUST STAY IN SYNC with the `$filter` in `MemoryLedgerEventModel.aggregateLakeMemoryCoverage`,
- * which cannot import this predicate into an aggregation pipeline and restates the prefix test in
- * Mongo operators instead - `aggregateLakeMemoryCoverage`'s cases in `MemoryLedgerEventModel.test.ts`
- * pin the two together against a real Mongo.
+ * `MemoryLedgerEventModel.aggregateLakeMemoryCoverage` restates this test in Mongo operators (an
+ * aggregation pipeline cannot call a JS predicate), but builds it from
+ * `LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES` rather than from a hardcoded prefix of its own, so the two
+ * cannot drift on WHICH prefixes count - `MemoryLedgerEventModel.test.ts` pins them together against
+ * a real Mongo.
  */
 export const LAKE_MEMORY_FINDING_SOURCE_PREFIX = 'finding:';
+
+/**
+ * EVERY provenance prefix, and the single list both readers of it are built from.
+ *
+ * `isDocumentSource` derives its predicate from this, and `aggregateLakeMemoryCoverage` builds its
+ * Mongo `$filter` condition from the same array (it cannot call a JS predicate inside an aggregation
+ * pipeline, so the restatement is unavoidable - sharing the INPUT is what keeps the two honest).
+ * Adding a second provenance prefix here therefore reaches both, which is what makes the "edit this
+ * and nothing else" claim below true rather than aspirational.
+ */
+export const LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES = [LAKE_MEMORY_FINDING_SOURCE_PREFIX] as const;
 
 /** The `sources` entry naming the finding a belief was decided on. */
 export const findingSourceRef = (findingId: string): string => `${LAKE_MEMORY_FINDING_SOURCE_PREFIX}${findingId}`;
@@ -67,7 +79,8 @@ export const findingSourceRef = (findingId: string): string => `${LAKE_MEMORY_FI
  * Whether a `sources` entry names a SOURCE DOCUMENT rather than provenance.
  *
  * The one predicate every FabFile-resolving reader of a belief's `sources` filters on, so that
- * "which of these is a document id?" has a single answer. Adding a second provenance prefix should
- * mean editing this and nothing else.
+ * "which of these is a document id?" has a single answer. Adding a second provenance prefix means
+ * editing `LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES` and nothing else.
  */
-export const isDocumentSource = (sourceId: string): boolean => !sourceId.startsWith(LAKE_MEMORY_FINDING_SOURCE_PREFIX);
+export const isDocumentSource = (sourceId: string): boolean =>
+  !LAKE_MEMORY_PROVENANCE_SOURCE_PREFIXES.some(prefix => sourceId.startsWith(prefix));
