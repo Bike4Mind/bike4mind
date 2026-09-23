@@ -833,6 +833,44 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
     expect(toolFn).not.toHaveBeenCalled();
   });
 
+  it('keeps the sandbox profile alive until the command has run, then cleans it up', async () => {
+    // Regression guard: the success path must `await executeAndRecord()` inside the
+    // try/finally. A bare `return <promise>` runs the finally synchronously at the
+    // return, rmSync'ing the .sb profile before the spawned sandbox-exec opens it -
+    // breaking every sandboxed macOS command. The `await Promise.resolve()` below
+    // models that async gap: the real profile read happens a tick after the spawn.
+    const { orchestrator, profile } = await orchestratorWithProfile();
+    let profilePresentDuringRun: boolean | null = null;
+    const toolFn = vi.fn(async () => {
+      await Promise.resolve();
+      profilePresentDuringRun = existsSync(profile);
+      return 'ok';
+    });
+    const tool = createMockTool('bash_execute', toolFn);
+    const permissionManager = {
+      needsPermission: vi.fn(() => false),
+      trustToolForSession: vi.fn(),
+    } as unknown as PermissionManager;
+    const agentContext = { currentAgent: null, observationQueue: [] };
+    const wrapped = wrapToolWithPermission(
+      tool,
+      permissionManager,
+      noopPrompt,
+      agentContext,
+      {},
+      {} as ApiClient,
+      orchestrator,
+      []
+    );
+
+    const result = await wrapped.toolFn({ command: 'ls' });
+
+    expect(result).toBe('ok');
+    expect(profilePresentDuringRun).toBe(true); // still present while the command ran
+    expect(existsSync(profile)).toBe(false); // cleaned up afterwards
+    expect(toolFn).toHaveBeenCalledTimes(1);
+  });
+
   it('records a blocked decision as a violation and never runs the command', async () => {
     const orchestrator = createOrchestrator();
     (orchestrator.shouldSandbox as ReturnType<typeof vi.fn>).mockReturnValue({

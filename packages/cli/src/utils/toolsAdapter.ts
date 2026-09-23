@@ -207,6 +207,12 @@ export function wrapToolWithPermission(
           isSandboxed = true;
           sandboxedArgs = {
             ...args,
+            // Hand execution the SAME realpath-resolved cwd used for the confinement
+            // check and the writable bind. Bubblewrap bakes --chdir into its command,
+            // but Seatbelt's process cwd is whatever spawn() sets, so without this the
+            // sandboxed process would run in the unresolved (symlinked) path - a silent
+            // divergence from the profile's baked writable root.
+            cwd,
             command: decision.wrappedCommand.commandString,
             _sandboxCleanup: decision.wrappedCommand.cleanupPaths,
           };
@@ -220,8 +226,12 @@ export function wrapToolWithPermission(
       // gate below rebinds it to carry the approved content-hash snapshot.
       let execArgs: Record<string, unknown> = effectiveArgs;
       // Temp sandbox profile this wrapper created (Seatbelt writes a .sb file).
-      // Cleaned once in the finally below so it never leaks on an early-return
-      // path (plan-mode block, permission deny) that skips executeAndRecord.
+      // Cleaned once in the finally below: after the awaited command completes on
+      // the success path, and on any early-return path (plan-mode block, permission
+      // deny) that skips executeAndRecord. The success-path returns MUST `await`
+      // executeAndRecord() - a bare `return <promise>` inside try/finally runs the
+      // finally synchronously at the return, rmSync'ing this profile before the
+      // spawned sandbox-exec ever opens it (every sandboxed command would then fail).
       // Only paths THIS wrapper set - a model-supplied `_sandboxCleanup` on the
       // raw (unsandboxed) args must never reach rmSync(recursive, force).
       const sandboxCleanupPaths = isSandboxed ? (sandboxedArgs?._sandboxCleanup as string[] | undefined) : undefined;
@@ -353,17 +363,17 @@ export function wrapToolWithPermission(
         // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
         const allowedPatterns = getAllowedToolPatterns();
         if (!forcePrompt && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
-          return executeAndRecord();
+          return await executeAndRecord();
         }
 
         // Auto-approved, trusted, or sandbox auto-allowed
         if (!forcePrompt && !permissionManager.needsPermission(toolName, { isSandboxed })) {
-          return executeAndRecord();
+          return await executeAndRecord();
         }
 
         // Auto-accept: skip permission prompt when Shift+Tab toggle is on
         if (!forcePrompt && interactionMode === 'auto-accept') {
-          return executeAndRecord();
+          return await executeAndRecord();
         }
 
         // Generate preview for dangerous operations. For edit_local_file the gate
@@ -397,7 +407,7 @@ export function wrapToolWithPermission(
           await persistToolTrust(toolName, permissionManager, configStore);
         }
 
-        return executeAndRecord();
+        return await executeAndRecord();
       } finally {
         cleanupSandboxFiles(sandboxCleanupPaths);
       }

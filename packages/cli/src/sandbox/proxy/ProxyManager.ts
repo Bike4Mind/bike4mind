@@ -58,6 +58,11 @@ export class ProxyManager {
   }
 
   async stop(): Promise<void> {
+    // Join any in-flight start() first: otherwise we could null `this.proxy` out
+    // from under doStart()'s own `await this.proxy.start()` (throws), or orphan a
+    // listener a concurrent start bound just after our check. A start's own failure
+    // is irrelevant to a stop, so swallow it.
+    if (this.startPromise) await this.startPromise.catch(() => {});
     if (!this.proxy) return;
     await this.proxy.stop();
     this.proxy = null;

@@ -185,6 +185,7 @@ import { buildAgent } from './bootstrap/buildAgent.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
+import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
 import { runTurn } from './session/turnController.js';
 import {
   createFreshSession,
@@ -3409,28 +3410,12 @@ function CliApp() {
       }
 
       case 'sandbox:trust-domain': {
-        if (!state.sandboxOrchestrator) {
-          console.log('Sandbox not initialized');
-          break;
-        }
-        if (args.length === 0) {
-          console.log('Usage: /sandbox:trust-domain <domain> [...]');
-          break;
-        }
-        if (!state.sandboxOrchestrator.getProxyManager()) {
-          console.log('Network proxy not initialized');
-          break;
-        }
-        // Route through the orchestrator so the persisted config and the live proxy
-        // stay in lockstep - otherwise a later /sandbox:network save would persist a
-        // stale allow-list and silently drop these grants.
-        for (const domain of args) {
-          state.sandboxOrchestrator.addAllowedDomain(domain);
-          console.log(`  Added: ${domain}`);
-        }
-        // Persist ONLY the sandbox field (no repo-merged config laundering).
-        await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
-        console.log(`Trusted ${args.length} domain(s)`);
+        console.log(
+          await handleSandboxTrustDomainCommand(
+            { orchestrator: state.sandboxOrchestrator, configStore: state.configStore },
+            args
+          )
+        );
         break;
       }
 
