@@ -63,10 +63,10 @@ export function generateFileCreatePreview(args: { path: string; content: string 
  * Generate a preview for edit_local_file (string replacement).
  *
  * Shows the ACTUAL span edit_local_file will delete and its replacement, not
- * just the model's typed old_string. A block-anchor (fuzzy) match can span more
- * lines than old_string names, so previewing old_string alone would let a wider
- * region be replaced than the user approved. Mirrors the tool's own match order:
- * exact substring first, then the shared fuzzy matcher.
+ * just the model's typed old_string. A fuzzy fallback match can span more lines
+ * than old_string names, so previewing old_string alone would let a wider region
+ * be replaced than the user approved. Mirrors the tool's own match order: exact
+ * substring first, then the shared fuzzy matcher.
  */
 export async function generateEditLocalFilePreview(args: {
   path: string;
