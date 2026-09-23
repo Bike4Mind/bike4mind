@@ -13,12 +13,21 @@ import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 
-/** An ISO-8601 instant, or undefined when absent. Throws on a value that is present but unusable,
- * rather than silently diffing a window the caller did not ask for. */
+/**
+ * A full ISO-8601 instant with an explicit offset. Deliberately stricter than `new Date`, which
+ * accepts `2026` or `June 1 2026` and reads an offset-less value in the SERVER's timezone - so the
+ * same request would name a different window depending on where it landed.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** Throws on a value that is present but unusable, rather than silently diffing a window the caller
+ * did not ask for. */
 const parseInstant = (raw: string | undefined, field: string): Date | undefined => {
   if (!raw) return undefined;
   const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) throw new BadRequestError(`\`${field}\` must be an ISO-8601 date-time.`);
+  if (!ISO_INSTANT.test(raw) || Number.isNaN(parsed.getTime())) {
+    throw new BadRequestError(`\`${field}\` must be an ISO-8601 date-time with an explicit UTC offset.`);
+  }
   return parsed;
 };
 
@@ -52,15 +61,27 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
       });
 
-      const canManage = await dataLakeService.resolveCanManageLake(lake, ctx, {
-        db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
-      });
+      // A fallback (static registry) lake gates on `ctx.isAdmin` DIRECTLY, the way every other
+      // registry gate here does: its synthetic document spreads `organizationId` from the registry
+      // config, so `canManageLake`'s org-admin rung would otherwise hand a customer-side org admin
+      // a platform lake's history.
+      const canManage = dataLakeService.isFallbackLake(lake)
+        ? ctx.isAdmin
+        : await dataLakeService.resolveCanManageLake(lake, ctx, {
+            db: { dataLakeAccessGrants: dataLakeAccessGrantRepository },
+          });
       if (!canManage) {
         throw new ForbiddenError('You must be able to manage this data lake to view its membership changes.');
       }
 
       const fromAt = parseInstant(from, 'from');
       if (!fromAt) throw new BadRequestError('`from` is required and must be an ISO-8601 date-time.');
+      const toAt = parseInstant(to, 'to');
+      // A backwards window would otherwise read as 200 with empty lists and an `unchangedCount`
+      // rewound over a span that was never asked about.
+      if (toAt && toAt.getTime() < fromAt.getTime()) {
+        throw new BadRequestError('`to` must not be earlier than `from`.');
+      }
 
       const view = await dataLakeService.diffLakeMembership(lake, {
         db: {
@@ -69,7 +90,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
           users: userRepository,
         },
         from: fromAt,
-        to: parseInstant(to, 'to'),
+        to: toAt,
         // Parsed permissively: the service clamps into [1, MAX], so a garbage ?limit= serves a page
         // instead of a 400. `limit ?` not `limit == null ?` - a bare `?limit=` is '' and Number('')
         // is 0, which the clamp floors to 1.

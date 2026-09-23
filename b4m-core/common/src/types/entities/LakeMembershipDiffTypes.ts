@@ -66,8 +66,13 @@ export interface LakeMembershipDiffView {
   /** The lake's oldest retained event, absent when it has none. Lets a consumer caption the diff
    * with how far back the log can be believed. */
   logStartsAt?: Date;
-  /** True when the read hit its cap, so `added`/`removed` are a window on the window: moves in the
-   * earliest part of the span are missing. */
+  /**
+   * True when the read hit its cap, so `added`/`removed` are a window on the window: moves in the
+   * earliest part of the span are missing. The listed entries are then unreliable in DIRECTION too,
+   * not only incomplete - a file whose earlier flip fell off the tail is classified from its first
+   * surviving event, so a remove-then-readd can surface as a plain `added`. A consumer must caption
+   * a truncated diff as partial rather than present it as the window's changes.
+   */
   truncated: boolean;
   generatedAt: Date;
   /** Display names for the user ids appearing as principals, keyed by id. Unresolvable ids are

@@ -1499,6 +1499,19 @@ describe('FabFile data lake lifecycle membership', () => {
       for (const id of rows.strangerIds) expect(ids).not.toContain(id);
     });
 
+    it('findLiveIdsByDataLakeTag leaves out the tombstone that findIdsByDataLakeTag reports', async () => {
+      // A soft delete leaves the lake tags in place, so the two reads must disagree by exactly the
+      // tombstone - this is what keeps a deleted file out of a membership-over-time reconstruction.
+      const rows = await seedLakeRows();
+      await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { deletedAt: new Date() } });
+
+      const live = await fabFileRepository.findLiveIdsByDataLakeTag(scope);
+
+      expect(live).not.toContain(rows.prefixOwned._id.toString());
+      expect(live.sort()).toEqual([...rows.memberIds].filter(id => id !== rows.prefixOwned._id.toString()).sort());
+      for (const id of rows.strangerIds) expect(live).not.toContain(id);
+    });
+
     it('purges the members and destroys no file the creator does not own', async () => {
       const rows = await seedLakeRows();
       await FabFile.updateOne({ _id: rows.prefixSharedToCreator._id }, { $set: { deletedAt: new Date() } });

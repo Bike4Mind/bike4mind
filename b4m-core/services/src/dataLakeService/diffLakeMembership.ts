@@ -44,7 +44,7 @@ const userDisplayName = (u: { name?: string; username?: string } | undefined): s
 export interface DiffLakeMembershipAdapters {
   db: {
     lakeMembershipChangeEvents: Pick<ILakeMembershipChangeEventRepository, 'listByLakeSince' | 'oldestEventAt'>;
-    fabFiles: Pick<IFabFileRepository, 'findIdsByDataLakeTag'>;
+    fabFiles: Pick<IFabFileRepository, 'findLiveIdsByDataLakeTag'>;
     users: Pick<IUserRepository, 'findByIds'>;
   };
   /** Exclusive lower bound of the window. */
@@ -85,7 +85,9 @@ const toEntry = (w: FileWindow): LakeMembershipDiffEntry => ({
  * Three facts are combined, because no two of them suffice:
  *  - the events after `from`, which give every move and its actor;
  *  - the events after `to`, which rewind today's membership back to the window's end;
- *  - today's membership, which is the only record of a file that never moved.
+ *  - today's LIVE membership, which is the only record of a file that never moved. Live-only
+ *    matters: a soft delete leaves the lake tags in place, so a tombstone would otherwise be
+ *    counted as a member that sat through the window.
  * The last one is why `unchangedCount` is conditional: it is a claim about files the log says
  * nothing about, and that claim only holds while the log covers the whole window.
  */
@@ -102,14 +104,15 @@ export async function diffLakeMembership(
     // history uses, and here it also decides whether `unchangedCount` may be reported at all.
     db.lakeMembershipChangeEvents.listByLakeSince(lake.id, from, { limit: pageSize + 1 }),
     db.lakeMembershipChangeEvents.oldestEventAt(lake.id),
-    db.fabFiles.findIdsByDataLakeTag(scope),
+    db.fabFiles.findLiveIdsByDataLakeTag(scope),
   ]);
   const truncated = page.length > pageSize;
   // Truncation drops the OLDEST rows, so the surviving newest ones still rewind today's membership
   // correctly; only the early part of the window goes missing.
-  const events = (truncated ? page.slice(0, pageSize) : page)
-    .slice()
-    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  // Reversed, not re-sorted: the page arrives ordered by `{createdAt desc, _id desc}`, and a sort
+  // on `createdAt` alone would leave same-millisecond events in _id-DESCENDING order, so the last
+  // event of a tie - the one that names the end state - would be the wrong row.
+  const events = (truncated ? page.slice(0, pageSize) : page).slice().reverse();
 
   // Membership at the window's end: today's set, rewound through everything recorded since. The
   // EARLIEST event after `to` is what names the state at `to` - an `added` means the file was
@@ -167,7 +170,7 @@ export async function diffLakeMembership(
     unchangedCount = 0;
     for (const fileId of membersAtTo) {
       const w = windows.get(fileId);
-      if (!w || w.memberAtFrom) unchangedCount += 1;
+      if (!w || (w.memberAtFrom && w.memberAtTo)) unchangedCount += 1;
     }
   }
 

@@ -1922,4 +1922,11 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   hardDeleteOneById(fabFileId: string): Promise<boolean>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  /**
+   * Member file ids that are CURRENTLY live - the lake's membership as of now, which is what a
+   * reader reconstructing membership over time has to start from. Distinct from
+   * `findIdsByDataLakeTag` above because a soft delete leaves the lake tags in place, so that one
+   * keeps naming files the lake no longer holds.
+   */
+  findLiveIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
 }
