@@ -201,6 +201,7 @@ describe('CookieConsentBanner', () => {
       expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
       expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'granted' });
       expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
+      expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
     });
 
     // Auto-allow is a fact about where the visitor is, not a decision they
@@ -230,6 +231,7 @@ describe('CookieConsentBanner', () => {
       expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
       expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'denied' });
       expect(mockLoadRedditPixel).not.toHaveBeenCalled();
+      expect(mockLoadMetaPixel).not.toHaveBeenCalled();
     });
   });
 
@@ -249,6 +251,7 @@ describe('CookieConsentBanner', () => {
 
       expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'denied' });
       expect(mockLoadRedditPixel).not.toHaveBeenCalled();
+      expect(mockLoadMetaPixel).not.toHaveBeenCalled();
       expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
     });
 
@@ -264,6 +267,7 @@ describe('CookieConsentBanner', () => {
 
       expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'granted' });
       expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
+      expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
       expect(screen.queryByTestId('cookie-consent-accept-btn')).not.toBeInTheDocument();
     });
 
@@ -279,6 +283,7 @@ describe('CookieConsentBanner', () => {
 
       expect(mockGtag).toHaveBeenCalledWith('consent', 'update', { analytics_storage: 'denied' });
       expect(mockLoadRedditPixel).not.toHaveBeenCalled();
+      expect(mockLoadMetaPixel).not.toHaveBeenCalled();
     });
 
     // It is a signal about the visitor, not a decision they took on this origin;
@@ -324,6 +329,7 @@ describe('CookieConsentBanner', () => {
       expect(screen.getByTestId('cookie-consent-accept-btn')).toBeInTheDocument();
       expect(mockGtag).not.toHaveBeenCalled();
       expect(mockLoadRedditPixel).not.toHaveBeenCalled();
+      expect(mockLoadMetaPixel).not.toHaveBeenCalled();
     });
   });
 
@@ -338,5 +344,6 @@ describe('CookieConsentBanner', () => {
 
     expect(screen.getByTestId('cookie-consent-accept-btn')).toBeInTheDocument();
     expect(mockLoadRedditPixel).not.toHaveBeenCalled();
+    expect(mockLoadMetaPixel).not.toHaveBeenCalled();
   });
 });
