@@ -51,7 +51,7 @@ vi.mock('@server/utils/config', () => ({
 }));
 // `cacheRepository` stays real against the in-memory server - it is the limiter's counter and
 // the whole point of the file. The rollup aggregate itself is stubbed: filling a window means
-// running the allowed request count for real, and rollup.ownership.integration.test.ts already
+// running the allowed request count for real, and rollup.ownership.e2e.test.ts already
 // owns what the pipeline returns.
 vi.mock('@bike4mind/database', async importOriginal => ({
   ...(await importOriginal<typeof import('@bike4mind/database')>()),
