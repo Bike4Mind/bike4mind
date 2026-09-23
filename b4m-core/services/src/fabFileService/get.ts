@@ -81,6 +81,14 @@ export const getFabFile = async (
 };
 
 export const generateSignedUrl = async (fabFile: IFabFileDocument, { db, storage }: GetFabFileAdapter) => {
+  // Curator ruling metadata (who ruled, when, which lake) is control-plane, not something any
+  // client renders, and this is the one function every outward-facing file read (get/list/search,
+  // byIds, the shared-lake fallback) passes a FabFile through before it reaches a response body -
+  // no lake-manage check gates those routes. The audit trail (DataLakeCorpusActionModel) is the
+  // durable, permission-checked home for this fact. Internal collapse/service code (the curator-
+  // supersession partition) reads the field straight off repository queries and never calls this.
+  fabFile.supersededInLakes = undefined;
+
   // Never hand out a URL for an image that's still held (pending scan) or was
   // quarantined (blocked) by upload moderation, before any URL work. We withhold the
   // URL but return the record (with moderationStatus/fileName/id intact) so the client can

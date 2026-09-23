@@ -172,15 +172,22 @@ function nameFor(finding: IDataLakeFindingDocument, fabFileId: string): string |
 }
 
 /**
- * How many distinct lakes this file's own meta-tags name, unconditionally - a file carrying more
- * than one `datalake:<slug>` tag is a member of more than one lake regardless of whether either
- * lake is in `candidateAttributionLakes`' pool (that pool cannot enumerate every OTHER curator's
- * dynamic lake, only the ones this file's own owner could reach), so this stays a separate,
- * unscoped check rather than folding into `soleAttributedLakeId`.
+ * True when this file's own meta-tags name a lake OTHER than the one being acted on -
+ * unconditionally, regardless of whether that other lake is in `candidateAttributionLakes`' pool
+ * (that pool cannot enumerate every OTHER curator's dynamic lake, only the ones this file's own
+ * owner could reach). Two shapes both count: carrying more than one `datalake:<slug>` tag at all
+ * (ambiguous even before asking which lakes they name), and carrying exactly one that simply is
+ * not this lake's own tag - a file member here by prefix alone that also names a foreign lake by
+ * meta-tag is just as unattributable as one naming two. This stays a separate, unscoped check
+ * rather than folding into `soleAttributedLakeId`.
  */
-function memberOfMoreThanOneLakeByMetaTag(file: { tags?: { name?: string }[] }): boolean {
+function memberOfMoreThanOneLakeByMetaTag(
+  file: { tags?: { name?: string }[] },
+  lake: Pick<IDataLakeDocument, 'datalakeTag'>
+): boolean {
   const names = (file.tags ?? []).map(t => t.name).filter((n): n is string => typeof n === 'string');
-  return datalakeTagsFrom(names).length > 1;
+  const metaTags = datalakeTagsFrom(names);
+  return metaTags.length > 1 || metaTags.some(tag => tag !== lake.datalakeTag);
 }
 
 /**
@@ -216,7 +223,11 @@ async function candidateAttributionLakes(
     const ownedIds = (await db.dataLakes.findIdsCreatedBy(ownerUserId)).filter(id => id !== lake.id);
     const ownedLakes = await Promise.all(ownedIds.map(id => db.dataLakes.findById(id)));
     for (const doc of ownedLakes) {
-      if (!doc) continue;
+      // `findIdsCreatedBy` returns ids in any status, but the read scope this guard exists to
+      // mirror (getDynamicDataLakeTags) is bounded to `status: 'active'` - an owner's draft or
+      // archived lake can never actually grant an attribution at retrieval time, so including it
+      // here would refuse a valid supersede over a lake the read side can't see.
+      if (!doc || doc.status !== 'active') continue;
       dynamicLakes.push({
         id: doc.id,
         datalakeTag: doc.datalakeTag,
@@ -437,7 +448,7 @@ export const applyCorpusAction = async (
     // it can enumerate (see its own doc comment).
     if (
       retiringFile &&
-      (memberOfMoreThanOneLakeByMetaTag(retiringFile) ||
+      (memberOfMoreThanOneLakeByMetaTag(retiringFile, lake) ||
         (await soleAttributedLakeId(retiringFile, lake, db)) !== lake.id)
     ) {
       throw new BadRequestError(

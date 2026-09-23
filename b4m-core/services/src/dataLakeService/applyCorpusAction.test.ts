@@ -196,6 +196,60 @@ describe('applyCorpusAction supersede', () => {
   });
 
   it(
+    'refuses to retire a document whose ONLY datalake meta-tag names a foreign lake - member here ' +
+      'by prefix alone, but it also claims a lake this write can never honor',
+    async () => {
+      // In-lake via the prefix arm only (no 'datalake:lake1' tag at all), but the single meta-tag
+      // it does carry names a different lake entirely. Before the fix this passed
+      // `memberOfMoreThanOneLakeByMetaTag` (only one datalake:* tag) and resolved to `lake.id` via
+      // the prefix arm, so the write went through and reported a suppression the collapse would
+      // never honor for anyone reading through lake2's own scope.
+      const foreignMetaTagDoc = {
+        ...member('doc-b'),
+        tags: [
+          { name: 'policies:doc', strength: 1 },
+          { name: 'datalake:lake2', strength: 1 },
+        ],
+      };
+      const { promise, setLakeSupersession } = run(
+        { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+        { files: { 'doc-a': member('doc-a'), 'doc-b': foreignMetaTagDoc } }
+      );
+      await expect(promise).rejects.toThrow(/belongs to more than one data lake/);
+      expect(setLakeSupersession).not.toHaveBeenCalled();
+    }
+  );
+
+  it(
+    "allows a supersede that the guard would otherwise refuse only because the owner's own " +
+      'non-active lake shares a content-tag prefix - that lake can never grant an attribution, ' +
+      'because the read scope this guard mirrors excludes it',
+    async () => {
+      const draftLakeId = 'lake-draft';
+      const draftLake = lake({
+        id: draftLakeId,
+        status: 'draft',
+        datalakeTag: 'datalake:draftlake',
+        fileTagPrefix: 'draft:',
+        createdByUserId: OWNER,
+      });
+      const doc = {
+        ...member('doc-b'),
+        tags: [
+          { name: 'policies:doc', strength: 1 },
+          { name: 'draft:something', strength: 1 },
+        ],
+      };
+      const { promise, setLakeSupersession } = run(
+        { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+        { files: { 'doc-a': member('doc-a'), 'doc-b': doc }, otherLakes: { [draftLakeId]: draftLake } }
+      );
+      await promise;
+      expect(setLakeSupersession).toHaveBeenCalled();
+    }
+  );
+
+  it(
     'refuses to retire a document ambiguous only by the dynamic-lake prefix arm - a second tag ' +
       'carries no `datalake:<slug>` meta-tag, only a content prefix matching another lake OWNER owns',
     async () => {
@@ -224,6 +278,42 @@ describe('applyCorpusAction supersede', () => {
       expect(setLakeSupersession).not.toHaveBeenCalled();
     }
   );
+
+  it(
+    'refuses to retire a document ambiguous by the static-registry prefix arm - a content tag ' +
+      'matching a compile-time DATA_LAKES prefix needs no owned lake or DB read to attribute',
+    async () => {
+      const staticRegistryAmbiguousDoc = {
+        ...member('doc-b'),
+        tags: [
+          { name: 'policies:doc', strength: 1 },
+          // 'opti:' is DATA_LAKES's always-present static-registry lake prefix (opti-knowledge).
+          { name: 'opti:something', strength: 1 },
+        ],
+      };
+      const { promise, setLakeSupersession } = run(
+        { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+        { files: { 'doc-a': member('doc-a'), 'doc-b': staticRegistryAmbiguousDoc } }
+      );
+      await expect(promise).rejects.toThrow(/belongs to more than one data lake/);
+      expect(setLakeSupersession).not.toHaveBeenCalled();
+    }
+  );
+
+  it("propagates rather than swallows a failure resolving the owner's other lakes", async () => {
+    const { deps } = makeDeps({ files: { 'doc-a': member('doc-a'), 'doc-b': member('doc-b') } });
+    (deps.db.dataLakes.findIdsCreatedBy as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('lookup boom'));
+
+    await expect(
+      applyCorpusAction(
+        actor,
+        LAKE_ID,
+        'finding-1',
+        { action: 'supersede', keepFabFileId: 'doc-a', retireFabFileId: 'doc-b' },
+        deps
+      )
+    ).rejects.toThrow(/lookup boom/);
+  });
 
   it('allows a retiring document whose content tag matches only a prefix the file owner does not own a lake for', async () => {
     // 'legal:contract' looks structurally like it could match a prefix, but no lake owned by this

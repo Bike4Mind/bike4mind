@@ -3239,10 +3239,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // concurrency $pull buys. The cost of two writes is that a crash between them leaves a
     // primaryTag pointing at a removed tag, which the gate above then rejects until it is set
     // again. A stale label that blocks one edit beats a lost concurrent removal.
-    await this.fabFileModel.updateOne(
-      { _id: fabFileId, primaryTag: { $in: tagNames } },
-      { $unset: { primaryTag: '' } }
-    );
+    //
+    // Best-effort: the $pull above has already committed by this point, so letting this reject
+    // propagate would throw out of a membership removal that in fact happened - every caller
+    // (removeFileFromLake, the corpus-action merge door) has no compensating action for a
+    // "removal partially failed" state, only for "removal did not happen." A stale primaryTag
+    // is self-correcting the next time the file's tags are written through setDataLakeFileTags.
+    try {
+      await this.fabFileModel.updateOne(
+        { _id: fabFileId, primaryTag: { $in: tagNames } },
+        { $unset: { primaryTag: '' } }
+      );
+    } catch {
+      // swallowed - see the best-effort note above.
+    }
     return result.modifiedCount;
   }
 
@@ -3460,15 +3470,13 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
         if (ret.mimeType === 'application/pdf') {
           delete ret.content;
         }
-        // Curator ruling metadata (who ruled, when, which lake) is control-plane, not something
-        // any client renders, and every raw-file read route (GET /api/files/:id, byIds, the
-        // shared-lake fallback above) otherwise hands it to whoever can merely READ the file -
-        // no lake-manage check gates those routes. The audit trail (DataLakeCorpusActionModel)
-        // is the durable, permission-checked home for this fact; internal collapse/service code
-        // reads the field straight off repository queries, never through this JSON transform.
-        if (ret.supersededInLakes) {
-          delete ret.supersededInLakes;
-        }
+        // supersededInLakes is deliberately NOT stripped here. toJSON is not a client boundary -
+        // BaseRepository.findById and FabFileRepository.executeSearch both return doc.toJSON(),
+        // and those are exactly the reads the curator-supersession collapse (partitionBySupersession)
+        // depends on. Stripping it here made every ruling invisible to retrieval too. The field is
+        // instead stripped at the actual HTTP boundary, in fabFileService's generateSignedUrl - the
+        // single choke point every outward-facing file read (get/list/search/byIds/the shared-lake
+        // fallback) already passes through before a FabFile reaches a response body.
       },
     },
     toObject: {

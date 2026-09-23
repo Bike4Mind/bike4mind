@@ -81,11 +81,12 @@ describe('FabFileRepository lake supersession', () => {
     expect(await repo.setLakeSupersession('64b7f9c2d1e4a5b6c7d8e9f0', ruling())).toBe(false);
   });
 
-  it('never serializes the ruling to a client, even though it is stored', async () => {
+  it('is visible through the repository read the curator-supersession collapse relies on', async () => {
     await repo.setLakeSupersession(fileId, ruling());
 
-    expect(await stored()).not.toEqual([]);
-    const doc = await FabFile.findById(fileId);
-    expect(doc?.toJSON()).not.toHaveProperty('supersededInLakes');
+    const found = await repo.findById(fileId);
+    expect(found?.supersededInLakes).toMatchObject([
+      { dataLakeId: 'lake-1', supersededByFabFileId: 'winner-1', decidedByUserId: 'curator-1' },
+    ]);
   });
 });
