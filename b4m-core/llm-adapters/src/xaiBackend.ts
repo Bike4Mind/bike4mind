@@ -641,6 +641,18 @@ export class XAIBackend implements ICompletionBackend {
       });
     }
 
+    // Close a <think> block left open because the stream ended on reasoning with no
+    // following prose - a reasoning-to-tool turn. Without this the escaper's held-back
+    // partial marker is lost when the tool recursion creates a fresh reasoningEscaper.
+    if (isInThinkingBlock) {
+      await callback([reasoningEscaper.flush() + '</think>'], {
+        inputTokens: accumInputTokens + inputTokens,
+        outputTokens: accumOutputTokens + outputTokens,
+        toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+      });
+      isInThinkingBlock = false;
+    }
+
     // Extract cache stats after streaming completes (xAI caching is automatic)
     let cacheStats: CacheUsageStats | undefined;
     if (cacheStrategy?.enableCaching && inputTokens > 0) {
