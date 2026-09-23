@@ -119,8 +119,8 @@ const handler = baseApi(API_OPTIONS).get(async (req, res) => {
   // and never sees a root, so it runs once here rather than per root. It is shared with
   // `server/help/retrieval.ts` so the two readers of these roots cannot drift apart. Appending the
   // root with a template literal afterwards - never handing it to `path.resolve` - is what keeps
-  // @vercel/nft from globbing all of `apps/client` into the Lambda bundle, and is why both roots
-  // are declared in `outputFileTracingIncludes`. See `server/help/contentPath.ts`.
+  // the file tracer from globbing all of `apps/client` into the Lambda bundle, and is why both
+  // roots are declared in `outputFileTracingIncludes`. See `server/help/contentPath.ts`.
   const relative = safeHelpContentPath(requested);
   if (!relative) return notFound();
 
