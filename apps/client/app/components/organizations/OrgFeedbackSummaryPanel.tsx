@@ -1,3 +1,4 @@
+import FeedbackCountTable, { tagTruncationCaption } from '@client/app/components/organizations/FeedbackCountTable';
 import { type OrgFeedbackRange, useOrgFeedbackReport } from '@client/app/hooks/data/orgFeedbackReport';
 import { useOrgFeedbackSummary } from '@client/app/hooks/data/useOrgFeedbackSummary';
 import { promoteInlineLatexDollars, remarkGfmNoSingleTilde } from '@client/app/utils/remarkPlugins';
@@ -91,6 +92,19 @@ const OrgFeedbackSummaryPanel: FC<{ organizationId: string; range: OrgFeedbackRa
               {promoteInlineLatexDollars(data.artifact.summary)}
             </ReactMarkdown>
           </Box>
+          {/* The stored top-N cut, not today's limit: the artifact is frozen, so the caption counts its
+              own rows. Untagged rows are absent here, so these do not sum to the total. Strict
+              `=== true` because artifacts written before the flag carry no key. */}
+          <FeedbackCountTable
+            title="By tag"
+            testId="feedback-summary-by-tag"
+            rows={data.artifact.counts.byTag}
+            caption={
+              data.artifact.counts.byTagTruncated === true
+                ? tagTruncationCaption(data.artifact.counts.byTag.length, 'stored')
+                : undefined
+            }
+          />
         </Stack>
       );
     }

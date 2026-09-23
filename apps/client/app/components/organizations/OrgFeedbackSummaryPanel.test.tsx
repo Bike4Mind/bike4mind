@@ -136,6 +136,55 @@ describe('OrgFeedbackSummaryPanel', () => {
     expect(result.textContent).not.toContain('##');
   });
 
+  describe('stored by-tag counts', () => {
+    const renderCompleted = (counts: Partial<typeof ARTIFACT.counts> & { byTagTruncated?: boolean }) => {
+      h.get.mockResolvedValue({
+        data: {
+          status: 'completed',
+          summaryJobId: 'sum-1',
+          artifact: { ...ARTIFACT, counts: { ...ARTIFACT.counts, ...counts } },
+        },
+      });
+      renderPanel();
+      return screen.findByTestId('feedback-summary-by-tag');
+    };
+    const TWO_TAGS = [
+      { key: 'billing', count: 3 },
+      { key: 'login', count: 1 },
+    ];
+
+    it('renders the stored rows as plain, non-drillable rows', async () => {
+      const table = await renderCompleted({ byTag: TWO_TAGS, byTagTruncated: false });
+
+      expect(table).toHaveTextContent('billing3');
+      expect(table).toHaveTextContent('login1');
+      expect(screen.queryByTestId('feedback-summary-by-tag-row-billing')).toBeNull();
+    });
+
+    it('captions a truncated cut with the stored row count', async () => {
+      await renderCompleted({ byTag: TWO_TAGS, byTagTruncated: true });
+
+      expect(screen.getByTestId('feedback-summary-by-tag-caption')).toHaveTextContent(
+        'Showing the top 2 tags by count; the rest were not included in this summary.'
+      );
+    });
+
+    it('leaves the caption off when nothing was cut', async () => {
+      await renderCompleted({ byTag: TWO_TAGS, byTagTruncated: false });
+
+      expect(screen.queryByTestId('feedback-summary-by-tag-caption')).not.toBeInTheDocument();
+    });
+
+    it('leaves the caption off for an artifact written before the flag existed', async () => {
+      expect(await renderCompleted({ byTag: TWO_TAGS })).toHaveTextContent('billing3');
+      expect(screen.queryByTestId('feedback-summary-by-tag-caption')).not.toBeInTheDocument();
+    });
+
+    it('says None when the window had no tagged rows', async () => {
+      expect(await renderCompleted({ byTag: [], byTagTruncated: false })).toHaveTextContent('None');
+    });
+  });
+
   it('ignores a frame for a different organization', async () => {
     h.get.mockResolvedValue({ data: { status: 'processing', summaryJobId: 'sum-1' } });
 
