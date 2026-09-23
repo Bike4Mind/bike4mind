@@ -261,7 +261,10 @@ describe('LakeFindingsChip', () => {
     expect(h.findings).toHaveBeenCalledWith('lake-1', { status: 'open', limit: 50 }, { enabled: false });
   });
 
-  it('renders nothing when there is nothing to review', () => {
+  // Terminal-only history (e.g. one dismissed finding, zero open) must not take the entry point
+  // down with it - the route still serves those rows, and a curator reaches them via the dialog's
+  // own status filter. The chip stays up as a neutral, uncounted control instead of disappearing.
+  it('stays reachable for a manager when only terminal-status findings exist', () => {
     h.findings.mockReturnValue(listing([]));
     render(
       <TestWrapper>
@@ -269,7 +272,11 @@ describe('LakeFindingsChip', () => {
       </TestWrapper>
     );
 
-    expect(screen.queryByTestId('datalake-findings-chip-lake-1')).not.toBeInTheDocument();
+    const chip = screen.getByTestId('datalake-findings-chip-lake-1');
+    expect(chip).toHaveTextContent('Findings');
+
+    fireEvent.click(within(chip).getByRole('button'));
+    expect(screen.getByTestId('lake-findings-dialog')).toBeInTheDocument();
   });
 
   // The count is of OPEN findings and the curator inside may be reading dismissed ones, so an
@@ -289,7 +296,7 @@ describe('LakeFindingsChip', () => {
       </TestWrapper>
     );
 
-    expect(screen.queryByTestId('datalake-findings-chip-lake-1')).not.toBeInTheDocument();
+    expect(screen.getByTestId('datalake-findings-chip-lake-1')).toHaveTextContent('Findings');
     expect(screen.getByTestId('lake-findings-dialog')).toBeInTheDocument();
   });
 

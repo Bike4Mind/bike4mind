@@ -54,9 +54,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     });
 
     const pageLimit = limit ?? DEFAULT_LIMIT;
-    // Fetched one row past the page so `hasMore` reflects the queue, not a guess from `data.length
-    // === pageLimit` - a queue that ends exactly on a page boundary would otherwise read as having
-    // more.
+    // Fetched one row past the page so `hasMore` reflects the queue, not a guess from
+    // `findings.length === pageLimit` - a queue that ends exactly on a page boundary would
+    // otherwise read as having more.
     const findings = await dataLakeFindingRepository.listByLake(lake.id, {
       status,
       kind,

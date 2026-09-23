@@ -71,7 +71,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // so an unlisted export is `undefined` and every render here throws - not a missing assertion
     // but 41 broken tests.
     useGetLakeMembershipDuplicates: () => ({ data: undefined, isLoading: false }),
-    // Same for LakeFindingsChip: no findings leaves the chip rendering null.
+    // Same for LakeFindingsChip: it renders a neutral chip either way, so no findings just means
+    // no open-count badge.
     useDataLakeFindings: () => ({ data: undefined, isLoading: false, error: null, isForbidden: false }),
     // Default: no rebuild backlog, so the "Rebuild passages" button/chips stay hidden. A test that
     // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).

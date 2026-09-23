@@ -40,9 +40,8 @@ import {
  */
 
 /**
- * One page of the queue. Below the route's own 200 ceiling, and held here rather than imported from
- * the server so the client can tell a full page from a short one - which is the only thing that
- * makes the chip's count honest about being a lower bound.
+ * One page of the queue, well under the route's own 200 ceiling. `hasMore` comes straight from the
+ * route's own response, not from comparing this to the page length client-side.
  */
 const FINDINGS_PAGE_LIMIT = 50;
 
@@ -309,9 +308,12 @@ export function LakeFindingsDialog({
 /**
  * The affordance that reaches the dialog, in the lake manager's badge row.
  *
- * Counts OPEN findings only - the same query the dialog opens on, so the two share one fetch and a
- * curator never sees a number the list then contradicts. Gated on `canManage` to match the route,
- * which refuses a reader because the rows carry document excerpts.
+ * Always rendered for a manager, regardless of the open count: a lake whose only findings are
+ * dismissed or resolved still has history worth reviewing, and gating this on the open-only query
+ * would make it unreachable in that state even though the route serves those rows. The open count
+ * only changes its color/label - warning + a count when there is open work, neutral otherwise.
+ * Gated on `canManage` to match the route, which refuses a reader because the rows carry document
+ * excerpts.
  */
 export default function LakeFindingsChip({
   lakeId,
@@ -331,30 +333,37 @@ export default function LakeFindingsChip({
     }
   );
   const count = findings?.length ?? 0;
+  const hasOpenFindings = count > 0;
 
   if (!canManage) return null;
 
   return (
     <>
-      {count > 0 && (
-        <Tooltip title="Documents in this lake appear to contradict each other. Review the passages." size="sm">
-          <Chip
-            size="sm"
-            variant="soft"
-            color="warning"
-            startDecorator={<RuleFolderOutlinedIcon sx={{ fontSize: 12 }} />}
-            onClick={() => setOpen(true)}
-            sx={{ fontSize: '11px', cursor: 'pointer' }}
-            data-testid={`datalake-findings-chip-${lakeId}`}
-          >
-            {/* A full page is a lower bound, so it reads `50+` rather than claiming an exact count. */}
-            {`${count}${hasMore ? '+' : ''} to review`}
-          </Chip>
-        </Tooltip>
-      )}
-      {/* The dialog sits OUTSIDE the count guard on purpose. The count is of OPEN findings, and the
-          curator inside may be reading dismissed ones - so an invalidation that empties the open
-          query would otherwise yank the whole surface off screen mid-read. */}
+      <Tooltip
+        title={
+          hasOpenFindings
+            ? 'Documents in this lake appear to contradict each other. Review the passages.'
+            : "Review this lake's detected findings, including past ones."
+        }
+        size="sm"
+      >
+        <Chip
+          size="sm"
+          variant="soft"
+          color={hasOpenFindings ? 'warning' : 'neutral'}
+          startDecorator={<RuleFolderOutlinedIcon sx={{ fontSize: 12 }} />}
+          onClick={() => setOpen(true)}
+          sx={{ fontSize: '11px', cursor: 'pointer' }}
+          data-testid={`datalake-findings-chip-${lakeId}`}
+        >
+          {/* A full page is a lower bound, so it reads `50+` rather than claiming an exact count. */}
+          {hasOpenFindings ? `${count}${hasMore ? '+' : ''} to review` : 'Findings'}
+        </Chip>
+      </Tooltip>
+      {/* The dialog is independent of the open-findings state on purpose. The chip's color/label is
+          derived from the OPEN query, and the curator inside may be reading dismissed ones - so an
+          invalidation that empties the open query would otherwise yank the whole surface off screen
+          mid-read. */}
       <LakeFindingsDialog open={open} onClose={() => setOpen(false)} dataLakeId={lakeId} lakeName={lakeName} />
     </>
   );
