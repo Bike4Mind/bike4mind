@@ -3084,6 +3084,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => d._id.toString());
   }
 
+  async findLiveIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]> {
+    // `deletedAt: null` asserted explicitly rather than left to the soft-delete plugin's find hook,
+    // matching softDeleteByDataLakeTag: a soft delete leaves the lake tags in place, so a tombstone
+    // keeps matching the membership filter and would otherwise read as a current member.
+    const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
+    return docs.map(d => d._id.toString());
+  }
+
   async updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number> {
     if (!tag || !newTag) return 0;
     // Anchored and escaped for the same reason as removeTagByUserId: unanchored, renaming `q1`

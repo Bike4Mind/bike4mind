@@ -59,17 +59,17 @@ const adapters = (
           ? newestFirst(events).at(-1)!.createdAt
           : undefined
     );
-  const findIdsByDataLakeTag = vi.fn().mockResolvedValue(over.memberIds ?? []);
+  const findLiveIdsByDataLakeTag = vi.fn().mockResolvedValue(over.memberIds ?? []);
   const findByIds = over.findByIds ?? vi.fn().mockResolvedValue([]);
   return {
     listByLakeSince,
     oldestEventAt,
-    findIdsByDataLakeTag,
+    findLiveIdsByDataLakeTag,
     findByIds,
     adapters: {
       db: {
         lakeMembershipChangeEvents: { listByLakeSince, oldestEventAt },
-        fabFiles: { findIdsByDataLakeTag } as never,
+        fabFiles: { findLiveIdsByDataLakeTag } as never,
         users: { findByIds } as never,
       },
       from: FROM,
@@ -163,6 +163,75 @@ describe('diffLakeMembership', () => {
 
       expect(view.removed).toEqual([]);
       expect(view.unchangedCount).toBe(1);
+    });
+  });
+
+  describe('tombstones are not members', () => {
+    // A soft delete leaves the lake tags in place, so a tombstone still matches the membership
+    // filter; only the live-only read keeps it out of the sat-through count.
+    it('does not count a file soft-deleted BEFORE the window as having sat through it', async () => {
+      const { adapters: a } = adapters([], { memberIds: [], oldestEventAt: new Date('2026-05-01T00:00:00Z') });
+
+      const view = await diffLakeMembership(lake(), a);
+
+      expect(view.unchangedCount).toBe(0);
+    });
+
+    it('reads LIVE members only, so a tombstone never reaches the rewind', async () => {
+      const { adapters: a, findLiveIdsByDataLakeTag } = adapters([], {
+        memberIds: [],
+        oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+      });
+
+      await diffLakeMembership(lake(), a);
+
+      expect(findLiveIdsByDataLakeTag).toHaveBeenCalledTimes(1);
+    });
+
+    it('never counts a file that left inside the window as having sat through it', async () => {
+      // Belt and braces: even if the live read still named this file (a tombstone that kept its
+      // tags), a file the window shows leaving is not a member at both ends.
+      const { adapters: a } = adapters(
+        [event({ fabFileId: 'left', action: 'removed', createdAt: new Date('2026-06-10T00:00:00Z') })],
+        { memberIds: ['left'], oldestEventAt: new Date('2026-05-01T00:00:00Z') }
+      );
+
+      const view = await diffLakeMembership(lake(), a);
+
+      expect(view.removed.map(e => e.fabFileId)).toEqual(['left']);
+      expect(view.unchangedCount).toBe(0);
+    });
+  });
+
+  describe('ordering', () => {
+    it('takes the end state from the last event of a same-millisecond tie, not the first', async () => {
+      // The page arrives {createdAt desc, _id desc}, so a re-sort on createdAt alone leaves a tie in
+      // _id-DESCENDING order and the wrong row names the end state. Here `readd` is the later of the
+      // two tied rows: the file ends the window inside the lake.
+      const early = new Date('2026-06-10T00:00:00Z');
+      const tie = new Date('2026-06-20T00:00:00Z');
+      const first = event({ id: 'evtA', fabFileId: 'tie', action: 'added', createdAt: early });
+      const pull = event({ id: 'evtB', fabFileId: 'tie', action: 'removed', createdAt: tie });
+      const readd = event({ id: 'evtC', fabFileId: 'tie', action: 'added', createdAt: tie });
+      const listByLakeSince = vi.fn().mockResolvedValue([readd, pull, first]);
+      const a = {
+        db: {
+          lakeMembershipChangeEvents: {
+            listByLakeSince,
+            oldestEventAt: vi.fn().mockResolvedValue(new Date('2026-05-01T00:00:00Z')),
+          },
+          fabFiles: { findLiveIdsByDataLakeTag: vi.fn().mockResolvedValue(['tie']) } as never,
+          users: { findByIds: vi.fn().mockResolvedValue([]) } as never,
+        },
+        from: FROM,
+        to: TO,
+        now: NOW,
+      };
+
+      const view = await diffLakeMembership(lake(), a);
+
+      expect(view.added.map(e => e.eventId)).toEqual(['evtC']);
+      expect(view.removed).toEqual([]);
     });
   });
 
@@ -295,14 +364,14 @@ describe('diffLakeMembership', () => {
     });
 
     it('resolves membership against the lake scope, prefix arm included', async () => {
-      const { adapters: a, findIdsByDataLakeTag } = adapters([], {
+      const { adapters: a, findLiveIdsByDataLakeTag } = adapters([], {
         memberIds: [],
         oldestEventAt: new Date('2026-05-01T00:00:00Z'),
       });
 
       await diffLakeMembership(lake(), a);
 
-      expect(findIdsByDataLakeTag).toHaveBeenCalledWith({
+      expect(findLiveIdsByDataLakeTag).toHaveBeenCalledWith({
         kind: 'owned',
         datalakeTag: 'datalake:ops',
         fileTagPrefix: 'ops/',

@@ -4,6 +4,7 @@ const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   resolveCanManageLake: vi.fn(),
   diffLakeMembership: vi.fn(),
+  isFallbackLake: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
 }));
 
@@ -24,6 +25,7 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeAccess: h.assertLakeAccess,
     resolveCanManageLake: h.resolveCanManageLake,
     diffLakeMembership: h.diffLakeMembership,
+    isFallbackLake: h.isFallbackLake,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -63,6 +65,7 @@ describe('GET /api/data-lakes/[id]/membership-diff', () => {
     h.assertLakeAccess.mockResolvedValue({ id: 'lake-oid-1', name: 'Ops Lake' });
     h.resolveCanManageLake.mockResolvedValue(true);
     h.diffLakeMembership.mockResolvedValue(view);
+    h.isFallbackLake.mockReturnValue(false);
   });
 
   it('returns the diff for a manager', async () => {
@@ -109,6 +112,37 @@ describe('GET /api/data-lakes/[id]/membership-diff', () => {
       await expect(call(req({ id: 'lake1', from: 'last tuesday' }), res)).rejects.toThrow(/ISO-8601/);
       await expect(call(req({ id: 'lake1', from: FROM, to: 'soon' }), res)).rejects.toThrow(/ISO-8601/);
     });
+
+    it('refuses the loose forms `new Date` would have accepted', async () => {
+      const { res } = makeRes();
+
+      // A bare year, a locale string, and an offset-less instant: the last would mean a different
+      // window on a server in a different timezone.
+      await expect(call(req({ id: 'lake1', from: '2026' }), res)).rejects.toThrow(/ISO-8601/);
+      await expect(call(req({ id: 'lake1', from: 'June 1 2026' }), res)).rejects.toThrow(/ISO-8601/);
+      await expect(call(req({ id: 'lake1', from: '2026-06-01T00:00:00' }), res)).rejects.toThrow(/ISO-8601/);
+      expect(h.diffLakeMembership).not.toHaveBeenCalled();
+    });
+
+    it('accepts a non-UTC offset', async () => {
+      const { res } = makeRes();
+
+      await call(req({ id: 'lake1', from: '2026-06-01T02:00:00+02:00' }), res);
+
+      expect(h.diffLakeMembership).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ from: new Date('2026-06-01T00:00:00.000Z') })
+      );
+    });
+
+    it('refuses a backwards window instead of serving an empty diff for it', async () => {
+      const { res } = makeRes();
+
+      await expect(call(req({ id: 'lake1', from: FROM, to: '2026-05-01T00:00:00.000Z' }), res)).rejects.toThrow(
+        /earlier than/i
+      );
+      expect(h.diffLakeMembership).not.toHaveBeenCalled();
+    });
   });
 
   describe('gates', () => {
@@ -120,6 +154,27 @@ describe('GET /api/data-lakes/[id]/membership-diff', () => {
       expect(json).not.toHaveBeenCalled();
       // The refusal must happen BEFORE any audit row is read, not after.
       expect(h.diffLakeMembership).not.toHaveBeenCalled();
+    });
+
+    it('gates a registry lake on platform admin, not the org-admin rung', async () => {
+      // A fallback lake's synthetic document carries the registry config's organizationId, so
+      // resolveCanManageLake would let a customer-side org admin through.
+      h.isFallbackLake.mockReturnValue(true);
+      const { res } = makeRes();
+
+      await expect(call(req({ id: 'help', from: FROM }), res)).rejects.toThrow(/manage this data lake/i);
+      expect(h.resolveCanManageLake).not.toHaveBeenCalled();
+      expect(h.diffLakeMembership).not.toHaveBeenCalled();
+    });
+
+    it('serves a registry lake to a platform admin', async () => {
+      h.isFallbackLake.mockReturnValue(true);
+      h.toAccessContext.mockResolvedValue({ userId: 'u1', isAdmin: true, administeredOrgIds: [] });
+      const { res, json } = makeRes();
+
+      await call(req({ id: 'help', from: FROM }), res);
+
+      expect(json).toHaveBeenCalledWith({ data: view });
     });
 
     it('propagates the not-found-style access denial so a lake the caller cannot see is not disclosed', async () => {
