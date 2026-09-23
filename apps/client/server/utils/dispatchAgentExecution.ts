@@ -1,7 +1,7 @@
 import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda';
 import { resolveAgentExecutorFunctionName } from './agentExecutorFunctionName';
 
-type ExecutorTarget = { kind: 'lambda'; functionName: string } | { kind: 'http'; url: string; secret: string };
+export type ExecutorTarget = { kind: 'lambda'; functionName: string } | { kind: 'http'; url: string; secret: string };
 const lambdaClient = new LambdaClient({});
 
 export class AgentExecutorRejectedError extends Error {}

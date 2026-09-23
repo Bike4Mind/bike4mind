@@ -1419,4 +1419,264 @@ describe('AgentExecutionRepository', () => {
       expect(reloaded?.pendingPermission?.toolInput).toEqual({});
     });
   });
+
+  describe('approvePendingPermission', () => {
+    const pause = () => ({
+      toolName: 'image_generation',
+      toolInput: { prompt: 'cat' },
+      toolCallId: 'toolu_1',
+      gatedToolCalls: [{ id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' }],
+      requestedAt: new Date(),
+    });
+
+    it('marks the pause approved while keeping the withheld calls the executor has to replay', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(true);
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission?.approved).toBe(true);
+      expect(reloaded?.pendingPermission?.gatedToolCalls).toEqual([
+        { id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' },
+      ]);
+    });
+
+    it('does not land when the run is no longer awaiting permission', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'running' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission?.approved).toBeUndefined();
+    });
+
+    it('does not land when there is no pause to approve', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
+    });
+
+    it('is idempotent once the caller has advanced status off awaiting_permission, as the real approve handler does', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(true);
+      // `agentExecute.ts` moves status to 'continuing' right after a successful approve
+      // (before invoking the resume Lambda), so the status clause alone would already
+      // catch a retry landing after that point.
+      await agentExecutionRepository.updateStatus(execution.id, 'continuing' as AgentExecutionStatus);
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
+    });
+
+    it('does not land a second approval while status is still awaiting_permission', async () => {
+      // The status clause alone is not enough here: `timestamps: true` bumps `updatedAt`
+      // on every write, so a `$set` to the same `approved: true` value still reports
+      // `modifiedCount > 0` even though nothing actually changed. Only the
+      // `pendingPermission.approved: { $ne: true }` filter clause catches a retry that
+      // races ahead of the status flip to 'continuing'.
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(true);
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id)).toBe(false);
+    });
+
+    it('folds a remembered-tool approval into the same CAS write', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(
+        await agentExecutionRepository.approvePendingPermission(execution.id, { approvedTool: 'image_generation' })
+      ).toBe(true);
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission?.approved).toBe(true);
+      expect(reloaded?.approvedTools).toContain('image_generation');
+    });
+
+    it('does not land when toolCallId names a different pause than the one persisted', async () => {
+      // Two withheld calls to the same tool: cat's approval must not land against
+      // a since-replaced pause on dog just because the tool name still matches.
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id, { toolCallId: 'toolu_cat' })).toBe(
+        false
+      );
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission?.approved).toBeUndefined();
+    });
+
+    it('lands when toolCallId matches the persisted pause', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id, { toolCallId: 'toolu_dog' })).toBe(
+        true
+      );
+    });
+  });
+
+  describe('updatePermissionState matchToolCallId', () => {
+    const pause = () => ({
+      toolName: 'image_generation',
+      toolInput: { prompt: 'cat' },
+      toolCallId: 'toolu_1',
+      gatedToolCalls: [{ id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' }],
+      requestedAt: new Date(),
+    });
+
+    it('does not clear the pause when matchToolCallId names a different one than the one persisted', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: null,
+        matchToolCallId: 'toolu_cat',
+      });
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission).toBeDefined();
+    });
+
+    it('clears the pause when matchToolCallId matches the persisted one', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: null,
+        matchToolCallId: 'toolu_dog',
+      });
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.pendingPermission).toBeUndefined();
+    });
+  });
+
+  describe('denyPendingPermission', () => {
+    const pause = () => ({
+      toolName: 'image_generation',
+      toolInput: { prompt: 'cat' },
+      toolCallId: 'toolu_1',
+      gatedToolCalls: [{ id: 'toolu_1', name: 'image_generation', input: '{"prompt":"cat"}' }],
+      requestedAt: new Date(),
+    });
+
+    it('clears the pause, records the denied tool, and fails the run in one write', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      const denied = await agentExecutionRepository.denyPendingPermission(execution.id, {
+        toolCallId: 'toolu_1',
+        deniedTool: 'image_generation',
+        errorMessage: 'Execution stopped: you denied "image_generation".',
+      });
+
+      expect(denied).toBe(true);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.status).toBe('failed');
+      expect(reloaded?.pendingPermission).toBeUndefined();
+      expect(reloaded?.deniedTools).toContain('image_generation');
+      expect(reloaded?.error?.message).toBe('Execution stopped: you denied "image_generation".');
+    });
+
+    it('does not land when toolCallId names a different pause than the one persisted', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, {
+        pendingPermission: { ...pause(), toolCallId: 'toolu_dog' },
+      });
+
+      const denied = await agentExecutionRepository.denyPendingPermission(execution.id, {
+        toolCallId: 'toolu_cat',
+        errorMessage: 'Execution stopped: you denied "image_generation".',
+      });
+
+      expect(denied).toBe(false);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.status).toBe('awaiting_permission');
+      expect(reloaded?.pendingPermission).toBeDefined();
+    });
+
+    // The concrete race the review flagged: two tabs answer the same pause. Whichever
+    // side's CAS lands first (approve or deny) must be the only one that can act -
+    // the loser's write must be a no-op, not a partial mutation.
+    it('cannot clear a pause that a concurrent approval already claimed', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id, { toolCallId: 'toolu_1' })).toBe(
+        true
+      );
+
+      const denied = await agentExecutionRepository.denyPendingPermission(execution.id, {
+        toolCallId: 'toolu_1',
+        errorMessage: 'Execution stopped: you denied "image_generation".',
+      });
+
+      expect(denied).toBe(false);
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      // The approval's claim survives intact: still approved, still awaiting the
+      // executor's replay, not clobbered into `failed` by the losing denial.
+      expect(reloaded?.status).toBe('awaiting_permission');
+      expect(reloaded?.pendingPermission?.approved).toBe(true);
+    });
+
+    it('cannot land after a concurrent denial already won and failed the run', async () => {
+      const execution = await agentExecutionRepository.create(
+        makeBaseExecution({ status: 'awaiting_permission' as AgentExecutionStatus })
+      );
+      await agentExecutionRepository.updatePermissionState(execution.id, { pendingPermission: pause() });
+
+      expect(
+        await agentExecutionRepository.denyPendingPermission(execution.id, {
+          toolCallId: 'toolu_1',
+          errorMessage: 'Execution stopped: you denied "image_generation".',
+        })
+      ).toBe(true);
+
+      // A same-pause approval racing in after denial already won must not resurrect it.
+      expect(await agentExecutionRepository.approvePendingPermission(execution.id, { toolCallId: 'toolu_1' })).toBe(
+        false
+      );
+
+      const reloaded = await agentExecutionRepository.findById(execution.id);
+      expect(reloaded?.status).toBe('failed');
+      expect(reloaded?.pendingPermission).toBeUndefined();
+    });
+  });
 });

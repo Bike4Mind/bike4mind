@@ -5,6 +5,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { assertUrlAllowed, safeFetch, SsrfError } from '@server/utils/ssrfProtection';
+import { streamWithSizeLimit } from '@server/utils/streamWithSizeLimit';
 import { Resource } from 'sst';
 import crypto from 'crypto';
 import { z } from 'zod';
@@ -37,34 +38,6 @@ function generateCacheKey(rawUrl: string, parsed: URL): string {
   // Constrain extension to a small safe set
   const safeExt = /^[a-z0-9]{1,5}$/i.test(ext) ? ext : 'jpg';
   return `proxied-images/${hash}.${safeExt}`;
-}
-
-/**
- * Stream the response body and abort as soon as the size cap is
- * exceeded, rather than buffering with arrayBuffer() which can OOM the Lambda
- * before the post-check fires when Content-Length is omitted or lies.
- */
-async function streamWithSizeLimit(response: Response, maxBytes: number): Promise<Buffer> {
-  const reader = response.body?.getReader();
-  if (!reader) throw new BadRequestError('No response body');
-
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      received += value.byteLength;
-      if (received > maxBytes) {
-        await reader.cancel();
-        throw new BadRequestError('Image too large');
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks);
 }
 
 const handler = baseApi().get(

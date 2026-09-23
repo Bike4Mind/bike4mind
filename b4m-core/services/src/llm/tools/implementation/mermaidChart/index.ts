@@ -1,4 +1,5 @@
 import { ToolDefinition } from '../../base/types';
+import { sanitizeArtifactTitle, stripArtifactTagsFromRawBody } from '../../utils/artifactEmission';
 
 interface MermaidChartParams {
   definition: string;
@@ -20,13 +21,15 @@ export const mermaidChartTool: ToolDefinition = {
   implementation: () => ({
     toolFn: async value => {
       const params = value as MermaidChartParams;
-      const title = params.title || 'Mermaid Chart';
+      // Model-controlled; an unescaped quote here would close the attribute and let the
+      // rest of the title be read as further attributes (e.g. an injected type=).
+      const title = sanitizeArtifactTitle(params.title || 'Mermaid Chart');
       const identifier = `mermaid-${Date.now()}`;
 
       // Return artifact syntax directly so handleToolResultStreaming streams it immediately
       // (same pattern as recharts - avoids the JSON-in-tool-result rendering gap)
       return `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">
-${params.definition}
+${stripArtifactTagsFromRawBody(params.definition)}
 </artifact>`;
     },
     toolSchema: {

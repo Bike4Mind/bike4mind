@@ -93,6 +93,14 @@ export type StartAgentExecutionInput = {
    */
   agentId?: string;
   enabledTools?: string[];
+  /**
+   * Marks `enabledTools` as the caller's AMBIENT picks, to be unioned onto the resolved
+   * orchestration profile rather than replacing it (`pickEffectiveEnabledTools`). Forwarded to
+   * the executor only - it deliberately does NOT feed `approvedTools` below, which stays keyed
+   * to the raw list a headless caller sent. Interactive chat sets it; the public REST route
+   * never does.
+   */
+  enabledToolsAreAmbient?: boolean;
   maxIterations?: number;
   messageFileIds?: string[];
   sessionFabFileIds?: string[];
@@ -366,6 +374,7 @@ export async function startAgentExecution(
         organizationId: input.organizationId,
         agentId: input.agentId,
         enabledTools: input.enabledTools,
+        enabledToolsAreAmbient: input.enabledToolsAreAmbient,
         maxIterations: input.maxIterations,
         // Forwarded here *and* persisted on the doc (above), unlike
         // `enableMementos` which is doc-only. The executor resolves
