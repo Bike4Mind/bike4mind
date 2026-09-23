@@ -10,6 +10,9 @@ import {
   generateTools,
   getCliOnlyTools,
   setShowUserQuestionFn,
+  resolveEditLocalFile,
+  isFuzzyEditConfirmationRequired,
+  type EditPlan,
   type LlmTools,
   type UserQuestionPayload,
   type UserQuestionResponse,
@@ -17,12 +20,7 @@ import {
 import type { PermissionManager } from './PermissionManager';
 import type { PermissionResponse } from '../components/PermissionPrompt';
 import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
-import {
-  generateFileDiffPreview,
-  generateFileDeletePreview,
-  generateEditLocalFilePreview,
-  willEditResolveFuzzily,
-} from './diffPreview';
+import { generateFileDiffPreview, generateFileDeletePreview, generateEditLocalFilePreview } from './diffPreview';
 import { executeTool } from '../llm/ToolRouter';
 import type { ApiClient } from '../auth/ApiClient';
 import { executeHooks, buildHookContext } from '../agents/hookExecutor.js';
@@ -194,6 +192,9 @@ export function wrapToolWithPermission(
       }
 
       const effectiveArgs = isSandboxed ? sandboxedArgs : args;
+      // Args actually handed to execution. Defaults to effectiveArgs; the fuzzy-edit
+      // gate below rebinds it to carry the approved content-hash snapshot.
+      let execArgs: Record<string, unknown> = effectiveArgs;
 
       /**
        * Shared execution flow: run tool, cleanup sandbox files, capture violations,
@@ -202,7 +203,7 @@ export function wrapToolWithPermission(
       async function executeAndRecord(): Promise<string> {
         let result: string;
         try {
-          result = await executeTool(toolName, effectiveArgs, apiClient, originalFn);
+          result = await executeWithFuzzyConfirmation(toolName, execArgs, apiClient, originalFn, showPermissionPrompt);
         } catch (err) {
           // grep_search / glob_files re-throw path-validation errors instead
           // of returning them as a string. Normalize a denial to a string so
@@ -231,7 +232,7 @@ export function wrapToolWithPermission(
         result = await retryPathAccessDenial(
           result,
           toolName,
-          effectiveArgs,
+          execArgs,
           allowedDirectories,
           configStore,
           apiClient,
@@ -284,17 +285,42 @@ export function wrapToolWithPermission(
       }
       const forcePromptForRisk = commandRisk?.level === 'high';
 
-      // Fuzzy-edit gate: an edit_local_file whose old_string is not an exact
-      // match resolves via the block-anchor fallback, which can write a wider
-      // span than old_string names. Re-confirm it even under trust / auto-accept
-      // (mirroring forcePromptForRisk) so the human sees the real span first.
-      // edit_local_file is never shell-like, so this and forcePromptForRisk are
-      // mutually exclusive.
-      const forcePromptForFuzzyEdit =
-        toolName === 'edit_local_file'
-          ? await willEditResolveFuzzily(args as { path: string; old_string: string; new_string: string })
-          : false;
+      // Fuzzy-edit gate: resolve the edit ONCE, through the SAME path
+      // authorization the tool itself enforces (no raw model-supplied path is
+      // ever read here), to learn whether it resolves via the fuzzy fallback -
+      // which can write a wider span than old_string names. Such an edit is
+      // re-confirmed even under trust / auto-accept (mirroring forcePromptForRisk)
+      // so the human sees the real span. Any resolve error (auth denial, missing
+      // file, no match) leaves editPlan null: the gate forces no prompt and the
+      // real error surfaces at execution. edit_local_file is never shell-like, so
+      // this and forcePromptForRisk are mutually exclusive.
+      let editPlan: EditPlan | null = null;
+      if (
+        toolName === 'edit_local_file' &&
+        typeof args?.path === 'string' &&
+        typeof args?.old_string === 'string' &&
+        typeof args?.new_string === 'string'
+      ) {
+        try {
+          editPlan = await resolveEditLocalFile(
+            args as { path: string; old_string: string; new_string: string },
+            allowedDirectories
+          );
+        } catch {
+          editPlan = null;
+        }
+      }
+      const forcePromptForFuzzyEdit = editPlan?.strategy != null;
       const forcePrompt = forcePromptForRisk || forcePromptForFuzzyEdit;
+
+      // Bind the fuzzy edit's execution to the snapshot the gate just approved, so
+      // the bytes written are the ones the human confirmed. The tool refuses to
+      // apply a fuzzy edit whose content-hash no longer matches, forcing a fresh
+      // prompt (see executeWithFuzzyConfirmation). Exact edits are deterministic
+      // and need no binding.
+      if (forcePromptForFuzzyEdit && editPlan) {
+        execArgs = { ...effectiveArgs, confirmedFuzzyHash: editPlan.contentHash };
+      }
 
       // Host allowlist (claude --allowedTools): auto-approve tools matching an
       // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
@@ -313,8 +339,15 @@ export function wrapToolWithPermission(
         return executeAndRecord();
       }
 
-      // Generate preview for dangerous operations
-      const basePreview = await generateToolPreview(toolName, args, isSandboxed);
+      // Generate preview for dangerous operations. For edit_local_file the gate
+      // already resolved the real span through the authorized preflight, so reuse
+      // that (one resolve, no extra raw-path read) instead of resolving again in
+      // generateToolPreview; fall back to the generic preview only when the edit
+      // did not resolve (auth denied, missing file, no match).
+      const basePreview =
+        toolName === 'edit_local_file' && editPlan
+          ? editPlan.diffPreview
+          : await generateToolPreview(toolName, args, isSandboxed);
       const preview =
         forcePromptForRisk && commandRisk
           ? prependRiskBanner(basePreview, commandRisk.reasons)
@@ -519,10 +552,13 @@ async function retryPathAccessDenial(
     }
   }
 
-  // Retry now that the directory is allowed. A failure here (including another
-  // denial for a different path) is returned as-is - no recursion, no loop.
+  // Retry now that the directory is allowed. Route back through the fuzzy-edit
+  // confirmation so a granted edit that resolves fuzzily is re-prompted, not
+  // silently applied - a directory grant must never double as a confirmation
+  // bypass. A failure here (including another denial for a different path) is
+  // returned as-is - no recursion, no loop.
   try {
-    return await executeTool(toolName, args, apiClient, originalFn);
+    return await executeWithFuzzyConfirmation(toolName, args, apiClient, originalFn, showPermissionPrompt);
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   } finally {
@@ -586,13 +622,39 @@ function prependRiskBanner(basePreview: string | undefined, reasons: string[]): 
 
 /**
  * Prepend a banner to an edit_local_file preview whose old_string was not an
- * exact match. The diff below (from generateEditLocalFilePreview) shows the real
- * fuzzy span, so the banner just explains why this edit is re-prompted despite
- * trust / auto-accept.
+ * exact match. The diff passed in is the resolved fuzzy span (from the tool's own
+ * authorized resolve), so the banner just explains why this edit is re-prompted
+ * despite trust / auto-accept.
  */
 function prependFuzzyEditBanner(basePreview: string | undefined): string {
   const banner = '[!] old_string was not an exact match; the diff below is the actual span that will be written.';
   return basePreview ? `${banner}\n\n${basePreview}` : banner;
+}
+
+/**
+ * Execute a tool, and when the core edit_local_file tool refuses a fuzzy edit that
+ * is not bound to the current file snapshot - the gate saw an exact match but the
+ * file changed before the write, or a directory grant re-entered here - force ONE
+ * permission prompt showing the REAL resolved span, then retry bound to the hash
+ * the tool reported so the write matches what the human approved. A further
+ * concurrent change makes the tool refuse again; that is surfaced rather than
+ * looped - fail safe, never a silent wider-than-named write.
+ */
+async function executeWithFuzzyConfirmation(
+  toolName: string,
+  args: Record<string, unknown>,
+  apiClient: ApiClient,
+  originalFn: (args: unknown) => Promise<string>,
+  showPermissionPrompt: (toolName: string, args: unknown, preview?: string) => Promise<{ action: PermissionResponse }>
+): Promise<string> {
+  try {
+    return await executeTool(toolName, args, apiClient, originalFn);
+  } catch (err) {
+    if (!isFuzzyEditConfirmationRequired(err)) throw err;
+    const response = await showPermissionPrompt(toolName, args, prependFuzzyEditBanner(err.diffPreview));
+    if (response.action === 'deny') throw new PermissionDeniedError(toolName, args);
+    return executeTool(toolName, { ...args, confirmedFuzzyHash: err.contentHash }, apiClient, originalFn);
+  }
 }
 
 /**
