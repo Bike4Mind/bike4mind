@@ -7,7 +7,7 @@ import { createMongoServer, MONGO_TEST_TIMEOUT_MS } from '../../../database/src/
 // but mirror the sibling ensure-*-index tests' guard so this stays robust if that changes.
 vi.mock('../../utils/config', () => ({ Config: {} }));
 
-import migration from './20260922000002_backfill-data-lake-origin';
+import migration from './20260921000100_backfill-data-lake-origin';
 
 // Boots a real mongod, so lift the whole file off the shard's unit-test budget for tests AND
 // hooks in one place (see MONGO_TEST_TIMEOUT_MS for why 30s is not enough).

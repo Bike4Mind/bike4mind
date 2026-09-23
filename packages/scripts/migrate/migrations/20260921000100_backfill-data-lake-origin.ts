@@ -25,7 +25,7 @@ const LOG = '[backfill-data-lake-origin]';
  * `$exists: false` filter below.
  */
 const migration: MigrationFile = {
-  id: 20260922000002,
+  id: 20260921000100,
   name: 'backfill-data-lake-origin',
 
   up: async () => {
