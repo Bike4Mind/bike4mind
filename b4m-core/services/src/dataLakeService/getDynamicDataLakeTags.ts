@@ -16,7 +16,7 @@ import { isDatalakeTagWellFormed } from './createDataLake';
 import { lakeMembershipScope, registryMembershipScope } from './lakeMembershipScope';
 import {
   grantedLakeReachForTurn,
-  resolveEnforceReadGrants,
+  resolveEnforceReadGrantsResult,
   supersededOwnLakeIdsForTurn,
   type LakeGrantReach,
 } from './resolveLakeReadAccess';
@@ -90,6 +90,25 @@ export interface DataLakeAccessContext {
   };
   /** Caller's resolved entitlement keys; absent means tag-only matching. */
   entitlementKeys?: string[];
+  /**
+   * False ONLY when the caller's entitlement lookup THREW and `entitlementKeys` is therefore the
+   * fail-safe `[]`, not the caller's real keys (#3155) - distinct from an absent/true value, which
+   * means the keys above are trustworthy (including a legitimately empty list). An entitlement-gated
+   * lake looks the same as an excluded one to `countGateExcludedLakes` either way, so a resolver
+   * that cannot tell them apart must not report a confident exclusion count - see
+   * `excludedByAccessCountPrerequisitesComplete` at this file's resolvers for how this feeds that
+   * gate, mirroring the grant-read and supersession prerequisites already tracked there.
+   *
+   * DEFAULTS OPTIMISTIC (absent = trustworthy), DELIBERATELY, unlike `excludedByAccessCount`'s own
+   * "absent = not measured" contract (review, #3155): only `getDataLakeAccessContext()` sets this
+   * field today, so gating on an explicit `true` instead of `!== false` would flip
+   * `lakeViewComplete` to incomplete for every OTHER caller of this resolver too (they never set
+   * it), silently disabling the narrowing `sessionService/deriveRetrievalTags.ts` does when the
+   * view is complete - a real regression for a hypothetical future bug. See the test pinning this
+   * default in `getDynamicDataLakeTags.test.ts` ("omitting entitlementKeysResolved... still runs
+   * the count") before changing it.
+   */
+  entitlementKeysResolved?: boolean;
   /** Optional; only used to report a swallowed dataLakes read failure (see below). */
   logger?: Logger;
 }
@@ -233,10 +252,11 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
    * field degrades to "say nothing", which is the safe direction - there is no safe default number
    * (0 would under-report a real outage as a clean turn).
    *
-   * "Not measured" also covers a failed grant-exemption or supersession read upstream of the count
-   * (#3055) - both are inputs the count trusts, so a degraded input produces a confidently WRONG
-   * number rather than an honest failure; see `excludedByAccessCountPrerequisitesComplete` at this
-   * function's call site for the two failure directions this guards against.
+   * "Not measured" also covers a failed entitlement lookup, enforce-flag read, grant-exemption
+   * read, or supersession read upstream of the count (#3055, #3155) - all four are inputs the
+   * count trusts, so a degraded input produces a confidently WRONG number rather than an honest
+   * failure; see `excludedByAccessCountPrerequisitesComplete` at this function's call site for the
+   * four failure directions this guards against.
    */
   excludedByAccessCount?: number;
   /**
@@ -282,7 +302,16 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   const grantedDynamicIds = new Set<string>();
   // Complete unless the read below throws. An absent `db.dataLakes` is NOT degraded: a deployment
   // with no dynamic-lake repo has no dynamic lakes to miss, so its registry-only answer is whole.
-  let lakeViewComplete = true;
+  //
+  // Seeded from the caller's own entitlement-read completeness (#3155, review): a thrown
+  // entitlement lookup degrades `context.entitlementKeys` to `[]` before this function ever sees
+  // it, and that array is not just a count input - it is the same one handed to
+  // `findActiveByUserTagsAndEntitlements` below - so a degraded `[]` can silently drop an
+  // entitlement-gated lake the caller genuinely holds the key for out of `dataLakeTags`/`lakes`,
+  // exactly the "lakes may be MISSING" failure this field exists to flag. Declared with the
+  // expression directly (review: a bare `= true` here previously left a later unconditional
+  // overwrite as dead code) so there is exactly one place this starts from.
+  let lakeViewComplete = context.entitlementKeysResolved !== false;
   // Same reason as ownedDynamicIds: createdByUserId survives only on the raw documents, and
   // whole-lake queries (see ResolvedLakeAccess) cannot anchor a prefix arm without it.
   const creatorByDynamicId = new Map<string, string>();
@@ -302,8 +331,14 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // second (see the supersession catch below) - so neither flag alone can gate the count safely.
   // Stays `true` when a read is simply unwired (no grant repo): an absent adapter has nothing to
   // fail, so `reach`/`supersededOwnLakeIds` staying at their empty defaults is a complete answer,
-  // not a degraded one.
-  let excludedByAccessCountPrerequisitesComplete = true;
+  // not a degraded one. Seeded from `lakeViewComplete`'s own initial value (see that declaration
+  // for the entitlement-read completeness this also carries, #3155).
+  //
+  // No warn here for an incomplete seed (review): the count this gates only exists inside the
+  // `context.db.dataLakes` branch below, which already warns once, correctly, when it actually
+  // skips the query - warning here too would double-log on a wired host, and warn about a count
+  // that was never going to run at all on a registry-only one.
+  let excludedByAccessCountPrerequisitesComplete = lakeViewComplete;
   if (context.db.dataLakes) {
     // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
     // legible error naming the missing adapter. Resolved only on this branch - a static-registry-
@@ -337,7 +372,23 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
     let reach: LakeGrantReach = { grantedLakeIds: [], orgGrantedLakes: {} };
     if (userId && context.db.dataLakeAccessGrants) {
       try {
-        const includeReaders = await resolveEnforceReadGrants(context.db.adminSettings, context.logger, context);
+        const { enforced: includeReaders, readSucceeded } = await resolveEnforceReadGrantsResult(
+          context.db.adminSettings,
+          context.logger,
+          context
+        );
+        if (!readSucceeded) {
+          // The enforce-flag read itself failed and degraded to report-only (#3155): `includeReaders`
+          // is `false` but not TRUSTWORTHY-false, so `reach` below narrows (reader/org grants excluded)
+          // exactly like the failed-grants-read catch just below - same two consequences, same
+          // reasons: the lake view may be missing a grant-only lake, and the exclusion count would
+          // over-count a lake actually exempted by that grant.
+          context.logger?.warn(
+            '[dataLakes] enforce-flag read failed; resolving lakes without the reader/org grant rungs'
+          );
+          lakeViewComplete = false;
+          excludedByAccessCountPrerequisitesComplete = false;
+        }
         reach = await grantedLakeReachForTurn(
           context,
           userId,
@@ -476,7 +527,8 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
       }
     } else {
       context.logger?.warn(
-        '[dataLakes] gate-excluded-lake count skipped; a grant-exemption or supersession prerequisite read failed this turn'
+        '[dataLakes] gate-excluded-lake count skipped; an entitlement, enforce-flag, grant-exemption, ' +
+          'or supersession prerequisite read failed this turn'
       );
     }
   }
@@ -621,6 +673,14 @@ export async function measureIdentityNamedExclusion(
   if (!context.db.dataLakes || typeof context.db.organizations?.findMembershipOrgIds !== 'function') {
     return undefined;
   }
+  // #3155: the entitlement lookup that produced `context.entitlementKeys` may itself have failed
+  // (see `entitlementKeysResolved`'s own doc) - this function's "any failure means unknown" contract
+  // extends to that upstream failure too, since a degraded key list would make an entitlement-gated
+  // lake look excluded rather than unmeasured.
+  if (context.entitlementKeysResolved === false) {
+    context.logger?.warn('[dataLakes] scoped gate-excluded-lake count skipped; entitlement lookup failed this turn');
+    return undefined;
+  }
   const userTags = context.user.tags || [];
   const entitlementKeys = context.entitlementKeys ?? [];
   const userId = context.user.id ? String(context.user.id) : undefined;
@@ -629,7 +689,18 @@ export async function measureIdentityNamedExclusion(
     let reach: LakeGrantReach = { grantedLakeIds: [], orgGrantedLakes: {} };
     let supersededOwnLakeIds = new Set<string>();
     if (userId && context.db.dataLakeAccessGrants) {
-      const includeReaders = await resolveEnforceReadGrants(context.db.adminSettings, context.logger, context);
+      const { enforced: includeReaders, readSucceeded } = await resolveEnforceReadGrantsResult(
+        context.db.adminSettings,
+        context.logger,
+        context
+      );
+      if (!readSucceeded) {
+        // Same reasoning as the account-wide resolver's own enforce-flag check: a failed read
+        // degrades to report-only and narrows `reach`, which would over-count this identity-scoped
+        // exclusion - so the whole measurement is unknown, not partial (#3155).
+        context.logger?.warn('[dataLakes] scoped gate-excluded-lake count skipped; enforce-flag read failed this turn');
+        return undefined;
+      }
       reach = await grantedLakeReachForTurn(
         context,
         userId,
