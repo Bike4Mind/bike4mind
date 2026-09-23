@@ -82,7 +82,7 @@ export function buildAgent(input: BuildAgentInput): BuildAgentResult {
     buildSystemPrompt(promptVariant, {
       contextContent,
       agentStore,
-      customCommands: customCommandStore.getAllCommands(),
+      customCommands: customCommandStore.getModelReachableCommands(),
       enableSkillTool,
       enableDynamicAgentCreation: config.preferences.enableDynamicAgentCreation === true,
       additionalDirectories,

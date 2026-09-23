@@ -15,6 +15,8 @@ import {
   ICreditTransactionDocument,
   IAuthSessionRepository,
   IAuthSessionDocument,
+  ISessionAgentConfigRepository,
+  ISessionAgentConfigDocument,
 } from '@bike4mind/common';
 import {
   IResearchTask,
@@ -56,6 +58,16 @@ export const createMockProjectRepository = (): IProjectRepository => ({
   findAllBySessionId: vi.fn(),
 });
 
+export const createMockSessionAgentConfigRepository = (): ISessionAgentConfigRepository => ({
+  ...createMockRepository<ISessionAgentConfigDocument>(),
+  findBySessionAndAgent: vi.fn(),
+  findBySessionId: vi.fn(),
+  findAllWithProactiveMessagingEnabled: vi.fn(),
+  updateLastProactiveMessageAt: vi.fn(),
+  deleteBySessionId: vi.fn(),
+  deleteBySessionAndAgent: vi.fn(),
+});
+
 export const createMockFabFileRepository = (): IFabFileRepository => ({
   ...createMockRepository<IFabFileDocument>(),
   shareable: createMockShareableRepository<IFabFileDocument>(),
@@ -84,11 +96,13 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   countDataLakeTagsByPrefix: vi.fn(),
   countDataLakeUniqueFilesByPrefix: vi.fn(),
   countUniqueFilesByNamespaceForUser: vi.fn(),
+  claimTagRewriteByUserId: vi.fn().mockResolvedValue(null),
   removeTagByUserId: vi.fn(),
   updateTagsByUserId: vi.fn(),
   dedupeTagByUserId: vi.fn(),
   pullTagsByFabFileId: vi.fn(),
   pushTagsByFabFileId: vi.fn(),
+  pushTagReturningPriorState: vi.fn().mockResolvedValue(null),
   bulkUpdateTags: vi.fn(),
   findByContentHashes: vi.fn(),
   findByContentHashesInDataLake: vi.fn(),

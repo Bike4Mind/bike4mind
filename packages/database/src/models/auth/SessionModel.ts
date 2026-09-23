@@ -8,6 +8,7 @@ import {
   ISessionDocument,
   ISessionRepository,
   SearchOptions,
+  tagAttemptDueFilter,
 } from '@bike4mind/common';
 import { softDeletePlugin, usableObjectIds } from '../../utils/mongo';
 import User from './UserModel';
@@ -87,6 +88,10 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     // this declaration the field is dropped from every write and the `!session.taggedAt` gate in
     // apps/client/server/events/spider.ts re-tags notebooks it already paid a completion to tag.
     taggedAt: { type: Date, required: false },
+    // Same strict-schema hazard as `taggedAt` above: undeclared means silently dropped, and the
+    // retry gate would read permanently unattempted. Records that a completion was spent and
+    // produced nothing, which is what bounds the retry - NOT that tags exist.
+    tagLastAttemptAt: { type: Date, required: false },
     clonedSourceId: { type: String, required: false },
     forkedSourceId: { type: String, required: false },
     isAutoNamed: { type: Boolean, required: false },
@@ -468,6 +473,50 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       $or: [{ deletedAt: null }, { deletedAt: { $exists: false } }],
     };
     return this.sessionModel.countDocuments({ userId, ...deletedAtFilter });
+  }
+
+  /**
+   * Untagged notebooks the tagging handler will actually spend an operations-model completion on.
+   *
+   * Narrower than `{ taggedAt: null }` on purpose. `sessionTagging.ts` aborts at its no-quest
+   * branch BEFORE the completion and writes nothing, so a questless notebook stays `taggedAt:
+   * null` and is re-counted on every run. The spider's credit pre-flight sizes a run from this
+   * number, and `assertSessionOperationalCredits` only gates - it never debits - so counting that
+   * notebook does not overcharge anyone; it refuses a low-balance admin a run that would have
+   * spent nothing on it.
+   *
+   * `deletedAt: null` is stated on both queries. On the quest side it is load-bearing:
+   * `softDeletePlugin` hooks only `find` and `findOne`, so `distinct` does NOT inherit it, while
+   * the handler's gate IS a hooked `findOne` - omitting it would price a notebook whose only
+   * quest is soft-deleted. On the session side the hook already applies and the term is belt and
+   * braces, so this does not depend on which verbs the plugin happens to cover.
+   * (`deletedAt: null` matches a missing field as well as a null one.)
+   *
+   * `tagAttemptDueFilter` excludes a notebook still inside its retry backoff. Without it this
+   * would re-price, on every run, the notebook the backoff exists to stop paying for - the same
+   * dispatch-vs-settlement gap in a new place.
+   *
+   * Loads one id per untagged notebook to build the `$in`, which is the same per-notebook scale
+   * the spider itself already runs at.
+   *
+   * Must stay in step with the handler's gate (`determineSessionOperations` in
+   * apps/client/server/events/spider.ts): quest existence AND the retry backoff. Both halves of
+   * the backoff are declared together in `@bike4mind/common` so they cannot drift.
+   */
+  async countTaggableNotebooks(userId: string): Promise<number> {
+    const untagged = await this.sessionModel
+      .find({ userId, deletedAt: null, taggedAt: null, ...tagAttemptDueFilter() }, { _id: 1 })
+      .lean();
+    if (untagged.length === 0) return 0;
+
+    const Quest = this.questModel || mongoose.models.Quest || mongoose.model('Quest');
+    // `distinct` collapses a notebook's many quests to one entry, so the length IS the notebook
+    // count - no second pass needed.
+    const taggable = await Quest.distinct('sessionId', {
+      sessionId: { $in: untagged.map(session => session._id.toString()) },
+      deletedAt: null,
+    });
+    return taggable.length;
   }
 
   async countActiveVoiceSessionsByUserId(userId: string) {

@@ -31,6 +31,7 @@ import type {
   IChatHistoryItem,
   IChatHistoryItemDocument,
 } from '@bike4mind/common';
+import { parseNotebookImportKey } from '@server/utils/notebookImportKeys';
 import { Resource } from 'sst';
 import { getFilesStorage } from '@server/utils/storage';
 import { v4 as uuidv4 } from 'uuid';
@@ -51,7 +52,13 @@ export const createSessionWrites = () => ({
   // keeps that boundary in one visible place instead of widening either side.
   create: async (data: Record<string, unknown>) =>
     sessionRepository.create(data as Parameters<typeof sessionRepository.create>[0]),
-  find: async (query: Record<string, unknown>) => sessionRepository.find(query),
+  // `ISession`'s four attachment-id arrays are typed optional, but SessionModel.ts declares them
+  // as Mongoose array paths, so a real document always carries them, hydrated to `[]`. Cast to the
+  // port's own `find` return type instead of respelling it, so the two cannot drift apart.
+  find: async (query: Record<string, unknown>) =>
+    sessionRepository.find(query) as unknown as ReturnType<
+      notebookImportService.NotebookImportAdapters['sessionRepository']['find']
+    >,
   // `update` identifies the row by `id` and throws without it - `_id` here silently made every
   // overwrite and merge import fail.
   updateById: async (id: string, data: Record<string, unknown>) => sessionRepository.update({ id, ...data }),
@@ -334,7 +341,7 @@ const processNotebookImport = async (
         // type degraded says so itself, and calling that "could not be imported" contradicts the
         // record. Each message states its own outcome.
         const more = warnings.length > shown.length ? `; and ${warnings.length - shown.length} more` : '';
-        parts.push(`${warnings.length} attachment issue(s): ${shown.join('; ')}${more}.`);
+        parts.push(`${warnings.length} import issue(s): ${shown.join('; ')}${more}.`);
       }
 
       await inboxRepository.createInboxMessage({
@@ -417,21 +424,12 @@ export const dispatch = withContext(async (event, context, logger) => {
     const bucket = record.s3.bucket.name;
     const key = decodeURIComponent(record.s3.object.key.replace(/\+/g, ' '));
 
-    // Only process notebook imports (skip options files)
-    if (!key.startsWith('notebooks/') || key.endsWith('.options.json')) {
-      logger.debug('Skipping non-notebook or options file', { key });
+    const importKeys = parseNotebookImportKey(key);
+    if (!importKeys) {
+      logger.debug('Skipping non-notebook, options or malformed key', { key });
       continue;
     }
-
-    const [, userId, filename] = key.split('/'); // prefix not used
-    const timestamp = filename?.split('.')[0];
-
-    if (!userId || !timestamp) {
-      logger.error('Invalid key format', { key });
-      continue;
-    }
-
-    const optionsKey = `notebooks/${userId}/${timestamp}.options.json`;
+    const { userId, optionsKey } = importKeys;
 
     try {
       logger.info('Processing notebook import', { key, optionsKey });

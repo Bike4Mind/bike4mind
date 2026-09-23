@@ -33,7 +33,8 @@ import {
 import dynamic from 'next/dynamic';
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import TextViewer from './TextViewer';
-import MarkdownViewer from './MarkdownViewer';
+import MarkdownViewer, { UnmarkedCitedPassage } from './MarkdownViewer';
+import { citedPassageForFile } from './citedPassage';
 import DocxViewer from './DOCXViewer';
 import CSVViewer from './CSVViewer';
 import QuestMasterReply from '../GenAI/QuestMasterReply';
@@ -50,7 +51,11 @@ import SendIcon from '@mui/icons-material/Send';
 import { ExpandMore, ExtensionOff, Splitscreen, FormatListNumbered } from '@mui/icons-material';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
 import { create } from 'zustand';
-import { setSessionLayout, clearRecentArtifacts } from '@client/app/hooks/useSessionLayout';
+import {
+  setSessionLayout,
+  clearRecentArtifacts,
+  clearSessionScopedViewerState,
+} from '@client/app/hooks/useSessionLayout';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
@@ -879,9 +884,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       clearRecentArtifacts();
       // The data-lake View preview is just as session-transient: leaving it set would surface a
       // stale "just looking" tab inside a different notebook's viewer.
-      if (useSessionLayout.getState().previewFile) {
-        setSessionLayout({ previewFile: null });
-      }
+      clearSessionScopedViewerState();
       prevSessionIdRef.current = currentSessionId;
     }
   }, [currentSessionId]);
@@ -1344,8 +1347,10 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
         }
         break;
       case 'questmaster':
-        // Use the async export feature for QuestMaster plans
-        questExport.startExport(currentItem.content);
+        // The plan id lives on the item's id, not its content: a streamed quest completion
+        // overwrites the content with a QuestMasterData object (see the streamed_chat_completion
+        // subscription above), and the export route only accepts an id.
+        questExport.startExport(currentItem.id);
         break;
       case 'code':
         downloadFile(
@@ -1717,6 +1722,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                     sx={(theme: Theme) => ({
                       borderColor: theme.palette.divider,
                     })}
+                    data-testid="knowledgeviewer-download-btn"
                   >
                     {questExport.isExporting ? (
                       <CircularProgress size="sm" sx={{ '--CircularProgress-size': '16px' }} />
@@ -2332,7 +2338,12 @@ const KnowledgeContent: React.FC<{
   }
 };
 
-const FileContent = ({
+/**
+ * Exported for tests, like the pane-latch helpers above: this is the surface a citation chip
+ * actually opens, and its Mermaid branch returns before the MarkdownViewer handoff - so the branch
+ * needs to be reachable on its own rather than only through the whole viewer's provider chain.
+ */
+export const FileContent = ({
   file,
   signedUrl,
   fetching,
@@ -2348,6 +2359,11 @@ const FileContent = ({
   const [content, setContent] = useState<string>('');
   const [isLoading, setIsLoading] = useState(true);
   const [readyToShow, setReadyToShow] = useState(false);
+  // The passage a citation click asked us to mark (#3038), narrowed to THIS file. The anchor is a
+  // single store slot shared by every open tab, so without the id guard a citation into one
+  // document would mark whatever text happens to collide in the others.
+  const citedAnchor = useSessionLayout(s => s.citedPassage);
+  const citedPassage = citedPassageForFile(citedAnchor, file?.id);
 
   // The signed URL takes a while to be ready; wait for it before showing content.
   useEffect(() => {
@@ -2565,12 +2581,22 @@ const FileContent = ({
         const mermaidMatch = content.match(/```mermaid\s*([\s\S]*?)```/);
 
         if (isMermaidDiagram || mermaidMatch) {
-          return <MermaidChart chartDefinition={mermaidMatch ? mermaidMatch[1].trim() : content} />;
+          // This branch returns BEFORE the MarkdownViewer handoff below, and it is the surface a
+          // citation chip actually opens (/opti?mode=datalake&article=<id>), so dropping the anchor
+          // here would lose the passage on the main deep-link path. A diagram has no prose blocks
+          // to mark, so it is shown as a callout rather than highlighted - same contract as
+          // MarkdownViewer's own Mermaid early returns.
+          return (
+            <>
+              {citedPassage && <UnmarkedCitedPassage passage={citedPassage} title="Cited passage" />}
+              <MermaidChart chartDefinition={mermaidMatch ? mermaidMatch[1].trim() : content} />
+            </>
+          );
         }
 
         const wrappedContent = content.includes('```mermaid') ? `\`\`\`mermaid\n${content}\n\`\`\`` : content;
 
-        return <MarkdownViewer content={wrappedContent} />;
+        return <MarkdownViewer content={wrappedContent} citedPassage={citedPassage} />;
       } else {
         return (
           <>

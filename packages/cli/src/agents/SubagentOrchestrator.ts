@@ -12,6 +12,7 @@ import type { ApiClient } from '../auth/ApiClient.js';
 import { withRetry, isRetryableError } from '@bike4mind/utils';
 import {
   generateCliTools,
+  wrapTools,
   wrapToolWithHooks,
   type AgentContext,
   type ToolFilter,
@@ -19,6 +20,7 @@ import {
   type UserQuestionPayload,
   type UserQuestionResponse,
 } from '../utils/toolsAdapter.js';
+import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { AgentStore } from './AgentStore.js';
 import type { AgentDefinition } from './types.js';
 import { ALWAYS_DENIED_FOR_AGENTS, MAX_SUBAGENT_DEPTH, HookBlockedError } from './types.js';
@@ -171,6 +173,14 @@ export interface OrchestratorDependencies {
   onSubagentUsage?: SubagentUsageCallback;
   /** Optional: retains completed sub-agent conversations for resume_agent. */
   historyStore?: AgentHistoryStore | null;
+  /**
+   * Sandbox orchestrator - threaded so a subagent's bash_execute is sandboxed
+   * and directory-scoped exactly like the main agent's (a delegated
+   * `cat ~/.ssh/id_rsa` must be denied the same way).
+   */
+  sandboxOrchestrator?: SandboxOrchestrator;
+  /** Live filesystem allow-list shared with the parent, for the same reason. */
+  additionalDirectories?: string[];
 }
 
 /**
@@ -312,8 +322,8 @@ export class SubagentOrchestrator {
       undefined, // toolFilter (applied below via filterToolsByPatterns)
       this.deps.showUserQuestion,
       this.deps.checkpointStore,
-      undefined, // sandboxOrchestrator (not wired for subagents)
-      undefined, // allowedDirectories (not wired for subagents)
+      this.deps.sandboxOrchestrator,
+      this.deps.additionalDirectories,
       effectiveInteractionMode
     );
 
@@ -331,7 +341,7 @@ export class SubagentOrchestrator {
 
     // Add skill tool for subagents if customCommandStore is available
     if (this.deps.customCommandStore) {
-      const skillTool = createSkillTool({
+      const rawSkillTool = createSkillTool({
         customCommandStore: this.deps.customCommandStore,
         subagentOrchestrator: this,
         sessionId: parentSessionId,
@@ -342,11 +352,32 @@ export class SubagentOrchestrator {
         parentInteractionMode: effectiveInteractionMode,
         // Onward forks inherit this agent's model unless they declare their own.
         parentModel: effectiveModel,
+        // Gate the skill's lifecycle hook shell commands through permission.
+        permission: {
+          permissionManager: this.deps.permissionManager,
+          promptFn: this.deps.showPermissionPrompt,
+        },
+        // Confine skill @file refs to the workspace (plus granted dirs).
+        allowedDirectories: this.deps.additionalDirectories,
+      });
+      // Route the skill through the ONE permission wrapper, same as the main
+      // agent, carrying this subagent's interaction-mode ceiling.
+      const [skillTool] = wrapTools([rawSkillTool], {
+        permissionManager: this.deps.permissionManager,
+        showPermissionPrompt: this.deps.showPermissionPrompt,
+        agentContext,
+        configStore: this.deps.configStore,
+        apiClient: this.deps.apiClient,
+        sandboxOrchestrator: this.deps.sandboxOrchestrator,
+        allowedDirectories: this.deps.additionalDirectories,
+        interactionModeOverride: effectiveInteractionMode,
       });
       filteredTools.push(skillTool);
 
-      // Build skills section for system prompt with agent's restrictions
-      const commands = this.deps.customCommandStore.getAllCommands();
+      // Build skills section for system prompt with agent's restrictions. Use the
+      // model-reachable set so a reserved-named skill is never advertised as
+      // invokable when the dispatch chokepoint would refuse it.
+      const commands = this.deps.customCommandStore.getModelReachableCommands();
       const skillsSection = buildSkillsPromptSection(commands, agentDef.skills);
       if (skillsSection) {
         systemPrompt += skillsSection;
@@ -364,6 +395,11 @@ export class SubagentOrchestrator {
       sessionId: parentSessionId,
       agentName,
       cwd: process.cwd(),
+      // Gate each agent lifecycle hook's shell command through permission.
+      permission: {
+        permissionManager: this.deps.permissionManager,
+        promptFn: this.deps.showPermissionPrompt,
+      },
     };
 
     const hookedTools = filteredTools.map(tool => wrapToolWithHooks(tool, agentDef.hooks, hookWrapperContext));
@@ -469,7 +505,8 @@ export class SubagentOrchestrator {
         buildHookContext({
           ...hookWrapperContext,
           hookEventName: 'Stop',
-        })
+        }),
+        hookWrapperContext.permission
       );
 
       if (stopResult.decision === 'block') {

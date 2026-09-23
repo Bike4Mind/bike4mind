@@ -25,6 +25,9 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
 
 vi.mock('@client/app/components/Knowledge/MarkdownViewer', () => ({
   default: ({ content }: { content?: string }) => <div data-testid="mock-markdown">{content}</div>,
+  UnmarkedCitedPassage: ({ passage }: { passage: string }) => (
+    <div data-testid="markdown-cited-passage-fallback">{passage}</div>
+  ),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });

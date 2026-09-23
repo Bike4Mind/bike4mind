@@ -11,6 +11,8 @@ import {
   RETRIEVAL_EXCLUDE_MARKERS_MAX,
 } from '@bike4mind/utils/retrievalExclusion';
 
+const OBJECT_ID = /^[0-9a-fA-F]{24}$/;
+
 export const ApiErrorSchema = z.object({
   status: z.number(),
   message: z.string(),
@@ -79,17 +81,11 @@ export const CreateSessionRequestSchema = z.object({
   preauthorizedLakeIds: z.array(z.string()).optional(),
 });
 
+// Id arrays here stay loose (no hex/shape check) unless a schema says otherwise: the queries they
+// reach guard ids themselves - usableObjectIds drops unusable ids from the $in batch filters in
+// SharableDocumentModel, and BaseModel.findById returns null for a non-hex id on per-id lookups.
 export const ProjectFilesRequestSchema = z.object({
   fileIds: z.array(z.string().min(1)),
-});
-
-export const ProjectSessionsRequestSchema = z.object({
-  sessionIds: z.array(z.string().min(1)).min(1).max(50),
-});
-
-export const FileTagToggleRequestSchema = z.object({
-  ids: z.array(z.string().min(1)),
-  tags: z.array(z.string().min(1)),
 });
 
 export const FileTagCreateRequestSchema = z.object({
@@ -140,13 +136,14 @@ export const NotebookExportRequestSchema = z.object({
     .positive()
     .optional()
     .prefault(10 * 1024 * 1024), // 10MB default
-  // These feed `_id: { $in: ... }` on ObjectId-keyed SessionModel, so one non-hex entry rejects the
-  // whole query with a CastError the route could only answer as a 500. Empty is rejected rather
-  // than treated as "all": getSessionsToExport only adds the `_id` filter when the array is
-  // non-empty, so `[]` and an omitted field produce the same bare `{ userId }` query - a caller
-  // who named zero notebooks would receive an archive of every one they own.
+  // These feed `_id: { $in: ... }` on ObjectId-keyed SessionModel. Rejecting a non-hex entry here
+  // names the offending index; getSessionsToExport also refuses the batch, but only as a whole.
+  // Empty is rejected rather than treated as "all": getSessionsToExport only adds the `_id`
+  // filter when the array is non-empty, so `[]` and an omitted field produce the same bare
+  // `{ userId }` query - a caller who named zero notebooks would receive an archive of every one
+  // they own.
   notebookIds: z
-    .array(z.string().regex(/^[0-9a-fA-F]{24}$/, 'must be a 24-character hex notebook id'))
+    .array(z.string().regex(OBJECT_ID, 'must be a 24-character hex notebook id'))
     .min(1, 'name at least one notebook, or omit notebookIds to export all')
     .max(50, 'Maximum 50 notebooks per export request')
     .optional(),
@@ -160,8 +157,10 @@ export const NotebookExportRequestSchema = z.object({
 });
 
 export const NotebookCurateRequestSchema = z.object({
+  // BaseModel.findById resolves a non-hex id to null, so an unguarded one reached the route as a
+  // 404, the same answer as an absent id. Rejecting the shape names the field, matching notebookIds above.
   sessionIds: z
-    .array(z.string().min(1))
+    .array(z.string().regex(OBJECT_ID, 'must be a 24-character hex session id'))
     .min(1, 'At least one session ID is required')
     .max(50, 'Maximum 50 sessions per curation request'),
   curationType: CurationTypeSchema.optional().prefault(CurationType.TRANSCRIPT),
@@ -171,8 +170,10 @@ export const NotebookCurateRequestSchema = z.object({
 });
 
 export const NotebookDownloadRequestSchema = z.object({
+  // BaseModel.findById resolves a non-hex id to null, so an unguarded one reached the route as a
+  // 404, the same answer as an absent id. Rejecting the shape names the field, matching notebookIds above.
   sessionIds: z
-    .array(z.string().min(1))
+    .array(z.string().regex(OBJECT_ID, 'must be a 24-character hex session id'))
     .min(1, 'At least one session ID is required')
     .max(50, 'Maximum 50 sessions per download'),
   format: ExportFormatSchema.optional().prefault('markdown'),
@@ -184,6 +185,8 @@ const BaseEmailRequestSchema = z.object({
   message: z.string().optional(),
 });
 
+// sessionIds/fileIds below are loose by design, not an oversight - see the comment above
+// ProjectFilesRequestSchema for why.
 export const EmailSendRequestSchema = z.discriminatedUnion('type', [
   BaseEmailRequestSchema.extend({
     type: z.literal('notebooks'),
@@ -198,20 +201,6 @@ export const EmailSendRequestSchema = z.discriminatedUnion('type', [
     fileIds: z.array(z.string().min(1)).min(1, 'At least one file ID is required'),
   }),
 ]);
-
-// Legacy schemas for backward compatibility (deprecated - use EmailSendRequestSchema)
-export const NotebookEmailRequestSchema = z.object({
-  sessionIds: z.array(z.string().min(1)).min(1, 'At least one session ID is required'),
-  recipients: z.array(z.email()).min(1, 'At least one recipient email is required'),
-  format: ExportFormatSchema.optional().prefault('markdown'),
-  message: z.string().optional(),
-});
-
-export const FabFileEmailRequestSchema = z.object({
-  fileIds: z.array(z.string().min(1)).min(1, 'At least one file ID is required'),
-  recipients: z.array(z.email()).min(1, 'At least one recipient email is required'),
-  message: z.string().optional(),
-});
 
 export const ProjectQueryParamsSchema = z.object({
   id: z.string().min(1),
@@ -237,8 +226,6 @@ export type CreateApiKeyRequestBody = z.infer<typeof CreateApiKeyRequestSchema>;
 export type UpdateUserRequestBody = z.infer<typeof UpdateUserRequestSchema>;
 export type CreateSessionRequestBody = z.infer<typeof CreateSessionRequestSchema>;
 export type ProjectFilesRequestBody = z.infer<typeof ProjectFilesRequestSchema>;
-export type ProjectSessionsRequestBody = z.infer<typeof ProjectSessionsRequestSchema>;
-export type FileTagToggleRequestBody = z.infer<typeof FileTagToggleRequestSchema>;
 export type FileTagCreateRequestBody = z.infer<typeof FileTagCreateRequestSchema>;
 export type ProjectCreateRequestBody = z.infer<typeof ProjectCreateRequestSchema>;
 export type ProjectInviteRequestBody = z.infer<typeof ProjectInviteRequestSchema>;
@@ -246,8 +233,6 @@ export type NotebookExportRequestBody = z.infer<typeof NotebookExportRequestSche
 export type NotebookCurateRequestBody = z.infer<typeof NotebookCurateRequestSchema>;
 export type NotebookDownloadRequestBody = z.infer<typeof NotebookDownloadRequestSchema>;
 export type EmailSendRequestBody = z.infer<typeof EmailSendRequestSchema>;
-export type NotebookEmailRequestBody = z.infer<typeof NotebookEmailRequestSchema>;
-export type FabFileEmailRequestBody = z.infer<typeof FabFileEmailRequestSchema>;
 
 export type ProjectQueryParams = z.infer<typeof ProjectQueryParamsSchema>;
 export type ProjectInviteQueryParams = z.infer<typeof ProjectInviteQueryParamsSchema>;

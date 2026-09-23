@@ -21,16 +21,17 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   App,
   TrustLocationSelector,
+  FolderTrustPrompt,
   RewindSelector,
   SessionSelector,
   EnvironmentPicker,
   ModelPicker,
 } from './components';
-import type { PermissionResponse, EnvChoice } from './components';
+import type { PermissionResponse, EnvChoice, FolderTrustChoice } from './components';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services/llm';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
-import { SessionStore, ConfigStore, CommandHistoryStore } from './storage';
+import { SessionStore, ConfigStore, CommandHistoryStore, buildGlobalConfigPatch } from './storage';
 import type { Session, Message, CliConfig, ProjectConfig, ProjectLocalConfig, SessionHandoff } from './storage';
 import { CheckpointStore } from './storage/CheckpointStore.js';
 import { ImageStore } from './storage/ImageStore.js';
@@ -43,6 +44,7 @@ import { getPlanModeFilePath } from './utils/planMode.js';
 import {
   PermissionManager,
   type AgentContext,
+  wrapTools,
   resolveApiEndpoint,
   requireApiUrl,
   ApiEndpointUnconfiguredError,
@@ -60,6 +62,7 @@ import { ConversationContext, reconstructTurnBlocks } from './context/Conversati
 import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
 import { buildWorkflowState } from './utils/workflowState.js';
 import { getProcessHooks } from './utils/processHooks.js';
+import { isValidSessionId, SESSION_ID_PATTERN } from './utils/validateSessionId.js';
 import {
   buildHandoffPrompt,
   parseHandoffResponse,
@@ -141,7 +144,7 @@ import packageJson from '../package.json';
 import type { ICreditTransactionResponse, ModelInfo } from '@bike4mind/common';
 import { CREDIT_DEDUCT_TRANSACTION_TYPES } from '@bike4mind/common';
 import { USAGE_DAYS, MODEL_NAME_COLUMN_WIDTH, USAGE_CACHE_TTL } from './config/constants';
-import { mergeCommands } from './config/commands.js';
+import { mergeCommands, rewireReservedNames } from './config/commands.js';
 import { SubagentOrchestrator } from './agents/SubagentOrchestrator.js';
 import { AgentStore } from './agents/AgentStore.js';
 import { createAgentDelegateTool } from './agents/delegateTool.js';
@@ -231,6 +234,8 @@ interface CliState {
   permissionManager: PermissionManager | null;
   permissionPrompt: PermissionPromptState | null;
   trustLocationSelector: TrustLocationSelectorState | null;
+  /** Startup folder-trust prompt for an untrusted project shipping b4m files. */
+  folderTrustPrompt: { projectRoot: string } | null;
   rewindSelector: RewindSelectorState | null;
   sessionSelector: SessionSelectorState | null;
   showLoginFlow?: boolean;
@@ -290,6 +295,7 @@ function CliApp() {
     permissionManager: null,
     permissionPrompt: null,
     trustLocationSelector: null,
+    folderTrustPrompt: null,
     rewindSelector: null,
     sessionSelector: null,
     orchestrator: null,
@@ -313,6 +319,10 @@ function CliApp() {
   const imageStoreInitPromise = useRef<Promise<ImageStore> | null>(null);
 
   // Durable workflow stores - refs so they're accessible across all callbacks
+  // Guards the one-time startup folder-trust prompt so re-runs of init() (login
+  // flow, env picker) don't re-show it. A ref (not React state) so it survives
+  // init()'s stable closure.
+  const folderTrustResolvedRef = useRef(false);
   const todoStoreRef = useRef(createTodoStore());
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
@@ -512,6 +522,26 @@ function CliApp() {
       // Load configuration
       const config = await state.configStore.load();
 
+      // Folder-trust gate: when an untrusted project ships repo-committed b4m
+      // files, prompt ONCE (interactive TTY only) before anything repo-sourced
+      // loads. Non-interactive stays untrusted (fail-safe). The ref guard keeps
+      // re-runs of init() (login/env-picker) from re-showing the prompt.
+      if (
+        !folderTrustResolvedRef.current &&
+        !state.configStore.isProjectTrusted() &&
+        state.configStore.projectHasB4mFiles() &&
+        Boolean(process.stdin.isTTY) &&
+        Boolean(process.stdout.isTTY)
+      ) {
+        folderTrustResolvedRef.current = true;
+        setState(prev => ({
+          ...prev,
+          folderTrustPrompt: { projectRoot: state.configStore.getProjectRealPath() ?? process.cwd() },
+          config,
+        }));
+        return;
+      }
+
       // Load additional directories from config and --add-dir flag
       const configDirs = await state.configStore.getAdditionalDirectories();
       const flagDirs = process.env.B4M_ADDITIONAL_DIRS ? JSON.parse(process.env.B4M_ADDITIONAL_DIRS) : [];
@@ -521,7 +551,9 @@ function CliApp() {
       const history = await state.commandHistoryStore.load();
       setCommandHistory(history);
 
-      // Load custom commands
+      // Load custom commands. Project skills load only for a trusted project
+      // root (folder-trust gate); this must be set before loadCommands().
+      state.customCommandStore.setProjectTrusted(state.configStore.isProjectTrusted());
       try {
         await state.customCommandStore.loadCommands();
       } catch (error) {
@@ -627,6 +659,16 @@ function CliApp() {
       // uuid (so a later --resume finds it). Stage launches set neither -> random uuid.
       const pinnedSessionId = process.env.B4M_SESSION_ID;
       const resumeSessionId = process.env.B4M_RESUME_ID;
+      // Both become filesystem path components (session store, debug logs);
+      // reject anything outside the strict charset before use (see validateSessionId).
+      if (pinnedSessionId && !isValidSessionId(pinnedSessionId)) {
+        console.error(`Invalid session id (--session-id / B4M_SESSION_ID): must match ${SESSION_ID_PATTERN.source}`);
+        process.exit(1);
+      }
+      if (resumeSessionId && !isValidSessionId(resumeSessionId)) {
+        console.error(`Invalid session id (--resume / B4M_RESUME_ID): must match ${SESSION_ID_PATTERN.source}`);
+        process.exit(1);
+      }
       let newSession: Session;
       if (resumeSessionId) {
         const resumed = await state.sessionStore.load(resumeSessionId);
@@ -881,21 +923,44 @@ function CliApp() {
         reviewGateStoreRef.current.reviewGates = [];
       }
 
+      // Deps for routing the raw CLI-built tools (skill, find_definition,
+      // get_file_structure) through the ONE permission wrapper, exactly like the
+      // B4M and MCP tools. `additionalDirectories` is the same live allow-list
+      // reference threaded into generateCliTools, so runtime grants apply here too.
+      const cliWrapDeps = {
+        permissionManager,
+        showPermissionPrompt: promptFn,
+        agentContext,
+        configStore: state.configStore,
+        apiClient,
+        sandboxOrchestrator: sandboxOrchestrator ?? undefined,
+        allowedDirectories: additionalDirectories,
+      };
+
       // Create skill tool for AI-driven skill invocation (unless disabled)
       const enableSkillTool = config.preferences.enableSkillTool !== false;
       const skillTool = enableSkillTool
-        ? createSkillTool({
-            customCommandStore: state.customCommandStore,
-            subagentOrchestrator: orchestrator,
-            sessionId: newSession.id,
-          })
+        ? wrapTools(
+            [
+              createSkillTool({
+                customCommandStore: state.customCommandStore,
+                subagentOrchestrator: orchestrator,
+                sessionId: newSession.id,
+                // Gate skill lifecycle hook shell commands through permission.
+                permission: { permissionManager, promptFn },
+                // Confine skill @file refs to the workspace (plus granted dirs).
+                allowedDirectories: additionalDirectories,
+              }),
+            ],
+            cliWrapDeps
+          )[0]
         : null;
 
       // Create find_definition tool for fast symbol lookup
-      const findDefinitionTool = createFindDefinitionTool();
+      const findDefinitionTool = wrapTools([createFindDefinitionTool(additionalDirectories)], cliWrapDeps)[0];
 
       // Create get_file_structure tool for AST-based code overview
-      const getFileStructureTool = createGetFileStructureTool();
+      const getFileStructureTool = wrapTools([createGetFileStructureTool(additionalDirectories)], cliWrapDeps)[0];
 
       // Persistent work tracking - outlives the session, unlike write_todos.
       // Off by default: six tool schemas in every completion is a real cost for
@@ -947,6 +1012,12 @@ function CliApp() {
         // 'tool_search' is added later but its name is fixed; reserve it too.
         reservedToolNames: [...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name).concat('tool_search'),
       });
+
+      // Feed the live plugin command names into the custom-command load gate, then
+      // drop any project command that loaded (pre-registry, above) under a name a
+      // runtime plugin command now owns - so load, display, and dispatch all share
+      // one reserved-name source.
+      rewireReservedNames(state, featureRegistry);
 
       // Register feature module tool names with ToolRouter so they route as local tools
       const featureModuleToolNames = featureRegistry.getAllToolNames();
@@ -2068,8 +2139,13 @@ function CliApp() {
   };
 
   const handleCommand = async (command: string, args: string[]) => {
-    // Check if this is a custom command first
-    const customCommand = state.customCommandStore.getCommand(command);
+    // Check if this is a custom command first. A reserved name (built-in or
+    // feature command) must never be served from the custom store - a repo-planted
+    // `.claude/commands/help.md` would otherwise hijack dispatch, since this lookup
+    // runs before any built-in/feature handling. getModelReachableCommand applies
+    // the same live reserved-name gate mergeCommands uses for the display list, at
+    // the point that actually executes - one derivation of the reserved set, not two.
+    const customCommand = state.customCommandStore.getModelReachableCommand(command);
     if (customCommand) {
       try {
         // Show that the command is being executed
@@ -2327,6 +2403,21 @@ function CliApp() {
       }
 
       case 'trust': {
+        // /trust folder - trust the current project root (folder-trust gate).
+        if (args[0] === 'folder') {
+          const root = state.configStore.getProjectRealPath() ?? process.cwd();
+          const trusted = await state.configStore.trustProject();
+          if (!trusted) {
+            console.log('\n⚠️  No project folder to trust here (no resolvable project root).\n');
+            return;
+          }
+          state.customCommandStore.setProjectTrusted(true);
+          await state.customCommandStore.reloadCommands().catch(() => {});
+          console.log(`\n✅ Trusted project folder: ${root}`);
+          console.log('Project skills are now loaded. Restart b4m to load repo agents and MCP servers.\n');
+          return;
+        }
+
         if (!state.permissionManager) {
           console.log('Permission manager not initialized');
           return;
@@ -2375,6 +2466,14 @@ function CliApp() {
                 console.log('❌ No project found. Use "global" to save to ~/.bike4mind/config.json');
                 return;
               }
+              // An untrusted root never re-reads its repo layers, so a project-local
+              // write would silently not apply and would drop a file into a repo the
+              // user declined to trust. Refuse and point at the honored paths.
+              if (!state.configStore.isProjectTrusted()) {
+                console.log('❌ This folder is not trusted, so a project-local trust would not take effect.');
+                console.log(`   Run /trust folder first, or choose "global" to trust '${toolToTrust}' everywhere.`);
+                return;
+              }
 
               try {
                 // Auto-create .bike4mind directory if needed
@@ -2400,6 +2499,14 @@ function CliApp() {
             case 'project': {
               if (!projectDir) {
                 console.log('❌ No project found. Use "global" to save to ~/.bike4mind/config.json');
+                return;
+              }
+              // Worse than local: this writes committable TEAM config into a repo
+              // the user declined to trust, and it would not apply this session
+              // either. Refuse until the folder is trusted.
+              if (!state.configStore.isProjectTrusted()) {
+                console.log('❌ This folder is not trusted, so a team-project trust would not take effect.');
+                console.log(`   Run /trust folder first, or choose "global" to trust '${toolToTrust}' everywhere.`);
                 return;
               }
 
@@ -2450,6 +2557,17 @@ function CliApp() {
       }
 
       case 'untrust': {
+        // /untrust folder - revoke trust for the current project root.
+        if (args[0] === 'folder') {
+          const root = state.configStore.getProjectRealPath() ?? process.cwd();
+          await state.configStore.untrustProject();
+          state.customCommandStore.setProjectTrusted(false);
+          await state.customCommandStore.reloadCommands().catch(() => {});
+          console.log(`\n✅ Untrusted project folder: ${root}`);
+          console.log('Repo config stays inert. Restart b4m to fully unload repo agents and MCP servers.\n');
+          return;
+        }
+
         if (!state.permissionManager) {
           console.log('Permission manager not initialized');
           return;
@@ -2834,7 +2952,7 @@ function CliApp() {
         const variantForCount = state.config?.preferences.promptVariant ?? 'current';
         const corePromptTokens = tokenCounter.countTokens(buildSystemPrompt(variantForCount));
         const projectContextTokens = state.contextContent ? tokenCounter.countTokens(state.contextContent) : 0;
-        const commands = state.customCommandStore.getAllCommands();
+        const commands = state.customCommandStore.getModelReachableCommands();
         const skillsSection = buildSkillsPromptSection(commands);
         const skillsTokens = skillsSection ? tokenCounter.countTokens(skillsSection) : 0;
         const agentDirectoryTokens = state.agentStore
@@ -2937,6 +3055,12 @@ function CliApp() {
 
         if (projectDir) {
           console.log(`Project Directory: ${projectDir}/.bike4mind/`);
+          if (!state.configStore.isProjectTrusted()) {
+            // The layers below are read straight off disk, but an untrusted root
+            // contributes nothing to the merged config - flag it so this doesn't
+            // read as the live configuration.
+            console.log('⚠️  Folder not trusted - team/local config below is NOT applied. Run /trust folder.');
+          }
           console.log('');
 
           const projectConfig = await state.configStore.loadRawProjectConfig();
@@ -2982,9 +3106,11 @@ function CliApp() {
       }
 
       case 'commands': {
-        const customCommands = state.customCommandStore.getAllCommands();
-        const globalCommands = state.customCommandStore.getCommandsBySource('global');
-        const projectCommands = state.customCommandStore.getCommandsBySource('project');
+        // Model-reachable set: display matches dispatch, so a reserved-named
+        // command the dispatch chokepoint would refuse is not listed here.
+        const customCommands = state.customCommandStore.getModelReachableCommands();
+        const globalCommands = customCommands.filter(cmd => cmd.source === 'global');
+        const projectCommands = customCommands.filter(cmd => cmd.source === 'project');
 
         console.log('\n📝 Custom Commands:\n');
 
@@ -3220,12 +3346,9 @@ function CliApp() {
             console.log(`🌐 Network proxy started on port ${pm.getPort()}`);
           }
         }
-        // Persist to config
-        const config = await state.configStore.get();
-        await state.configStore.save({
-          ...config,
-          sandbox: { ...state.sandboxOrchestrator.getConfig() },
-        });
+        // Persist ONLY the sandbox field. Spreading the merged effective config
+        // would launder repo-sourced preferences/tools/defaultModel into global.
+        await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
         console.log('Sandbox enabled (auto-allow mode)');
         break;
       }
@@ -3238,11 +3361,7 @@ function CliApp() {
         await state.sandboxOrchestrator.stopProxy();
         state.sandboxOrchestrator.setMode('disabled');
         state.permissionManager?.setSandboxState('disabled', false);
-        const disableConfig = await state.configStore.get();
-        await state.configStore.save({
-          ...disableConfig,
-          sandbox: { ...state.sandboxOrchestrator.getConfig() },
-        });
+        await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
         console.log('Sandbox disabled');
         break;
       }
@@ -3263,11 +3382,7 @@ function CliApp() {
         }
         state.sandboxOrchestrator.setMode(modeArg);
         state.permissionManager?.setSandboxState(modeArg, state.sandboxOrchestrator.isActive());
-        const modeConfig = await state.configStore.get();
-        await state.configStore.save({
-          ...modeConfig,
-          sandbox: { ...state.sandboxOrchestrator.getConfig() },
-        });
+        await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
         console.log(`Sandbox mode set to: ${modeArg}`);
         break;
       }
@@ -3290,17 +3405,13 @@ function CliApp() {
           proxyMgr.addAllowedDomain(domain);
           console.log(`  Added: ${domain}`);
         }
-        // Persist to config
-        const trustDomainConfig = await state.configStore.get();
+        // Persist ONLY the sandbox field (no repo-merged config laundering).
         const currentSandboxConfig = state.sandboxOrchestrator.getConfig();
-        await state.configStore.save({
-          ...trustDomainConfig,
-          sandbox: {
-            ...currentSandboxConfig,
-            network: {
-              ...currentSandboxConfig.network,
-              allowedDomains: proxyMgr.getAllowedDomains(),
-            },
+        await state.configStore.saveSandboxConfig({
+          ...currentSandboxConfig,
+          network: {
+            ...currentSandboxConfig.network,
+            allowedDomains: proxyMgr.getAllowedDomains(),
           },
         });
         console.log(`Trusted ${args.length} domain(s)`);
@@ -3531,7 +3642,14 @@ function CliApp() {
    * Handle saving config from the interactive editor
    */
   const handleSaveConfig = async (updatedConfig: CliConfig, options?: { skipModelApply?: boolean }): Promise<void> => {
-    await state.configStore.save(updatedConfig);
+    // Persist ONLY the fields the /config editor owns AND that the user actually
+    // changed vs the current effective config, via buildGlobalConfigPatch (pure +
+    // unit-tested). Unchanged fields equal the merged seed, so a repo-injected
+    // defaultModel/preference the user never touched is never laundered into the
+    // global layer. tools/sandbox/mcpServers/trustedTools are not editor-owned and
+    // never persist here (see GlobalConfigPatch).
+    const patch = buildGlobalConfigPatch(state.config, updatedConfig);
+    await state.configStore.save(patch);
 
     // Check if model changed
     const modelChanged = state.config?.defaultModel !== updatedConfig.defaultModel;
@@ -3563,7 +3681,15 @@ function CliApp() {
         logger,
         reservedToolNames: baseTools.map(t => t.toolSchema.name),
       });
-      newFeatureRegistry = rebuilt.registry;
+      const rebuiltRegistry = rebuilt.registry;
+      newFeatureRegistry = rebuiltRegistry;
+
+      // Re-point the custom-command reserved-name gate at the hot-swapped registry
+      // and re-prune, mirroring the bootstrap wiring. Without this the store's
+      // reserved source stays pinned to the boot registry, so a project command
+      // shadowing a plugin enabled at runtime survives load, display, and dispatch.
+      rewireReservedNames(state, rebuiltRegistry);
+
       for (const skippedPlugin of rebuilt.skipped) {
         console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
       }
@@ -3595,7 +3721,7 @@ function CliApp() {
         buildSystemPrompt(updatedConfig.preferences.promptVariant ?? 'current', {
           contextContent: state.contextContent,
           agentStore: state.agentStore || undefined,
-          customCommands: state.customCommandStore.getAllCommands(),
+          customCommands: state.customCommandStore.getModelReachableCommands(),
           enableSkillTool: updatedConfig.preferences.enableSkillTool !== false,
           enableDynamicAgentCreation: updatedConfig.preferences.enableDynamicAgentCreation === true,
           additionalDirectories: state.additionalDirectories,
@@ -3680,7 +3806,12 @@ function CliApp() {
         if (!state.config) {
           throw new Error('no CLI config is loaded');
         }
-        await handleSaveConfig({ ...state.config, defaultModel: modelId }, { skipModelApply: true });
+        // Persist ONLY the model choice (an explicit user pick). Spreading the
+        // merged effective config through handleSaveConfig would launder repo
+        // preferences into the global layer. The live-session apply is handled
+        // by performModelSwitch's applyToSession (applyModelToSession) below.
+        await state.configStore.save({ defaultModel: modelId });
+        setState(prev => (prev.config ? { ...prev, config: { ...prev.config, defaultModel: modelId } } : prev));
       },
       applyToSession: applyModelToSession,
       log: message => console.log(message),
@@ -3716,6 +3847,34 @@ function CliApp() {
           if (state.trustLocationSelector) {
             state.trustLocationSelector.resolve(null);
           }
+        }}
+      />
+    );
+  }
+
+  // Show the one-time folder-trust prompt for an untrusted project shipping
+  // repo b4m files. Resolving it re-runs init() (the ref guard prevents a loop).
+  if (state.folderTrustPrompt) {
+    return (
+      <FolderTrustPrompt
+        projectRoot={state.folderTrustPrompt.projectRoot}
+        onSelect={(choice: FolderTrustChoice) => {
+          void (async () => {
+            try {
+              if (choice === 'trust') {
+                await state.configStore.trustProject();
+                console.log('\n✅ Folder trusted. Loading its config, agents, skills and MCP servers.\n');
+              } else {
+                console.log('\nℹ️  Project config stays inert this session. Use /trust folder to trust it later.\n');
+              }
+            } finally {
+              setState(prev => ({ ...prev, folderTrustPrompt: null }));
+              init().catch(err => {
+                console.error('\n❌ Initialization failed:', err instanceof Error ? err.message : String(err), '\n');
+                exit();
+              });
+            }
+          })();
         }}
       />
     );

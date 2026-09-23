@@ -65,19 +65,20 @@ import {
   ImageEditResponse,
   BaseStorage,
   getSettingsByNames,
+  downloadImageAsBuffer,
 } from '@bike4mind/utils';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { truncateImagePrompt } from './imagePromptTruncation';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
-import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { fromZodError } from 'zod-validation-error';
 import {
+  OMITTED_QUALITY_TIER,
   OpenAICostInput,
   OpenAIGPTImageInput,
   OpenAIImageCostCalculator,
@@ -90,9 +91,25 @@ import { shouldSummarizeSession } from './ChatCompletionFeatures';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
 
-/** Maps quality for GPT Image models: standard -> medium, hd -> high; returns quality unchanged for other models. */
+/**
+ * The tier a GPT-Image request is both billed at and rendered at: standard -> medium,
+ * hd -> high, and an omitted tier pinned to OMITTED_QUALITY_TIER. Quality is returned
+ * unchanged for every other model family, none of which has a tier concept.
+ *
+ * Both callers below read this one function - validateUserCredits (the charge) and the
+ * openaiParams dispatch (the render) - so the two cannot disagree.
+ *
+ * Pinning an omitted tier is the #3007 fix. Left undefined, the parameter is dropped from
+ * the OpenAI call entirely, OpenAI applies its own 'auto' and can render at high effort,
+ * while the calculator has already held the medium price - and image credits are held once,
+ * before the call, with no reconciliation pass to correct it. Pinning moves nobody's bill
+ * (the pin IS the billed tier); a caller who wants OpenAI's dynamic effort asks for it with
+ * an explicit 'auto', which bills at the ceiling. Do not restore the undefined here without
+ * repricing the omitted case in OpenAIImageCostCalculator.normalizeInput.
+ */
 function mapQualityForModel(model: string, quality: OpenAIGPTImageInput['quality']): OpenAIGPTImageInput['quality'] {
-  if (!isGPTImageModel(model) || !quality) return quality;
+  if (!isGPTImageModel(model)) return quality;
+  if (!quality) return OMITTED_QUALITY_TIER;
   return quality === 'standard' ? 'medium' : quality === 'hd' ? 'high' : quality;
 }
 
@@ -164,21 +181,11 @@ interface IImageGenerationServiceOptions {
   resolveLakeAccess?: (user: IUserDocument, logger: Logger) => Promise<AttachmentLakeAccess>;
 }
 
-async function downloadImage(url: string) {
-  // Handle data URLs (base64 images) from GPT-Image-1
-  if (url.startsWith('data:image/')) {
-    const base64Data = url.split(',')[1];
-    return Buffer.from(base64Data, 'base64');
-  }
-
-  // Handle regular URLs from DALL-E and other models
-  const response = await axios.get(url, { responseType: 'arraybuffer' });
-  return response.data;
-}
-
-async function imageUrlToBase64(imageUrl: string): Promise<string> {
-  const data = await downloadImage(imageUrl);
-  const buffer = Buffer.from(data, 'binary');
+async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
+  // `downloadImageAsBuffer` handles both the data URLs GPT-Image-1 returns and the http(s) URLs
+  // from DALL-E and friends, and SSRF-guards the latter. `trustConfiguredStorageOrigin` must only
+  // be set true for a URL a caller just got back from `getSignedUrl` in this same request.
+  const buffer = await downloadImageAsBuffer(imageUrl, { trustConfiguredStorageOrigin });
   return buffer.toString('base64');
 }
 
@@ -1001,7 +1008,9 @@ export class ImageGenerationService {
               Logger.globalInstance.debug(`[DEBUG] Gemini edit: converting input image to base64`, {
                 urlPreview: imageUrl.substring(0, 100) + '...',
               });
-              base64Image = await imageUrlToBase64(imageUrl);
+              // `imageUrl` is always a fabFile/storage `getSignedUrl` result or an internal
+              // storage key above, never a caller-supplied string.
+              base64Image = await imageUrlToBase64(imageUrl, true);
               Logger.globalInstance.debug(`[DEBUG] Gemini edit: base64 conversion successful`, {
                 length: base64Image.length,
               });
@@ -1162,7 +1171,8 @@ export class ImageGenerationService {
         let base64Image: string | undefined;
         if (imageUrl) {
           try {
-            base64Image = await imageUrlToBase64(imageUrl);
+            // `imageUrl` above always came from `fabFileStorage.getSignedUrl` or `storage.getSignedUrl`.
+            base64Image = await imageUrlToBase64(imageUrl, true);
             Logger.globalInstance.debug(`[DEBUG] ✅ Base64 conversion successful:`, {
               base64Length: base64Image.length,
               preview: base64Image.substring(0, 50) + '...',
@@ -1300,8 +1310,10 @@ export class ImageGenerationService {
 
         // Filter parameters based on model type
         if (isGPTImageModel(model)) {
-          // GPT-Image models don't support 'style' or 'response_format' parameters
-          // Use mapped quality (standard -> medium, hd -> high)
+          // GPT-Image models don't support 'style' or 'response_format' parameters.
+          // Same mapping validateUserCredits billed against, so the render matches the charge -
+          // including the omitted case, which mapQualityForModel pins rather than dropping.
+          // The truthiness guard is kept for the unrecognized-value case only.
           const mappedQuality = mapQualityForModel(model, quality);
           if (mappedQuality) {
             openaiParams.quality = mappedQuality;
@@ -1325,6 +1337,9 @@ export class ImageGenerationService {
         if (referenceImageUrls.length) {
           openaiParams.referenceImages = referenceImageUrls;
         }
+        // `imageUrl` and `referenceImageUrls` above are always `getSignedUrl` results, never a
+        // caller- or provider-supplied string.
+        openaiParams.trustConfiguredStorageOrigin = true;
 
         Logger.globalInstance.debug(`[DEBUG] OpenAI API call parameters:`, {
           model,
@@ -1366,7 +1381,7 @@ export class ImageGenerationService {
             model,
           });
 
-          const buffer = await downloadImage(image);
+          const buffer = await downloadImageAsBuffer(image);
           const fileType = await fileTypeFromBuffer(buffer);
           const filename = `${uuidv4()}.${fileType?.ext}`;
 

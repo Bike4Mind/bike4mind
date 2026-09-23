@@ -62,6 +62,7 @@ GEMINI_API_KEY=         # Google Gemini
 XAI_API_KEY=            # Grok
 DEEPSEEK_API_KEY=       # DeepSeek
 MOONSHOT_API_KEY=       # Kimi
+BFL_API_KEY=            # Black Forest Labs (FLUX image models)
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
 ```
 
@@ -95,7 +96,9 @@ Working from a checkout and want to run your own edits (or a freshly pulled `mai
 docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d --build
 ```
 
-`--build` rebuilds the `app` image from the Dockerfile before starting; only `app` rebuilds, the backing services just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+`--build` rebuilds the services that build from source - `app`, the `ws` gateway, `chatcompletion`, and `worker` - before starting; the pure-image backing services (Mongo, MinIO, etc.) just restart. Drop `--profile ollama` if you are not running local models, and keep any `-f compose.ollama-*.yaml` overrides you normally pass (see [Local models with Ollama](#local-models-with-ollama-no-api-keys)). Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+
+> **Upgrading: rebuild the `ws` gateway in lockstep with the app.** The `ws` gateway is built from source (there is no published image for it), while the app is pulled by default. The browser and the gateway share a connection contract (the browser sends its realtime credential as a `?ticket=` query the gateway must forward), so a version skew between them breaks realtime for every browser silently - the socket is simply rejected. A pull-only upgrade (`docker compose ... pull && ... up -d`) refreshes the published `app` image but leaves the already-built `ws` container at its old version. When you move to a new version, `git pull` your checkout and bring the stack up with `--build` (which rebuilds `ws` too), or rebuild the gateway explicitly with `docker compose -f compose.selfhost.yaml build ws`.
 
 Confirm it came up, then follow the logs:
 
@@ -687,7 +690,27 @@ Discovery uses the provider keys already in `.env.selfhost` (or a user's own key
 - **Image generation or image edit never completes (the quest stays "pending")** - both are queued to the `worker` service. Check `IMAGE_GENERATION_QUEUE` and `IMAGE_EDIT_QUEUE` are set in `.env.selfhost` (added after the initial release, so an upgraded install may be missing them), then confirm the worker picked them up: its boot line names every queue it polls, e.g. `[selfHostWorker] started: polling 6 queue(s) [researchEngineQueue, ..., imageGenerationQueue, imageEditQueue]`. An unset var is warned about by name and the consumer is skipped, leaving the rest of the worker running. Also make sure the queues exist in `elasticmq.conf` and that a provider key is configured (see "Image generation and image edit"). An OpenAI **edit** fails by design here - use Gemini or BFL.
 - **Research/deep-research tasks never complete** - the `worker` consumes the research queue. Confirm it's running and check its logs; a task that keeps failing is left for a few retries, then dropped with an error log (ElasticMQ has no dead-letter queue).
 - **Files chunk but never get vectors / vectorize fails with a `401`** - your `OPENAI_API_KEY` (or `VOYAGE_API_KEY`) is set to an invalid or placeholder value, so embedding is routed to that cloud provider and rejected. Set a real key, or clear it and configure a local Ollama embedder (see "Offline RAG") for the airgapped path. A dummy/placeholder value is ignored automatically; a present-but-invalid key now surfaces an actionable error on the file instead of a raw 401. If you previously picked a cloud embedder in **Settings -> AI**, switch it back to a local one after clearing the key.
-- **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` ran the `mc event add` on the fab-file bucket (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs. Running the app on your host with `next dev`? The webhook (aimed at the compose `app`) can't reach it at all - that is expected, and the safety-net scan still chunks within a few minutes. See [Frontend dev mode](#frontend-dev-mode-host-next-dev).
+- **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` registered notifications on `FAB_FILE_BUCKET` (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs. Running the app on your host with `next dev`? The webhook (aimed at the compose `app`) can't reach it at all - that is expected, and the safety-net scan still chunks within a few minutes. See [Frontend dev mode](#frontend-dev-mode-host-next-dev).
+
+### History or notebook uploads never start importing
+
+`createbuckets` registers ObjectCreated notifications on **both** `FAB_FILE_BUCKET` and `HISTORY_IMPORT_BUCKET`. The first drives uploaded-file ingestion; the second drives history and notebook imports. Both must point to `arn:minio:sqs::primary:webhook`, whose endpoint is `http://app:3000/api/internal/s3/object-created`. Verify that `HISTORY_IMPORT_BUCKET` names the same bucket for the app, MinIO registration and uploaded objects. The notebook data object uses `notebooks/<userId>/<timestamp>.json`; its `.options.json` sibling is configuration, not an import trigger.
+
+Check the registrations without changing them:
+
+```bash
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost run --rm --no-deps --entrypoint /bin/sh createbuckets -c '
+  mc alias set local http://minio:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null &&
+  mc event list "local/$FAB_FILE_BUCKET" &&
+  mc event list "local/$HISTORY_IMPORT_BUCKET"
+'
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs createbuckets
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f minio app
+```
+
+Confirm both registrations include the `put` event and webhook target. If one is missing, correct the bucket environment values and rerun `createbuckets` with the same Compose files and environment. During a fresh import through the UI, inspect MinIO delivery failures and the app's webhook/import logs. Check that `INTERNAL_S3_WEBHOOK_SECRET` agrees between MinIO and the app, and that MinIO can reach the configured endpoint. When using host-side `next dev`, repoint the webhook as described in [Frontend dev mode](#frontend-dev-mode-host-next-dev); delivery to the stopped Compose app cannot trigger imports.
+
+The FabFile safety-net filter in `apps/client/server/worker/chunkScan.ts` (`buildFabFileChunkScanFilter`) scans FabFile records only. It does **not** recover history or notebook imports from missed notifications. A successful registration listing or notification delivered to a diagnostic sink proves configuration or delivery only. To prove a completed import, check its terminal application status and read the expected imported content after refreshing the app.
 
 ## Security notes
 
@@ -814,7 +837,7 @@ WEBSOCKET_URL=wss://chat.example.com/ws
 
 `APP_URL` is the CSRF origin allow-list and must be the public `https` origin, not the container address: left at the template's `http://localhost:3000` it cannot match the origin your visitors browse from, so every state-changing request 403s with `Invalid request origin. CSRF protection triggered (expected http://localhost:3000).` while reads keep working.
 
-The `WEBSOCKET_URL` path must be `/ws` to match the Caddyfile route: the browser uses `WEBSOCKET_URL` verbatim (plus a `?token=` query), and Caddy proxies `/ws` to the ws gateway, which accepts the upgrade on any path. No app-side change is needed.
+The `WEBSOCKET_URL` path must be `/ws` to match the Caddyfile route: the browser uses `WEBSOCKET_URL` verbatim (plus a `?ticket=` query), and Caddy proxies `/ws` to the ws gateway, which accepts the upgrade on any path. No app-side change is needed.
 
 **4. Bring the stack up with the `proxy` profile:**
 
@@ -860,3 +883,11 @@ Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Que
 Python artifacts execute in the browser via Pyodide (WebAssembly), fetched by default from the public jsDelivr CDN - so a fully air-gapped box cannot run them out of the box. To run them offline, mirror the Pyodide v0.25.1 "full" distribution on a server you control and set `PYODIDE_BASE_URL` in `.env.selfhost` to that base (a trailing slash is added automatically if you omit it). A cross-origin mirror must send permissive CORS headers; its origin is added to the app CSP automatically. See the `PYODIDE_BASE_URL` block in `.env.selfhost.example` for what to mirror. Leave it unset to use the CDN.
 
 Need help? Ask in [Discussions](https://github.com/bike4mind/bike4mind/discussions).
+
+### Batch reconciliation timing
+
+The worker runs its existing stuck-batch reconciliation once at startup and at 05:00 UTC, independent of the host timezone. Startup before 05:00 does not consume that day's scheduled run. Startup after 05:00 waits until tomorrow for the next scheduled run; it does not replay missed days. Startup exactly at 05:00 coalesces with that scheduled slot.
+
+Startup and scheduled reconciliation share one in-flight guard and shutdown drain budget. A scheduled slot that overlaps an active run is skipped, as is an immediate retry after failure. Clock checks occur at most 60 seconds apart: a delayed wake or forward clock jump coalesces missed slots into one run, with at most one scheduled invocation per UTC day in that process. A backward clock adjustment does not replay consumed days. The separate startup run can add one invocation. There is no persistent schedule history or coordination between multiple workers; run one worker for this schedule.
+
+This changes only when `runStuckBatchSweep` runs. Its existing database updates, taxonomy queue/status effects and CloudWatch metric attempts remain unchanged; it is not a Mongo-only maintenance job. It does not enable the full hosted reconciliation handler or other hosted daily maintenance jobs.

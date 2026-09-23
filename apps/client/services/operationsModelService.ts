@@ -1,5 +1,11 @@
 import { getSettingsByNames } from '@bike4mind/utils';
-import { buildApiKeyTable, getAvailableModels, getLlmByModel, type ApiKeyTable } from '@bike4mind/llm-adapters';
+import {
+  buildApiKeyTable,
+  getAvailableModels,
+  getLlmByModel,
+  type ApiKeyTable,
+  type ICompletionBackend,
+} from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { apiKeyRepository, adminSettingsRepository, AdminSettings } from '@bike4mind/database';
@@ -115,6 +121,44 @@ export class OperationsModelService {
   }
 
   /**
+   * Build a usable image backend starting from `candidate`, retrying down
+   * getDefaultImageModel's priority order when a candidate's backend fails to
+   * construct (e.g. a local-image model whose server is currently
+   * unreachable). Returns `{ undefined, null }` once every image model in the
+   * catalog has been tried and none could build.
+   */
+  private static pickWorkingImageModel(
+    apiKeyTable: OperationsApiKeyTable,
+    models: ModelInfo[],
+    candidate: ModelInfo | undefined,
+    logLabel: string
+  ): { imageModelInfo: ModelInfo | undefined; imageLlm: ICompletionBackend | null } {
+    const tried = new Set<string>();
+    let next = candidate;
+
+    while (next && !tried.has(next.id)) {
+      tried.add(next.id);
+      let llm: ICompletionBackend | null = null;
+      try {
+        llm = getLlmByModel(apiKeyTable, { modelInfo: next, logger: this.logger });
+      } catch (err) {
+        this.logger.warn(`Failed to initialize ${logLabel} image model ${next.id}`, err);
+      }
+      if (llm) {
+        return { imageModelInfo: next, imageLlm: llm };
+      }
+
+      this.logger.warn(
+        `Failed to initialize ${logLabel} image model ${next.id} - trying the next available image model`
+      );
+      next = getDefaultImageModel(models, tried);
+    }
+
+    this.logger.warn(`No usable image models available for ${logLabel} - continuing without image support`);
+    return { imageModelInfo: undefined, imageLlm: null };
+  }
+
+  /**
    * Resolve ONLY the operations text model and its LLM - never image or speech.
    *
    * Background tasks (research, summaries) need a text model and must not fail when
@@ -210,19 +254,12 @@ export class OperationsModelService {
         imageModelInfo = getDefaultImageModel(models);
       }
 
-      if (!imageModelInfo) {
-        throw new Error(`No image models available for operations`);
-      }
-
-      const imageLlm = getLlmByModel(apiKeyTable, {
-        modelInfo: imageModelInfo,
-        logger: this.logger,
-      });
-
-      if (!imageLlm) {
-        this.logger.error(`Failed to initialize LLM for operations image model ${config.imageModelId}`);
-        throw new Error(`Failed to initialize operations image model ${config.imageModelId}`);
-      }
+      // Image model is optional - a deployment with no configured image backend
+      // (e.g. self-host with no BFL/OpenAI/local-image key) has none, and
+      // text-only operations callers must not fail on that account.
+      const imagePick = OperationsModelService.pickWorkingImageModel(apiKeyTable, models, imageModelInfo, 'operations');
+      imageModelInfo = imagePick.imageModelInfo;
+      const imageLlm = imagePick.imageLlm;
 
       // Speech model is optional - proceed without it if unavailable
       const speechModelInfo = models.find(m => m.id === config.speechModelId);
@@ -249,8 +286,8 @@ export class OperationsModelService {
         llm,
         modelInfo,
         imageLlm,
-        imageModelId: imageModelInfo.id,
-        imageModelInfo,
+        imageModelId: imageModelInfo ? imageModelInfo.id : null,
+        imageModelInfo: imageModelInfo || null,
         speechLlm,
         speechModelId: speechModelInfo ? speechModelInfo.id : null,
         speechModelInfo: speechModelInfo || null,
@@ -299,22 +336,20 @@ export class OperationsModelService {
       imageModelInfo = getDefaultImageModel(models);
     }
 
-    if (!imageModelInfo) {
-      throw new Error('No image models available for operations');
-    }
-
-    const imageLlm = getLlmByModel(apiKeyTable, {
-      modelInfo: imageModelInfo,
-      logger: this.logger,
-    });
-
-    if (!imageLlm) {
-      throw new Error(`Failed to initialize hardcoded default operations image model ${imageModelInfo.id}`);
-    }
-
-    this.logger.info(
-      `Using hardcoded default operations image model: ${imageModelInfo.id} (${imageModelInfo.backend})`
+    // Image model is optional - see getOperationsModel's comment.
+    const imagePick = OperationsModelService.pickWorkingImageModel(
+      apiKeyTable,
+      models,
+      imageModelInfo,
+      'hardcoded default operations'
     );
+    imageModelInfo = imagePick.imageModelInfo;
+    const imageLlm = imagePick.imageLlm;
+    if (imageModelInfo) {
+      this.logger.info(
+        `Using hardcoded default operations image model: ${imageModelInfo.id} (${imageModelInfo.backend})`
+      );
+    }
 
     // Speech model is optional
     let speechModelInfo = models.find(m => m.id === defaultConfig.speechModelId);
@@ -348,8 +383,8 @@ export class OperationsModelService {
       modelId: modelInfo.id,
       llm,
       modelInfo,
-      imageModelId: imageModelInfo.id,
-      imageModelInfo: imageModelInfo,
+      imageModelId: imageModelInfo ? imageModelInfo.id : null,
+      imageModelInfo: imageModelInfo || null,
       imageLlm,
       speechModelId: speechModelInfo ? speechModelInfo.id : null,
       speechModelInfo: speechModelInfo || null,
@@ -402,24 +437,19 @@ export class OperationsModelService {
 
     this.logger.info(`Using default operations model: ${modelInfo.id} (${modelInfo.backend})`);
 
-    const imageModelInfo = getDefaultImageModel(models);
-    const imageModelId = imageModelInfo?.id;
+    let imageModelInfo = getDefaultImageModel(models);
 
+    // Image model is optional - see getOperationsModel's comment.
+    const imagePick = OperationsModelService.pickWorkingImageModel(
+      apiKeyTable,
+      models,
+      imageModelInfo,
+      'default operations'
+    );
+    imageModelInfo = imagePick.imageModelInfo;
+    const imageLlm = imagePick.imageLlm;
     if (imageModelInfo) {
-      this.logger.info(`Using default image model: ${imageModelId} (${imageModelInfo.backend})`);
-    }
-
-    if (!imageModelInfo) {
-      throw new Error('No image models available for operations');
-    }
-
-    const imageLlm = getLlmByModel(apiKeyTable, {
-      modelInfo: imageModelInfo,
-      logger: this.logger,
-    });
-
-    if (!imageLlm) {
-      throw new Error(`Failed to initialize default operations image model ${imageModelInfo.id}`);
+      this.logger.info(`Using default image model: ${imageModelInfo.id} (${imageModelInfo.backend})`);
     }
 
     // Speech model is optional
@@ -449,8 +479,8 @@ export class OperationsModelService {
       llm,
       modelInfo,
       imageLlm,
-      imageModelId: imageModelInfo.id,
-      imageModelInfo,
+      imageModelId: imageModelInfo ? imageModelInfo.id : null,
+      imageModelInfo: imageModelInfo || null,
       speechLlm,
       speechModelId: speechModelInfo ? speechModelInfo.id : null,
       speechModelInfo: speechModelInfo || null,

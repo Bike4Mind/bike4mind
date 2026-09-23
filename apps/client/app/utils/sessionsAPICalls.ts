@@ -1,5 +1,11 @@
 import { api } from '@client/app/contexts/ApiContext';
-import { IChatHistoryItem, IChatHistoryItemDocument, ISessionDocument, ISessionFavoriteItem } from '@bike4mind/common';
+import {
+  IChatHistoryItem,
+  IChatHistoryItemDocument,
+  ISessionDocument,
+  ISessionFavoriteItem,
+  SessionUpdateRequest,
+} from '@bike4mind/common';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 
 export const getSessionsFromServer = async (
@@ -50,7 +56,17 @@ export const getSessionByIdFromServer = async (sessionId: string): Promise<ISess
   return response.data;
 };
 
-export const updateSessionToServer = async (sessionData: Partial<ISessionDocument>) => {
+/**
+ * The PUT /api/sessions/{id} body. `lakeScope` (tri-state: a list, `[]` for no lake, `null` to
+ * clear) is the request-only spelling of the stored `retrievalTags`/`lakeScopeExplicit` pair, and
+ * deliberately has no field of that name on `ISessionDocument` - a caller that spreads a whole
+ * cached session into this payload (a rename PUTs the session back as-is) then has no `lakeScope`
+ * key to accidentally carry, so the server's parse drops it rather than reading the echoed
+ * `retrievalTags: []` Mongoose hydrates onto every session as a deliberate "ground on no lake".
+ */
+export type SessionUpdatePayload = Partial<ISessionDocument> & Pick<SessionUpdateRequest, 'lakeScope'>;
+
+export const updateSessionToServer = async (sessionData: SessionUpdatePayload & { id: string }) => {
   const response = await api.put(`/api/sessions/${sessionData.id}`, sessionData);
   return response.data;
 };

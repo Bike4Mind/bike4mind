@@ -1,6 +1,7 @@
 export * from './ConnectionModel';
 export * from './FeedbackModel';
 export * from './FeedbackReportQueries';
+export * from './FeedbackRollupQueries';
 export * from './FeedbackTextModel';
 export * from './FriendshipModel';
 export * from './GroupModel';

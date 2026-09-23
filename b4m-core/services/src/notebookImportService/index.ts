@@ -31,6 +31,17 @@ interface NotebookRef {
   userId: string;
 }
 
+/** The four attachment-id arrays a notebook carries, keyed the same way on every write path. */
+type AttachmentIds = { knowledgeIds: string[]; artifactIds: string[]; toolIds: string[]; agentIds: string[] };
+
+/**
+ * A session `sessionRepository.find` hands back. The four arrays are Mongoose array paths
+ * (SessionModel.ts), so a real document always carries them, hydrated to `[]` when empty - kept
+ * required here, separate from `NotebookRef`, so a future lean/projected `find` adapter that omits
+ * them fails to typecheck instead of silently turning `mergeAttachmentIds`'s union into a replace.
+ */
+type FoundNotebook = NotebookRef & AttachmentIds;
+
 /**
  * The created document is the only source of truth for the id: these entities have no `id` schema
  * path, so one passed in is dropped on insert. `data` excludes `id` to keep it that way - passing
@@ -56,7 +67,7 @@ export interface NotebookImportAdapters {
      * passed id was always dropped. Excluding it here makes re-adding one a compile error.
      */
     create: (data: Record<string, unknown> & { id?: never }) => Promise<NotebookRef>;
-    find: (query: { userId: string; name: string }) => Promise<NotebookRef[]>;
+    find: (query: { userId: string; name: string }) => Promise<FoundNotebook[]>;
     /**
      * `null` CLEARS the stored field; `undefined` leaves it untouched. The distinction is not
      * stylistic: `BaseRepository.update` issues `$set`, and mongoose deletes every `undefined`
@@ -212,10 +223,12 @@ export class NotebookImportService {
   constructor(private adapters: NotebookImportAdapters) {}
 
   /**
-   * Attachment failures. Deliberately not `errors`: the handler rolls the whole import back on a
-   * non-empty `errors`, so one unreadable file would discard every notebook that imported cleanly.
+   * Import issues surfaced to the caller: per-attachment failures, plus notebook-level notices like
+   * a claimed-name fallback. Deliberately not `errors`: the handler rolls the whole import back on a
+   * non-empty `errors`, so one unreadable file (or one renamed notebook) would discard every
+   * notebook that imported cleanly.
    */
-  private attachmentWarnings: string[] = [];
+  private warnings: string[] = [];
 
   /** Attachments actually persisted, as opposed to the count the export file claims. */
   private attachmentsWritten = 0;
@@ -235,6 +248,22 @@ export class NotebookImportService {
    * files that each pass against that stale value can overshoot the quota together. Same reason as
    * the accumulator in b4m-core/slack/src/CommandHandler.ts. */
   private admittedBytes = 0;
+
+  /**
+   * Session ids `findExistingSession` may not match again THIS import. Without it, two incoming
+   * notebooks with the same name both resolve to the same target: the second overwrite/merge would
+   * silently redo (and, for overwrite, re-delete-and-replace) what the first just did, rather than
+   * landing as its own notebook. Never claimed when the user's own `conflictResolution` is `skip`:
+   * a skipped notebook writes nothing, so a later same-named notebook must still see, and skip
+   * against, the same target rather than treat it as taken.
+   */
+  private claimedSessionIds = new Set<string>();
+
+  /**
+   * Highest suffix `generateUniqueName` has minted so far THIS run, per base name - a starting hint
+   * so N same-named notebooks cost roughly N probes instead of N(N-1)/2; see that method's comment.
+   */
+  private lastUsedSuffix = new Map<string, number>();
 
   /**
    * The store assigns the id; anything else records a reference that resolves to nothing.
@@ -306,9 +335,11 @@ export class NotebookImportService {
         newNotebookIds: [],
       };
 
-      this.attachmentWarnings = [];
+      this.warnings = [];
       this.attachmentsWritten = 0;
       this.importedKnowledgeFilePaths = [];
+      this.claimedSessionIds = new Set();
+      this.lastUsedSuffix = new Map();
       // Unchecked cast: `checkStorageLimit` defaults storageLimit/currentStorageSize with `??`, so
       // a document missing them is admitted against 1000MB/0 rather than misread - fail-open, not
       // safety. Both are required on IUser, so only a lean projection or an old document gets there.
@@ -346,7 +377,7 @@ export class NotebookImportService {
       }
 
       result.importedAttachments = this.attachmentsWritten;
-      result.warnings!.push(...this.attachmentWarnings);
+      result.warnings!.push(...this.warnings);
       result.importedKnowledgeFilePaths = this.importedKnowledgeFilePaths;
 
       // Determine overall success
@@ -383,24 +414,45 @@ export class NotebookImportService {
     }
   }
 
+  /**
+   * `isRenameRetry` is a recursion guard, not user input: the `rename` branch below calls back into
+   * this method with the already-uniquified name, and passing it skips the existing-session lookup
+   * so that fresh name is never re-checked against itself.
+   */
   private async importNotebook(
     notebook: ExportedNotebook,
     targetUserId: string,
-    options: NotebookImportOptions
+    options: NotebookImportOptions,
+    isRenameRetry = false
   ): Promise<string | null> {
-    // Check for existing notebook
-    const existingSession = await this.findExistingSession(notebook, targetUserId, options);
+    if (!isRenameRetry) {
+      const matches = await this.findExistingSession(notebook, targetUserId);
+      // Skips a session this run already claimed (see claimedSessionIds), so a second same-named
+      // incoming notebook cannot resolve to the target a prior overwrite/merge/create already used.
+      const existingSession = matches.find(session => !this.claimedSessionIds.has(session.id)) ?? null;
 
-    if (existingSession) {
-      return this.handleExistingSession(existingSession, notebook, options);
+      if (existingSession) {
+        return this.handleExistingSession(existingSession, notebook, options);
+      }
+
+      // existingSession is null here for one of two reasons: nothing named this exists yet
+      // (matches is empty), or something does but every match was already claimed by an earlier
+      // notebook in this run - only the second needs a fallback name. Creating under the unchanged
+      // name would otherwise land a second identically-named row, and the next import's unsorted
+      // {userId, name} match would then pair incoming notebooks to these two by natural order
+      // rather than by which is which.
+      if (matches.length > 0) {
+        const uniqueName = await this.generateUniqueName(notebook.name, targetUserId);
+        // Unshifted, not pushed: this is the one notice the user must act on, and the caller
+        // truncates warnings to the first few (notebookImportComplete.ts) - an attachment warning
+        // pushed earlier in this same notebook must not be able to bump it past that cutoff.
+        this.warnings.unshift(
+          `Could not reuse the notebook named "${notebook.name}": an earlier notebook in this import ` +
+            `already claimed it, so this one was imported as a new notebook named "${uniqueName}" instead.`
+        );
+        notebook = { ...notebook, name: uniqueName };
+      }
     }
-
-    const attachmentIds = {
-      knowledgeIds: [] as string[],
-      artifactIds: [] as string[],
-      toolIds: [] as string[],
-      agentIds: [] as string[],
-    };
 
     const sessionData = {
       userId: targetUserId,
@@ -416,7 +468,10 @@ export class NotebookImportService {
       taggedAt: notebook.taggedAt ? new Date(notebook.taggedAt) : undefined,
       isAutoNamed: notebook.isAutoNamed,
       lastUsedModel: notebook.lastUsedModel,
-      ...attachmentIds,
+      knowledgeIds: [] as string[],
+      artifactIds: [] as string[],
+      toolIds: [] as string[],
+      agentIds: [] as string[],
     };
 
     // The notebook is created BEFORE its attachments, and the id arrays are written back below.
@@ -427,18 +482,41 @@ export class NotebookImportService {
     // opened empty on an import that reported success. Ordering is the fix; a second write is the
     // price, and both sit inside the caller's transaction.
     const createdSession = await this.adapters.sessionRepository.create(sessionData);
+    // Not claimed on `skip`: see the claimedSessionIds field comment.
+    if (options.conflictResolution !== 'skip') {
+      this.claimedSessionIds.add(createdSession.id);
+    }
+
+    const attachmentIds = await this.importAttachments(notebook, targetUserId, createdSession.id, options);
+    await this.adapters.sessionRepository.updateById(createdSession.id, attachmentIds);
+
+    // Import chat history
+    if (notebook.chatHistory.length > 0) {
+      await this.importChatHistory(notebook.chatHistory, createdSession.id, targetUserId, options);
+    }
+
+    return createdSession.id;
+  }
+
+  /**
+   * The four gated attachment imports and their `attachmentsWritten` accounting, shared by the
+   * create path above (a session it just created) and overwrite/merge below (a session that
+   * already existed).
+   */
+  private async importAttachments(
+    notebook: ExportedNotebook,
+    targetUserId: string,
+    sessionId: string,
+    options: NotebookImportOptions
+  ): Promise<AttachmentIds> {
+    const attachmentIds: AttachmentIds = { knowledgeIds: [], artifactIds: [], toolIds: [], agentIds: [] };
 
     if (options.importKnowledge && notebook.knowledge.length > 0) {
       attachmentIds.knowledgeIds = await this.importKnowledgeFiles(notebook.knowledge, targetUserId);
     }
 
     if (options.importArtifacts && notebook.artifacts.length > 0) {
-      attachmentIds.artifactIds = await this.importArtifacts(
-        notebook.artifacts,
-        targetUserId,
-        createdSession.id,
-        options
-      );
+      attachmentIds.artifactIds = await this.importArtifacts(notebook.artifacts, targetUserId, sessionId, options);
     }
 
     if (options.importTools && notebook.tools.length > 0) {
@@ -455,43 +533,44 @@ export class NotebookImportService {
       attachmentIds.toolIds.length +
       attachmentIds.agentIds.length;
 
-    await this.adapters.sessionRepository.updateById(createdSession.id, attachmentIds);
-
-    // Import chat history
-    if (notebook.chatHistory.length > 0) {
-      await this.importChatHistory(notebook.chatHistory, createdSession.id, targetUserId, options);
-    }
-
-    return createdSession.id;
+    return attachmentIds;
   }
 
-  private async findExistingSession(
-    notebook: ExportedNotebook,
-    targetUserId: string,
-    options: NotebookImportOptions
-  ): Promise<NotebookRef | null> {
-    // Try to find by exact name match
-    const existingSessions = await this.adapters.sessionRepository.find({
-      userId: targetUserId,
-      name: notebook.name,
-    });
+  /** Union, never replace: overwrite/merge only ever gain attachments the target did not have. */
+  private mergeAttachmentIds(existing: AttachmentIds, imported: AttachmentIds): AttachmentIds {
+    const union = (current: string[], fresh: string[]) => Array.from(new Set([...current, ...fresh]));
+    return {
+      knowledgeIds: union(existing.knowledgeIds, imported.knowledgeIds),
+      artifactIds: union(existing.artifactIds, imported.artifactIds),
+      toolIds: union(existing.toolIds, imported.toolIds),
+      agentIds: union(existing.agentIds, imported.agentIds),
+    };
+  }
 
-    return existingSessions.length > 0 ? existingSessions[0] : null;
+  private async findExistingSession(notebook: ExportedNotebook, targetUserId: string): Promise<FoundNotebook[]> {
+    // Try to find by exact name match
+    return this.adapters.sessionRepository.find({ userId: targetUserId, name: notebook.name });
   }
 
   private async handleExistingSession(
-    existingSession: NotebookRef,
+    existingSession: FoundNotebook,
     notebook: ExportedNotebook,
     options: NotebookImportOptions
   ): Promise<string | null> {
+    if (options.conflictResolution === 'overwrite' || options.conflictResolution === 'merge') {
+      this.claimedSessionIds.add(existingSession.id);
+    }
+
     switch (options.conflictResolution) {
       case 'skip':
         return null;
 
-      case 'overwrite':
+      case 'overwrite': {
         // Delete existing chat history and replace
         await this.adapters.chatHistoryRepository.deleteMany({ sessionId: existingSession.id });
         await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
+
+        const imported = await this.importAttachments(notebook, existingSession.userId, existingSession.id, options);
 
         // Update session metadata. The file owns this notebook's metadata, so a value it does not
         // carry is written as an explicit `null` rather than left out - mongoose deletes every
@@ -506,34 +585,46 @@ export class NotebookImportService {
           summaryAt: notebook.summaryAt ? new Date(notebook.summaryAt) : null,
           tags: notebook.tags || [],
           taggedAt: notebook.taggedAt ? new Date(notebook.taggedAt) : null,
+          // Cleared for the same reason, one gate along: the import replaces the content tagging
+          // reads, so a backoff earned by the target's old content must not hold off the re-tag.
+          // Not carried from the file - it is this deployment's billing state, not the notebook's.
+          tagLastAttemptAt: null,
           // Not `?? null` like the pairs above: no gate keys off this field, so clearing a target's
           // last-used model because an older file omits it loses information for no gain. Omitting
           // the key means "leave it", which is what the dropped-`undefined` behaviour did anyway.
           ...(notebook.lastUsedModel !== undefined && { lastUsedModel: notebook.lastUsedModel }),
+          // A third case, governed by neither convention above: every key here always unions with
+          // the target's existing ids rather than clearing or leaving them, so it is always written.
+          ...this.mergeAttachmentIds(existingSession, imported),
         });
 
         return existingSession.id;
+      }
 
       case 'rename': {
         // Create with renamed title
         const renamedNotebook = { ...notebook };
         renamedNotebook.name = await this.generateUniqueName(notebook.name, existingSession.userId);
-        return await this.importNotebook(renamedNotebook, existingSession.userId, {
-          ...options,
-          conflictResolution: 'skip', // Prevent infinite recursion
-        });
+        // Original options, not overridden: the recursion guard below is `isRenameRetry`, not a
+        // borrowed `conflictResolution` value, so this call still claims its new session as the
+        // user's real choice (e.g. `rename`) says it should.
+        return await this.importNotebook(renamedNotebook, existingSession.userId, options, true);
       }
 
-      case 'merge':
+      case 'merge': {
         // Append chat history to existing session
         await this.importChatHistory(notebook.chatHistory, existingSession.id, existingSession.userId, options);
+
+        const imported = await this.importAttachments(notebook, existingSession.userId, existingSession.id, options);
 
         // Update last updated time
         await this.adapters.sessionRepository.updateById(existingSession.id, {
           lastUpdated: new Date(),
+          ...this.mergeAttachmentIds(existingSession, imported),
         });
 
         return existingSession.id;
+      }
 
       default:
         throw new NotebookImportError(`Unknown conflict resolution: ${options.conflictResolution}`, 'INVALID_OPTION');
@@ -685,11 +776,11 @@ export class NotebookImportService {
         // true, and a file that then failed would otherwise be reported twice. Absent is expected
         // of older exports; present-but-unknown is format drift worth saying.
         if (file.type && !isValidEnumValue(file.type, KnowledgeType)) {
-          this.attachmentWarnings.push(`Imported "${label}" as FILE: unrecognised knowledge type "${file.type}"`);
+          this.warnings.push(`Imported "${label}" as FILE: unrecognised knowledge type "${file.type}"`);
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        this.attachmentWarnings.push(`Failed to import knowledge file "${label}": ${message}`);
+        this.warnings.push(`Failed to import knowledge file "${label}": ${message}`);
         this.adapters.logger.warn('Failed to import knowledge file', {
           file: label,
           error,
@@ -756,7 +847,7 @@ export class NotebookImportService {
         });
         importedIds.push(this.takeStoreId(created, 'artifact'));
       } catch (error) {
-        this.attachmentWarnings.push(
+        this.warnings.push(
           `Failed to import artifact "${artifact.name}": ${error instanceof Error ? error.message : String(error)}`
         );
         this.adapters.logger.warn('Failed to import artifact', {
@@ -798,7 +889,7 @@ export class NotebookImportService {
 
         importedIds.push(this.takeStoreId(await this.adapters.toolRepository.create(toolData), 'tool'));
       } catch (error) {
-        this.attachmentWarnings.push(
+        this.warnings.push(
           `Failed to import tool "${tool.name}": ${error instanceof Error ? error.message : String(error)}`
         );
         this.adapters.logger.warn('Failed to import tool', {
@@ -827,7 +918,7 @@ export class NotebookImportService {
 
         importedIds.push(this.takeStoreId(await this.adapters.agentRepository.create(agentData), 'agent'));
       } catch (error) {
-        this.attachmentWarnings.push(
+        this.warnings.push(
           `Failed to import agent "${agent.name}": ${error instanceof Error ? error.message : String(error)}`
         );
         this.adapters.logger.warn('Failed to import agent', {
@@ -847,8 +938,15 @@ export class NotebookImportService {
     return originalName;
   }
 
+  /**
+   * `lastUsedSuffix` is a starting hint, not a substitute for the check below: a suffix this run
+   * never minted (a pre-existing "Dup (3)" from an earlier import) can still be taken, so every
+   * candidate is still verified against the store. Without the hint, N same-named notebooks in one
+   * run would each restart the probe at 1 - O(N^2) queries, since every earlier notebook already
+   * claimed the low suffixes.
+   */
   private async generateUniqueName(baseName: string, userId: string): Promise<string> {
-    let counter = 1;
+    let counter = (this.lastUsedSuffix.get(baseName) ?? 0) + 1;
     let candidateName = `${baseName} (${counter})`;
 
     while (true) {
@@ -858,6 +956,7 @@ export class NotebookImportService {
       });
 
       if (existing.length === 0) {
+        this.lastUsedSuffix.set(baseName, counter);
         return candidateName;
       }
 
