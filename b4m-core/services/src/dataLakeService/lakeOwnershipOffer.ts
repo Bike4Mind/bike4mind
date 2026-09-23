@@ -9,7 +9,7 @@ import type {
   LakeOwnershipOfferSummary,
   LakePendingOwnershipOffer,
 } from '@bike4mind/common';
-import { DATA_LAKE_OWNERSHIP_OFFER_TTL_DAYS } from '@bike4mind/common';
+import { DATA_LAKE_OWNERSHIP_OFFER_TTL_DAYS, isOrgMember } from '@bike4mind/common';
 import { BadRequestError, NotFoundError, normalizeId } from '@bike4mind/utils';
 import { resolveEffectiveOwnerIds, type LakeGrant } from './manageRule';
 import {
@@ -115,8 +115,10 @@ export interface AcceptLakeOwnershipOfferResult {
  *    succession, since the offer makes it STALE and it is refused rather than applied over it);
  *  - the lake still belongs to the organization it did at offer time;
  *  - the offerer still holds the authority the offer was made under: current ADMIN rights for the
- *    org-admin rung (not mere roster membership, which the offer-time gate never granted it), current
- *    membership for the ownership rungs, current platform-admin for that rung;
+ *    org-admin rung (not mere roster membership, which the offer-time gate never granted it), and for
+ *    the ownership rungs whatever `resolveLakeTransferAuthority` admitted at offer time - platform
+ *    admin, billing owner, a roster row that still confers membership, team manager or appointed
+ *    admin - re-read live;
  *  - the recipient is still a member of the lake's organization.
  *
  * The offer is resolved `pending -> accepted` BEFORE the grants are written. `resolve` is atomic on
@@ -196,15 +198,22 @@ export async function acceptLakeOwnershipOffer(
           'The person who made this offer is no longer an admin of the organization that owns this data lake'
         );
       }
-    } else if (
-      offer.offeredVia !== 'platform-admin' &&
-      (!org || !isOrgOwnershipCandidate(org, offer.offeredByUserId))
-    ) {
-      // The ownership rungs (`creator`/`grant-owner`) still require the offerer to belong to the org:
-      // an owner grant outlives membership, and the offerer may have left.
-      throw new BadRequestError(
-        'The person who made this offer is no longer a member of the organization that owns this data lake'
-      );
+    } else if (offer.offeredVia !== 'platform-admin') {
+      // The ownership rungs (`creator`/`grant-owner`) re-check exactly what the OFFER-time gate
+      // admitted (`resolveLakeTransferAuthority`'s `inLakeOrg || isAdmin`), re-read live: platform
+      // admin, billing owner, a roster row that still confers membership, team manager, or appointed
+      // admin. `isOrgOwnershipCandidate` was NARROWER than that gate - no `managerId` arm, no
+      // platform-admin exemption - while the rung is picked owner-first, so an owner admitted as
+      // admin or manager was recorded on an ownership rung and then refused here forever. That was a
+      // regression against the synchronous transfer, which allowed them.
+      const offerer = await db.users.findById(offer.offeredByUserId);
+      if (!org || !offerer || !(isOrgMember(offerer, org) || isOrgAdminOf(org, offer.offeredByUserId))) {
+        // An owner grant outlives membership, so an offerer who has since left the org and holds no
+        // admin arm is still refused.
+        throw new BadRequestError(
+          'The person who made this offer is no longer a member of the organization that owns this data lake'
+        );
+      }
     }
     if (!org || !isOrgOwnershipCandidate(org, recipientUserId)) {
       throw new BadRequestError('You are no longer a member of the organization that owns this data lake');

@@ -46,7 +46,23 @@ const offerRow = (over: Partial<IDataLakeOwnershipOfferDocument> = {}): IDataLak
   }) as IDataLakeOwnershipOfferDocument;
 
 /** The roster every org-scoped case shares: both parties are members unless a test says otherwise. */
-const ORG = { userId: 'billing', adminUserIds: [], users: [{ userId: 'creator' }, { userId: 'recipient' }] };
+type OrgFixture = {
+  userId: string;
+  managerId?: string;
+  adminUserIds: string[];
+  // `permissions` is what `isOrgMember`/`orgAclRowConfersMembership` read: a roster row with none
+  // does not confer membership, so the accept-time owner-rung re-check must see real permissions.
+  users: { userId: string; permissions?: readonly string[] }[];
+};
+
+const ORG: OrgFixture = {
+  userId: 'billing',
+  adminUserIds: [],
+  users: [
+    { userId: 'creator', permissions: ['read'] },
+    { userId: 'recipient', permissions: ['read'] },
+  ],
+};
 
 const makeAdapters = (
   over: {
@@ -55,7 +71,7 @@ const makeAdapters = (
     recipientOffers?: IDataLakeOwnershipOfferDocument[];
     lakeDoc?: IDataLakeDocument | null;
     grants?: IDataLakeAccessGrantDocument[];
-    org?: typeof ORG | null;
+    org?: OrgFixture | null;
     userExists?: boolean;
     /** Whether `users.findById` reports the platform-admin flag the accept-time re-check reads. */
     offererIsAdmin?: boolean;
@@ -66,11 +82,18 @@ const makeAdapters = (
   // Stateful so `expirePendingForLake` can actually retire the row a later `findPendingForLake` and a
   // `create` would otherwise still see - that is the whole behaviour finding 1 is about.
   let pending = over.pending ?? null;
-  const create = vi.fn(async (input: Record<string, unknown>) => offerRow(input as never));
+  // The row `create` most recently wrote, so a test can run `offerLakeOwnership` then
+  // `acceptLakeOwnershipOffer` on one adapters instance and have accept read the row the REAL gate
+  // produced - `offeredVia` in particular, rather than a hand-written rung.
+  let stored: IDataLakeOwnershipOfferDocument | null = over.offer ?? null;
+  const create = vi.fn(async (input: Record<string, unknown>) => {
+    stored = offerRow(input as never);
+    return stored;
+  });
   const resolve = vi.fn(async (id: string, toStatus: string) =>
     over.resolveTo === undefined ? offerRow({ id, status: toStatus as never, resolvedAt: new Date() }) : over.resolveTo
   );
-  const findById = vi.fn(async () => (over.offer === undefined ? offerRow() : over.offer));
+  const findById = vi.fn(async () => stored ?? (over.offer === undefined ? offerRow() : over.offer));
   // Honours `asOf` exactly as the repository does: with one, a lapsed row is invisible; without one it
   // is returned raw (the "still holds the slot" read the old pre-check trusted).
   const findPendingForLake = vi.fn(async (_dataLakeId: string, asOf?: Date) => {
@@ -110,6 +133,7 @@ const makeAdapters = (
     findPendingForLake,
     expirePendingForLake,
     findById,
+    findByIdUser,
     listByLake,
     /** The live fixture row AFTER any retire, so a test can assert it is no longer pending. */
     getPending: () => pending,
@@ -379,6 +403,81 @@ describe('acceptLakeOwnershipOffer', () => {
     expect(upsertGrant).not.toHaveBeenCalled();
   });
 
+  describe('the owner-rung check admits what the OFFER gate admitted', () => {
+    // Finding 1 (round 2, P1): the rung is picked owner-first, so an owner who was authorized as a
+    // platform admin or as the team manager is recorded on `creator`/`grant-owner` and never on the
+    // admin rungs. The old accept re-check used `isOrgOwnershipCandidate`, which has neither a
+    // platform-admin exemption nor a `managerId` arm, so their offers could never be accepted -
+    // a regression against the synchronous transfer. Each case below runs the REAL gate first, so
+    // the rung is the one the gate chose.
+    const ownerGrant = () => grant({ principalId: 'creator', role: 'owner' });
+
+    it('accepts an offer from a platform-admin owner who is not on the org roster', async () => {
+      const { adapters, upsertGrant } = makeAdapters({
+        grants: [ownerGrant()],
+        org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'recipient' }] },
+        offererIsAdmin: true,
+      });
+
+      const offer = await offerLakeOwnership(
+        { userId: 'creator', isAdmin: true, organizationIds: [] },
+        lake(),
+        [ownerGrant()],
+        'recipient',
+        adapters
+      );
+      expect(offer.offeredVia).toBe('grant-owner');
+
+      await acceptLakeOwnershipOffer('recipient', 'offer1', adapters);
+
+      expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'recipient', role: 'owner' }));
+    });
+
+    it('accepts an offer from an owner whose only admin arm is the org managerId', async () => {
+      const { adapters, upsertGrant } = makeAdapters({
+        grants: [ownerGrant()],
+        org: { userId: 'billing', managerId: 'creator', adminUserIds: [], users: [{ userId: 'recipient' }] },
+      });
+
+      const offer = await offerLakeOwnership(
+        { userId: 'creator', isAdmin: false, administeredOrgIds: ['org1'], organizationIds: [] },
+        lake(),
+        [ownerGrant()],
+        'recipient',
+        adapters
+      );
+      expect(offer.offeredVia).toBe('grant-owner');
+
+      await acceptLakeOwnershipOffer('recipient', 'offer1', adapters);
+
+      expect(upsertGrant).toHaveBeenCalledWith(expect.objectContaining({ principalId: 'recipient', role: 'owner' }));
+    });
+
+    it('still refuses an owner who has left the org and holds no admin arm', async () => {
+      const { adapters, upsertGrant, resolve } = makeAdapters({
+        grants: [ownerGrant()],
+        org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'recipient' }] },
+      });
+
+      // The actor was on the roll when the offer was made (`organizationIds`), but the roster no
+      // longer names them and no admin arm does - the owner grant outlived the membership.
+      const offer = await offerLakeOwnership(
+        { userId: 'creator', isAdmin: false, organizationIds: ['org1'] },
+        lake(),
+        [ownerGrant()],
+        'recipient',
+        adapters
+      );
+      expect(offer.offeredVia).toBe('grant-owner');
+
+      await expect(acceptLakeOwnershipOffer('recipient', 'offer1', adapters)).rejects.toThrow(
+        /no longer a member of the organization/i
+      );
+      expect(resolve).not.toHaveBeenCalled();
+      expect(upsertGrant).not.toHaveBeenCalled();
+    });
+  });
+
   it('a platform-admin offer survives the offerer leaving the organization', async () => {
     const { adapters, upsertGrant } = makeAdapters({
       offer: offerRow({ offeredByUserId: 'root', offeredVia: 'platform-admin' }),
@@ -444,20 +543,26 @@ describe('acceptLakeOwnershipOffer', () => {
   it('refuses a platform-admin offer once the offerer loses the admin flag', async () => {
     // Finding 6, the P2 twin of finding 2: `platform-admin` is a live claim on the flag, not a fact
     // snapshotted with the offer.
-    const { adapters, upsertGrant, resolve } = makeAdapters({
+    const { adapters, upsertGrant, resolve, findByIdUser } = makeAdapters({
       offer: offerRow({ offeredByUserId: 'root', offeredVia: 'platform-admin' }),
       offererIsAdmin: false,
     });
     await expect(acceptLakeOwnershipOffer('recipient', 'offer1', adapters)).rejects.toThrow(
       /no longer a platform admin/i
     );
+    // Finding 4: the flag must be read from the OFFERER, not from whoever else the test happens to
+    // make an admin. Without this pin, `findById(recipientUserId)` reads the same false flag and the
+    // refusal is indistinguishable from the right one.
+    expect(findByIdUser).toHaveBeenCalledWith('root');
     expect(resolve).not.toHaveBeenCalled();
     expect(upsertGrant).not.toHaveBeenCalled();
   });
 
   it('refuses when the recipient is no longer an org member', async () => {
     const { adapters, upsertGrant } = makeAdapters({
-      org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'creator' }] },
+      // The offerer still confers membership (so the check that fails is the RECIPIENT's, not the
+      // offerer's): a roster row without membership permissions would now trip the owner-rung check.
+      org: { userId: 'billing', adminUserIds: [], users: [{ userId: 'creator', permissions: ['read'] }] },
     });
     await expect(acceptLakeOwnershipOffer('recipient', 'offer1', adapters)).rejects.toThrow(
       /no longer a member of the organization/i
