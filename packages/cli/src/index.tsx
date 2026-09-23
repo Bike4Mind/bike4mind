@@ -3315,13 +3315,16 @@ function CliApp() {
         }
         state.sandboxOrchestrator.setMode('auto-allow');
         state.permissionManager?.setSandboxState('auto-allow', state.sandboxOrchestrator.isActive());
-        // Start network proxy if enabled
+        // Start the network proxy through the single lifecycle owner so it fails
+        // closed (no runtime network-on without a running proxy) if enabled.
         const sandboxCfg = state.sandboxOrchestrator.getConfig();
         if (sandboxCfg.network.enabled) {
-          await state.sandboxOrchestrator.startProxy();
+          const on = await state.sandboxOrchestrator.setNetworkEnabled(true);
           const pm = state.sandboxOrchestrator.getProxyManager();
-          if (pm?.isRunning()) {
+          if (on && pm?.isRunning()) {
             console.log(`🌐 Network proxy started on port ${pm.getPort()}`);
+          } else {
+            console.log('⚠️  Network filtering requested but the proxy failed to start; egress disabled');
           }
         }
         // Persist ONLY the sandbox field. Spreading the merged effective config

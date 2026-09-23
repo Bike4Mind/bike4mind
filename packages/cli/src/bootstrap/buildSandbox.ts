@@ -88,13 +88,17 @@ export async function buildSandbox(input: BuildSandboxInput): Promise<BuildSandb
     } else {
       console.log('⚠️  Sandbox: enabled but runtime not available on this platform');
     }
-    // Start network proxy if enabled
+    // Start the network proxy through the orchestrator's single lifecycle owner so
+    // it fails closed: if the proxy can't start, network is forced back off rather
+    // than leaving the runtime flag on with no proxy (which would grant raw egress).
     if (sandboxConfig.network.enabled) {
-      await proxyManager.start();
-      if (proxyManager.isRunning()) {
+      const on = await sandboxOrchestrator.setNetworkEnabled(true);
+      if (on && proxyManager.isRunning()) {
         console.log(
           `🌐 Network proxy: filtering on port ${proxyManager.getPort()} (${sandboxConfig.network.allowedDomains.length} domains)`
         );
+      } else {
+        console.log('⚠️  Sandbox: network filtering requested but the proxy failed to start; egress disabled');
       }
     }
   }

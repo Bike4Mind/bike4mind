@@ -344,11 +344,14 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     });
     sandboxOrchestrator.setViolationStore(new ViolationLogStore());
 
-    // Start the proxy when network filtering is on; otherwise getProxyEnv() stays
-    // empty and the runtime grants raw egress, silently ignoring allowedDomains
-    // (mirrors buildSandbox for the interactive path).
+    // Start the proxy through the orchestrator's single lifecycle owner so it fails
+    // closed: without a running proxy, getProxyEnv() is empty and the runtime would
+    // otherwise grant raw egress with allowedDomains ignored (mirrors buildSandbox).
     if (sandboxConfig.enabled && sandboxConfig.mode !== 'disabled' && sandboxConfig.network.enabled) {
-      await sandboxOrchestrator.startProxy();
+      const on = await sandboxOrchestrator.setNetworkEnabled(true);
+      if (!on) {
+        process.stderr.write('Sandbox: network filtering requested but the proxy failed to start; egress disabled.\n');
+      }
     }
 
     // Agent context for observation tracking
