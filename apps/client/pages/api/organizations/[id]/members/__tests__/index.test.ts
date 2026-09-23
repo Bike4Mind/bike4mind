@@ -41,6 +41,8 @@ const leave = vi.hoisted(() =>
     stripeCustomerId: 'cus_SECRET',
   }))
 );
+const reportAndNotifyKeptPersonalLakeShares = vi.hoisted(() => vi.fn().mockResolvedValue(1));
+vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({ reportAndNotifyKeptPersonalLakeShares }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { leave } }));
 // A factory must name every export the module graph reaches, or the missing binding throws. The
 // lake repos the route passes to the service throw when the handler runs; the audit pair behind
@@ -126,5 +128,21 @@ describe('DELETE /api/organizations/[id]/members (leave) - safe serialization', 
         logger,
       })
     );
+  });
+});
+
+describe('DELETE /api/organizations/[id]/members (leave) - personal-lake shares kept', () => {
+  it('reports and notifies once after the commit, and returns no count to the leaver', async () => {
+    reportAndNotifyKeptPersonalLakeShares.mockClear();
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+    (req as any).user = { id: 'member2', isAdmin: false };
+    (req as any).ability = {};
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(reportAndNotifyKeptPersonalLakeShares).toHaveBeenCalledTimes(1);
+    expect(reportAndNotifyKeptPersonalLakeShares).toHaveBeenCalledWith('member2', 'Acme', undefined);
+    const body = res._getJSONData();
+    expect('personalLakeSharesKept' in body).toBe(false);
   });
 });

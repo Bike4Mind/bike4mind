@@ -617,6 +617,13 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return docs.map(doc => doc.toJSON() as IDataLakeDocument);
   }
 
+  async findByIds(ids: string[]): Promise<IDataLakeDocument[]> {
+    const usable = usableObjectIds(ids, 'DataLakeModel.findByIds');
+    if (usable.length === 0) return [];
+    const docs = await this.dataLakeModel.find({ _id: { $in: usable } }).select(LIST_PROJECTION);
+    return docs.map(doc => doc.toJSON() as IDataLakeDocument);
+  }
+
   /**
    * Legacy tag-only filter, currently UNUSED - prefer findActiveByUserTagsAndEntitlements.
    * It predates entitlements, org scoping, and Private-by-default, so it returns every

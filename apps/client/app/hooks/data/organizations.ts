@@ -284,18 +284,28 @@ export function useRemoveMemberFromOrganization() {
 
   return useMutation({
     mutationFn: async ({ organizationId, userId }: { organizationId: string; userId: string }) => {
-      const organization = await api.delete(`/api/organizations/${organizationId}/members/${userId}`);
+      const response = await api.delete<WithId<IOrganizationDocument> & { personalLakeSharesKept?: number }>(
+        `/api/organizations/${organizationId}/members/${userId}`
+      );
+      const { personalLakeSharesKept, ...organization } = response.data;
 
-      updateAllQueryData(queryClient, 'organizations', 'write', organization.data);
+      updateAllQueryData(queryClient, 'organizations', 'write', organization);
 
-      return organization;
+      return { personalLakeSharesKept: personalLakeSharesKept ?? 0 };
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', variables.organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       // Removing a member may hand their lakes to a successor, changing ownership-derived flags.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      toast.success('Member removed successfully');
+      const kept = data.personalLakeSharesKept;
+      // Notification is best-effort and happens server-side after this response, so the client
+      // cannot claim delivery - only that it was kept and owners are being told.
+      toast.success(
+        kept > 0
+          ? `Member removed. ${kept} share${kept === 1 ? '' : 's'} on personal data lakes ${kept === 1 ? 'was' : 'were'} kept; the lake owners are being notified.`
+          : 'Member removed successfully'
+      );
     },
     onError: (error: unknown) => {
       console.error('Failed to remove member:', error);

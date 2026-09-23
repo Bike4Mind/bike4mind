@@ -9,6 +9,7 @@ import { userRepository } from '@bike4mind/database/auth';
 import { groupRepository } from '@bike4mind/database/social';
 import { OrganizationEvents, toSafeOrganization } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
+import { reportAndNotifyKeptPersonalLakeShares } from '@server/utils/keptPersonalLakeSharesNotifier';
 
 // `datalake:share` is required because this route now changes who can reach a data lake: removing a
 // member expires their grants on the org's lakes and can mint an owner grant for the billing owner.
@@ -43,6 +44,14 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
     )
   );
 
+  // After the commit, so a retried transaction cannot mail twice. Shares on personal lakes are not
+  // the org's to revoke; their owners are told instead.
+  const personalLakeSharesKept = await reportAndNotifyKeptPersonalLakeShares(
+    req.query.userId as string,
+    organization.name,
+    req.logger
+  );
+
   await logEvent(
     {
       userId: req.user.id,
@@ -55,7 +64,11 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
     { ability: req.ability }
   );
 
-  return res.json(toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }));
+  // Count only: the removing admin cannot see these lakes, so no name or id may reach them.
+  return res.json({
+    ...toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }),
+    personalLakeSharesKept,
+  });
 });
 
 export const config = {

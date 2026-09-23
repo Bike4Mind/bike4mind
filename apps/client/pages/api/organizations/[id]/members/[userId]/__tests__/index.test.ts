@@ -35,13 +35,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const revokeAccess = vi.hoisted(() =>
-  vi.fn(async () => ({
-    id: 'org1',
-    userId: 'owner1',
-    name: 'Acme',
-    stripeCustomerId: 'cus_SECRET',
-  }))
+  vi.fn(async () => ({ id: 'org1', userId: 'owner1', name: 'Acme', stripeCustomerId: 'cus_SECRET' }))
 );
+const reportAndNotifyKeptPersonalLakeShares = vi.hoisted(() => vi.fn().mockResolvedValue(2));
+vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({ reportAndNotifyKeptPersonalLakeShares }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { revokeAccess } }));
 
 const lakeConfigAuditPrincipal = vi.hoisted(() => vi.fn(() => undefined as unknown));
@@ -130,5 +127,19 @@ describe('DELETE /api/organizations/[id]/members/[userId]', () => {
     expect(body.name).toBe('Acme');
     expect('stripeCustomerId' in body).toBe(false);
     expect(JSON.stringify(body)).not.toContain('cus_SECRET');
+  });
+});
+
+describe('DELETE /api/organizations/[id]/members/[userId] - personal-lake shares kept', () => {
+  it('reports and notifies once after the commit, and tells the admin only how many shares were kept', async () => {
+    reportAndNotifyKeptPersonalLakeShares.mockClear();
+    const { req, res } = request();
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(reportAndNotifyKeptPersonalLakeShares).toHaveBeenCalledTimes(1);
+    expect(reportAndNotifyKeptPersonalLakeShares).toHaveBeenCalledWith('member2', 'Acme', undefined);
+    const body = res._getJSONData();
+    expect(body.personalLakeSharesKept).toBe(2);
   });
 });
