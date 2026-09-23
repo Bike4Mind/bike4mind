@@ -16,6 +16,19 @@ export class ProxyManager {
     this.networkConfig = { ...networkConfig, allowedDomains: [...networkConfig.allowedDomains] };
   }
 
+  /**
+   * Update the live enabled flag so a runtime toggle takes effect on the next
+   * start()/stop(). Without this, start() would early-return on the enabled value
+   * snapshotted at construction and grant egress with no proxy actually running.
+   */
+  setEnabled(enabled: boolean): void {
+    this.networkConfig.enabled = enabled;
+  }
+
+  isEnabled(): boolean {
+    return this.networkConfig.enabled;
+  }
+
   async start(): Promise<void> {
     if (!this.networkConfig.enabled) return;
     if (this.proxy?.isRunning()) return; // idempotent

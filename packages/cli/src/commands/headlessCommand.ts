@@ -55,6 +55,7 @@ import { createSandboxRuntime } from '../sandbox/runtime/SandboxRuntimeAdapter.j
 import { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 import { ProxyManager } from '../sandbox/proxy/ProxyManager.js';
+import { ViolationLogStore } from '../sandbox/logging/ViolationLogStore.js';
 import { readFile } from 'fs/promises';
 import {
   HEADLESS_SCHEMA_VERSION,
@@ -322,6 +323,26 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const proxyManager = new ProxyManager(sandboxConfig.network);
     const sandboxOrchestrator = new SandboxOrchestrator(sandboxConfig, sandboxRuntime, proxyManager);
     permissionManager.setSandboxState(sandboxConfig.mode, sandboxOrchestrator.isActive());
+
+    // Record blocked egress so it is not silent and stats.violations counts it
+    // (mirrors buildSandbox; without this the headless proxy filters but reports
+    // nothing).
+    proxyManager.onEvent(event => {
+      if (event.type === 'blocked') {
+        process.stderr.write(`Sandbox: network proxy blocked ${event.method} ${event.domain}\n`);
+        sandboxOrchestrator
+          .recordViolation({
+            type: 'network',
+            domain: event.domain,
+            command: `[network] ${event.method} ${event.domain}`,
+            blockedBy: 'proxy',
+            timestamp: event.timestamp,
+            detail: `Blocked ${event.method} to ${event.domain}`,
+          })
+          .catch(() => {});
+      }
+    });
+    sandboxOrchestrator.setViolationStore(new ViolationLogStore());
 
     // Start the proxy when network filtering is on; otherwise getProxyEnv() stays
     // empty and the runtime grants raw egress, silently ignoring allowedDomains

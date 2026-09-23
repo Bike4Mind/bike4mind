@@ -38,11 +38,41 @@ function createMockProxyManager(running: boolean, port: number | null): ProxyMan
   return {
     start: vi.fn(),
     stop: vi.fn(),
+    setEnabled: vi.fn(),
     getProxyEnv: () => env,
     addAllowedDomain: vi.fn(),
     getAllowedDomains: () => [],
     isRunning: () => running,
     getPort: () => port,
+    onEvent: vi.fn(() => () => {}),
+  } as unknown as ProxyManager;
+}
+
+/**
+ * A ProxyManager stub that models the real start/stop/setEnabled/isRunning state
+ * machine: start() only runs the proxy when enabled and not asked to fail. Lets a
+ * test exercise the real off->on transition where F1 (unfiltered egress with no
+ * proxy) lived.
+ */
+function createStatefulProxyManager(opts?: { failStart?: boolean }): ProxyManager {
+  let enabled = false;
+  let running = false;
+  return {
+    setEnabled: vi.fn((v: boolean) => {
+      enabled = v;
+    }),
+    isEnabled: () => enabled,
+    start: vi.fn(async () => {
+      if (enabled && !opts?.failStart) running = true;
+    }),
+    stop: vi.fn(async () => {
+      running = false;
+    }),
+    isRunning: () => running,
+    getPort: () => (running ? 8888 : null),
+    getProxyEnv: () => (running ? { HTTP_PROXY: 'http://127.0.0.1:8888' } : {}),
+    addAllowedDomain: vi.fn(),
+    getAllowedDomains: () => [],
     onEvent: vi.fn(() => () => {}),
   } as unknown as ProxyManager;
 }
@@ -293,6 +323,51 @@ describe('SandboxOrchestrator', () => {
       orchestrator.shouldSandbox('curl https://example.com', '/tmp');
 
       expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: true }));
+    });
+  });
+
+  describe('setNetworkEnabled (runtime toggle lifecycle)', () => {
+    it('enabling starts the proxy and makes shouldSandbox pass networkEnabled: true', async () => {
+      const proxy = createStatefulProxyManager();
+      const runtime = createMockRuntime();
+      const wrapSpy = vi.spyOn(runtime, 'wrapCommand');
+      // Default config: network.enabled is false at construction (the shipped default).
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), runtime, proxy);
+
+      expect(await orchestrator.setNetworkEnabled(true)).toBe(true);
+      expect(proxy.isRunning()).toBe(true);
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: true }));
+      expect(orchestrator.getConfig().network.enabled).toBe(true);
+    });
+
+    it('disabling stops the proxy and flips networkEnabled: false', async () => {
+      const proxy = createStatefulProxyManager();
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), createMockRuntime(), proxy);
+      await orchestrator.setNetworkEnabled(true);
+
+      expect(await orchestrator.setNetworkEnabled(false)).toBe(false);
+      expect(proxy.isRunning()).toBe(false);
+      expect(orchestrator.getConfig().network.enabled).toBe(false);
+    });
+
+    it('fails closed when the proxy will not start - never grants raw egress', async () => {
+      const proxy = createStatefulProxyManager({ failStart: true });
+      const runtime = createMockRuntime();
+      const wrapSpy = vi.spyOn(runtime, 'wrapCommand');
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), runtime, proxy);
+
+      expect(await orchestrator.setNetworkEnabled(true)).toBe(false);
+      expect(orchestrator.getConfig().network.enabled).toBe(false);
+      orchestrator.shouldSandbox('curl https://example.com', '/tmp');
+      expect(wrapSpy).toHaveBeenCalledWith(expect.objectContaining({ networkEnabled: false }));
+    });
+
+    it('does not mutate the shared DEFAULT_SANDBOX_CONFIG singleton', async () => {
+      const before = DEFAULT_SANDBOX_CONFIG.network.enabled;
+      const orchestrator = new SandboxOrchestrator(undefined, createMockRuntime(), createStatefulProxyManager());
+      await orchestrator.setNetworkEnabled(true);
+      expect(DEFAULT_SANDBOX_CONFIG.network.enabled).toBe(before);
     });
   });
 

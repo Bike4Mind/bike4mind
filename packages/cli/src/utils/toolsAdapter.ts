@@ -156,7 +156,16 @@ export function wrapToolWithPermission(
       let sandboxedArgs = args;
 
       if (toolName === 'bash_execute' && args?.command && sandboxOrchestrator) {
-        const cwd = args.cwd ? path.resolve(process.cwd(), args.cwd) : process.cwd();
+        let cwd = args.cwd ? path.resolve(process.cwd(), args.cwd) : process.cwd();
+        // Resolve symlinks up front so the confinement check (isPathAllowed resolves
+        // internally) and the sandbox's writable bind (built from the string we pass)
+        // use the SAME real path - otherwise a symlinked cwd could validate while the
+        // bind points elsewhere.
+        try {
+          cwd = realpathSync(cwd);
+        } catch {
+          // Not-yet-resolvable path: keep the lexical resolution.
+        }
         const decision = sandboxOrchestrator.shouldSandbox(args.command, cwd);
 
         // Record + report a blocked command and return the model-facing message.

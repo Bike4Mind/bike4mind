@@ -29,7 +29,9 @@ export class SandboxOrchestrator {
   private violationStore: ViolationLogStore | null = null;
 
   constructor(config?: SandboxConfig, runtime?: SandboxRuntime | null, proxyManager?: ProxyManager | null) {
-    this.config = config ?? DEFAULT_SANDBOX_CONFIG;
+    // Clone so a runtime mutation (e.g. setNetworkEnabled) never writes through to
+    // the shared DEFAULT_SANDBOX_CONFIG singleton both entrypoints fall back to.
+    this.config = structuredClone(config ?? DEFAULT_SANDBOX_CONFIG);
     this.runtime = runtime ?? null;
     this.proxyManager = proxyManager ?? null;
   }
@@ -122,9 +124,39 @@ export class SandboxOrchestrator {
     this.config = config;
   }
 
-  /** Enable or disable network egress (does not persist - caller must save). */
-  setNetworkEnabled(enabled: boolean): void {
-    this.config.network.enabled = enabled;
+  /**
+   * Toggle network egress at runtime and keep the runtime flag and the actual
+   * proxy in lockstep - this is the SINGLE owner of that lifecycle. Fail-closed:
+   * when enabling, the proxy must be running afterwards or the flag stays false,
+   * so `shouldSandbox` can never hand `networkEnabled: true` to the runtime while
+   * `getProxyEnv()` is empty (which would grant raw, unfiltered IP egress).
+   * Returns whether network is enabled on return. Does not persist - caller saves.
+   */
+  async setNetworkEnabled(enabled: boolean): Promise<boolean> {
+    if (!enabled) {
+      // Flip off first so a concurrent shouldSandbox denies, then tear down.
+      this.config.network.enabled = false;
+      this.proxyManager?.setEnabled(false);
+      await this.proxyManager?.stop().catch(() => {});
+      return false;
+    }
+
+    // Enabling: start the proxy FIRST; only grant egress if it actually runs.
+    if (this.proxyManager) {
+      this.proxyManager.setEnabled(true);
+      try {
+        await this.proxyManager.start();
+      } catch {
+        // fall through to the isRunning check -> fail closed
+      }
+      if (!this.proxyManager.isRunning()) {
+        this.proxyManager.setEnabled(false);
+        this.config.network.enabled = false;
+        return false;
+      }
+    }
+    this.config.network.enabled = true;
+    return true;
   }
 
   /** Get the ProxyManager instance (if any) */
