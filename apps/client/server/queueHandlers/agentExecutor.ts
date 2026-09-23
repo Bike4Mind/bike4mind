@@ -1170,7 +1170,15 @@ async function processExecution(
       });
       // An exclusive toolset voids the payload's tool selection by design - but silently
       // voiding it is how a "why is the tool I picked missing?" report goes undiagnosable.
-      if (orchestrationProfile.toolsetIsExclusive && startPayload?.enabledTools?.length) {
+      // Only a PINNED payload is worth warning about. Every agentless chat send ships the
+      // user's ambient Smart Tools, which are an offer to union, not a demand to replace, so
+      // warning on those would fire on every single send on an exclusive surface and bury the
+      // pinned case this log exists to surface.
+      if (
+        orchestrationProfile.toolsetIsExclusive &&
+        startPayload?.enabledTools?.length &&
+        !startPayload.enabledToolsAreAmbient
+      ) {
         logger.warn('[Orchestration] Payload enabledTools ignored: profile toolset is exclusive', {
           profileId: orchestrationProfile.id,
           ignoredToolCount: startPayload.enabledTools.length,
@@ -1752,7 +1760,11 @@ async function processExecution(
     // the agentless path (Agent-mode toggle / `@agent` literal trigger) ends
     // up with a non-empty toolbelt instead of mission-tools only.
     const profileEnabledTools = orchestrationProfile
-      ? pickEffectiveEnabledTools(startPayload?.enabledTools, orchestrationProfile)
+      ? pickEffectiveEnabledTools(
+          startPayload?.enabledTools,
+          orchestrationProfile,
+          startPayload?.enabledToolsAreAmbient
+        )
       : (startPayload?.enabledTools ?? []);
 
     // Lattice parity with chat_completion. Mirrors

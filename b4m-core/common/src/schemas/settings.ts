@@ -574,7 +574,13 @@ export const IntentClassifierConfigSchema = z.object({
 export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema>;
 
 export const OrchestrationDefaultsSchema = z.object({
-  /** Tool names the synthetic profile is allowed to invoke. */
+  /**
+   * Tool names the synthetic profile is allowed to invoke. A DEFAULT toolbelt, not a gate:
+   * an agentless chat dispatch ships the user's ambient Smart Tools and the executor UNIONS
+   * them onto this list (`pickEffectiveEnabledTools`), so narrowing this narrows what the
+   * agent brings of its own rather than capping what the user may select. `deniedTools` below
+   * is the gate.
+   */
   allowedTools: z.array(z.string()).default([
     'web_search',
     'retrieve_knowledge_content',
@@ -587,13 +593,11 @@ export const OrchestrationDefaultsSchema = z.object({
     // Read-only, timezone-aware clock. Fresh at call time and mutates nothing,
     // so it is safe for agent mode - lets agents stamp an action at execution
     // instant without re-polluting the cached system prefix with a volatile
-    // minute-precision date block. Mirrored client-side via
-    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
+    // minute-precision date block.
     'current_datetime',
     // Storage-backed artifact generation, opted into for agent mode: the agent
     // writes these to generated-content storage, not user data, so they are safe
-    // to expose. Mirrored client-side in
-    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
+    // to expose.
     'image_generation',
     'edit_image',
     'music_generation',

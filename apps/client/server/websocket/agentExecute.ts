@@ -70,6 +70,9 @@ const StartCommandSchema = BaseMessageSchema.extend({
   // dispatches through.
   agentId: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
+  // See `agentExecutor.schemas.ts`: marks `enabledTools` as ambient chat picks to be unioned
+  // onto the resolved profile rather than a pinned selection that replaces it.
+  enabledToolsAreAmbient: z.boolean().optional(),
   // Bounded ceiling: each iteration is a full LLM round-trip. Without a cap,
   // a client could request enough iterations to span all 5 Lambda handoffs
   // (~65 min total) and inflate cost.
@@ -272,6 +275,7 @@ async function handleStart(
       organizationId: cmd.organizationId,
       agentId: cmd.agentId,
       enabledTools: cmd.enabledTools,
+      enabledToolsAreAmbient: cmd.enabledToolsAreAmbient,
       maxIterations: cmd.maxIterations,
       messageFileIds: cmd.messageFileIds,
       sessionFabFileIds: cmd.sessionFabFileIds,
