@@ -5,6 +5,7 @@ import Box from '@mui/joy/Box';
 import Button from '@mui/joy/Button';
 import Typography from '@mui/joy/Typography';
 import { APP_NAME } from '@client/config/general';
+import { loadMetaPixel } from '@client/app/utils/metaPixel';
 import { loadRedditPixel } from '@client/app/utils/redditPixel';
 
 const CONSENT_KEY = 'cookie_consent';
@@ -29,10 +30,12 @@ function applyConsent(value: 'granted' | 'denied') {
   if (typeof gtag !== 'undefined') {
     gtag('consent', 'update', { analytics_storage: value });
   }
-  // The ads pixel has no consent-mode equivalent: granted == load the script
-  // (until then it only queues in memory), denied == it never loads.
+  // The ads pixels have no consent-mode equivalent: granted == load the scripts
+  // (until then they only queue in memory), denied == they never load. Each
+  // no-ops when its own pixel id is unconfigured.
   if (value === 'granted') {
     loadRedditPixel();
+    loadMetaPixel();
   }
 }
 
@@ -84,7 +87,10 @@ export function CookieConsentBanner() {
       <Typography level="body-sm" sx={{ flex: 1, minWidth: 200 }}>
         We use cookies to understand how you use {APP_NAME || 'this app'} and to improve your experience. By clicking
         &ldquo;Accept&rdquo;, you consent to our use of analytics
-        {process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID ? ' and advertising' : ''} cookies.
+        {process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID || process.env.NEXT_PUBLIC_META_PIXEL_ID
+          ? ' and advertising'
+          : ''}{' '}
+        cookies.
       </Typography>
       <Box sx={{ display: 'flex', gap: 1, flexShrink: 0 }}>
         <Button

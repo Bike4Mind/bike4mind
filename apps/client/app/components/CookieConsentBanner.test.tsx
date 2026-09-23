@@ -3,12 +3,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider } from '@mui/joy/styles';
 
-const { mockLoadRedditPixel } = vi.hoisted(() => ({
+const { mockLoadRedditPixel, mockLoadMetaPixel } = vi.hoisted(() => ({
   mockLoadRedditPixel: vi.fn(),
+  mockLoadMetaPixel: vi.fn(),
 }));
 
 vi.mock('@client/app/utils/redditPixel', () => ({
   loadRedditPixel: mockLoadRedditPixel,
+}));
+
+vi.mock('@client/app/utils/metaPixel', () => ({
+  loadMetaPixel: mockLoadMetaPixel,
 }));
 
 import { CookieConsentBanner } from './CookieConsentBanner';
@@ -38,6 +43,7 @@ describe('CookieConsentBanner', () => {
     localStorageMock.clear();
     mockGtag.mockClear();
     mockLoadRedditPixel.mockClear();
+    mockLoadMetaPixel.mockClear();
   });
 
   it('shows banner when no consent is stored', () => {
@@ -127,7 +133,7 @@ describe('CookieConsentBanner', () => {
     expect(screen.queryByTestId('cookie-consent-decline-btn')).not.toBeInTheDocument();
   });
 
-  it('loads the Reddit pixel on Accept but not on Decline', () => {
+  it('loads both ad pixels on Accept but neither on Decline', () => {
     const { unmount } = render(
       <TestWrapper>
         <CookieConsentBanner />
@@ -135,9 +141,11 @@ describe('CookieConsentBanner', () => {
     );
     fireEvent.click(screen.getByTestId('cookie-consent-accept-btn'));
     expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
+    expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
     unmount();
 
     mockLoadRedditPixel.mockClear();
+    mockLoadMetaPixel.mockClear();
     localStorageMock.clear();
     render(
       <TestWrapper>
@@ -146,9 +154,10 @@ describe('CookieConsentBanner', () => {
     );
     fireEvent.click(screen.getByTestId('cookie-consent-decline-btn'));
     expect(mockLoadRedditPixel).not.toHaveBeenCalled();
+    expect(mockLoadMetaPixel).not.toHaveBeenCalled();
   });
 
-  it('loads the Reddit pixel on mount when consent was previously granted', () => {
+  it('loads both ad pixels on mount when consent was previously granted', () => {
     localStorageMock.setItem('cookie_consent', 'granted');
 
     render(
@@ -158,5 +167,6 @@ describe('CookieConsentBanner', () => {
     );
 
     expect(mockLoadRedditPixel).toHaveBeenCalledTimes(1);
+    expect(mockLoadMetaPixel).toHaveBeenCalledTimes(1);
   });
 });
