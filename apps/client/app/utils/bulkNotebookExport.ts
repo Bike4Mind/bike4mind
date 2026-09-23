@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { stripSearchResultCardFences } from '@bike4mind/common';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
 import {
   DocxColors,
@@ -87,7 +88,7 @@ export async function notebooksToExcel(data: BulkExportData): Promise<Blob> {
             Notebook: nb.name,
             Timestamp: msg.timestamp ? new Date(msg.timestamp).toISOString() : '',
             Role: 'Assistant',
-            Content: reply,
+            Content: stripSearchResultCardFences(reply),
             Model: msg.promptMeta?.model?.name || '',
             Tokens: msg.promptMeta?.tokenUsage?.outputTokens || '',
           });
@@ -335,7 +336,7 @@ export async function notebooksToDocx(data: BulkExportData): Promise<Blob> {
             // Message content with background shading and left border
             children.push(
               new Paragraph({
-                children: [new TextRun({ text: reply, size: DocxFontSizes.small })],
+                children: [new TextRun({ text: stripSearchResultCardFences(reply), size: DocxFontSizes.small })],
                 shading: { fill: roleStyle.backgroundColor },
                 border: {
                   left: {
@@ -422,7 +423,7 @@ export function notebooksToMarkdown(data: BulkExportData): string {
         const replies = msg.replies || [];
         for (const reply of replies) {
           if (reply) {
-            md += `**AI**:\n\n${reply}\n\n`;
+            md += `**AI**:\n\n${stripSearchResultCardFences(reply)}\n\n`;
           }
         }
       }

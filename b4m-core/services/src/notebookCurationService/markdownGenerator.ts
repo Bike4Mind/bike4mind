@@ -1,4 +1,8 @@
-import { ExtractedArtifact, CurationArtifactType as ArtifactType } from '@bike4mind/common';
+import {
+  ExtractedArtifact,
+  CurationArtifactType as ArtifactType,
+  stripSearchResultCardFences,
+} from '@bike4mind/common';
 
 /**
  * Template-based "Raw Transcript" markdown generator (Option 1) for curated notebooks.
@@ -391,6 +395,10 @@ function cleanMessageContent(content: string): string {
 
   // Remove <think> tags (internal reasoning)
   cleaned = cleaned.replace(/<think>([\s\S]*?)<\/think>/gi, '');
+
+  // Raw model-authored card JSON, not transcript prose - the artifactExtractor skips this fence
+  // for the same reason, but the transcript body here is generated independently of it.
+  cleaned = stripSearchResultCardFences(cleaned);
 
   // Normalize whitespace
   cleaned = cleaned.trim();
