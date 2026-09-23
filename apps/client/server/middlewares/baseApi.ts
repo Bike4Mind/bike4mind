@@ -37,6 +37,15 @@ interface BaseAPIOptions {
    */
   requiredScopes?: ApiKeyScope[];
   /**
+   * API-key scopes this route ALSO requires, on top of `requiredScopes` (AND
+   * semantics - every one of these must be held). Use when a route needs two
+   * orthogonal scopes together, e.g. a feature scope and a separate spend gate,
+   * which `requiredScopes`'s OR list cannot express (see issue #2330). Unlike
+   * `requiredScopes`, this has no staging grace period - see decideScopeGate's
+   * doc comment (apiKeyScopeGate.ts).
+   */
+  alsoRequiredScopes?: ApiKeyScope[];
+  /**
    * OAuth reachability for this route. Relying-party OAuth access tokens are default-denied at
    * every JWT-authed route; set this to opt a route in.
    * - omitted (default): first-party-only (OAuth tokens rejected 403).
@@ -160,7 +169,7 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       // Check API key authentication FIRST, before JWT
       // This allows API keys to work independently without requiring JWT/SST setup.
       // requiredScopes (when set) makes an under-scoped key 403 here instead of authorizing.
-      router.use(apiKeyAuth(resolvedOptions.requiredScopes));
+      router.use(apiKeyAuth(resolvedOptions.requiredScopes, resolvedOptions.alsoRequiredScopes));
 
       // Detect anomalies in API key usage (runs after apiKeyAuth, before handler)
       // This runs asynchronously and doesn't block requests

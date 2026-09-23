@@ -2,7 +2,18 @@ import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
-import React, { FC, useCallback, useState, useRef, useEffect, ReactNode, useMemo, ComponentProps } from 'react';
+import React, {
+  FC,
+  useCallback,
+  useState,
+  useRef,
+  useEffect,
+  ReactNode,
+  useMemo,
+  useContext,
+  createContext,
+  ComponentProps,
+} from 'react';
 import ReactMarkdown, { ExtraProps } from 'react-markdown';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
 import { useTheme } from '@mui/joy/styles';
@@ -64,6 +75,9 @@ import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
 
+import SearchResultCards from './SearchResultCards';
+import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
+
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
 import {
@@ -92,11 +106,30 @@ function simpleHash(str: string): string {
   return Math.abs(hash).toString(36).slice(0, 8);
 }
 
+// Whether the reply this code block belongs to has finished streaming. Read via context
+// (ReplyCompleteContext.Provider, below) rather than a `createCodeComponent` argument: its
+// caller memoizes the return value on `syntaxTheme` alone, so the `code` component's own
+// identity stays stable across the streaming -> completed transition. If `completed` instead
+// flowed in as a closed-over value, changing it would change `codeComponent`'s identity the
+// instant a reply finishes, and react-markdown treats a new `code` component as a new element
+// type - every code block in the reply (image cards, charts, artifact previews) would unmount
+// and remount at once.
+export const ReplyCompleteContext = createContext(false);
+
+// `code` (below) is a lowercase-named plain render helper, not a component ESLint's hooks rules
+// recognize - and its body has pre-existing patterns (JSX inside try/catch, etc.) that would newly
+// fail component-purity lint rules if it were renamed to look like one. This wrapper is the actual
+// component that reads the context, kept tiny and hook-clean on purpose.
+const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
+  const replyComplete = useContext(ReplyCompleteContext);
+  return <SearchResultCards content={content} replyComplete={replyComplete} />;
+};
+
 // Markdown `code` component: handles inline artifacts in code blocks. The
 // Prism theme is closed over rather than read from a hook here, because the
 // caller already resolves the color scheme and this function deliberately
 // stays a plain render helper.
-const createCodeComponent = (syntaxTheme: PrismStyle) => {
+export const createCodeComponent = (syntaxTheme: PrismStyle) => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
@@ -154,6 +187,11 @@ const createCodeComponent = (syntaxTheme: PrismStyle) => {
       } catch {
         // Not a blog-draft JSON block - fall through to normal code rendering.
       }
+    }
+
+    // Model-authored image cards for a visual web_search answer, placed inline by the model.
+    if (language === SEARCH_RESULT_CARDS_LANGUAGE) {
+      return <SearchResultCardsInReply content={codeContent} />;
     }
 
     // Recharts inline rendering
@@ -1702,44 +1740,46 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           // chrome are siblings above, and must not inherit the
                           // reading typography or land in the `> *` measure rules.
                           <div className="b4m-md">
-                            <ReactMarkdown
-                              components={{
-                                ...markdownComponents,
-                                code: codeComponent,
-                                img: ({ alt, src, title }) => {
-                                  if (!src) {
-                                    return null;
-                                  }
+                            <ReplyCompleteContext.Provider value={!!completed}>
+                              <ReactMarkdown
+                                components={{
+                                  ...markdownComponents,
+                                  code: codeComponent,
+                                  img: ({ alt, src, title }) => {
+                                    if (!src) {
+                                      return null;
+                                    }
 
-                                  const srcStr = typeof src === 'string' ? src : '';
-                                  if (
-                                    srcStr.startsWith('/mnt/') ||
-                                    srcStr.startsWith('/tmp/') ||
-                                    srcStr.startsWith('file://') ||
-                                    srcStr.startsWith('sandbox:') ||
-                                    srcStr.includes('/mnt/data/')
-                                  ) {
-                                    return null;
-                                  }
+                                    const srcStr = typeof src === 'string' ? src : '';
+                                    if (
+                                      srcStr.startsWith('/mnt/') ||
+                                      srcStr.startsWith('/tmp/') ||
+                                      srcStr.startsWith('file://') ||
+                                      srcStr.startsWith('sandbox:') ||
+                                      srcStr.includes('/mnt/data/')
+                                    ) {
+                                      return null;
+                                    }
 
-                                  return (
-                                    <ImageContainer
-                                      src={srcStr}
-                                      index={0}
-                                      totalImages={1}
-                                      images={[srcStr]}
-                                      onSendMessage={onSendMessage}
-                                    />
-                                  );
-                                },
-                                a: link,
-                              }}
-                              remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
-                              rehypePlugins={[rehypeKatex]}
-                              remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                            >
-                              {mathReadyContent}
-                            </ReactMarkdown>
+                                    return (
+                                      <ImageContainer
+                                        src={srcStr}
+                                        index={0}
+                                        totalImages={1}
+                                        images={[srcStr]}
+                                        onSendMessage={onSendMessage}
+                                      />
+                                    );
+                                  },
+                                  a: link,
+                                }}
+                                remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
+                                rehypePlugins={[rehypeKatex]}
+                                remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                              >
+                                {mathReadyContent}
+                              </ReactMarkdown>
+                            </ReplyCompleteContext.Provider>
                           </div>
                         )}
                       </>
