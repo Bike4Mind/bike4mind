@@ -1,5 +1,6 @@
 import {
   ChatModels,
+  escapeThinkMarkers,
   ImageModels,
   IMessage,
   ModelBackend,
@@ -399,7 +400,7 @@ export class XAIBackend implements ICompletionBackend {
         // Handle reasoning content for thinking models (only if thinking is enabled)
         if (thinkingEnabled && (c.message as any).reasoning_content) {
           const reasoningContent = (c.message as any).reasoning_content;
-          streamedText[c.index] = `<think>${reasoningContent}</think>${c.message.content || ''}`;
+          streamedText[c.index] = `<think>${escapeThinkMarkers(reasoningContent)}</think>${c.message.content || ''}`;
           continue;
         }
 
@@ -597,11 +598,12 @@ export class XAIBackend implements ICompletionBackend {
 
         // Handle reasoning content for thinking models (only if thinking is enabled)
         if (thinkingEnabled && (c.delta as any).reasoning_content) {
+          const escapedReasoning = escapeThinkMarkers((c.delta as any).reasoning_content);
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
-            streamedText[c.index] = '<think>' + (c.delta as any).reasoning_content;
+            streamedText[c.index] = '<think>' + escapedReasoning;
           } else {
-            streamedText[c.index] = (c.delta as any).reasoning_content;
+            streamedText[c.index] = escapedReasoning;
           }
           return;
         }

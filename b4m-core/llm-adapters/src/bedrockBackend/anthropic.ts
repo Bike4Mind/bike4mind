@@ -1,6 +1,7 @@
 import {
   BEDROCK_NO_PROMPT_CACHING_MODELS,
   ChatModels,
+  escapeThinkMarkers,
   IMessage,
   MessageContentText,
   ModelBackend,
@@ -1172,7 +1173,9 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         } else if (isInputJsonDelta(delta)) {
           choice.chunkText = delta.partial_json;
         } else if (isThinkingDelta(delta)) {
-          choice.chunkText = delta.thinking;
+          // Escaped for the transcript; the replay copy in assistantReasoningBlocks stays
+          // raw since it is resent to the API verbatim in tool-use loops.
+          choice.chunkText = escapeThinkMarkers(delta.thinking);
           const block = this.assistantReasoningBlocks[chunk.index];
           if (block?.type === 'thinking') block.thinking += delta.thinking;
         } else if (isSignatureDelta(delta)) {

@@ -1,5 +1,6 @@
 import {
   ChatModels,
+  escapeThinkMarkers,
   IMessage,
   ModelBackend,
   PermissionDeniedError,
@@ -401,7 +402,9 @@ export class DeepSeekBackend implements ICompletionBackend {
         } else {
           const prose = c.message.content || '';
           if (prose) sawProse = true;
-          streamedText[c.index] = reasoningContent ? `<think>${reasoningContent}</think>${prose}` : prose;
+          streamedText[c.index] = reasoningContent
+            ? `<think>${escapeThinkMarkers(reasoningContent)}</think>${prose}`
+            : prose;
         }
       }
 
@@ -467,11 +470,12 @@ export class DeepSeekBackend implements ICompletionBackend {
         // arrives by default on both ids and is billed either way.
         if (deltaReasoning) {
           streamedReasoning += deltaReasoning;
+          const escapedReasoning = escapeThinkMarkers(deltaReasoning);
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
-            streamedText[c.index] = '<think>' + deltaReasoning;
+            streamedText[c.index] = '<think>' + escapedReasoning;
           } else {
-            streamedText[c.index] = deltaReasoning;
+            streamedText[c.index] = escapedReasoning;
           }
           // Falls through when the SAME delta also carries prose: DeepSeek can end
           // the monologue and start the answer in one chunk, and returning here

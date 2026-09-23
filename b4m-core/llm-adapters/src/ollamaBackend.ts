@@ -1,5 +1,6 @@
 import {
   CONTEXT_WINDOW_SAFETY_BUFFER_TOKENS,
+  escapeThinkMarkers,
   IMessage,
   isUserInitiatedAbort,
   ModelBackend,
@@ -492,7 +493,7 @@ export class OllamaBackend implements ICompletionBackend {
             piece += '<think>';
             thinkingFieldOpen = true;
           }
-          piece += thinkPiece;
+          piece += escapeThinkMarkers(thinkPiece);
         }
         const contentPiece = chunk.message.content || '';
         if (contentPiece) {
@@ -534,7 +535,7 @@ export class OllamaBackend implements ICompletionBackend {
       // Prepend reasoning (from the separate thinking field) as a <think> block
       // so it renders consistently with the streaming path.
       const think = response.message.thinking || '';
-      content = (think ? `<think>${think}</think>` : '') + (response.message.content || '');
+      content = (think ? `<think>${escapeThinkMarkers(think)}</think>` : '') + (response.message.content || '');
       inputTokens = response.prompt_eval_count || 0;
       outputTokens = response.eval_count || 0;
       doneReason = response.done_reason;

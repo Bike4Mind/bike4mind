@@ -16,6 +16,28 @@ export const THINK_CLOSE_TAG = '</think>';
 const THINK_TAG_TOKENS = /(<think>|<\/think>)/g;
 
 /**
+ * Zero-width space spliced into a defanged marker. It is invisible wherever the text is
+ * rendered, so escaping never changes what the reader sees - only what the parser matches.
+ */
+const ZERO_WIDTH_SPACE = '​';
+
+/**
+ * Defangs think-marker-shaped substrings inside provider-authored reasoning text so they can
+ * never be mistaken for the real control markers adapters wrap around that same text.
+ *
+ * A reasoning delta is provider output, not our control plane - a model can say `<think>` or
+ * `</think>` as literal content (reasoning about the protocol itself, or a leading/trailing
+ * `</think>` from a provider that already delimits its own monologue). Adapters wrap the whole
+ * delta in real markers via plain string concatenation, so an unescaped literal is
+ * indistinguishable from a genuine open/close once it lands in the same string. Call this on
+ * every raw reasoning delta before it is concatenated with THINK_OPEN_TAG/THINK_CLOSE_TAG.
+ */
+export function escapeThinkMarkers(text: string): string {
+  if (!text) return text;
+  return text.replace(/<(\/?)think>/g, `<${ZERO_WIDTH_SPACE}$1think>`);
+}
+
+/**
  * The visible remainder of one reply slot, with hidden reasoning removed.
  *
  * This is the rule the chat transcript renders by - `extractReplies` in

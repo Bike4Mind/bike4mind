@@ -1,4 +1,4 @@
-import { ChatModels, IMessage, ModelBackend, type ModelInfo } from '@bike4mind/common';
+import { ChatModels, escapeThinkMarkers, IMessage, ModelBackend, type ModelInfo } from '@bike4mind/common';
 import {
   ChoiceEndReason,
   ChoiceStatus,
@@ -305,7 +305,9 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         continue;
       }
 
-      const reasoning = payload.reasoning_content ?? '';
+      // Escaped up front: every use below feeds a <think> block, and this is
+      // provider-authored text that can itself contain marker-shaped substrings.
+      const reasoning = escapeThinkMarkers(payload.reasoning_content ?? '');
       const content = payload.content ?? '';
       // Bedrock Kimi does NOT populate `reasoning_content`; it inlines the monologue
       // in `content` wrapped in <reasoning>...</reasoning> -- a self-contained,
@@ -332,7 +334,10 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
         // Real Bedrock: reasoning inlined as <reasoning> tags, tool calls possibly
         // inside it as native tokens. Filter the reasoning inner text.
         if (content.includes('<reasoning>')) {
-          const inner = content.replace(/<\/?reasoning>/g, '');
+          // Strip the model's own <reasoning> envelope first, then defang any
+          // <think>/</think>-shaped text left in the monologue before it is wrapped
+          // in our real control markers below.
+          const inner = escapeThinkMarkers(content.replace(/<\/?reasoning>/g, ''));
           const { text: safe, toolCalls: nativeCalls } = this.nativeToolStream.push(inner);
           for (const call of nativeCalls) {
             // Same header + plain-argument-delta contract the structured path uses,
@@ -383,7 +388,7 @@ export default class MoonshotBedrockBackend extends BaseBedrockBackend {
       // Non-streaming: the whole message is in hand. Extract a native tool section if
       // present; otherwise convert the inline <reasoning> envelope to <think>.
       if (hasNativeToolMarker(content)) {
-        const inner = content.replace(/<\/?reasoning>/g, '');
+        const inner = escapeThinkMarkers(content.replace(/<\/?reasoning>/g, ''));
         // Slice to the calls before parsing: parseNativeToolSection caps its input, and
         // `inner` is the whole message - on a thinking model the monologue precedes the
         // calls, so an uncapped `inner` can push them past the cap and silently drop every

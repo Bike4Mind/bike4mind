@@ -8,6 +8,7 @@ import type {
 import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/client-cloudwatch';
 import {
   ChatModels,
+  escapeThinkMarkers,
   IMessage,
   MessageContentText,
   ModelBackend,
@@ -1367,11 +1368,16 @@ export class AnthropicBackend implements ICompletionBackend {
                   } else if (event.type === 'content_block_delta') {
                     if ('delta' in event && event.delta.type === 'thinking_delta') {
                       const thinkingText = event.delta.thinking;
-                      // Accumulate thinking content in the collected block
+                      // Accumulate thinking content in the collected block - kept raw
+                      // (unescaped) since this is resent to the API verbatim in tool-use loops.
                       if (collectedContent[event.index]) {
                         collectedContent[event.index].thinking += thinkingText;
                       }
-                      streamedText[event.index] = thinkingText;
+                      // Escaped before it reaches the transcript: reasoning is
+                      // provider-authored and can contain marker-shaped substrings that would
+                      // otherwise be indistinguishable from the real <think>/</think> we wrap
+                      // around it.
+                      streamedText[event.index] = escapeThinkMarkers(thinkingText);
                       await cb(streamedText, { toolsUsed: toolsUsed });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;

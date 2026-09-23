@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hasVisibleReplyText, visibleReplyText } from './streamVisibility';
+import { escapeThinkMarkers, hasVisibleReplyText, visibleReplyText } from './streamVisibility';
 
 describe('visibleReplyText', () => {
   it('treats an empty or whitespace-only slot as nothing visible', () => {
@@ -65,6 +65,48 @@ describe('visibleReplyText', () => {
 
   it('treats an unmatched trailing close as ordinary text rather than hiding a phantom block', () => {
     expect(visibleReplyText('answer</think>more')).toBe('answer</think>more');
+  });
+
+  it('does not let an unescaped provider-authored close marker leak hidden reasoning', () => {
+    // Reported against the depth-tracking implementation: reasoning that itself contains a
+    // literal '</think>' closes the real block early, and the text between the fake close and
+    // the real one - genuinely still hidden reasoning - reads as ordinary text and leaks. This
+    // is only safe because adapters now call escapeThinkMarkers on the raw delta before
+    // wrapping it in the real markers (see the escapeThinkMarkers tests below); visibleReplyText
+    // itself cannot tell control markers from data once they share an unescaped string.
+    const leaked = visibleReplyText('<think>secret prefix </think>LEAKED SECRET</think>answer');
+    expect(leaked).toBe('LEAKED SECRET</think>answer');
+
+    const escapedInput = `<think>${escapeThinkMarkers('secret prefix </think>LEAKED SECRET')}</think>answer`;
+    expect(visibleReplyText(escapedInput)).toBe('answer');
+  });
+});
+
+describe('escapeThinkMarkers', () => {
+  it('passes text with no markers through untouched', () => {
+    expect(escapeThinkMarkers('plain reasoning')).toBe('plain reasoning');
+  });
+
+  it('returns empty/nullish input as-is', () => {
+    expect(escapeThinkMarkers('')).toBe('');
+  });
+
+  it('defangs a literal open marker so it no longer matches the control token', () => {
+    const escaped = escapeThinkMarkers('the model reasoned about <think>');
+    expect(escaped).not.toContain('<think>');
+    expect(escaped).toContain('think>');
+  });
+
+  it('defangs a literal close marker so it no longer matches the control token', () => {
+    const escaped = escapeThinkMarkers('a trailing </think> in the monologue');
+    expect(escaped).not.toContain('</think>');
+    expect(escaped).toContain('/think>');
+  });
+
+  it('escaping and rewrapping a marker-shaped delta round-trips through visibleReplyText untouched', () => {
+    const rawReasoning = 'outer <think>inner</think> tail </think> more';
+    const wrapped = `<think>${escapeThinkMarkers(rawReasoning)}</think>final`;
+    expect(visibleReplyText(wrapped)).toBe('final');
   });
 });
 

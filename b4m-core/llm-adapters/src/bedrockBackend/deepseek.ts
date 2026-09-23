@@ -1,4 +1,4 @@
-import { ChatModels, IMessage, type ModelInfo, ModelBackend } from '@bike4mind/common';
+import { ChatModels, escapeThinkMarkers, IMessage, type ModelInfo, ModelBackend } from '@bike4mind/common';
 import { ChoiceEndReason, ChoiceStatus, ICompletionOptions, ICompletionResponseChunk } from '../backend';
 import { BaseBedrockBackend } from './base';
 import { ConverseCommand, ConverseStreamCommand } from '@aws-sdk/client-bedrock-runtime';
@@ -308,7 +308,7 @@ export default class DeepSeekBedrockBackend extends BaseBedrockBackend {
       if (this.isSpecialTask) return ''; // Never leak chain-of-thought into a title/summary field.
       const opening = this.isInReasoningBlock ? '' : '<think>';
       this.isInReasoningBlock = true;
-      return opening + delta.reasoningContent.text;
+      return opening + escapeThinkMarkers(delta.reasoningContent.text);
     }
     if (delta?.text !== undefined) {
       const closing = this.isInReasoningBlock ? '</think>' : '';
@@ -324,7 +324,7 @@ export default class DeepSeekBedrockBackend extends BaseBedrockBackend {
         if (isReasoningBlock(block)) {
           if (this.isSpecialTask) return '';
           const text = block.reasoningContent.reasoningText?.text;
-          return text ? `<think>${text}</think>` : '';
+          return text ? `<think>${escapeThinkMarkers(text)}</think>` : '';
         }
         return block.text;
       })
