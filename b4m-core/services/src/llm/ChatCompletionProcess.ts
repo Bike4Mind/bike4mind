@@ -864,6 +864,19 @@ export class ChatCompletionProcess {
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
+   * True only when `resolveEntitlementKeys()` fell back to `[]` because the injected
+   * `getEntitlements` THREW, not because it legitimately returned no keys (#3155). Read by
+   * `getDataLakeAccessContext()` to set `entitlementKeysResolved: false`, which tells the exclusion-
+   * telemetry count to report "unknown" instead of miscounting an entitlement-gated lake as excluded.
+   *
+   * NOT the same axis as `entitlementsResolved` above (review: the two names read as near-synonyms
+   * but answer different questions) - that one means "an attempt has been made this process, so the
+   * memo is populated" and is `true` in BOTH the success and the failure branch of
+   * `resolveEntitlementKeys()`. This one means "that attempt actually succeeded." Never read
+   * `entitlementsResolved: true` as proof the keys are trustworthy - check this field instead.
+   */
+  private entitlementResolutionFailed = false;
+  /**
    * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
    * (userHasAccessibleKnowledgeLake), the corpus inline-defer plan (resolveCorpusInlinePlan) and
    * the retrieval seed's `lakeScope`, so none of them can disagree - it is the SAME access the
@@ -990,6 +1003,7 @@ export class ChatCompletionProcess {
           `Entitlement resolution failed; falling back to tag-only lake access: ${(err as Error)?.message}`
         );
         this.entitlementKeys = [];
+        this.entitlementResolutionFailed = true;
       }
       this.entitlementsResolved = true;
     }
@@ -1020,10 +1034,14 @@ export class ChatCompletionProcess {
    */
   private async getDataLakeAccessContext(): Promise<DataLakeAccessContext> {
     if (this.dataLakeAccessContextMemo === undefined) {
+      const entitlementKeys = await this.resolveEntitlementKeys();
       this.dataLakeAccessContextMemo = {
         db: this.db,
         user: this.user,
-        entitlementKeys: await this.resolveEntitlementKeys(),
+        entitlementKeys,
+        // #3155: tells the exclusion-telemetry count apart a legitimately empty entitlement list
+        // from a failed lookup - see `entitlementResolutionFailed`'s own doc.
+        entitlementKeysResolved: !this.entitlementResolutionFailed,
         // Without this, a countGateExcludedLakes failure warns into a void: the resolver
         // swallows it internally (never throws), so this call's own try/catch never sees it.
         logger: this.logger,
