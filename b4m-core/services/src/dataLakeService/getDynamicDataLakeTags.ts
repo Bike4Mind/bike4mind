@@ -98,6 +98,15 @@ export interface DataLakeAccessContext {
    * that cannot tell them apart must not report a confident exclusion count - see
    * `excludedByAccessCountPrerequisitesComplete` at this file's resolvers for how this feeds that
    * gate, mirroring the grant-read and supersession prerequisites already tracked there.
+   *
+   * DEFAULTS OPTIMISTIC (absent = trustworthy), DELIBERATELY, unlike `excludedByAccessCount`'s own
+   * "absent = not measured" contract (review, #3155): only `getDataLakeAccessContext()` sets this
+   * field today, so gating on an explicit `true` instead of `!== false` would flip
+   * `lakeViewComplete` to incomplete for every OTHER caller of this resolver too (they never set
+   * it), silently disabling the narrowing `sessionService/deriveRetrievalTags.ts` does when the
+   * view is complete - a real regression for a hypothetical future bug. See the test pinning this
+   * default in `getDynamicDataLakeTags.test.ts` ("omitting entitlementKeysResolved... still runs
+   * the count") before changing it.
    */
   entitlementKeysResolved?: boolean;
   /** Optional; only used to report a swallowed dataLakes read failure (see below). */
@@ -293,7 +302,16 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   const grantedDynamicIds = new Set<string>();
   // Complete unless the read below throws. An absent `db.dataLakes` is NOT degraded: a deployment
   // with no dynamic-lake repo has no dynamic lakes to miss, so its registry-only answer is whole.
-  let lakeViewComplete = true;
+  //
+  // Seeded from the caller's own entitlement-read completeness (#3155, review): a thrown
+  // entitlement lookup degrades `context.entitlementKeys` to `[]` before this function ever sees
+  // it, and that array is not just a count input - it is the same one handed to
+  // `findActiveByUserTagsAndEntitlements` below - so a degraded `[]` can silently drop an
+  // entitlement-gated lake the caller genuinely holds the key for out of `dataLakeTags`/`lakes`,
+  // exactly the "lakes may be MISSING" failure this field exists to flag. Declared with the
+  // expression directly (review: a bare `= true` here previously left a later unconditional
+  // overwrite as dead code) so there is exactly one place this starts from.
+  let lakeViewComplete = context.entitlementKeysResolved !== false;
   // Same reason as ownedDynamicIds: createdByUserId survives only on the raw documents, and
   // whole-lake queries (see ResolvedLakeAccess) cannot anchor a prefix arm without it.
   const creatorByDynamicId = new Map<string, string>();
@@ -313,23 +331,14 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // second (see the supersession catch below) - so neither flag alone can gate the count safely.
   // Stays `true` when a read is simply unwired (no grant repo): an absent adapter has nothing to
   // fail, so `reach`/`supersededOwnLakeIds` staying at their empty defaults is a complete answer,
-  // not a degraded one.
+  // not a degraded one. Seeded from `lakeViewComplete`'s own initial value (see that declaration
+  // for the entitlement-read completeness this also carries, #3155).
   //
-  // Seeded from the caller's own entitlement-read completeness (#3155): a thrown entitlement lookup
-  // degrades `context.entitlementKeys` to `[]` before this function ever sees it, which would
-  // otherwise make an entitlement-gated lake look gate-excluded for a caller whose real keys are
-  // simply unknown this turn. UNLIKE the grant/supersession pair above, this ALSO sets
-  // `lakeViewComplete = false`: `entitlementKeys` is not just a count input, it is the same array
-  // handed to `findActiveByUserTagsAndEntitlements` below - so a degraded `[]` can silently drop an
-  // entitlement-gated lake the caller genuinely holds the key for out of `dataLakeTags`/`lakes`
-  // too, exactly the "lakes may be MISSING" failure `lakeViewComplete` exists to flag.
-  lakeViewComplete = context.entitlementKeysResolved !== false;
+  // No warn here for an incomplete seed (review): the count this gates only exists inside the
+  // `context.db.dataLakes` branch below, which already warns once, correctly, when it actually
+  // skips the query - warning here too would double-log on a wired host, and warn about a count
+  // that was never going to run at all on a registry-only one.
   let excludedByAccessCountPrerequisitesComplete = lakeViewComplete;
-  if (!excludedByAccessCountPrerequisitesComplete) {
-    context.logger?.warn(
-      '[dataLakes] gate-excluded-lake count prerequisite incomplete: entitlement lookup failed this turn'
-    );
-  }
   if (context.db.dataLakes) {
     // Fail closed on the projected reader rather than a bare TypeError: an unwired host gets a
     // legible error naming the missing adapter. Resolved only on this branch - a static-registry-
