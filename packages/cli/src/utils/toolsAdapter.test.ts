@@ -26,6 +26,7 @@ import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { AgentHooks, HookMatcher } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
 import type { ShellCommandPermissionDeps } from './commandPermission.js';
+import { useCliStore } from '../store/index.js';
 
 // Mock the hookExecutor module
 vi.mock('../agents/hookExecutor.js', () => ({
@@ -833,12 +834,17 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
     expect(toolFn).not.toHaveBeenCalled();
   });
 
-  it('keeps the sandbox profile alive until the command has run, then cleans it up', async () => {
-    // Regression guard: the success path must `await executeAndRecord()` inside the
-    // try/finally. A bare `return <promise>` runs the finally synchronously at the
-    // return, rmSync'ing the .sb profile before the spawned sandbox-exec opens it -
-    // breaking every sandboxed macOS command. The `await Promise.resolve()` below
-    // models that async gap: the real profile read happens a tick after the spawn.
+  afterEach(() => {
+    useCliStore.setState({ interactionMode: 'normal' });
+  });
+
+  // Each success-path return MUST `await executeAndRecord()` inside the try/finally.
+  // A bare `return <promise>` runs the finally synchronously at the return, rmSync'ing
+  // the .sb profile before the spawned sandbox-exec opens it - breaking every sandboxed
+  // macOS command. This drives the profile-present check through a given branch; the
+  // `await Promise.resolve()` models the async gap (the real profile read is a tick
+  // after the spawn), so reverting that branch's `await` turns the test red.
+  async function assertProfileSurvivesRun(wrapFn: typeof wrapToolWithPermission, needsPermission: boolean) {
     const { orchestrator, profile } = await orchestratorWithProfile();
     let profilePresentDuringRun: boolean | null = null;
     const toolFn = vi.fn(async () => {
@@ -846,14 +852,13 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
       profilePresentDuringRun = existsSync(profile);
       return 'ok';
     });
-    const tool = createMockTool('bash_execute', toolFn);
     const permissionManager = {
-      needsPermission: vi.fn(() => false),
+      needsPermission: vi.fn(() => needsPermission),
       trustToolForSession: vi.fn(),
     } as unknown as PermissionManager;
     const agentContext = { currentAgent: null, observationQueue: [] };
-    const wrapped = wrapToolWithPermission(
-      tool,
+    const wrapped = wrapFn(
+      createMockTool('bash_execute', toolFn),
       permissionManager,
       noopPrompt,
       agentContext,
@@ -866,9 +871,56 @@ describe('wrapToolWithPermission sandbox cwd confinement', () => {
     const result = await wrapped.toolFn({ command: 'ls' });
 
     expect(result).toBe('ok');
-    expect(profilePresentDuringRun).toBe(true); // still present while the command ran
+    expect(profilePresentDuringRun).toBe(true); // present while the command ran
     expect(existsSync(profile)).toBe(false); // cleaned up afterwards
     expect(toolFn).toHaveBeenCalledTimes(1);
+  }
+
+  it('profile survives the run: trusted / needs-no-permission branch', async () => {
+    await assertProfileSurvivesRun(wrapToolWithPermission, false);
+  });
+
+  it('profile survives the run: prompt-allow branch', async () => {
+    // needsPermission true + noopPrompt returns allow-session -> falls through to the
+    // final return await after the prompt.
+    await assertProfileSurvivesRun(wrapToolWithPermission, true);
+  });
+
+  it('profile survives the run: auto-accept branch', async () => {
+    useCliStore.setState({ interactionMode: 'auto-accept' });
+    await assertProfileSurvivesRun(wrapToolWithPermission, true);
+  });
+
+  it('profile survives the run: host-allowlist branch', async () => {
+    // The allowlist patterns are read from a module-cached env, so exercise this
+    // branch in a fresh module instance with the tool allowlisted; restore after.
+    process.env.B4M_ALLOWED_TOOLS = JSON.stringify(['bash_execute']);
+    vi.resetModules();
+    try {
+      const fresh = await import('./toolsAdapter.js');
+      await assertProfileSurvivesRun(fresh.wrapToolWithPermission, false);
+    } finally {
+      delete process.env.B4M_ALLOWED_TOOLS;
+      vi.resetModules();
+    }
+  });
+
+  it('hands execution the realpath-resolved cwd, not the lexical symlink path', async () => {
+    // Pins the writable-root threading: without `cwd,` in sandboxedArgs the tool would
+    // run in the unresolved (symlinked) path, diverging from the profile's baked root.
+    const orchestrator = createOrchestrator();
+    const workspace = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'b4m-ws-')));
+    const realTarget = path.join(workspace, 'real');
+    await fs.mkdir(realTarget);
+    const link = path.join(workspace, 'link');
+    await fs.symlink(realTarget, link);
+    const { wrapped, toolFn } = wrap(orchestrator, [workspace]);
+
+    await wrapped.toolFn({ command: 'ls', cwd: link });
+
+    expect(realTarget).not.toBe(link); // the resolved path really differs from the lexical one
+    expect(orchestrator.recordSandboxed).toHaveBeenCalledTimes(1);
+    expect(toolFn).toHaveBeenCalledWith(expect.objectContaining({ cwd: realTarget, command: 'sandboxed-command' }));
   });
 
   it('records a blocked decision as a violation and never runs the command', async () => {

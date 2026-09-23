@@ -51,7 +51,18 @@ import {
 } from '../tools';
 import { WorkItemsClient } from '../api/WorkItemsClient.js';
 import { CheckpointStore } from '../storage/CheckpointStore.js';
-import { buildSandbox } from '../bootstrap/buildSandbox.js';
+import { buildSandbox, type SandboxLog } from '../bootstrap/buildSandbox.js';
+
+/**
+ * Sandbox status/warning sink for headless mode. Headless emits its NDJSON protocol
+ * on stdout, so BOTH info and warn must go to stderr - routing either to stdout would
+ * corrupt the protocol stream. Exported so this invariant is unit-tested (see
+ * headlessSandboxLog.test.ts) rather than left as an inline lambda nothing pins.
+ */
+export const headlessSandboxLog: SandboxLog = {
+  info: line => void process.stderr.write(`${line}\n`),
+  warn: line => void process.stderr.write(`${line}\n`),
+};
 import { readFile } from 'fs/promises';
 import {
   HEADLESS_SCHEMA_VERSION,
@@ -310,13 +321,12 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // NDJSON on stdout, so all sandbox status/warnings are routed to stderr.
     const checkpointProjectDir = configStore.getProjectConfigDir() ?? process.cwd();
     const checkpointStore = new CheckpointStore(checkpointProjectDir);
-    const toStderr = (line: string): void => void process.stderr.write(`${line}\n`);
     const { sandboxOrchestrator } = await buildSandbox({
       config,
       sessionId: session.id,
       permissionManager,
       checkpointStore,
-      log: { info: toStderr, warn: toStderr },
+      log: headlessSandboxLog,
     });
 
     // Agent context for observation tracking

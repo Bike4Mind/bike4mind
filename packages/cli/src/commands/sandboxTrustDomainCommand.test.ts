@@ -65,4 +65,41 @@ describe('handleSandboxTrustDomainCommand', () => {
     expect(msg).toContain('Added: a.com');
     expect(msg).toContain('Trusted 2 domain(s)');
   });
+
+  it('drops empty tokens from a double-space split instead of trusting an empty domain', async () => {
+    const { orchestrator, allowedDomains } = makeOrchestrator();
+    const { deps, save } = makeDeps(orchestrator);
+
+    // Upstream splits on a single space, so "a.com  b.com" arrives as ['a.com','','b.com'].
+    const msg = await handleSandboxTrustDomainCommand(deps, ['a.com', '', 'b.com']);
+
+    expect(orchestrator.addAllowedDomain).not.toHaveBeenCalledWith('');
+    expect(allowedDomains).toEqual(['a.com', 'b.com']);
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ network: expect.objectContaining({ allowedDomains: ['a.com', 'b.com'] }) })
+    );
+    expect(msg).toContain('Trusted 2 domain(s)');
+  });
+
+  it('rejects when ALL tokens are empty and never saves', async () => {
+    const { orchestrator } = makeOrchestrator();
+    const { deps, save } = makeDeps(orchestrator);
+    expect(await handleSandboxTrustDomainCommand(deps, ['', '   '])).toContain('Usage: /sandbox:trust-domain');
+    expect(orchestrator.addAllowedDomain).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('reports a session-only warning when persistence fails, having still widened the live proxy', async () => {
+    const { orchestrator } = makeOrchestrator();
+    const save = vi.fn(async () => {
+      throw new Error('disk full');
+    });
+    const deps = { orchestrator, configStore: { saveSandboxConfig: save } };
+
+    const msg = await handleSandboxTrustDomainCommand(deps, ['a.com']);
+
+    expect(orchestrator.addAllowedDomain).toHaveBeenCalledWith('a.com'); // live list widened
+    expect(msg).toContain('failed to persist');
+    expect(msg).toContain('session only');
+  });
 });

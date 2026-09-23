@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ProxyManager } from './ProxyManager.js';
+import { HttpConnectProxy } from './HttpConnectProxy.js';
 import type { NetworkConfig } from '../types.js';
 
 function enabledConfig(overrides?: Partial<NetworkConfig>): NetworkConfig {
@@ -67,6 +68,53 @@ describe('ProxyManager', () => {
     it('stop when not started is safe', async () => {
       manager = new ProxyManager(enabledConfig());
       await manager.stop(); // should not throw
+    });
+
+    it('stop() waits for an in-flight start() to finish before tearing down', async () => {
+      // Pins the join added for the orphaned-listener leak: stop() must not proceed
+      // while start() is still binding. Gate start() on a manual promise; stop() must
+      // stay pending until it resolves. Without the join, stop() settles immediately.
+      let resolveStart!: (port: number) => void;
+      const gate = new Promise<number>(r => {
+        resolveStart = r;
+      });
+      const startSpy = vi.spyOn(HttpConnectProxy.prototype, 'start').mockReturnValueOnce(gate);
+      const stopSpy = vi.spyOn(HttpConnectProxy.prototype, 'stop').mockResolvedValue(undefined);
+      manager = new ProxyManager(enabledConfig());
+
+      const startP = manager.start();
+      let stopSettled = false;
+      const stopP = manager.stop().then(() => {
+        stopSettled = true;
+      });
+
+      await new Promise(r => setTimeout(r, 10));
+      expect(stopSettled).toBe(false); // still joined to the in-flight start
+
+      resolveStart(0);
+      await Promise.all([startP, stopP]);
+      expect(stopSettled).toBe(true);
+      expect(stopSpy).toHaveBeenCalled();
+      expect(manager.isRunning()).toBe(false);
+
+      startSpy.mockRestore();
+      stopSpy.mockRestore();
+    });
+
+    it('stop() resolves and clears the proxy even when the in-flight start() rejects', async () => {
+      const startSpy = vi.spyOn(HttpConnectProxy.prototype, 'start').mockRejectedValueOnce(new Error('bind failed'));
+      const stopSpy = vi.spyOn(HttpConnectProxy.prototype, 'stop').mockResolvedValue(undefined);
+      manager = new ProxyManager(enabledConfig());
+
+      const startP = manager.start().catch(() => {}); // start rejects; caller swallows
+      await expect(manager.stop()).resolves.toBeUndefined(); // join swallows the rejection
+      await startP;
+
+      expect(manager.isRunning()).toBe(false);
+      expect(manager.getPort()).toBeNull();
+
+      startSpy.mockRestore();
+      stopSpy.mockRestore();
     });
 
     it('setEnabled flips the live flag start() honors (real class, happy path)', async () => {
