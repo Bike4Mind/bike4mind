@@ -174,11 +174,10 @@ jobs:
           # Account-tied: set these repo/org variables to your own resources (no brand fallback).
           # SUBSCRIBER_FANOUT_IMAGE is your published subscriber-fanout image reference (required
           # in CI). GA_MEASUREMENT_ID, REDDIT_PIXEL_ID and META_PIXEL_ID are optional analytics
-          # ids; infra/web.ts
-          # only injects each one on the production stage AND when it is non-empty, with no
-          # fallback - so an unset value means that tracker never mounts and every conversion
-          # event it would report is silently inert. GA_COOKIE_DOMAIN is optional too, but
-          # read the warning in infra/web.ts before setting it: a value that is not a
+          # ids; infra/web.ts only injects each one on the production stage AND when it is
+          # non-empty, with no fallback - so an unset value means that tracker never mounts and
+          # every conversion event it would report is silently inert. GA_COOKIE_DOMAIN is optional
+          # too, but read the warning in infra/web.ts before setting it: a value that is not a
           # registrable suffix of your serving host makes the browser reject the GA cookie
           # outright, which is WORSE than leaving it unset.
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
@@ -210,11 +209,10 @@ jobs:
           # Account-tied: set these repo/org variables to your own resources (no brand fallback).
           # SUBSCRIBER_FANOUT_IMAGE is your published subscriber-fanout image reference (required
           # in CI). GA_MEASUREMENT_ID, REDDIT_PIXEL_ID and META_PIXEL_ID are optional analytics
-          # ids; infra/web.ts
-          # only injects each one on the production stage AND when it is non-empty, with no
-          # fallback - so an unset value means that tracker never mounts and every conversion
-          # event it would report is silently inert. GA_COOKIE_DOMAIN is optional too, but
-          # read the warning in infra/web.ts before setting it: a value that is not a
+          # ids; infra/web.ts only injects each one on the production stage AND when it is
+          # non-empty, with no fallback - so an unset value means that tracker never mounts and
+          # every conversion event it would report is silently inert. GA_COOKIE_DOMAIN is optional
+          # too, but read the warning in infra/web.ts before setting it: a value that is not a
           # registrable suffix of your serving host makes the browser reject the GA cookie
           # outright, which is WORSE than leaving it unset.
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
