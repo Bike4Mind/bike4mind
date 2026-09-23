@@ -45,10 +45,12 @@ import { resolveEffectiveEmbeddingModel } from '@server/embeddings/effectiveEmbe
  * is bursting the embedding provider's tokens-per-minute, so the caller repeats bounded waves (the
  * UI reads `remaining`) rather than fanning out the whole lake at once.
  *
- * Auth diverges from per-file /api/files/reprocess (CASL ability) on purpose: this re-chunks files
- * already in the lake, attaching nothing and mutating no lake document, so the POST gates on
- * `assertLakeRebuildAccess` rather than `assertLakeWriteAccess` - the one /api/data-lakes write
- * that does not require a lake document to exist (see that gate's comment for why).
+ * Auth: this re-chunks files already in the lake, attaching nothing and mutating no lake document,
+ * so the POST gates on `assertLakeRebuildAccess` rather than `assertLakeWriteAccess` - the one
+ * /api/data-lakes write that does not require a lake document to exist (see that gate's comment for
+ * why). Per-file /api/files/reprocess reaches the same gate when the caller names a lake, so a
+ * manager sees one rule whether they repair the lake or a single member of it; its other arm is the
+ * caller's own CASL right over the file, which needs no lake at all.
  */
 
 const RechunkInput = z.object({
