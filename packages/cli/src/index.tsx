@@ -3417,24 +3417,19 @@ function CliApp() {
           console.log('Usage: /sandbox:trust-domain <domain> [...]');
           break;
         }
-        const proxyMgr = state.sandboxOrchestrator.getProxyManager();
-        if (!proxyMgr) {
+        if (!state.sandboxOrchestrator.getProxyManager()) {
           console.log('Network proxy not initialized');
           break;
         }
+        // Route through the orchestrator so the persisted config and the live proxy
+        // stay in lockstep - otherwise a later /sandbox:network save would persist a
+        // stale allow-list and silently drop these grants.
         for (const domain of args) {
-          proxyMgr.addAllowedDomain(domain);
+          state.sandboxOrchestrator.addAllowedDomain(domain);
           console.log(`  Added: ${domain}`);
         }
         // Persist ONLY the sandbox field (no repo-merged config laundering).
-        const currentSandboxConfig = state.sandboxOrchestrator.getConfig();
-        await state.configStore.saveSandboxConfig({
-          ...currentSandboxConfig,
-          network: {
-            ...currentSandboxConfig.network,
-            allowedDomains: proxyMgr.getAllowedDomains(),
-          },
-        });
+        await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
         console.log(`Trusted ${args.length} domain(s)`);
         break;
       }

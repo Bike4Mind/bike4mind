@@ -284,7 +284,7 @@ export function wrapToolWithPermission(
           ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
           : liveInteractionMode;
         if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
-          const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only — research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
+          const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only \u2014 research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
           agentContext.observationQueue.push({ toolName, result });
           return result;
         }

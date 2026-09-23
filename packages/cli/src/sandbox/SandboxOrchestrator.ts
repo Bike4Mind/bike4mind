@@ -171,6 +171,20 @@ export class SandboxOrchestrator {
     return this.proxyManager;
   }
 
+  /**
+   * Trust a domain for network egress. Updates BOTH the persisted config (the
+   * source of truth getConfig/saveSandboxConfig read) and the live proxy - the
+   * config is structuredClone'd at construction, so updating only the proxy would
+   * leave getConfig()'s allowedDomains stale and a later /sandbox:network or
+   * /sandbox:enable save would silently drop the grant. No-op on a duplicate.
+   */
+  addAllowedDomain(domain: string): void {
+    if (!this.config.network.allowedDomains.includes(domain)) {
+      this.config.network.allowedDomains.push(domain);
+    }
+    this.proxyManager?.addAllowedDomain(domain);
+  }
+
   /** Get full status information for display */
   getStatus(): SandboxStatus {
     return {

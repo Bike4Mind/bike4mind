@@ -68,6 +68,23 @@ describe('ProxyManager', () => {
       manager = new ProxyManager(enabledConfig());
       await manager.stop(); // should not throw
     });
+
+    it('setEnabled flips the live flag start() honors (real class, happy path)', async () => {
+      // Constructed disabled: start() must no-op until setEnabled(true) flips the
+      // live flag the runtime toggle depends on; observable via isRunning().
+      manager = new ProxyManager({ enabled: false, allowedDomains: ['example.com'] });
+      await manager.start();
+      expect(manager.isRunning()).toBe(false);
+
+      manager.setEnabled(true);
+      await manager.start();
+      expect(manager.isRunning()).toBe(true);
+
+      manager.setEnabled(false);
+      await manager.stop();
+      await manager.start();
+      expect(manager.isRunning()).toBe(false);
+    });
   });
 
   describe('getProxyEnv', () => {

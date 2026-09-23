@@ -300,6 +300,22 @@ describe('SandboxOrchestrator', () => {
       const orchestrator = new SandboxOrchestrator(enabledConfig(), createMockRuntime(), mockProxy);
       expect(orchestrator.getProxyManager()).toBe(mockProxy);
     });
+
+    it('addAllowedDomain keeps config and proxy in lockstep so a later save persists the grant', () => {
+      const proxy = createStatefulProxyManager();
+      const orchestrator = new SandboxOrchestrator(enabledConfig(), createMockRuntime(), proxy);
+
+      orchestrator.addAllowedDomain('example.org');
+
+      // The config (what getConfig/saveSandboxConfig read) must carry the new domain,
+      // not just the live proxy - otherwise /sandbox:network would persist a stale list.
+      expect(orchestrator.getConfig().network.allowedDomains).toContain('example.org');
+      expect(proxy.addAllowedDomain).toHaveBeenCalledWith('example.org');
+
+      // Idempotent: trusting the same domain twice does not duplicate it in config.
+      orchestrator.addAllowedDomain('example.org');
+      expect(orchestrator.getConfig().network.allowedDomains.filter(d => d === 'example.org')).toHaveLength(1);
+    });
   });
 
   describe('network gating', () => {
