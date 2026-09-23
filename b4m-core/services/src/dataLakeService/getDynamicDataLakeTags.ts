@@ -107,9 +107,13 @@ export interface DataLakeAccessContext {
    * when the view is complete - a real regression for a hypothetical future bug. See the test
    * pinning this default in `getDynamicDataLakeTags.test.ts` before changing it.
    *
-   * An EXCLUSION MEASUREMENT has the opposite default: it is unknown unless this field is stated -
-   * see `MeasurableDataLakeAccessContext` below, which is what makes stating it unforgettable
-   * there rather than a comment at each call site.
+   * The IDENTITY-SCOPED measurement (`measureIdentityNamedExclusion`) takes the opposite default -
+   * unknown unless this field is stated - because it is telemetry-only and has no structural hosts
+   * to break; `MeasurableDataLakeAccessContext` below is what makes stating it unforgettable there.
+   * The ACCOUNT-WIDE `excludedByAccessCount` in this file is NOT on that stricter contract: it
+   * still seeds from `!== false`, so an unstated context gets a number rather than "unknown". Wiring
+   * a new consumer of that count off a site that degrades its keys to `[]` reintroduces the
+   * confidently-wrong count; state this field there.
    */
   entitlementKeysResolved?: boolean;
   /** Optional; only used to report a swallowed dataLakes read failure (see below). */
@@ -127,6 +131,18 @@ export interface DataLakeAccessContext {
  * `ChatCompletionProcess.resolveEntitlementKeys`).
  */
 export type MeasurableDataLakeAccessContext = DataLakeAccessContext & { entitlementKeysResolved: boolean };
+
+/**
+ * The caller's entitlement keys together with whether they are the real ones (`resolved: false`
+ * means the lookup threw and `keys` is the fail-safe `[]`). One value rather than two returns so a
+ * producer cannot hand over the keys and leave the signal behind - it is the shape a resolver owes
+ * a `MeasurableDataLakeAccessContext` builder, so it lives beside that type rather than beside the
+ * one resolver that happens to produce it (`ChatCompletionProcess.resolveEntitlementKeys`).
+ */
+export interface EntitlementResolution {
+  keys: string[];
+  resolved: boolean;
+}
 
 /**
  * One accessible lake, resolved far enough to run a WHOLE-LAKE query against it (counting,
