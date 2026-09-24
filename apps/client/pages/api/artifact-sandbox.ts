@@ -64,6 +64,11 @@ const SANDBOX_HTML = `<!DOCTYPE html>
 </head>
 <body>
 <script>
+  // Everything below is closure-scoped. document.write runs the artifact's own scripts in
+  // THIS window, so anything left on the global object is something an artifact can replace:
+  // a page defining its own reportHeight or watchHeight would otherwise take over the
+  // reporter. Left un-indented so the diff stays readable.
+  (function () {
   // event.origin is intentionally not checked: this iframe runs with an
   // opaque origin (sandbox="allow-scripts", no allow-same-origin), so the
   // parent must postMessage with targetOrigin '*' — no other window can
@@ -142,6 +147,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     watchHeight();
   }
   window.addEventListener('message', handleArtifactMessage);
+  })();
 </script>
 </body>
 </html>`;

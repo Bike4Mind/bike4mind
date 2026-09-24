@@ -396,7 +396,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
             </Tooltip>
 
             {source && (
-              // The card's own onClick collapses it, so swallow clicks meant for the button.
+              // The card's own onClick opens the viewer, so swallow clicks meant for the button.
               <Box onClick={e => e.stopPropagation()} sx={{ display: 'flex', flexShrink: 0 }}>
                 <Button
                   size="sm"

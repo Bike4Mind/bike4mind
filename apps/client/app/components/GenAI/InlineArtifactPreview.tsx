@@ -368,8 +368,8 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
 
       {/* Same control the code card carries, for the same reason: the body is bounded, and
         this says how much more there is rather than leaving the reader to guess. The card
-        sets `pointer-events: none` over the render so a click opens the viewer, so this
-        opts back in - and stops the click there rather than opening the viewer under it. */}
+        around it opens the viewer on click, so the button stops propagation (see
+        ShowMoreButton) rather than expanding and opening the viewer at once. */}
       {htmlOverflows && (
         <ShowMoreButton
           expanded={htmlExpanded}

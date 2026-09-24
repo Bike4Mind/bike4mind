@@ -24,6 +24,7 @@ export function ShowMoreButton({ expanded, onToggle, collapsedLabel = 'Show more
       component="button"
       type="button"
       level="body-sm"
+      aria-expanded={expanded}
       data-testid={testId}
       endDecorator={expanded ? <ExpandLessIcon sx={{ fontSize: 16 }} /> : <ExpandMoreIcon sx={{ fontSize: 16 }} />}
       onClick={e => {

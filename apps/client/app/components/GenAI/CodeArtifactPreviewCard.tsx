@@ -187,8 +187,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       <Box className="code-artifact-content">
         {/* Title and line count are one block, so the trailing controls centre against the
             pair rather than against the title alone. Every control sits at that trailing
-            edge, with the fold chevron last behind a rule - it acts on the whole card, the
-            others act on its content. Matches ArtifactPreviewCard - keep the two in sync. */}
+            edge. Matches ArtifactPreviewCard - keep the two in sync. */}
         <Stack className="code-artifact-header" direction="row" spacing={1} alignItems="center">
           <Stack sx={{ minWidth: 0 }}>
             <Typography
@@ -204,8 +203,8 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             >
               {data.title}
             </Typography>
-            {/* Stays outside the fold: with no body showing, the line count is part of what
-                identifies a collapsed card. */}
+            {/* Part of what identifies the card at a glance, so it sits with the title
+                rather than down in the body. */}
             <Typography className="code-artifact-stats" level="body-xs" sx={{ color: 'text.tertiary' }}>
               {data.lineCount} lines of code
             </Typography>

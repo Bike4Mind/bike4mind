@@ -47,6 +47,7 @@ export const ExpandCollapseButton: FC<ExpandCollapseButtonProps> = ({
         size="sm"
         endDecorator={isExpanded ? <ExpandLess /> : <ExpandMore />}
         onClick={onToggle}
+        aria-expanded={isExpanded}
         data-testid={testId}
         sx={{
           backgroundColor: 'background.body',

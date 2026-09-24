@@ -123,10 +123,9 @@ const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
   return <SearchResultCards content={content} replyComplete={replyComplete} />;
 };
 
-// Markdown `code` component: handles inline artifacts in code blocks. The
-// Prism theme is closed over rather than read from a hook here, because the
-// caller already resolves the color scheme and this function deliberately
-// stays a plain render helper.
+// Markdown `code` component: handles inline artifacts in code blocks. Takes no arguments -
+// HighlightedCode resolves the syntax theme from a hook of its own, so this stays a plain
+// render helper with nothing to close over.
 export const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
