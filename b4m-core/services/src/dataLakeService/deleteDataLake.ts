@@ -5,6 +5,7 @@ import type {
   IDataLakeBatchRepository,
   IFabFileRepository,
   IFabFileChunkRepository,
+  IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, type ManageActor } from './manageRule';
@@ -18,6 +19,8 @@ import { warnOnPrefixCollision } from './tagPrefixCollision';
 import {
   bestEffortIndexRemove,
   bestEffortSetDriveConnectionEnabled,
+  bestEffortAdjustOwnerStorage,
+  groupStorageDeltaByOwner,
   type RetrievalIndexPort,
   type DriveConnectionEnablePort,
 } from './ports';
@@ -44,6 +47,10 @@ interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembership
       // bestEffortIndexRemove's docblock). Making it optional here let all three doors go unwired
       // silently and compile clean; this turns a missing door into a compile error instead.
       fabFileChunks: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>;
+      // REQUIRED for the same reason as the rest of this list: a route that forgot to wire it would
+      // silently keep every soft-deleted file's bytes counted against its owner's storage quota
+      // forever, correctable only via the admin recalculate-storage endpoint.
+      users: Pick<IUserRepository, 'incrementCurrentStorage'>;
     };
   retrievalIndex?: RetrievalIndexPort;
   /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
@@ -150,17 +157,21 @@ export const deleteDataLake = async (
 
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);
-  const sweptIds = await db.fabFiles.softDeleteByDataLakeTag(scope, stamp);
+  const swept = await db.fabFiles.softDeleteByDataLakeTag(scope, stamp);
   // Every swept file leaves every lake read, which is a membership departure no per-file delete
   // door saw. Without it the restore side's `added` rows stand alone and a reader replaying the
   // log has those files never having left. Recorded off the ids the sweep itself stamped, so a
   // file some other door deleted in the same moment is not claimed twice, and recorded HERE rather
   // than after the settle below: the soft delete has already landed, and the steps in between can
   // throw.
-  for (const fabFileId of sweptIds) {
+  for (const { id: fabFileId } of swept) {
     const leave = { actor, lake: existing, fabFileId, action: 'removed' as const, origin: 'person' as const };
     await recordLakeMembershipChange(leave, { db, logger });
   }
+  // Grouped by owner, not the lake's creator: a swept file may belong to any contributor (see
+  // groupStorageDeltaByOwner). Off the same swept set as the membership log above, so a re-run
+  // after a crash only debits files THIS attempt actually took out of the counted set.
+  await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(swept, -1), logger);
   // Not softDeleteByDataLakeTag's return: it reports only the files this call flipped, so a re-run
   // after a crashed attempt would hand the index an empty set. findIdsByDataLakeTag sees
   // soft-deleted members too and stays stable across re-runs.

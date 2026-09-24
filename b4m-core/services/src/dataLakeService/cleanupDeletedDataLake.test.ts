@@ -291,4 +291,17 @@ describe('cleanupDeletedDataLake', () => {
 
     expect(warn.mock.calls.filter(([msg]) => String(msg).includes('no findings repo wired'))).toHaveLength(0);
   });
+
+  // Regression guard for the invariant the docblock states: every file this sweep destroys was
+  // already debited at soft-delete time, so this door must never touch storage a second time.
+  // `users` isn't part of `CleanupDeletedDataLakeAdapters` at all - the cast below is what a future
+  // change would need to bypass to wire it in, and this test exists so that change trips here.
+  it('never adjusts owner storage, even if a future change wires a users adapter in', async () => {
+    const incrementCurrentStorage = vi.fn();
+    const db = { ...makeDb(), users: { incrementCurrentStorage } };
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db } as never);
+
+    expect(incrementCurrentStorage).not.toHaveBeenCalled();
+  });
 });

@@ -1138,12 +1138,17 @@ describe('FabFile data lake lifecycle membership', () => {
     it('soft-deletes the members and spares every stranger-owned prefix match', async () => {
       const rows = await seedLakeRows();
 
-      const ids = await fabFileRepository.softDeleteByDataLakeTag(scope);
+      const swept = await fabFileRepository.softDeleteByDataLakeTag(scope);
+      const ids = swept.map(f => f.id);
 
       expect(ids.sort()).toEqual([...rows.memberIds].sort());
       for (const id of rows.strangerIds) {
         expect((await readRaw(id))?.deletedAt ?? null).toBeNull();
       }
+      // userId/fileSize must be the real values off each row, not a coercion artifact - this is
+      // what a caller debits the owner's storage by.
+      const metaTagged = swept.find(f => f.id === rows.metaTagged._id.toString());
+      expect(metaTagged).toMatchObject({ userId: CREATOR, fileSize: 100 });
     });
 
     it('round-trips a prefix-only member back to live', async () => {
@@ -1154,6 +1159,9 @@ describe('FabFile data lake lifecycle membership', () => {
 
       expect(restored).toHaveLength(2);
       expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt ?? null).toBeNull();
+      // Same real-values check as the delete side - this is what a caller credits the owner by.
+      const prefixOwned = restored.find(f => f.id === rows.prefixOwned._id.toString());
+      expect(prefixOwned).toMatchObject({ userId: CREATOR, fileSize: 100 });
     });
 
     it('honours excludeIds so a discarded duplicate stays deleted', async () => {
@@ -1177,35 +1185,47 @@ describe('FabFile data lake lifecycle membership', () => {
       await FabFile.updateOne({ _id: rows.prefixOwned._id }, { $set: { deletedAt: null } });
 
       const restored = await fabFileRepository.undeleteByDataLakeTag(scope, [], stamp);
+      const restoredIds = restored.map(f => f.id);
 
-      expect(restored).not.toContain(rows.prefixOwned._id.toString());
-      expect(restored).toContain(rows.metaTagged._id.toString());
+      expect(restoredIds).not.toContain(rows.prefixOwned._id.toString());
+      expect(restoredIds).toContain(rows.metaTagged._id.toString());
     });
 
-    // The teardown door mints one permanent membership `removed` per id this returns, so an id it
-    // did not stamp itself would double-report a departure another delete door already recorded.
-    // The window is between the enumeration and the write, which is why it takes an injection to
+    // The teardown door mints one permanent membership `removed` per id this returns (and, since
+    // this PR, debits the row's owner storage), so a row it did not itself flip must never be
+    // reported - double-reporting it would double-debit, not just double-log. The window is
+    // between the enumeration and each row's own write, which is why it takes an injection to
     // reach: a plain pre-existing soft delete is already excluded by the enumeration itself.
     it('omits a row another door claimed between the read and the write', async () => {
       const stamp = new Date('2026-07-01T00:00:00.000Z');
       const rows = await seedLakeRows();
-      const updateMany = FabFile.updateMany.bind(FabFile);
-      const spy = vi.spyOn(FabFile, 'updateMany').mockImplementation((async (
-        filter: unknown,
-        update: unknown,
-        options?: unknown
-      ) => {
+      // Fires on the FIRST per-row updateOne, regardless of which row the sweep reaches first -
+      // races prefixOwned out from under the sweep before its own conditional write runs.
+      const updateOne = FabFile.updateOne.bind(FabFile);
+      const spy = vi.spyOn(FabFile, 'updateOne').mockImplementation((async (filter: unknown, update: unknown) => {
         spy.mockRestore();
-        await FabFile.updateOne(
-          { _id: rows.prefixOwned._id },
-          { $set: { deletedAt: new Date('2026-06-30T00:00:00.000Z') } }
-        );
-        return updateMany(filter as never, update as never, options as never);
+        await updateOne({ _id: rows.prefixOwned._id }, { $set: { deletedAt: new Date('2026-06-30T00:00:00.000Z') } });
+        return updateOne(filter as never, update as never);
       }) as never);
 
       const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
 
-      expect(flipped).toEqual([rows.metaTagged._id.toString()]);
+      expect(flipped.map(f => f.id)).toEqual([rows.metaTagged._id.toString()]);
+    });
+
+    // The bug this closes: two concurrent teardowns sharing a stamp (claimFilesDeletedAt folds a
+    // re-entrant second caller onto the first's stamp) must not BOTH report every row as theirs -
+    // a bulk updateMany + read-back-by-stamp-equality can't tell the callers apart; only a per-row
+    // conditional write can.
+    it('does not let a second sweep sharing the same stamp re-claim rows the first already flipped', async () => {
+      const stamp = new Date('2026-07-01T00:00:00.000Z');
+      const rows = await seedLakeRows();
+
+      const first = await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
+      const second = await fabFileRepository.softDeleteByDataLakeTag(scope, stamp);
+
+      expect(first.map(f => f.id).sort()).toEqual([...rows.memberIds].sort());
+      expect(second).toEqual([]);
     });
 
     it('finds soft-deleted members for the restore dedup pass', async () => {
@@ -1247,7 +1267,7 @@ describe('FabFile data lake lifecycle membership', () => {
 
         const flipped = await fabFileRepository.softDeleteByDataLakeTag(scope, STAMP);
 
-        expect(flipped).toEqual([rows.metaTagged._id.toString()]);
+        expect(flipped.map(f => f.id)).toEqual([rows.metaTagged._id.toString()]);
         expect((await readRaw(rows.prefixOwned._id.toString()))?.deletedAt?.getTime()).toBe(EARLIER.getTime());
       });
 

@@ -117,6 +117,13 @@ async function inChunks<T>(
  *
  * Retrieval-index removal is the one step deliberately allowed to abort the sweep, which is why it
  * runs first. See `strictIndexRemove` in ports.ts for that posture and what it does not cover.
+ *
+ * Deliberately touches no owner's storage quota: every file this sweep hard-deletes was already
+ * soft-deleted by `deleteDataLake`, which debits each owner's `currentStorageSize` at that point.
+ * `deleteDataLake`'s terminal settle is the only write that puts a lake INTO 'deleted' (a purge
+ * accepted from there can bounce it back via `releasePurgingToDeleted` if the enqueue fails, but
+ * that never re-touches file state or storage, so the debit this sweep relies on already happened
+ * whichever door it re-enters through). Debiting again here would double-count.
  */
 export const cleanupDeletedDataLake = async (
   actor: ManageActor,
