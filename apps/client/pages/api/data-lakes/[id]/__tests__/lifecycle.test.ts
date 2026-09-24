@@ -80,6 +80,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   fabFileRepository: {},
   fabFileChunkRepository: {},
+  userRepository: { incrementCurrentStorage: vi.fn() },
 }));
 vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: h.selfHostOpenSearchEnabled }));
