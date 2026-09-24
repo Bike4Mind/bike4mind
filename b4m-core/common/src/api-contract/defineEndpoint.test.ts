@@ -36,4 +36,16 @@ describe('defineEndpoint', () => {
       })
     ).toThrow(/getFixture.*pathParams and queryParams both declare.*"id"/s);
   });
+
+  it('does not false-positive on an Object.prototype name that only pathParams declares', () => {
+    // Regression: `key in shape` would also match inherited names like
+    // `constructor`, even though queryParams's own shape never declares them.
+    const contract = defineEndpoint({
+      ...base,
+      pathParams: z.object({ constructor: z.string() }),
+      queryParams: z.object({ limit: z.coerce.number() }),
+    });
+    expect(contract.pathParams).toBeDefined();
+    expect(contract.queryParams).toBeDefined();
+  });
 });
