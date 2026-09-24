@@ -92,17 +92,8 @@ export interface UploadProgress {
    */
   taxonomyStatus?: TaxonomyStatus;
   /**
-   * Lifecycle status of the lake this run committed into, captured at commit time so every surface
-   * that reports this upload as finished can say whether the lake actually serves retrieval (#3222) -
-   * the wizard's two Complete screens and the background upload indicator. A new lake is born
-   * `draft` and grounds nothing until it is published, which the success copy otherwise never
-   * mentions.
-   *
-   * Set from the create response in create mode and from the target lake in append mode, rather
-   * than assumed: the UI must not be a second place that encodes the born-draft rule, or the two
-   * drift the moment `createDataLake` changes. Absent means "not known" - a built-in fallback lake
-   * carries no status and always serves (see `DataLakeConfig.status`) - and the screen claims
-   * nothing rather than guessing.
+   * Lifecycle status of the lake this run committed into (#3222). From the create response or the
+   * target lake, never assumed - absent means a fallback lake, which always serves.
    */
   lakeStatus?: DataLakeStatus;
 }

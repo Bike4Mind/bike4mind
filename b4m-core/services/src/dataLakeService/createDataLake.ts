@@ -166,12 +166,9 @@ export const createDataLake = async (
   const slug = await disambiguateSlug(db, params.slug.toLowerCase(), organizationId);
   const datalakeTag = buildDatalakeTag(slug, organizationId);
 
-  // Lakes start in 'draft' and stay invisible to Discover and to retrieval until someone publishes
-  // them through `promoteDataLake`. Adding files does NOT publish: #3073 removed the implicit flip
-  // that `recomputeLakeStats` used to perform, so that a lake never starts grounding answers as a
-  // side effect of an upload. Nothing else moves a lake out of draft, so any surface that reports a
-  // successful create has to disclose that the lake is not yet serving - the client's creation
-  // wizard reads `status` off this response for exactly that.
+  // Lakes start in 'draft' and stay invisible to Discover and retrieval until published via
+  // `promoteDataLake` - nothing else moves them out of draft, so the client reads `status` off
+  // this response to disclose that (#3222).
   try {
     const dataLake = await db.dataLakes.create({
       name: params.name,

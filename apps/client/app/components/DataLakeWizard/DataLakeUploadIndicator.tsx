@@ -21,10 +21,8 @@ export default function DataLakeUploadIndicator() {
 
   const pct = progress.totalFiles > 0 ? Math.round((progress.uploadedFiles / progress.totalFiles) * 100) : 0;
 
-  // The third surface that reports this upload as finished (#3222), after the wizard's two Complete
-  // screens - it is what a user sees when they close the wizard and let the upload run in the
-  // background, so a bare green "Upload Complete" here is the same false all-clear. An unknown
-  // status claims nothing: a built-in fallback lake carries none and always serves.
+  // Third surface disclosing a non-serving lake (#3222) - a bare "Upload Complete" here is the same
+  // false all-clear as the wizard's Complete screens. Unknown status claims nothing (fallback lake).
   const lakeServes = !progress.lakeStatus || deriveLakeServingState(progress.lakeStatus).servesRetrieval;
 
   const handleClick = () => {
@@ -71,7 +69,7 @@ export default function DataLakeUploadIndicator() {
             <Typography level="body-xs" color="warning" data-testid="upload-indicator-not-serving">
               {progress.lakeStatus === 'draft'
                 ? 'Draft - not searchable yet'
-                : `${progress.lakeStatus} - not searchable`}
+                : `Not searchable yet (${progress.lakeStatus})`}
             </Typography>
           )}
         </Box>

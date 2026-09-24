@@ -181,10 +181,8 @@ export function zeroProgressCounts(): Partial<UploadProgress> {
  * `tagPrefix` is passed in rather than derived here: it is the value every client-side gate already
  * judged (see submittedTagPrefix), and re-deriving it would let the two drift.
  *
- * Returns the created lake's lifecycle status alongside its id: a lake is born `draft` and grounds
- * no answers until it is published, and the wizard's Complete screen has to disclose that (#3222).
- * Read from the response rather than assumed, so this stays a single source for the born-status
- * rule - `createDataLake` owns it, the client only reports it.
+ * Returns the lake's lifecycle status alongside its id (#3222) - read from the response, never
+ * assumed, so `createDataLake` stays the one place that owns the born-draft rule.
  */
 export async function createWizardLake(
   config: DataLakeFormValues,

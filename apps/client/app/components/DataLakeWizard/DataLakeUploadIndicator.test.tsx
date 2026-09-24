@@ -158,6 +158,6 @@ describe('DataLakeUploadIndicator - non-serving lake disclosure (#3222)', () => 
 
   it('names a non-draft non-serving status rather than calling it a draft', () => {
     renderIndicator({ lakeStatus: 'archived' });
-    expect(screen.getByTestId('upload-indicator-not-serving')).toHaveTextContent('archived - not searchable');
+    expect(screen.getByTestId('upload-indicator-not-serving')).toHaveTextContent('Not searchable yet (archived)');
   });
 });

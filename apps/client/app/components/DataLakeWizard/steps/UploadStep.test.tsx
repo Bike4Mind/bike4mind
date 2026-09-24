@@ -253,7 +253,9 @@ describe('UploadStep - non-serving lake disclosure (#3222)', () => {
   it('names a non-draft non-serving status without offering Publish', () => {
     renderComplete({ totalFiles: 1, uploadedFiles: 1, chunkedFiles: 1, vectorizedFiles: 1, lakeStatus: 'archived' });
     const notice = screen.getByTestId('wizard-lake-not-serving');
-    expect(notice).toHaveTextContent('This Data Lake is archived, so it does not ground answers.');
+    expect(notice).toHaveTextContent(
+      'This Data Lake is not serving retrieval yet (archived), so it does not ground answers.'
+    );
     expect(notice).not.toHaveTextContent('Publish');
   });
 });

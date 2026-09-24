@@ -68,19 +68,10 @@ function describeFailures(failedFiles: number, processingFailedFiles: number): s
 }
 
 /**
- * Discloses that the lake this run committed into grounds no answers (#3222).
- *
- * A lake is born `draft` and stays excluded from retrieval until someone publishes it - deliberately
- * so, since #3073 replaced the implicit "first file publishes the lake" flip with an explicit
- * decision. What that left behind is this screen: it reports files "uploaded, chunked, and
- * vectorized" and never mentions that the assistant cannot see one of them. The manager's existing
- * "Not serving" badge is the wrong place to say it - the user is looking at THIS screen, and has no
- * reason to open that one.
- *
- * Renders nothing for a serving lake, and nothing when the status is unknown: an absent status means
- * a built-in fallback lake, which has no lifecycle and always serves (see `DataLakeConfig.status`),
- * so a warning there would be false. `servesRetrieval` comes from the same shared helper the health
- * badge and the retrieval gate read, so this can never disagree with them about what a status means.
+ * Discloses that the lake this run committed into grounds no answers yet (#3222) - the success copy
+ * above otherwise never mentions it. Renders nothing when the lake serves or the status is unknown
+ * (a fallback lake has none and always serves); reads `servesRetrieval` from the same shared helper
+ * the health badge uses, so the two can never disagree.
  */
 function NonServingLakeNotice({ status }: { status: DataLakeStatus | undefined }) {
   if (!status || deriveLakeServingState(status).servesRetrieval) return null;
@@ -89,7 +80,7 @@ function NonServingLakeNotice({ status }: { status: DataLakeStatus | undefined }
   const isDraft = status === 'draft';
   const headline = isDraft
     ? `This ${DATA_LAKE} is a draft, so it does not ground answers yet.`
-    : `This ${DATA_LAKE} is ${status}, so it does not ground answers.`;
+    : `This ${DATA_LAKE} is not serving retrieval yet (${status}), so it does not ground answers.`;
   const detail = isDraft
     ? `Your files are stored and indexed. Publish the ${DATA_LAKE} from the ${DATA_LAKES} list to let the assistant search them.`
     : `The assistant will not search these files while the ${DATA_LAKE} stays in this state.`;
