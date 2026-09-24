@@ -78,7 +78,7 @@ describe('buildApiKeyTable', () => {
   });
 
   it('gates DeepSeek on its own key, which LISTING_KIND has to name', () => {
-    // Marked anything but keyed in LISTING_KIND, it fails closed and silently: a valid key
+    // Marked anything but 'keyed' in LISTING_KIND, DeepSeek fails closed and silently: a valid key
     // and a working adapter still list nothing.
     const ctx = { apiKeys: buildApiKeyTable(ALL_KEYS), isSelfHost: false };
     expect(isBackendUsable(ModelBackend.DeepSeek, ctx)).toBe(true);

@@ -16,7 +16,7 @@ API_KEY=###########
 MODEL_ID=#########
 MODEL_BACKEND=#########
 
-MODEL_ID is the model that rewrites the descriptions. MODEL_BACKEND is the `ModelBackend` value that serves it (e.g. `openai`, `ollama`, `bedrock`); API_KEY is filed under that backend. It is stated rather than inferred because the same id text is served by more than one backend.
+MODEL_ID is the model that rewrites the descriptions. MODEL_BACKEND is the `ModelBackend` value that serves it (e.g. `openai`, `ollama`, `bedrock`); API_KEY is filed under that backend (still required, but unused, for the AWS-IAM backends `bedrock` and `aws`). It is stated rather than inferred because the same id text is served by more than one backend.
 
 ### Running the script
 
