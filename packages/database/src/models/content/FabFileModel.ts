@@ -923,6 +923,13 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // through data-lake membership must resolve here too, or this predicate would be narrower than
     // the door that admitted the file and silently drop lake-only images. Same builder, same
     // `archivedAt: null` post-processing on each arm - so the two doors can never disagree.
+    //
+    // They still disagree on DRAFT lakes, and not because of anything here: the arms are only as
+    // wide as the `lakeAccess` a caller passes, and every attachment door resolves that through
+    // `findActiveByUserTagsAndEntitlements` (`status: 'active'`), while browse - `GET
+    // /api/files/byIds`, which is what admits the file to the workbench - selects draft AND active.
+    // So an unpublished lake's file is attachable and readable there, and absent here. Pinned by
+    // `queries/dataLakeDraftAttachmentScope.integration.test.ts`.
     const lakeArms = buildLakeArms({
       lakeMemberships: lakeAccess?.lakeMemberships,
       dataLakeTags: lakeAccess?.dataLakeTags,

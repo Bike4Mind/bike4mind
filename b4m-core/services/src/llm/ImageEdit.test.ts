@@ -564,13 +564,44 @@ describe('ImageEditService.process mask access (#3069)', () => {
     expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
   });
 
+  it('fails the quest instead of substituting a mask when lake access cannot be determined', async () => {
+    // The mask slot is positional: with [lakeOnlyMask, ownMask] a silent drop of the first
+    // promotes the second, so the edit would run on an input the caller did not name and still
+    // bill for it. An outage must not look like a deny.
+    const { quest, deleteFabFile } = await run({
+      failLakeAccess: true,
+      reachable: () => [], // nothing resolves by ownership, so an id genuinely goes missing
+    });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('data-lake lookup failed');
+    expect(quest.status).toBe('done');
+    // Nothing resolved, so there is no mask to clean up - and crucially no provider dispatch.
+    expect(deleteFabFile).not.toHaveBeenCalled();
+  });
+
+  it('still runs when the lake resolver fails but every requested id resolves by ownership', async () => {
+    // A lake outage must not break edits that never needed the lake arms.
+    const { quest, getSignedUrl } = await run({ failLakeAccess: true });
+
+    expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+    // 'stop-after-dispatch' is the provider stub - the run reached dispatch.
+    expect(quest.reply).toBe('stop-after-dispatch');
+  });
+
   it('degrades rather than stranding the quest when the lake resolver itself rejects', async () => {
     // This resolution sits above the try/catch that owns the quest's terminal write, so an
     // unhandled rejection would leave status 'running' for the check-timeout reaper instead of
     // failing cleanly. The run must reach dispatch on the ownership arms alone.
     const { findAccessibleInIds, quest } = await run({ failLakeAccess: true });
 
-    expect(findAccessibleInIds).toHaveBeenCalledWith(['mask1'], { userId: 'user1', userGroups: undefined }, undefined);
+    // Empty buckets (never widened) but flagged, so the guard above can tell an outage from a deny.
+    expect(findAccessibleInIds).toHaveBeenCalledWith(
+      ['mask1'],
+      { userId: 'user1', userGroups: undefined },
+      { resolutionFailed: true }
+    );
     // 'stop-after-dispatch' is the provider stub - proof the outage did not short-circuit the run.
     expect(quest.reply).toBe('stop-after-dispatch');
     expect(quest.status).toBe('done');

@@ -353,7 +353,17 @@ export class ImageEditService {
 
     return uniqueIds.map(id => {
       const file = byId.get(id);
-      if (!file) throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
+      if (!file) {
+        // Same distinction the mask guard in `process` makes: when lake resolution failed, a miss
+        // is "we could not check", not "you may not have this". Reporting it as a 400 would blame
+        // the caller for our outage and send them off verifying a share that is fine.
+        if (lakeAccess?.resolutionFailed) {
+          throw new InternalServerError(
+            `Could not verify access to reference image ${id} because the data-lake lookup failed. Please try again.`
+          );
+        }
+        throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
+      }
       if (!file.mimeType.startsWith('image')) throw new BadRequestError(`Reference image ${id} is not an image`);
       if (!isImageServeable(file)) {
         throw new BadRequestError(`Reference image ${id} is not available (moderation pending or blocked)`);
@@ -405,25 +415,6 @@ export class ImageEditService {
     ]);
     if (!user) throw new NotFoundError('User not found');
 
-    // Owner-wide lake access for scoping every fabFile lookup on this path - the mask below and
-    // the anchors further down. Resolved unconditionally, mirroring ImageGenerationService: the
-    // mask lookup runs on every edit, so there is no anchor-free mainline left to spare the
-    // roundtrip.
-    //
-    // The catch is load-bearing: this sits ABOVE the try/catch that owns the quest's terminal
-    // write, so a rejection would strand the quest in status 'running' until the check-timeout
-    // reaper found it rather than failing it cleanly. Degrading to owner/share/global-read is
-    // always safe (it narrows, never widens), and the resolveLakeAccess signature cannot enforce
-    // that every future wiring stays non-throwing the way createAttachmentLakeAccess does.
-    const lakeAccess = this.resolveLakeAccess
-      ? await this.resolveLakeAccess(user, logger).catch(error => {
-          logger.warn('[ImageEdit] Lake access resolution failed; falling back to ownership-only', {
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return undefined;
-        })
-      : undefined;
-
     const settings = await getSettingsMap(this.db);
     const adminSettingsEnforceCredits = getSettingsValue('enforceCredits', settings);
 
@@ -442,16 +433,9 @@ export class ImageEditService {
 
     const clientMessageSender = new ClientMessageSender(this.db, logger);
     const wsEndpoint = this.wsHttpsUrl;
-    // Access-scoped: a caller-supplied mask id the caller cannot reach is dropped here, never
-    // presigned and never fed to a provider as an alpha channel. Lenient on purpose (a dropped
-    // id yields no mask rather than an error), matching ImageGenerationService.selectInputImage;
-    // the anchor lookup below is the strict one. The `finally` cleanup reads this same list, so
-    // an unreachable id also stops reaching deleteFabFile - which already refused it.
-    const fabFiles = await this.db.fabFiles.findAccessibleInIds(
-      fabFileIds || [],
-      { userId, userGroups: user.groups ?? undefined },
-      lakeAccess
-    );
+    // Assigned inside the try so a failed lookup lands on the quest as an error rather than
+    // escaping this method; the finally's mask cleanup reads it either way.
+    let fabFiles: IFabFileDocument[] = [];
 
     // Persist status='running' + heartbeat updatedAt so a hung/killed edit is recoverable by the
     // check-timeout endpoint. Disposer is cleared in the finally below. See startQuestHeartbeat.
@@ -459,6 +443,53 @@ export class ImageEditService {
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-edit-heartbeat');
+
+      // Owner-wide lake access for scoping every fabFile lookup on this path - the mask below and
+      // the anchors further down. Resolved unconditionally, mirroring ImageGenerationService: the
+      // mask lookup runs on every edit, so there is no anchor-free mainline left to spare the
+      // roundtrip.
+      //
+      // Covers PUBLISHED lakes only. The resolver behind this is active-only while the browse door
+      // that admits a file to the workbench also serves draft lakes, so a file in an unpublished
+      // lake is attachable and then dropped here. Pre-existing and shared with generation and the
+      // chat tool, not introduced by the scoping - see findAccessibleInIds' docblock.
+      //
+      // A rejection is caught rather than propagated, but NOT flattened into "no lake arms": that
+      // would report an outage as a clean deny. It is recorded as `resolutionFailed` and acted on
+      // at the guard below, so a transient lake failure still lets an edit whose inputs all resolve
+      // by ownership run normally.
+      const lakeAccess = this.resolveLakeAccess
+        ? await this.resolveLakeAccess(user, logger).catch(error => {
+            logger.warn('[ImageEdit] Lake access resolution failed; falling back to ownership-only', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return { resolutionFailed: true } as AttachmentLakeAccess;
+          })
+        : undefined;
+
+      // Access-scoped: a caller-supplied mask id the caller cannot reach is dropped here, never
+      // presigned and never fed to a provider as an alpha channel. Lenient on a genuine deny (a
+      // dropped id yields no mask rather than an error), matching
+      // ImageGenerationService.selectInputImage; the anchor lookup below is the strict one. The
+      // `finally` cleanup reads this same list, so an unreachable id also stops reaching
+      // deleteFabFile - which already refused it.
+      const requestedFabFileIds = [...new Set(fabFileIds ?? [])];
+      fabFiles = await this.db.fabFiles.findAccessibleInIds(
+        requestedFabFileIds,
+        { userId, userGroups: user.groups ?? undefined },
+        lakeAccess
+      );
+
+      // Leniency is only safe when a drop MEANS "you may not have this". If lake resolution failed
+      // we cannot tell that from "we could not check", and the mask slot is positional: dropping
+      // the caller's first image silently promotes the next one, so the edit would run on a
+      // different input and still bill. Fail before dispatch instead. Gated on an id actually
+      // going missing, so a lake outage cannot break edits whose inputs all resolve by ownership.
+      if (lakeAccess?.resolutionFailed && fabFiles.length < requestedFabFileIds.length) {
+        throw new InternalServerError(
+          'Could not verify access to the attached files because the data-lake lookup failed. The edit was not run - please try again.'
+        );
+      }
 
       const apiKeyTable = await getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames });
 
