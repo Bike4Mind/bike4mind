@@ -4137,6 +4137,11 @@ export class ChatCompletionProcess {
         }
       };
 
+      // A user Stop has already persisted 'stopped' (sessionOperations.ts), and an aborted
+      // backend resolves rather than throws, so the success path must not overwrite it.
+      const successStatus = (): 'done' | 'stopped' =>
+        stopSignalSent || abortController.signal.aborted ? 'stopped' : 'done';
+
       // Set up a dedicated cancellation watcher that checks more frequently
       // than the regular status updates
       const startCancellationWatcher = () => {
@@ -4735,7 +4740,7 @@ export class ChatCompletionProcess {
         }
 
         // Mark quest as done when all the replies are received
-        quest.status = 'done';
+        quest.status = successStatus();
 
         const modelInferenceTime = Date.now() - modelInferenceStartTime;
         quest.promptMeta!.performance!.modelInferenceTime = modelInferenceTime;
@@ -5474,7 +5479,7 @@ export class ChatCompletionProcess {
           quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
-        quest.status = 'done';
+        quest.status = successStatus();
 
         // Context Telemetry: Finalize and attach to promptMeta
         if (telemetryBuilder) {
@@ -5729,7 +5734,7 @@ export class ChatCompletionProcess {
           }
         }
 
-        quest.status = 'done';
+        quest.status = successStatus();
 
         timer.phase('save');
 
@@ -5834,7 +5839,7 @@ export class ChatCompletionProcess {
         // Post-streaming processing failed, but the reply is already streamed.
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
-        quest.status = 'done';
+        quest.status = successStatus();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }

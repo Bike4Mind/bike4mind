@@ -1202,6 +1202,50 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
+    it('keeps a user-stopped quest as stopped when the aborted backend resolves normally', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          await cb(['Partial']);
+          // A user Stop persists 'stopped'; the cancellation watcher sees it and aborts.
+          mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal.aborted) return resolve();
+            opts.abortSignal.addEventListener('abort', () => resolve());
+            setTimeout(resolve, 3000);
+          });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const statuses = mockDb.quests.update.mock.calls.map(([arg]: [{ status?: string } | undefined]) => arg?.status);
+      expect(statuses.length).toBeGreaterThan(0);
+      expect(statuses.at(-1)).toBe('stopped');
+      expect(mockQuest.status).toBe('stopped');
+    });
+
     // Every other test in this file mocks messageTruncation: null, which never exercises the
     // `if (messageTruncationInfo)` persist branch below - this is the one test that does.
     it('persists a non-null messageTruncation onto quest.promptMeta.context', async () => {
