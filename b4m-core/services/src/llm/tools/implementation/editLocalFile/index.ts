@@ -161,8 +161,8 @@ function resolveEdit(currentContent: string, old_string: string, new_string: str
 /**
  * Defense in depth for a reused `gateSnapshot.resolvedEdit`: even once its
  * `contentHash` has matched, confirm the span it claims is actually the real bytes
- * at that offset in `currentContent` before trusting it - so a caller cannot use a
- * hash-matching `gateSnapshot` to smuggle in a span/replacement that never came from
+ * at that offset in `currentContent` before trusting it - so a hash-matching
+ * `gateSnapshot` cannot carry a span/replacement that never came from
  * `resolveEdit()` matching `old_string`/`new_string` against real content.
  */
 function isResolvedEditConsistent(currentContent: string, edit: ResolvedEdit): boolean {
