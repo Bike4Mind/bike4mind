@@ -665,6 +665,12 @@ The `worker` is the only service that runs discovery on a schedule, even though 
 
 Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure. Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
 
+### Abandoned agent execution recovery
+
+The worker runs the shared abandoned-execution sweep at startup and every hour. Executions in eligible active statuses with no update for more than six hours become `failed` with reason `abandoned`, and their unfinished quests are settled. Fresh executions and parents waiting in `awaiting_subagent` or `awaiting_dag_children` remain unchanged. This releases abandoned work; it does not retry the execution.
+
+The age comparison uses elapsed time, not a local-time calendar schedule. Restart runs one current-state sweep immediately; missed hourly slots coalesce into that scan, rather than replaying each missed slot. Startup and interval runs share the worker's in-flight guard, so a slow run skips overlapping ticks. Shutdown drains a running sweep within the existing worker grace period. Keep the documented single worker replica: this is an in-process guard, not a distributed lease. A quest whose settlement fails after its execution is marked abandoned is retried on later ticks until it succeeds; self-host uses local logs and does not send this sweep's CloudWatch metrics, so the hosted cron retains its metrics.
+
 ## Queue storage and container replacement
 
 ElasticMQ stores queue state, pending messages, and acknowledged deletions in the `sqs-data` named volume mounted at `/data`. Keep one `sqs` container as the sole writer to this H2 store. Do not scale it or mount the volume into another running broker. This is single-host persistence, not replication or protection against host/disk loss. Consumers must still tolerate duplicate deliveries.
