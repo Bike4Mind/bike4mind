@@ -9,6 +9,7 @@ import {
   type ModelInfo,
 } from '@bike4mind/common';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
+import { getSettingsMap } from '@bike4mind/utils';
 import { OMITTED_QUALITY_TIER } from './imageCostCalculator/OpenAIImageCostCalculator';
 import type { Logger } from '@bike4mind/observability';
 
@@ -850,5 +851,101 @@ describe('ImageGenerationService.process (GPT-Image omitted-quality pin)', () =>
 
   it.each(['low', 'high'])('leaves an explicit %s tier alone', async quality => {
     expect(await generateWith(quality)).toMatchObject({ quality });
+  });
+});
+
+describe('ImageGenerationService.process (size normalization)', () => {
+  const makeProcessService = () => {
+    const quest = { id: 'quest1', sessionId: 'session1', status: undefined as string | undefined };
+    return new ImageGenerationService({
+      db: {
+        quests: { findById: vi.fn(async () => quest as any), update: vi.fn(), updateMany: vi.fn() },
+        users: { findById: vi.fn(async () => ({ id: 'user1', currentCredits: 1_000_000 })) },
+        organizations: { findById: vi.fn(async () => null) },
+        fabFiles: { findAccessibleInIds: vi.fn(async () => []) },
+        creditTransactions: {},
+      },
+      logEvent: vi.fn().mockResolvedValue(undefined),
+      abilityGetter: vi.fn().mockReturnValue({}),
+      storage: {} as any,
+      fabFileStorage: {} as any,
+      wsHttpsUrl: 'https://ws.example.com',
+    } as any);
+  };
+
+  const generateWith = async (model: ImageModels, backend: ModelBackend, size?: string) => {
+    vi.mocked(getAvailableModels).mockResolvedValue([
+      {
+        id: model,
+        type: 'image',
+        name: model,
+        backend,
+        contextWindow: 10000,
+        max_tokens: 10000,
+        supportsImageVariation: false,
+        pricing: { 1: { input: 0, output: 0 } },
+      } as unknown as ModelInfo,
+    ]);
+    mockGeminiGenerate.mockReset();
+    mockGeminiGenerate.mockResolvedValue([]); // empty images short-circuits storage/moderation
+
+    const service = makeProcessService();
+    const validateUserCredits = vi
+      .spyOn(service as any, 'validateUserCredits')
+      .mockResolvedValue({ requiredCredits: 0, usdCost: 0 });
+    // Twice: process() reads the settings map once for the credit gate and once for moderation.
+    vi.mocked(getSettingsMap).mockResolvedValueOnce({ enforceCredits: 'true' }).mockResolvedValueOnce({});
+
+    await service.process({
+      body: {
+        sessionId: 'session1',
+        questId: 'quest1',
+        userId: 'user1',
+        prompt: 'a red bicycle',
+        model,
+        ...(size ? { size } : {}),
+      } as any,
+      logger: silentLogger,
+    });
+
+    return {
+      rendered: mockGeminiGenerate.mock.calls[0]?.[1],
+      billed: validateUserCredits.mock.calls[0]?.[3] as { size?: string } | undefined,
+    };
+  };
+
+  it.each([
+    [ImageModels.GPT_IMAGE_1_5, '1440x810', '1024x1024'],
+    [ImageModels.GPT_IMAGE_1_5, '2048x2048', '1024x1024'],
+    [ImageModels.GPT_IMAGE_1_5, '1536x1024', '1536x1024'],
+    [ImageModels.GPT_IMAGE_2, '2048x2048', '2048x2048'],
+    [ImageModels.GPT_IMAGE_2, 'auto', 'auto'],
+  ])('%s asked for %s bills and renders at %s', async (model, size, expected) => {
+    const { rendered, billed } = await generateWith(model, ModelBackend.OpenAI, size);
+    expect(rendered).toMatchObject({ size: expected });
+    expect(billed).toMatchObject({ size: expected });
+  });
+
+  // OpenAIImageService falls an out-of-constraint gpt-image-2 size back before rendering, so
+  // the size recorded and billed here falls back the same way rather than naming a size
+  // that never renders.
+  it('falls an out-of-constraint gpt-image-2 size back to the tier default', async () => {
+    const { rendered, billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI, '5000x5000');
+    expect(rendered).toMatchObject({ size: '1024x1024' });
+    expect(billed).toMatchObject({ size: '1024x1024' });
+  });
+
+  it('leaves an absent GPT-Image size absent so the renderer picks the tier default', async () => {
+    const { rendered, billed } = await generateWith(ImageModels.GPT_IMAGE_2, ModelBackend.OpenAI);
+    expect(rendered?.size).toBeUndefined();
+    expect(billed?.size).toBeUndefined();
+  });
+
+  // The OpenAI size rule must not be applied to other providers: BFL takes its own
+  // dimensions, which the legacy dall-e list would reject.
+  it('forwards a BFL size to BFL untouched', async () => {
+    const { rendered, billed } = await generateWith(ImageModels.FLUX_PRO_1_1, ModelBackend.BFL, '1440x810');
+    expect(rendered).toMatchObject({ width: 1440, height: 810 });
+    expect(billed).toMatchObject({ size: '1440x810' });
   });
 });
