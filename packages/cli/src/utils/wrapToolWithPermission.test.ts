@@ -311,3 +311,58 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     vi.resetModules();
   });
 });
+
+describe('wrapToolWithPermission: create_file / delete_file preview guard', () => {
+  // The isPathAllowed guard in generateToolPreview (toolsAdapter.ts) covers create_file and
+  // delete_file as well as edit_local_file. Target files are pre-created so that, without
+  // the guard, the preview would take its read-and-diff / stat branch. Asserted on the
+  // preview text rather than fs spies: diffPreview.ts calls through the fs/promises ESM
+  // namespace, which vi.spyOn(fs.promises, ...) does not patch.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let createDef: any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let deleteDef: any;
+  beforeAll(async () => {
+    const tools = await getCliOnlyTools();
+    createDef = tools.create_file;
+    deleteDef = tools.delete_file;
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  function realTool(def: any, allowedDirectories: string[]): ICompletionOptionTools {
+    const logger = { info() {}, error() {}, warn() {}, debug() {} };
+    return def.implementation({ logger, allowedDirectories }) as ICompletionOptionTools;
+  }
+
+  it('previews an out-of-bounds create_file as denied WITHOUT reading the raw path (preview auth parity)', async () => {
+    useCliStore.getState().setInteractionMode('normal');
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'b4m-create-'));
+    const file = path.join(dir, 'existing.txt');
+    await fs.writeFile(file, 'do not read me\n');
+    const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
+    // No allowedDirectories => the temp file is outside cwd, so authorization rejects it.
+    const wrapped = wrap(realTool(createDef, []), prompt, new PermissionManager([], undefined, []));
+
+    await expect(wrapped.toolFn({ path: file, content: 'new content' })).rejects.toThrow();
+
+    const preview = prompt.mock.calls[0][2] as string;
+    expect(preview).toContain('Path outside allowed directories');
+    expect(preview).not.toContain('do not read me'); // the existing file was never diffed
+    expect(await fs.readFile(file, 'utf-8')).toBe('do not read me\n'); // untouched
+  });
+
+  it('previews an out-of-bounds delete_file as denied WITHOUT statting the raw path (preview auth parity)', async () => {
+    useCliStore.getState().setInteractionMode('normal');
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'b4m-delete-'));
+    const file = path.join(dir, 'existing.txt');
+    await fs.writeFile(file, 'do not delete me\n');
+    const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
+    const wrapped = wrap(realTool(deleteDef, []), prompt, new PermissionManager([], undefined, []));
+
+    await expect(wrapped.toolFn({ path: file })).rejects.toThrow();
+
+    const preview = prompt.mock.calls[0][2] as string;
+    expect(preview).toContain('Path outside allowed directories');
+    expect(preview).not.toContain('bytes'); // generateFileDeletePreview's size/mtime line never ran
+    expect(existsSync(file)).toBe(true); // untouched
+  });
+});
