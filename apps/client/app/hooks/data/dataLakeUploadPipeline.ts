@@ -6,7 +6,7 @@ import {
   MAX_TAG_PREFIX_LENGTH,
   MIN_TAG_PREFIX_LENGTH,
 } from '@bike4mind/common';
-import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
+import type { CreateDataLakeRequestInputType, DataLakeStatus, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type {
   DataLakeFormValues,
@@ -180,8 +180,16 @@ export function zeroProgressCounts(): Partial<UploadProgress> {
  *
  * `tagPrefix` is passed in rather than derived here: it is the value every client-side gate already
  * judged (see submittedTagPrefix), and re-deriving it would let the two drift.
+ *
+ * Returns the created lake's lifecycle status alongside its id: a lake is born `draft` and grounds
+ * no answers until it is published, and the wizard's Complete screen has to disclose that (#3222).
+ * Read from the response rather than assumed, so this stays a single source for the born-status
+ * rule - `createDataLake` owns it, the client only reports it.
  */
-export async function createWizardLake(config: DataLakeFormValues, tagPrefix: string): Promise<string> {
+export async function createWizardLake(
+  config: DataLakeFormValues,
+  tagPrefix: string
+): Promise<{ id: string; status?: DataLakeStatus }> {
   // Scope to the active account-switcher org (Personal -> undefined). activeOrgId reads the store
   // at call time, like the wizard config itself, so it can't go stale.
   const organizationId = activeOrgId();
@@ -189,7 +197,7 @@ export async function createWizardLake(config: DataLakeFormValues, tagPrefix: st
   // useCreateLakeFromDrive) already have a pendingDriveFolder in scope, so read it here rather
   // than threading it through as a parameter both would just forward unchanged.
   const { pendingDriveFolder } = useDataLakeWizardStore.getState();
-  const res = await api.post<{ id: string }>('/api/data-lakes', {
+  const res = await api.post<{ id: string; status?: DataLakeStatus }>('/api/data-lakes', {
     name: config.name,
     // The slug we ask for. The server disambiguates it against lakes in scope, so the created
     // lake's real slug can differ - everything downstream keys off the id.
@@ -205,7 +213,7 @@ export async function createWizardLake(config: DataLakeFormValues, tagPrefix: st
     // ('curated') applies.
     ...(pendingDriveFolder ? { origin: 'connector-fed' as const } : {}),
   } satisfies CreateDataLakeRequestInputType);
-  return res.data.id;
+  return { id: res.data.id, status: res.data.status };
 }
 
 /**
@@ -289,7 +297,7 @@ export async function resolveCreateModeLake(
   tagPrefix: string,
   recoverableLake: RecoverableLake | null,
   setRecoverableLake: (lake: RecoverableLake | null) => void
-): Promise<string> {
+): Promise<{ id: string; status?: DataLakeStatus }> {
   // Read at call time, like createWizardLake does, so a switch made behind the wizard modal counts.
   const organizationId = activeOrgId();
   if (!canReuseRecoverableLake(recoverableLake, tagPrefix, organizationId)) {
@@ -321,7 +329,9 @@ export async function resolveCreateModeLake(
   }
 
   await syncRestoredLakeConfig(recoverableLake.id, config);
-  return recoverableLake.id;
+  // unarchiveDataLake unconditionally lands the lake at 'active' (never restored to its pre-archive
+  // status, e.g. 'draft') - so a reused lake always serves retrieval; no need to re-fetch it.
+  return { id: recoverableLake.id, status: 'active' };
 }
 
 /** Bind a Drive folder picked during create to the lake that now exists (POST drive-sync). */
@@ -472,9 +482,13 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
   // Step 1: Create the data lake; skipped in append mode (upload into the existing lake), and
   // skipped when a same-session prior attempt archived a lake holding this exact prefix claim -
   // restore and reuse it instead of creating a second one the claim would refuse.
-  const dataLakeId = targetLake
-    ? targetLake.id
+  // The lake's lifecycle status travels with its id from here so the Complete screen can disclose a
+  // non-serving lake (#3222) - in append mode that is the target lake's CURRENT status, because
+  // adding files to a draft lake still grounds nothing.
+  const committedLake = targetLake
+    ? { id: targetLake.id, status: targetLake.status }
     : await resolveCreateModeLake(config, tagPrefix, recoverableLake, cb.setRecoverableLake);
+  const dataLakeId = committedLake.id;
   let uploadedCount = 0;
   // Hoisted above the try so the outcome branch + the catch can reconcile the batch
   // and clean up the records setup created. `failedFileIds` are the FabFiles presign
@@ -521,6 +535,7 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
       totalFiles: included.length,
       status: 'uploading',
       currentBatchId: batchId,
+      lakeStatus: committedLake.status,
       // Clear any error from a prior attempt so a retry starts clean.
       errorMessage: undefined,
       errorKind: undefined,

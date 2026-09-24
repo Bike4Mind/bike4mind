@@ -1,6 +1,10 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import type { ReactNode } from 'react';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import type { UploadProgress } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeUploadIndicator from './DataLakeUploadIndicator';
 
 /**
@@ -96,5 +100,64 @@ describe('DataLakeUploadIndicator', () => {
     const state = useDataLakeWizardStore.getState();
     expect(state.isOpen).toBe(true);
     expect(state.step).toBe('upload');
+  });
+});
+
+/**
+ * #3222: this indicator is the surface a user sees after "Close and continue in background", so it
+ * reports the upload as finished without the wizard's Complete screen ever being on screen. A green
+ * "Upload Complete" here, with the lake still a non-serving draft, is the same false all-clear the
+ * Complete screen was giving.
+ */
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const TestWrapper = ({ children }: { children: ReactNode }) => (
+  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+);
+
+/** The indicator only renders while the wizard is closed and a real batch is in flight. */
+function renderIndicator(overrides: Partial<UploadProgress>) {
+  useDataLakeWizardStore.setState(state => ({
+    isOpen: false,
+    uploadProgress: { ...state.uploadProgress, totalFiles: 2, uploadedFiles: 2, status: 'complete', ...overrides },
+  }));
+  return render(
+    <TestWrapper>
+      <DataLakeUploadIndicator />
+    </TestWrapper>
+  );
+}
+
+describe('DataLakeUploadIndicator - non-serving lake disclosure (#3222)', () => {
+  afterEach(() => {
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('flags a completed upload into a draft lake as not searchable', () => {
+    renderIndicator({ lakeStatus: 'draft' });
+    expect(screen.getByText('Upload Complete')).toBeInTheDocument();
+    expect(screen.getByTestId('upload-indicator-not-serving')).toHaveTextContent('Draft - not searchable yet');
+  });
+
+  it('stays silent for a lake that already serves retrieval', () => {
+    renderIndicator({ lakeStatus: 'active' });
+    expect(screen.queryByTestId('upload-indicator-not-serving')).toBeNull();
+  });
+
+  it('claims nothing when the status is unknown', () => {
+    renderIndicator({});
+    expect(screen.queryByTestId('upload-indicator-not-serving')).toBeNull();
+  });
+
+  // The warning belongs to the finished state only - during the upload the lake's status is not yet
+  // the thing the user is waiting on, and the chip would read as an upload failure.
+  it('does not warn while the upload is still running', () => {
+    renderIndicator({ status: 'uploading', uploadedFiles: 1, lakeStatus: 'draft' });
+    expect(screen.queryByTestId('upload-indicator-not-serving')).toBeNull();
+  });
+
+  it('names a non-draft non-serving status rather than calling it a draft', () => {
+    renderIndicator({ lakeStatus: 'archived' });
+    expect(screen.getByTestId('upload-indicator-not-serving')).toHaveTextContent('archived - not searchable');
   });
 });

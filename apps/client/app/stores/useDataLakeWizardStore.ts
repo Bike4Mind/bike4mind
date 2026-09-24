@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { isReservedTagPrefix } from '@bike4mind/common';
-import type { TaxonomyStatus } from '@bike4mind/common';
+import type { DataLakeStatus, TaxonomyStatus } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import { deriveTagPrefixFromLakeName } from '../hooks/data/dataLakeSlug';
 import {
@@ -91,6 +91,20 @@ export interface UploadProgress {
    * optionalSteps.taxonomy is true.
    */
   taxonomyStatus?: TaxonomyStatus;
+  /**
+   * Lifecycle status of the lake this run committed into, captured at commit time so every surface
+   * that reports this upload as finished can say whether the lake actually serves retrieval (#3222) -
+   * the wizard's two Complete screens and the background upload indicator. A new lake is born
+   * `draft` and grounds nothing until it is published, which the success copy otherwise never
+   * mentions.
+   *
+   * Set from the create response in create mode and from the target lake in append mode, rather
+   * than assumed: the UI must not be a second place that encodes the born-draft rule, or the two
+   * drift the moment `createDataLake` changes. Absent means "not known" - a built-in fallback lake
+   * carries no status and always serves (see `DataLakeConfig.status`) - and the screen claims
+   * nothing rather than guessing.
+   */
+  lakeStatus?: DataLakeStatus;
 }
 
 // ── Defaults ────────────────────────────────────────────────────────────────
@@ -169,6 +183,12 @@ export interface WizardTargetLake {
   organizationId: string | null;
   /** Whether the caller may manage this lake. Same gate as above - the status route 404s otherwise. */
   canManage: boolean;
+  /**
+   * Lake lifecycle, so appending files to a lake that is still `draft` discloses on the Complete
+   * screen that the new files ground nothing yet (#3222). Optional because `DataLakeConfig.status`
+   * is: a built-in fallback lake has no document and always serves.
+   */
+  status?: DataLakeStatus;
 }
 
 /**
@@ -188,6 +208,7 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement?: string;
   organizationId?: string | null;
   canManage?: boolean;
+  status?: DataLakeStatus;
 }): WizardTargetLake => ({
   id: lake.id,
   slug: lake.slug,
@@ -197,6 +218,7 @@ export const toWizardTargetLake = (lake: {
   requiredEntitlement: lake.requiredEntitlement,
   organizationId: lake.organizationId ?? null,
   canManage: lake.canManage ?? false,
+  status: lake.status,
 });
 
 /**

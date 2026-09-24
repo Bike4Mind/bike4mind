@@ -5,7 +5,8 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import { useDataLakeWizardStore, type UploadProgress } from '@client/app/stores/useDataLakeWizardStore';
 import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
-import { MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
+import { deriveLakeServingState, MIN_DATA_LAKE_SLUG_LENGTH } from '@bike4mind/common';
+import type { DataLakeStatus } from '@bike4mind/common';
 
 /**
  * Background AI-tag suggestion status, shown only while the wizard's Complete screen
@@ -67,12 +68,59 @@ function describeFailures(failedFiles: number, processingFailedFiles: number): s
 }
 
 /**
+ * Discloses that the lake this run committed into grounds no answers (#3222).
+ *
+ * A lake is born `draft` and stays excluded from retrieval until someone publishes it - deliberately
+ * so, since #3073 replaced the implicit "first file publishes the lake" flip with an explicit
+ * decision. What that left behind is this screen: it reports files "uploaded, chunked, and
+ * vectorized" and never mentions that the assistant cannot see one of them. The manager's existing
+ * "Not serving" badge is the wrong place to say it - the user is looking at THIS screen, and has no
+ * reason to open that one.
+ *
+ * Renders nothing for a serving lake, and nothing when the status is unknown: an absent status means
+ * a built-in fallback lake, which has no lifecycle and always serves (see `DataLakeConfig.status`),
+ * so a warning there would be false. `servesRetrieval` comes from the same shared helper the health
+ * badge and the retrieval gate read, so this can never disagree with them about what a status means.
+ */
+function NonServingLakeNotice({ status }: { status: DataLakeStatus | undefined }) {
+  if (!status || deriveLakeServingState(status).servesRetrieval) return null;
+  // Whole sentences, not JSX text interleaved with {DATA_LAKE} expressions - JSX drops the space
+  // between an expression and the text that follows it (see DriveOnlyCommitStatus above).
+  const isDraft = status === 'draft';
+  const headline = isDraft
+    ? `This ${DATA_LAKE} is a draft, so it does not ground answers yet.`
+    : `This ${DATA_LAKE} is ${status}, so it does not ground answers.`;
+  const detail = isDraft
+    ? `Your files are stored and indexed. Publish the ${DATA_LAKE} from the ${DATA_LAKES} list to let the assistant search them.`
+    : `The assistant will not search these files while the ${DATA_LAKE} stays in this state.`;
+  return (
+    <Alert
+      color="warning"
+      variant="soft"
+      startDecorator={<ErrorOutlineIcon />}
+      sx={{ maxWidth: 440, textAlign: 'left' }}
+      data-testid="wizard-lake-not-serving"
+    >
+      <Box>
+        <Typography level="body-sm" sx={{ fontWeight: 'lg' }}>
+          {headline}
+        </Typography>
+        <Typography level="body-xs" sx={{ mt: 0.25 }}>
+          {detail}
+        </Typography>
+      </Box>
+    </Alert>
+  );
+}
+
+/**
  * The fileless Drive commit's own status screen (#1916): create the lake, bind the folder, hand off
  * to background ingest. No per-file counters exist on this path - the files arrive later, from
  * Drive - so it reports the connection instead of a progress bar it could only ever draw at 0%.
  */
 function DriveOnlyCommitStatus({
   status,
+  lakeStatus,
   errorMessage,
   driveRollback,
   folderLabel,
@@ -80,6 +128,7 @@ function DriveOnlyCommitStatus({
   onBack,
 }: {
   status: UploadProgress['status'];
+  lakeStatus: DataLakeStatus | undefined;
   errorMessage: string | undefined;
   driveRollback: UploadProgress['driveRollback'];
   folderLabel: string;
@@ -115,6 +164,7 @@ function DriveOnlyCommitStatus({
         <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 420 }}>
           {syncingSentence}
         </Typography>
+        <NonServingLakeNotice status={lakeStatus} />
         <Button variant="solid" color="primary" onClick={onDone}>
           Done
         </Button>
@@ -217,6 +267,7 @@ export default function UploadStep() {
       <Box data-testid="wizard-upload-step" sx={{ flex: 1, display: 'flex', flexDirection: 'column', p: 3 }}>
         <DriveOnlyCommitStatus
           status={progress.status}
+          lakeStatus={progress.lakeStatus}
           errorMessage={progress.errorMessage}
           driveRollback={progress.driveRollback}
           folderLabel={driveFolderLabel}
@@ -307,6 +358,7 @@ export default function UploadStep() {
           <Typography level="body-sm" color="neutral" textAlign="center">
             {completionSummary}
           </Typography>
+          <NonServingLakeNotice status={progress.lakeStatus} />
           {wantsTaxonomy && <TaxonomyStatusRow status={progress.taxonomyStatus} />}
           <Button variant="solid" color="primary" onClick={resetWizard}>
             Done
