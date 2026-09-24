@@ -6,7 +6,7 @@
  * using the same pipeline.
  */
 
-import type { IChatHistoryItemDocument, ModelInfo } from '@bike4mind/common';
+import { ClaudeArtifactMimeTypes, type IChatHistoryItemDocument, type ModelInfo } from '@bike4mind/common';
 import { type BaseStorage } from '@bike4mind/utils';
 import {
   type ApiKeyTable,
@@ -272,6 +272,16 @@ const VALID_SIDE_EFFECT_TYPES = new Set([
   'populateScheduleRace',
   'populateFamilyProblem',
   'populateDecomposition',
+]);
+// The tools whose results wrapToolsForSentinels turns into artifacts, each pinned to the one
+// type it emits: any other tool's output (web pages, files, subagent replies) is untrusted and
+// can carry forged markup. A new artifact-emitting tool must be added here or its artifact is dropped.
+const TOOL_ARTIFACT_EMITTERS: ReadonlyMap<string, string> = new Map([
+  ['recharts', ClaudeArtifactMimeTypes.RECHARTS],
+  ['mermaid_chart', ClaudeArtifactMimeTypes.MERMAID],
+  ['lattice_create_model', ClaudeArtifactMimeTypes.LATTICE],
+  ['blog_draft', ClaudeArtifactMimeTypes.BLOG_DRAFT],
+  ['chess_engine', ClaudeArtifactMimeTypes.CHESS],
 ]);
 const TOOL_ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/gi;
 // Value is anchored to its own quote kind so a double-quoted value can contain
@@ -663,7 +673,13 @@ function wrapToolsForSentinels(
         }
 
         // Extract artifacts from tool results
-        if (callbacks.onArtifactExtracted && typeof result === 'string' && result.includes('<artifact')) {
+        const allowedArtifactType = TOOL_ARTIFACT_EMITTERS.get(toolName);
+        if (
+          callbacks.onArtifactExtracted &&
+          allowedArtifactType !== undefined &&
+          typeof result === 'string' &&
+          result.includes('<artifact')
+        ) {
           try {
             TOOL_ARTIFACT_RE.lastIndex = 0;
             let artifactMatch;
@@ -674,6 +690,12 @@ function wrapToolsForSentinels(
               TOOL_ATTR_RE.lastIndex = 0;
               while ((attrMatch = TOOL_ATTR_RE.exec(attrsStr)) !== null) {
                 attrs[attrMatch[1]] = attrMatch[2] ?? attrMatch[3];
+              }
+
+              // Checked on the final value, so a repeated type= attribute cannot smuggle one past.
+              if (attrs.type !== allowedArtifactType) {
+                logger.warn(`[toolArtifact] Dropped ${attrs.type} artifact from ${toolName}: not the type it emits`);
+                continue;
               }
 
               let metadata: Record<string, unknown> = {
