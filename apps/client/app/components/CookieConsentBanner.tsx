@@ -7,6 +7,7 @@ import Typography from '@mui/joy/Typography';
 import { APP_NAME } from '@client/config/general';
 import { loadMetaPixel } from '@client/app/utils/metaPixel';
 import { loadRedditPixel } from '@client/app/utils/redditPixel';
+import { readConsentRegion, readSharedConsent } from '@client/app/utils/consentRegion';
 
 const CONSENT_KEY = 'cookie_consent';
 
@@ -21,12 +22,10 @@ function getStoredConsent(): 'granted' | 'denied' | null {
   }
 }
 
-function applyConsent(value: 'granted' | 'denied') {
-  try {
-    localStorage.setItem(CONSENT_KEY, value);
-  } catch {
-    // ignore storage errors
-  }
+/** Point the trackers at a consent state. Deliberately does not persist it, so an
+ * auto-allow is re-derived each load rather than freezing the answer for someone
+ * who travels. */
+function activateConsent(value: 'granted' | 'denied') {
   if (typeof gtag !== 'undefined') {
     gtag('consent', 'update', { analytics_storage: value });
   }
@@ -39,17 +38,36 @@ function applyConsent(value: 'granted' | 'denied') {
   }
 }
 
+/** Record the visitor's own decision, and apply it. */
+function applyConsent(value: 'granted' | 'denied') {
+  try {
+    localStorage.setItem(CONSENT_KEY, value);
+  } catch {
+    // ignore storage errors
+  }
+  activateConsent(value);
+}
+
 export function CookieConsentBanner() {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    const stored = getStoredConsent();
-    if (stored === null) {
-      setVisible(true);
-    } else {
-      // Restore prior consent so GA4 respects it on every page load
-      applyConsent(stored);
+    // Precedence: this origin's decision, then one made on the marketing site, then
+    // the region. Only the first two are decisions; the region is a default for a
+    // visitor who has made none, so it must never override someone who declined on
+    // the other host - they cannot come back and decline again here (#3184).
+    const decision = getStoredConsent() ?? readSharedConsent();
+    if (decision !== null) {
+      activateConsent(decision);
+      return;
     }
+    // Outside the opt-in region the marketing site grants by default and shows
+    // nothing, so asking here would be one journey asking halfway through.
+    if (readConsentRegion() === 'row') {
+      activateConsent('granted');
+      return;
+    }
+    setVisible(true);
   }, []);
 
   if (!visible) return null;
