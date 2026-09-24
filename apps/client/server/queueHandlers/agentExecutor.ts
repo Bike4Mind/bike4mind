@@ -191,6 +191,7 @@ import {
   type SubagentDispatchPayload,
 } from './agentExecutor.schemas';
 import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
+import { runIterationWithDeadlineGuard } from './agentExecutor.iterationDeadline';
 import { Config } from '@server/utils/config';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
@@ -2443,6 +2444,40 @@ async function processExecution(
       if (!proceed) return;
     }
 
+    // Checkpoints the agent's current state as `continuing` and hands the run to a fresh
+    // Lambda via `agentContinuationQueue`. Shared by the between-iteration watchdog below and
+    // the in-flight iteration deadline abort - both are "we're out of time, hand off" and must
+    // reach the same continuation state rather than one of them failing the run outright.
+    const selfDispatchContinuation = async () => {
+      const checkpoint = agent.toCheckpoint();
+      // Atomic write: persisting checkpoint + status separately could leave the
+      // doc in `running` with a fresh checkpoint if Lambda is killed between
+      // calls, which would fail the continuation Lambda's CAS and orphan the
+      // execution. The opti plan ledger (#680) rides the SAME write so the continuation Lambda
+      // rehydrates the latest plan state (decompose-once + solved steps), not a stale one.
+      await agentExecutionRepository.updateCheckpointAndStatus(
+        executionId,
+        checkpoint,
+        'continuing',
+        ledgerForWrite(optiPlanState)
+      );
+
+      // Publish to continuation queue
+      await sqsClient.send(
+        new SendMessageCommand({
+          QueueUrl: Resource.agentContinuationQueue.url,
+          MessageBody: JSON.stringify({
+            kind: 'continuation',
+            executionId,
+            connectionId,
+            checkpointDepth: checkpointDepth + 1,
+          }),
+        })
+      );
+
+      await sendWs('resumed', { executionId, reason: 'timeout_handoff' });
+    };
+
     while (iterationIndex < maxIterations) {
       // Check abort flag
       const isAborted = await agentExecutionRepository.checkAbortFlag(executionId);
@@ -2477,33 +2512,7 @@ async function processExecution(
       // Check timeout watchdog
       if (Date.now() - startTime > deadlineMs) {
         logger.info('[Timeout] Approaching Lambda timeout, triggering self-dispatch');
-        const checkpoint = agent.toCheckpoint();
-        // Atomic write: persisting checkpoint + status separately could leave the
-        // doc in `running` with a fresh checkpoint if Lambda is killed between
-        // calls, which would fail the continuation Lambda's CAS and orphan the
-        // execution. The opti plan ledger (#680) rides the SAME write so the continuation Lambda
-        // rehydrates the latest plan state (decompose-once + solved steps), not a stale one.
-        await agentExecutionRepository.updateCheckpointAndStatus(
-          executionId,
-          checkpoint,
-          'continuing',
-          ledgerForWrite(optiPlanState)
-        );
-
-        // Publish to continuation queue
-        await sqsClient.send(
-          new SendMessageCommand({
-            QueueUrl: Resource.agentContinuationQueue.url,
-            MessageBody: JSON.stringify({
-              kind: 'continuation',
-              executionId,
-              connectionId,
-              checkpointDepth: checkpointDepth + 1,
-            }),
-          })
-        );
-
-        await sendWs('resumed', { executionId, reason: 'timeout_handoff' });
+        await selfDispatchContinuation();
         logger.info('[Timeout] Self-dispatched to continuation queue');
         return;
       }
@@ -2644,43 +2653,39 @@ async function processExecution(
       // The watchdog above only checks BETWEEN iterations, so a single iteration whose LLM
       // call runs longer than the remaining Lambda time would otherwise be hard-killed
       // mid-flight - skipping every catch block below and leaving the quest silently stuck
-      // in 'running' forever (#3223). Abort the in-flight call ourselves once the remaining
-      // time drops below the same buffer, so runIteration fails cleanly and the outer catch
-      // (which persists a user-visible error) always gets to run.
-      const iterationDeadlineController = new AbortController();
-      const iterationRemainingMs = Math.max(0, context.getRemainingTimeInMillis() - TIMEOUT_BUFFER_MS);
-      const iterationDeadlineTimer = setTimeout(() => iterationDeadlineController.abort(), iterationRemainingMs);
-      iterationDeadlineTimer.unref?.();
-      try {
-        iterationResult = await agent.runIteration(firstIterationMessage, {
-          maxIterations,
-          confidenceGate,
-          previousMessages,
-          // Cache the (large, static) system prompt + tool schemas across iterations. An
-          // agent run is always multi-iteration, and previously this was omitted - so the
-          // full system prompt + tools were re-sent at full input price EVERY iteration
-          // (the chat path already caches via ChatCompletionProcess). Enabling it is the
-          // single biggest cost reduction for multi-iteration runs; cache-read tokens are
-          // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
-          enableCaching: true,
-          // Pre-execution permission gate - see `toolGate` above. The agent withholds a
-          // gated call instead of running it, so nothing is spent on a call the user has
-          // not approved yet.
-          toolGate,
-          signal: iterationDeadlineController.signal,
-        });
-      } catch (iterationErr) {
-        // runIteration always rethrows on abort (ReActAgent just downgrades the log
-        // severity for it) - reclassify it here into a recognizable message so the
-        // outer catch's toUserFacingFailureMessage routes it to the timeout copy
-        // instead of the generic fallback.
-        if (iterationDeadlineController.signal.aborted) {
-          throw new Error('Agent iteration timed out: exceeded the remaining Lambda execution budget');
-        }
-        throw iterationErr;
-      } finally {
-        clearTimeout(iterationDeadlineTimer);
+      // in 'running' forever (#3223). runIterationWithDeadlineGuard arms an abort at the same
+      // buffer the watchdog uses, so a deadline hit mid-iteration hands off to a continuation
+      // Lambda the same way the watchdog does, instead of hard-killing or failing the run.
+      const deadlineOutcome = await runIterationWithDeadlineGuard(
+        {
+          remainingMs: context.getRemainingTimeInMillis(),
+          timeoutBufferMs: TIMEOUT_BUFFER_MS,
+          runIteration: signal =>
+            agent.runIteration(firstIterationMessage, {
+              maxIterations,
+              confidenceGate,
+              previousMessages,
+              // Cache the (large, static) system prompt + tool schemas across iterations. An
+              // agent run is always multi-iteration, and previously this was omitted - so the
+              // full system prompt + tools were re-sent at full input price EVERY iteration
+              // (the chat path already caches via ChatCompletionProcess). Enabling it is the
+              // single biggest cost reduction for multi-iteration runs; cache-read tokens are
+              // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
+              enableCaching: true,
+              // Pre-execution permission gate - see `toolGate` above. The agent withholds a
+              // gated call instead of running it, so nothing is spent on a call the user has
+              // not approved yet.
+              toolGate,
+              signal,
+            }),
+        },
+        { selfDispatchContinuation }
+      );
+      if (deadlineOutcome.kind === 'handed-off') {
+        logger.info('[Timeout] Iteration deadline hit mid-call, self-dispatched to continuation queue');
+        return;
       }
+      iterationResult = deadlineOutcome.result;
 
       iterationIndex = iterationResult.checkpoint.iteration;
 

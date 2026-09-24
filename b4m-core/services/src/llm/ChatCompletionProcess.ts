@@ -38,6 +38,7 @@ import {
   DEGENERATE_FINISH_REASON,
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
+  visibleReplyText,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -5864,9 +5865,25 @@ export class ChatCompletionProcess {
       // otherwise outrank this error message and the user sees a blank turn instead of the
       // error (#3223). Every branch below that overrides quest.reply must go through this so
       // the two never drift apart across the extra saveQuest calls those branches make.
+      //
+      // A slot that already has real visible text (an answer that streamed before the failure
+      // hit) is kept ahead of the error rather than discarded, joined with no separator to match
+      // extractReplies' own join rule. `quest.reply` mirrors the same joined text rather than
+      // just the error - search indexing, export/curation and the public /api/chat response all
+      // read `.reply` alone and expect the full answer, not a truncated error-only string.
+      //
+      // Snapshotted once, before any call: this catch block calls setErrorReply more than once
+      // on some paths (an unconditional raw-message call up front, then a friendlier message in
+      // the branch below) - reading quest.replies live would pick up the FIRST call's own error
+      // text as if it were streamed content and stack every subsequent message on top of it.
+      const streamedRepliesBeforeError = quest.replies;
       const setErrorReply = (message: string) => {
-        quest.reply = message;
-        quest.replies = [message];
+        const visiblePartial = (streamedRepliesBeforeError ?? [])
+          .map(r => visibleReplyText(r))
+          .filter(text => text.length > 0);
+        const combined = [...visiblePartial, message];
+        quest.replies = combined;
+        quest.reply = combined.join('');
       };
       setErrorReply((err as Error).message);
       quest.type = 'error';
