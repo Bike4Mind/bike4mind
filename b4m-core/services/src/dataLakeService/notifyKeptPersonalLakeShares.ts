@@ -86,7 +86,10 @@ export async function notifyKeptPersonalLakeShares(
         ];
       })
     );
-    const failed = results.filter(result => result === false).length;
+    // MailService (apps/client/server/utils/mailer) resolves false on a send failure and a truthy
+    // send result otherwise, never throwing. Treat anything falsy as failed so that contract moving
+    // cannot quietly hold this at zero.
+    const failed = results.filter(result => !result).length;
     if (failed > 0) warn('[dataLakes] some kept-personal-lake-share emails failed', { failed });
   } catch (err) {
     warn('[dataLakes] kept-personal-lake-share notification failed', { error: String(err) });

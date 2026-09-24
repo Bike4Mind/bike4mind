@@ -81,7 +81,7 @@ describe('notifyKeptPersonalLakeShares', () => {
   };
   const context = { departedUserId: 'dana', organizationName: 'Acme' };
 
-  it('sends one email per owner, listing that owner lakes only', async () => {
+  it("sends one email per owner, listing that owner's lakes only", async () => {
     const sendEmail = vi.fn().mockResolvedValue(true);
     const { deps: d } = deps(sendEmail);
 
