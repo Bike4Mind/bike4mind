@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { stripToolArtifactMarkup } from '@bike4mind/common';
 import { handleToolResultStreaming } from './toolStreamingHelper';
 
 const CHESS_ARTIFACT =
@@ -74,6 +75,41 @@ describe('handleToolResultStreaming: only emitting tools stream, and only their 
     const started = Date.now();
     for (const input of inputs) await streamed('mermaid_chart', input);
 
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+});
+
+describe('stripToolArtifactMarkup: the model never sees tool artifact markup it could echo', () => {
+  const P = '[removed]';
+
+  it('replaces every block, keeps surrounding text, and leaves markup-free text untouched', () => {
+    expect(stripToolArtifactMarkup(`a ${CHESS_ARTIFACT} b ${MERMAID_ARTIFACT} c`, P)).toBe(`a ${P} b ${P} c`);
+    expect(stripToolArtifactMarkup('plain <artifacts> text', P)).toBe('plain <artifacts> text');
+    expect(stripToolArtifactMarkup('', P)).toBe('');
+  });
+
+  it('removes a block whose quoted attribute holds ">" and a case-varied tag', () => {
+    const tricky = '<ARTIFACT title="a>b" type="text/html"><script>x</script></Artifact>';
+    expect(stripToolArtifactMarkup(`x${tricky}y`, P)).toBe(`x${P}y`);
+  });
+
+  it('breaks an unclosed opener and a nested opener so no tag survives', () => {
+    const out = stripToolArtifactMarkup('<artifact type="text/html">open <artifact type="x">in</artifact> tail', P);
+    expect(out).not.toMatch(/<artifact/i);
+    expect(stripToolArtifactMarkup('ok <artifact type="text/html"><!DOCTYPE html><html></html>', P)).toBe(`ok ${P}`);
+    expect(stripToolArtifactMarkup('<artifact>bare</artifact> tail', P)).toBe(P);
+  });
+
+  it('does not let a quoted closer inside the open tag end the block early', () => {
+    const quoted = '<artifact title="</artifact>" type="text/html"><html><script>x</script></html></artifact>';
+    expect(stripToolArtifactMarkup(`a ${quoted} b`, P)).toBe(`a ${P} b`);
+  });
+
+  it('strips pathological output in linear time', () => {
+    const started = Date.now();
+    stripToolArtifactMarkup('<artifact '.repeat(100_000), P);
+    stripToolArtifactMarkup(`${'<artifact>'.repeat(50_000)}</artifact>`, P);
+    stripToolArtifactMarkup(CHESS_ARTIFACT.repeat(20_000), P);
     expect(Date.now() - started).toBeLessThan(2_000);
   });
 });

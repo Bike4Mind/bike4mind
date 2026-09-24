@@ -62,3 +62,27 @@ export function filterToolArtifactMarkup(toolName: string, text: string): string
   }
   return kept > 0 ? out + text.slice(cursor) : null;
 }
+
+/**
+ * Replaces each `<artifact ...>...</artifact>` block in a tool result with `placeholder`, so the
+ * model never sees markup it could echo into its reply (where the reply parser would render it).
+ * The open tag is read with the reply parser grammar, so a quoted `</artifact>` cannot end a block
+ * early; an opener that does not parse or never closes drops the rest of the text. Linear.
+ */
+export function stripToolArtifactMarkup(text: string, placeholder: string): string {
+  const opener = /<artifact\b/gi;
+  const openTag = new RegExp(`<artifact\\s(?:${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
+  const closer = /<\/artifact>/gi;
+  let out = '';
+  let cursor = 0;
+  for (let open = opener.exec(text); open; open = opener.exec(text)) {
+    out += text.slice(cursor, open.index) + placeholder;
+    openTag.lastIndex = open.index;
+    if (!openTag.exec(text)) return out;
+    closer.lastIndex = openTag.lastIndex;
+    if (!closer.exec(text)) return out;
+    cursor = closer.lastIndex;
+    opener.lastIndex = cursor;
+  }
+  return out + text.slice(cursor);
+}
