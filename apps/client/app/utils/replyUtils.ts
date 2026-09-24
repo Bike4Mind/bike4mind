@@ -1,6 +1,8 @@
 import { THINK_CLOSE_TAG, THINK_OPEN_TAG, visibleReplyText } from '@bike4mind/common';
 
-export function extractReplies(messageData: { reply?: string | null; replies?: string[] | undefined }) {
+type ReplyBearingMessage = { reply?: string | null; replies?: string[] | undefined };
+
+export function extractReplies(messageData: ReplyBearingMessage) {
   // Prefer the authoritative array when present, because the server streams into replies[0]
   const sourceReplies =
     Array.isArray(messageData.replies) && messageData.replies.length > 0
@@ -33,7 +35,19 @@ export function extractReplies(messageData: { reply?: string | null; replies?: s
   return combined ? [combined] : [];
 }
 
-export function extractThinking(messageData: { reply?: string | null; replies?: string[] | undefined }) {
+/**
+ * The assistant text an export should carry for one turn: the single combined string the chat
+ * bubble renders, or '' when the turn produced no visible text.
+ *
+ * Exporters must not walk `replies` themselves. A tool-using turn persists several slots (see
+ * appendStreamedChunk) and some hold only a thinking block, so a raw walk writes blank "AI:"
+ * entries and leaks `<think>` markers into the exported file.
+ */
+export function visibleReplyForExport(messageData: ReplyBearingMessage): string {
+  return extractReplies(messageData)[0] ?? '';
+}
+
+export function extractThinking(messageData: ReplyBearingMessage) {
   // Handle both reply and replies arrays
   let initialReplies: string[] = [];
 

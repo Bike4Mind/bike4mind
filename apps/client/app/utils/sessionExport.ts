@@ -1,5 +1,6 @@
 import { IChatHistoryItem, ISessionDocument, stripSearchResultCardFences } from '@bike4mind/common';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
+import { visibleReplyForExport } from '@client/app/utils/replyUtils';
 import Papa from 'papaparse';
 import * as XLSX from 'xlsx';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
@@ -53,20 +54,21 @@ export function toExportableSession(session: ISessionDocument, chatHistory: ICha
       });
     }
 
-    const replies = item.replies || (item.reply ? [item.reply] : []);
-    for (const reply of replies) {
-      if (reply) {
-        messages.push({
-          timestamp: new Date(item.timestamp),
-          role: 'assistant',
-          // Every downstream export format (CSV, XLSX, DOCX, ...) renders `content` as plain
-          // text with no way to show cards, so strip the fence at this single read boundary.
-          content: stripSearchResultCardFences(reply),
-          model: item.promptMeta?.model?.name,
-          tokensUsed: item.promptMeta?.tokenUsage?.outputTokens,
-          creditsUsed: item.creditsUsed,
-        });
-      }
+    // One assistant message per turn, not one per reply slot: a tool-using turn persists
+    // several slots, and the per-slot walk copied this turn's creditsUsed/tokensUsed onto
+    // every row, so summing either column over-counted.
+    const reply = visibleReplyForExport(item);
+    if (reply) {
+      messages.push({
+        timestamp: new Date(item.timestamp),
+        role: 'assistant',
+        // Every downstream export format (CSV, XLSX, DOCX, ...) renders `content` as plain
+        // text with no way to show cards, so strip the fence at this single read boundary.
+        content: stripSearchResultCardFences(reply),
+        model: item.promptMeta?.model?.name,
+        tokensUsed: item.promptMeta?.tokenUsage?.outputTokens,
+        creditsUsed: item.creditsUsed,
+      });
     }
   }
 

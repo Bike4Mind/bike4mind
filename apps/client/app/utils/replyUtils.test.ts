@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractReplies, extractThinking } from './replyUtils';
+import { extractReplies, extractThinking, visibleReplyForExport } from './replyUtils';
 import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
 
 /**
@@ -30,6 +30,37 @@ describe('extractReplies', () => {
 
   it('ignores an undefined replies array rather than throwing', () => {
     expect(extractReplies({ reply: ABANDONED_REPLY })).toEqual([ABANDONED_REPLY]);
+  });
+});
+
+/**
+ * The rule every session exporter reads a turn through. Exporters used to walk `replies`
+ * directly behind an `if (reply)` truthiness guard, which a think-only slot passes - so a
+ * tool-using turn wrote several blank "AI:" entries per turn and leaked raw `<think>`
+ * markers into the downloaded file.
+ */
+describe('visibleReplyForExport', () => {
+  it('collapses a tool-loop turn into the one string the bubble showed', () => {
+    // The shape appendStreamedChunk leaves behind: a closed thinking block spills into its
+    // own slot, and the next block reopens inside the slot holding the partial answer.
+    expect(
+      visibleReplyForExport({
+        replies: ['<think>first reasoning</think>', 'PARTIAL ANSWER <think>second reasoning</think>FINAL ANSWER'],
+      })
+    ).toBe('PARTIAL ANSWER FINAL ANSWER');
+  });
+
+  it('returns nothing for a turn whose only slot is a thinking block', () => {
+    expect(visibleReplyForExport({ replies: ['<think>reasoning that produced no answer</think>'] })).toBe('');
+  });
+
+  it('returns nothing rather than undefined when there is no reply at all', () => {
+    expect(visibleReplyForExport({ replies: [] })).toBe('');
+    expect(visibleReplyForExport({})).toBe('');
+  });
+
+  it('still surfaces a terminal-recovery reply written next to an empty replies array', () => {
+    expect(visibleReplyForExport({ reply: ABANDONED_REPLY, replies: [] })).toBe(ABANDONED_REPLY);
   });
 });
 
