@@ -363,6 +363,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     chatInputRef,
     clearFiles,
     stream,
+    chatCompletion,
     setChatCompletion,
     onAgentsAttached: () => setAgentBenchCollapsed(false),
   });

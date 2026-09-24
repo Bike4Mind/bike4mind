@@ -43,13 +43,13 @@ import useSessionLayout, {
   setPendingMessageFiles,
   getSendableMessageFileIds,
 } from '@client/app/hooks/useSessionLayout';
-import type { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import type { IChatCompletion, useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import {
   OPTIMISTIC_GENERATING_STATUS,
   adoptSentQuest,
   rollbackOptimisticGenerating,
 } from '@client/app/hooks/chatCompletionState';
-import { stopChatCompletion } from './stopChatCompletion';
+import { DeferredStop, canStopNow, stopChatCompletion } from './stopChatCompletion';
 import {
   detectAgentMentions,
   findAgentsByMentions,
@@ -82,6 +82,7 @@ interface UseSendMessageParams {
   chatInputRef: React.RefObject<HTMLTextAreaElement | null>;
   clearFiles: () => void;
   stream: boolean;
+  chatCompletion: ReturnType<typeof useSubscribeChatCompletion>['chatCompletion'];
   setChatCompletion: ReturnType<typeof useSubscribeChatCompletion>['setChatCompletion'];
   onAgentsAttached?: () => void;
 }
@@ -115,6 +116,7 @@ export function useSendMessage({
   chatInputRef,
   clearFiles,
   stream,
+  chatCompletion,
   setChatCompletion,
   onAgentsAttached,
 }: UseSendMessageParams): UseSendMessageResult {
@@ -298,28 +300,47 @@ export function useSendMessage({
     }
   }, [setChatInputValue, isOnNewNotebookRoute]);
 
-  const handleStopMessage = async (): Promise<void> => {
-    if (!currentSessionId) return;
+  const sendStop = useCallback(
+    async (sessionId: string, restoreTo?: IChatCompletion): Promise<void> => {
+      setStoppingMessage(true);
+      try {
+        // No success toast: the inline statusMessage already surfaces the cancellation, and a
+        // bottom-right toast covers the whole prompt area on narrow layouts (e.g. chat docked
+        // to the right). A failed cancel has no inline surface, so it does toast.
+        const stopped = await stopChatCompletion({
+          sessionId,
+          setChatCompletion,
+          stop: stopChatMessage,
+          getCachedQuestStatus: questId =>
+            queryClient
+              .getQueryData<{ pages?: { data: IChatHistoryItemDocument[] }[] }>(['quests', 'session', sessionId])
+              ?.pages?.flatMap(page => page.data)
+              .find(quest => quest?.id === questId)?.status,
+          restoreTo,
+        });
+        if (!stopped) toast.error('Error cancelling generation');
+      } finally {
+        setStoppingMessage(false);
+      }
+    },
+    [setChatCompletion, queryClient]
+  );
 
-    setStoppingMessage(true);
-    try {
-      // No success toast: the inline statusMessage already surfaces the cancellation, and a
-      // bottom-right toast covers the whole prompt area on narrow layouts (e.g. chat docked
-      // to the right). A failed cancel has no inline surface, so it does toast.
-      const stopped = await stopChatCompletion({
-        sessionId: currentSessionId,
-        setChatCompletion,
-        stop: stopChatMessage,
-        getCachedQuestStatus: questId =>
-          queryClient
-            .getQueryData<{ pages?: { data: IChatHistoryItemDocument[] }[] }>(['quests', 'session', currentSessionId])
-            ?.pages?.flatMap(page => page.data)
-            .find(quest => quest?.id === questId)?.status,
-      });
-      if (!stopped) toast.error('Error cancelling generation');
-    } finally {
-      setStoppingMessage(false);
+  // Survives the optimistic -> real id switch: the notebook shell keeps this composer mounted.
+  const [deferredStop] = useState(() => new DeferredStop(setChatCompletion));
+  useEffect(() => () => deferredStop.drop(), [deferredStop]);
+  useEffect(() => {
+    const held = deferredStop.resolve(chatCompletion);
+    if (held) void sendStop(held.sessionId, held.beforeStop);
+  }, [deferredStop, chatCompletion, sendStop]);
+
+  const handleStopMessage = async (): Promise<void> => {
+    if (!canStopNow(currentSessionId, chatCompletion)) {
+      // Too early for stop-reply (no real session id or no quest yet): hold it until both exist.
+      if (!chatCompletion.completed) deferredStop.request(chatCompletion);
+      return;
     }
+    await sendStop(currentSessionId);
   };
 
   // Body of the send. Always call it through `handleSendClick` below, never
@@ -1118,6 +1139,8 @@ export function useSendMessage({
       // rollback leaves `completed: false` with the generating sentinel, so
       // `shouldShowStopButton` stays true and the composer renders Stop and
       // swallows Enter for good - dead in a way releasing the mutex cannot fix.
+      // A held Stop is dropped first so the placeholder reads as unreplaced again.
+      deferredStop.cancel();
       setChatCompletion(rollbackOptimisticGenerating);
       setWorkBenchAgents([]);
       setSubmitting(false);

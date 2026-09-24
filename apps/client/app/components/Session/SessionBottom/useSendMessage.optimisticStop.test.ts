@@ -20,5 +20,10 @@ describe('useSendMessage - optimistic Stop wiring', () => {
     const catchBlock = source.match(/data = await handler\(sessionToSend\);\s*\} catch[\s\S]*?return;\s*\}/)?.[0] ?? '';
     expect(catchBlock).not.toBe('');
     expect(catchBlock).toContain('setChatCompletion(rollbackOptimisticGenerating);');
+    // A held Stop must be dropped before the rollback, or the placeholder reads as replaced.
+    expect(catchBlock.indexOf('deferredStop.cancel();')).toBeGreaterThan(-1);
+    expect(catchBlock.indexOf('deferredStop.cancel();')).toBeLessThan(
+      catchBlock.indexOf('setChatCompletion(rollbackOptimisticGenerating);')
+    );
   });
 });
