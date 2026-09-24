@@ -347,8 +347,8 @@ export function useBatchProgressListener() {
 }
 
 /**
- * Hook: keep the lake list, health-badge, and browse-tree tag-count caches in sync with ANY
- * batch's completion - independent of the wizard's own currentBatchId, unlike
+ * Hook: keep the lake list, health-badge, browse-tree tag-count, and article/file caches in sync
+ * with ANY batch's completion - independent of the wizard's own currentBatchId, unlike
  * useBatchProgressListener above. Done (resetWizard) clears currentBatchId the moment the user
  * leaves the Complete screen - which itself appears as soon as browser uploads finish, before
  * chunk/vectorize ever does - so a listener keyed on that id unsubscribes before a still-ingesting
@@ -376,6 +376,12 @@ export function useDataLakeBatchCompletionSync() {
       // Browse-tree counts (and an emptied lake's very presence in the tree) are stale until
       // ingestion tags the files - this is that point.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+      // The tree's COUNT refreshing is not enough - an already-open category/Uncategorized
+      // view queries articles/files independently (useGetDataLakeArticles / dataLakeFiles),
+      // and those sit on a 5-minute staleTime with focus refetch off, so a file uploaded into
+      // a folder the user already has open stays invisible there until this fires too.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
     });
 
     return unsubscribe;
