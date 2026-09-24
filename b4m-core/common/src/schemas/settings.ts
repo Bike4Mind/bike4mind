@@ -299,6 +299,7 @@ export const SettingKeySchema = z.enum([
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
   'EnforceLakeAdmission',
+  'EnforceLakeOriginOnIngest',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -2246,6 +2247,27 @@ export const settingsMap = {
     // Resolved through scopeForLake, so the rungs mirror PauseLakeConvergence: the contract is the
     // LAKE's ("the policy I require"), which is why Lake is settable here even though the chunk
     // policy it grades against is owner-altitude and deliberately is not (see DefaultChunkSize).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  EnforceLakeOriginOnIngest: makeBooleanSetting({
+    key: 'EnforceLakeOriginOnIngest',
+    name: 'Data Lakes: Enforce curated-lake origin on ingest',
+    defaultValue: true,
+    description:
+      'ON by default: unattended ingest (the Drive folder sync) refuses to add content to a lake ' +
+      'whose owner declared it curated. OFF makes the refusal advisory and lets the write through. ' +
+      'Unlike the admission contract this ships ON, because it refuses on an explicit owner ' +
+      'declaration rather than a heuristic, and because the origin backfill marks every lake that ' +
+      'currently has a connector as connector-fed - so at rollout this refuses nothing that exists. ' +
+      'The lake rung is the one that matters; the org and owner rungs disable it across every lake ' +
+      'in that scope at once. A flip is not instantaneous: the settings cache is per-instance, so it ' +
+      'applies immediately on the instance that served the change and within ~5 min elsewhere.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 97,
+    dependsOn: 'EnableDataLakes',
+    // Resolved through scopeForLake, mirroring EnforceLakeAdmission: the declaration is the LAKE's,
+    // so Lake is the meaningful rung and the wider rungs are operator escape hatches.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   EnableBriefcase: makeBooleanSetting({
