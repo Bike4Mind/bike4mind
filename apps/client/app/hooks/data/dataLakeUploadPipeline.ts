@@ -6,7 +6,7 @@ import {
   MAX_TAG_PREFIX_LENGTH,
   MIN_TAG_PREFIX_LENGTH,
 } from '@bike4mind/common';
-import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
+import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import type {
   DataLakeFormValues,
@@ -201,12 +201,21 @@ export async function createWizardLake(config: DataLakeFormValues, tagPrefix: st
 
 /**
  * Whether a create-mode retry should reuse the lake a previous attempt in this session
- * archived, rather than creating a new one. True only when the retry's tag prefix exactly
- * matches the archived lake's - a changed prefix means nothing claims it, so createWizardLake
- * succeeds on its own with no need to restore anything.
+ * archived, rather than creating a new one. True only when the retry lands in the same scope
+ * with the same tag prefix - that pair is exactly what the archived lake's claim occupies
+ * (findCollidingPrefixLakes), so changing either means nothing claims what this retry asks for
+ * and createWizardLake succeeds on its own with no need to restore anything.
  */
-export function canReuseRecoverableLake(recoverableLake: RecoverableLake | null, tagPrefix: string): boolean {
-  return recoverableLake !== null && recoverableLake.tagPrefix === tagPrefix;
+export function canReuseRecoverableLake(
+  recoverableLake: RecoverableLake | null,
+  tagPrefix: string,
+  organizationId: string | undefined
+): recoverableLake is RecoverableLake {
+  return (
+    recoverableLake !== null &&
+    recoverableLake.tagPrefix === tagPrefix &&
+    recoverableLake.organizationId === organizationId
+  );
 }
 
 /**
@@ -217,6 +226,88 @@ export function canReuseRecoverableLake(recoverableLake: RecoverableLake | null,
 export async function restoreRecoverableLake(dataLakeId: string): Promise<string> {
   await api.post(`/api/data-lakes/${dataLakeId}/lifecycle`, { action: 'unarchive' });
   return dataLakeId;
+}
+
+/**
+ * Re-apply the wizard's current Configure values to a lake being reused. The restored lake still
+ * carries the settings the FIRST attempt created it with, and the failure leaves Configure fully
+ * editable behind it - so without this, edits made before the retry are silently dropped. That
+ * matters most for requiredUserTag / requiredEntitlement: a user who adds an access gate before
+ * retrying would otherwise land their files in an ungated lake with nothing reported.
+ *
+ * '' is the server's explicit clear sentinel for both gate fields (see UpdateDataLakeRequestInput),
+ * so a gate REMOVED between attempts is removed here too. `slug` is not updatable on this route;
+ * a reused lake keeps its original slug, which is inert because everything downstream keys off the id.
+ */
+export async function syncRestoredLakeConfig(dataLakeId: string, config: DataLakeFormValues): Promise<void> {
+  await api.put(`/api/data-lakes/${dataLakeId}`, {
+    name: config.name,
+    description: config.description,
+    requiredUserTag: config.requiredUserTag,
+    requiredEntitlement: config.requiredEntitlement,
+  } satisfies UpdateDataLakeRequestInputType);
+}
+
+/**
+ * Soft-delete the 0-chunk FabFiles a failed upload left behind (created at presign, no S3 object).
+ * MUST run before the lake is archived on the create-mode rollback paths: archiveByDataLakeTag
+ * matches the lake's members by meta-tag with no status or chunk-count filter and skips only rows
+ * already soft-deleted, and unarchiveByDataLakeTag reverses exactly that set under the lake's
+ * filesArchivedAt stamp. An orphan still live at archive time is therefore brought BACK by the
+ * retry's restore, and shows up alongside the retried file as a member with no bytes and no chunks
+ * - which the retry's own dedup pass can't catch either, since nothing is live yet when it runs.
+ *
+ * Only the ids go: `failedFiles` is an $inc and `failedFileNames` a $set on the same batch the
+ * caller already stamped, so re-sending them here would double-count. Best-effort, like the other
+ * rollback calls - the server-side reconciler is the backstop, and this must not mask the real error.
+ */
+async function deleteFailedUploadOrphans(batchId: string | undefined, failedFileIds: string[]): Promise<void> {
+  if (!batchId || failedFileIds.length === 0) return;
+  await api.post('/api/data-lakes/batches/upload-complete', { batchId, failedFileIds }).catch(() => {});
+}
+
+/**
+ * The lake a create-mode attempt uploads into: the one a prior failed attempt in this session
+ * left archived when its claim still matches, otherwise a brand-new one.
+ */
+async function resolveCreateModeLake(
+  config: DataLakeFormValues,
+  tagPrefix: string,
+  recoverableLake: RecoverableLake | null,
+  cb: BatchUploadCallbacks
+): Promise<string> {
+  // Read at call time, like createWizardLake does, so a switch made behind the wizard modal counts.
+  const organizationId = activeOrgId();
+  if (!canReuseRecoverableLake(recoverableLake, tagPrefix, organizationId)) {
+    return createWizardLake(config, tagPrefix);
+  }
+
+  if (!recoverableLake.restored) {
+    try {
+      await restoreRecoverableLake(recoverableLake.id);
+    } catch (restoreErr: unknown) {
+      // Only a 404 means the remembered lake is truly gone (e.g. purged after the user
+      // permanently deleted it from the Archived section) - its prefix claim is gone with
+      // it, so a fresh create is exactly as valid as the reuse would have been. Any other
+      // failure (a transient error, a permission change, a status the lake moved to that
+      // unarchive won't cross) leaves the lake, and its prefix claim, in place -
+      // findCollidingPrefixLakes has no status filter, so falling back to create here would
+      // just reproduce the original collision this reuse logic exists to prevent. Surface
+      // the real restore failure instead and keep the lake remembered for the next retry.
+      if (axios.isAxiosError(restoreErr) && restoreErr.response?.status === 404) {
+        cb.setRecoverableLake(null);
+        return createWizardLake(config, tagPrefix);
+      }
+      throw restoreErr;
+    }
+    // Recorded BEFORE the config sync below, which can fail on its own: unarchive refuses a lake
+    // already back in 'active' status with a 400, and a 400 is precisely what the branch above
+    // rethrows - so without this flag one failed sync would wedge every later retry.
+    cb.setRecoverableLake({ ...recoverableLake, restored: true });
+  }
+
+  await syncRestoredLakeConfig(recoverableLake.id, config);
+  return recoverableLake.id;
 }
 
 /** Bind a Drive folder picked during create to the lake that now exists (POST drive-sync). */
@@ -365,27 +456,9 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
   const tagPrefix = submittedTagPrefix(config.tagPrefix);
 
   // Step 1: Create the data lake; skipped in append mode (upload into the existing lake), and
-  // skipped when a same-session prior attempt archived a lake with this exact tag prefix -
-  // restore and reuse it instead of creating a second one the prefix claim would refuse.
-  const dataLakeId = targetLake
-    ? targetLake.id
-    : recoverableLake && canReuseRecoverableLake(recoverableLake, tagPrefix)
-      ? await restoreRecoverableLake(recoverableLake.id).catch(async (restoreErr: unknown) => {
-          // Only a 404 means the remembered lake is truly gone (e.g. purged after the user
-          // permanently deleted it from the Archived section) - its prefix claim is gone with
-          // it, so a fresh create is exactly as valid as the reuse would have been. Any other
-          // failure (a transient error, a permission change, a status the lake moved to that
-          // unarchive won't cross) leaves the lake, and its prefix claim, in place -
-          // findCollidingPrefixLakes has no status filter, so falling back to create here would
-          // just reproduce the original collision this reuse logic exists to prevent. Surface
-          // the real restore failure instead and keep the lake remembered for the next retry.
-          if (axios.isAxiosError(restoreErr) && restoreErr.response?.status === 404) {
-            cb.setRecoverableLake(null);
-            return createWizardLake(config, tagPrefix);
-          }
-          throw restoreErr;
-        })
-      : await createWizardLake(config, tagPrefix);
+  // skipped when a same-session prior attempt archived a lake holding this exact prefix claim -
+  // restore and reuse it instead of creating a second one the claim would refuse.
+  const dataLakeId = targetLake ? targetLake.id : await resolveCreateModeLake(config, tagPrefix, recoverableLake, cb);
   let uploadedCount = 0;
   // Hoisted above the try so the outcome branch + the catch can reconcile the batch
   // and clean up the records setup created. `failedFileIds` are the FabFiles presign
@@ -529,9 +602,10 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
           })
           .catch(() => {});
       } else {
-        // Create: archive the empty new lake (cascade cancels the batch and tears down
-        // its FabFiles); stamp 'failed' first so the terminal state is accurate rather
-        // than the archive's 'cancelled'.
+        // Create: archive the empty new lake (cascade cancels the batch and soft-archives its
+        // FabFiles - a reversible marker, NOT a teardown, which is why the orphans have to be
+        // deleted separately below); stamp 'failed' first so the terminal state is accurate
+        // rather than the archive's 'cancelled'.
         await api
           .put(`/api/data-lakes/batches/${batchId}`, {
             status: 'failed',
@@ -539,13 +613,17 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
             failedFileNames: failedNames,
           })
           .catch(() => {});
+        // After the 'failed' stamp above, which is terminal: upload-complete's own status flip and
+        // finalize are both guarded to non-terminal batches, so all it can still do here is the
+        // orphan cleanup this path needs.
+        await deleteFailedUploadOrphans(batchId, failedFileIds);
         const archived = await api
           .delete(`/api/data-lakes/${dataLakeId}`)
           .then(() => true)
           .catch(() => false);
         // Remember it for a same-session retry - but only once we know the archive
         // actually took, so a retry never tries to restore a lake still live in some other state.
-        cb.setRecoverableLake(archived ? { id: dataLakeId, tagPrefix } : null);
+        cb.setRecoverableLake(archived ? { id: dataLakeId, tagPrefix, organizationId: activeOrgId() } : null);
       }
       // A presign refusal already says WHY (e.g. the request did not name the batch's lake),
       // and classifyUploadError surfaces a 4xx's server message - so rethrow it rather than
@@ -564,8 +642,13 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     // finalizes - all server-side, in the right order.
     reconciled = true;
     // Files landed in this lake, so it's no longer a candidate to restore-and-reuse on some
-    // later, unrelated failure.
-    if (!targetLake) cb.setRecoverableLake(null);
+    // later, unrelated failure. Keyed on the id rather than just create mode: a retry that CHANGED
+    // the tag prefix succeeds into a DIFFERENT, new lake while the remembered one stays archived,
+    // still holding the original prefix and still invisible outside the Archived list. Clearing it
+    // there would drop the only handle on it and leave the original prefix stuck exactly as #3231
+    // describes - so it stays remembered, and a later retry that goes back to that prefix can
+    // still reuse it.
+    if (recoverableLake?.id === dataLakeId) cb.setRecoverableLake(null);
     await api
       .post('/api/data-lakes/batches/upload-complete', {
         batchId,
@@ -613,13 +696,16 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
       if (batchId) {
         await api.put(`/api/data-lakes/batches/${batchId}`, { status: 'failed' }).catch(() => {});
       }
+      // Ungated by mode: an orphan left live is archived-then-restored with the lake in create
+      // mode (see deleteFailedUploadOrphans) and simply inflates the user's own lake in append mode.
+      await deleteFailedUploadOrphans(batchId, failedFileIds);
       // Never touch the user's existing lake in append mode.
       if (!targetLake) {
         const archived = await api
           .delete(`/api/data-lakes/${dataLakeId}`)
           .then(() => true)
           .catch(() => false);
-        cb.setRecoverableLake(archived ? { id: dataLakeId, tagPrefix } : null);
+        cb.setRecoverableLake(archived ? { id: dataLakeId, tagPrefix, organizationId: activeOrgId() } : null);
       }
     }
     throw err;

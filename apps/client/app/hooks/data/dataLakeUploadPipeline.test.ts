@@ -100,18 +100,36 @@ describe('runWithConcurrency', () => {
 });
 
 // The decision at the heart of the retry-reuse fix: reuse the lake a prior failed attempt archived only when
-// this retry's tag prefix is the exact one that lake still holds.
+// this retry asks for the exact claim - prefix AND scope - that lake still holds.
 describe('canReuseRecoverableLake', () => {
-  it('reuses when the tag prefix matches exactly', () => {
-    expect(canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:' }, 'legal:')).toBe(true);
+  it('reuses when the tag prefix matches exactly in the same personal scope', () => {
+    expect(canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:' }, 'legal:', undefined)).toBe(true);
+  });
+
+  it('reuses when the tag prefix matches exactly in the same org scope', () => {
+    expect(
+      canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:', organizationId: 'org1' }, 'legal:', 'org1')
+    ).toBe(true);
   });
 
   it('does not reuse when there is nothing remembered', () => {
-    expect(canReuseRecoverableLake(null, 'legal:')).toBe(false);
+    expect(canReuseRecoverableLake(null, 'legal:', undefined)).toBe(false);
   });
 
   it('does not reuse when the retry changed the tag prefix - nothing claims the new one', () => {
-    expect(canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:' }, 'medical:')).toBe(false);
+    expect(canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:' }, 'medical:', undefined)).toBe(false);
+  });
+
+  // Prefix claims are scoped per owner, so the same prefix in another scope is unclaimed - and
+  // reusing across the switch would drop the retry's files into the wrong account entirely.
+  it('does not reuse when the account switcher moved to an org between attempts', () => {
+    expect(canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:' }, 'legal:', 'org1')).toBe(false);
+  });
+
+  it('does not reuse when the account switcher moved back to personal between attempts', () => {
+    expect(
+      canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:', organizationId: 'org1' }, 'legal:', undefined)
+    ).toBe(false);
   });
 });
 

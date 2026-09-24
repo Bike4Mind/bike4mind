@@ -209,6 +209,19 @@ export const toWizardTargetLake = (lake: {
 export interface RecoverableLake {
   id: string;
   tagPrefix: string;
+  /**
+   * The account scope the lake was created under (undefined = personal), since the account
+   * switcher stays reachable behind the wizard modal. Prefix claims are scoped per owner
+   * (findCollidingPrefixLakes), so a retry from a DIFFERENT scope must not reuse this lake -
+   * and doesn't need to: nothing in the new scope claims the prefix.
+   */
+  organizationId?: string;
+  /**
+   * Set once the unarchive has landed. The steps after it can still fail, and re-issuing an
+   * unarchive against a lake already back in 'active' status is a 400 - which, not being the
+   * 404 that means "really gone", would leave every later retry stuck on the same refusal.
+   */
+  restored?: boolean;
 }
 
 interface DataLakeWizardStore {
