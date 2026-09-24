@@ -28,7 +28,6 @@ import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useHelpPanel, openHelpPanel } from '@client/app/hooks/useHelpPanel';
-import { useGearUnlocks, type GearKey } from '@client/app/hooks/useGearsStatus';
 import { useNotebookLayout } from '..';
 
 type NavItem = {
@@ -82,27 +81,10 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const isBobEnabled = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags).some(
     item => item.path === '/bob'
   );
-  // Gears (earned nav): feature rows appear once the user has USED the feature -
-  // the permanent rail is New Chat / Gears / Help. Unlocks are derived server-side
-  // (has >=1 project, agent, lake, file, publication). While the status loads we
-  // show everything (the safe default for existing users; a brand-new user sees
-  // the rail settle once, on first paint only).
-  const gearUnlocks = useGearUnlocks();
-  // Fail OPEN unless a gear is EXPLICITLY present-and-unearned. These rows
-  // (Files, Projects, ...) were unconditional before Gears, so a loading state,
-  // a catalog that omits/renames the key, or an admin override that drops it
-  // must NOT silently remove core navigation app-wide - only a key the server
-  // returns as `false` (a known, genuinely-unearned gear) hides its row.
-  const gearOpen = (key: GearKey) => gearUnlocks === undefined || !(key in gearUnlocks) || gearUnlocks[key] === true;
-  // Fail CLOSED, for rows that did NOT exist before Gears. The fail-open above
-  // protects navigation users already had; a net-new earned row has nothing to
-  // preserve, and its failure modes run the other way. `/api/gears/status`
-  // omits admin-disabled gears from the response entirely, so under gearOpen
-  // turning a gear OFF in Manage Gears satisfied `!(key in gearUnlocks)` and
-  // pinned the unearned row visible for every flag-enabled user - the opposite
-  // of what the admin asked for. Same on any status error. Only an explicit
-  // `true` reveals these.
-  const gearEarned = (key: GearKey) => gearUnlocks?.[key] === true;
+  // Gears no longer gates navigation. A feature's row is always present; the gear
+  // still pays its one-time credit reward on first use, but discovery must not
+  // depend on having already discovered it - Hearth was only reachable from the
+  // Gears page, so its row could never appear on its own.
   const helpOpen = useHelpPanel(s => s.open);
 
   const closeOnMobile = () => {
@@ -204,21 +186,17 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       : []),
     // No Data Lakes sidebar destination: the in-chat Data Lakes toggle is the only entry point,
     // and since #1943 the only surface - the standalone page is retired.
-    ...(gearOpen('files')
-      ? [
-          {
-            key: 'files',
-            label: t('files.manager', 'Files Manager'),
-            icon: iconSlot(<FolderSharedIcon sx={{ fontSize: '18px' }} />),
-            isActive: fileBrowserOpen,
-            onClick: () => {
-              closeOnMobile();
-              setFileBrowserOpen(true);
-            },
-          },
-        ]
-      : []),
-    ...(isAgentsEnabled && gearOpen('agents')
+    {
+      key: 'files',
+      label: t('files.manager', 'Files Manager'),
+      icon: iconSlot(<FolderSharedIcon sx={{ fontSize: '18px' }} />),
+      isActive: fileBrowserOpen,
+      onClick: () => {
+        closeOnMobile();
+        setFileBrowserOpen(true);
+      },
+    },
+    ...(isAgentsEnabled
       ? [
           {
             key: 'agents',
@@ -234,44 +212,34 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    ...(gearOpen('projects')
-      ? [
-          {
-            key: 'projects',
-            label: t('projects.projects'),
-            // Active only on the overall projects grid, not a specific project screen
-            // (/projects/:id), which highlights its own row in the list below instead.
-            icon: iconSlot(<HubOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname === '/projects',
-            onClick: () => {
-              closeOnMobile();
-              navigate({ to: '/projects' });
-            },
-          },
-        ]
-      : []),
-    ...(gearOpen('published')
-      ? [
-          {
-            // Live Artifacts (published shares) are the product's lead-gen surface -
-            // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).
-            key: 'published',
-            label: t('sidenav.published', 'Live Artifacts'),
-            icon: iconSlot(<PublicOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname === '/profile' && (location.search as { tab?: string }).tab === 'published',
-            onClick: () => {
-              closeOnMobile();
-              navigate({ to: '/profile', search: { tab: 'published' } });
-            },
-          },
-        ]
-      : []),
-    // Double-gated: the experimental flag says the feature exists for this user,
-    // the gear says they have actually used it (>=1 channel). Sits beside
-    // Tavern/Gears - the shared-log destination. Uses gearEarned, not gearOpen:
-    // this row is net-new, so an unknown gear state must hide it rather than
-    // reveal it.
-    ...(isFeatureEnabled('enableHearth') && gearEarned('hearth')
+    {
+      key: 'projects',
+      label: t('projects.projects'),
+      // Active only on the overall projects grid, not a specific project screen
+      // (/projects/:id), which highlights its own row in the list below instead.
+      icon: iconSlot(<HubOutlinedIcon sx={{ fontSize: '18px' }} />),
+      isActive: location.pathname === '/projects',
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/projects' });
+      },
+    },
+    {
+      // Live Artifacts (published shares) are the product's lead-gen surface -
+      // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).
+      key: 'published',
+      label: t('sidenav.published', 'Live Artifacts'),
+      icon: iconSlot(<PublicOutlinedIcon sx={{ fontSize: '18px' }} />),
+      isActive: location.pathname === '/profile' && (location.search as { tab?: string }).tab === 'published',
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/profile', search: { tab: 'published' } });
+      },
+    },
+    // Gated on the experimental flag alone: the flag says the feature exists for
+    // this user, and that is the whole question. Sits beside Tavern/Gears - the
+    // shared-log destination.
+    ...(isFeatureEnabled('enableHearth')
       ? [
           {
             key: 'hearth',

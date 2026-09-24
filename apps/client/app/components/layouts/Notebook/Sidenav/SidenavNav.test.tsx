@@ -4,12 +4,13 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 
 /**
- * The two gates on the Hearth nav row, which had no test at all.
+ * What gates the feature rows in the sidenav.
  *
- * The row is DOUBLE gated and the two halves fail in OPPOSITE directions on
- * purpose, which is the part worth pinning: the experimental flag fails closed
- * (no flag, no row), and so does the gear - unlike the pre-Gears rows beside it,
- * where an unknown gear state must not remove navigation the user already had.
+ * Gears used to gate them, and no longer does: a feature's row is always there,
+ * whether or not its gear is earned. That is the part worth pinning, because the
+ * old behaviour was a discovery trap - Hearth's only entry point was the Gears
+ * page, so its row could never appear on its own. Feature FLAGS still gate, and
+ * still fail closed.
  */
 const { useFeatureEnabledMock, useGearUnlocksMock } = vi.hoisted(() => ({
   useFeatureEnabledMock: vi.fn(),
@@ -64,62 +65,54 @@ function renderNav() {
 
 const hearthRow = () => screen.queryByTestId('sidenav-nav-hearth');
 
+/** Every gear state the status endpoint can produce, including its failure shapes. */
+const GEAR_STATES: [string, Record<string, boolean> | undefined][] = [
+  ['earned', { hearth: true, files: true, projects: true, published: true, agents: true }],
+  ['explicitly unearned', { hearth: false, files: false, projects: false, published: false, agents: false }],
+  ['still loading', undefined],
+  // An admin-disabled gear is omitted from the response entirely rather than
+  // returned as false, so "key absent" is a shape that really occurs.
+  ['admin-disabled (key absent)', { projects: true }],
+  ['errored (empty)', {}],
+];
+
 beforeEach(() => {
   vi.clearAllMocks();
   useFeatureEnabledMock.mockImplementation((key: string) => key === 'enableHearth');
   useGearUnlocksMock.mockReturnValue({ hearth: true });
 });
 
+describe('SidenavNav feature rows', () => {
+  describe.each(GEAR_STATES)('with gears %s', (_label, unlocks) => {
+    it('still shows every feature row', () => {
+      useFeatureEnabledMock.mockReturnValue(true);
+      useGearUnlocksMock.mockReturnValue(unlocks);
+      renderNav();
+
+      for (const key of ['files', 'projects', 'published', 'agents', 'hearth']) {
+        expect(screen.getByTestId(`sidenav-nav-${key}`)).toBeInTheDocument();
+      }
+    });
+  });
+});
+
 describe('SidenavNav Hearth row', () => {
-  it('shows when the flag is on and the gear is earned', () => {
+  it('shows when the experimental flag is on', () => {
     renderNav();
     expect(hearthRow()).toBeInTheDocument();
   });
 
-  it('hides when the experimental flag is off, even with the gear earned', () => {
+  it('hides when the experimental flag is off', () => {
     useFeatureEnabledMock.mockReturnValue(false);
     renderNav();
     expect(hearthRow()).not.toBeInTheDocument();
   });
 
-  it('hides when the gear is explicitly unearned', () => {
+  // The flag is the only gate left, so an unearned gear must NOT remove the row -
+  // this is the case that inverted, and the reason the change exists.
+  it('shows with the flag on even though the gear is unearned', () => {
     useGearUnlocksMock.mockReturnValue({ hearth: false });
     renderNav();
-    expect(hearthRow()).not.toBeInTheDocument();
-  });
-
-  // The three cases below are the fail-CLOSED direction, and all three used to
-  // REVEAL the row. `gearOpen` treats an unknown gear state as open so that a
-  // loading state or a renamed key cannot delete navigation that predates Gears;
-  // Hearth is net-new, so there is nothing to preserve and the reasoning inverts.
-  it('hides while the gear status is still loading', () => {
-    useGearUnlocksMock.mockReturnValue(undefined);
-    renderNav();
-    expect(hearthRow()).not.toBeInTheDocument();
-  });
-
-  it('hides when an admin disables the gear, which drops the key from the response', () => {
-    // /api/gears/status omits admin-disabled gears entirely rather than
-    // returning them as false, so "key absent" is the shape a disabled gear
-    // actually takes - and under gearOpen that made disabling it reveal the row
-    // permanently to every flag-enabled user.
-    useGearUnlocksMock.mockReturnValue({ projects: true });
-    renderNav();
-    expect(hearthRow()).not.toBeInTheDocument();
-  });
-
-  it('hides when the gear status errors', () => {
-    useGearUnlocksMock.mockReturnValue({});
-    renderNav();
-    expect(hearthRow()).not.toBeInTheDocument();
-  });
-
-  // Guards the boundary between the two helpers: switching Hearth to fail-closed
-  // must not drag the pre-Gears rows along with it.
-  it('still shows a pre-Gears row whose gear key is absent', () => {
-    useFeatureEnabledMock.mockReturnValue(true);
-    useGearUnlocksMock.mockReturnValue({});
-    renderNav();
-    expect(screen.getByTestId('sidenav-nav-files')).toBeInTheDocument();
+    expect(hearthRow()).toBeInTheDocument();
   });
 });
