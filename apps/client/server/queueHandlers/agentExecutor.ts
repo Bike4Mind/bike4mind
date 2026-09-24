@@ -2572,6 +2572,7 @@ async function processExecution(
           lakeAccess: attachmentLakeAccess,
           availableToolNames: resolvedToolNames,
           inlinedFileIds: materialized?.inlinedFileIds ?? [],
+          fullyInlinedFileIds: materialized?.fullyInlinedFileIds ?? [],
         },
         logger,
         fabFileRepository
