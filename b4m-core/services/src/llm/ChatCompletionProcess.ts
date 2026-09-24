@@ -38,6 +38,7 @@ import {
   DEGENERATE_FINISH_REASON,
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
+  visibleReplyText,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -5859,7 +5860,32 @@ export class ChatCompletionProcess {
 
       quest.promptMeta!.performance!.totalResponseTime = totalResponseTime;
       quest.promptMeta!.generatedAt = new Date().toISOString();
-      quest.reply = (err as Error).message;
+      // extractReplies (client) prefers a non-empty replies[] over reply, so a stale partial
+      // replies array left behind by the failed run (e.g. an unclosed '<think>' block) would
+      // otherwise outrank this error message and the user sees a blank turn instead of the
+      // error (#3223). Every branch below that overrides quest.reply must go through this so
+      // the two never drift apart across the extra saveQuest calls those branches make.
+      //
+      // A slot that already has real visible text (an answer that streamed before the failure
+      // hit) is kept ahead of the error rather than discarded, joined with no separator to match
+      // extractReplies' own join rule. `quest.reply` mirrors the same joined text rather than
+      // just the error - search indexing, export/curation and the public /api/chat response all
+      // read `.reply` alone and expect the full answer, not a truncated error-only string.
+      //
+      // Snapshotted once, before any call: this catch block calls setErrorReply more than once
+      // on some paths (an unconditional raw-message call up front, then a friendlier message in
+      // the branch below) - reading quest.replies live would pick up the FIRST call's own error
+      // text as if it were streamed content and stack every subsequent message on top of it.
+      const streamedRepliesBeforeError = quest.replies;
+      const setErrorReply = (message: string) => {
+        const visiblePartial = (streamedRepliesBeforeError ?? [])
+          .map(r => visibleReplyText(r))
+          .filter(text => text.length > 0);
+        const combined = [...visiblePartial, message];
+        quest.replies = combined;
+        quest.reply = combined.join('');
+      };
+      setErrorReply((err as Error).message);
       quest.type = 'error';
       quest.status = 'done';
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -5883,7 +5909,7 @@ export class ChatCompletionProcess {
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
-        quest.reply = 'The request was interrupted. Please try sending your message again.';
+        setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5898,7 +5924,7 @@ export class ChatCompletionProcess {
         // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5906,14 +5932,14 @@ export class ChatCompletionProcess {
       } else if (err instanceof Error && isToolPairingError(err)) {
         // User-friendly error message instead of stuck spinner
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'I encountered an issue with the conversation history. Please try again or start a new session.';
+        setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
