@@ -461,7 +461,7 @@ describe('WebsocketProvider - connect URL carries a single-use ticket, never the
   it('mints a ticket and returns a URL carrying ?ticket= and no token=', async () => {
     const getUrl = mountAndGetUrlGetter() as () => Promise<string>;
     const resolved = await getUrl();
-    expect(h.apiPost).toHaveBeenCalledWith('/api/websocket/ticket');
+    expect(h.apiPost).toHaveBeenCalledWith('/api/websocket/ticket', undefined, { timeout: 10_000 });
     expect(resolved).toBe('wss://example/ws?ticket=ticket-abc');
     expect(resolved).not.toContain('token=');
   });

@@ -42,9 +42,8 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
 // SessionToolbar imports `api` at module load (used inside onOptimizePrompt).
 vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: vi.fn(), get: vi.fn() } }));
 
-// The global WebsocketContext mock in vitest.setup.ts does NOT export `ReadyState`,
-// but SessionToolbar imports it (and this test uses ReadyState.OPEN for baseProps).
-// Re-mock locally to provide the enum plus a benign useWebsocket.
+// Re-mocked locally so any transitive import gets the ReadyState enum plus a benign
+// useWebsocket (the global mock in vitest.setup.ts does not export ReadyState).
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
   ReadyState: { CONNECTING: 0, OPEN: 1, CLOSING: 2, CLOSED: 3 },
   useWebsocket: () => ({ subscribe: vi.fn(), unsubscribe: vi.fn(), send: vi.fn(), isConnected: true }),
@@ -75,7 +74,6 @@ vi.mock('@client/app/components/Session/ConversationalVoice/ConversationalVoiceB
 }));
 
 import { SessionToolbar } from './SessionToolbar';
-import { ReadyState } from '@client/app/contexts/WebsocketContext';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -117,9 +115,7 @@ const baseProps = {
   handleSendClick: vi.fn(),
   handleStopMessage: vi.fn(),
   pendingAutoSubmitGoal: null,
-  readyState: ReadyState.OPEN,
-  hasActiveUploads: false,
-  accessibleModels: [],
+  sendBlockedReason: null,
   isModelsLoading: false,
   isVoiceSessionEnabled: false,
   voiceEngine: null,
@@ -142,5 +138,21 @@ describe('SessionToolbar - Agent Mode admin kill switch', () => {
     mocks.agentModeFlag.value = false; // admin kill switch OFF
     render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
     expect(screen.queryByTestId('agent-mode-toggle-btn')).toBeNull();
+  });
+});
+
+describe('SessionToolbar - Send button blocked reason', () => {
+  it('disables Send and exposes why when the socket is reconnecting', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" sendBlockedReason="reconnecting" />, {
+      wrapper: Wrapper,
+    });
+    expect(screen.getByTestId('send-message-btn')).toBeDisabled();
+    expect(screen.getByTestId('send-message-btn-wrapper')).toHaveAttribute('data-blocked-reason', 'reconnecting');
+  });
+
+  it('enables Send with no blocked reason when nothing blocks it', () => {
+    render(<SessionToolbar {...baseProps} chatInputValue="hello" />, { wrapper: Wrapper });
+    expect(screen.getByTestId('send-message-btn')).not.toBeDisabled();
+    expect(screen.getByTestId('send-message-btn-wrapper')).not.toHaveAttribute('data-blocked-reason');
   });
 });

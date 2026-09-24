@@ -383,6 +383,17 @@ export const patchPendingMessageFileModerationStatus = (
 };
 
 /**
+ * Gives up on images whose moderation scan never reported back: `'scanning'` -> `'error'`,
+ * so the composer is released and the user can remove the file. Never `'complete'` - an
+ * image only becomes sendable on a server-confirmed clean scan, and `'error'` is excluded
+ * by `getSendableMessageFileIds`. A clean result that lands later still applies.
+ */
+export const markModerationScanTimedOut = (files: PendingMessageFile[], fabFileIds: string[]): PendingMessageFile[] =>
+  files.map(item =>
+    item.status === 'scanning' && fabFileIds.includes(item.fabFile.id) ? { ...item, status: 'error' } : item
+  );
+
+/**
  * True when the composer must hold the Send button disabled because a pending message file
  * is still uploading or being content-moderation-scanned. `'blocked'` is
  * intentionally excluded - a blocked file is terminal (it will never become sendable) and
@@ -416,7 +427,8 @@ export const getSendableMessageFileIds = (
       hadBlocked = true;
       continue;
     }
-    if (item.status === 'scanning') continue;
+    // 'error' covers a failed upload and a moderation scan that timed out unconfirmed.
+    if (item.status === 'scanning' || item.status === 'error') continue;
     ids.push(item.fabFile.id);
   }
 

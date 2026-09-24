@@ -10,9 +10,9 @@ import SendIcon from '@mui/icons-material/Send';
 import { useTranslation } from 'react-i18next';
 
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
-import { ReadyState } from '@client/app/contexts/WebsocketContext';
 import { api } from '@client/app/contexts/ApiContext';
 import { fixedIconSize } from './sessionBottomConstants';
+import type { SendBlockedReason } from './sendBlockedReason';
 import { sessionTheme } from '@client/app/utils/themes/components/session';
 import { brand, red } from '@client/app/utils/themes/colors';
 
@@ -76,9 +76,8 @@ interface SessionToolbarProps {
   handleSendClick: (prompt?: string) => Promise<unknown>;
   handleStopMessage: () => Promise<void>;
   pendingAutoSubmitGoal: string | null;
-  readyState: ReadyState;
-  hasActiveUploads: boolean;
-  accessibleModels: { id: string }[] | undefined;
+  // Computed once in SessionBottom so the button, Enter and voice share one gate.
+  sendBlockedReason: SendBlockedReason | null;
 
   // Models loading
   isModelsLoading: boolean;
@@ -124,9 +123,7 @@ export function SessionToolbar(props: SessionToolbarProps) {
     handleSendClick,
     handleStopMessage,
     pendingAutoSubmitGoal,
-    readyState,
-    hasActiveUploads,
-    accessibleModels,
+    sendBlockedReason,
     isModelsLoading,
     isVoiceSessionEnabled,
     voiceEngine,
@@ -147,6 +144,16 @@ export function SessionToolbar(props: SessionToolbarProps) {
   // see zero change to the composer surface.
   const { isFeatureEnabled } = useFeatureEnabled();
   const agentModeFeatureEnabled = isFeatureEnabled('agentMode');
+
+  const sendBlockedLabels: Record<SendBlockedReason, string> = {
+    generating: t('session.sendBlocked.generating', 'A response is still generating'),
+    sending: t('session.sendBlocked.sending', 'Sending...'),
+    loadingModels: t('session.loadingModels', 'Loading AI models\u2026'),
+    noModels: t('session.sendBlocked.noModels', 'No models available'),
+    reconnecting: t('session.sendBlocked.reconnecting', 'Reconnecting...'),
+    uploading: t('session.sendBlocked.uploading', 'Uploading files...'),
+  };
+  const sendBlockedLabel = sendBlockedReason ? sendBlockedLabels[sendBlockedReason] : null;
 
   return (
     <Stack className="session-bottom-toolbar" direction="column" spacing={0} alignItems="center" sx={{ width: '100%' }}>
@@ -370,6 +377,12 @@ export function SessionToolbar(props: SessionToolbarProps) {
                     onRecordingError={() => setRecording(false)}
                     onRecordingEnd={async (prompt: string) => {
                       setRecording(false);
+                      // Keep the transcript rather than drop it when a send isn't allowed yet.
+                      if (sendBlockedLabel) {
+                        setChatInputValue(prompt);
+                        toast.info(sendBlockedLabel);
+                        return;
+                      }
                       await handleSendClick(prompt);
                     }}
                     disabled={creditsBlocked}
@@ -443,47 +456,42 @@ export function SessionToolbar(props: SessionToolbarProps) {
                        above serves as the default action. */ ? null : (
                     <Tooltip
                       title={
-                        isModelsLoading
-                          ? t('session.loadingModels', 'Loading AI models…')
-                          : pendingAutoSubmitGoal
-                            ? t('session.preparingQuest')
-                            : t('session.sendMessage')
+                        sendBlockedLabel ??
+                        (pendingAutoSubmitGoal ? t('session.preparingQuest') : t('session.sendMessage'))
                       }
                       placement="top"
                     >
-                      <Button
-                        sx={{
-                          borderRadius: '6px',
-                          paddingBlock: '0px',
-                          ...fixedIconSize,
-                        }}
-                        variant="solid"
-                        color="primary"
-                        disabled={
-                          isModelsLoading ||
-                          !chatInputValue ||
-                          readyState !== ReadyState.OPEN ||
-                          submitting ||
-                          hasActiveUploads ||
-                          chatInputValue.trim() === '' ||
-                          !accessibleModels ||
-                          accessibleModels.length === 0
-                        }
-                        size="md"
-                        onClick={async () => await handleSendClick()}
-                        data-testid="send-message-btn"
+                      {/* A disabled button fires no pointer events, so the tooltip hangs off this wrapper. */}
+                      <span
+                        data-testid="send-message-btn-wrapper"
+                        data-blocked-reason={sendBlockedReason ?? undefined}
+                        style={{ display: 'inline-flex' }}
                       >
-                        {submitting || pendingAutoSubmitGoal || isModelsLoading ? (
-                          <CircularProgress data-testid="session-send-progress" />
-                        ) : (
-                          <Box
-                            sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-                            data-testid="session-send-icon-wrapper"
-                          >
-                            <SendIcon sx={{ width: '13px', height: '13px' }} />
-                          </Box>
-                        )}
-                      </Button>
+                        <Button
+                          sx={{
+                            borderRadius: '6px',
+                            paddingBlock: '0px',
+                            ...fixedIconSize,
+                          }}
+                          variant="solid"
+                          color="primary"
+                          disabled={!!sendBlockedReason || !chatInputValue || chatInputValue.trim() === ''}
+                          size="md"
+                          onClick={async () => await handleSendClick()}
+                          data-testid="send-message-btn"
+                        >
+                          {submitting || pendingAutoSubmitGoal || isModelsLoading ? (
+                            <CircularProgress data-testid="session-send-progress" />
+                          ) : (
+                            <Box
+                              sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+                              data-testid="session-send-icon-wrapper"
+                            >
+                              <SendIcon sx={{ width: '13px', height: '13px' }} />
+                            </Box>
+                          )}
+                        </Button>
+                      </span>
                     </Tooltip>
                   )}
                 </>

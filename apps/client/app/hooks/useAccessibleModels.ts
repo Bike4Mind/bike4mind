@@ -15,8 +15,11 @@ import { isModelAccessible, isModelDeprecated } from '@bike4mind/common';
  */
 export function useAccessibleModels() {
   const currentUser = useUser(s => s.currentUser);
-  const { data: modelInfos } = useModelInfo();
-  const { data: modelConfigs, isLoading: isConfigsLoading } = useLLMModelConfigurationsWithDefaults(modelInfos);
+  const { data: modelInfos, isPending: isModelInfosPending } = useModelInfo();
+  const { data: modelConfigs, isLoading: isConfigsLoading } = useLLMModelConfigurationsWithDefaults(
+    modelInfos,
+    isModelInfosPending
+  );
   // Resolved entitlement keys (subscription- + tag-derived). Gates
   // entitlement-scoped models so a tag-less subscriber still gets accessible
   // models (and an enabled send button). A failed/empty fetch yields [] and

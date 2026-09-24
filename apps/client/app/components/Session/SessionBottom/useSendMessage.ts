@@ -43,7 +43,8 @@ import useSessionLayout, {
   setPendingMessageFiles,
   getSendableMessageFileIds,
 } from '@client/app/hooks/useSessionLayout';
-import type { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import type { IChatCompletion, useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import { adoptSentQuest, resolveStopFailure } from '@client/app/hooks/chatCompletionState';
 import {
   detectAgentMentions,
   findAgentsByMentions,
@@ -82,6 +83,7 @@ import { LexicalChatInputRef } from '../LexicalChatInput';
 // `'Running...'`, etc.) use ASCII `...`, so the strict-equality rollback below
 // can't accidentally clobber a real WS event.
 const OPTIMISTIC_GENERATING_STATUS = 'Generating…';
+const CANCELLING_STATUS = 'Cancelling generation...';
 
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
@@ -305,12 +307,16 @@ export function useSendMessage({
     if (!currentSessionId) return;
 
     setStoppingMessage(true);
-    setChatCompletion(prev => ({
-      ...prev,
-      quest: { ...prev.quest, sessionId: currentSessionId },
-      stopped: true,
-      statusMessage: 'Cancelling generation...',
-    }));
+    let beforeStop: IChatCompletion | undefined;
+    setChatCompletion(prev => {
+      beforeStop = prev;
+      return {
+        ...prev,
+        quest: { ...prev.quest, sessionId: currentSessionId },
+        stopped: true,
+        statusMessage: CANCELLING_STATUS,
+      };
+    });
 
     try {
       await stopChatMessage(currentSessionId);
@@ -328,10 +334,17 @@ export function useSendMessage({
     } catch (error) {
       console.error('Error stopping chat message:', error);
       toast.error('Error cancelling generation');
-      setChatCompletion(prev => ({
-        ...prev,
-        stopped: false,
-      }));
+      // Leaving "Cancelling..." with completed: false would pin Stop on screen for good.
+      setChatCompletion(prev => {
+        const questId = prev.quest?.id;
+        const cachedStatus = questId
+          ? queryClient
+              .getQueryData<{ pages?: { data: IChatHistoryItemDocument[] }[] }>(['quests', 'session', currentSessionId])
+              ?.pages?.flatMap(page => page.data)
+              .find(quest => quest?.id === questId)?.status
+          : undefined;
+        return resolveStopFailure(prev, beforeStop ?? prev, cachedStatus, CANCELLING_STATUS);
+      });
     } finally {
       setStoppingMessage(false);
     }
@@ -1136,6 +1149,13 @@ export function useSendMessage({
 
     setWorkBenchAgents([]);
     setSubmitting(false);
+
+    // If the websocket never delivers this quest's stream, the placeholder would have no
+    // quest id for the recovery poll (useStreamingMessageMerge) to reconcile against.
+    if (!isRealSlashCommand && data?.quest?.id) {
+      const sentQuest = data.quest;
+      setChatCompletion(prev => adoptSentQuest(prev, sentQuest));
+    }
 
     // Fallback migration: if session.created websocket was missed (e.g. WS not yet
     // connected in a fresh session), the optimistic ID is still set. Use the API

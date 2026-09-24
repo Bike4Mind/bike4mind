@@ -7,6 +7,7 @@ import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
 import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 import { probeIdentity } from '@client/app/utils/sessionBootstrap';
+import { WEBSOCKET_TICKET_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 
 export { ReadyState };
 
@@ -126,9 +127,12 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   // Mint a fresh single-use connect ticket per (re)connect and carry it in the
   // URL instead of the session JWT, so the long-lived credential never lands in
   // proxy/CDN/access logs. `getUrl` re-invokes this on every reconnect and
-  // retries on its own backoff if the mint throws.
+  // retries on its own backoff if the mint throws - which is why it needs a timeout: a
+  // mint that never settles holds readyState at CONNECTING with no retry ever scheduled.
   const getWebsocketUrl = useCallback(async () => {
-    const { data } = await api.post<{ ticket: string }>('/api/websocket/ticket');
+    const { data } = await api.post<{ ticket: string }>('/api/websocket/ticket', undefined, {
+      timeout: WEBSOCKET_TICKET_TIMEOUT_MS,
+    });
     return `${url}?ticket=${encodeURIComponent(data.ticket)}`;
   }, [url]);
 

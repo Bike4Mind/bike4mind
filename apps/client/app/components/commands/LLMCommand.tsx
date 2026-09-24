@@ -21,6 +21,8 @@ import perfLogger from '../../utils/performanceLogger';
 import { CommandArgExtra } from '@client/app/utils/commands';
 import { classifyQueryComplexity } from '@bike4mind/common';
 import { createOptimisticSessionId } from '@client/app/utils/llm';
+import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
+import { terminalQuests } from '@client/app/hooks/chatCompletionState';
 import { getSurfaceChatContext } from '@client/app/utils/surfaceChatContext';
 
 export type LLMCommandArgs = {
@@ -145,6 +147,9 @@ export async function handleLLMCommand(
     const fabFileIds = workBenchFiles.map(file => file.id);
 
     const tmpSessionId = optimisticSessionId || createOptimisticSessionId();
+    // Re-running an existing quest restarts it: its earlier terminal frame must not
+    // mark the new run's chunks stale.
+    if (questId) terminalQuests.forget(questId);
 
     const optimisticOperation = questId
       ? (cb: () => Promise<{ quest: IChatHistoryItemDocument; session: ISessionDocument }>) =>
@@ -312,7 +317,11 @@ export async function handleLLMCommand(
           quest: IChatHistoryItemDocument;
         }>,
         LLMApiRequestBody
-      >('/api/ai/llm', requestPayload);
+      >('/api/ai/llm', requestPayload, {
+        // The route only creates the quest and enqueues it (the answer streams over the
+        // websocket), so a request this slow has stalled and must release the composer.
+        timeout: SEND_REQUEST_TIMEOUT_MS,
+      });
 
       // Store the sent time in the quest data for later calculation
       if (data && data.quest.id) {
