@@ -775,6 +775,26 @@ Whichever path you choose, do the checklist first.
 - [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
 - [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
 
+### Read-only production configuration preflight
+
+Run the preflight with the same Compose files, merge order, interpolation env file, and profiles you plan to deploy. Python 3 and Docker Compose are required; the script only runs `docker compose config --format json`. It does not start containers, contact services, modify state, or print the resolved configuration or secrets.
+
+```bash
+python3 scripts/selfhost_production_preflight.py \
+  -f compose.selfhost.yaml -f compose.caddy.yaml \
+  --env-file .env.selfhost --profile proxy
+```
+
+The checks cover selected services: browser HTTPS/WSS URLs, missing/template secrets, encryption-key format, internal shared secrets, development mail catchers and SMTP settings, local Mongo auth flags and client credentials, local MinIO defaults, and non-loopback internal port publishes. External databases do not require a local Mongo service, but an active local Mongo is still checked. Non-root MinIO client accounts and SMTP relays without authentication are supported; their permissions and delivery are not tested. Custom Mongo entrypoints/config files and non-password local authentication require separate verification and fail this bounded check.
+
+The base stack and the Caddy override still fail these checks until their development settings are replaced. Caddy alone does not configure database authentication or mail. Exit codes are `0` for passed checks, `1` for configuration findings, and `2` when Compose configuration cannot be inspected. Success prints `preflight checks passed; live TLS/mail/auth/restore not proven`. This is not a production-readiness certification: independently test DNS/TLS, browser login and mail delivery, database/storage permissions, registration policy, backups and a restore, resource limits, and reachability from another machine. The script does not inspect proxy routing, mounted configuration contents, firewall rules, or live application settings.
+
+Run the checks' tests, including real Compose config/profile resolution against disposable example configuration, with:
+
+```bash
+B4M_PREFLIGHT_COMPOSE_TESTS=1 python3 -m unittest discover -s scripts -p test_selfhost_production_preflight.py
+```
+
 ### Path A: Tailscale tailnet (recommended for friends)
 
 Tailscale puts your host and your friends' devices on one private encrypted network. You expose **nothing** to the public internet; only tailnet members can reach the app. This is the best fit when the host is a home server, a laptop, or any box that should not have a public presence. The stack bundles an opt-in `tailscale` sidecar (under the `tailnet` profile) that joins the tailnet and serves the app over tailnet HTTPS for you.
