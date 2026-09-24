@@ -15,7 +15,7 @@ import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls
 import { toast } from 'sonner';
 import { brand } from '@client/app/utils/themes/colors';
 import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
-import { actionButtonSx } from './ArtifactPreviewCard';
+import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
 
 interface CodeArtifactData {
   title: string;

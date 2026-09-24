@@ -131,13 +131,17 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       } catch (err) {
         console.error('Mermaid chart rendering error:', err);
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to render chart');
-      } finally {
-        rendering = false;
         // mermaid removes its temp container itself on success, but throws before doing so
         // on a parse error. A fixed id used to mean the next render swept the orphan; with
         // a unique id per render nothing would, and invalid model-written mermaid is common.
+        //
+        // Error path only, and never by renderId alone: the svg mermaid RETURNS also carries
+        // that id, so once it is in the container, removing by id deletes the chart itself.
         document.getElementById('d' + renderId)?.remove();
-        document.getElementById(renderId)?.remove();
+        const stray = document.getElementById(renderId);
+        if (stray?.parentElement === document.body) stray.remove();
+      } finally {
+        rendering = false;
       }
     };
 

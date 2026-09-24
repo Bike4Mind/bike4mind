@@ -27,10 +27,6 @@ import type { ArtifactType } from '@bike4mind/common';
 import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
 import HighlightedCode from '@client/app/components/common/HighlightedCode';
 
-// Re-exported so existing importers keep working; it lives in common/ to keep this module
-// out of the markdown renderer's import graph (see the note on the recipe itself).
-export { actionButtonSx };
-
 /** How much of a non-rendering artifact's source a card shows before offering the rest. */
 const SOURCE_COLLAPSED_MAX_HEIGHT = 360;
 
