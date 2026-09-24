@@ -712,7 +712,7 @@ ${codeContent.trim()}
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
     if (!hasFullHtmlDocument(codeContent)) return match;
-    const title = extractHTMLTitle(codeContent) || 'HTML Page';
+    const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
     return `<artifact identifier="${identifier}" type="text/html" title="${title}">
@@ -728,7 +728,7 @@ ${codeContent.trim()}
   content = content.replace(htmlFragmentFenceRegex, (match, codeContent) => {
     // Require at least one HTML tag so a mislabeled fence of plain text is left alone.
     if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent)) return match;
-    const title = extractHTMLTitle(codeContent) || 'HTML Snippet';
+    const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Snippet');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
     return `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${codeContent.trim()}
@@ -870,7 +870,7 @@ function toolCallJsonToArtifact(candidate: string): string | null {
   );
   if (!html) return null;
 
-  const title = extractHTMLTitle(html) || 'HTML Page';
+  const title = sanitizeHTMLTitle(extractHTMLTitle(html), 'HTML Page');
   const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
   return `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${html.trim()}
@@ -925,7 +925,7 @@ function promoteBareHtmlDocument(content: string): string {
     if (fences % 2 === 1 || artifactOpens > artifactCloses) continue;
 
     const doc = content.slice(start, end);
-    const title = extractHTMLTitle(doc) || 'HTML Page';
+    const title = sanitizeHTMLTitle(extractHTMLTitle(doc), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
     out += content.slice(copiedTo, start);
     out += `<artifact identifier="${identifier}" type="text/html" title="${title}">
@@ -967,6 +967,15 @@ function extractHTMLTitle(code: string): string | null {
   const titleMatch = code.match(/<title>(.*?)<\/title>/i);
   if (!titleMatch) return null;
   return titleMatch[1].replace(/[<>"]/g, '') || null;
+}
+
+// Strip <, >, and " before interpolating a document-controlled title into title="...".
+// Some artifact attribute parsers are not quote-aware, so any of these characters would
+// corrupt or prematurely close the tag. Falls back to `fallback` when stripping empties
+// the string (e.g. a title that was only quotes).
+function sanitizeHTMLTitle(raw: string | null, fallback: string): string {
+  const sanitized = (raw ?? '').replace(/[<>"]/g, '').trim();
+  return sanitized || fallback;
 }
 
 /**
