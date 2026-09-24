@@ -2,10 +2,8 @@
  * @vitest-environment node
  *
  * Guard for the session.* EventBridge subscriptions in infra/eventBus.ts: each must dead-letter
- * into sessionEnrichmentDLQ on BOTH sides of the async invoke. The rule-target DLQ only sees
- * events EventBridge could not hand to Lambda; a handler that throws, times out or crashes at
- * init is Lambda's async retry, and without a function-level dead-letter target it is dropped
- * with no trace. A new session.* subscription that copies an older block would silently miss both.
+ * into sessionEnrichmentDLQ on both sides of the async invoke (why: see the "Session events"
+ * comment there). A new session.* subscription that copies an older block would miss both.
  *
  * Text-matched, not executed: infra/ is an SST program and does not load outside `sst`.
  */
@@ -18,11 +16,11 @@ const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const EVENT_BUS_SOURCE = readFileSync(path.join(REPO_ROOT, 'infra/eventBus.ts'), 'utf8');
 const DLQ_ALARMS_SOURCE = readFileSync(path.join(REPO_ROOT, 'infra/dlqAlarms.ts'), 'utf8');
 
-// Each chunk runs from one `eventBus.subscribe(` to the next, so it holds that subscription's
-// function args and rule options (and possibly trailing code, which is harmless here).
-const sessionSubscriptions = EVENT_BUS_SOURCE.split(/eventBus\.subscribe\(/)
-  .slice(1)
-  .map(chunk => ({
+// One match per `eventBus.subscribe(` call, cut at its column-0 `);` so a subscription cannot
+// pass on text that belongs to the code after it. `variable` is the const it is assigned to.
+const sessionSubscriptions = [...EVENT_BUS_SOURCE.matchAll(/(?:const (\w+) = )?eventBus\.subscribe\(([\s\S]*?)\n\);/g)]
+  .map(([, variable, chunk]) => ({
+    variable,
     name: chunk.match(/^\s*'([^']+)'/)?.[1] ?? '<unnamed>',
     detailTypes: [...chunk.matchAll(/detailType:\s*\[([^\]]*)\]/g)].map(m => m[1]),
     chunk,
@@ -67,18 +65,16 @@ describe('session.* EventBridge subscriptions dead-letter their failures', () =>
     const policy = EVENT_BUS_SOURCE.match(/new aws\.sqs\.QueuePolicy\('sessionEnrichmentDLQPolicy'[\s\S]*?\n\}\);/);
     expect(policy).not.toBeNull();
     expect(policy?.[0]).toMatch(/events\.amazonaws\.com/);
-    const listed = EVENT_BUS_SOURCE.match(/const sessionEnrichmentSubscriptions\s*=\s*\[([^\]]*)\]/)?.[1] ?? '';
-    for (const variable of [
-      'sessionAutoNamingSubscription',
-      'sessionSummarizationSubscription',
-      'sessionContextSummarizationSubscription',
-      'sessionTaggingSubscription',
-    ]) {
-      expect(listed).toContain(variable);
-    }
+    const listed = (EVENT_BUS_SOURCE.match(/const sessionEnrichmentSubscriptions\s*=\s*\[([^\]]*)\]/)?.[1] ?? '')
+      .split(',')
+      .map(v => v.trim())
+      .filter(Boolean);
+    expect(listed.sort()).toEqual(sessionSubscriptions.map(s => s.variable).sort());
   });
 
   it('alarms the DLQ', () => {
-    expect(DLQ_ALARMS_SOURCE).toMatch(/createDlqAlarms\(\{[\s\S]*?queue:\s*sessionEnrichmentDLQ,/);
+    expect(DLQ_ALARMS_SOURCE).toMatch(
+      /createDlqAlarms\(\{\s*label:\s*'session-enrichment',[^}]*queue:\s*sessionEnrichmentDLQ,/
+    );
   });
 });
