@@ -81,8 +81,8 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
       sessionId,
       pendingSessionId: pendingSessionRef.current,
       current: chatCompletionRef.current,
-      // Both are written by this tab's own send and outlive the remount. A null view counts
-      // too: the /new provider is still mounted for a moment after the send navigates.
+      // Both are written by this tab's own send. A null view counts too: the send sets
+      // pendingOptimisticId before its navigation to the tmpId has committed.
       mintingOwnSession: !!pendingOptimisticId && (!sessionId || sessionId === pendingOptimisticId),
       mintedSessionId: pendingRealSessionId,
     };

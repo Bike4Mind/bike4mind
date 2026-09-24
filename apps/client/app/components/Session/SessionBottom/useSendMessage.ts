@@ -44,7 +44,11 @@ import useSessionLayout, {
   getSendableMessageFileIds,
 } from '@client/app/hooks/useSessionLayout';
 import type { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
-import { adoptSentQuest } from '@client/app/hooks/chatCompletionState';
+import {
+  OPTIMISTIC_GENERATING_STATUS,
+  adoptSentQuest,
+  rollbackOptimisticGenerating,
+} from '@client/app/hooks/chatCompletionState';
 import { stopChatCompletion } from './stopChatCompletion';
 import {
   detectAgentMentions,
@@ -72,18 +76,6 @@ import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import perfLogger from '../../../utils/performanceLogger';
 import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
-
-// Sentinel statusMessage written by the send path to render the Stop
-// affordance the instant the user clicks Send, masking backend cold-start
-// latency before the WS handler has emitted a real stream event. The real
-// stream overwrites this on first event; the error path detects it via strict
-// equality and clears so the Send button reappears.
-//
-// Load-bearing: the character is U+2026 (HORIZONTAL ELLIPSIS), not three ASCII
-// dots. Server-emitted status messages (`'Cancelling generation...'`,
-// `'Running...'`, etc.) use ASCII `...`, so the strict-equality rollback below
-// can't accidentally clobber a real WS event.
-const OPTIMISTIC_GENERATING_STATUS = 'Generating…';
 
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
@@ -287,8 +279,11 @@ export function useSendMessage({
 
   // Consume a quest launch intent from the /quests page (auto-submit).
   // The /new route records it in a useLayoutEffect, which runs before this
-  // effect; consume-once semantics prevent replay on refresh or remount.
+  // effect; consume-once semantics prevent replay on refresh or remount. Re-run on entering
+  // /new too: the notebook shell keeps this composer mounted when a notebook navigates there.
+  const isOnNewNotebookRoute = location.pathname === '/new';
   useEffect(() => {
+    if (!isOnNewNotebookRoute) return;
     const intent = consumeQuestLaunchIntent();
     if (intent) {
       setChatInputValue(intent.goal);
@@ -301,7 +296,7 @@ export function useSendMessage({
         }
       }
     }
-  }, [setChatInputValue]);
+  }, [setChatInputValue, isOnNewNotebookRoute]);
 
   const handleStopMessage = async (): Promise<void> => {
     if (!currentSessionId) return;
@@ -1123,11 +1118,7 @@ export function useSendMessage({
       // rollback leaves `completed: false` with the generating sentinel, so
       // `shouldShowStopButton` stays true and the composer renders Stop and
       // swallows Enter for good - dead in a way releasing the mutex cannot fix.
-      setChatCompletion(prev =>
-        prev.statusMessage === OPTIMISTIC_GENERATING_STATUS
-          ? { ...prev, completed: true, statusMessage: undefined }
-          : prev
-      );
+      setChatCompletion(rollbackOptimisticGenerating);
       setWorkBenchAgents([]);
       setSubmitting(false);
       return;

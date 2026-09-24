@@ -26,7 +26,13 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 
 import { useSubscribeChatCompletion } from './useSubscribeChatCompletion';
 import useSessionLayout from './useSessionLayout';
-import { blankRapidReplies } from './chatCompletionState';
+import {
+  OPTIMISTIC_GENERATING_STATUS,
+  adoptSentQuest,
+  blankRapidReplies,
+  isChatCompletionActiveFor,
+  rollbackOptimisticGenerating,
+} from './chatCompletionState';
 
 const mount = (sessionId: string | null) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -380,6 +386,66 @@ describe('useSubscribeChatCompletion - rapid-reply acks', () => {
 
     await stream(ack({ questId: 'own-q' }));
     expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
+  });
+});
+
+describe('useSubscribeChatCompletion - first turn in the notebook shell (one provider throughout)', () => {
+  const TMP_ID = 'optimistic-session-first-turn';
+
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    useSessionLayout.setState({ pendingOptimisticId: null, pendingRealSessionId: null });
+  });
+
+  // What useSendMessage writes at send time (the placeholder half of its reset).
+  const sendPlaceholder = (prev: Parameters<typeof rollbackOptimisticGenerating>[0]) => ({
+    ...prev,
+    quest: undefined,
+    completed: false,
+    stopped: false,
+    statusMessage: OPTIMISTIC_GENERATING_STATUS,
+    rapidReply: undefined,
+  });
+
+  // /new -> send: pendingOptimisticId and the navigation to the tmpId, then the placeholder.
+  const sendFromNew = () => {
+    const hook = mount(null);
+    useSessionLayout.setState({ pendingOptimisticId: TMP_ID });
+    hook.rerender({ sessionId: TMP_ID });
+    act(() => hook.result.current.setChatCompletion(sendPlaceholder));
+    return hook;
+  };
+
+  it('shows Stop from the send itself and keeps it through the move to the real id', async () => {
+    const { result, rerender } = sendFromNew();
+    expect(isChatCompletionActiveFor(result.current.chatCompletion, TMP_ID)).toBe(true);
+
+    useSessionLayout.setState({ pendingRealSessionId: 'real-ft' });
+    rerender({ sessionId: 'real-ft' });
+    expect(isChatCompletionActiveFor(result.current.chatCompletion, 'real-ft')).toBe(true);
+
+    // The send response adopts its quest id into the same placeholder (B5)...
+    act(() =>
+      result.current.setChatCompletion(prev =>
+        adoptSentQuest(prev, { id: 'q-ft', sessionId: 'real-ft', type: 'message', status: 'running' })
+      )
+    );
+    expect(result.current.chatCompletion.quest?.id).toBe('q-ft');
+
+    // ...so the turn's own terminal frame ends it.
+    await act(async () => {
+      await latestStreamHandler()(frame('q-ft', 'real-ft', 'done'));
+    });
+    expect(result.current.chatCompletion.completed).toBe(true);
+  });
+
+  it('clears the first-turn Stop when the send fails', () => {
+    const { result } = sendFromNew();
+
+    act(() => result.current.setChatCompletion(rollbackOptimisticGenerating));
+
+    expect(result.current.chatCompletion.completed).toBe(true);
+    expect(isChatCompletionActiveFor(result.current.chatCompletion, TMP_ID)).toBe(false);
   });
 });
 

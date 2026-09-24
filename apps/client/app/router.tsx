@@ -29,8 +29,8 @@ import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
 import { lazyWithPreload } from './utils/lazyWithPreload';
 
 // Lazy load all route components for code splitting
-const NewNotebookPage = lazy(() => import('./routes/notebooks/new'));
-const NotebookPage = lazyWithPreload(() => import('./routes/notebooks/$id'));
+// /new and /notebooks/$id render through one shell (see notebookShellRoute).
+const NotebookShell = lazyWithPreload(() => import('./routes/notebooks/shell'));
 const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
@@ -281,21 +281,27 @@ const indexRoute = createRoute({
   ),
 });
 
-// New notebook route (replaces /new.tsx)
-const newRoute = createRoute({
+// Pathless parent of /new and /notebooks/$id. Its component - one SessionContainer and chat
+// provider - stays mounted across /new -> /notebooks/<optimistic id> -> /notebooks/<real id>, so a
+// first send never remounts the chat it is streaming into. The children render no component of
+// their own: the shell renders each one's route effects itself (routes/notebooks/shell.tsx).
+const notebookShellRoute = createRoute({
   getParentRoute: () => layoutRoute,
-  path: '/new',
+  id: 'notebook-shell',
   loader: () => {
-    // Kick off the NotebookPage chunk download while the user is typing their first
-    // message. Once it has loaded, the optimistic navigation on send mounts NotebookPage
-    // synchronously instead of painting the Suspense fallback (see lazyWithPreload).
-    void NotebookPage.preload();
+    void NotebookShell.preload();
   },
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
-      <NewNotebookPage />
+      <NotebookShell />
     </Suspense>
   ),
+});
+
+// New notebook route (replaces /new.tsx)
+const newRoute = createRoute({
+  getParentRoute: () => notebookShellRoute,
+  path: '/new',
   validateSearch: (
     search: Record<string, unknown>
   ): { projectId?: string; questmaster?: string; goal?: string; article?: string } => {
@@ -311,15 +317,8 @@ const newRoute = createRoute({
 
 // Notebook route with dynamic ID (replaces /notebooks/[id].tsx)
 const notebookRoute = createRoute({
-  getParentRoute: () => layoutRoute,
+  getParentRoute: () => notebookShellRoute,
   path: '/notebooks/$id',
-  // fallback={null}: if the chunk isn't ready yet (e.g. user sent before preload
-  // finished), show nothing rather than the jarring full-screen loader.
-  component: () => (
-    <Suspense fallback={null}>
-      <NotebookPage />
-    </Suspense>
-  ),
   // `questId` is the turn anchor a feedback deep link carries (see common/utils/deepLinks) - the
   // session loads normally and ChatHistory scrolls to that turn once it has rendered.
   validateSearch: (search: Record<string, unknown>): { projectId?: string; questId?: string } => {
@@ -1086,8 +1085,7 @@ const routeTree = rootRoute.addChildren([
   // Layout-wrapped routes (main app)
   layoutRoute.addChildren([
     indexRoute,
-    newRoute,
-    notebookRoute,
+    notebookShellRoute.addChildren([newRoute, notebookRoute]),
     gearsRoute,
     projectsRoute,
     projectRoute,

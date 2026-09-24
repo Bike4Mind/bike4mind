@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import {
   IDLE_CHAT_COMPLETION,
+  OPTIMISTIC_GENERATING_STATUS,
   TerminalQuestTracker,
   BlankRapidReplyTracker,
   adoptSentQuest,
   isChatCompletionActiveFor,
   isTerminalQuestStatus,
   resolveStopFailure,
+  rollbackOptimisticGenerating,
   shouldAcceptRapidReply,
   shouldAcceptStreamFrame,
   shouldResetOnSessionChange,
@@ -186,6 +188,23 @@ describe('shouldAcceptRapidReply', () => {
       true
     );
     expect(claimed).toBe(1);
+  });
+});
+
+describe('rollbackOptimisticGenerating', () => {
+  it('clears the send-time placeholder', () => {
+    const placeholder = { ...IDLE_CHAT_COMPLETION, completed: false, statusMessage: OPTIMISTIC_GENERATING_STATUS };
+    expect(rollbackOptimisticGenerating(placeholder)).toMatchObject({ completed: true, statusMessage: undefined });
+  });
+
+  it('leaves a real in-flight stream alone', () => {
+    const streaming = { ...IDLE_CHAT_COMPLETION, completed: false, statusMessage: 'Running...' };
+    expect(rollbackOptimisticGenerating(streaming)).toBe(streaming);
+  });
+
+  it('uses a sentinel no ASCII server status can equal', () => {
+    expect(OPTIMISTIC_GENERATING_STATUS).toBe('Generating\u2026');
+    expect(OPTIMISTIC_GENERATING_STATUS).not.toBe('Generating...');
   });
 });
 

@@ -16,6 +16,21 @@ export const IDLE_CHAT_COMPLETION: IChatCompletion = {
   rapidReply: undefined,
 };
 
+/**
+ * statusMessage the send path writes so Stop shows the instant Send is clicked, before the
+ * backend's first frame; that frame overwrites it. Load-bearing: the character is U+2026, not
+ * three ASCII dots - server statuses ('Cancelling generation...', 'Running...') use ASCII, so
+ * the strict-equality rollback below can't clobber a real frame.
+ */
+export const OPTIMISTIC_GENERATING_STATUS = 'Generating\u2026';
+
+/** A failed send clears its optimistic Stop, unless a real frame has already replaced it. */
+export function rollbackOptimisticGenerating(prev: IChatCompletion): IChatCompletion {
+  return prev.statusMessage === OPTIMISTIC_GENERATING_STATUS
+    ? { ...prev, completed: true, statusMessage: undefined }
+    : prev;
+}
+
 /** True for any status that ends a quest (done, stopped, or any later addition). */
 export function isTerminalQuestStatus(status: string | null | undefined): boolean {
   return !!status && status !== 'running';
@@ -29,9 +44,8 @@ const isCreatingSession = (sessionId: string | null) => !sessionId || isOptimist
  * own send is accepted: the quest already held, or a frame from `mintedSessionId` - the real
  * session the send created. Session creation always precedes the quest (the server sends
  * session.created before dispatching it), so while `mintingOwnSession` and nothing is recorded
- * no frame can be ours yet and none is accepted. The /new -> /notebooks/<optimistic id>
- * navigation remounts the provider, which is why these come from the store, not held state.
- * A null view with neither signal (a server-minted session outside /new) keeps the old rule:
+ * no frame can be ours yet and none is accepted. These come from the store because held state
+ * (a bare "generating" placeholder) can't say which session a frame should come from. A null view with neither signal (a server-minted session outside /new) keeps the old rule:
  * the first frame while a send is awaiting.
  */
 export function shouldAcceptStreamFrame(params: {
