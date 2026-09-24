@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
-import { Edit } from '@mui/icons-material';
+import { Edit, OpenInFullOutlined as ExpandIcon } from '@mui/icons-material';
 import ContentPreviewModal from '../ProfileModal/ContentPreviewModal';
 import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
 import { brand } from '@client/app/utils/themes/themePrimitives';
@@ -53,9 +53,9 @@ const ContentTransformPreviewCard: React.FC<ContentTransformPreviewCardProps> = 
         data-testid="blog-draft-card"
         sx={theme => ({
           // The artifact-card recipe, shared so a blog draft reads as the same family as
-          // every other card a reply produces. surface2 rather than background.level1,
-          // which this theme never defines - it used to resolve to a Joy default that
-          // matched nothing else in the transcript.
+          // every other card a reply produces. reading.cardBase rather than
+          // background.level1, which this theme never defines - it used to resolve to a Joy
+          // default that matched nothing else in the transcript.
           backgroundColor: theme.palette.reading.cardBase,
           backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
           borderRadius: '8px',
@@ -147,6 +147,26 @@ const ContentTransformPreviewCard: React.FC<ContentTransformPreviewCardProps> = 
                   }}
                 >
                   <Edit />
+                </IconButton>
+              </Tooltip>
+
+              {/* The card's own onClick opens this too, but a click target is not a control:
+                  without a real button, preview (and publishing, which happens through it)
+                  is unreachable by keyboard and invisible to a screen reader. Every other
+                  artifact card pairs its whole-card click with this same button. */}
+              <Tooltip title="Preview draft" placement="top">
+                <IconButton
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  sx={actionButtonSx}
+                  data-testid="blog-draft-preview-btn"
+                  onClick={e => {
+                    e.stopPropagation();
+                    openPreview();
+                  }}
+                >
+                  <ExpandIcon />
                 </IconButton>
               </Tooltip>
             </Box>

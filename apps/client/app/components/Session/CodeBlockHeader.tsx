@@ -42,7 +42,7 @@ export const CodeBlockHeader: React.FC<{ code: string; language?: string; childr
         background:
           'linear-gradient(180deg, var(--joy-palette-reading-cardTintTop, rgba(59, 130, 246, 0.05)),' +
           ' var(--joy-palette-reading-cardTintBottom, rgba(59, 130, 246, 0.02))),' +
-          ' var(--joy-palette-background-surface2)',
+          ' var(--joy-palette-reading-cardBase)',
       }}
     >
       <Box
