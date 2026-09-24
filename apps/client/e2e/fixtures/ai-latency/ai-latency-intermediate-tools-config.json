@@ -33,7 +33,7 @@
         "camera",
         "battery"
       ],
-      "streamingBudgetSec": 300
+      "textStreamingBudgetSec": 300
     }
   ]
 }
