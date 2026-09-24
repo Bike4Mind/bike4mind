@@ -590,12 +590,6 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * so the caller must key by `datalakeTag` rather than assume a positional match.
    */
   findByDatalakeTags(datalakeTags: string[]): Promise<IDataLakeDocument[]>;
-  /**
-   * Batched lookup by `_id`, for a caller holding a foreign-key set it did not itself resolve (e.g.
-   * a grant's `dataLakeId`). Unusable ids are dropped rather than failing the whole `$in` - see
-   * `usableObjectIds`.
-   */
-  findByIds(ids: string[]): Promise<IDataLakeDocument[]>;
   findActiveByUserTags(userTags: string[]): Promise<IDataLakeDocument[]>;
   /**
    * Entitlement-aware variant of `findActiveByUserTags`: active lakes the user can reach by

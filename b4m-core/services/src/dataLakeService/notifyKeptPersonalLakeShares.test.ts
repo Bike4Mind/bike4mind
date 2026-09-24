@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { IDataLakeAccessGrantDocument, IDataLakeDocument } from '@bike4mind/common';
 import {
   notifyKeptPersonalLakeShares,
   renderKeptPersonalLakeSharesEmail,
   type KeptPersonalLakeSharesNotifyDeps,
 } from './notifyKeptPersonalLakeShares';
+import { reportKeptPersonalLakeShares } from './reportKeptPersonalLakeShares';
 
 describe('renderKeptPersonalLakeSharesEmail', () => {
   it('names the member, the org and every lake, and links to the app', () => {
@@ -17,8 +19,8 @@ describe('renderKeptPersonalLakeSharesEmail', () => {
       appUrl: 'https://app.example.test',
     });
 
-    expect(subject).toBe('Dana has left Acme and still has access to 2 of your data lakes');
-    expect(html).toContain('Dana has left Acme and still has access to');
+    expect(subject).toBe('Dana has left Acme and still has shares on 2 of your data lakes');
+    expect(html).toContain('Dana has left Acme and still has shares on');
     expect(html).toContain('<li>Research</li>');
     expect(html).toContain('<li>Notes</li>');
     expect(html).toContain('href="https://app.example.test"');
@@ -30,7 +32,7 @@ describe('renderKeptPersonalLakeSharesEmail', () => {
       organizationName: 'Acme',
       lakes: [{ id: 'l1', name: 'Research' }],
     });
-    expect(subject).toBe('Dana has left Acme and still has access to "Research"');
+    expect(subject).toBe('Dana has left Acme and still has a share on "Research"');
   });
 
   it('escapes user-supplied names in the body and strips newlines from the subject', () => {
@@ -43,6 +45,48 @@ describe('renderKeptPersonalLakeSharesEmail', () => {
     expect(html).toContain('&lt;script&gt;');
     expect(html).toContain('&lt;b&gt;Dana&lt;/b&gt;');
     expect(subject).not.toMatch(/[\r\n]/);
+  });
+});
+
+// EnforceLakeReadGrants (resolveLakeReadAccess.ts) can be OFF - at an unwired call site or on a
+// thrown settings read, not only when an operator flips it - and a reader-only grant then admits
+// nobody. The report and the email describe a retained GRANT rather than usable access, so neither
+// the count nor the wording may vary with the grant's role. Deliberately reads no flag: so does the
+// report.
+describe('a reader-only grant', () => {
+  it('is counted and worded as a retained share', async () => {
+    const lakeId = '0'.repeat(23) + '1';
+    const grant = {
+      dataLakeId: lakeId,
+      principalType: 'user',
+      principalId: 'dana',
+      role: 'reader',
+      grantedByUserId: 'owner-1',
+      expiresAt: null,
+    } as IDataLakeAccessGrantDocument;
+    const lake = { id: lakeId, name: 'Research', createdByUserId: 'alice' } as IDataLakeDocument;
+    const adapters = {
+      db: {
+        dataLakes: { findByIds: vi.fn().mockResolvedValue([lake]) },
+        dataLakeAccessGrants: {
+          listByPrincipal: vi.fn().mockResolvedValue([grant]),
+          listActiveByLakes: vi.fn().mockResolvedValue([]),
+        },
+      },
+    };
+
+    const shares = await reportKeptPersonalLakeShares('dana', adapters);
+    expect(shares).toEqual({
+      lakeCount: 1,
+      byOwner: [{ ownerUserId: 'alice', lakes: [{ id: lakeId, name: 'Research' }] }],
+    });
+
+    const { subject } = renderKeptPersonalLakeSharesEmail({
+      memberName: 'Dana',
+      organizationName: 'Acme',
+      lakes: shares.byOwner[0].lakes,
+    });
+    expect(subject).toBe('Dana has left Acme and still has a share on "Research"');
   });
 });
 

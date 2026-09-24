@@ -2,7 +2,7 @@ import type {
   DataLakeStatus,
   IDataLakeAccessGrantDocument,
   IDataLakeAccessGrantRepository,
-  IDataLakeRepository,
+  IDataLakeDocument,
 } from '@bike4mind/common';
 import { resolveEffectiveOwnerIds } from './manageRule';
 import type { LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
@@ -24,9 +24,19 @@ const NO_KEPT_SHARES: KeptPersonalLakeShares = { lakeCount: 0, byOwner: [] };
 // A lake on its way out reaches nobody, so a share on it is not worth an owner's attention.
 const GOING_AWAY_STATUSES: readonly DataLakeStatus[] = ['deleting', 'deleted', 'purging'];
 
+/**
+ * Deliberately not `Pick<IDataLakeRepository, 'findByIds'>`: `IDataLakeRepository` is exported from
+ * the published `@bike4mind/common` package, so a required member added there breaks every external
+ * implementor. This report only ever needs one method, so it declares its own narrow port instead.
+ */
+export interface KeptPersonalLakeSharesDataLakes {
+  /** Unusable ids are dropped rather than failing the whole `$in` - see `usableObjectIds`. */
+  findByIds(ids: string[]): Promise<IDataLakeDocument[]>;
+}
+
 export interface ReportKeptPersonalLakeSharesAdapters {
   db: {
-    dataLakes: Pick<IDataLakeRepository, 'findByIds'>;
+    dataLakes: KeptPersonalLakeSharesDataLakes;
     dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByPrincipal' | 'listActiveByLakes'>;
   };
   logger?: LakeConfigAuditLogger;

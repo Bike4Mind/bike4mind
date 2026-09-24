@@ -17,18 +17,20 @@ export function renderKeptPersonalLakeSharesEmail(input: KeptPersonalLakeSharesE
   html: string;
 } {
   const oneLine = (value: string) => value.replace(/[\r\n]+/g, ' ');
-  const what = input.lakes.length === 1 ? `"${input.lakes[0].name}"` : `${input.lakes.length} of your data lakes`;
+  const isSingle = input.lakes.length === 1;
+  const what = isSingle ? `"${input.lakes[0].name}"` : `${input.lakes.length} of your data lakes`;
+  const shareWord = isSingle ? 'a share' : 'shares';
   const member = escapeHtml(input.memberName);
   const org = escapeHtml(input.organizationName);
   const items = input.lakes.map(lake => `<li>${escapeHtml(lake.name)}</li>`).join('');
   // There is no per-lake URL for the access view (it is a modal in the Data Lakes manager).
   const link = input.appUrl ? ` <a href="${escapeHtml(input.appUrl)}">Open the app</a>` : '';
   return {
-    subject: oneLine(`${input.memberName} has left ${input.organizationName} and still has access to ${what}`),
+    subject: oneLine(`${input.memberName} has left ${input.organizationName} and still has ${shareWord} on ${what}`),
     html: wrapLakeEmail(
-      `<p>${member} has left ${org} and still has access to:</p><ul>${items}</ul>` +
-        `<p>Leaving an organization does not remove access you shared on your own data lakes. To review or ` +
-        `remove it, open Data Lakes, select the lake and choose Access.${link}</p>`,
+      `<p>${member} has left ${org} and still has ${shareWord} on:</p><ul>${items}</ul>` +
+        `<p>Leaving an organization does not remove shares you granted on your own data lakes. To review or ` +
+        `remove them, open Data Lakes, select the lake and choose Access.${link}</p>`,
       'You are receiving this because you own these data lakes.'
     ),
   };
@@ -42,9 +44,9 @@ export interface KeptPersonalLakeSharesNotifyDeps {
 }
 
 /**
- * Email each owner of a personal lake the departing member can still reach, one message per owner.
- * Best-effort and never throws: call it after the departure commits, and a mail failure must not
- * fail the departure.
+ * Email each owner of a personal lake on which the departing member retains a grant, one message
+ * per owner. Best-effort and never throws: call it after the departure commits, and a mail failure
+ * must not fail the departure.
  */
 export async function notifyKeptPersonalLakeShares(
   shares: KeptPersonalLakeShares,
