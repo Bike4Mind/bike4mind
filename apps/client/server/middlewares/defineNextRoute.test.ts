@@ -414,9 +414,10 @@ describe('nextRouteForContract', () => {
     });
 
     it('does not 422 a `.strict()` queryParams schema on account of a sibling pathParams key in the same req.query', async () => {
-      // Regression: only the sibling schema's OWN declared keys are excluded before
-      // parsing (see the omit() doc comment), so a strict queryParams schema never
-      // sees the pathParams key and can't reject it as unrecognized.
+      // Regression: only the sibling pathParams's OWN declared keys are excluded
+      // before parsing (see the asymmetric-scoping comment on nextRouteForContract),
+      // so a strict queryParams schema never sees the pathParams key and can't
+      // reject it as unrecognized.
       validKey([ApiKeyScope.AI_CHAT]);
       let seenQuery: unknown;
       const route = nextRouteForContract(
@@ -440,9 +441,10 @@ describe('nextRouteForContract', () => {
     });
 
     it('still 422s a `.strict()` queryParams schema on a genuinely unexpected query key, even alongside a path sibling', async () => {
-      // Regression: excluding only the pathParams key (not every undeclared key,
-      // as an earlier pick()-based fix did) must not also swallow a real unknown
-      // key - a strict schema's whole point is to reject exactly this.
+      // Regression: excluding only the sibling pathParams key from queryParams's
+      // input (queryParams is never picked down to its own keys) must not also
+      // swallow a real unknown key - a strict schema's whole point is to reject
+      // exactly this.
       validKey([ApiKeyScope.AI_CHAT]);
       const handlerFn = vi.fn();
       const route = nextRouteForContract(
@@ -509,6 +511,36 @@ describe('nextRouteForContract', () => {
       });
       await route(req, res);
       expect(res._getStatusCode()).toBe(200);
+      expect(seenQuery).toEqual({ limit: 5, extra: '1' });
+    });
+
+    it('does not 422 a `.strict()` pathParams schema on account of a genuinely unexpected query key alongside a `.passthrough()` queryParams schema', async () => {
+      // Regression: pathParams is picked down to its OWN declared keys, not
+      // scoped by omitting the sibling's keys - the opposite of queryParams. Doing
+      // it the queryParams way here would hand the path schema a real, unrelated
+      // query key it never declared and was never meant to see.
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenParams: unknown;
+      let seenQuery: unknown;
+      const route = nextRouteForContract(
+        makeContract({
+          pathParams: z.strictObject({ id: z.string() }),
+          queryParams: z.looseObject({ limit: z.coerce.number() }),
+          scopes: [],
+        })
+      ).post((req, res) => {
+        seenParams = req.validatedParams;
+        seenQuery = req.validatedQuery;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({
+        apiKey: 'b4m_live_key',
+        query: { id: 'sess-1', limit: '5', extra: '1' },
+        body: { message: 'hi' },
+      });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenParams).toEqual({ id: 'sess-1' });
       expect(seenQuery).toEqual({ limit: 5, extra: '1' });
     });
   });
