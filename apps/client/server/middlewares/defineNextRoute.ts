@@ -1,5 +1,5 @@
 import { baseApi } from './baseApi';
-import type { EndpointContract, PathParamsOf, RequestBodyOf } from '@bike4mind/common';
+import type { EndpointContract, PathParamsOf, QueryParamsOf, RequestBodyOf } from '@bike4mind/common';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
 /**
@@ -12,12 +12,23 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 const METHODS = ['all', 'get', 'head', 'post', 'put', 'patch', 'delete', 'options', 'trace'] as const;
 
 /**
+ * Picks only `keys` off `obj`. Used to scope `pathParams`/`queryParams` validation to
+ * each schema's own fields before parsing (see the call sites below) - relying on
+ * Zod's default key-stripping alone would break for a `.strict()` or `.passthrough()`
+ * schema, since both are parsed against the same merged `req.query`.
+ */
+function pick(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  return Object.fromEntries(keys.filter(k => k in obj).map(k => [k, obj[k]]));
+}
+
+/**
  * Next.js transport adapter for an {@link EndpointContract}.
  *
  * Derives the route's auth mode + required scopes from the contract and validates
- * the body against the contract schema, exposing it to the handler as the typed
- * `req.validated`. Returns the usual `baseApi` router, so callers chain
- * `.use(...)` / `.post(...)` exactly as before.
+ * path params, query params, and the body against the contract schema (in that
+ * order), exposing them to the handler as the typed `req.validatedParams` /
+ * `req.validatedQuery` / `req.validated`. Returns the usual `baseApi` router, so
+ * callers chain `.use(...)` / `.post(...)` exactly as before.
  *
  * Rate limiting is passed as `options.rateLimit` (rather than the caller chaining
  * its own `.use(...)`) so the adapter can order it correctly - auth -> rate limit
@@ -32,7 +43,11 @@ export function nextRouteForContract<C extends EndpointContract>(
   contract: C,
   options: { maxBodySize?: number; exemptReadsFromDailyRateLimit?: boolean; rateLimit?: RequestHandler } = {}
 ) {
-  type ValidatedReq = Request & { validated: RequestBodyOf<C>; validatedParams: PathParamsOf<C> };
+  type ValidatedReq = Request & {
+    validated: RequestBodyOf<C>;
+    validatedParams: PathParamsOf<C>;
+    validatedQuery: QueryParamsOf<C>;
+  };
   type Handler = (req: ValidatedReq, res: Response, next: NextFunction) => unknown;
 
   const { rateLimit, ...baseOptions } = options;
@@ -65,7 +80,24 @@ export function nextRouteForContract<C extends EndpointContract>(
   const pathParamsSchema = contract.pathParams;
   if (pathParamsSchema) {
     prelude.push((req, _res, next) => {
-      req.validatedParams = pathParamsSchema.parse(req.query) as PathParamsOf<C>;
+      req.validatedParams = pathParamsSchema.parse(
+        pick(req.query, Object.keys(pathParamsSchema.shape))
+      ) as PathParamsOf<C>;
+      next();
+    });
+  }
+
+  // Real query-string fields, validated after path params but before the body -
+  // same precedence reasoning: address/filter the resource before its payload.
+  // Each schema is scoped to its own declared keys via `pick` before parsing (not
+  // just relying on Zod's default strip mode), so pathParams and queryParams stay
+  // independent of each other even if either is declared `.strict()`/`.passthrough()`.
+  const queryParamsSchema = contract.queryParams;
+  if (queryParamsSchema) {
+    prelude.push((req, _res, next) => {
+      req.validatedQuery = queryParamsSchema.parse(
+        pick(req.query, Object.keys(queryParamsSchema.shape))
+      ) as QueryParamsOf<C>;
       next();
     });
   }
