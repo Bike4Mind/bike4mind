@@ -305,7 +305,6 @@ export function useBatchProgressListener() {
   // cause re-render then unsubscribe/resubscribe on every progress tick
   const batchId = useDataLakeWizardStore(s => s.uploadProgress.currentBatchId);
   const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
-  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (!batchId) return;
@@ -329,32 +328,10 @@ export function useBatchProgressListener() {
         updates.processingFailedFiles = message.processingFailedFiles;
       }
       if (message.status === 'completed' || message.status === 'completed_with_errors') {
+        // Cache invalidation for a completed batch lives in useDataLakeBatchCompletionSync below,
+        // not here - this listener unsubscribes as soon as resetWizard (Done) clears currentBatchId,
+        // which happens the moment browser uploads finish, before chunk/vectorize ever completes.
         updates.status = 'complete';
-        // Ingest just finished, so a lake's derived health has changed (pending "indexing" members are
-        // now measured). The message carries no lake id, so refresh every mounted health badge; only
-        // the active lake-detail view mounts one, so this is a single cheap refetch at most. Without
-        // it the badge keeps its pending chip until staleTime (2 min) or a remount. (#1666)
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
-        // Same reason, different surface: `fileCount`/`totalSizeBytes` are cached rollups on the lake
-        // DOCUMENT, and `finalizeBatchIfComplete` calls recomputeLakeStats BEFORE emitting this
-        // message - so the server value is already fresh here and only the client cache is stale.
-        // The batch upload door invalidates `list` at SUBMIT time (see useBatchUpload), which is too
-        // early: ingestion has not run yet, so that refetch returns the pre-upload count.
-        //
-        // PARTIAL BY CONSTRUCTION - this only fires while the wizard is open. This listener is
-        // mounted solely by UploadStep, and DataLakeWizardModal renders <Modal> without
-        // `keepMounted`, so both exits ("Close and continue in background", "Done") tear the
-        // subscription down. Worse, `status: 'complete'` is set the moment browser uploads finish -
-        // before chunk/vectorize - so the Complete screen invites the user to leave BEFORE this
-        // message ever arrives. A user who takes either exit still sees the stale count until a
-        // refresh, exactly as before; nothing regresses, but this is not a whole-product fix.
-        // Making it unconditional means hosting the listener somewhere always-mounted (e.g.
-        // DataLakeUploadIndicator in the Notebook layout) - a separate change, and one that needs
-        // the double-subscribe interaction checked rather than assumed.
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-        // Same reason again: ingestion is what actually tags the files, so the browse tree's
-        // counts (and an emptied lake's very presence in it) are stale until this fires too (#3234).
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
       }
       if (message.taxonomyStatus !== undefined) {
         updates.taxonomyStatus = message.taxonomyStatus;
@@ -366,5 +343,41 @@ export function useBatchProgressListener() {
     });
 
     return unsubscribe;
-  }, [batchId, subscribeToAction, updateUploadProgress, queryClient]);
+  }, [batchId, subscribeToAction, updateUploadProgress]);
+}
+
+/**
+ * Hook: keep the lake list, health-badge, and browse-tree tag-count caches in sync with ANY
+ * batch's completion - independent of the wizard's own currentBatchId, unlike
+ * useBatchProgressListener above. Done (resetWizard) clears currentBatchId the moment the user
+ * leaves the Complete screen - which itself appears as soon as browser uploads finish, before
+ * chunk/vectorize ever does - so a listener keyed on that id unsubscribes before a still-ingesting
+ * batch's `completed` message can arrive. This hook reads nothing from the wizard store, so it
+ * survives Done/Close and reopening the wizard for a second lake. Mount unconditionally
+ * (DataLakeUploadIndicator, always rendered in the Notebook layout), not just inside UploadStep.
+ * (#1666, #3234)
+ */
+export function useDataLakeBatchCompletionSync() {
+  const { subscribeToAction } = useWebsocket();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const unsubscribe = subscribeToAction('data_lake_batch_progress', async (message: IMessageDataToClient) => {
+      if (message.action !== 'data_lake_batch_progress') return;
+      if (message.status !== 'completed' && message.status !== 'completed_with_errors') return;
+
+      // The message carries no lake id, so refresh every mounted health badge; only the active
+      // lake-detail view mounts one, so this is a single cheap refetch at most.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
+      // `fileCount`/`totalSizeBytes` are cached rollups on the lake document. The batch-upload door
+      // invalidates `list` at SUBMIT time (see useBatchUpload), which is too early - ingestion
+      // hasn't run yet - so this is the first point the server value is actually fresh.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // Browse-tree counts (and an emptied lake's very presence in the tree) are stale until
+      // ingestion tags the files - this is that point.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+    });
+
+    return unsubscribe;
+  }, [subscribeToAction, queryClient]);
 }
