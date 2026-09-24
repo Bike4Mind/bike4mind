@@ -353,8 +353,10 @@ export function useBatchProgressListener() {
  * leaves the Complete screen - which itself appears as soon as browser uploads finish, before
  * chunk/vectorize ever does - so a listener keyed on that id unsubscribes before a still-ingesting
  * batch's `completed` message can arrive. This hook reads nothing from the wizard store, so it
- * survives Done/Close and reopening the wizard for a second lake. Mount unconditionally
- * (DataLakeUploadIndicator, always rendered in the Notebook layout), not just inside UploadStep.
+ * survives Done/Close and reopening the wizard for a second lake. Mount at the ProviderBundle
+ * boundary (not DataLakeUploadIndicator/Notebook layout, and not UploadStep) - ProviderBundle is
+ * the one ancestor every route that carries the upload wizard actually renders, including
+ * standalone premium routes that render it without NotebookLayout (#3238 review).
  * (#1666, #3234)
  */
 export function useDataLakeBatchCompletionSync() {
