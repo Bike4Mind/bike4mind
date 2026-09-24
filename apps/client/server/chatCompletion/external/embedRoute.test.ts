@@ -43,7 +43,7 @@ const MockInsufficientCreditsError = vi.hoisted(
 vi.mock('@bike4mind/services', () => ({
   assertOwnerHasCredits: mockAssertOwnerHasCredits,
   assertKeySpendWithinCap: mockAssertKeySpendWithinCap,
-  apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
+  apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
 }));
 
 vi.mock('@bike4mind/services/cliCompletions', () => ({
@@ -114,6 +114,7 @@ vi.mock('@server/cli/auth', () => ({
 const mockVerifyEmbedSessionToken = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: mockVerifyEmbedSessionToken }));
 
+const mockGetEffectiveLLMApiKeys = vi.hoisted(() => vi.fn());
 const mockCheckApiKeyRateLimit = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({ checkApiKeyRateLimit: mockCheckApiKeyRateLimit }));
 
@@ -162,6 +163,7 @@ beforeEach(() => {
   mockAssertOwnerHasCredits.mockReturnValue(undefined);
   mockAssertKeySpendWithinCap.mockReturnValue(undefined);
   mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: true });
+  mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
   mockCheckEmbedSessionRateLimit.mockResolvedValue({ allowed: true });
   mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-1', fileIds: ['f1', 'f2'], deletedAt: null });
   mockUserFindById.mockResolvedValue({ id: 'user-1', groups: [] });
@@ -784,6 +786,28 @@ describe('POST /api/embed/chat - server-side tools', () => {
     const { options } = mockExecuteCompletion.mock.calls[0][0] as { options: Record<string, unknown> };
     expect(options).not.toHaveProperty('thinking');
     expect(Object.keys(options).sort()).toEqual(['maxTokens', 'stream', 'temperature']);
+  });
+
+  it.each([
+    [
+      'the spend cap',
+      () =>
+        mockAssertKeySpendWithinCap.mockImplementation(() => {
+          throw spendCapExceededError('This embed key has reached its spend cap');
+        }),
+    ],
+    ['the rate limiter', () => mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: false, error: 'too many' })],
+  ])('starts no key or catalog lookup once %s has rejected the request', async (_gate, reject) => {
+    // The catalog read can miss its cache and reach a provider, so a caller past either
+    // limit must not be able to drive that work by retrying.
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    reject();
+
+    await post(CHAT);
+
+    expect(mockGetEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(vi.mocked(getAvailableModels)).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
   it.each([

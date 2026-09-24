@@ -421,30 +421,6 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         });
       }
 
-      // Reasoning must never reach an anonymous visitor. On these providers it shares one
-      // frame with the reply prose at the same index, so the per-frame channel tag that
-      // covers every other family has nothing to separate, and a public stream does not
-      // parse markers. Refuse the model here, before any stream bytes.
-      // Fail-closed on a model the catalog cannot describe (see inlinesReasoningIntoText).
-      const embedApiKeys = (await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
-        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-        getSettingsByNames,
-      })) as ApiKeyTable;
-      const embedModels = await getAvailableModels(embedApiKeys);
-      const embedAdapterFamily = embedModels.find(m => m.id === hydrated.model)?.adapterFamily;
-      if (inlinesReasoningIntoText(embedAdapterFamily)) {
-        logger.warn('[EMBED_CHAT] Refused a model that streams reasoning in the text channel', {
-          model: hydrated.model,
-          adapterFamily: embedAdapterFamily,
-        });
-        return res.status(422).json({
-          error: 'unprocessable',
-          error_description:
-            'Bound agent uses a model whose reasoning streams inline with its reply, which cannot be hidden from a public visitor. Set the agent to a different model.',
-          code: 'agent_model_not_embeddable',
-        });
-      }
-
       // Per-key spend-cap gate, the second billing-class check: the org may be
       // solvent while this key has exhausted its own budget. Reads the validation-
       // time snapshot off ctx (no fresh query - the auth layer just loaded the
@@ -480,6 +456,33 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           if (sessionRl.retryAfter) res.setHeader('Retry-After', sessionRl.retryAfter);
           return res.status(429).json({ error: 'rate_limited', error_description: sessionRl.error });
         }
+      }
+
+      // Reasoning must never reach an anonymous visitor. On these providers it shares one
+      // frame with the reply prose at the same index, so the per-frame channel tag that
+      // covers every other family has nothing to separate, and a public stream does not
+      // parse markers. Refuse the model here - after every billing and rate gate, because
+      // the catalog read can miss its cache and reach a provider, and a caller past its
+      // spend cap or rate limit must not be able to drive that work; still before any
+      // stream bytes, so the refusal is a clean JSON 422.
+      // Fail-closed on a model the catalog cannot describe (see inlinesReasoningIntoText).
+      const embedApiKeys = (await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
+        db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+        getSettingsByNames,
+      })) as ApiKeyTable;
+      const embedModels = await getAvailableModels(embedApiKeys);
+      const embedAdapterFamily = embedModels.find(m => m.id === hydrated.model)?.adapterFamily;
+      if (inlinesReasoningIntoText(embedAdapterFamily)) {
+        logger.warn('[EMBED_CHAT] Refused a model that streams reasoning in the text channel', {
+          model: hydrated.model,
+          adapterFamily: embedAdapterFamily,
+        });
+        return res.status(422).json({
+          error: 'unprocessable',
+          error_description:
+            'Bound agent uses a model whose reasoning streams inline with its reply, which cannot be hidden from a public visitor. Set the agent to a different model.',
+          code: 'agent_model_not_embeddable',
+        });
       }
 
       // --- Server-side tools (built pre-stream so a failure is a clean JSON 500) ---

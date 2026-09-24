@@ -35,8 +35,8 @@ describe('buildPublicSSEEvent', () => {
   });
 
   it('joins multiple populated blocks in index order', () => {
-    // The non-streaming anthropic path pushes one entry per response text block
-    // pushes one entry per response text block; every entry is response text, none droppable.
+    // The non-streaming anthropic path pushes one entry per response text block; every
+    // entry is response text, so none may be dropped.
     expect(buildPublicSSEEvent(['part one ', 'part two']).text).toBe('part one part two');
   });
 
