@@ -5265,6 +5265,67 @@ describe('ChatCompletionProcess', () => {
         })
       );
     });
+
+    it('overwrites a stale partial replies[] with the error message, not just reply (#3223)', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      // extractReplies (client) prefers a non-empty replies[] over reply, so a lingering
+      // partial entry from before the failure (e.g. an unclosed '<think>' left by a killed
+      // stream) would otherwise outrank this error message and render a blank turn.
+      mockQuest.replies = ['<think>'];
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('stream timeout - idle for too long, overloaded backend');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          replies: ['The AI service is currently experiencing high demand. Please try again in a few minutes.'],
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
+
+    it('keeps visible partial answer text ahead of the error instead of discarding it', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      // A real answer streamed before the failure - must survive alongside the error, not be
+      // replaced by it, so the user doesn't lose text they already watched arrive.
+      mockQuest.replies = ['Here is what I found so far'];
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('stream timeout - idle for too long, overloaded backend');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply:
+            'Here is what I found so farThe AI service is currently experiencing high demand. Please try again in a few minutes.',
+          replies: [
+            'Here is what I found so far',
+            'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          ],
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
   });
 
   describe('isStreamIdleTimeoutError', () => {
