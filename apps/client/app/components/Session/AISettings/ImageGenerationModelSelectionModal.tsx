@@ -34,7 +34,6 @@ import {
   OpenAIImageSize,
   OpenAIImageStyle,
   isGPTImageModel,
-  isGPTImage2Model,
   isKontextModel as isKontextImageModel,
   EDIT_SUPPORTED_IMAGE_MODELS,
 } from '@bike4mind/common';
@@ -58,6 +57,7 @@ import {
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
+import { defaultImageSize, getAvailableImageSizes } from './imageSizeOptions';
 interface ImageGenerationModelSelectionModalProps {
   open: boolean;
   onClose: () => void;
@@ -260,34 +260,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     color: 'text.primary',
   };
 
-  const getModelConstraintKey = (modelId: string) => {
-    if (isGPTImage2Model(modelId)) return 'GPT_IMAGE_2';
-    if (isGPTImageModel(modelId)) return 'GPT_IMAGE_1';
-    if ((BFL_IMAGE_MODELS as readonly string[]).includes(modelId)) return 'BFL';
-    return 'GPT_IMAGE_1';
-  };
   const isKontextModel = isKontextImageModel(contextImageModel);
-  const getSizePresets = (modelId: string): readonly string[] => {
-    if (isGPTImage2Model(modelId)) return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes;
-    if (isGPTImageModel(modelId)) return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
-    if ((BFL_IMAGE_MODELS as readonly string[]).includes(modelId)) {
-      if (isKontextModel) return [];
-      return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
-    }
-    return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
-  };
-  const getAvailableSizes = (modelId: string): readonly string[] => {
-    const presets = getSizePresets(modelId);
-    // gpt-image-2 accepts any resolution meeting its constraints, not just the presets, so
-    // handleModelChange can legitimately keep a size that has no <Option> here - 'auto', or a
-    // carried-over 1280x960. Joy renders the Select blank when the value matches no option
-    // (no placeholder is passed), which would hide what the user is about to generate, so
-    // surface the live value alongside the presets.
-    if (_size && !presets.includes(_size) && isGPTImageModel(modelId) && isSupportedImageSize(modelId, _size)) {
-      return [...presets, _size];
-    }
-    return presets;
-  };
 
   // Coerce quality only when the selected model cannot express the current value - i.e. it
   // came from the other vocabulary (or is unset/'auto', which the select cannot display).
@@ -325,9 +298,9 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
           {
             label: 'Image Size',
             type: 'select' as const,
-            value: _size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(contextImageModel)].defaultSize,
+            value: _size || defaultImageSize(contextImageModel),
             onChange: (value: OpenAIImageSize | null) => value && setLLM(imageSizeUpdate(contextImageModel, value)),
-            options: getAvailableSizes(contextImageModel).map(s => ({ value: s, label: s })),
+            options: getAvailableImageSizes(contextImageModel, _size).map(s => ({ value: s, label: s })),
             testId: 'image-setting-size-select',
           },
         ]
