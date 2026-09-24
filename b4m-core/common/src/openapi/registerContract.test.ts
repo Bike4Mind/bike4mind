@@ -23,19 +23,38 @@ const contract: EndpointContract = {
   responses: { 200: { description: 'ok', schema: z.object({ ok: z.boolean() }) } },
 };
 
+/**
+ * The generated doc's own type comes from a transitive dependency (`openapi3-ts`,
+ * via `@asteasolutions/zod-to-openapi`), not one of this package's own - so this
+ * narrows from `unknown` instead of importing it, rather than adding an
+ * undeclared dependency for a type only these tests need.
+ */
+type FixtureOperation = {
+  parameters?: { name: string; in: string; required?: boolean; schema?: { type?: unknown } }[];
+  responses?: Record<string, unknown>;
+};
+
+function getOperation(document: unknown, path: string): FixtureOperation {
+  const paths = (document as { paths?: unknown }).paths;
+  const pathItem = typeof paths === 'object' && paths !== null ? (paths as Record<string, unknown>)[path] : undefined;
+  const operation =
+    typeof pathItem === 'object' && pathItem !== null ? (pathItem as Record<string, unknown>).get : undefined;
+  if (typeof operation !== 'object' || operation === null) {
+    throw new Error(`Expected GET ${path} to be registered in the generated document`);
+  }
+  return operation as FixtureOperation;
+}
+
 registerContract(contract);
 const doc = new OpenApiGeneratorV31(registry.definitions).generateDocument({
   openapi: '3.1.0',
   info: { title: 'fixture', version: '0.0.0' },
 });
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
-const operation = (doc.paths as any)['/api/v1/fixture/{id}'].get;
+const operation = getOperation(doc, '/api/v1/fixture/{id}');
 
 describe('registerContract - queryParams', () => {
   it('documents queryParams as `in: query`, distinct from pathParams as `in: path`', () => {
-    const byName = Object.fromEntries(
-      (operation.parameters as { name: string; in: string; required?: boolean }[]).map(p => [p.name, p])
-    );
+    const byName = Object.fromEntries((operation.parameters ?? []).map(p => [p.name, p]));
     expect(byName.id).toMatchObject({ in: 'path', required: true });
     expect(byName.q).toMatchObject({ in: 'query', required: true });
     expect(byName.cursor).toMatchObject({ in: 'query', required: false });
@@ -48,12 +67,7 @@ describe('registerContract - queryParams', () => {
     // (Number(null) === 0) - so the generated spec undersells the real runtime guarantee.
     // Pinned here so a zod-to-openapi upgrade that fixes this is noticed, not silently
     // relied on.
-    const byName = Object.fromEntries(
-      (operation.parameters as { name: string; in: string; required?: boolean; schema: { type: unknown } }[]).map(p => [
-        p.name,
-        p,
-      ])
-    );
+    const byName = Object.fromEntries((operation.parameters ?? []).map(p => [p.name, p]));
     expect(byName.limit).toMatchObject({ in: 'query', required: false, schema: { type: ['number', 'null'] } });
   });
 
@@ -69,8 +83,7 @@ describe('registerContract - queryParams', () => {
       openapi: '3.1.0',
       info: { title: 'fixture', version: '0.0.0' },
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
-    const op = (generated.paths as any)['/api/v1/fixture-query-only'].get;
-    expect(op.responses['422']).toBeDefined();
+    const op = getOperation(generated, '/api/v1/fixture-query-only');
+    expect(op.responses?.['422']).toBeDefined();
   });
 });
