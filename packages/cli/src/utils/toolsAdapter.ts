@@ -223,13 +223,12 @@ export function wrapToolWithPermission(
 
       const effectiveArgs = isSandboxed ? sandboxedArgs : args;
       // Args actually handed to execution. Defaults to effectiveArgs, minus any
-      // gateSnapshot the model itself tried to smuggle in - only the edit_local_file
-      // gate below (once it actually resolves) may set this field. Stripping it here
+      // gateSnapshot present in the raw args - only the edit_local_file gate below
+      // (once it actually resolves) may set this field. Stripping it here
       // unconditionally, rather than only when the gate resolves, closes the path
-      // where a caller-forged gateSnapshot would otherwise survive untouched whenever
-      // resolveEditLocalFile() throws (an ambiguous or no-match old_string, not just
-      // an auth/IO error) and let editLocalFile() trust an arbitrary span with no real
-      // match check.
+      // where an externally supplied gateSnapshot would otherwise survive untouched
+      // whenever resolveEditLocalFile() throws (an ambiguous or no-match old_string,
+      // not just an auth/IO error) and let editLocalFile() trust an unverified span.
       const { gateSnapshot: _modelSuppliedGateSnapshot, ...effectiveArgsSansGateSnapshot } = effectiveArgs ?? {};
       let execArgs: Record<string, unknown> = effectiveArgsSansGateSnapshot;
       // Temp sandbox profile this wrapper created (Seatbelt writes a .sb file).
