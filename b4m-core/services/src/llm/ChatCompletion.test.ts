@@ -1319,6 +1319,20 @@ describe('ChatCompletionProcess', () => {
         expect(mockQuest.replies.join('')).toContain('Here are the figures.');
       });
 
+      it('adds no notice when a tool delivered an attachment and the model wrote no caption', async () => {
+        setupTurn(async cb => {
+          const toolsUsed = [{ name: 'image_generation', arguments: '{"prompt":"a cat"}', id: 't1' }];
+          // What applyQuestStatusChanges does when the tool calls statusUpdate({ images }).
+          mockQuest.images = [...(mockQuest.images ?? []), 'generated/cat.png'];
+          await cb(['<think>done</think>'], { toolsUsed });
+          await cb([], { toolsUsed, stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
       it('adds no notice to a stopped turn', async () => {
         setupTurn(async (cb, opts) => {
           const toolsUsed = [{ name: 'web_search', arguments: '{}', id: 't1' }];

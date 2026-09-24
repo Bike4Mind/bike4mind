@@ -4217,6 +4217,9 @@ export class ChatCompletionProcess {
       // themselves can't say this: every iteration appends into the same indices.
       let toolCallsSeen = 0;
       let visibleCharsAtLastToolCall = 0;
+      // Generating tools deliver through statusUpdate({ images }), which applyQuestStatusChanges
+      // (tools/ToolBuilder.ts) merges into quest.images with dedup, so growth means a new file.
+      const imageCountAtTurnStart = quest.images?.length ?? 0;
       const countVisibleChars = (slots: readonly string[] | undefined) =>
         (slots ?? [])
           .map(slot => visibleReplyText(slot))
@@ -4766,6 +4769,7 @@ export class ChatCompletionProcess {
           toolCallCount: toolCallsSeen,
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
+          producedAttachment: (quest.images?.length ?? 0) > imageCountAtTurnStart,
         });
         if (incompleteAnswerNotice) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
