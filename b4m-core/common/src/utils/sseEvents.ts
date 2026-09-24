@@ -210,14 +210,13 @@ function resolveResponseText(text: (string | null | undefined)[]): string {
  * allowlists forward: any field later added to CompletionInfo stays hidden from
  * public surfaces until deliberately surfaced here.
  *
- * It does NOT filter the text. Keeping reasoning out of a public stream is the CALLER's
- * job, done by admitting only models whose reasoning cannot reach the text channel - see
- * {@link inlinesReasoningIntoText}. Scanning the text for `<think>` here would be worse
- * than useless: on an admitted family that token is ordinary prose (ask any model to
- * explain the tag), so treating it as a marker truncates a legitimate paid reply, while an
- * unadmitted family cannot be made safe by parsing anyway, because the reasoning between
- * the markers is model-generated and may contain them. A new public caller must run the
- * same family gate before it streams.
+ * It does NOT scan the text. Non-reply frames are dropped on the adapter's channel tag, and
+ * families that cannot be separated that way are refused before the stream opens - see
+ * {@link inlinesReasoningIntoText}. Scanning for `<think>` here would be worse than
+ * useless: a model is free to write the token in its ANSWER (ask one to explain the tag),
+ * and escapeThinkMarkers defangs marker-shaped text inside REASONING only, so treating it
+ * as a marker truncates a legitimate paid reply. A new public caller must run the same
+ * family gate before it streams.
  */
 export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
   // A tagged frame is reasoning or a raw tool artifact, never the reply. Its usage still

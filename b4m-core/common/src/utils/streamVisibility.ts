@@ -178,10 +178,13 @@ export type StreamChannel =
  * Exhaustive by type: `Record<AdapterFamily, ...>` makes adding a family to the union a
  * compile error here, so a new provider cannot be admitted or refused by omission.
  *
- * `always` is the dangerous class. Those adapters wrap raw model text in the markers, so
- * reasoning that itself contains the close marker would end a parsed redaction early - the
- * markers are not a trust boundary and must not be treated as one. A public surface refuses
- * these families instead of trying to strip their output.
+ * `always` is the class a public surface cannot serve. Those adapters put reasoning and
+ * reply prose in the SAME string at the SAME index - a delta can close the block and carry
+ * the first words of the answer - so the per-frame channel tag, which is what keeps
+ * `opt-in` families safe, has nothing to separate. Only parsing the markers could, and a
+ * public surface does not parse: escapeThinkMarkers defangs marker-shaped text inside
+ * REASONING, but a model is free to write `<think>` in its ANSWER, and a parser would
+ * truncate that legitimate reply. So these families are refused before the stream opens.
  */
 export const REASONING_CHANNEL_BY_ADAPTER_FAMILY: Record<AdapterFamily, ReasoningChannel> = {
   // Reasoning lands at the thinking block's OWN content-block index, each marker emitted as

@@ -421,10 +421,10 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         });
       }
 
-      // Reasoning must never reach an anonymous visitor, and on these providers it streams
-      // inline in the text channel wrapped in model-generated <think> markers - markers that
-      // cannot be parsed as a boundary, because the reasoning between them may contain them.
-      // Refuse the model here, before any stream bytes, instead of stripping mid-stream.
+      // Reasoning must never reach an anonymous visitor. On these providers it shares one
+      // frame with the reply prose at the same index, so the per-frame channel tag that
+      // covers every other family has nothing to separate, and a public stream does not
+      // parse markers. Refuse the model here, before any stream bytes.
       // Fail-closed on a model the catalog cannot describe (see inlinesReasoningIntoText).
       const embedApiKeys = (await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
         db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
