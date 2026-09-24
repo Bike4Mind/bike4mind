@@ -1,7 +1,8 @@
+import { ORG_FEEDBACK_BY_TAG_LIMIT } from '@bike4mind/common';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({
@@ -152,6 +153,12 @@ describe('OrgFeedbackSummaryPanel', () => {
       { key: 'billing', count: 3 },
       { key: 'login', count: 1 },
     ];
+    const tags = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `tag-${i}`, count: 1000 - i }));
+    const shownTagKeys = (table: HTMLElement) =>
+      within(table)
+        .queryAllByText(/^tag-\d+$/)
+        .map(el => el.textContent);
+    const STORED_CAPTION = 'Showing the top 20 tags by count; the rest were not included in this summary.';
 
     it('renders the stored rows as plain, non-drillable rows', async () => {
       const table = await renderCompleted({ byTag: TWO_TAGS, byTagTruncated: false });
@@ -161,23 +168,39 @@ describe('OrgFeedbackSummaryPanel', () => {
       expect(screen.queryByTestId('feedback-summary-by-tag-row-billing')).toBeNull();
     });
 
-    it('captions a truncated cut with the stored row count', async () => {
-      await renderCompleted({ byTag: TWO_TAGS, byTagTruncated: true });
+    // A truncated report is always exactly ORG_FEEDBACK_BY_TAG_LIMIT rows (FeedbackReportQueries slices to it).
+    it('shows only the rows the summary was written from when the report was truncated', async () => {
+      const table = await renderCompleted({ byTag: tags(ORG_FEEDBACK_BY_TAG_LIMIT), byTagTruncated: true });
 
-      expect(screen.getByTestId('feedback-summary-by-tag-caption')).toHaveTextContent(
-        'Showing the top 2 tags by count; the rest were not included in this summary.'
-      );
+      expect(shownTagKeys(table)).toEqual(tags(20).map(t => t.key));
+      expect(screen.getByTestId('feedback-summary-by-tag-caption')).toHaveTextContent(STORED_CAPTION);
     });
 
-    it('leaves the caption off when nothing was cut', async () => {
-      await renderCompleted({ byTag: TWO_TAGS, byTagTruncated: false });
+    it('caps and captions an untruncated report with more tags than the summary used', async () => {
+      const table = await renderCompleted({ byTag: tags(35), byTagTruncated: false });
 
+      expect(shownTagKeys(table)).toHaveLength(20);
+      expect(within(table).queryByText('tag-20')).toBeNull();
+      expect(screen.getByTestId('feedback-summary-by-tag-caption')).toHaveTextContent(STORED_CAPTION);
+    });
+
+    it('shows every row and no caption when all the tags reached the summary', async () => {
+      const table = await renderCompleted({ byTag: tags(20), byTagTruncated: false });
+
+      expect(shownTagKeys(table)).toHaveLength(20);
       expect(screen.queryByTestId('feedback-summary-by-tag-caption')).not.toBeInTheDocument();
     });
 
-    it('leaves the caption off for an artifact written before the flag existed', async () => {
+    it('leaves the caption off for a small artifact written before the flag existed', async () => {
       expect(await renderCompleted({ byTag: TWO_TAGS })).toHaveTextContent('billing3');
       expect(screen.queryByTestId('feedback-summary-by-tag-caption')).not.toBeInTheDocument();
+    });
+
+    it('still caps and captions a pre-flag artifact holding more tags than the summary used', async () => {
+      const table = await renderCompleted({ byTag: tags(ORG_FEEDBACK_BY_TAG_LIMIT) });
+
+      expect(shownTagKeys(table)).toHaveLength(20);
+      expect(screen.getByTestId('feedback-summary-by-tag-caption')).toHaveTextContent(STORED_CAPTION);
     });
 
     it('says None when the window had no tagged rows', async () => {

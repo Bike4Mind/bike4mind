@@ -24,6 +24,7 @@ vi.mock('sst', () => ({
 vi.mock('@bike4mind/common', () => ({
   ChatModels: { CLAUDE_4_5_HAIKU_BEDROCK: 'claude-haiku' },
   ORG_FEEDBACK_SUMMARY_JOB_TYPE: 'orgFeedbackSummary',
+  ORG_FEEDBACK_SUMMARY_TAG_LIMIT: 20,
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -75,6 +76,8 @@ const run = (logger = makeLogger()) => runOrgFeedbackSummary(message, logger as 
 
 const frames = () => h.sendToClient.mock.calls.map(call => call[2] as { status: string; errorMessage?: string });
 
+const tagRows = (n: number) => Array.from({ length: n }, (_, i) => ({ key: `tag-${i}`, count: 100 - i }));
+
 const REPORT = {
   range: { from: message.startDate, to: message.endDate },
   totals: { count: 7 },
@@ -83,7 +86,7 @@ const REPORT = {
   byType: [{ key: 'bug', count: 5 }],
   byStatus: [{ key: 'open', count: 6 }],
   byTag: [{ key: 'slow', count: 3 }],
-  byTagTruncated: true,
+  byTagTruncated: false,
   byMember: [{ userId: 'u1', displayName: MEMBER_NAME, count: 7 }],
   membership: { memberCount: 1, aclOnly: [], stampOnly: [] },
 };
@@ -114,18 +117,20 @@ describe('runOrgFeedbackSummary', () => {
       h.orgFeedbackReport.mockResolvedValue({
         ...REPORT,
         byTagTruncated,
-        ...(byTagCount === null
-          ? {}
-          : { byTag: Array.from({ length: byTagCount }, (_, i) => ({ key: `tag-${i}`, count: 100 - i })) }),
+        ...(byTagCount === null ? {} : { byTag: tagRows(byTagCount) }),
       });
       await run();
       return JSON.stringify(h.complete.mock.calls[0][1]);
     };
 
+    // A truncated report is always exactly ORG_FEEDBACK_BY_TAG_LIMIT (50) rows: FeedbackReportQueries
+    // sets the flag only when more matched, and slices to the limit.
     it('says the list is a cut when the report was truncated', async () => {
-      const prompt = await promptFor(null, true);
+      const prompt = await promptFor(50, true);
       expect(prompt).toContain(PARTIAL_NOTE);
-      expect(prompt).toContain('only the top 1 tags by count are listed');
+      expect(prompt).toContain('only the top 20 tags by count are listed');
+      expect(prompt).toContain('tag-19');
+      expect(prompt).not.toContain('tag-20');
     });
 
     it('stays quiet when the report was not truncated and every tag fits', async () => {
@@ -144,6 +149,7 @@ describe('runOrgFeedbackSummary', () => {
   });
 
   it('writes the artifact and releases the window on success', async () => {
+    h.orgFeedbackReport.mockResolvedValue({ ...REPORT, byTag: tagRows(50), byTagTruncated: true });
     await run();
 
     const [payload, key] = h.upload.mock.calls[0];
