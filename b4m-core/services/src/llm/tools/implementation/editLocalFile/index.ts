@@ -28,7 +28,10 @@ interface EditLocalFileParams {
    * formatter, a watcher), so the read itself can never be safely skipped - but when
    * the fresh hash still matches `contentHash`, it reuses `resolvedEdit` instead of
    * re-running resolveEdit()'s string-matching pass. Injected by the CLI permission
-   * layer; the model cannot set it.
+   * layer, which strips any caller-supplied value before conditionally re-adding its
+   * own - this file does not rely on that alone, and independently verifies the
+   * reused span against the actual bytes (see {@link isResolvedEditConsistent})
+   * before trusting it.
    */
   gateSnapshot?: {
     contentHash: string;
@@ -155,6 +158,21 @@ function resolveEdit(currentContent: string, old_string: string, new_string: str
   };
 }
 
+/**
+ * Defense in depth for a reused `gateSnapshot.resolvedEdit`: even once its
+ * `contentHash` has matched, confirm the span it claims is actually the real bytes
+ * at that offset in `currentContent` before trusting it - so a caller cannot use a
+ * hash-matching `gateSnapshot` to smuggle in a span/replacement that never came from
+ * `resolveEdit()` matching `old_string`/`new_string` against real content.
+ */
+function isResolvedEditConsistent(currentContent: string, edit: ResolvedEdit): boolean {
+  return (
+    edit.startIndex >= 0 &&
+    edit.startIndex + edit.matchedText.length <= currentContent.length &&
+    currentContent.slice(edit.startIndex, edit.startIndex + edit.matchedText.length) === edit.matchedText
+  );
+}
+
 /** A preview of the REAL span an edit will replace (not the model's typed old_string). */
 function formatSpanPreview(filePath: string, matchedText: string, replacement: string): string {
   const { diff } = generateDiff(matchedText, replacement);
@@ -229,10 +247,15 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
   const currentContent = await fs.readFile(resolvedPath, 'utf-8');
   const currentHash = sha256(currentContent);
 
-  // Reuse the gate's already-resolved span only when the file hasn't changed since -
-  // this is what skips the redundant resolveEdit() string-matching pass.
+  // Reuse the gate's already-resolved span only when the file hasn't changed since,
+  // AND the span still checks out against the real bytes (isResolvedEditConsistent) -
+  // the hash match alone binds the snapshot to this content, but says nothing about
+  // whether the span itself is genuine, so both gate the reuse. This is what skips
+  // the redundant resolveEdit() string-matching pass.
   const resolved =
-    gateSnapshot && gateSnapshot.contentHash === currentHash
+    gateSnapshot &&
+    gateSnapshot.contentHash === currentHash &&
+    isResolvedEditConsistent(currentContent, gateSnapshot.resolvedEdit)
       ? gateSnapshot.resolvedEdit
       : resolveEdit(currentContent, old_string, new_string);
 
