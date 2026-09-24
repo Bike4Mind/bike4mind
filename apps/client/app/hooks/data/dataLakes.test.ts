@@ -84,6 +84,7 @@ import {
   useDismissTaxonomy,
   useGrantLakeAccess,
   useRevokeLakeAccess,
+  useReprocessFabFile,
   useUnderChunkedCount,
 } from './dataLakes';
 
@@ -1901,5 +1902,43 @@ describe('server refusal text reaches the toast', () => {
     });
 
     expect(toast.error).toHaveBeenCalledWith('boom');
+  });
+});
+
+/**
+ * The client half of #3167. The server authorizes a non-owning lake manager only on the lake it is
+ * NAMED, so a dropped `dataLakeId` here does not error - the request simply falls back to the
+ * caller's own rights and 404s again, which is exactly the bug. Asserting the body is the only
+ * place that regression is visible.
+ */
+describe('useReprocessFabFile request body', () => {
+  const mount = <T>(hook: () => T): { result: { current: T } } => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    return renderHook(hook, { wrapper });
+  };
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPost.mockResolvedValue({ data: { messageId: 'm1' } });
+  });
+
+  it('names the lake whose manage rights authorize a file the caller does not own', async () => {
+    const { result } = mount(() => useReprocessFabFile('lake1'));
+    await act(async () => {
+      await result.current.mutateAsync('file1');
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/files/reprocess', { fabFileId: 'file1', dataLakeId: 'lake1' });
+  });
+
+  it('omits dataLakeId entirely when there is no lake context, rather than sending null', async () => {
+    const { result } = mount(() => useReprocessFabFile(null));
+    await act(async () => {
+      await result.current.mutateAsync('file1');
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/files/reprocess', { fabFileId: 'file1' });
   });
 });

@@ -1036,12 +1036,21 @@ export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: n
 /**
  * Hook: Re-run chunking + vectorization for a single fabFile in a data lake.
  * Useful for files that landed with 0 chunks (failed/partial extraction).
+ *
+ * Sends `dataLakeId` so a lake manager who is not the file's uploader is authorized on their manage
+ * rights over THIS lake rather than on ownership of the file (#3167). The route falls back to the
+ * caller's own rights when it is absent, so this is additive: it never narrows what an owner can do.
  */
 export function useReprocessFabFile(dataLakeId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (fabFileId: string) => {
-      const res = await api.post<{ messageId: string }>('/api/files/reprocess', { fabFileId });
+      const res = await api.post<{ messageId: string }>('/api/files/reprocess', {
+        fabFileId,
+        // Omitted rather than sent as null: the server reads its presence as "act under this lake's
+        // authority", and a null would have to be special-cased at every read of it.
+        ...(dataLakeId ? { dataLakeId } : {}),
+      });
       return res.data;
     },
     onSuccess: () => {
