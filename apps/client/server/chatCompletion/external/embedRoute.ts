@@ -398,6 +398,29 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         });
       }
 
+      // A key can outlive its org (org deleted while the key stayed active). That is a
+      // data-integrity condition, not a balance one - fail closed with a clear 403
+      // rather than a misleading 422, and never fall back to any other pool.
+      if (!org) {
+        return res.status(403).json({ error: 'forbidden', error_description: 'Embed key organization not found' });
+      }
+
+      // Unconditional pre-flight balance check against the owner org (runs even when
+      // enforceCredits is off). Must precede any stream bytes so it can 422. This is a
+      // coarse floor (requiredCredits defaults to 1) - exact settlement/refusal happens
+      // inside executeCompletion; a broke-but-nonzero org can still trip the mid-stream
+      // InsufficientCreditsError. A rough per-model pre-estimate here is a later refinement.
+      try {
+        assertOwnerHasCredits(org);
+      } catch (creditErr) {
+        const status = (creditErr as { statusCode?: number }).statusCode ?? 422;
+        return res.status(status).json({
+          error: 'insufficient_credits',
+          error_description: creditErr instanceof Error ? creditErr.message : 'Insufficient credits',
+          code: resolveQuestErrorCode(creditErr),
+        });
+      }
+
       // Reasoning must never reach an anonymous visitor, and on these providers it streams
       // inline in the text channel wrapped in model-generated <think> markers - markers that
       // cannot be parsed as a boundary, because the reasoning between them may contain them.
@@ -419,29 +442,6 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           error_description:
             'Bound agent uses a model whose reasoning streams inline with its reply, which cannot be hidden from a public visitor. Set the agent to a different model.',
           code: 'agent_model_not_embeddable',
-        });
-      }
-
-      // A key can outlive its org (org deleted while the key stayed active). That is a
-      // data-integrity condition, not a balance one - fail closed with a clear 403
-      // rather than a misleading 422, and never fall back to any other pool.
-      if (!org) {
-        return res.status(403).json({ error: 'forbidden', error_description: 'Embed key organization not found' });
-      }
-
-      // Unconditional pre-flight balance check against the owner org (runs even when
-      // enforceCredits is off). Must precede any stream bytes so it can 422. This is a
-      // coarse floor (requiredCredits defaults to 1) - exact settlement/refusal happens
-      // inside executeCompletion; a broke-but-nonzero org can still trip the mid-stream
-      // InsufficientCreditsError. A rough per-model pre-estimate here is a later refinement.
-      try {
-        assertOwnerHasCredits(org);
-      } catch (creditErr) {
-        const status = (creditErr as { statusCode?: number }).statusCode ?? 422;
-        return res.status(status).json({
-          error: 'insufficient_credits',
-          error_description: creditErr instanceof Error ? creditErr.message : 'Insufficient credits',
-          code: resolveQuestErrorCode(creditErr),
         });
       }
 

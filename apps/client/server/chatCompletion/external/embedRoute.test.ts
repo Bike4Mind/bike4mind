@@ -732,6 +732,43 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(text).not.toContain('web_search');
   });
 
+  it('keeps adaptive-model reasoning off the wire', async () => {
+    // An adaptive Claude model opens a thinking block on every turn regardless of the
+    // request, so the adapter tags those frames and the route must not render them.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['<think>'], { channel: 'reasoning' });
+        await params.onChunk(['the user is asking about internal pricing'], { channel: 'reasoning' });
+        await params.onChunk(['</think>'], { channel: 'reasoning' });
+        await params.onChunk(['hello from the agent'], { outputTokens: 5 });
+      }
+    );
+
+    const text = await (await post(CHAT)).text();
+    expect(text).toContain('hello from the agent');
+    expect(text).not.toContain('internal pricing');
+    expect(text).not.toContain('<think>');
+    expect(text).not.toContain('</think>');
+  });
+
+  it('keeps a raw tool artifact off the wire', async () => {
+    // web_fetch is in the embed tool set and handleToolResultStreaming pushes the whole
+    // result when it contains artifact markup - third-party text the page author controls.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['<artifact type="application/vnd.ant.react">raw page body</artifact>'], {
+          channel: 'tool-artifact',
+        });
+        await params.onChunk(['here is what I found'], { outputTokens: 5 });
+      }
+    );
+
+    const text = await (await post(CHAT)).text();
+    expect(text).toContain('here is what I found');
+    expect(text).not.toContain('raw page body');
+    expect(text).not.toContain('<artifact');
+  });
+
   it('never enables thinking on the completion request', async () => {
     // Load-bearing: anthropic families are admitted by the model gate because their
     // reasoning is OPT-IN. Nothing filters the text, so if this route ever asked for

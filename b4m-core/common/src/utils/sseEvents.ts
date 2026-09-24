@@ -3,6 +3,7 @@
  * Shared between Next.js API route and Lambda function
  */
 import type { QuestErrorCode } from '../types/entities/SessionTypes';
+import type { StreamChannel } from './streamVisibility';
 
 export interface SSEContentEvent {
   type: 'content' | 'tool_use';
@@ -102,6 +103,12 @@ export interface CompletionInfo {
    * Mirrored onto SSEContentEvent.stopReason by buildSSEEvent.
    */
   stopReason?: string;
+  /**
+   * Set when this chunk is NOT the assistant's prose reply - reasoning, or a raw tool
+   * artifact. Public surfaces drop the text of such a frame; first-party surfaces ignore
+   * the field and keep receiving it. See {@link StreamChannel}.
+   */
+  channel?: StreamChannel;
 }
 
 /**
@@ -171,17 +178,17 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
  * Resolve the response text carried by ONE adapter callback.
  *
  * `text` is a SPARSE array indexed by the provider's content-block/choice index - never
- * [thinking, response]. Every streaming backend allocates it fresh inside its event loop
- * (anthropicBackend.ts:1330, kimiBackend.ts:506, deepseekBackend.ts:451, xaiBackend.ts:582,
- * openaiBackend.ts:1476, geminiBackend.ts:669), so one callback populates exactly the index
- * the provider used - 2 or higher as soon as two blocks precede the text, which a fixed
- * [1]/[0] read drops entirely. The lone dense shape is the non-streaming anthropic path,
- * which pushes one entry per response text block (anthropicBackend.ts:1999).
+ * [thinking, response]. Every streaming backend declares its `streamedText` INSIDE the
+ * `for await` over provider events (anthropic, openai, gemini, kimi, deepseek, xai,
+ * bedrock), so one callback populates exactly the index the provider used - 2 or higher as
+ * soon as two blocks precede the text, which a fixed [1]/[0] read drops entirely. The lone
+ * dense shape is the non-streaming anthropic path, which pushes one entry per response text
+ * block.
  *
  * Rule: join every populated entry in index order. It drops nothing at any index, and it
- * cannot merge channels - reasoning arrives on its own callback when streaming, and is
- * never pushed at all in the non-streaming path (thinking blocks carry `.thinking`, not
- * `.text`).
+ * cannot merge channels - reasoning arrives on its own callback, tagged (see
+ * CompletionInfo.channel), and is never pushed at all in the non-streaming path (thinking
+ * blocks carry `.thinking`, not `.text`).
  */
 function resolveResponseText(text: (string | null | undefined)[]): string {
   let out = '';
@@ -213,7 +220,10 @@ function resolveResponseText(text: (string | null | undefined)[]): string {
  * same family gate before it streams.
  */
 export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  const responseOnly: (string | null | undefined)[] = ['', resolveResponseText(text)];
+  // A tagged frame is reasoning or a raw tool artifact, never the reply. Its usage still
+  // counts, so the frame is kept and only its text is dropped. Structural, not a content
+  // scan: the adapter marked it at the emit site, where the two were still distinguishable.
+  const responseOnly: (string | null | undefined)[] = ['', info?.channel ? '' : resolveResponseText(text)];
   if (!info) return buildSSEEvent(responseOnly, undefined);
   // Allowlist forward (not denylist): explicitly name the fields a public caller may
   // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.

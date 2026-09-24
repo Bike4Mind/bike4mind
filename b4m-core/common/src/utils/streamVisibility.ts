@@ -158,6 +158,21 @@ export function hasVisibleReplyText(parts: readonly (string | null | undefined)[
 export type ReasoningChannel = 'never' | 'opt-in' | 'always';
 
 /**
+ * What a completion chunk carries when it is NOT the assistant's prose reply. Absent means
+ * prose, which is the only thing a public/anonymous stream may forward.
+ *
+ * Set by the adapter at the emit site, where the distinction is still known; downstream the
+ * frames are indistinguishable strings. Purely additive - adapters emit exactly what they
+ * always did, and first-party surfaces that want reasoning or artifact frames keep getting
+ * them. Only {@link buildPublicSSEEvent} acts on it.
+ */
+export type StreamChannel =
+  /** A thinking/reasoning block, including the marker chunks that bracket it. */
+  | 'reasoning'
+  /** A raw tool result streamed for a renderer to pick up (see toolStreamingHelper). */
+  | 'tool-artifact';
+
+/**
  * Truth table over every declared AdapterFamily, each entry read off the adapter.
  *
  * Exhaustive by type: `Record<AdapterFamily, ...>` makes adding a family to the union a
@@ -169,33 +184,35 @@ export type ReasoningChannel = 'never' | 'opt-in' | 'always';
  * these families instead of trying to strip their output.
  */
 export const REASONING_CHANNEL_BY_ADAPTER_FAMILY: Record<AdapterFamily, ReasoningChannel> = {
-  // Emits the markers around its thinking block, but only when the request enables
-  // thinking (anthropicBackend.ts:1033), and at that block's OWN content-block index with
-  // each marker as a whole adapter-emitted chunk (anthropicBackend.ts:1338,1374,1423).
+  // Reasoning lands at the thinking block's OWN content-block index, each marker emitted as
+  // a whole adapter chunk. `opt-in` describes the REQUEST only: anthropicBackend sets
+  // apiParams.thinking just for a caller that asked. The RESPONSE is not bound by that - an
+  // adaptive model reasons on every turn either way - so the stream loop TAGS those frames
+  // (CompletionInfo.channel) and a public surface drops them on the tag, not on the marker.
   'anthropic-messages': 'opt-in',
-  // Same shape through Bedrock (bedrockBackend/anthropic.ts:1155).
+  // Same shape through Bedrock, tagged on the choice.
   'bedrock-anthropic': 'opt-in',
-  // streamedText[c.index] = c.delta.content only; reasoning_effort is a REQUEST parameter
-  // and Chat Completions returns no reasoning text (openaiBackend.ts:1521).
+  // Takes delta.content only; reasoning_effort is a REQUEST parameter and Chat Completions
+  // returns no reasoning text.
   'openai-chat': 'never',
   // Forwards response.output_text.delta only, and the request carries reasoning.effort
-  // without reasoning.summary, so no summary events exist to forward
-  // (openaiBackend.ts:2099, :2064).
+  // without reasoning.summary, so no summary events exist to forward.
   'openai-responses': 'never',
   // Takes part.text only, and the adapter never sends includeThoughts/thinkingConfig, so
-  // Gemini returns no thought parts to take (geminiBackend.ts:678).
+  // Gemini returns no thought parts to take.
   gemini: 'never',
-  // Plain completions: chunkText comes from response.generation (bedrockBackend/llama.ts:161).
+  // Plain completions: chunkText comes from the provider's `generation` field.
   'bedrock-llama': 'never',
   'bedrock-jurassic': 'never',
   'bedrock-titan': 'never',
-  // Inline reasoning at the prose index, marker-wrapped by the adapter.
-  xai: 'always', // xaiBackend.ts:402,602,612
-  kimi: 'always', // kimiBackend.ts:459,526,540
-  deepseek: 'always', // deepseekBackend.ts:404,472,486
-  ollama: 'always', // ollamaBackend.ts:487-514, wrapping the provider's separate thinking field
-  'bedrock-deepseek': 'always', // bedrockBackend/deepseek.ts:309,327
-  'bedrock-moonshot': 'always', // bedrockBackend/moonshot.ts:57
+  // Each wraps the provider's separate reasoning field (reasoning_content, or Ollama's
+  // `thinking`) in the markers at the SAME index as the prose - no other separator.
+  xai: 'always',
+  kimi: 'always',
+  deepseek: 'always',
+  ollama: 'always',
+  'bedrock-deepseek': 'always',
+  'bedrock-moonshot': 'always',
   // Not text completion at all - image, embedding and credential-only families. They cannot
   // back a chat agent, so they are refused rather than described.
   bfl: 'always',

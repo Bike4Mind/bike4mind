@@ -24,7 +24,7 @@ describe('buildPublicSSEEvent', () => {
   // The index is the PROVIDER's content-block/choice index, so any index is reachable:
   // two preceding blocks put the text at 2. A fixed [1]/[0] read reproduced the
   // empty-reply bug there. Streaming backends allocate the array fresh per event, so a
-  // chunk populates exactly one index (anthropicBackend.ts:1330 and siblings).
+  // chunk populates exactly one index (each backend declares streamedText inside its loop).
   it.each([
     [['the answer'], 'index 0'],
     [[undefined, 'the answer'], 'index 1'],
@@ -36,7 +36,7 @@ describe('buildPublicSSEEvent', () => {
 
   it('joins multiple populated blocks in index order', () => {
     // The non-streaming anthropic path pushes one entry per response text block
-    // (anthropicBackend.ts:1999); every entry is response text, so none may be dropped.
+    // pushes one entry per response text block; every entry is response text, none droppable.
     expect(buildPublicSSEEvent(['part one ', 'part two']).text).toBe('part one part two');
   });
 
@@ -80,6 +80,34 @@ describe('buildPublicSSEEvent', () => {
   it('keeps trailing tag-prefix text that no chunk can follow', () => {
     // Single-shot: nothing comes after, so `<` is prose, not a split sentinel.
     expect(buildPublicSSEEvent(['the operator is <']).text).toBe('the operator is <');
+  });
+
+  // The channel tag is set by the adapter at the emit site, where reply prose, reasoning
+  // and a raw tool result are still distinguishable. Downstream they are identical strings,
+  // which is why this is a tag and not a content scan.
+  it('drops the text of a reasoning frame', () => {
+    // An adaptive Claude model opens a thinking block whether or not the request asked for
+    // one, so the markers and any thinking text reach consumers on every turn.
+    expect(buildPublicSSEEvent(['<think>'], { channel: 'reasoning' }).text).toBe('');
+    expect(buildPublicSSEEvent(['deliberating about the user'], { channel: 'reasoning' }).text).toBe('');
+  });
+
+  it('drops the text of a raw tool-artifact frame', () => {
+    // handleToolResultStreaming pushes the WHOLE tool result at index 0. For web_fetch that
+    // is third-party page text; joining the sparse array would otherwise make it the reply.
+    const page = '<artifact type="application/vnd.ant.react">raw third-party page body</artifact>';
+    expect(buildPublicSSEEvent([page], { channel: 'tool-artifact' }).text).toBe('');
+  });
+
+  it('keeps usage accounting on a dropped frame', () => {
+    const e = buildPublicSSEEvent(['<think>'], { channel: 'reasoning', outputTokens: 7, creditsUsed: 1 });
+    expect(e.text).toBe('');
+    expect(e.usage).toMatchObject({ outputTokens: 7 });
+    expect(e.credits).toMatchObject({ used: 1 });
+  });
+
+  it('forwards an untagged frame, which is ordinary reply prose', () => {
+    expect(buildPublicSSEEvent(['the answer'], { outputTokens: 5 }).text).toBe('the answer');
   });
 
   it('drops usdCost while keeping creditsUsed', () => {
