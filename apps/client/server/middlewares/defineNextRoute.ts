@@ -11,14 +11,15 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
  */
 const METHODS = ['all', 'get', 'head', 'post', 'put', 'patch', 'delete', 'options', 'trace'] as const;
 
-/**
- * Returns `obj` without `keys`. Used to keep `pathParams` and `queryParams` from
- * seeing each other's fields before parsing (see the call sites below), since both
- * are parsed against the same merged `req.query`. Deliberately excludes only the
- * SIBLING schema's own declared keys, not every undeclared key: a `.strict()` or
- * `.passthrough()` schema must still see (and reject, or pass through) a real,
- * unexpected query key - only the other schema's field belongs to it, not this one.
- */
+/** Returns a copy of `obj` restricted to `keys`. */
+function pick(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  // Object.hasOwn, not `k in obj`: the latter also matches inherited names
+  // (`toString`, `constructor`, ...), which would report an absent key as
+  // present - the same class of bug the defineEndpoint overlap guard fixed.
+  return Object.fromEntries(keys.filter(k => Object.hasOwn(obj, k)).map(k => [k, obj[k]]));
+}
+
+/** Returns a copy of `obj` without `keys`. */
 function omit(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
   const excluded = new Set(keys);
   return Object.fromEntries(Object.entries(obj).filter(([key]) => !excluded.has(key)));
@@ -80,25 +81,34 @@ export function nextRouteForContract<C extends EndpointContract>(
   //
   // Next's file-based routing merges dynamic segments into req.query, not req.params
   // (there is no req.params in a Next.js API route) - see the pathParams doc comment.
+  //
+  // pathParams and queryParams are scoped ASYMMETRICALLY on purpose, not both the
+  // same way:
+  //   - pathParams is a fixed, closed set - only the `{name}` segments declared in
+  //     `path` are ever populated by Next's routing, so it is picked down to
+  //     exactly its own declared keys. Any other key in req.query (a real query
+  //     string field, or the sibling schema's) is none of its business.
+  //   - queryParams is inherently open - a caller can send any real query key - so
+  //     it is scoped by omitting only the sibling pathParams's declared keys,
+  //     never every undeclared key. That is what lets a `.strict()` queryParams
+  //     schema still 422 a genuinely unexpected key, and a `.passthrough()` one
+  //     still retain it, exactly as it would with no pathParams sibling at all.
+  // Getting this backwards (pick-ing queryParams down to its own keys, or
+  // omit-ing queryParams's keys off of pathParams) reintroduces the same
+  // interference this split exists to prevent, just on the other schema.
   const pathParamsSchema = contract.pathParams;
   const queryParamsSchema = contract.queryParams;
-  const queryParamsKeys = queryParamsSchema ? Object.keys(queryParamsSchema.shape) : [];
   const pathParamsKeys = pathParamsSchema ? Object.keys(pathParamsSchema.shape) : [];
 
   if (pathParamsSchema) {
     prelude.push((req, _res, next) => {
-      req.validatedParams = pathParamsSchema.parse(omit(req.query, queryParamsKeys)) as PathParamsOf<C>;
+      req.validatedParams = pathParamsSchema.parse(pick(req.query, pathParamsKeys)) as PathParamsOf<C>;
       next();
     });
   }
 
   // Real query-string fields, validated after path params but before the body -
   // same precedence reasoning: address/filter the resource before its payload.
-  // Only the sibling's own declared keys are excluded before parsing (never every
-  // undeclared key - see the omit() doc comment), so pathParams and queryParams
-  // stay independent of each other even if either is declared
-  // `.strict()`/`.passthrough()`, without changing what either schema does with a
-  // real, unexpected query key.
   if (queryParamsSchema) {
     prelude.push((req, _res, next) => {
       req.validatedQuery = queryParamsSchema.parse(omit(req.query, pathParamsKeys)) as QueryParamsOf<C>;
