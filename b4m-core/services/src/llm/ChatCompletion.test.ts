@@ -520,37 +520,37 @@ describe('ChatCompletionProcess', () => {
   // invariant, not just an assignment: getAccessibleDataLakeAccess memoizes per turn, so a capture
   // that ran after the first consumer would freeze an access set with the lake missing - and the
   // whole re-check below it would then be pinning behaviour nothing reaches.
-  describe('per-turn pre-authorized capture', () => {
-    const wireMinimalTurn = () => {
-      mockedGetLlmByModel.mockReturnValue({
-        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
-          await cb(['Hi!']);
-        }),
-        getModelInfo: vi.fn().mockResolvedValue([]),
-        currentModel: ChatModels.GPT4,
-      } as any); // any: minimal backend shape, as elsewhere in this file
-      mockedGetAvailableModels.mockResolvedValue([
-        {
-          id: ChatModels.GPT4,
-          type: 'text',
-          name: 'GPT-4',
-          backend: ModelBackend.OpenAI,
-          max_tokens: 100,
-          contextWindow: 1000,
-          can_stream: false,
-          pricing: {},
-          supportsImageVariation: false,
-        },
-      ] as any); // any: minimal model shape, as elsewhere in this file
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any); // any: minimal message shape, as elsewhere in this file
-      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
-      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
-      return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
-    };
+  const wireMinimalTurn = () => {
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi!']);
+      }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any); // any: minimal backend shape, as elsewhere in this file
+    mockedGetAvailableModels.mockResolvedValue([
+      {
+        id: ChatModels.GPT4,
+        type: 'text',
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 1000,
+        can_stream: false,
+        pricing: {},
+        supportsImageVariation: false,
+      },
+    ] as any); // any: minimal model shape, as elsewhere in this file
+    mockedBuildAndSortMessages.mockResolvedValue({
+      messages: [{ role: 'user', content: 'Hello' }],
+      messageTruncation: null,
+    } as any); // any: minimal message shape, as elsewhere in this file
+    mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+    mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+    return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+  };
 
+  describe('per-turn pre-authorized capture', () => {
     it('captures the session ids onto the turn', async () => {
       mockSession.userId = 'user1';
       mockSession.preauthorizedLakeIds = ['managed'];
@@ -587,6 +587,65 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       expect((service as any).turnPreauthorizedLakeIds).toBeUndefined();
+    });
+  });
+
+  describe('a user stop', () => {
+    it('landing before processing starts is honoured instead of saving running over it', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'stopped' });
+      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'running' }));
+      expect(sendStatusUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: 'stopped' }),
+        null,
+        expect.anything()
+      );
+    });
+
+    it('that aborts the request before the first chunk ends the quest stopped, not with an error reply', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const abort = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(abort),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus
+        .mockResolvedValueOnce({ id: 'quest1', status: 'running' })
+        .mockResolvedValue({ id: 'quest1', status: 'stopped' });
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'stopped', type: 'message' });
+      expect(JSON.stringify(lastSave.replies ?? [])).not.toContain('interrupted');
+    });
+
+    it('does not apply to an abort the user did not ask for', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const abort = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(abort),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'running' });
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
+      expect(lastSave.replies.join('')).toContain('The request was interrupted');
     });
   });
 

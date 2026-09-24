@@ -7,7 +7,8 @@ import Stack from '@mui/joy/Stack';
 import Tooltip from '@mui/joy/Tooltip';
 
 import { useLLM } from '@client/app/contexts/LLMContext';
-import { useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { ReadyState, useWebsocket } from '@client/app/contexts/WebsocketContext';
+import { isChatCompletionActiveFor } from '@client/app/hooks/chatCompletionState';
 import {
   useSessions,
   useSystemPromptFiles,
@@ -58,6 +59,7 @@ import { ContextCompactionNote } from '../ContextCompactionNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { LexicalChatInput, LexicalChatInputRef } from '../LexicalChatInput';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
@@ -69,6 +71,8 @@ import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
 import { useSessionFiles } from './useSessionFiles';
 import { useSendMessage } from './useSendMessage';
+import { createBlockedSendToastGate, getSendBlockedLabel, getSendBlockedReason } from './sendBlockedReason';
+import { useModerationScanFallback } from './useModerationScanFallback';
 import { useRollDice } from './useRollDice';
 import { useModalState } from './useModalState';
 import { useVoiceState } from './useVoiceState';
@@ -169,7 +173,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
   const [stream, setStream] = useState<boolean>(true);
   const { data: modelInfo } = useModelInfo();
-  const { accessibleModels, isLoading: isModelsLoading } = useAccessibleModels();
+  const { accessibleModels, isLoading: isModelsLoading, isModelsError, refetchModels } = useAccessibleModels();
   const hasModels = !!accessibleModels && accessibleModels.length > 0;
 
   // Keeps enabledMcpServers in sync with the database (init + stale-server cleanup)
@@ -290,13 +294,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const bothPanelsClosed = !isKnowledgeViewerBesideChat && !isSideNavOpen;
   const promptBarMaxWidth = isDockedLayout || isFloatingLayout ? 'none' : bothPanelsClosed ? '1200px' : '950px';
 
-  // Determine if the stop button should be shown
-  const shouldShowStopButton = useMemo(() => {
-    // Show stop button if chat completion is in progress
-    const isChatCompletionActive =
-      !chatCompletion.completed && (chatCompletion.statusMessage || chatCompletion.quest?.status === 'running');
-    return isChatCompletionActive;
-  }, [chatCompletion.completed, chatCompletion.statusMessage, chatCompletion.quest?.status]);
+  // Another session's in-flight quest must not put Stop on this composer.
+  const shouldShowStopButton = useMemo(
+    () => isChatCompletionActiveFor(chatCompletion, currentSessionId),
+    [chatCompletion, currentSessionId]
+  );
 
   // Check if there are active file uploads or images still pending a content-moderation
   // scan - the Send button must stay disabled until the scan clears, otherwise
@@ -361,16 +363,31 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     chatInputRef,
     clearFiles,
     stream,
+    chatCompletion,
     setChatCompletion,
     onAgentsAttached: () => setAgentBenchCollapsed(false),
   });
 
+  const sendBlockedReason = getSendBlockedReason({
+    isGenerating: shouldShowStopButton,
+    submitting,
+    isModelsLoading,
+    isModelsError,
+    hasModels,
+    isSocketOpen: readyState === ReadyState.OPEN,
+    hasActiveUploads,
+  });
+
+  const [shouldToastBlockedSend] = useState(() => createBlockedSendToastGate());
   const handleEditorSubmit = useCallback(async () => {
-    // Block Enter-to-send while a response is still streaming
-    // or while files are still uploading/scanning.
-    if (shouldShowStopButton || submitting || hasActiveUploads) return;
+    // Same gate as the Send button: Enter must not send what the button would refuse. The
+    // tooltip explaining why is out of sight while typing, so say it here too.
+    if (sendBlockedReason) {
+      if (shouldToastBlockedSend(sendBlockedReason)) toast.info(getSendBlockedLabel(sendBlockedReason, t));
+      return;
+    }
     await handleSendClick();
-  }, [shouldShowStopButton, submitting, hasActiveUploads, handleSendClick]);
+  }, [sendBlockedReason, handleSendClick, shouldToastBlockedSend, t]);
 
   // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard)
   const sendPromptCallback = useCallback(
@@ -453,6 +470,35 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // swapped in the real FabFile id yet (upload still resolving) - see SessionFilePond's
   // consumeBufferedModerationStatus reconciliation on that swap - so a ws event that beats
   // the id-swap doesn't strand the item on the 'scanning' placeholder forever.
+  // Shared by the websocket event and the polling fallback (useModerationScanFallback),
+  // which can both report the same scan, so an already-applied clean result is skipped.
+  const applyModerationResult = useCallback(
+    (fabFileId: string, moderationStatus: 'pending' | 'clean' | 'blocked', fileUrl?: string) => {
+      if (moderationStatus !== 'clean') {
+        recordModerationStatus(fabFileId, moderationStatus);
+        return;
+      }
+      const existing = useSessionLayout.getState().pendingMessageFiles.find(item => item.fabFile.id === fabFileId);
+      if (existing?.status === 'complete') return;
+      recordModerationStatus(fabFileId, 'clean', fileUrl);
+
+      // An image the user explicitly scoped to the notebook is held back at upload
+      // time and promoted only here, once the scan clears. A knowledgeIds entry
+      // survives into clones, exports and (when propagation is on) projects, so a
+      // blocked image must never acquire one. Read from the store rather than a
+      // closure: this effect is subscribed once and would capture a stale list.
+      const promoted = useSessionLayout.getState().pendingMessageFiles.find(item => item.fabFile.id === fabFileId);
+      if (promoted?.scope === 'notebook') {
+        void addToNotebookContext(promoted.uploadSessionId, promoted.fabFile, { propagateToProjects: false }).catch(
+          () => {
+            // Already rolled back and surfaced by the hook.
+          }
+        );
+      }
+    },
+    [addToNotebookContext]
+  );
+
   useEffect(() => {
     const unsubscribe = subscribeToAction('image_moderation_status', async msg => {
       if (msg.action !== 'image_moderation_status') return;
@@ -466,32 +512,20 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           // Fall through - the reducer still flips status to 'complete'; a page refresh
           // (File Manager / message stream) self-heals by refetching a valid fileUrl.
         }
-        recordModerationStatus(msg.fabFileId, 'clean', fileUrl);
-
-        // An image the user explicitly scoped to the notebook is held back at upload
-        // time and promoted only here, once the scan clears. A knowledgeIds entry
-        // survives into clones, exports and (when propagation is on) projects, so a
-        // blocked image must never acquire one. Read from the store rather than a
-        // closure: this effect is subscribed once and would capture a stale list.
-        const promoted = useSessionLayout
-          .getState()
-          .pendingMessageFiles.find(item => item.fabFile.id === msg.fabFileId);
-        if (promoted?.scope === 'notebook') {
-          void addToNotebookContext(promoted.uploadSessionId, promoted.fabFile, { propagateToProjects: false }).catch(
-            () => {
-              // Already rolled back and surfaced by the hook.
-            }
-          );
-        }
+        applyModerationResult(msg.fabFileId, 'clean', fileUrl);
       } else {
-        recordModerationStatus(msg.fabFileId, msg.moderationStatus);
+        applyModerationResult(msg.fabFileId, msg.moderationStatus);
       }
     });
 
     return () => {
       unsubscribe();
     };
-  }, [subscribeToAction, addToNotebookContext]);
+  }, [subscribeToAction, applyModerationResult]);
+
+  // The websocket event above is the only other thing that clears 'scanning'; if it is
+  // lost, poll the server, and give up to an error state rather than hang the composer.
+  useModerationScanFallback(pendingMessageFiles, applyModerationResult);
 
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
 
@@ -559,7 +593,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   position: 'relative',
                 }}
               >
-                <NoModelsWarning show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)} />
+                <NoModelsWarning
+                  show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)}
+                  loadError={isModelsError}
+                  onRetry={() => void refetchModels()}
+                />
                 {contextUsage && (
                   <ContextUsageWarning
                     show={showContextWarning}
@@ -790,9 +828,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           handleSendClick={handleSendClick}
           handleStopMessage={handleStopMessage}
           pendingAutoSubmitGoal={pendingAutoSubmitGoal}
-          readyState={readyState}
-          hasActiveUploads={hasActiveUploads}
-          accessibleModels={accessibleModels}
+          sendBlockedReason={sendBlockedReason}
           isModelsLoading={isModelsLoading}
           isVoiceSessionEnabled={isVoiceSessionEnabled}
           voiceEngine={voiceEngine}
