@@ -14,7 +14,8 @@ const h = vi.hoisted(() => ({
   capturedUrl: { current: null as unknown as string | (() => Promise<string>) | null },
   readyState: 1 as number, // ReadyState.OPEN
   probeIdentity: vi.fn(),
-  queryClient: {} as unknown,
+  queryClient: { invalidateQueries: vi.fn() },
+  sendMessage: vi.fn(),
   apiGet: vi.fn(),
   apiPost: vi.fn(),
   accessTokenState: { accessToken: 'tok' as string | null, mfaPending: false },
@@ -29,7 +30,7 @@ vi.mock('react-use-websocket', () => ({
     h.capturedUrl.current = url;
     h.capturedOptions.current = options;
     h.capturedUrls.push(url);
-    return { sendJsonMessage: vi.fn(), readyState: h.readyState, lastJsonMessage: null };
+    return { sendJsonMessage: vi.fn(), sendMessage: h.sendMessage, readyState: h.readyState, lastJsonMessage: null };
   },
 }));
 
@@ -62,7 +63,13 @@ vi.mock('@client/app/hooks/useAccessToken', () => {
   return { useAccessToken };
 });
 
-import { shouldProbeOnFailedWsConnect, WebsocketProvider } from './WebsocketContext';
+import {
+  LIVENESS_PROBE_TIMEOUT_MS,
+  SLEEP_CHECK_INTERVAL_MS,
+  SLEEP_GAP_THRESHOLD_MS,
+  shouldProbeOnFailedWsConnect,
+  WebsocketProvider,
+} from './WebsocketContext';
 
 const base = { openedThisAttempt: false, accessToken: 'tok', mfaPending: false, pathname: '/new' };
 
@@ -464,5 +471,125 @@ describe('WebsocketProvider - connect URL carries a single-use ticket, never the
     expect(h.apiPost).toHaveBeenCalledWith('/api/websocket/ticket', undefined, { timeout: 10_000 });
     expect(resolved).toBe('wss://example/ws?ticket=ticket-abc');
     expect(resolved).not.toContain('token=');
+  });
+});
+
+describe('WebsocketProvider - liveness probe for a half-open socket', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    h.sendMessage.mockReset();
+    h.capturedUrls = [];
+    h.readyState = 1;
+    h.accessTokenState.accessToken = 'tok';
+    stubVisibility('visible');
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const mount = () => {
+    render(React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div')));
+    return h.capturedOptions.current;
+  };
+
+  const refocus = async () => {
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+    });
+  };
+
+  const advance = async (ms: number) => {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  };
+
+  it('keeps the socket when anything answers the probe within the window', async () => {
+    const opts = mount();
+    h.capturedUrls = [];
+
+    await refocus();
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+    await act(async () => {
+      opts.onMessage({ data: 'pong' });
+    });
+    await advance(LIVENESS_PROBE_TIMEOUT_MS + 100);
+
+    expect(h.capturedUrls).not.toContain(null);
+  });
+
+  it('drops a socket that stays silent so it reconnects now', async () => {
+    mount();
+    h.capturedUrls = [];
+
+    await refocus();
+    await advance(LIVENESS_PROBE_TIMEOUT_MS + 100);
+
+    expect(h.capturedUrls).toContain(null);
+    expect(typeof h.capturedUrls[h.capturedUrls.length - 1]).toBe('function');
+  });
+
+  it('sends one probe when focus, visibilitychange and online fire together', async () => {
+    mount();
+
+    await act(async () => {
+      window.dispatchEvent(new Event('focus'));
+      document.dispatchEvent(new Event('visibilitychange'));
+      window.dispatchEvent(new Event('online'));
+    });
+
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not probe a socket that is not open', async () => {
+    h.readyState = 0;
+    mount();
+
+    await refocus();
+
+    expect(h.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('probes when a timer gap shows the machine slept, with no focus event', async () => {
+    mount();
+    // Jump the wall clock without running the intervening ticks, as a suspended machine does.
+    vi.setSystemTime(Date.now() + SLEEP_CHECK_INTERVAL_MS + SLEEP_GAP_THRESHOLD_MS + 1_000);
+    await advance(SLEEP_CHECK_INTERVAL_MS);
+
+    expect(h.sendMessage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('WebsocketProvider - catch-up refetch after a reconnect', () => {
+  beforeEach(() => {
+    h.queryClient.invalidateQueries.mockReset();
+    h.accessTokenState.accessToken = 'tok';
+  });
+
+  const element = () => React.createElement(WebsocketProvider, { url: 'wss://example/ws' }, React.createElement('div'));
+
+  it('does not refetch on the first connect', () => {
+    h.readyState = 0;
+    const { rerender } = render(element());
+    h.readyState = 1;
+    rerender(element());
+
+    expect(h.queryClient.invalidateQueries).not.toHaveBeenCalled();
+  });
+
+  it('refetches the quest lists once when the socket comes back', () => {
+    h.readyState = 1;
+    const { rerender } = render(element());
+    h.readyState = 3;
+    rerender(element());
+    h.readyState = 0;
+    rerender(element());
+    h.readyState = 1;
+    rerender(element());
+    rerender(element());
+
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(h.queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['quests', 'session'] });
   });
 });

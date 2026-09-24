@@ -43,8 +43,9 @@ import useSessionLayout, {
   setPendingMessageFiles,
   getSendableMessageFileIds,
 } from '@client/app/hooks/useSessionLayout';
-import type { IChatCompletion, useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
-import { adoptSentQuest, resolveStopFailure } from '@client/app/hooks/chatCompletionState';
+import type { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import { adoptSentQuest } from '@client/app/hooks/chatCompletionState';
+import { stopChatCompletion } from './stopChatCompletion';
 import {
   detectAgentMentions,
   findAgentsByMentions,
@@ -83,7 +84,6 @@ import { LexicalChatInputRef } from '../LexicalChatInput';
 // `'Running...'`, etc.) use ASCII `...`, so the strict-equality rollback below
 // can't accidentally clobber a real WS event.
 const OPTIMISTIC_GENERATING_STATUS = 'Generating…';
-const CANCELLING_STATUS = 'Cancelling generation...';
 
 interface UseSendMessageParams {
   lexicalInputRef: React.RefObject<LexicalChatInputRef | null>;
@@ -307,44 +307,21 @@ export function useSendMessage({
     if (!currentSessionId) return;
 
     setStoppingMessage(true);
-    let beforeStop: IChatCompletion | undefined;
-    setChatCompletion(prev => {
-      beforeStop = prev;
-      return {
-        ...prev,
-        quest: { ...prev.quest, sessionId: currentSessionId },
-        stopped: true,
-        statusMessage: CANCELLING_STATUS,
-      };
-    });
-
     try {
-      await stopChatMessage(currentSessionId);
-      // No success toast here: the inline statusMessage below already surfaces the
-      // cancellation, and a bottom-right toast covers the whole prompt area on
-      // narrow layouts (e.g. chat docked to the right).
-      setChatCompletion(prev => ({
-        ...prev,
-        completed: true,
-        statusMessage: 'Generation cancelled by user',
-        // Same reason as the send-time reset: a cancelled turn keeps the streaming
-        // slot, so its acknowledgement would outlive it.
-        rapidReply: undefined,
-      }));
-    } catch (error) {
-      console.error('Error stopping chat message:', error);
-      toast.error('Error cancelling generation');
-      // Leaving "Cancelling..." with completed: false would pin Stop on screen for good.
-      setChatCompletion(prev => {
-        const questId = prev.quest?.id;
-        const cachedStatus = questId
-          ? queryClient
-              .getQueryData<{ pages?: { data: IChatHistoryItemDocument[] }[] }>(['quests', 'session', currentSessionId])
-              ?.pages?.flatMap(page => page.data)
-              .find(quest => quest?.id === questId)?.status
-          : undefined;
-        return resolveStopFailure(prev, beforeStop ?? prev, cachedStatus, CANCELLING_STATUS);
+      // No success toast: the inline statusMessage already surfaces the cancellation, and a
+      // bottom-right toast covers the whole prompt area on narrow layouts (e.g. chat docked
+      // to the right). A failed cancel has no inline surface, so it does toast.
+      const stopped = await stopChatCompletion({
+        sessionId: currentSessionId,
+        setChatCompletion,
+        stop: stopChatMessage,
+        getCachedQuestStatus: questId =>
+          queryClient
+            .getQueryData<{ pages?: { data: IChatHistoryItemDocument[] }[] }>(['quests', 'session', currentSessionId])
+            ?.pages?.flatMap(page => page.data)
+            .find(quest => quest?.id === questId)?.status,
       });
+      if (!stopped) toast.error('Error cancelling generation');
     } finally {
       setStoppingMessage(false);
     }

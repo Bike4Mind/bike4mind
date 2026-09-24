@@ -10,8 +10,14 @@ import React from 'react';
  * composer showed a spurious "Stop Generation" button until the OTHER
  * session's stream ended.
  */
-const { subscribeToAction } = vi.hoisted(() => ({
+const { subscribeToAction, artifactPersistence } = vi.hoisted(() => ({
   subscribeToAction: vi.fn((_action: string, _cb: unknown) => () => {}),
+  // Stable object: the hook lists it as an effect dependency.
+  artifactPersistence: { persistArtifactsFromQuest: vi.fn(), reset: vi.fn() },
+}));
+
+vi.mock('./useStreamingArtifactPersistence', () => ({
+  useStreamingArtifactPersistence: () => artifactPersistence,
 }));
 
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
@@ -218,5 +224,28 @@ describe('useSubscribeChatCompletion - first send from /new', () => {
     await stream(frame('foreign-q', 'foreign-session', 'running', 'Running...'));
     expect(result.current.chatCompletion.completed).toBe(true);
     expect(result.current.chatCompletion.quest).toBeUndefined();
+  });
+});
+
+describe('useSubscribeChatCompletion - artifact persistence', () => {
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    artifactPersistence.persistArtifactsFromQuest.mockClear();
+  });
+
+  it("persists artifacts for a 'done' quest", async () => {
+    mount('session-art');
+    await act(async () => {
+      await latestStreamHandler()(frame('art-done', 'session-art', 'done'));
+    });
+    expect(artifactPersistence.persistArtifactsFromQuest).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not persist a stopped quest's partial reply", async () => {
+    mount('session-art');
+    await act(async () => {
+      await latestStreamHandler()(frame('art-stopped', 'session-art', 'stopped'));
+    });
+    expect(artifactPersistence.persistArtifactsFromQuest).not.toHaveBeenCalled();
   });
 });

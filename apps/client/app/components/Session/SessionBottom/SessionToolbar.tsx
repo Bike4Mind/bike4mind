@@ -1,5 +1,5 @@
 import type { AttachScopeMode } from '@bike4mind/common';
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Box, CircularProgress, Dropdown, IconButton, Menu, MenuButton } from '@mui/joy';
 import Button from '@mui/joy/Button';
@@ -12,7 +12,8 @@ import { useTranslation } from 'react-i18next';
 import { IFabFileDocument, ISessionDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
 import { fixedIconSize } from './sessionBottomConstants';
-import type { SendBlockedReason } from './sendBlockedReason';
+import { getSendBlockedLabel, type SendBlockedReason } from './sendBlockedReason';
+import { useChatInput } from '@client/app/hooks/useChatInput';
 import { sessionTheme } from '@client/app/utils/themes/components/session';
 import { brand, red } from '@client/app/utils/themes/colors';
 
@@ -89,6 +90,12 @@ interface SessionToolbarProps {
   setDebugDrawerOpen: (open: boolean) => void;
 }
 
+/** Joins a voice transcript onto existing composer text. */
+export function appendTranscript(existing: string, transcript: string): string {
+  if (!existing.trim()) return transcript;
+  return `${existing.replace(/\s+$/, '')} ${transcript}`;
+}
+
 export function SessionToolbar(props: SessionToolbarProps) {
   const { t } = useTranslation();
   const {
@@ -145,15 +152,13 @@ export function SessionToolbar(props: SessionToolbarProps) {
   const { isFeatureEnabled } = useFeatureEnabled();
   const agentModeFeatureEnabled = isFeatureEnabled('agentMode');
 
-  const sendBlockedLabels: Record<SendBlockedReason, string> = {
-    generating: t('session.sendBlocked.generating', 'A response is still generating'),
-    sending: t('session.sendBlocked.sending', 'Sending...'),
-    loadingModels: t('session.loadingModels', 'Loading AI models\u2026'),
-    noModels: t('session.sendBlocked.noModels', 'No models available'),
-    reconnecting: t('session.sendBlocked.reconnecting', 'Reconnecting...'),
-    uploading: t('session.sendBlocked.uploading', 'Uploading files...'),
-  };
-  const sendBlockedLabel = sendBlockedReason ? sendBlockedLabels[sendBlockedReason] : null;
+  const sendBlockedLabel = sendBlockedReason ? getSendBlockedLabel(sendBlockedReason, t) : null;
+  // VoiceRecordButton captures onRecordingEnd when recording starts, so the gate has to be
+  // read at transcript time, not from that render's closure.
+  const sendBlockedLabelRef = useRef(sendBlockedLabel);
+  useEffect(() => {
+    sendBlockedLabelRef.current = sendBlockedLabel;
+  }, [sendBlockedLabel]);
 
   return (
     <Stack className="session-bottom-toolbar" direction="column" spacing={0} alignItems="center" sx={{ width: '100%' }}>
@@ -377,10 +382,14 @@ export function SessionToolbar(props: SessionToolbarProps) {
                     onRecordingError={() => setRecording(false)}
                     onRecordingEnd={async (prompt: string) => {
                       setRecording(false);
-                      // Keep the transcript rather than drop it when a send isn't allowed yet.
-                      if (sendBlockedLabel) {
-                        setChatInputValue(prompt);
-                        toast.info(sendBlockedLabel);
+                      // Keep the transcript rather than drop it when a send isn't allowed yet,
+                      // after whatever is already in the composer (SyncValuePlugin mirrors the
+                      // store into the editor, as for a rephrase).
+                      const blockedLabel = sendBlockedLabelRef.current;
+                      if (blockedLabel) {
+                        const existing = useChatInput.getState().chatInputValue;
+                        setChatInputValue(appendTranscript(existing, prompt));
+                        toast.info(blockedLabel);
                         return;
                       }
                       await handleSendClick(prompt);

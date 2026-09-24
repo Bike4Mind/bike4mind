@@ -58,7 +58,7 @@ describe('useCreateDataLakeSession', () => {
         retrievalTags: ['datalake:research', 'datalake:legal'],
         lakeScopeExplicit: true,
       },
-      { timeout: 30_000 }
+      { timeout: 60_000 }
     );
     // Consumed - a scope picked for this /new must not silently apply to the next one.
     expect(usePendingLakeScope.getState().lakeTags).toEqual([]);
@@ -78,7 +78,7 @@ describe('useCreateDataLakeSession', () => {
         name: 'New Notebook',
         forceKnowledgeRetrieval: true,
       },
-      { timeout: 30_000 }
+      { timeout: 60_000 }
     );
   });
 
@@ -100,7 +100,7 @@ describe('useCreateDataLakeSession', () => {
         lakeScopeExplicit: true,
         knowledgeIds: ['file-1'],
       },
-      { timeout: 30_000 }
+      { timeout: 60_000 }
     );
   });
 

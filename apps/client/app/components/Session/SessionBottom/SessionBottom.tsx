@@ -59,6 +59,7 @@ import { ContextCompactionNote } from '../ContextCompactionNote';
 import { buildSortedKnowledgeItems } from '@client/app/utils/knowledgeViewerSorting';
 import { deleteFileUtility, getFabFilesFromServerByIds } from '@client/app/utils/filesAPICalls';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { LexicalChatInput, LexicalChatInputRef } from '../LexicalChatInput';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
@@ -70,7 +71,7 @@ import { useMcpServerSync } from './useMcpServerSync';
 import { useMessageDraft } from './useMessageDraft';
 import { useSessionFiles } from './useSessionFiles';
 import { useSendMessage } from './useSendMessage';
-import { getSendBlockedReason } from './sendBlockedReason';
+import { createBlockedSendToastGate, getSendBlockedLabel, getSendBlockedReason } from './sendBlockedReason';
 import { useModerationScanFallback } from './useModerationScanFallback';
 import { useRollDice } from './useRollDice';
 import { useModalState } from './useModalState';
@@ -172,7 +173,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const setSessionFilesOpen = useAdvancedAISettings(state => state.setSessionFilesOpen);
   const [stream, setStream] = useState<boolean>(true);
   const { data: modelInfo } = useModelInfo();
-  const { accessibleModels, isLoading: isModelsLoading } = useAccessibleModels();
+  const { accessibleModels, isLoading: isModelsLoading, isModelsError, refetchModels } = useAccessibleModels();
   const hasModels = !!accessibleModels && accessibleModels.length > 0;
 
   // Keeps enabledMcpServers in sync with the database (init + stale-server cleanup)
@@ -370,16 +371,22 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     isGenerating: shouldShowStopButton,
     submitting,
     isModelsLoading,
+    isModelsError,
     hasModels,
     isSocketOpen: readyState === ReadyState.OPEN,
     hasActiveUploads,
   });
 
+  const [shouldToastBlockedSend] = useState(() => createBlockedSendToastGate());
   const handleEditorSubmit = useCallback(async () => {
-    // Same gate as the Send button: Enter must not send what the button would refuse.
-    if (sendBlockedReason) return;
+    // Same gate as the Send button: Enter must not send what the button would refuse. The
+    // tooltip explaining why is out of sight while typing, so say it here too.
+    if (sendBlockedReason) {
+      if (shouldToastBlockedSend(sendBlockedReason)) toast.info(getSendBlockedLabel(sendBlockedReason, t));
+      return;
+    }
     await handleSendClick();
-  }, [sendBlockedReason, handleSendClick]);
+  }, [sendBlockedReason, handleSendClick, shouldToastBlockedSend, t]);
 
   // Expose handleSendClick for programmatic use (e.g., InteractiveChessBoard)
   const sendPromptCallback = useCallback(
@@ -585,7 +592,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                   position: 'relative',
                 }}
               >
-                <NoModelsWarning show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)} />
+                <NoModelsWarning
+                  show={!isModelsLoading && (!accessibleModels || accessibleModels.length === 0)}
+                  loadError={isModelsError}
+                  onRetry={() => void refetchModels()}
+                />
                 {contextUsage && (
                   <ContextUsageWarning
                     show={showContextWarning}

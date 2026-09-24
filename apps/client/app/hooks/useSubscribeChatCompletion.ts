@@ -338,7 +338,11 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
 
           // ARTIFACT PERSISTENCE: Extract and save artifacts from completed quest
           // (parsing, dedup, persistence, and id broadcast are owned by the hook)
-          artifactPersistence.persistArtifactsFromQuest(typedMsg.quest);
+          // 'done' only: a stopped reply is partial, and persisting it would also mark the
+          // quest as handled so a later retry's complete artifacts were skipped.
+          if (typedMsg.quest.status === 'done') {
+            artifactPersistence.persistArtifactsFromQuest(typedMsg.quest);
+          }
         }
       } catch (error) {
         perfLogger.error(`🚨 [STREAMING] Error in handleStreamingMessage:`, error);
