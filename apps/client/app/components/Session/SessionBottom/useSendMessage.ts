@@ -884,7 +884,9 @@ export function useSendMessage({
             dispatchModel
           );
           dispatchSessionId = realSession.id;
-          setSessionLayout({ pendingRealSessionId: realSession.id });
+          // Adopted here, so a later session.created (possibly another tab's) must not be read
+          // as this tab's own mint - only a set pendingOptimisticId makes a tab switch to it.
+          setSessionLayout({ pendingOptimisticId: null, pendingRealSessionId: realSession.id });
           setCurrentSession(realSession);
           setCurrentSessionId(realSession.id);
           // Insert into the sessions list cache so the new notebook appears
