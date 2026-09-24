@@ -90,9 +90,9 @@ const SNAPSHOT_FIELDS = {
   createdByUserId: 1,
   organizationId: 1,
   requiredPassageTokenTarget: 1,
-  // Subpaths, never the whole report: `storedInconsistency` reads only these scalars and never
-  // `findings`, and DataLakeRepository's own list projection drops `inconsistencyReport` by default
-  // (LIST_PROJECTION_FIELDS) precisely so that array does not ride along on a fleet-wide scan.
+  // Subpaths rather than the whole field, so this scan asks for exactly what `storedInconsistency`
+  // reads. DataLakeRepository's own list projection drops `inconsistencyReport` by default
+  // (LIST_PROJECTION_FIELDS), so naming what is wanted is the only way to get it either way.
   'inconsistencyReport.sampled': 1,
   'inconsistencyReport.memberSampled': 1,
   'inconsistencyReport.memberCount': 1,

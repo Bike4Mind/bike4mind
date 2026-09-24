@@ -123,6 +123,9 @@ const DataLakeSchema = new mongoose.Schema(
     // so a never-checked lake sorts first (see the compound index below), same convention as
     // lastPolledAt on OrgGoogleDriveConnectionModel.
     lastHealthCheckedAt: { type: Date, default: null },
+    // Detection sweep's staleness-ordering key - see IDataLake.lastInconsistencyScanAt. Null
+    // default so a never-scanned lake sorts first, same convention as lastHealthCheckedAt above.
+    lastInconsistencyScanAt: { type: Date, default: null },
     // Teardown batch key (see IDataLake.filesDeletedAt): the exact stamp phase-1 delete wrote on
     // the lake's member files, matched by equality on restore. Set only through
     // claimFilesDeletedAt, never a plain update - a stamp written past the claim can name a batch
@@ -178,6 +181,10 @@ DataLakeSchema.index({ createdByUserId: 1, fileTagPrefix: 1 }, { unique: true })
 // and an index ending at lastHealthCheckedAt cannot satisfy that sort, so the planner would fall
 // back to a blocking top-k sort over every active lake on every page of a fleet-wide scan.
 DataLakeSchema.index({ status: 1, lastHealthCheckedAt: 1, _id: 1 });
+// Serves the detection sweep's staleness-ordered scan, and `_id` is a key here for the same reason
+// it is above: the scan pages by (staleness, _id) and an index ending at the date cannot satisfy
+// that sort.
+DataLakeSchema.index({ status: 1, lastInconsistencyScanAt: 1, _id: 1 });
 
 export const DataLakeModel =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
@@ -346,39 +353,51 @@ type DueForHealthCheckParams = {
   projection: Record<string, 0 | 1>;
 };
 
-/** Matches the { status, lastHealthCheckedAt, _id } index, so no page pays a blocking sort. */
-const DUE_FOR_HEALTH_CHECK_SORT = { lastHealthCheckedAt: 1, _id: 1 } as const;
+/** Keyset position in a staleness-ordered scan: the sort key's value, then the `_id` tiebreak. */
+export type InconsistencyScanCursor = { lastInconsistencyScanAt: Date | null; id: string };
+
+type DueForInconsistencyScanParams = {
+  cursor: InconsistencyScanCursor | null;
+  limit: number;
+  /** Stamp the calling run writes as it scans, so its own writes stay out of the candidate set. */
+  excludeScannedAt: Date;
+  projection: Record<string, 0 | 1>;
+};
+
+/** Matches the { status, <stampField>, _id } index, so no page pays a blocking sort. */
+const stalenessScanSort = (stampField: string) => ({ [stampField]: 1, _id: 1 }) as const;
 
 /**
- * Candidate filter for one page of the health sweep's staleness-ordered scan.
+ * Candidate filter for one page of a sweep's staleness-ordered scan over active lakes, shared by
+ * the health sweep and the detection sweep - two sweeps, two stamp fields, one predicate, because
+ * both of the subtleties below were live bugs in the first one and neither is visible from a call
+ * site.
  *
  * Two things a textbook keyset predicate gets wrong here, both of them because the scan's sort key
  * is the very field the caller stamps while the scan is still in flight:
  *
- * 1. A lake this run already graded carries `lastHealthCheckedAt = excludeCheckedAt`, which is
- *    newer than any cursor built from an older page, so it re-enters the candidate set and gets
- *    graded a second time. The `$ne` drops exactly this run's own writes; it still admits null and
- *    missing, so never-checked lakes qualify.
+ * 1. A lake this run already handled carries `<stampField> = excludeStampedAt`, which is newer than
+ *    any cursor built from an older page, so it re-enters the candidate set and is handled a second
+ *    time. The `$ne` drops exactly this run's own writes; it still admits null and missing, so
+ *    never-stamped lakes qualify.
  * 2. Mongo's comparison operators are type-bracketed: `$gt: null` matches NOTHING, not every dated
- *    document. A cursor sitting on a never-checked lake therefore needs an explicit "leave the null
+ *    document. A cursor sitting on a never-stamped lake therefore needs an explicit "leave the null
  *    group" arm, or the scan ends the moment the nulls run out and every dated lake is skipped.
  */
-function buildDueForHealthCheckFilter(
-  cursor: HealthCheckScanCursor | null,
-  excludeCheckedAt: Date
+function buildStalenessScanFilter(
+  stampField: string,
+  cursor: { stampedAt: Date | null; id: string } | null,
+  excludeStampedAt: Date
 ): Record<string, unknown> {
   const filter: Record<string, unknown> = {
     status: 'active',
-    lastHealthCheckedAt: { $ne: excludeCheckedAt },
+    [stampField]: { $ne: excludeStampedAt },
   };
   if (!cursor) return filter;
   filter.$or =
-    cursor.lastHealthCheckedAt === null
-      ? [{ lastHealthCheckedAt: null, _id: { $gt: cursor.id } }, { lastHealthCheckedAt: { $ne: null } }]
-      : [
-          { lastHealthCheckedAt: { $gt: cursor.lastHealthCheckedAt } },
-          { lastHealthCheckedAt: cursor.lastHealthCheckedAt, _id: { $gt: cursor.id } },
-        ];
+    cursor.stampedAt === null
+      ? [{ [stampField]: null, _id: { $gt: cursor.id } }, { [stampField]: { $ne: null } }]
+      : [{ [stampField]: { $gt: cursor.stampedAt } }, { [stampField]: cursor.stampedAt, _id: { $gt: cursor.id } }];
   return filter;
 }
 
@@ -1211,8 +1230,15 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   async findDueForHealthCheck(params: DueForHealthCheckParams): Promise<IDataLakeDocument[]> {
     const { cursor, limit, excludeCheckedAt, projection } = params;
     const docs = await this.dataLakeModel
-      .find(buildDueForHealthCheckFilter(cursor, excludeCheckedAt), projection)
-      .sort(DUE_FOR_HEALTH_CHECK_SORT)
+      .find(
+        buildStalenessScanFilter(
+          'lastHealthCheckedAt',
+          cursor && { stampedAt: cursor.lastHealthCheckedAt, id: cursor.id },
+          excludeCheckedAt
+        ),
+        projection
+      )
+      .sort(stalenessScanSort('lastHealthCheckedAt'))
       .limit(limit);
     return docs.map(d => d.toJSON() as IDataLakeDocument);
   }
@@ -1221,8 +1247,54 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * whose last page happened to land exactly on the cap. */
   async hasMoreDueForHealthCheck(cursor: HealthCheckScanCursor | null, excludeCheckedAt: Date): Promise<boolean> {
     const doc = await this.dataLakeModel
-      .findOne(buildDueForHealthCheckFilter(cursor, excludeCheckedAt), { _id: 1 })
-      .sort(DUE_FOR_HEALTH_CHECK_SORT);
+      .findOne(
+        buildStalenessScanFilter(
+          'lastHealthCheckedAt',
+          cursor && { stampedAt: cursor.lastHealthCheckedAt, id: cursor.id },
+          excludeCheckedAt
+        ),
+        { _id: 1 }
+      )
+      .sort(stalenessScanSort('lastHealthCheckedAt'));
+    return !!doc;
+  }
+
+  async markInconsistencyScanned(id: string, at: Date): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $set: { lastInconsistencyScanAt: at } });
+  }
+
+  async findDueForInconsistencyScan(params: DueForInconsistencyScanParams): Promise<IDataLakeDocument[]> {
+    const { cursor, limit, excludeScannedAt, projection } = params;
+    const docs = await this.dataLakeModel
+      .find(
+        buildStalenessScanFilter(
+          'lastInconsistencyScanAt',
+          cursor && { stampedAt: cursor.lastInconsistencyScanAt, id: cursor.id },
+          excludeScannedAt
+        ),
+        projection
+      )
+      .sort(stalenessScanSort('lastInconsistencyScanAt'))
+      .limit(limit);
+    return docs.map(d => d.toJSON() as IDataLakeDocument);
+  }
+
+  /** Whether any candidate remains behind `cursor` - distinguishes a real remainder from a run
+   * whose last page happened to land exactly on the cap. */
+  async hasMoreDueForInconsistencyScan(
+    cursor: InconsistencyScanCursor | null,
+    excludeScannedAt: Date
+  ): Promise<boolean> {
+    const doc = await this.dataLakeModel
+      .findOne(
+        buildStalenessScanFilter(
+          'lastInconsistencyScanAt',
+          cursor && { stampedAt: cursor.lastInconsistencyScanAt, id: cursor.id },
+          excludeScannedAt
+        ),
+        { _id: 1 }
+      )
+      .sort(stalenessScanSort('lastInconsistencyScanAt'));
     return !!doc;
   }
 }

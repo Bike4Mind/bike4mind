@@ -159,6 +159,8 @@ export const LAKE_CONFIG_FIELD_AUDIT = {
   lastSyncAt: 'excluded',
   // Sweep bookkeeping, not an operator choice - see IDataLake.lastHealthCheckedAt.
   lastHealthCheckedAt: 'excluded',
+  // Sweep bookkeeping, not an operator choice - see IDataLake.lastInconsistencyScanAt.
+  lastInconsistencyScanAt: 'excluded',
   filesDeletedAt: 'excluded',
   filesArchivedAt: 'excluded',
   lakeMemoryExtractionAt: 'excluded',

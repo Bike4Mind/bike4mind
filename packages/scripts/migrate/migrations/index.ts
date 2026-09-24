@@ -131,6 +131,11 @@ import EnsureDataLakeFindingIndexes from './20260921000000_ensure-data-lake-find
 // environment's stale `20260922000000` row from the migrations collection so it reruns as the
 // OAuthGrant migration.
 import EnsureDataLakeCorpusActionIndexes from './20260921100000_ensure-data-lake-corpus-action-indexes';
+// Renamed from 20260922000000 to 20260921120000 to resolve an id collision with
+// EnsureOAuthGrantClientUserIndex below, which merged into main first, and to keep this id below
+// BackfillOAuthClientTokenEndpointAuthMethod's - that migration's own test asserts it has the
+// highest id on disk, since its fail-closed throw must not block anything queued after it.
+import EnsureDataLakeInconsistencyScanIndex from './20260921120000_ensure-data-lake-inconsistency-scan-index';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -248,6 +253,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureUserOrganizationIdIndex,
   EnsureDataLakeFindingIndexes,
   EnsureDataLakeCorpusActionIndexes,
+  EnsureDataLakeInconsistencyScanIndex,
   EnsureOAuthGrantClientUserIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
