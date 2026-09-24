@@ -9,7 +9,13 @@ import { AdminTab } from '@client/app/components/admin/adminSidebarConfig';
 // dragging in AdminPage (the import cycle this module split exists to prevent).
 import { useAdminModal } from '@client/app/components/admin/useAdminModal';
 import { getThemeConfig } from '@client/app/utils/themes';
-import ModelSelection, { getModelBackend, SELF_HOSTED_BACKEND, sortBackendsByPriority } from './ModelSelection';
+import { getModelProviderLabel } from './fallbackProviderLabel';
+import ModelSelection, {
+  BACKEND_PRIORITY,
+  getModelBackend,
+  SELF_HOSTED_BACKEND,
+  sortBackendsByPriority,
+} from './ModelSelection';
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
 const admin = vi.hoisted(() => ({ isAdmin: false, navigate: vi.fn() }));
@@ -321,4 +327,57 @@ describe('BACKEND_PRIORITY section order', () => {
       'Zephyr',
     ]);
   });
+});
+
+/**
+ * getModelBackend (picker section, by maker) and getModelProviderLabel (fallback
+ * tooltip, by hosting path) are two id-sniffing classifiers with deliberately
+ * different rules: Bedrock Claude is "Anthropic" in the picker but "Bedrock" in the
+ * tooltip, which is the distinction the tooltip exists to draw. What must not
+ * happen is a provider landing in one and not the other, so every ModelBackend
+ * needs a representative here. Checked at runtime: client tests are outside tsc.
+ */
+describe('provider classifiers cover every backend', () => {
+  // null = not a chat model, so never in a text fallback; the picker still groups it.
+  const REPRESENTATIVE: Record<ModelBackend, { id: string; name: string; label: string | null }> = {
+    [ModelBackend.OpenAI]: { id: 'gpt-5', name: 'GPT-5', label: 'OpenAI' },
+    [ModelBackend.Anthropic]: { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', label: 'Anthropic direct' },
+    [ModelBackend.Bedrock]: { id: 'us.anthropic.claude-sonnet-5', name: 'Claude Sonnet 5', label: 'Bedrock' },
+    [ModelBackend.Gemini]: { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', label: 'Google' },
+    [ModelBackend.XAI]: { id: 'grok-4', name: 'Grok 4', label: 'xAI' },
+    [ModelBackend.Kimi]: { id: 'kimi-k3', name: 'Kimi K3', label: 'Moonshot direct' },
+    [ModelBackend.DeepSeek]: { id: 'deepseek-flash', name: 'DeepSeek Flash', label: 'DeepSeek' },
+    [ModelBackend.Ollama]: { id: 'llama3.3', name: 'llama3.3', label: 'Ollama' },
+    [ModelBackend.BFL]: { id: 'flux-pro-1.1', name: 'FLUX 1.1 [pro]', label: null },
+    [ModelBackend.AWS]: { id: 'aws-transcribe', name: 'Amazon Transcribe', label: null },
+    [ModelBackend.VoyageAI]: { id: 'voyage-3', name: 'Voyage 3', label: null },
+    [ModelBackend.LocalImage]: { id: 'local-image/sd15', name: 'sd15', label: null },
+  };
+  const makeModel = (backend: ModelBackend): ModelInfo =>
+    ({ ...REPRESENTATIVE[backend], backend, description: '', type: 'text' }) as unknown as ModelInfo;
+  // Never grouped by maker: speech-to-text, embeddings, and self-host-only
+  // images (covered by the self-hosted grouping tests above).
+  const NOT_MAKER_GROUPED: ReadonlySet<ModelBackend> = new Set([
+    ModelBackend.AWS,
+    ModelBackend.VoyageAI,
+    ModelBackend.LocalImage,
+  ]);
+  const PICKER_BACKENDS = Object.values(ModelBackend).filter(b => !NOT_MAKER_GROUPED.has(b));
+
+  it.each(Object.values(ModelBackend))('%s has a representative model', backend => {
+    expect(REPRESENTATIVE).toHaveProperty(backend);
+  });
+
+  it.each(PICKER_BACKENDS)('%s groups under an ordered picker section, not "Other"', backend => {
+    const section = getModelBackend(makeModel(backend));
+    expect(section).not.toBe('Other');
+    expect(BACKEND_PRIORITY).toContain(section);
+  });
+
+  it.each(Object.values(ModelBackend).filter(b => REPRESENTATIVE[b]?.label))(
+    '%s gets a provider label in the fallback tooltip',
+    backend => {
+      expect(getModelProviderLabel(REPRESENTATIVE[backend].id, backend)).toBe(REPRESENTATIVE[backend].label);
+    }
+  );
 });
