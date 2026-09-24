@@ -4,6 +4,7 @@ import {
   mockBulkExportData,
   mockEmptyBulkExportData,
   mockSingleNotebookExportData,
+  toolLoopNotebookData,
 } from './fixtures/bulkNotebookExportFixture';
 
 describe('bulkNotebookExport', () => {
@@ -74,6 +75,21 @@ describe('bulkNotebookExport', () => {
       expect(md).toContain('# Empty Notebook');
       // Should still have conversation section header
       expect(md).toContain('## Conversation');
+    });
+
+    /**
+     * A tool-using turn persists several reply slots and some hold only a thinking block, so
+     * the per-slot walk this replaced wrote an empty `**AI**:` heading per think-only slot and
+     * pasted the model's reasoning into the export.
+     */
+    it('writes one AI entry per tool-loop turn and no thinking text', () => {
+      const toolLoop = toolLoopNotebookData();
+      const md = notebooksToMarkdown(toolLoop);
+
+      expect(md).toContain('**AI**:\n\nPARTIAL FINAL');
+      expect(md.match(/\*\*AI\*\*:/g)).toHaveLength(1);
+      expect(md).not.toContain('reasoning');
+      expect(md).not.toContain('<think>');
     });
   });
 
