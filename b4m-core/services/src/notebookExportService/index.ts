@@ -706,7 +706,7 @@ export class NotebookExportService {
 
     // Add metadata
     if (message.promptMeta && options.includeMetadata) {
-      const { model, tokenUsage, performance, context, citables } = message.promptMeta;
+      const { model, tokenUsage, performance, context } = message.promptMeta;
       exportedMessage.promptMeta = {
         model,
         tokenUsage,
@@ -715,7 +715,16 @@ export class NotebookExportService {
         // export has never contained, and that `anonymize` does not strip.
         performance: performance && { totalResponseTime: performance.totalResponseTime },
         context: context && { contextWindowUsage: context.contextWindowUsage },
-        citables,
+      };
+    }
+
+    // citables resolve b4m_map fences in the reply text this export already includes, unlike the
+    // rest of promptMeta which is opt-in metadata about the reply - so it must not share the
+    // includeMetadata gate, or turning that toggle off silently drops the place list.
+    if (message.promptMeta?.citables) {
+      exportedMessage.promptMeta = {
+        ...exportedMessage.promptMeta,
+        citables: message.promptMeta.citables,
       };
     }
 

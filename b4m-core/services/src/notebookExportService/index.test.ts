@@ -122,6 +122,37 @@ describe('notebook export', () => {
     expect(promptMeta.context.contextWindowUsage.actualInputTokens).toBe(900);
   });
 
+  it('keeps citables even with "Include Usage Metadata" off, so a b4m_map fence still resolves', async () => {
+    // citables resolve b4m_map place ids in reply text this export always includes, unlike the
+    // rest of promptMeta which is opt-in metadata about the reply - so it must not vanish along
+    // with the rest of promptMeta when the user unchecks that toggle.
+    const citables = [{ id: 'place:abc', type: 'place', metadata: { place: { name: 'A Place' } } }];
+    const { adapters, uploaded } = makeAdapters({
+      chatHistoryRepository: {
+        find: vi
+          .fn()
+          .mockResolvedValueOnce([
+            {
+              id: 'msg-1',
+              timestamp: new Date('2026-01-01T00:00:00Z'),
+              reply: 'See places\n```b4m_map\n{"places":[{"id":"place:abc"}]}\n```',
+              promptMeta: { ...PROMPT_META, citables },
+            },
+          ])
+          .mockResolvedValue([]),
+      },
+    });
+    await new NotebookExportService(adapters).exportNotebooks('user-1', {
+      ...OPTIONS,
+      includeMetadata: false,
+    } as unknown as Parameters<NotebookExportService['exportNotebooks']>[1]);
+    const payload = JSON.parse(uploaded[0]);
+    const message = payload.notebooks[0].chatHistory[0];
+
+    expect(message.promptMeta.model).toBeUndefined();
+    expect(message.promptMeta.citables).toEqual(citables);
+  });
+
   it('skips a message with no id rather than emitting one that cannot be re-imported', async () => {
     // Re-import keys updateOne on this id; a missing one casts the filter to {} and upserts over
     // an arbitrary quest, so the row must not reach the file.
