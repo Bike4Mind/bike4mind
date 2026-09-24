@@ -500,6 +500,9 @@ importers:
       katex:
         specifier: ^0.17.0
         version: 0.17.0
+      leaflet:
+        specifier: ^1.9.4
+        version: 1.9.4
       lexical:
         specifier: ^0.47.0
         version: 0.47.0(typescript@5.9.3)
@@ -750,6 +753,9 @@ importers:
       '@types/jsonwebtoken':
         specifier: ^9.0.4
         version: 9.0.10
+      '@types/leaflet':
+        specifier: ^1.9.22
+        version: 1.9.22
       '@types/lodash':
         specifier: ^4.17.24
         version: 4.17.24
@@ -5547,6 +5553,9 @@ packages:
   '@types/katex@0.16.8':
     resolution: {integrity: sha512-trgaNyfU+Xh2Tc+ABIb44a5AYUpicB3uwirOioeOkNPPbmgRNtcWyDeeFRzjPZENO9Vq8gvVqfhaaXWLlevVwg==}
 
+  '@types/leaflet@1.9.22':
+    resolution: {integrity: sha512-h3lhECYEKDasG7LFHu+GiHqAvsgLuQvlJvVZzJDGONo3sEL+wUOqSFLnwkZlK0qVxnxbuGFW8iBlJNYs5wgndA==}
+
   '@types/lodash@4.17.24':
     resolution: {integrity: sha512-gIW7lQLZbue7lRSWEFql49QJJWThrTFFeIMJdp3eH4tKoxm1OvEPg02rm4wCCSHS0cL3/Fizimb35b7k8atwsQ==}
 
@@ -9114,6 +9123,9 @@ packages:
 
   leac@0.7.0:
     resolution: {integrity: sha512-qMrZeyEekgdRQ9o6a4NAB2EQZrv827GJdn1vnapwSJ90hWRB4TzUSunvacPkxQ2TnNqHNI1/zSt0hlo0crG8Jw==}
+
+  leaflet@1.9.4:
+    resolution: {integrity: sha512-nxS1ynzJOmOlHp+iL3FyWqK89GtNL8U8rvlMOsQdTTssxZwCXh8N2NB3GDQOL+YR3XnWyZAxwQixURb+FA74PA==}
 
   levn@0.4.1:
     resolution: {integrity: sha512-+bT2uH4E5LGE7h/n3evcS/sQlJXCpIp6ym8OWJ5eV6+67Dsql/LaaT7qJBAt2rzfoa/5QBGBhxDix1dMt2kQKQ==}
@@ -16726,6 +16738,10 @@ snapshots:
 
   '@types/katex@0.16.8': {}
 
+  '@types/leaflet@1.9.22':
+    dependencies:
+      '@types/geojson': 7946.0.16
+
   '@types/lodash@4.17.24': {}
 
   '@types/mailparser@3.4.6':
@@ -20752,6 +20768,8 @@ snapshots:
       readable-stream: 2.3.8
 
   leac@0.7.0: {}
+
+  leaflet@1.9.4: {}
 
   levn@0.4.1:
     dependencies:

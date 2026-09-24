@@ -352,3 +352,105 @@ describe('resolveWebSearchProvider precedence', () => {
     expect(await resolveWebSearchProvider(adapters)).toBeNull();
   });
 });
+
+describe('searchPlaces', () => {
+  const mapsPlace = (overrides: Record<string, unknown> = {}) => ({
+    title: 'Barr',
+    place_id: 'ChIJbarr',
+    gps_coordinates: { latitude: 55.68, longitude: 12.59 },
+    rating: 4.6,
+    reviews: 1234,
+    type: 'Restaurant',
+    address: 'Strandgade 93, Copenhagen',
+    thumbnail: 'https://lh5.googleusercontent.com/barr.jpg',
+    ...overrides,
+  });
+
+  it('queries the google_maps engine and keeps the provider coordinates and details', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(jsonRes({ local_results: [mapsPlace()] }));
+
+    const places = await createSerpApiProvider(adapters).searchPlaces!('dinner near citizenM');
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.searchParams.get('engine')).toBe('google_maps');
+    expect(url.searchParams.get('q')).toBe('dinner near citizenM');
+    expect(places).toEqual([
+      {
+        id: 'ChIJbarr',
+        name: 'Barr',
+        lat: 55.68,
+        lng: 12.59,
+        rating: 4.6,
+        reviews: 1234,
+        category: 'Restaurant',
+        address: 'Strandgade 93, Copenhagen',
+        thumbnail: 'https://lh5.googleusercontent.com/barr.jpg',
+      },
+    ]);
+  });
+
+  it('reads the single-match place_results a specific place name comes back as', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(jsonRes({ place_results: mapsPlace({ title: 'citizenM', place_id: 'ChIJcm' }) }));
+
+    const places = await createSerpApiProvider(adapters).searchPlaces!('citizenM Copenhagen', 1);
+
+    expect(places.map(p => p.id)).toEqual(['ChIJcm']);
+  });
+
+  it('drops entries with missing or out-of-range coordinates and caps at the limit', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        local_results: [
+          mapsPlace({ place_id: 'no-gps', gps_coordinates: undefined }),
+          mapsPlace({ place_id: 'bad-lat', gps_coordinates: { latitude: 200, longitude: 1 } }),
+          mapsPlace({ place_id: 'a' }),
+          mapsPlace({ place_id: 'a' }),
+          mapsPlace({ place_id: 'b' }),
+          mapsPlace({ place_id: 'c' }),
+        ],
+      })
+    );
+
+    const places = await createSerpApiProvider(adapters).searchPlaces!('q', 2);
+
+    expect(places.map(p => p.id)).toEqual(['a', 'b']);
+  });
+
+  it('resolves to [] on a failed request rather than failing the search', async () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    fetchMock.mockResolvedValue(jsonRes({}, false, 503));
+    expect(await createSerpApiProvider(adapters).searchPlaces!('q')).toEqual([]);
+
+    fetchMock.mockRejectedValue(new Error('network'));
+    expect(await createSerpApiProvider(adapters).searchPlaces!('q')).toEqual([]);
+  });
+
+  it('parses SearXNG map-category results, keyed by their OpenStreetMap id', async () => {
+    fetchMock.mockResolvedValue(
+      jsonRes({
+        results: [
+          {
+            title: 'Tivoli Gardens',
+            url: 'https://openstreetmap.org/way/1',
+            latitude: '55.6736',
+            longitude: 12.5681,
+            osm: { type: 'way', id: 1 },
+            address: { road: 'Vesterbrogade 3', locality: 'Copenhagen' },
+          },
+          { title: 'No coordinates', url: 'https://example.com' },
+        ],
+      })
+    );
+
+    const places = await createSearxngProvider('http://searx.local/').searchPlaces!('tivoli');
+
+    const url = new URL(fetchMock.mock.calls[0][0] as string);
+    expect(url.searchParams.get('categories')).toBe('map');
+    expect(places).toEqual([
+      { id: 'way/1', name: 'Tivoli Gardens', lat: 55.6736, lng: 12.5681, address: 'Vesterbrogade 3, Copenhagen' },
+    ]);
+  });
+});

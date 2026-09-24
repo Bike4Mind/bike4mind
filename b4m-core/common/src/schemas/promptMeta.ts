@@ -339,6 +339,20 @@ export const CitableSourceSchema = z.object({
        * stamps the wrong shape should fail here, not render a badge that silently names nobody.
        */
       conflictsWith: z.array(z.string()).optional(),
+      /** web_search's provider-located place (WebSearchPlace), the only source of map coordinates. */
+      place: z
+        .object({
+          id: z.string(),
+          name: z.string(),
+          lat: z.number(),
+          lng: z.number(),
+          rating: z.number().optional(),
+          reviews: z.number().optional(),
+          category: z.string().optional(),
+          address: z.string().optional(),
+          thumbnail: z.string().optional(),
+        })
+        .optional(),
     }) // Allow additional properties
     .optional(),
 });

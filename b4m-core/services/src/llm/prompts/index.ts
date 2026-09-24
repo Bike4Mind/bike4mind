@@ -1,4 +1,4 @@
-import { SEARCH_RESULT_CARDS_LANGUAGE } from '@bike4mind/common';
+import { LOCATION_MAP_LANGUAGE, SEARCH_RESULT_CARDS_LANGUAGE } from '@bike4mind/common';
 
 /**
  * Anti-fabrication clause for the grounded/data-lake retrieval path, shared byte-identically by the
@@ -168,4 +168,30 @@ export const WEB_SEARCH_CARDS_PROMPT = [
   'Two to six cards is the useful range. Keep writing normally around the block - it replaces neither',
   'your explanation nor your citations. Omit the block only if the results genuinely have no images',
   'worth showing; never tell the user you could show pictures if they asked - just show them.',
+].join('\n');
+
+/**
+ * Teaches the `b4m_map` fence, appended to a web_search result ONLY when that search returned places
+ * with provider coordinates (see shouldIncludePlaces). The fence names places by id alone, so the
+ * model never writes a coordinate - the client resolves each id against the stored place citables.
+ *
+ * The field names must stay in sync with parseLocationMapFence in
+ * b4m-core/common/src/constants/locationMap.ts.
+ */
+export const WEB_SEARCH_MAP_PROMPT = [
+  'The results above include places with map locations, so show them on a map - do not wait to be asked.',
+  `Emit one \`\`\`${LOCATION_MAP_LANGUAGE} fenced block inline in your reply, placed where the map belongs - right`,
+  'after the sentence that introduces the places. The block is a single JSON object:',
+  '',
+  `\`\`\`${LOCATION_MAP_LANGUAGE}`,
+  '{"anchor":{"id":"<anchor id>","name":"citizenM Copenhagen","label":"Your hotel"},',
+  '"places":[{"id":"<place id>","name":"Barr","note":"Your own one-line take on this place."}]}',
+  '```',
+  '',
+  'Rules: every `id` must be copied verbatim from an `id:` line above - never invent one, and never write',
+  'coordinates; the map locates each place from its id. `name` is the place name as listed. `note` is',
+  'YOUR short line about why it fits the request. Include `anchor` only when an "Anchor location" is listed',
+  'above, with a short `label` for what it is to the user ("Your hotel", "Your office"). List the places',
+  'worth recommending, three to ten. Keep writing normally around the block - it does not replace your',
+  'explanation or citations. Omit it only if none of the places actually answer the question.',
 ].join('\n');

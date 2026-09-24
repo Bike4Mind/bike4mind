@@ -57,3 +57,21 @@ describe('stripSearchResultCardFences', () => {
     expect(stripSearchResultCardFences(input)).toBe('Before.\n\nAfter.');
   });
 });
+
+describe('stripSearchResultCardFences - b4m_map fences', () => {
+  const MAP_FENCE = (body: string) => '```b4m_map\n' + body + '\n```';
+
+  it('rewrites a map fence as a readable list in place, leaving card fences stripped', () => {
+    const input = `Dinner ideas:\n\n${MAP_FENCE('{"places":[{"id":"ChIJa","name":"Barr"}]}')}\n\n${FENCE('{"cards":[]}')}\n\nEnjoy.`;
+    expect(stripSearchResultCardFences(input)).toBe(
+      'Dinner ideas:\n\n' +
+        '- **Barr** ([Open in Google Maps](https://www.google.com/maps/search/?api=1&query=Barr&query_place_id=ChIJa))' +
+        '\n\n\n\nEnjoy.'
+    );
+  });
+
+  it('drops a malformed or unclosed map fence rather than leaking JSON', () => {
+    expect(stripSearchResultCardFences(`A\n${MAP_FENCE('{"places":')}\nB`)).toBe('A\n\nB');
+    expect(stripSearchResultCardFences('A\n```b4m_map\n{"places":[{"id"')).toBe('A\n');
+  });
+});
