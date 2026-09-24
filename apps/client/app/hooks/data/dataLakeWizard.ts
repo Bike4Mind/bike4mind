@@ -14,10 +14,11 @@ import {
   OFFLINE_MESSAGE,
   classifyUploadError,
   runBatchUpload,
-  createWizardLake,
+  resolveCreateModeLake,
   connectPendingDriveFolder,
   zeroProgressCounts,
 } from '@client/app/hooks/data/dataLakeUploadPipeline';
+import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 
 // Re-exported for DataLakeWizardModal's pre-flight check, which imports it from this path.
 export { OFFLINE_MESSAGE };
@@ -214,6 +215,7 @@ export function useBatchUpload() {
 export function useCreateLakeFromDrive() {
   const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
   const setStep = useDataLakeWizardStore(s => s.setStep);
+  const setRecoverableLake = useDataLakeWizardStore(s => s.setRecoverableLake);
   const queryClient = useQueryClient();
   // Same indirection as useBatchUpload: lets onError's retry action call the mutation it belongs to.
   const retryRef = useRef<() => void>(() => {});
@@ -226,13 +228,16 @@ export function useCreateLakeFromDrive() {
       }
 
       // Read at mutation time to avoid a stale closure, as everywhere else in this module.
-      const { config, pendingDriveFolder, targetLake } = useDataLakeWizardStore.getState();
+      const { config, pendingDriveFolder, targetLake, recoverableLake } = useDataLakeWizardStore.getState();
       if (!pendingDriveFolder) throw new Error('No Google Drive folder selected');
       // Append mode never reaches here - it has a lake, so DriveConnectAction connects directly.
       if (targetLake) throw new Error('This data lake already exists - connect Drive from its header instead');
 
       const tagPrefix = submittedTagPrefix(config.tagPrefix);
-      const dataLakeId = await createWizardLake(config, tagPrefix);
+      // Same reuse rule as the upload path: this path archives its own lake on a failed connect
+      // (below), and an archived lake keeps its prefix claim - so a retry on the same prefix has
+      // to restore that lake rather than create a second one the claim would refuse.
+      const dataLakeId = await resolveCreateModeLake(config, tagPrefix, recoverableLake, setRecoverableLake);
 
       setStep('upload');
       updateUploadProgress({
@@ -257,10 +262,19 @@ export function useCreateLakeFromDrive() {
           .delete(`/api/data-lakes/${dataLakeId}`)
           .then(() => 'archived' as const)
           .catch(() => 'failed' as const);
+        // Only once the archive took: a lake left live in some other state must not be restored
+        // by the next retry. Mirrors the upload path's rollback.
+        setRecoverableLake(
+          driveRollback === 'archived' ? { id: dataLakeId, tagPrefix, organizationId: activeOrgId() } : null
+        );
         updateUploadProgress({ driveRollback });
         throw err;
       }
 
+      // The commit landed in this lake, so it is no longer a candidate to restore-and-reuse.
+      // Keyed on the id for the same reason as the upload path: a retry that changed the prefix
+      // commits into a different lake, and the remembered one is still archived holding the old one.
+      if (recoverableLake?.id === dataLakeId) setRecoverableLake(null);
       updateUploadProgress({ status: 'complete' });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       // First lake unlocks the 'datalakes' nav slot; no files yet, so 'files' stays locked (#833).

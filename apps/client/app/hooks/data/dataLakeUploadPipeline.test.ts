@@ -1,13 +1,29 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios from 'axios';
+
+const { apiPost, apiPut } = vi.hoisted(() => ({ apiPost: vi.fn(), apiPut: vi.fn() }));
+vi.mock('@client/app/contexts/ApiContext', () => ({ api: { post: apiPost, put: apiPut, delete: vi.fn() } }));
+
 import {
   classifyUploadError,
   foldersTagsForBatch,
   runWithConcurrency,
   canReuseRecoverableLake,
+  syncRestoredLakeConfig,
+  deleteFailedUploadOrphans,
   OFFLINE_MESSAGE,
   UPLOAD_ALL_FAILED_MESSAGE,
 } from './dataLakeUploadPipeline';
+
+const formValues = (overrides: Partial<Parameters<typeof syncRestoredLakeConfig>[1]> = {}) => ({
+  name: 'Legal Docs',
+  description: '',
+  tagPrefix: 'legal:',
+  requiredUserTag: '',
+  requiredEntitlement: '',
+  conflictResolution: 'skip' as const,
+  ...overrides,
+});
 
 // Minimal axios-shaped error helper (axios.isAxiosError keys off this flag).
 const axiosError = (status: number | undefined, data?: unknown, code?: string) => {
@@ -130,6 +146,75 @@ describe('canReuseRecoverableLake', () => {
     expect(
       canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:', organizationId: 'org1' }, 'legal:', undefined)
     ).toBe(false);
+  });
+});
+
+/**
+ * Request-shape guards for the two halves of the retry fix. The behaviour is driven end-to-end in
+ * dataLakeWizard.test.ts; these pin the contract of the request itself, which is where a silent
+ * regression would live - a dropped clear sentinel, or a resent counter that double-accounts.
+ */
+describe('syncRestoredLakeConfig', () => {
+  beforeEach(() => {
+    apiPut.mockReset().mockResolvedValue({ data: {} });
+  });
+
+  it('PUTs the editable Configure fields onto the reused lake', async () => {
+    await syncRestoredLakeConfig('lake1', formValues({ description: 'described', requiredUserTag: 'LegalTeam' }));
+    expect(apiPut).toHaveBeenCalledWith('/api/data-lakes/lake1', {
+      name: 'Legal Docs',
+      description: 'described',
+      requiredUserTag: 'LegalTeam',
+      requiredEntitlement: '',
+    });
+  });
+
+  // '' is the server's clear sentinel on UPDATE, and omitting the key instead means "leave
+  // unchanged" - so sending undefined would make a gate REMOVED between attempts silently persist.
+  it('sends the empty-string clear sentinel rather than omitting a gate the user removed', async () => {
+    await syncRestoredLakeConfig('lake1', formValues({ requiredUserTag: '', requiredEntitlement: '' }));
+    const body = apiPut.mock.calls[0][1] as Record<string, unknown>;
+    expect(body.requiredUserTag).toBe('');
+    expect(body.requiredEntitlement).toBe('');
+    expect('requiredUserTag' in body).toBe(true);
+  });
+
+  // The lake's prefix claim is the thing the reuse depends on; changing it here would move the
+  // claim out from under the batch that is about to upload into it.
+  it('never sends the tag prefix', async () => {
+    await syncRestoredLakeConfig('lake1', formValues());
+    expect(apiPut.mock.calls[0][1]).not.toHaveProperty('fileTagPrefix');
+    expect(apiPut.mock.calls[0][1]).not.toHaveProperty('tagPrefix');
+  });
+});
+
+describe('deleteFailedUploadOrphans', () => {
+  beforeEach(() => {
+    apiPost.mockReset().mockResolvedValue({ data: { success: true } });
+  });
+
+  it('posts only the ids, so the batch counters the caller already stamped are not re-sent', async () => {
+    await deleteFailedUploadOrphans('batch1', ['id-a', 'id-b']);
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/batches/upload-complete', {
+      batchId: 'batch1',
+      failedFileIds: ['id-a', 'id-b'],
+    });
+    const body = apiPost.mock.calls[0][1] as Record<string, unknown>;
+    expect(body).not.toHaveProperty('failedFiles');
+    expect(body).not.toHaveProperty('failedFileNames');
+  });
+
+  it('does nothing when there is no batch or nothing to clean up', async () => {
+    await deleteFailedUploadOrphans(undefined, ['id-a']);
+    await deleteFailedUploadOrphans('batch1', []);
+    expect(apiPost).not.toHaveBeenCalled();
+  });
+
+  // Best-effort: it runs on a rollback path, so a cleanup failure must not replace the error the
+  // user actually needs to read.
+  it('swallows a failure rather than masking the error being rolled back', async () => {
+    apiPost.mockRejectedValue(new Error('cleanup failed'));
+    await expect(deleteFailedUploadOrphans('batch1', ['id-a'])).resolves.toBeUndefined();
   });
 });
 

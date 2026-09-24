@@ -1059,6 +1059,93 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     );
     // Archive succeeded, so the Failed screen is cleared to say the lake is gone.
     expect(useDataLakeWizardStore.getState().uploadProgress.driveRollback).toBe('archived');
+    // Archived with its prefix claim intact, so a same-prefix retry has to restore it - the
+    // Drive-only path hits #3231 exactly like the upload path does without this.
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'drive:',
+      organizationId: undefined,
+    });
+  });
+
+  /**
+   * The fileless commit archives its own lake on a refused connect, so it holds a prefix claim
+   * the same way a failed upload does. Before this it called createWizardLake unconditionally,
+   * so the second attempt collided on that claim and the user was stuck with no visible lake -
+   * #3231 in the Drive path.
+   */
+  it('a same-prefix retry after a refused connect restores the archived lake instead of colliding', async () => {
+    let connectAttempts = 0;
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/drive-sync') {
+        connectAttempts++;
+        // Refuse the first connect, accept the retry.
+        if (connectAttempts === 1) {
+          return Promise.reject(
+            Object.assign(new Error('Request failed'), {
+              isAxiosError: true,
+              response: { status: 409, data: { error: 'This Drive folder is already connected to another data lake' } },
+            })
+          );
+        }
+        return Promise.resolve({ data: { success: true } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'drive:',
+      organizationId: undefined,
+    });
+
+    apiPost.mockClear();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // No second create - the archived lake was restored and reused.
+    expect(postCall('/api/data-lakes')).toBeUndefined();
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'unarchive' });
+    expect(postCall('/api/data-lakes/drive-sync')?.[1]).toMatchObject({ dataLakeId: 'lake1' });
+    // The commit landed in that lake, so it stops being a reuse candidate.
+    expect(useDataLakeWizardStore.getState().recoverableLake).toBeNull();
+  });
+
+  it('applies Configure edits made before a Drive retry onto the restored lake', async () => {
+    let connectAttempts = 0;
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/drive-sync') {
+        connectAttempts++;
+        if (connectAttempts === 1) {
+          return Promise.reject(
+            Object.assign(new Error('Request failed'), {
+              isAxiosError: true,
+              response: { status: 403, data: { error: 'Not a manager of that folder' } },
+            })
+          );
+        }
+        return Promise.resolve({ data: { success: true } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    useDataLakeWizardStore.getState().setConfig({ requiredUserTag: 'LegalTeam' });
+    apiPut.mockClear();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(putCall('/api/data-lakes/lake1')?.[1]).toMatchObject({ requiredUserTag: 'LegalTeam' });
   });
 
   it('still reports the refusal when the rollback archive also fails', async () => {

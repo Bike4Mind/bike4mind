@@ -261,20 +261,25 @@ export async function syncRestoredLakeConfig(dataLakeId: string, config: DataLak
  * caller already stamped, so re-sending them here would double-count. Best-effort, like the other
  * rollback calls - the server-side reconciler is the backstop, and this must not mask the real error.
  */
-async function deleteFailedUploadOrphans(batchId: string | undefined, failedFileIds: string[]): Promise<void> {
+export async function deleteFailedUploadOrphans(batchId: string | undefined, failedFileIds: string[]): Promise<void> {
   if (!batchId || failedFileIds.length === 0) return;
   await api.post('/api/data-lakes/batches/upload-complete', { batchId, failedFileIds }).catch(() => {});
 }
 
 /**
- * The lake a create-mode attempt uploads into: the one a prior failed attempt in this session
- * left archived when its claim still matches, otherwise a brand-new one.
+ * The lake a create-mode commit targets: the one a prior failed attempt in this session left
+ * archived when its claim still matches, otherwise a brand-new one.
+ *
+ * Shared by BOTH create-mode commit paths - the batch upload and the fileless Drive-only create
+ * (useCreateLakeFromDrive) - because both archive the lake they just made when the commit fails,
+ * and an archived lake keeps its prefix claim either way. Takes the store setter rather than the
+ * whole callback bag so the Drive path, which has no batch and no upload progress, can call it.
  */
-async function resolveCreateModeLake(
+export async function resolveCreateModeLake(
   config: DataLakeFormValues,
   tagPrefix: string,
   recoverableLake: RecoverableLake | null,
-  cb: BatchUploadCallbacks
+  setRecoverableLake: (lake: RecoverableLake | null) => void
 ): Promise<string> {
   // Read at call time, like createWizardLake does, so a switch made behind the wizard modal counts.
   const organizationId = activeOrgId();
@@ -295,7 +300,7 @@ async function resolveCreateModeLake(
       // just reproduce the original collision this reuse logic exists to prevent. Surface
       // the real restore failure instead and keep the lake remembered for the next retry.
       if (axios.isAxiosError(restoreErr) && restoreErr.response?.status === 404) {
-        cb.setRecoverableLake(null);
+        setRecoverableLake(null);
         return createWizardLake(config, tagPrefix);
       }
       throw restoreErr;
@@ -303,7 +308,7 @@ async function resolveCreateModeLake(
     // Recorded BEFORE the config sync below, which can fail on its own: unarchive refuses a lake
     // already back in 'active' status with a 400, and a 400 is precisely what the branch above
     // rethrows - so without this flag one failed sync would wedge every later retry.
-    cb.setRecoverableLake({ ...recoverableLake, restored: true });
+    setRecoverableLake({ ...recoverableLake, restored: true });
   }
 
   await syncRestoredLakeConfig(recoverableLake.id, config);
@@ -458,7 +463,9 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
   // Step 1: Create the data lake; skipped in append mode (upload into the existing lake), and
   // skipped when a same-session prior attempt archived a lake holding this exact prefix claim -
   // restore and reuse it instead of creating a second one the claim would refuse.
-  const dataLakeId = targetLake ? targetLake.id : await resolveCreateModeLake(config, tagPrefix, recoverableLake, cb);
+  const dataLakeId = targetLake
+    ? targetLake.id
+    : await resolveCreateModeLake(config, tagPrefix, recoverableLake, cb.setRecoverableLake);
   let uploadedCount = 0;
   // Hoisted above the try so the outcome branch + the catch can reconcile the batch
   // and clean up the records setup created. `failedFileIds` are the FabFiles presign
