@@ -4,6 +4,7 @@ import {
   classifyUploadError,
   foldersTagsForBatch,
   runWithConcurrency,
+  canReuseRecoverableLake,
   OFFLINE_MESSAGE,
   UPLOAD_ALL_FAILED_MESSAGE,
 } from './dataLakeUploadPipeline';
@@ -95,6 +96,22 @@ describe('runWithConcurrency', () => {
     const worker = vi.fn(async () => {});
     await expect(runWithConcurrency([1, 2, 3], 0, worker)).resolves.toBeUndefined();
     expect(worker).toHaveBeenCalledTimes(3);
+  });
+});
+
+// The decision at the heart of the retry-reuse fix: reuse the lake a prior failed attempt archived only when
+// this retry's tag prefix is the exact one that lake still holds.
+describe('canReuseRecoverableLake', () => {
+  it('reuses when the tag prefix matches exactly', () => {
+    expect(canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:' }, 'legal:')).toBe(true);
+  });
+
+  it('does not reuse when there is nothing remembered', () => {
+    expect(canReuseRecoverableLake(null, 'legal:')).toBe(false);
+  });
+
+  it('does not reuse when the retry changed the tag prefix - nothing claims the new one', () => {
+    expect(canReuseRecoverableLake({ id: 'lake1', tagPrefix: 'legal:' }, 'medical:')).toBe(false);
   });
 });
 

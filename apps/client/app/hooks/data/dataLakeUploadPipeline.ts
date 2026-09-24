@@ -11,6 +11,7 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 import type {
   DataLakeFormValues,
   PendingDriveFolder,
+  RecoverableLake,
   UploadErrorKind,
   UploadProgress,
   WizardStep,
@@ -198,6 +199,26 @@ export async function createWizardLake(config: DataLakeFormValues, tagPrefix: st
   return res.data.id;
 }
 
+/**
+ * Whether a create-mode retry should reuse the lake a previous attempt in this session
+ * archived, rather than creating a new one. True only when the retry's tag prefix exactly
+ * matches the archived lake's - a changed prefix means nothing claims it, so createWizardLake
+ * succeeds on its own with no need to restore anything.
+ */
+export function canReuseRecoverableLake(recoverableLake: RecoverableLake | null, tagPrefix: string): boolean {
+  return recoverableLake !== null && recoverableLake.tagPrefix === tagPrefix;
+}
+
+/**
+ * Restore a lake a previous failed attempt archived, so this retry can upload into it instead
+ * of creating a second one that would collide on the still-held tag prefix. Only called
+ * when canReuseRecoverableLake is true, i.e. the archive was this same lake's own rollback.
+ */
+export async function restoreRecoverableLake(dataLakeId: string): Promise<string> {
+  await api.post(`/api/data-lakes/${dataLakeId}/lifecycle`, { action: 'unarchive' });
+  return dataLakeId;
+}
+
 /** Bind a Drive folder picked during create to the lake that now exists (POST drive-sync). */
 export async function connectPendingDriveFolder(dataLakeId: string, folder: PendingDriveFolder): Promise<void> {
   await api.post('/api/data-lakes/drive-sync', { dataLakeId, ...folder });
@@ -280,6 +301,8 @@ export interface BatchUploadCallbacks {
   updateUploadProgress: (progress: Partial<UploadProgress>) => void;
   /** Store writers, injected so the pipeline never subscribes to react state. */
   setStep: (step: WizardStep) => void;
+  /** Store writer, injected so the pipeline never subscribes to react state. See RecoverableLake. */
+  setRecoverableLake: (lake: RecoverableLake | null) => void;
   /** Invalidate the lake list + gears status after upload-complete (the hook passes a closure over queryClient). */
   onUploadComplete: () => void;
 }
@@ -300,7 +323,8 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
 }> {
   // Read from store at mutation time to avoid stale closure
   // (same pattern as useComputeHashes)
-  const { config, allFiles, targetLake, optionalSteps, pendingDriveFolder } = useDataLakeWizardStore.getState();
+  const { config, allFiles, targetLake, optionalSteps, pendingDriveFolder, recoverableLake } =
+    useDataLakeWizardStore.getState();
   let included = allFiles.filter(f => !f.excluded);
   if (included.length === 0) throw new Error('No files to upload');
 
@@ -340,8 +364,28 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
   // gated is what gets sent.
   const tagPrefix = submittedTagPrefix(config.tagPrefix);
 
-  // Step 1: Create the data lake; skipped in append mode (upload into the existing lake).
-  const dataLakeId = targetLake ? targetLake.id : await createWizardLake(config, tagPrefix);
+  // Step 1: Create the data lake; skipped in append mode (upload into the existing lake), and
+  // skipped when a same-session prior attempt archived a lake with this exact tag prefix -
+  // restore and reuse it instead of creating a second one the prefix claim would refuse.
+  const dataLakeId = targetLake
+    ? targetLake.id
+    : recoverableLake && canReuseRecoverableLake(recoverableLake, tagPrefix)
+      ? await restoreRecoverableLake(recoverableLake.id).catch(async (restoreErr: unknown) => {
+          // Only a 404 means the remembered lake is truly gone (e.g. purged after the user
+          // permanently deleted it from the Archived section) - its prefix claim is gone with
+          // it, so a fresh create is exactly as valid as the reuse would have been. Any other
+          // failure (a transient error, a permission change, a status the lake moved to that
+          // unarchive won't cross) leaves the lake, and its prefix claim, in place -
+          // findCollidingPrefixLakes has no status filter, so falling back to create here would
+          // just reproduce the original collision this reuse logic exists to prevent. Surface
+          // the real restore failure instead and keep the lake remembered for the next retry.
+          if (axios.isAxiosError(restoreErr) && restoreErr.response?.status === 404) {
+            cb.setRecoverableLake(null);
+            return createWizardLake(config, tagPrefix);
+          }
+          throw restoreErr;
+        })
+      : await createWizardLake(config, tagPrefix);
   let uploadedCount = 0;
   // Hoisted above the try so the outcome branch + the catch can reconcile the batch
   // and clean up the records setup created. `failedFileIds` are the FabFiles presign
@@ -495,7 +539,13 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
             failedFileNames: failedNames,
           })
           .catch(() => {});
-        await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
+        const archived = await api
+          .delete(`/api/data-lakes/${dataLakeId}`)
+          .then(() => true)
+          .catch(() => false);
+        // Remember it for a same-session retry - but only once we know the archive
+        // actually took, so a retry never tries to restore a lake still live in some other state.
+        cb.setRecoverableLake(archived ? { id: dataLakeId, tagPrefix } : null);
       }
       // A presign refusal already says WHY (e.g. the request did not name the batch's lake),
       // and classifyUploadError surfaces a 4xx's server message - so rethrow it rather than
@@ -513,6 +563,9 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     // math can be satisfied (a partial batch used to hang at 'processing'), and
     // finalizes - all server-side, in the right order.
     reconciled = true;
+    // Files landed in this lake, so it's no longer a candidate to restore-and-reuse on some
+    // later, unrelated failure.
+    if (!targetLake) cb.setRecoverableLake(null);
     await api
       .post('/api/data-lakes/batches/upload-complete', {
         batchId,
@@ -562,7 +615,11 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
       }
       // Never touch the user's existing lake in append mode.
       if (!targetLake) {
-        await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
+        const archived = await api
+          .delete(`/api/data-lakes/${dataLakeId}`)
+          .then(() => true)
+          .catch(() => false);
+        cb.setRecoverableLake(archived ? { id: dataLakeId, tagPrefix } : null);
       }
     }
     throw err;

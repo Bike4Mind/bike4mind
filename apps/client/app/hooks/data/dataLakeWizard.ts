@@ -128,6 +128,7 @@ export function useCheckDuplicates() {
 export function useBatchUpload() {
   const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
   const setStep = useDataLakeWizardStore(s => s.setStep);
+  const setRecoverableLake = useDataLakeWizardStore(s => s.setRecoverableLake);
   const queryClient = useQueryClient();
   // Lets onError's toast retry action call back into the mutation it belongs to,
   // without a circular reference to the useMutation() result being built below.
@@ -146,6 +147,7 @@ export function useBatchUpload() {
       return runBatchUpload({
         updateUploadProgress,
         setStep,
+        setRecoverableLake,
         onUploadComplete: () => {
           queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
           // First lake unlocks the 'datalakes' nav slot; first file unlocks 'files'.

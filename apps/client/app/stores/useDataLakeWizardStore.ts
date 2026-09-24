@@ -138,6 +138,7 @@ const freshSession = () => ({
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null as WizardTargetLake | null,
   pendingDriveFolder: null as PendingDriveFolder | null,
+  recoverableLake: null as RecoverableLake | null,
 });
 
 // ── Store ───────────────────────────────────────────────────────────────────
@@ -198,6 +199,18 @@ export const toWizardTargetLake = (lake: {
   canManage: lake.canManage ?? false,
 });
 
+/**
+ * The lake a create-mode `runBatchUpload` created and then archived after every file in the
+ * batch failed to upload, remembered so a same-session retry with the SAME tag prefix can
+ * restore and reuse it instead of hitting the prefix claim the archived lake still holds.
+ * A retry submitted with a different tag prefix doesn't need this - nothing claims
+ * the new prefix, so createWizardLake succeeds on its own.
+ */
+export interface RecoverableLake {
+  id: string;
+  tagPrefix: string;
+}
+
 interface DataLakeWizardStore {
   // State
   isOpen: boolean;
@@ -220,6 +233,8 @@ interface DataLakeWizardStore {
   targetLake: WizardTargetLake | null;
   /** Drive folder chosen during create, connected on commit once the lake has an id. */
   pendingDriveFolder: PendingDriveFolder | null;
+  /** See RecoverableLake. Non-null only after a create-mode total-upload-failure rollback. */
+  recoverableLake: RecoverableLake | null;
   /** Drives the Data Lakes management panel (list + lifecycle), distinct from the wizard. */
   isManagerOpen: boolean;
   /** Which manager tab to show on open: the caller's own lakes, or the public discover catalog. */
@@ -265,6 +280,7 @@ interface DataLakeWizardStore {
 
   // Upload step
   updateUploadProgress: (progress: Partial<UploadProgress>) => void;
+  setRecoverableLake: (lake: RecoverableLake | null) => void;
 
   // Reset
   resetWizard: () => void;
@@ -285,6 +301,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null,
   pendingDriveFolder: null,
+  recoverableLake: null,
   isManagerOpen: false,
   managerTab: 'mine',
   managerLakeId: null,
@@ -434,6 +451,8 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
     set(state => ({
       uploadProgress: { ...state.uploadProgress, ...progress },
     })),
+
+  setRecoverableLake: lake => set({ recoverableLake: lake }),
 
   // ── Reset ───────────────────────────────────────────────────────────────
 

@@ -667,6 +667,149 @@ describe('useBatchUpload rollback (#816)', () => {
 });
 
 /**
+ * A retry after a total upload failure (create mode) used to always archive the new lake
+ * and forget its id, so the retry's second `createWizardLake` call collided with the archived
+ * lake's still-held tag prefix and the wizard reported it was blocked, with no visible lake to
+ * delete. The fix remembers the archived lake and, when the retry's tag prefix hasn't changed,
+ * restores and reuses it instead of creating a second one.
+ */
+describe('useBatchUpload retry reuse after a total upload failure', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPut.mockReset().mockResolvedValue({ data: { success: true } });
+    apiDelete.mockReset().mockResolvedValue({ data: { success: true } });
+    uploadFileToUrlMock.mockReset();
+    installApiPostRouter();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('a same-prefix retry restores and uploads into the lake the failed attempt archived', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({ id: 'lake1', tagPrefix: 'test:' });
+
+    // Retry: nothing about the config changed, only the upload itself now succeeds.
+    apiPost.mockClear();
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // No second create - the retry restored the archived lake instead.
+    expect(postCall('/api/data-lakes')).toBeUndefined();
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'unarchive' });
+    const presign = postCall('/api/files/generate-presigned-urls-batch');
+    expect((presign?.[1] as { dataLakeSlug: string }).dataLakeSlug).toBe('lake1');
+    // Files landed, so the lake is no longer held as a reuse candidate.
+    expect(useDataLakeWizardStore.getState().recoverableLake).toBeNull();
+  });
+
+  it('a retry with a changed tag prefix creates a fresh lake instead of restoring the old one', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({ id: 'lake1', tagPrefix: 'test:' });
+
+    // The user picked a different tag prefix on Configure before retrying - nothing claims
+    // it, so a fresh create is exactly as valid as a reuse would have been.
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: 'other:' });
+    apiPost.mockClear();
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(postCall('/api/data-lakes')).toBeDefined();
+    expect(apiPost.mock.calls.some(([url]) => url === '/api/data-lakes/lake1/lifecycle')).toBe(false);
+  });
+
+  it('falls back to creating fresh when the archived lake was purged (404)', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({ id: 'lake1', tagPrefix: 'test:' });
+
+    // The remembered lake was permanently deleted from the Archived section and fully purged
+    // between attempts - the server answers with a genuine 404, which is the only failure that
+    // means the prefix claim is actually gone.
+    apiPost.mockReset();
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/data-lakes/lake1/lifecycle') {
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status: 404, data: { error: 'Data lake not found' } },
+        });
+      }
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake2' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch2' } });
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        const files = (body?.files ?? []).map(f => ({
+          fileId: `id-${f.fileName}`,
+          fileKey: 'k',
+          url: `https://s3.example.com/${f.fileName}`,
+          fileName: f.fileName,
+        }));
+        return Promise.resolve({ data: { files } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(postCall('/api/data-lakes')).toBeDefined();
+    const presign = postCall('/api/files/generate-presigned-urls-batch');
+    expect((presign?.[1] as { dataLakeSlug: string }).dataLakeSlug).toBe('lake2');
+    expect(useDataLakeWizardStore.getState().recoverableLake).toBeNull();
+  });
+
+  // The lake still exists (e.g. it moved to a status unarchive won't cross, or the call just
+  // failed transiently) - findCollidingPrefixLakes has no status filter, so it still holds the
+  // prefix claim. Falling back to a fresh create here would reproduce the exact collision above,
+  // so this must surface the restore failure instead of masking it with a second doomed create.
+  it('surfaces the restore failure (not a 404) instead of reproducing the collision', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({ id: 'lake1', tagPrefix: 'test:' });
+
+    apiPost.mockReset();
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes/lake1/lifecycle') {
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status: 400, data: { error: "Cannot restore a data lake in 'deleted' status" } },
+        });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    // No second create attempt - the restore failure propagated instead of being masked.
+    expect(postCall('/api/data-lakes')).toBeUndefined();
+    expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe(
+      "Cannot restore a data lake in 'deleted' status"
+    );
+    // Still remembered - a later retry (once the transient/status issue clears) can try again.
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({ id: 'lake1', tagPrefix: 'test:' });
+  });
+});
+
+/**
  * The fileless commit (#1916): a lake whose only source is a Google Drive folder. Before this the
  * wizard could not produce one at all - the commit path was an upload pipeline that threw on an
  * empty file set - so these cover the create + connect ordering and, above all, that a commit which
@@ -694,6 +837,10 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     apiPost.mockReset();
     apiPut.mockReset().mockResolvedValue({ data: { success: true } });
     apiDelete.mockReset().mockResolvedValue({ data: { success: true } });
+    // This suite asserts uploadFileToUrlMock is never called (the fileless commit has no upload
+    // step) - reset its call history too, not just the other mocks, so a call left over from
+    // whichever describe block ran immediately before this one can't produce a false positive.
+    uploadFileToUrlMock.mockClear();
     toastMock.error.mockClear();
     toastMock.success.mockClear();
     installApiPostRouter();
