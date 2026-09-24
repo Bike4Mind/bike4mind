@@ -12,6 +12,14 @@ async function loadFooter(env: Record<string, string>) {
   return mod.buildShareFooterHtml;
 }
 
+async function loadSignupGate(env: Record<string, string> = {}) {
+  vi.resetModules();
+  vi.unstubAllEnvs();
+  for (const [k, v] of Object.entries(env)) vi.stubEnv(k, v);
+  const mod = await import('./shareFooter');
+  return mod.buildSignupGateHtml;
+}
+
 // A marker unique to the built-in Bike4Mind SVG wordmark (a clipPath id in b4mLogo.ts).
 const BUILTIN_SVG_MARKER = 'clip0_4034_1502';
 
@@ -68,5 +76,38 @@ describe('buildShareFooterHtml', () => {
     const html = build();
     expect(html).toContain('A&amp;B');
     expect(html).not.toContain('>A&B<');
+  });
+});
+
+// b4m-bob#318: the prompt must be an honest, dismissible invitation, not a fake gate over
+// content that's already been delivered on the page.
+describe('buildSignupGateHtml', () => {
+  it('does not lock scroll or render a blur/overlay layer', async () => {
+    const buildGate = await loadSignupGate();
+    const { styles, html } = buildGate();
+    expect(styles).not.toContain('overflow:hidden');
+    expect(styles).not.toContain('b4m-gate-ol');
+    expect(html).not.toContain('b4m-gate-ol');
+  });
+
+  it('is not a modal dialog', async () => {
+    const buildGate = await loadSignupGate();
+    const { html } = buildGate();
+    expect(html).not.toContain('role="dialog"');
+  });
+
+  it('does not claim to withhold content', async () => {
+    const buildGate = await loadSignupGate();
+    const { html } = buildGate();
+    expect(html).not.toContain('Read the rest');
+    expect(html).not.toContain('walled garden');
+    expect(html).toContain('Like this?');
+  });
+
+  it('keeps a keyboard-accessible dismiss control', async () => {
+    const buildGate = await loadSignupGate();
+    const { html } = buildGate();
+    expect(html).toContain('id="b4m-gate-dismiss"');
+    expect(html).toContain('for="b4m-gate-dismiss"');
   });
 });
