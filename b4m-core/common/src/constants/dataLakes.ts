@@ -1,5 +1,5 @@
 import type { DataLakeMembershipScope } from '../types/entities/FabFileTypes';
-import type { DataLakeStatus } from '../types/entities/DataLakeTypes';
+import type { DataLakeOrigin, DataLakeStatus } from '../types/entities/DataLakeTypes';
 
 /**
  * Namespace prefix for the per-lake join meta-tag (`datalake:<slug>` or
@@ -40,6 +40,12 @@ export type DataLakeGroundingMode = (typeof DATA_LAKE_GROUNDING_MODES)[number];
  * that predate it, whose stored value is absent) at the create-time resolution seam.
  */
 export const DEFAULT_DATA_LAKE_GROUNDING_MODE: DataLakeGroundingMode = 'retrieve';
+
+/**
+ * Default origin for a lake with no stored value: `curated`. Applied at every read site that
+ * hydrates a `DataLakeConfig.origin` (the field is optional - see its own doc comment for why).
+ */
+export const DEFAULT_DATA_LAKE_ORIGIN: DataLakeOrigin = 'curated';
 
 /**
  * Trim a lake's `fileTagPrefix` and return it only if it is usable as a tag prefix
@@ -399,6 +405,12 @@ export interface DataLakeConfig {
    * registry lake, which has no document and no lifecycle - always serving.
    */
   status?: DataLakeStatus;
+  /**
+   * Who fills this lake (see IDataLake.origin). Reader-visible so the manager can badge a
+   * connector-fed lake without a second fetch. Absent for a fallback (built-in) registry lake,
+   * which has no document.
+   */
+  origin?: DataLakeOrigin;
 }
 
 /**
@@ -745,6 +757,7 @@ export function toDataLakeConfig(dl: {
   isPublic?: boolean;
   lakeMemoryEnabled?: boolean;
   status?: DataLakeStatus;
+  origin?: DataLakeOrigin;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -759,6 +772,7 @@ export function toDataLakeConfig(dl: {
     isPublic: dl.isPublic,
     lakeMemoryEnabled: dl.lakeMemoryEnabled,
     status: dl.status,
+    origin: dl.origin,
   };
 }
 

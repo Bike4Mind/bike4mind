@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { ImageModels, IMAGES_PER_EDIT_REQUEST, type GenerateImageToolCall } from '@bike4mind/common';
 import type { ToolContext } from '../../base/types';
+import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
 // The agent-tool edit_image path must run the SAME moderation gate the
 // queue-handler ImageEdit service uses, before context.imageGenerateStorage.upload().
@@ -488,5 +489,18 @@ describe('imageEditTool - self-host storage provenance (source and mask)', () =>
 
     expect(mockAxiosGet).toHaveBeenCalled();
     expect(mockEditSpy).toHaveBeenCalled();
+  });
+});
+
+describe('imageEditTool - size', () => {
+  // The schema used to offer dall-e-2's 256x256/512x512: the default GPT-Image edit model
+  // rejects them, and the ledger has no row for them so it billed the 1024x1024 price.
+  it('offers only sizes the cost calculator can price in the tool schema', () => {
+    const { toolSchema } = imageEditTool.implementation(createFakeContext(), {
+      model: ImageModels.GPT_IMAGE_1_5,
+    } as GenerateImageToolCall);
+    const { properties } = toolSchema.parameters as { properties: Record<string, { enum?: string[] }> };
+
+    expect(properties.size.enum).toEqual([...PRICEABLE_IMAGE_SIZES]);
   });
 });

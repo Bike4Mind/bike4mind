@@ -335,6 +335,25 @@ describe('ChatCompletionProcess', () => {
       (service as any).entitlementKeys = [];
       expect(await service.resolveEntitlementKeys()).toEqual([]);
     });
+
+    // #3155 (review): `entitlementsResolved` only flips AFTER the await, so two callers racing
+    // before it settles previously both re-entered the try/catch independently and both wrote the
+    // shared fields - whichever settled last won, so a slow success racing behind a fast failure
+    // (or vice versa) could leave a healthy turn's keys stamped as failed. Single-flight closes
+    // the window: both callers must resolve to the SAME single settlement, and the resolver runs
+    // exactly once.
+    it('is single-flight: concurrent callers converge on one resolution, not a last-write-wins race', async () => {
+      const getEnt = vi.fn().mockResolvedValue(['product:pro']);
+      (service as any).getEntitlements = getEnt;
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+
+      const [first, second] = await Promise.all([service.resolveEntitlementKeys(), service.resolveEntitlementKeys()]);
+
+      expect(first).toEqual(['product:pro']);
+      expect(second).toEqual(['product:pro']);
+      expect(getEnt).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('userHasAccessibleKnowledgeLake (offering signal)', () => {
@@ -463,6 +482,37 @@ describe('ChatCompletionProcess', () => {
       // One call, not two: had the second call built its own context object, this memo
       // (keyed on object identity) would miss and read a second time.
       expect(listByPrincipal).toHaveBeenCalledTimes(1);
+    });
+
+    // #3155 (review): pins the producer, not just the consumer - the existing
+    // getDynamicDataLakeTags.ts tests hand `entitlementKeysResolved` in directly, so nothing
+    // asserted that a real `resolveEntitlementKeys()` failure actually reaches it through
+    // `entitlementResolutionFailed`. Deleting that private-field assignment must fail these.
+    it('sets entitlementKeysResolved: false only when the entitlement lookup actually failed', async () => {
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+      (service as any).entitlementResolutionFailed = false;
+      (service as any).getEntitlements = vi.fn().mockRejectedValue(new Error('subscription DB down'));
+      (service as any).logger = { warn: vi.fn() };
+      (service as any).db = { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } };
+
+      const context = await (service as any).getDataLakeAccessContext();
+
+      expect(context.entitlementKeysResolved).toBe(false);
+    });
+
+    it('sets entitlementKeysResolved: true when the entitlement lookup succeeds, including a legitimately empty list', async () => {
+      (service as any).dataLakeAccessContextMemo = undefined;
+      (service as any).entitlementsResolved = false;
+      (service as any).entitlementKeys = [];
+      (service as any).entitlementResolutionFailed = false;
+      (service as any).getEntitlements = vi.fn().mockResolvedValue([]);
+      (service as any).db = { organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) } };
+
+      const context = await (service as any).getDataLakeAccessContext();
+
+      expect(context.entitlementKeysResolved).toBe(true);
     });
   });
 
@@ -5210,6 +5260,67 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({
           reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
+
+    it('overwrites a stale partial replies[] with the error message, not just reply (#3223)', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      // extractReplies (client) prefers a non-empty replies[] over reply, so a lingering
+      // partial entry from before the failure (e.g. an unclosed '<think>' left by a killed
+      // stream) would otherwise outrank this error message and render a blank turn.
+      mockQuest.replies = ['<think>'];
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('stream timeout - idle for too long, overloaded backend');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          replies: ['The AI service is currently experiencing high demand. Please try again in a few minutes.'],
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
+
+    it('keeps visible partial answer text ahead of the error instead of discarding it', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      // A real answer streamed before the failure - must survive alongside the error, not be
+      // replaced by it, so the user doesn't lose text they already watched arrive.
+      mockQuest.replies = ['Here is what I found so far'];
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('stream timeout - idle for too long, overloaded backend');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply:
+            'Here is what I found so farThe AI service is currently experiencing high demand. Please try again in a few minutes.',
+          replies: [
+            'Here is what I found so far',
+            'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          ],
           type: 'error',
           status: 'done',
         })

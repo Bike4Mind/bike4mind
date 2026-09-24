@@ -238,6 +238,7 @@ export enum ChatModels {
   CLAUDE_4_8_OPUS = 'claude-opus-4-8',
   CLAUDE_FABLE_5 = 'claude-fable-5',
   CLAUDE_5_OPUS = 'claude-opus-5',
+  CLAUDE_5_5_OPUS = 'claude-opus-5-5',
 
   JURASSIC2_ULTRA = 'ai21.j2-ultra-v1',
   JURASSIC2_MID = 'ai21.j2-mid-v1',
@@ -445,7 +446,7 @@ export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * The API will reject requests that include temperature for these models.
  */
 export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
-  // Opus 4.7+, Sonnet 5, Fable 5, and Opus 5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
+  // Opus 4.7+, Sonnet 5, Fable 5, and Opus 5/5.5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
   ChatModels.CLAUDE_4_7_OPUS,
   ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
   ChatModels.CLAUDE_4_8_OPUS,
@@ -454,6 +455,7 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS,
   // Moonshot pins temperature and top_p on every current Kimi and documents them
   // as unmodifiable: the chat API reference states only the moonshot-v1 family
   // accepts them, and the thinking guide says outright that for kimi-k2.7-code

@@ -299,6 +299,7 @@ export const SettingKeySchema = z.enum([
   'EnforceLakeReadGrants',
   'EnableDataLakeDrivePoll',
   'EnforceLakeAdmission',
+  'EnforceLakeOriginOnIngest',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
@@ -574,7 +575,13 @@ export const IntentClassifierConfigSchema = z.object({
 export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema>;
 
 export const OrchestrationDefaultsSchema = z.object({
-  /** Tool names the synthetic profile is allowed to invoke. */
+  /**
+   * Tool names the synthetic profile is allowed to invoke. A DEFAULT toolbelt, not a gate:
+   * an agentless chat dispatch ships the user's ambient Smart Tools and the executor UNIONS
+   * them onto this list (`pickEffectiveEnabledTools`), so narrowing this narrows what the
+   * agent brings of its own rather than capping what the user may select. `deniedTools` below
+   * is the gate.
+   */
   allowedTools: z.array(z.string()).default([
     'web_search',
     'retrieve_knowledge_content',
@@ -587,13 +594,11 @@ export const OrchestrationDefaultsSchema = z.object({
     // Read-only, timezone-aware clock. Fresh at call time and mutates nothing,
     // so it is safe for agent mode - lets agents stamp an action at execution
     // instant without re-polluting the cached system prefix with a volatile
-    // minute-precision date block. Mirrored client-side via
-    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
+    // minute-precision date block.
     'current_datetime',
     // Storage-backed artifact generation, opted into for agent mode: the agent
     // writes these to generated-content storage, not user data, so they are safe
-    // to expose. Mirrored client-side in
-    // agentModeDefaultToolNames (apps/client/app/utils/agentOrchestration.ts).
+    // to expose.
     'image_generation',
     'edit_image',
     'music_generation',
@@ -2242,6 +2247,27 @@ export const settingsMap = {
     // Resolved through scopeForLake, so the rungs mirror PauseLakeConvergence: the contract is the
     // LAKE's ("the policy I require"), which is why Lake is settable here even though the chunk
     // policy it grades against is owner-altitude and deliberately is not (see DefaultChunkSize).
+    scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
+  }),
+  EnforceLakeOriginOnIngest: makeBooleanSetting({
+    key: 'EnforceLakeOriginOnIngest',
+    name: 'Data Lakes: Enforce curated-lake origin on ingest',
+    defaultValue: true,
+    description:
+      'ON by default: unattended ingest (the Drive folder sync) refuses to add content to a lake ' +
+      'whose owner declared it curated. OFF makes the refusal advisory and lets the write through. ' +
+      'Unlike the admission contract this ships ON, because it refuses on an explicit owner ' +
+      'declaration rather than a heuristic, and because the origin backfill marks every lake that ' +
+      'currently has a connector as connector-fed - so at rollout this refuses nothing that exists. ' +
+      'The lake rung is the one that matters; the org and owner rungs disable it across every lake ' +
+      'in that scope at once. A flip is not instantaneous: the settings cache is per-instance, so it ' +
+      'applies immediately on the instance that served the change and within ~5 min elsewhere.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 97,
+    dependsOn: 'EnableDataLakes',
+    // Resolved through scopeForLake, mirroring EnforceLakeAdmission: the declaration is the LAKE's,
+    // so Lake is the meaningful rung and the wider rungs are operator escape hatches.
     scope: { settableAt: [SettingScopeLevel.Organization, SettingScopeLevel.Owner, SettingScopeLevel.Lake] },
   }),
   EnableBriefcase: makeBooleanSetting({

@@ -6,10 +6,14 @@ import { router, appUrlForLambdaEnv } from './router';
 import { secrets } from './secrets';
 
 // Workspace code the bundle carries, hashed into MCP_VERSION so a code-only change redeploys the
-// handler: SST does not notice copyFiles CONTENT changes. Keep in sync with copyFiles below - a
-// package copied but not listed here stops moving the version. Read one path at a time and hashed
-// in @bike4mind/infra, where the ways it can go quietly constant are testable; nothing imports
-// this file. See mcpContentHash.ts for which ways and why.
+// handler: SST does not notice copyFiles CONTENT changes. Keep in sync with the b4m-core/* entries
+// in copyFiles below - a package copied but not listed here stops moving the version. The tiktoken
+// wasm is not one of them: it lives under node_modules, so it is untracked and `git ls-tree` has no
+// blob to hash, which means MCP_VERSION does not cover it.
+// infra/__tests__/contentHashCoverage.test.ts asserts that correspondence in both directions, and
+// holds the exclusion to being genuinely untracked. Read one path at a time and hashed in
+// @bike4mind/infra, where the ways it can go quietly constant are testable; nothing imports this
+// file. See mcpContentHash.ts for which ways and why.
 const MCP_CONTENT_HASH = computeMcpContentHash({
   paths: ['b4m-core/mcp', 'b4m-core/common', 'b4m-core/hearth'],
   readTree: path => execFileSync('git', ['ls-tree', '-r', 'HEAD', path]).toString(),

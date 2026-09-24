@@ -38,6 +38,7 @@ import {
   DEGENERATE_FINISH_REASON,
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
+  visibleReplyText,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -864,6 +865,28 @@ export class ChatCompletionProcess {
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
+   * Set only in `resolveEntitlementKeys()`'s catch branch; read by `getDataLakeAccessContext()` to
+   * set `DataLakeAccessContext.entitlementKeysResolved` - see that field's own doc for the "THREW
+   * vs. legitimately empty" distinction this exists to carry (#3155).
+   *
+   * NOT the same axis as `entitlementsResolved` above (review: the two names read as near-synonyms
+   * but answer different questions) - that one means "an attempt has been made this process, so the
+   * memo is populated" and is `true` in BOTH the success and the failure branch of
+   * `resolveEntitlementKeys()`. This one means "that attempt actually succeeded." Never read
+   * `entitlementsResolved: true` as proof the keys are trustworthy - check this field instead.
+   */
+  private entitlementResolutionFailed = false;
+  /**
+   * Single-flight guard for `resolveEntitlementKeys()` (review, #3155): the resolution check
+   * (`entitlementsResolved`) only flips to `true` AFTER the `await`, so two callers racing before
+   * it settles previously both re-entered the try/catch and both wrote the shared
+   * `entitlementKeys`/`entitlementResolutionFailed` fields - whichever settled LAST won, so a
+   * failure racing behind a success could overwrite healthy keys with the fail-safe `[]` and
+   * suppress a healthy turn's telemetry. Caching the in-flight PROMISE (set synchronously, before
+   * any `await`) closes the window: every racing caller awaits the same one settlement.
+   */
+  private entitlementKeysPromise?: Promise<string[]>;
+  /**
    * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
    * (userHasAccessibleKnowledgeLake), the corpus inline-defer plan (resolveCorpusInlinePlan) and
    * the retrieval seed's `lakeScope`, so none of them can disagree - it is the SAME access the
@@ -975,25 +998,35 @@ export class ChatCompletionProcess {
    * memoizing the result (an empty list is a valid, memoizable result). Both the forced
    * retrieval feature and the tool path read these keys to gate entitlement-scoped lakes.
    * No injection => empty keys => tag-only matching (the neutral default).
+   *
+   * SINGLE-FLIGHT (review, #3155): `entitlementKeysPromise` is cached synchronously, before the
+   * first `await`, so two callers racing before resolution settles converge on the SAME promise
+   * instead of each running the try/catch independently - see that field's own doc for the race
+   * this closes.
    */
   public async resolveEntitlementKeys(): Promise<string[]> {
-    if (!this.entitlementsResolved) {
-      try {
-        this.entitlementKeys = (await this.getEntitlements?.(this.user)) ?? [];
-      } catch (err) {
-        // Fail-safe: an entitlement-resolution failure (e.g. a subscription DB read error)
-        // must NEVER break the chat turn. Degrade to tag-only matching - exactly the pre-Q3b
-        // behavior. Entitlement-gated lakes (libonc) fail closed; tag-gated lakes (Opti)
-        // and the entire main-app chat path are unaffected. This is what keeps wiring
-        // getEntitlements into the shared chat defaults a non-regression for every surface.
-        this.logger.warn(
-          `Entitlement resolution failed; falling back to tag-only lake access: ${(err as Error)?.message}`
-        );
-        this.entitlementKeys = [];
-      }
-      this.entitlementsResolved = true;
+    if (this.entitlementsResolved) return this.entitlementKeys;
+    if (!this.entitlementKeysPromise) {
+      this.entitlementKeysPromise = (async () => {
+        try {
+          this.entitlementKeys = (await this.getEntitlements?.(this.user)) ?? [];
+        } catch (err) {
+          // Fail-safe: an entitlement-resolution failure (e.g. a subscription DB read error)
+          // must NEVER break the chat turn. Degrade to tag-only matching - exactly the pre-Q3b
+          // behavior. Entitlement-gated lakes (libonc) fail closed; tag-gated lakes (Opti)
+          // and the entire main-app chat path are unaffected. This is what keeps wiring
+          // getEntitlements into the shared chat defaults a non-regression for every surface.
+          this.logger.warn(
+            `Entitlement resolution failed; falling back to tag-only lake access: ${(err as Error)?.message}`
+          );
+          this.entitlementKeys = [];
+          this.entitlementResolutionFailed = true;
+        }
+        this.entitlementsResolved = true;
+        return this.entitlementKeys;
+      })();
     }
-    return this.entitlementKeys;
+    return this.entitlementKeysPromise;
   }
 
   /**
@@ -1020,10 +1053,14 @@ export class ChatCompletionProcess {
    */
   private async getDataLakeAccessContext(): Promise<DataLakeAccessContext> {
     if (this.dataLakeAccessContextMemo === undefined) {
+      const entitlementKeys = await this.resolveEntitlementKeys();
       this.dataLakeAccessContextMemo = {
         db: this.db,
         user: this.user,
-        entitlementKeys: await this.resolveEntitlementKeys(),
+        entitlementKeys,
+        // #3155: lets the exclusion-telemetry count tell a legitimately empty entitlement list
+        // apart from a failed lookup - see `entitlementResolutionFailed`'s own doc.
+        entitlementKeysResolved: !this.entitlementResolutionFailed,
         // Without this, a countGateExcludedLakes failure warns into a void: the resolver
         // swallows it internally (never throws), so this call's own try/catch never sees it.
         logger: this.logger,
@@ -2844,6 +2881,7 @@ export class ChatCompletionProcess {
           image_generation: imageConfig,
           edit_image: imageConfig,
           audio_generation: audioConfig,
+          web_search: { imageUrlSigningSecret: this.telemetryHmacSecret },
         },
         model,
         organization,
@@ -5822,7 +5860,32 @@ export class ChatCompletionProcess {
 
       quest.promptMeta!.performance!.totalResponseTime = totalResponseTime;
       quest.promptMeta!.generatedAt = new Date().toISOString();
-      quest.reply = (err as Error).message;
+      // extractReplies (client) prefers a non-empty replies[] over reply, so a stale partial
+      // replies array left behind by the failed run (e.g. an unclosed '<think>' block) would
+      // otherwise outrank this error message and the user sees a blank turn instead of the
+      // error (#3223). Every branch below that overrides quest.reply must go through this so
+      // the two never drift apart across the extra saveQuest calls those branches make.
+      //
+      // A slot that already has real visible text (an answer that streamed before the failure
+      // hit) is kept ahead of the error rather than discarded, joined with no separator to match
+      // extractReplies' own join rule. `quest.reply` mirrors the same joined text rather than
+      // just the error - search indexing, export/curation and the public /api/chat response all
+      // read `.reply` alone and expect the full answer, not a truncated error-only string.
+      //
+      // Snapshotted once, before any call: this catch block calls setErrorReply more than once
+      // on some paths (an unconditional raw-message call up front, then a friendlier message in
+      // the branch below) - reading quest.replies live would pick up the FIRST call's own error
+      // text as if it were streamed content and stack every subsequent message on top of it.
+      const streamedRepliesBeforeError = quest.replies;
+      const setErrorReply = (message: string) => {
+        const visiblePartial = (streamedRepliesBeforeError ?? [])
+          .map(r => visibleReplyText(r))
+          .filter(text => text.length > 0);
+        const combined = [...visiblePartial, message];
+        quest.replies = combined;
+        quest.reply = combined.join('');
+      };
+      setErrorReply((err as Error).message);
       quest.type = 'error';
       quest.status = 'done';
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -5846,7 +5909,7 @@ export class ChatCompletionProcess {
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
-        quest.reply = 'The request was interrupted. Please try sending your message again.';
+        setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5861,7 +5924,7 @@ export class ChatCompletionProcess {
         // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5869,14 +5932,14 @@ export class ChatCompletionProcess {
       } else if (err instanceof Error && isToolPairingError(err)) {
         // User-friendly error message instead of stuck spinner
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'I encountered an issue with the conversation history. Please try again or start a new session.';
+        setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);

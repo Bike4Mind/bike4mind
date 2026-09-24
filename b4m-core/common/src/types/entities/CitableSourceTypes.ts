@@ -1,3 +1,5 @@
+import type { WebSearchPlace } from '../../constants/locationMap';
+
 /**
  * Source classification for UI rendering
  * Determines icon, color, and behavior
@@ -97,6 +99,17 @@ export interface CitableSource {
     relevanceScore?: number;
     fullContext?: string; // For text-based sources (RAG, web search)
     /**
+     * Primary image for the source, same as `images[0]`. Set by web_search whenever the provider
+     * supplied one - NOT a signal that the user asked for a visual answer, and not currently read
+     * by any renderer. Absent means the provider gave no picture.
+     */
+    thumbnail?: string;
+    /**
+     * Every image the provider supplied for this source, most representative first, capped at 4.
+     * These persist with the quest, so they are a small but real addition to every stored web hit.
+     */
+    images?: string[];
+    /**
      * Ids of the other cited sources this one provably disagrees with, from the retrieval-time
      * conflict detector (#3041, buildRetrievalConflictSignal). Present only on the chips of a
      * witness pair, and only for the kinds classified as able to ASSERT disagreement - the rest
@@ -107,6 +120,11 @@ export interface CitableSource {
      * here later would change that classification - see promptMetaRedaction.ts.
      */
     conflictsWith?: string[];
+    /**
+     * A place web_search found with provider coordinates, for the inline `b4m_map` widget. The map
+     * takes its pins from here only - see WebSearchPlace.
+     */
+    place?: WebSearchPlace;
     [key: string]: unknown;
   };
 }

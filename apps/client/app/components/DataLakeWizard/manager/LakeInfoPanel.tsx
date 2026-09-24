@@ -45,6 +45,7 @@ import useStartChatWithLake from '@client/app/hooks/useStartChatWithLake';
 import DataLakeEmptyState from '@client/app/components/datalake/DataLakeEmptyState';
 import LakeHealthBadge from '@client/app/components/datalake/LakeHealthBadge';
 import DuplicateAdmissionsChip from '@client/app/components/datalake/DuplicateAdmissionDialog';
+import LakeFindingsChip from '@client/app/components/datalake/LakeFindingsDialog';
 import LakeDriveStatusChip from '@client/app/components/datalake/LakeDriveStatusChip';
 import { lakeVisibilityLabel } from '@client/app/components/datalake/lakeVisibility';
 import type { IDataLakeBatchSummary } from '@bike4mind/common';
@@ -549,6 +550,20 @@ export function LakeInfoPanel({
               {armCounts.metaCount} by lake tag, {armCounts.prefixOnlyCount} by content prefix
             </Chip>
           )}
+          {/* The DECLARATION (who may fill this lake), distinct from the Drive chip below it, which
+              reports whether a folder is actually attached. A lake can be connector-fed with no
+              connection yet. */}
+          {lake.origin === 'connector-fed' && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-origin-chip-${lake.id}`}
+            >
+              Connector-fed
+            </Chip>
+          )}
           {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,
               and it previously gave no sign a Drive folder was feeding it (#1645). */}
           <LakeDriveStatusChip lakeId={lake.id} organizationId={lake.organizationId} />
@@ -560,6 +575,10 @@ export function LakeInfoPanel({
               is blind to what the owner already decided; this reads the ruling-aware door and is the
               affordance that acts. Gated on canManage to match that door, which refuses a reader. */}
           <DuplicateAdmissionsChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
+          {/* Cross-document contradictions (#3044): the lake retrieves perfectly and still answers
+              wrongly, because two of its documents disagree. A different axis from the duplicate
+              chip beside it - those are two copies of ONE document, these are two documents. */}
+          <LakeFindingsChip lakeId={lake.id} lakeName={lake.name} canManage={!!lake.canManage} />
           {/* Lake memory: manage-gated state chip + build/rebuild trigger, next to the
               retrievability badge above - a different axis of "can this lake answer well" (extracted
               facts vs raw passages). Hidden entirely while off (no chip for a state nobody can act on). */}

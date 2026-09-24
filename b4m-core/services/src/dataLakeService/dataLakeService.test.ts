@@ -1539,6 +1539,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'lastSyncAt',
         'name',
         'organizationId',
+        'origin',
         'requiredEntitlement',
         'requiredUserTag',
         'slug',
@@ -2780,6 +2781,49 @@ describe('unarchiveDataLake - dedup pass (live re-upload wins)', () => {
     expect(result.restoredCount).toBe(1);
   });
 
+  // The same debit deleteDataLake's own sweep applies, reached from the archive axis instead: a
+  // discarded duplicate was archived-but-still-counted, and this dedup pass is what takes it out
+  // of the counted set.
+  it("debits each discarded duplicate's own owner, grouped by owner", async () => {
+    const archived = [
+      { id: 'a1', contentHash: 'h1', userId: 'creator', fileSize: 100 },
+      { id: 'a2', contentHash: 'h2', userId: 'contributor', fileSize: 50 },
+    ];
+    const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    const fabFiles = {
+      findArchivedByDataLakeTag: vi.fn().mockResolvedValue(archived),
+      // Both a1 and a2 have a live re-upload - both are discarded duplicates.
+      findByContentHashesInDataLake: vi.fn().mockResolvedValue([
+        { id: 'live1', contentHash: 'h1' },
+        { id: 'live2', contentHash: 'h2' },
+      ]),
+      unarchiveByDataLakeTag: vi.fn().mockResolvedValue(0),
+      deleteManyInIds: vi.fn().mockResolvedValue(undefined),
+      computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
+    };
+    const dataLakes = {
+      findById: vi
+        .fn()
+        .mockResolvedValueOnce(lake({ status: 'archived' }))
+        .mockResolvedValue(lake({ status: 'unarchiving' })),
+      update: vi.fn().mockResolvedValue(lake()),
+      settleLifecycleStatus: vi
+        .fn()
+        .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+      setStats: vi.fn().mockResolvedValue(lake()),
+      claimUnarchiving: vi.fn().mockResolvedValue(true),
+      activateIfDraft: vi.fn(),
+    };
+
+    await unarchiveDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { dataLakes, fabFiles, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).toHaveBeenCalledTimes(2);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', -100);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('contributor', -50);
+  });
+
   it("passes this lake's own filesArchivedAt stamp through to both the dedup read and the reversal", async () => {
     const STAMP = new Date('2026-05-01');
     const fabFiles = {
@@ -2988,7 +3032,7 @@ describe('restoreDeletedDataLake - deleted→active with dedup', () => {
       findDeletedByDataLakeTag: vi.fn().mockResolvedValue(deleted),
       // a live file with hash h1 exists -> d1 is a dup and must be excluded from un-delete.
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([{ id: 'live1', contentHash: 'h1' }]),
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(['r1']),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'r1', userId: 'owner', fileSize: 10 }]),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
     };
     const dataLakes = {
@@ -3022,7 +3066,7 @@ describe('restoreDeletedDataLake - deleted→active with dedup', () => {
       ]),
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
       // Only d2 moved - d1 is the row a concurrently re-entering restore had already flipped.
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(['d2']),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'd2', userId: 'owner', fileSize: 10 }]),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
     };
     const dataLakes = {
@@ -3051,7 +3095,7 @@ describe('restoreDeletedDataLake - deleted→active with dedup', () => {
     const fabFiles = {
       findDeletedByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'd1', contentHash: 'h1' }]),
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(['d1']),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'd1', userId: 'owner', fileSize: 10 }]),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
     };
     const dataLakes = {
@@ -3070,6 +3114,58 @@ describe('restoreDeletedDataLake - deleted→active with dedup', () => {
     });
 
     expect(result.restoredCount).toBe(1);
+  });
+});
+
+describe('restoreDeletedDataLake - owner storage quota sync', () => {
+  const makeAdapters = (restored: Array<{ id: string; userId: string; fileSize: number }>) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake({ status: 'deleted' })),
+        update: vi.fn().mockResolvedValue(lake()),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        setStats: vi.fn().mockResolvedValue(lake()),
+        activateIfDraft: vi.fn(),
+        claimRestoring: vi.fn().mockResolvedValue(true),
+      },
+      fabFiles: {
+        findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
+        findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
+        undeleteByDataLakeTag: vi.fn().mockResolvedValue(restored),
+        computeDataLakeStats: vi
+          .fn()
+          .mockResolvedValue({ fileCount: restored.length, totalSizeBytes: 0, totalChunkedChars: 0 }),
+      },
+    },
+  });
+
+  it('credits each restored file owner their own bytes, grouped by owner', async () => {
+    const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    const adapters = makeAdapters([
+      { id: 'f1', userId: 'creator', fileSize: 100 },
+      { id: 'f2', userId: 'contributor', fileSize: 50 },
+    ]);
+
+    await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { ...adapters.db, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).toHaveBeenCalledTimes(2);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', 100);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('contributor', 50);
+  });
+
+  it('calls nothing when nothing was restored', async () => {
+    const incrementCurrentStorage = vi.fn();
+    const adapters = makeAdapters([]);
+
+    await restoreDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      db: { ...adapters.db, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).not.toHaveBeenCalled();
   });
 });
 
@@ -3683,7 +3779,9 @@ describe('deleteDataLake - membership change log', () => {
         markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
       },
       fabFiles: {
-        softDeleteByDataLakeTag: vi.fn().mockResolvedValue(sweptIds),
+        softDeleteByDataLakeTag: vi
+          .fn()
+          .mockResolvedValue(sweptIds.map(id => ({ id, userId: 'owner', fileSize: 100 }))),
         findIdsByDataLakeTag: vi.fn().mockResolvedValue(sweptIds),
       },
     },
@@ -3747,7 +3845,7 @@ describe('deleteDataLake - membership change log', () => {
     const fabFiles = {
       findDeletedByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'f1', contentHash: 'h1' }]),
       findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
-      undeleteByDataLakeTag: vi.fn().mockResolvedValue(['f1']),
+      undeleteByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'f1', userId: 'owner', fileSize: 10 }]),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 1, totalSizeBytes: 10, totalChunkedChars: 0 }),
     };
     const dataLakes = {
@@ -3768,6 +3866,79 @@ describe('deleteDataLake - membership change log', () => {
       ['f1', 'removed'],
       ['f1', 'added'],
     ]);
+  });
+});
+
+// The lake creator's own quota is not the only one at stake: a contributor's own file is a full
+// lake member (lakeMembershipSignals carries no ownership conjunct on the meta-tag arm), so a
+// sweep spanning several owners must debit each of them their own bytes, not the creator's.
+describe('deleteDataLake - owner storage quota sync', () => {
+  const makeAdapters = (swept: Array<{ id: string; userId: string; fileSize: number }>) => ({
+    db: {
+      dataLakes: {
+        findById: vi.fn().mockResolvedValue(lake()),
+        update: vi
+          .fn()
+          .mockImplementation(async ({ status }: { status: IDataLakeDocument['status'] }) => lake({ status })),
+        settleLifecycleStatus: vi
+          .fn()
+          .mockImplementation(async (_id: string, _from: string, set: Partial<IDataLakeDocument>) => lake(set)),
+        find: vi.fn().mockResolvedValue([]),
+        claimFilesDeletedAt: vi.fn().mockImplementation(async (_id: string, at: Date) => at),
+        claimDeleting: vi.fn().mockResolvedValue(true),
+      },
+      batches: {
+        findActiveByDataLakeId: vi.fn().mockResolvedValue([]),
+        markTerminalIfActive: vi.fn().mockResolvedValue(undefined),
+      },
+      fabFiles: {
+        softDeleteByDataLakeTag: vi.fn().mockResolvedValue(swept),
+        findIdsByDataLakeTag: vi.fn().mockResolvedValue(swept.map(f => f.id)),
+      },
+    },
+    logger: { warn: vi.fn() },
+  });
+
+  it('debits each swept file owner their own bytes, grouped by owner', async () => {
+    const incrementCurrentStorage = vi.fn().mockResolvedValue(undefined);
+    const adapters = makeAdapters([
+      { id: 'f1', userId: 'creator', fileSize: 100 },
+      { id: 'f2', userId: 'contributor', fileSize: 50 },
+      { id: 'f3', userId: 'creator', fileSize: 25 },
+    ]);
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).toHaveBeenCalledTimes(2);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('creator', -125);
+    expect(incrementCurrentStorage).toHaveBeenCalledWith('contributor', -50);
+  });
+
+  it('calls nothing when the sweep took no files', async () => {
+    const incrementCurrentStorage = vi.fn();
+    const adapters = makeAdapters([]);
+
+    await deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+      ...adapters,
+      db: { ...adapters.db, users: { incrementCurrentStorage } },
+    });
+
+    expect(incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
+  it('completes the delete when the storage adjustment throws', async () => {
+    const incrementCurrentStorage = vi.fn().mockRejectedValue(new Error('storage write failed'));
+    const adapters = makeAdapters([{ id: 'f1', userId: 'creator', fileSize: 100 }]);
+
+    await expect(
+      deleteDataLake({ userId: 'owner', isAdmin: false }, 'lake1', {
+        ...adapters,
+        db: { ...adapters.db, users: { incrementCurrentStorage } },
+      })
+    ).resolves.toMatchObject({ status: 'deleted' });
   });
 });
 
@@ -3872,7 +4043,10 @@ describe('teardown stamp bookkeeping', () => {
       fabFiles: {
         findDeletedByDataLakeTag: vi.fn().mockResolvedValue([]),
         findByContentHashesInDataLake: vi.fn().mockResolvedValue([]),
-        undeleteByDataLakeTag: vi.fn().mockResolvedValue(['r1', 'r2']),
+        undeleteByDataLakeTag: vi.fn().mockResolvedValue([
+          { id: 'r1', userId: 'owner', fileSize: 10 },
+          { id: 'r2', userId: 'owner', fileSize: 10 },
+        ]),
         computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 2, totalSizeBytes: 20, totalChunkedChars: 0 }),
       },
     },
@@ -4775,6 +4949,7 @@ describe('removeFileFromDataLake - single-file removal', () => {
       totalSizeBytes: 0,
       totalChunkedChars: 0,
       restoreTokenMinted: true,
+      statsUpdated: true,
     });
   });
 
@@ -4892,6 +5067,7 @@ describe('removeFileFromDataLake - single-file removal', () => {
       totalSizeBytes: 0,
       totalChunkedChars: 0,
       restoreTokenMinted: true,
+      statsUpdated: true,
     });
   });
 

@@ -247,6 +247,119 @@ describe('DataLakeFindingRepository', () => {
     expect(await repo.listByLake('lake-1', { limit: 2 })).toHaveLength(2);
   });
 
+  it('accepts a status array, matching any of them (GET /inconsistencies open+resolved)', async () => {
+    const open = await repo.recordDetected(input({ subject: 'open one', seenAt: SEEN_FIRST }));
+    const resolved = await repo.recordDetected(input({ subject: 'resolved one', seenAt: SEEN_LATER }));
+    const dismissed = await repo.recordDetected(input({ subject: 'dismissed one', seenAt: SEEN_LATER }));
+    await repo.resolveFinding('lake-1', resolved.id, {
+      status: 'resolved',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+    await repo.resolveFinding('lake-1', dismissed.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+
+    const subjects = (await repo.listByLake('lake-1', { status: ['open', 'resolved'] })).map(f => f.subject);
+    expect(subjects).toEqual(expect.arrayContaining([open.subject, resolved.subject]));
+    expect(subjects).not.toContain(dismissed.subject);
+  });
+
+  it('narrows to the findings a run at or after seenSince still saw', async () => {
+    // Nothing ever closes a finding the detector stops reporting - `status` is a curator's word, so
+    // a detector retiring a row would be exactly the overwrite recordDetected refuses to make. The
+    // row therefore stays open once the problem is fixed, which is right for a triage queue and
+    // wrong for "what is wrong with my corpus NOW". This filter answers the second question without
+    // mutating anything: GET /inconsistencies passes the last run's own date, so its findings can
+    // never contradict the countsByKind stored beside them.
+    await repo.recordDetected(input({ subject: 'stale problem', seenAt: SEEN_FIRST }));
+    await repo.recordDetected(input({ subject: 'current problem', seenAt: SEEN_LATER }));
+
+    const current = await repo.listByLake('lake-1', { seenSince: SEEN_LATER });
+    expect(current.map(f => f.subject)).toEqual(['current problem']);
+
+    // Inclusive: a run stamps its rows with the SAME instant it dates its summary, so an exclusive
+    // bound would hide every finding the run just recorded.
+    expect(await repo.listByLake('lake-1', { seenSince: SEEN_FIRST })).toHaveLength(2);
+  });
+
+  it('narrows to dismissals resolved at or after resolvedSince, unlike seenSince', async () => {
+    // A subject dismissed BEFORE a run also gets its lastSeenAt bumped to that run's instant if the
+    // detector re-reports it (recordDetected never touches status/resolvedAt on update) - so a
+    // seenSince-scoped query for "what did this run dismiss" would also catch a dismissal that
+    // predates the run entirely. resolvedAt is the only field that actually distinguishes the two.
+    const preRun = await repo.recordDetected(input({ subject: 'dismissed before the run', seenAt: SEEN_FIRST }));
+    await repo.resolveFinding('lake-1', preRun.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_FIRST,
+    });
+    // Re-detected by a later run: lastSeenAt advances even though status/resolvedAt do not.
+    await repo.recordDetected(input({ subject: 'dismissed before the run', seenAt: SEEN_LATER }));
+
+    const postRun = await repo.recordDetected(input({ subject: 'dismissed after the run', seenAt: SEEN_LATER }));
+    await repo.resolveFinding('lake-1', postRun.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+
+    // seenSince alone cannot tell them apart: both rows now have lastSeenAt >= SEEN_LATER.
+    const bySeenSince = (await repo.listByLake('lake-1', { status: 'dismissed', seenSince: SEEN_LATER })).map(
+      f => f.subject
+    );
+    expect(bySeenSince).toEqual(expect.arrayContaining(['dismissed before the run', 'dismissed after the run']));
+    expect(bySeenSince).toHaveLength(2);
+
+    // resolvedSince keeps only the one actually dismissed at or after that instant.
+    const byResolvedSince = await repo.listByLake('lake-1', { status: 'dismissed', resolvedSince: SEEN_LATER });
+    expect(byResolvedSince.map(f => f.subject)).toEqual(['dismissed after the run']);
+  });
+
+  it('combines seenSince and resolvedSince to keep only rows this run counted and a later dismissal resolved', async () => {
+    // resolvedSince alone also matches a row this run never re-detected (its lastSeenAt is from an
+    // older run, so it never contributed to this run's countsByKind) - the compensation query in
+    // GET /inconsistencies needs both terms together, not either alone.
+    const stale = await repo.recordDetected(input({ subject: 'stale, not re-detected', seenAt: SEEN_FIRST }));
+    await repo.resolveFinding('lake-1', stale.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+
+    const counted = await repo.recordDetected(input({ subject: 'counted, then dismissed', seenAt: SEEN_LATER }));
+    await repo.resolveFinding('lake-1', counted.id, {
+      status: 'dismissed',
+      resolvedByUserId: 'curator-1',
+      resolvedAt: SEEN_LATER,
+    });
+
+    const both = await repo.listByLake('lake-1', {
+      status: 'dismissed',
+      seenSince: SEEN_LATER,
+      resolvedSince: SEEN_LATER,
+    });
+    expect(both.map(f => f.subject)).toEqual(['counted, then dismissed']);
+  });
+
+  it('pages with offset, breaking a lastSeenAt tie by id so no row is skipped or repeated', async () => {
+    // Same seenAt on all four: findings from one detection run commonly land in the same instant,
+    // and a page boundary that fell mid-tie is exactly the bug a `sort({ lastSeenAt: -1 })` alone
+    // produces.
+    for (const subject of ['a', 'b', 'c', 'd']) {
+      await repo.recordDetected(input({ subject, seenAt: SEEN_FIRST }));
+    }
+
+    const firstPage = await repo.listByLake('lake-1', { limit: 2, offset: 0 });
+    const secondPage = await repo.listByLake('lake-1', { limit: 2, offset: 2 });
+
+    expect(firstPage).toHaveLength(2);
+    expect(secondPage).toHaveLength(2);
+    expect(new Set([...firstPage, ...secondPage].map(f => f.id)).size).toBe(4);
+  });
+
   it('scopes every list to its own lake', async () => {
     await repo.recordDetected(input({ lakeId: 'lake-1' }));
     await repo.recordDetected(input({ lakeId: 'lake-2' }));

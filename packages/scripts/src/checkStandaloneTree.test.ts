@@ -9,7 +9,7 @@ import path from 'node:path';
  * Exercises apps/client/scripts/check-standalone-tree.mjs, the last thing the container build
  * runs before the standalone output is copied into the runner image.
  *
- * The guard exists because a @vercel/nft directory-glob fallback swept all of apps/client into
+ * The guard exists because a file-tracer directory-glob fallback swept all of apps/client into
  * the build output, and nothing failed: the image built, the Lambda deployed, and the only
  * symptom was tens of MB of raw source riding along inside a bundle already near Lambda's
  * 250 MB unzipped cap. A byte budget would not have caught it either - most of the standalone

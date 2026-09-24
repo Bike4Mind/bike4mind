@@ -51,8 +51,6 @@ import {
   OpenAIImageStyle,
   REASONING_SUPPORTED_MODELS,
   UserReasoningEffort,
-  isGPTImage2Model,
-  isGPTImageModel,
   isKontextModel as isKontextImageModel,
 } from '@bike4mind/common';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
@@ -107,6 +105,7 @@ import {
   withInertNote,
 } from './inertImageSettings';
 import { imageSizeUpdate } from './imageSizeUpdate';
+import { defaultImageSize, getAvailableImageSizes } from './imageSizeOptions';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { TabIntro } from './TabIntro';
@@ -292,31 +291,13 @@ interface ImageSettingItem {
   type: 'select' | 'input';
   value: string | undefined;
   tooltip?: string;
+  testId?: string;
   options?: ImageSettingOption[];
   inputProps?: Record<string, unknown>;
   // Set when the selected model ignores the setting: the row stays visible but cannot be edited.
   disabled?: boolean;
   onChange(value: string | number | null | undefined): void;
 }
-
-const getAvailableSizes = (model: string) => {
-  if (isGPTImage2Model(model)) {
-    return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes;
-  } else if (isGPTImageModel(model)) {
-    return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
-  } else if (isBflImageModel(model)) {
-    if (isKontextImageModel(model)) return [];
-    return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
-  }
-  return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
-};
-
-const getModelConstraintKey = (model: string) => {
-  if (isGPTImage2Model(model)) return 'GPT_IMAGE_2';
-  if (isGPTImageModel(model)) return 'GPT_IMAGE_1';
-  if (isBflImageModel(model)) return 'BFL';
-  return 'GPT_IMAGE_1';
-};
 
 /**
  * Every value the BFL safety cap actually allows. Derived from the constant rather than hardcoded so
@@ -1239,6 +1220,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       indicator={<KeyboardArrowDownIcon />}
                       sx={settingsSelectSx(mode || 'light')}
                       slotProps={SETTINGS_SELECT_SLOT_PROPS}
+                      data-testid={setting.testId}
                     >
                       {setting.options?.map(option => (
                         <Option key={option.value} value={option.value}>
@@ -1733,12 +1715,13 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
             {
               label: 'Image Size',
               type: 'select' as const,
-              value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(shownModel)].defaultSize,
+              value: size || defaultImageSize(shownModel),
               // `model`, not `shownModel`: the panel renders the previewed model's controls, but the
               // dimensions written here are consumed by whichever model actually generates.
               onChange: (value: OpenAIImageSize | null) => value && setLLM(imageSizeUpdate(model, value)),
-              options: getAvailableSizes(shownModel).map(s => ({ value: s, label: s })),
+              options: getAvailableImageSizes(shownModel, size).map(s => ({ value: s, label: s })),
               tooltip: FIELD_TOOLTIPS.imageSize,
+              testId: 'model-details-size-select',
             },
           ]),
       {

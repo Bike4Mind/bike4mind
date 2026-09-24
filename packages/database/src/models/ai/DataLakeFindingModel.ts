@@ -140,11 +140,19 @@ class DataLakeFindingRepository extends BaseRepository<IDataLakeFindingDocument>
     const query = this.findingModel
       .find({
         lakeId,
-        ...(options?.status ? { status: options.status } : {}),
+        ...(options?.status
+          ? { status: Array.isArray(options.status) ? { $in: options.status } : options.status }
+          : {}),
         ...(options?.kind ? { kind: options.kind } : {}),
         ...(options?.detector ? { detector: options.detector } : {}),
+        ...(options?.seenSince ? { lastSeenAt: { $gte: options.seenSince } } : {}),
+        ...(options?.resolvedSince ? { resolvedAt: { $gte: options.resolvedSince } } : {}),
       })
-      .sort({ lastSeenAt: -1 });
+      // `_id` breaks ties deterministically: findings from one detection run commonly share
+      // `lastSeenAt` to the millisecond, and an unstable order would let a row cross a page
+      // boundary as further pages are fetched.
+      .sort({ lastSeenAt: -1, _id: -1 });
+    if (options?.offset) query.skip(options.offset);
     if (options?.limit) query.limit(options.limit);
     const docs = await query;
     return docs.map(d => d.toJSON() as IDataLakeFindingDocument);

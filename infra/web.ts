@@ -447,6 +447,13 @@ export const web = new sst.aws.Nextjs(
       ...($app.stage === 'production' && process.env.REDDIT_PIXEL_ID
         ? { NEXT_PUBLIC_REDDIT_PIXEL_ID: process.env.REDDIT_PIXEL_ID }
         : {}),
+      // Meta ads pixel: same production-only, account-tied, no-fallback rule as Reddit above.
+      // Consent-deferred loading lives in apps/client/app/utils/metaPixel.ts, and the CSP hosts
+      // it needs are allow-listed in apps/client/proxy.ts - a pixel id set without those is
+      // blocked silently.
+      ...($app.stage === 'production' && process.env.META_PIXEL_ID
+        ? { NEXT_PUBLIC_META_PIXEL_ID: process.env.META_PIXEL_ID }
+        : {}),
       // Apex the GA cookie is pinned to, so the marketing site and this app resolve
       // to ONE visitor across the subdomain hop. Env-only with no brand fallback
       // (the account-tied-id policy). Not production-gated - it only shapes a cookie

@@ -330,12 +330,29 @@ export const CitableSourceSchema = z.object({
       chunkId: z.string().optional(),
       relevanceScore: z.number().optional(),
       fullContext: z.string().optional(),
+      /** web_search's own thumbnail/image cluster for this source, gated on `withImages`. */
+      thumbnail: z.string().optional(),
+      images: z.array(z.string()).optional(),
       /**
        * Ids of the other cited sources this one provably disagrees with (#3041). Declared rather
        * than left to the loose object, for the same reason chunkId/fullContext are: a writer that
        * stamps the wrong shape should fail here, not render a badge that silently names nobody.
        */
       conflictsWith: z.array(z.string()).optional(),
+      /** web_search's provider-located place (WebSearchPlace), the only source of map coordinates. */
+      place: z
+        .object({
+          id: z.string(),
+          name: z.string(),
+          lat: z.number(),
+          lng: z.number(),
+          rating: z.number().optional(),
+          reviews: z.number().optional(),
+          category: z.string().optional(),
+          address: z.string().optional(),
+          thumbnail: z.string().optional(),
+        })
+        .optional(),
     }) // Allow additional properties
     .optional(),
 });

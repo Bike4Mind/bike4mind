@@ -98,6 +98,7 @@ vi.mock('@bike4mind/common', async () => {
     THINK_OPEN_TAG: actual.THINK_OPEN_TAG,
     THINK_CLOSE_TAG: actual.THINK_CLOSE_TAG,
     visibleReplyText: actual.visibleReplyText,
+    stripSearchResultCardFences: actual.stripSearchResultCardFences,
   };
 });
 
@@ -337,6 +338,41 @@ describe('questExport reply extraction', () => {
     const markdown = await exportQuest({ reply: null, replies: ['<think>still thinking</think>'] });
     expect(markdown).toContain('_No response content._');
     expect(markdown).not.toContain('still thinking');
+  });
+
+  it('strips a b4m_cards fence out of the exported reply rather than leaking raw card JSON into the ZIP', async () => {
+    const markdown = await exportQuest({
+      reply: null,
+      replies: ['Here are some watches.\n\n```b4m_cards\n{"cards":[{"name":"Leaked"}]}\n```\n\nHope that helps.'],
+    });
+    expect(markdown).toContain('Here are some watches.');
+    expect(markdown).toContain('Hope that helps.');
+    expect(markdown).not.toContain('b4m_cards');
+    expect(markdown).not.toContain('"cards"');
+  });
+
+  it('resolves a b4m_map fence using the quest promptMeta citables, dropping an unresolved id', async () => {
+    const markdown = await exportQuest({
+      reply: null,
+      replies: [
+        'Here are some options.\n\n```b4m_map\n{"places":[{"id":"place-1","name":"Barr"},{"id":"invented","name":"Fake"}]}\n```\n',
+      ],
+      promptMeta: {
+        citables: [
+          {
+            id: 'place:place-1',
+            type: 'web_url',
+            title: 'Barr',
+            metadata: { place: { id: 'place-1', name: 'Barr', lat: 55.67, lng: 12.57 } },
+          },
+        ],
+      },
+    });
+    expect(markdown).toContain('Barr');
+    expect(markdown).toContain('Open in Google Maps');
+    expect(markdown).not.toContain('Fake');
+    expect(markdown).not.toContain('invented');
+    expect(markdown).not.toContain('b4m_map');
   });
 });
 

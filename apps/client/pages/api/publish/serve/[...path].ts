@@ -19,6 +19,7 @@ import {
   type PublishUser,
   type SandboxAsset,
 } from '@server/services/publish';
+import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@server/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
@@ -71,6 +72,15 @@ import {
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
+
+/**
+ * A reply's `renderedBody`, with any `b4m_cards` fence stripped, for every surface below that
+ * cannot render cards (raw text, markdown/HTML export, the viewer page's own extraction). Not
+ * gated on `source.kind` - a fabfile body never contains this fence, so stripping is a no-op.
+ */
+function replyBodyForExport(artifact: PublishedArtifactLean): string {
+  return stripSearchResultCardFences(artifact.renderedBody ?? '', artifact.citables);
+}
 
 /**
  * GET /api/publish/serve/[...path] - the public viewer for published artifacts.
@@ -522,7 +532,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           ? buildMarkdownExport(
               artifact.title || SHARED_FALLBACK_TITLE,
               artifact.description,
-              artifact.renderedBody ?? ''
+              replyBodyForExport(artifact)
             )
           : renderViewerPage(artifact, { noindex: true, noReferrer: isShare, standalone: true });
       bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
@@ -539,7 +549,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // normal page render instead.
     if (typeof req.query.a === 'string' && req.query.a !== '') {
       const idx = Number(req.query.a);
-      const { artifacts } = extractViewerArtifacts(artifact.renderedBody ?? '', artifact.source.kind);
+      const { artifacts } = extractViewerArtifacts(replyBodyForExport(artifact), artifact.source.kind);
       const target = Number.isInteger(idx) && idx >= 0 ? artifacts[idx] : undefined;
       if (!target || (target.type !== 'html' && target.type !== 'svg')) {
         return res.status(404).json({ error: 'Not found' });
@@ -569,7 +579,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       return sendRawArtifact(
         res,
         artifact,
-        artifact.renderedBody ?? '',
+        replyBodyForExport(artifact),
         req.user as { id?: string } | undefined,
         req.headers['user-agent']
       );
@@ -1295,6 +1305,9 @@ interface PublishedArtifactLean {
   storageKeyPrefix: string;
   manifest: Array<{ path: string; mimeType: string }>;
   renderedBody?: string;
+  /** Snapshot of the source reply's citables, so a `b4m_map` fence in `renderedBody` resolves
+   *  even after the source Quest changes or is deleted. Reply source only. */
+  citables?: CitableSource[];
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
@@ -1620,7 +1633,7 @@ function renderViewerPage(
     standalone = false,
     sharedBy,
   } = opts;
-  const body = artifact.renderedBody ?? '';
+  const body = replyBodyForExport(artifact);
   let contentHtml: string;
   let displayTitle = artifact.title || SHARED_FALLBACK_TITLE;
   if (artifact.source.kind === 'reply') {

@@ -156,10 +156,34 @@ export interface LakeFindingKey {
 
 /** How a surface narrows one lake's findings. Every filter is optional and independent. */
 export interface ListLakeFindingsOptions {
-  status?: LakeFindingStatus;
+  /** A single status, or (for a caller that must match a count taken over more than one) a set of them. */
+  status?: LakeFindingStatus | LakeFindingStatus[];
   kind?: InconsistencyKind;
   detector?: LakeFindingDetector;
+  /**
+   * Keep only rows a run at or after this instant still saw (`lastSeenAt >= seenSince`).
+   *
+   * Exists because nothing ever closes a finding the detector stops reporting - and nothing should:
+   * `status` is a human's word about the corpus, so a detector retiring a row would be exactly the
+   * overwrite `recordDetected` refuses to do. The row therefore stays `open` forever once the
+   * problem is fixed, which is right for a triage queue and wrong for "what is wrong with my corpus
+   * NOW". Passing the last run's `inconsistencyComputedAt` answers the second question without
+   * mutating anything, and leaves the retired row fully visible - status intact - on GET /findings.
+   */
+  seenSince?: Date;
+  /**
+   * Keep only terminal rows resolved at or after this instant (`resolvedAt >= resolvedSince`).
+   *
+   * `seenSince` alone cannot tell a dismissal that predates a run from one made after it: a
+   * re-detected subject gets its `lastSeenAt` bumped to the new run's instant regardless of when it
+   * was dismissed (`recordDetected` never touches `status` or `resolvedAt` on update), so a
+   * `seenSince`-only dismissed-rows query for compensating a run's counts would also catch dismissals
+   * that were already excluded from those counts before the run ever executed.
+   */
+  resolvedSince?: Date;
   limit?: number;
+  /** How many matching rows to skip before `limit` takes over. Pairs with `limit` for load-more paging. */
+  offset?: number;
 }
 
 export interface IDataLakeFindingRepository extends IBaseRepository<IDataLakeFindingDocument> {
@@ -175,7 +199,11 @@ export interface IDataLakeFindingRepository extends IBaseRepository<IDataLakeFin
    * reopening under the curator who closed it.
    */
   recordDetected(input: RecordLakeFindingInput): Promise<IDataLakeFindingDocument>;
-  /** One lake's findings, most recently seen first, narrowed by any combination of filters. */
+  /**
+   * One lake's findings, most recently seen first (ties broken by `_id` for a stable page
+   * boundary - findings from one detection run commonly share `lastSeenAt`), narrowed by any
+   * combination of filters and paged via `limit`/`offset`.
+   */
   listByLake(lakeId: string, options?: ListLakeFindingsOptions): Promise<IDataLakeFindingDocument[]>;
   /**
    * The keys one detector's DISMISSED findings occupy in this lake, so a re-detection can drop what

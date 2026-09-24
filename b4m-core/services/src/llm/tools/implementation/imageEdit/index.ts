@@ -33,6 +33,7 @@ import { fileTypeFromBuffer } from 'file-type';
 import { v4 as uuidv4 } from 'uuid';
 import { NotFoundError } from '@bike4mind/utils';
 import { moderateImageOrThrow } from '../../../imageModerationGate';
+import { PRICEABLE_IMAGE_SIZES } from '../../../imageCostCalculator/OpenAIImageCostCalculator';
 
 async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
   try {
@@ -587,8 +588,11 @@ Please check your BFL API key in settings and ensure it is configured correctly.
           },
           size: {
             type: 'string',
-            description: 'The size of the edited image (OpenAI only)',
-            enum: ['256x256', '512x512', '1024x1024'],
+            // Only sizes the cost calculator can price, as in the image_generation tool: `size`
+            // feeds the onStart credit hold above, and an unpriceable one bills the 1024x1024 row.
+            description:
+              "The size of the edited image (OpenAI only): '1024x1024' square, '1536x1024' landscape, or '1024x1536' portrait.",
+            enum: [...PRICEABLE_IMAGE_SIZES],
           },
           safety_tolerance: {
             type: 'number',

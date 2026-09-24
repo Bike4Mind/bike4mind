@@ -113,6 +113,9 @@ export interface PendingPermission {
   toolInput: unknown;
   iteration: number;
   requestedAt: number;
+  /** Echoed back on `permission_response` so the server can bind the answer to
+   *  THIS pause rather than any later one that happens to share a tool name. */
+  toolCallId?: string;
 }
 
 export interface ParentExecution {

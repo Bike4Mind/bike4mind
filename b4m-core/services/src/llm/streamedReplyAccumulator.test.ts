@@ -1,4 +1,4 @@
-import { hasVisibleReplyText } from '@bike4mind/common';
+import { hasVisibleReplyText, visibleReplyText } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
 import {
   appendStreamedChunk,
@@ -53,6 +53,27 @@ describe('appendStreamedChunk', () => {
 
     expect(replies[0]).toBe('<think>reasoning</think>');
     expect(replies[1]).toBe('The answer is 42.');
+  });
+
+  it('keeps the partial answer when a tool call reopens thinking on the same slot', () => {
+    // Answer, tool call, think again. The reset indices land the second thinking block in the
+    // slot that already holds the partial answer, which the user has already watched stream in.
+    const replies: ReplySlots = {};
+    for (const text of [
+      '<think>',
+      'first reasoning',
+      '</think>',
+      'PARTIAL ANSWER ',
+      '<think>',
+      'second reasoning',
+      '</think>',
+      'FINAL ANSWER',
+    ]) {
+      appendStreamedChunk(replies, text, 0, 'replace');
+    }
+
+    expect(replies[1]).toBe('PARTIAL ANSWER <think>second reasoning</think>FINAL ANSWER');
+    expect(Object.values(replies).map(visibleReplyText).filter(Boolean).join('')).toBe('PARTIAL ANSWER FINAL ANSWER');
   });
 
   it('funnels every chunk into slot 0 in append mode, whatever the index', () => {
@@ -114,8 +135,8 @@ describe('modelVisibleSlots', () => {
   });
 
   it('does not count the pre-seeded rapid reply as the model rendering something', () => {
-    // Without the strip, "a rapid reply <think>..." has an unclosed marker mid-string and so
-    // reads as visible - stamping TTFVT while the model is still only thinking.
+    // Without the strip, the rapid reply itself is the text in front of the still-open
+    // thinking block, so it reads as visible - stamping TTFVT while the model is only thinking.
     const replies: ReplySlots = { 0: 'a rapid reply <think>reasoning' };
     const slots = modelVisibleSlots(replies, 'append', 'a rapid reply');
 

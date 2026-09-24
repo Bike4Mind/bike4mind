@@ -3,6 +3,7 @@ import {
   buildApiKeyTable,
   getAvailableModels,
   getLlmByModel,
+  resolveSuccessorChain,
   type ApiKeyTable,
   type ICompletionBackend,
 } from '@bike4mind/llm-adapters';
@@ -111,13 +112,36 @@ export class OperationsModelService {
       modelInfo = models.find(m => (m.id as string) === 'gpt-3.5-turbo');
     }
     if (!modelInfo) {
-      // Last resort: any available text model
-      modelInfo = models.find(m => m.type === 'text');
+      modelInfo = OperationsModelService.pickAnyTextModel(models);
     }
     if (!modelInfo) {
       throw new Error('No text models available for operations');
     }
     return modelInfo;
+  }
+
+  /**
+   * Last-resort pick: the first text model, walked to its successor when the caller can run it.
+   * Bedrock enumerates legacy ids first, and AWS denies a Legacy model outright to an account
+   * that has not invoked it in 30 days. resolveSuccessorChain, not resolveDeprecatedModelId:
+   * this is our own fallback, not a pinned request, so it must not count toward [model-sunset].
+   */
+  private static pickAnyTextModel(models: ModelInfo[]): ModelInfo | undefined {
+    const first = models.find(m => m.type === 'text');
+    if (!first) return undefined;
+
+    const successorId = resolveSuccessorChain(first.id);
+    if (successorId === first.id) return first;
+
+    const successor = models.find(m => m.id === successorId);
+    if (!successor) {
+      this.logger.warn(
+        `Operations fallback ${first.id} is superseded and its successor ${successorId} is unavailable; keeping it`
+      );
+      return first;
+    }
+    this.logger.info(`Operations fallback ${first.id} is superseded; using its successor ${successorId}`);
+    return successor;
   }
 
   /**
@@ -402,13 +426,17 @@ export class OperationsModelService {
       speechModelId: 'whisper-1',
     };
 
-    // Try to seed the default setting, but don't fail if database is unavailable
+    // Seed the default setting, but don't fail if database is unavailable. $setOnInsert:
+    // this also runs when a configured model is merely unavailable here (e.g. no key for its
+    // backend), and that must not overwrite the admin's choice.
     try {
       await AdminSettings.findOneAndUpdate(
         { settingName: 'operationsModel' },
         {
-          settingName: 'operationsModel',
-          settingValue: defaultConfig,
+          $setOnInsert: {
+            settingName: 'operationsModel',
+            settingValue: defaultConfig,
+          },
         },
         { upsert: true }
       );
