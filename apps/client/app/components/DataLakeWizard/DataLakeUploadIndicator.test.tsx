@@ -1,43 +1,17 @@
-import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, act } from '@testing-library/react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import DataLakeUploadIndicator from './DataLakeUploadIndicator';
 
 /**
- * Regression coverage for #3234's follow-up: QA found the browse-tree tag-count refresh never
- * reached a real user, because the cache invalidation lived in a listener (useBatchProgressListener)
- * that unsubscribes the moment Done clears the wizard's currentBatchId - before a still-ingesting
- * batch's completed message can arrive. useDataLakeBatchCompletionSync fixes that by living here
- * instead, in the component that's always mounted regardless of the wizard or its own visibility.
+ * Batch-completion cache sync used to live in this component (#3234 follow-up), but a later
+ * review (#3238) moved it to ProviderBundle - see useDataLakeBatchCompletionSync's own doc
+ * comment and ProviderBundle.test.tsx. This file covers only the indicator's own visibility and
+ * click behavior.
  */
 
-const { subscribeToAction } = vi.hoisted(() => ({
-  subscribeToAction: vi.fn(() => () => {}),
-}));
-
-vi.mock('@client/app/contexts/WebsocketContext', () => ({
-  useWebsocket: () => ({ subscribeToAction }),
-}));
-
-const mountIndicator = () => {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const spy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
-  const result = render(
-    React.createElement(QueryClientProvider, { client: queryClient }, React.createElement(DataLakeUploadIndicator))
-  );
-  return { ...result, spy };
-};
-
-const invalidatedKeys = (spy: ReturnType<typeof vi.spyOn>) =>
-  spy.mock.calls.map(([arg]) => JSON.stringify((arg as { queryKey?: unknown })?.queryKey));
-
-describe('DataLakeUploadIndicator - batch-completion cache sync stays live while hidden (#3234)', () => {
+describe('DataLakeUploadIndicator', () => {
   beforeEach(() => {
-    subscribeToAction.mockClear();
-    // No visible indicator (totalFiles: 0) and no active batch id - mirrors the state right after
-    // Done (resetWizard), which is exactly when this sync must still be listening.
     useDataLakeWizardStore.setState({
       isOpen: false,
       uploadProgress: {
@@ -55,46 +29,72 @@ describe('DataLakeUploadIndicator - batch-completion cache sync stays live while
   });
 
   it('renders nothing when no upload is active or shown', () => {
-    const { container } = mountIndicator();
+    const { container } = render(<DataLakeUploadIndicator />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('subscribes to batch-progress even while rendering nothing', () => {
-    mountIndicator();
-    expect(subscribeToAction).toHaveBeenCalledWith('data_lake_batch_progress', expect.any(Function));
-  });
-
-  it('invalidates the lake list, health, tag-counts, articles, and files roots on batch completion, with no active batch id in the wizard store', () => {
-    const { spy } = mountIndicator();
-    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
-
-    act(() => {
-      onMessage({
-        action: 'data_lake_batch_progress',
-        batchId: 'batch-still-ingesting-in-background',
-        status: 'completed',
-      });
+  it('renders nothing while the wizard modal is open, even with an active upload', () => {
+    useDataLakeWizardStore.setState({
+      isOpen: true,
+      uploadProgress: {
+        totalFiles: 3,
+        uploadedFiles: 1,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'uploading',
+        currentBatchId: 'batch1',
+      },
     });
 
-    expect(invalidatedKeys(spy)).toEqual(
-      expect.arrayContaining([
-        JSON.stringify(['data-lakes']),
-        JSON.stringify(['dataLakeHealth']),
-        JSON.stringify(['dataLakeTagCounts']),
-        JSON.stringify(['dataLakeArticles']),
-        JSON.stringify(['dataLakeFiles']),
-      ])
-    );
+    const { container } = render(<DataLakeUploadIndicator />);
+    expect(container).toBeEmptyDOMElement();
   });
 
-  it('does not invalidate on an ordinary progress tick', () => {
-    const { spy } = mountIndicator();
-    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
-
-    act(() => {
-      onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
+  it('shows upload progress once the wizard is closed with an upload in flight', () => {
+    useDataLakeWizardStore.setState({
+      isOpen: false,
+      uploadProgress: {
+        totalFiles: 4,
+        uploadedFiles: 2,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'uploading',
+        currentBatchId: 'batch1',
+      },
     });
 
-    expect(invalidatedKeys(spy)).toEqual([]);
+    render(<DataLakeUploadIndicator />);
+    expect(screen.getByTestId('data-lake-upload-indicator')).toHaveTextContent('Uploading... 50%');
+    expect(screen.getByTestId('data-lake-upload-indicator')).toHaveTextContent('2 / 4 files');
+  });
+
+  it('reopens the wizard on the upload step when clicked', () => {
+    useDataLakeWizardStore.setState({
+      isOpen: false,
+      uploadProgress: {
+        totalFiles: 1,
+        uploadedFiles: 1,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'complete',
+        currentBatchId: 'batch1',
+      },
+    });
+
+    render(<DataLakeUploadIndicator />);
+    fireEvent.click(screen.getByTestId('data-lake-upload-indicator'));
+
+    const state = useDataLakeWizardStore.getState();
+    expect(state.isOpen).toBe(true);
+    expect(state.step).toBe('upload');
   });
 });
