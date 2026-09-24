@@ -1,6 +1,6 @@
-import { Box, Button, Card, Chip, LinearProgress, Stack, Typography } from '@mui/joy';
+import { Box, Button, Card, Chip, LinearProgress, Stack, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -42,6 +42,7 @@ import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import PageFrame from '@client/app/components/common/PageFrame';
+import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 
 /**
  * Gears - the earned-nav progression page.
@@ -87,7 +88,15 @@ const GEAR_ICONS: Partial<Record<GearKey, React.ReactNode>> = {
   clidocs: <MenuBookOutlinedIcon />,
 };
 
+type GearsTabKey = 'destinations' | 'features';
+
+const TABS: { key: GearsTabKey; label: string }[] = [
+  { key: 'destinations', label: 'Destinations' },
+  { key: 'features', label: 'Explore Features' },
+];
+
 const GearsPage = () => {
+  const [tab, setTab] = useState<GearsTabKey>('destinations');
   const navigate = useNavigate();
   const { data, isPending, refetch } = useGearsStatus();
   const { isFeatureEnabled } = useFeatureEnabled();
@@ -216,8 +225,7 @@ const GearsPage = () => {
           Gears
         </Typography>
         <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', color: 'text.tertiary' }}>
-          Every feature you use for the first time earns a checkmark and a credit bonus - destinations also earn their
-          place in your sidebar.
+          Every feature you use for the first time earns a checkmark and a credit bonus.
         </Typography>
         <Stack direction="row" alignItems="center" gap={1.5} sx={{ mt: '20px', mb: 3 }}>
           <LinearProgress
@@ -231,23 +239,30 @@ const GearsPage = () => {
         </Stack>
 
         {!isPending && (
-          <>
-            <Typography level="title-lg" sx={{ mb: 1.5 }}>
-              Destinations
-            </Typography>
-            <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
-              First use earns these a slot in your sidebar.
-            </Typography>
-            {renderCards(destinations)}
+          <Tabs
+            value={tab}
+            onChange={(_, value) => setTab(value as GearsTabKey)}
+            sx={{ mt: '32px' }}
+            aria-label="Gear categories"
+          >
+            <TabList data-testid="gears-tablist" sx={pageTabListSx}>
+              {TABS.map(({ key, label }) => (
+                <PageTab key={key} value={key} data-testid={`gears-tab-${key}`}>
+                  {/* Colour set here, as on /profile: the opacity step in PageTab is what
+                      separates active from inactive, so the label itself stays primary ink. */}
+                  <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
+                </PageTab>
+              ))}
+            </TabList>
 
-            <Typography level="title-lg" sx={{ mt: 4, mb: 1.5 }}>
-              Explore Features
-            </Typography>
-            <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
-              Capabilities worth knowing about - try each once.
-            </Typography>
-            {renderCards(skills)}
-          </>
+            <TabPanel value="destinations" sx={{ px: 0, pt: '24px', pb: 0 }}>
+              {renderCards(destinations)}
+            </TabPanel>
+
+            <TabPanel value="features" sx={{ px: 0, pt: '24px', pb: 0 }}>
+              {renderCards(skills)}
+            </TabPanel>
+          </Tabs>
         )}
       </Box>
     </PageFrame>

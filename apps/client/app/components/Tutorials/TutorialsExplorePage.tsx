@@ -1,7 +1,6 @@
 import { useState } from 'react';
-import { Box, Button, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
-import { styled } from '@mui/system';
-import { profileTabListSx } from '@client/app/routes/profile/profileTabListSx';
+import { Box, Button, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
+import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 import PageFrame from '@client/app/components/common/PageFrame';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
@@ -104,13 +103,13 @@ const TutorialsExplorePage = () => {
         sx={{ mt: '32px' }}
         aria-label="Tutorial categories"
       >
-        <TabList data-testid="tutorials-tablist" sx={tabListSx}>
+        <TabList data-testid="tutorials-tablist" sx={pageTabListSx}>
           {TABS.map(({ key, label }) => (
-            <StyledTab key={key} value={key} data-testid={`tutorials-tab-${key}`}>
-              {/* Colour set here, as on /profile: the opacity step in StyledTab is what
+            <PageTab key={key} value={key} data-testid={`tutorials-tab-${key}`}>
+              {/* Colour set here, as on /profile: the opacity step in PageTab is what
                     separates active from inactive, so the label itself stays primary ink. */}
               <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
-            </StyledTab>
+            </PageTab>
           ))}
         </TabList>
 
@@ -161,40 +160,5 @@ const TutorialsPanel = ({
     </Box>
   );
 };
-
-/**
- * The /profile tab strip, plus one fix for this page.
- *
- * Joy derives a child radius from `--List-radius` and applies it to the items
- * marked data-first-child / data-last-child, which rounds the OUTER corners of
- * the whole strip - the TabList root itself also paints `var(--List-radius)`.
- * Squaring the tabs alone cannot reach either, so zero the variable instead.
- */
-const tabListSx = {
-  ...profileTabListSx,
-  '--List-radius': '0px',
-  // Tabs is a flex column, so the strip is a flex item and would shrink below its
-  // own height on a short frame. profileTabListSx only pins the tabs INSIDE the
-  // strip (the horizontal axis); this pins the strip itself.
-  flexShrink: 0,
-} as const;
-
-// StyledTab from /profile, used as-is minus its icon rules (these tabs are text only).
-const StyledTab = styled(Tab)(({ theme }) => ({
-  borderBottomLeftRadius: '0',
-  borderBottomRightRadius: '0',
-  '&:hover:not([aria-selected="true"])': {
-    backgroundColor: `${theme.palette.notebooklist.hoverBg} !important`,
-    '& .MuiTypography-root': {
-      opacity: 1,
-    },
-  },
-  '& .MuiTypography-root': {
-    opacity: 0.7,
-  },
-  '&[aria-selected="true"] .MuiTypography-root': {
-    opacity: 1,
-  },
-}));
 
 export default TutorialsExplorePage;
