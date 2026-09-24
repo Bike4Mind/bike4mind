@@ -123,3 +123,48 @@ describe('editLocalFile: fuzzy writes are bound to the confirmed file snapshot (
     expect(existsSync(file)).toBe(true);
   });
 });
+
+describe('editLocalFile: the write path reuses the gate-resolved span, but always reads fresh', () => {
+  it('applies the gateSnapshot span instead of re-resolving old_string/new_string when the hash still matches', async () => {
+    const dir = await freshDir('b4m-reuse-');
+    const file = join(dir, 'note.txt');
+    await writeFile(file, 'hello world\n');
+    const tool = editTool([dir]);
+
+    const plan = await resolveEditLocalFile({ path: file, old_string: 'hello world', new_string: 'hi world' }, [dir]);
+
+    // A fresh resolveEdit() on this old_string/new_string pair would produce a
+    // different replacement - passing the ORIGINAL resolvedEdit alongside a matching
+    // contentHash proves the write reused it rather than re-resolving from scratch.
+    const message = await tool.toolFn({
+      path: file,
+      old_string: 'hello world',
+      new_string: 'this replacement would land if it were re-resolved',
+      gateSnapshot: { contentHash: plan.contentHash, resolvedEdit: plan.resolvedEdit },
+    });
+
+    expect(message).toContain('File edited successfully');
+    expect(await readFile(file, 'utf-8')).toBe('hi world\n');
+  });
+
+  it('still reads the file fresh and re-resolves when the gateSnapshot hash no longer matches (TOCTOU)', async () => {
+    const dir = await freshDir('b4m-stale-snapshot-');
+    const file = join(dir, 'note.txt');
+    await writeFile(file, 'hello world\n');
+    const tool = editTool([dir]);
+
+    const plan = await resolveEditLocalFile({ path: file, old_string: 'hello world', new_string: 'hi world' }, [dir]);
+    // The file changes after the gate resolved it - the snapshot's hash is now stale.
+    await writeFile(file, 'hello there\n');
+
+    const message = await tool.toolFn({
+      path: file,
+      old_string: 'hello there',
+      new_string: 'hi there',
+      gateSnapshot: { contentHash: plan.contentHash, resolvedEdit: plan.resolvedEdit },
+    });
+
+    expect(message).toContain('File edited successfully');
+    expect(await readFile(file, 'utf-8')).toBe('hi there\n');
+  });
+});
