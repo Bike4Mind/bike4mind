@@ -26,6 +26,7 @@ import {
   ImageModerationIncident as ImageModerationIncidentInput,
   AttachmentLakeAccess,
   materializePromptMetaSession,
+  PersistedSessionSummaryTrigger,
 } from '@bike4mind/common';
 import {
   BFL_IMAGE_MODELS,
@@ -44,6 +45,7 @@ import {
   BFL_DIMENSION_BOUNDS,
   ImageOutputFormatSchema,
   toNonWebpOutputFormat,
+  resolveGptImageGenerateSize,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -167,7 +169,7 @@ interface IImageGenerationServiceOptions {
    * Wiring this lets image-only sessions accumulate long-term context just like chat sessions -
    * the resolver in `resolveImagePrompt` then has more than the last 6 turns to ground on.
    */
-  invokeSummarizeSession?: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
+  invokeSummarizeSession?: (sessionId: string, trigger: PersistedSessionSummaryTrigger) => Promise<void>;
   /** Lambda function name for image processing (from SST Resource.ImageProcessor.name) */
   imageProcessorLambdaName?: string;
   /** Checks a generated image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
@@ -239,10 +241,11 @@ export class ImageGenerationService {
       logger.debug(`Skipping image-gen summarize check: session ${sessionId} not found`);
       return;
     }
-    const [shouldSummarize, trigger] = await shouldSummarizeSession(session, { db: this.db, logger });
-    if (shouldSummarize) {
+    // Indexed rather than destructured - see the matching call in ChatCompletionFeatures.
+    const decision = await shouldSummarizeSession(session, { db: this.db, logger });
+    if (decision[0]) {
       logger.info(`Triggering notebook summarization from image-gen for session ${sessionId}`);
-      await this.invokeSummarizeSession(sessionId, trigger);
+      await this.invokeSummarizeSession(sessionId, decision[1]);
     }
   }
 
@@ -835,24 +838,19 @@ export class ImageGenerationService {
       if (apiKeyTable[modelInfo.backend as keyof typeof apiKeyTable] === 'expired')
         throw new InternalServerError(`Model API key is expired for backend: "${modelInfo.backend}"`);
 
-      // For GPT image models (except gpt-image-2 which supports flexible sizes),
-      // normalize size to a valid GPT size. BFL sizes like '1440x810'
-      // can reach here if the user switched models without resetting their size selection,
-      // or if the transparent-background step-down above moved a gpt-image-2-only size
-      // (e.g. 2048x2048, 3840x2160) onto gpt-image-1.5.
-      const needsSizeNormalization =
-        isGPTImageModel(model) &&
-        !isGPTImage2Model(model) &&
-        size &&
-        !(OPENAI_IMAGE_SIZES as readonly string[]).includes(size);
-      if (needsSizeNormalization) {
+      // Resolve a GPT-Image size exactly as OpenAIImageService will before it renders, so the
+      // credit hold below prices the image that is actually produced. BFL sizes like '1440x810'
+      // reach here when the user switched models without resetting their size, or when the
+      // transparent-background step-down above moved a gpt-image-2-only size onto gpt-image-1.5.
+      // Other providers keep their size: the OpenAI rule would measure them as dall-e.
+      const effectiveSize = isGPTImageModel(model) && size ? resolveGptImageGenerateSize(model, size) : size;
+      if (effectiveSize !== size) {
         logger.debug('Normalizing image size not supported by the resolved model', {
           resolvedModel: model,
           requestedSize: size,
-          normalizedSize: OPENAI_IMAGE_SIZES[0],
+          normalizedSize: effectiveSize,
         });
       }
-      const effectiveSize = needsSizeNormalization ? (OPENAI_IMAGE_SIZES[0] as string) : size;
 
       // Validate credits before proceeding
       let usageCostUsd = 0;

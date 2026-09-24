@@ -88,8 +88,13 @@ export class SelfHostWorker {
     });
   }
 
-  registerScheduledTask(name: string, intervalMs: number, fn: () => Promise<void>): void {
-    this.scheduled.push({ name, intervalMs, fn });
+  registerScheduledTask(
+    name: string,
+    intervalMs: number,
+    fn: () => Promise<void>,
+    opts?: { runOnStartup?: boolean }
+  ): void {
+    this.scheduled.push({ name, intervalMs, fn, runOnStartup: opts?.runOnStartup });
   }
 
   registerDailyUtcTask(name: string, hour: number, fn: () => Promise<void>, opts?: { runOnStartup?: boolean }): void {
@@ -111,6 +116,7 @@ export class SelfHostWorker {
         this.checkDailyTask(t);
       } else {
         this.timers.push(setInterval(() => this.startScheduledTask(t), t.intervalMs));
+        if (t.runOnStartup) this.startScheduledTask(t);
       }
     }
     // Names, not just counts: a queue whose env var is unset is skipped at registration, and the

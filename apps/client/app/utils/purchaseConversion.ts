@@ -1,6 +1,9 @@
 // Purchase conversion tracking: fires the GA4 `purchase` event and the Reddit
-// `Purchase` conversion when a subscription checkout completes, stamped with the
-// same acquisition attribution as signup (see attributionCookies.ts).
+// `Purchase` / Meta `Subscribe` conversions when a subscription checkout
+// completes, stamped with the same acquisition attribution as signup (see
+// attributionCookies.ts). Meta's standard event for a recurring plan is
+// `Subscribe`, not `Purchase` - using the wrong name leaves Events Manager
+// with a custom event that campaigns cannot optimize toward.
 //
 // This is the event that makes paid acquisition measurable. Signup alone proves
 // interest; until revenue lands in the ad platforms, campaigns can only be
@@ -12,10 +15,11 @@
 // storage could be forged, and forged revenue in the ad platforms is worse than
 // no revenue at all - it would train bidding on fiction.
 //
-// Consent is handled upstream: GA4 runs in consent mode and the Reddit pixel
-// script is consent-deferred, so calling this is safe in any consent state.
+// Consent is handled upstream: GA4 runs in consent mode and both ad pixel
+// scripts are consent-deferred, so calling this is safe in any consent state.
 
 import { attributionParams } from './attributionCookies';
+import { trackMetaEvent } from './metaPixel';
 import { trackRedditEvent } from './redditPixel';
 
 declare function gtag(...args: unknown[]): void;
@@ -39,7 +43,7 @@ export interface PurchaseConversion {
  * Fire the purchase conversion across all wired channels in one place.
  *
  * Callers own once-per-purchase semantics; `transactionId` is the backstop
- * (GA4 dedupes on it, and it is passed to Reddit for the same reason).
+ * (GA4 dedupes on it, and it is passed to both ad pixels for the same reason).
  */
 export function trackPurchaseConversion(purchase: PurchaseConversion): void {
   if (typeof window === 'undefined') return;
@@ -69,4 +73,5 @@ export function trackPurchaseConversion(purchase: PurchaseConversion): void {
   }
 
   trackRedditEvent('Purchase', { value, currency, transactionId });
+  trackMetaEvent('Subscribe', { value, currency, eventId: transactionId });
 }

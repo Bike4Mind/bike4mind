@@ -2,7 +2,18 @@ import ImageContainer from '@client/app/components/Session/ImageContainer';
 import VideoContainer from '@client/app/components/Session/VideoContainer';
 import { Box, Stack, Chip, Avatar, Tooltip, Button, Alert } from '@mui/joy';
 import Typography from '@mui/joy/Typography';
-import React, { FC, useCallback, useState, useRef, useEffect, ReactNode, useMemo, ComponentProps } from 'react';
+import React, {
+  FC,
+  useCallback,
+  useState,
+  useRef,
+  useEffect,
+  ReactNode,
+  useMemo,
+  useContext,
+  createContext,
+  ComponentProps,
+} from 'react';
 import ReactMarkdown, { ExtraProps } from 'react-markdown';
 import { createMarkdownComponents } from './markdown/markdownComponents';
 import './markdown/observatory.css';
@@ -49,7 +60,7 @@ import {
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { extractReplies } from '@client/app/utils/replyUtils';
+import { extractReplies, extractThinking } from '@client/app/utils/replyUtils';
 import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
@@ -61,6 +72,9 @@ import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
+
+import SearchResultCards from './SearchResultCards';
+import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
@@ -90,11 +104,30 @@ function simpleHash(str: string): string {
   return Math.abs(hash).toString(36).slice(0, 8);
 }
 
+// Whether the reply this code block belongs to has finished streaming. Read via context
+// (ReplyCompleteContext.Provider, below) rather than a `createCodeComponent` argument: its
+// caller memoizes the return value on `syntaxTheme` alone, so the `code` component's own
+// identity stays stable across the streaming -> completed transition. If `completed` instead
+// flowed in as a closed-over value, changing it would change `codeComponent`'s identity the
+// instant a reply finishes, and react-markdown treats a new `code` component as a new element
+// type - every code block in the reply (image cards, charts, artifact previews) would unmount
+// and remount at once.
+export const ReplyCompleteContext = createContext(false);
+
+// `code` (below) is a lowercase-named plain render helper, not a component ESLint's hooks rules
+// recognize - and its body has pre-existing patterns (JSX inside try/catch, etc.) that would newly
+// fail component-purity lint rules if it were renamed to look like one. This wrapper is the actual
+// component that reads the context, kept tiny and hook-clean on purpose.
+const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
+  const replyComplete = useContext(ReplyCompleteContext);
+  return <SearchResultCards content={content} replyComplete={replyComplete} />;
+};
+
 // Markdown `code` component: handles inline artifacts in code blocks. The
 // Prism theme is closed over rather than read from a hook here, because the
 // caller already resolves the color scheme and this function deliberately
 // stays a plain render helper.
-const createCodeComponent = () => {
+export const createCodeComponent = () => {
   const code = ({ node, className, children, ref, ...props }: ComponentProps<'code'> & ExtraProps) => {
     const match = /language-(\w+)/.exec(className || '');
     const language = match ? match[1] : 'text';
@@ -152,6 +185,11 @@ const createCodeComponent = () => {
       } catch {
         // Not a blog-draft JSON block - fall through to normal code rendering.
       }
+    }
+
+    // Model-authored image cards for a visual web_search answer, placed inline by the model.
+    if (language === SEARCH_RESULT_CARDS_LANGUAGE) {
+      return <SearchResultCardsInReply content={codeContent} />;
     }
 
     // Recharts inline rendering
@@ -470,9 +508,11 @@ const PromptReplies: FC<PromptReplyProps> = ({
 
   const replies = useMemo(() => extractReplies(messageData), [messageData]);
 
-  const thoughts = useMemo(() => {
-    return (messageData.replies || []).filter(Boolean).filter(r => r.startsWith('<think>'));
-  }, [messageData.replies]);
+  // extractThinking walks every thinking block across every reply slot (see
+  // appendStreamedChunk: a tool-using turn reopens thinking inside the slot that already
+  // holds the partial answer), so ThoughtBubbles gets parsed reasoning text rather than a
+  // whole slot with the answer and raw <think> markers still in it.
+  const thought = useMemo(() => extractThinking(messageData), [messageData]);
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
@@ -530,7 +570,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={messageData.questMasterReply || replies[0]}
-        thought={thoughts[0]}
+        thought={thought}
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
@@ -1686,44 +1726,46 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           // chrome are siblings above, and must not inherit the
                           // reading typography or land in the `> *` measure rules.
                           <div className="b4m-md">
-                            <ReactMarkdown
-                              components={{
-                                ...markdownComponents,
-                                code: codeComponent,
-                                img: ({ alt, src, title }) => {
-                                  if (!src) {
-                                    return null;
-                                  }
+                            <ReplyCompleteContext.Provider value={!!completed}>
+                              <ReactMarkdown
+                                components={{
+                                  ...markdownComponents,
+                                  code: codeComponent,
+                                  img: ({ alt, src, title }) => {
+                                    if (!src) {
+                                      return null;
+                                    }
 
-                                  const srcStr = typeof src === 'string' ? src : '';
-                                  if (
-                                    srcStr.startsWith('/mnt/') ||
-                                    srcStr.startsWith('/tmp/') ||
-                                    srcStr.startsWith('file://') ||
-                                    srcStr.startsWith('sandbox:') ||
-                                    srcStr.includes('/mnt/data/')
-                                  ) {
-                                    return null;
-                                  }
+                                    const srcStr = typeof src === 'string' ? src : '';
+                                    if (
+                                      srcStr.startsWith('/mnt/') ||
+                                      srcStr.startsWith('/tmp/') ||
+                                      srcStr.startsWith('file://') ||
+                                      srcStr.startsWith('sandbox:') ||
+                                      srcStr.includes('/mnt/data/')
+                                    ) {
+                                      return null;
+                                    }
 
-                                  return (
-                                    <ImageContainer
-                                      src={srcStr}
-                                      index={0}
-                                      totalImages={1}
-                                      images={[srcStr]}
-                                      onSendMessage={onSendMessage}
-                                    />
-                                  );
-                                },
-                                a: link,
-                              }}
-                              remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
-                              rehypePlugins={[rehypeKatex]}
-                              remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                            >
-                              {mathReadyContent}
-                            </ReactMarkdown>
+                                    return (
+                                      <ImageContainer
+                                        src={srcStr}
+                                        index={0}
+                                        totalImages={1}
+                                        images={[srcStr]}
+                                        onSendMessage={onSendMessage}
+                                      />
+                                    );
+                                  },
+                                  a: link,
+                                }}
+                                remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
+                                rehypePlugins={[rehypeKatex]}
+                                remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                              >
+                                {mathReadyContent}
+                              </ReactMarkdown>
+                            </ReplyCompleteContext.Provider>
                           </div>
                         )}
                       </>

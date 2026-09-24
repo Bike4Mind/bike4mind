@@ -28,6 +28,9 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
     deleteForLake: vi.fn(async () => 0),
     deleteForPurgedDocuments: vi.fn(async () => 0),
   },
+  dataLakeCorpusActions: {
+    deleteForLake: vi.fn(async () => 0),
+  },
   batches: {
     find: vi.fn(async () => [] as never),
     delete: vi.fn(async () => {}),
@@ -163,6 +166,23 @@ describe('cleanupDeletedDataLake', () => {
     expect(db.dataLakeFindings.deleteForLake).toHaveBeenCalledWith('lake-1');
   });
 
+  it("cascade-drops the lake's curator corpus-action trail (#3046), before the lake record itself", async () => {
+    const db = makeDb();
+    const order: string[] = [];
+    db.dataLakeCorpusActions.deleteForLake = vi.fn(async () => {
+      order.push('corpusActions');
+      return 0;
+    });
+    db.dataLakes.delete = vi.fn(async () => {
+      order.push('lake');
+    });
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(db.dataLakeCorpusActions.deleteForLake).toHaveBeenCalledWith('lake-1');
+    expect(order).toEqual(['corpusActions', 'lake']);
+  });
+
   it("sweeps each destroyed document's findings GLOBALLY, so a co-tagged lake keeps no excerpt of it", async () => {
     const db = makeDb(['f1', 'f2']);
 
@@ -270,5 +290,18 @@ describe('cleanupDeletedDataLake', () => {
     await cleanupDeletedDataLake(ADMIN, 'lake-1', { db: dbWithoutFindings, logger: { warn } });
 
     expect(warn.mock.calls.filter(([msg]) => String(msg).includes('no findings repo wired'))).toHaveLength(0);
+  });
+
+  // Regression guard for the invariant the docblock states: every file this sweep destroys was
+  // already debited at soft-delete time, so this door must never touch storage a second time.
+  // `users` isn't part of `CleanupDeletedDataLakeAdapters` at all - the cast below is what a future
+  // change would need to bypass to wire it in, and this test exists so that change trips here.
+  it('never adjusts owner storage, even if a future change wires a users adapter in', async () => {
+    const incrementCurrentStorage = vi.fn();
+    const db = { ...makeDb(), users: { incrementCurrentStorage } };
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db } as never);
+
+    expect(incrementCurrentStorage).not.toHaveBeenCalled();
   });
 });

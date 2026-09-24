@@ -1079,6 +1079,68 @@ describe('semanticDataLakeSearch supersession collapse', () => {
     expect(isPartialSearch(result)).toBe(false);
   });
 
+  it('applies a curator ruling with the flag OFF, the shipped default', async () => {
+    // Two regressions in one test, and both were silent. The flag used to gate the whole partition,
+    // so a ruling never ran on a default deployment; and `allScopedFiles` - the last projection
+    // before the partition - did not carry `supersededInLakes`, so even with the partition running
+    // the field arrived undefined. Either one alone makes every curator ruling a no-op here.
+    const files = twoGenerations().map(f =>
+      f.id === 'old'
+        ? {
+            ...f,
+            // Deliberately NOT the newer generation: a curator rules on documents that contradict
+            // each other, which is what no derived tier can express.
+            supersededInLakes: [
+              {
+                dataLakeId: 'lakeX',
+                supersededByFabFileId: 'other',
+                decidedByUserId: 'curator-1',
+                decidedAt: new Date('2026-09-22'),
+              },
+            ],
+          }
+        : f
+    );
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), lakes: LAKES },
+      adaptersFor(files, findVectors) as never
+    );
+
+    expect(findVectors.mock.calls[0][0]).toEqual(['new', 'other']);
+    expect(result.supersession.count).toBe(1);
+    expect(result.supersession.sample[0]).toMatchObject({ fileId: 'old', tier: 'curator', supersededBy: 'other' });
+  });
+
+  it('still leaves the DERIVED tiers off with the flag off, even while honoring a ruling', async () => {
+    // The two halves must stay separable: `old` leaves only because a curator said so, and the
+    // identical file names of `old`/`new` must not collapse on the bare file-name tier.
+    const files = twoGenerations().map(f =>
+      f.id === 'new'
+        ? {
+            ...f,
+            supersededInLakes: [
+              {
+                dataLakeId: 'lakeX',
+                supersededByFabFileId: 'other',
+                decidedByUserId: 'curator-1',
+                decidedAt: new Date('2026-09-22'),
+              },
+            ],
+          }
+        : f
+    );
+    const findVectors = vi.fn().mockResolvedValue([]);
+    const result = await semanticDataLakeSearch(
+      { ...baseParams(), lakes: LAKES },
+      adaptersFor(files, findVectors) as never
+    );
+
+    // `old` survives: nothing ruled on it, and the derived file-name tier is off.
+    expect(findVectors.mock.calls[0][0]).toEqual(['old', 'other']);
+    expect(result.supersession.sample.map(e => e.tier)).toEqual(['curator']);
+  });
+
   it('flag on but no lakes resolved: nothing is attributable, so nothing collapses', async () => {
     const findVectors = vi.fn().mockResolvedValue([]);
     const result = await semanticDataLakeSearch(

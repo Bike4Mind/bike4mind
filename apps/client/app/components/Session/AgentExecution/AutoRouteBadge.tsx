@@ -24,8 +24,9 @@ export type AutoRouteSource = 'classifier' | 'complexity';
 
 // User-facing explanation keyed by which auto-route fired. Neither line claims
 // anything about the Smart Tools selection: an agentless run now carries the
-// user's picks unioned with the agent-mode defaults (see `resolveDispatchTools`),
-// so the old "your selection was replaced" copy would be untrue.
+// user's picks, which the executor unions onto the agent-mode defaults
+// (`pickEffectiveEnabledTools`), so the old "your selection was replaced" copy
+// would be untrue.
 const MESSAGE_BY_SOURCE: Record<AutoRouteSource, string> = {
   classifier: 'Agent mode auto-engaged - multi-step research detected.',
   complexity: 'Agent mode auto-engaged - complex prompt detected.',

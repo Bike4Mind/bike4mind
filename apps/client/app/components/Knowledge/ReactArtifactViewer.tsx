@@ -19,6 +19,7 @@ import {
 import { type ReactArtifact } from '@bike4mind/common';
 import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { validateArtifactContent } from '@client/app/utils/artifactParser';
+import { codeImportDependencies } from '@client/app/utils/importStatements';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-javascript';
@@ -268,17 +269,7 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
   const memoizedDependencies = useMemo(() => {
     const metadataDeps = artifact.metadata?.dependencies || [];
 
-    // Also extract dependencies from the actual code
-    const codeImportRegex = /import\s+.*?\s+from\s+['"]([^'"]+)['"]/g;
-    const codeDeps: string[] = [];
-    let match;
-    while ((match = codeImportRegex.exec(editableCode)) !== null) {
-      const dep = match[1];
-      // Only include external packages (not relative imports)
-      if (!dep.startsWith('.') && !dep.startsWith('/') && dep !== 'react') {
-        codeDeps.push(dep);
-      }
-    }
+    const codeDeps = codeImportDependencies(editableCode);
 
     // Combine and deduplicate (avoid spread on Set for TS compatibility)
     const combinedDeps = [...metadataDeps, ...codeDeps];

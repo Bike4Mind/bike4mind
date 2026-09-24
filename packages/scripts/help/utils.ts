@@ -34,9 +34,10 @@ export const ADMIN_HELP_CONTENT_DIR = 'app/generated/help-content-admin';
 /*
  * Neither constant is statically resolvable at its read sites, and that is deliberate. Both server
  * readers interpolate them into a template literal so that no content root ever reaches a `path.*`
- * call: @vercel/nft cannot fold a `path.resolve()` whose base it does not know, and its fallback
- * is to glob the entire app directory into the traced bundle - measured at 47 MB against Lambda's
- * hard 250 MB ceiling. See `apps/client/server/help/contentPath.ts` for the full reasoning.
+ * call: the file tracer cannot fold a `path.resolve()` whose base it does not know, and its
+ * fallback is to glob the entire app directory into the traced bundle - measured at 47 MB against
+ * Lambda's hard 250 MB ceiling. See `apps/client/server/help/contentPath.ts` for the full
+ * reasoning.
  *
  * The consequence is that nothing traces these directories implicitly any more. Both roots are
  * declared in `outputFileTracingIncludes` in `apps/client/next.config.mjs`, and that declaration

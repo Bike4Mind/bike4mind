@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractReplies } from './replyUtils';
+import { extractReplies, extractThinking } from './replyUtils';
 import { ABANDONED_REPLY } from '@server/chatCompletion/questTimeoutRecovery';
 
 /**
@@ -30,5 +30,34 @@ describe('extractReplies', () => {
 
   it('ignores an undefined replies array rather than throwing', () => {
     expect(extractReplies({ reply: ABANDONED_REPLY })).toEqual([ABANDONED_REPLY]);
+  });
+});
+
+describe('extractThinking', () => {
+  it('collects every thinking block in a slot, not just the first', () => {
+    // A tool-using turn reopens its thinking inside the slot that already holds the partial
+    // answer, so the second block sits mid-string with the answer either side of it.
+    expect(extractThinking({ replies: ['<think>first</think>partial <think>second</think>final'] })).toBe(
+      'first\n\nsecond'
+    );
+  });
+
+  it('collects the reopened block from a two-slot accumulator sequence, not just the first slot', () => {
+    // Matches the shape appendStreamedChunk leaves behind: the first thinking block spills
+    // into its own slot once closed, and the second reopens inside the slot holding the
+    // partial answer.
+    expect(
+      extractThinking({
+        replies: ['<think>first reasoning</think>', 'PARTIAL ANSWER <think>second reasoning</think>FINAL ANSWER'],
+      })
+    ).toBe('first reasoning\n\nsecond reasoning');
+  });
+
+  it('takes a trailing block that has not closed yet', () => {
+    expect(extractThinking({ replies: ['partial <think>still reasoning'] })).toBe('still reasoning');
+  });
+
+  it('returns nothing when no reply carries a thinking block', () => {
+    expect(extractThinking({ replies: ['just an answer'] })).toBe('');
   });
 });

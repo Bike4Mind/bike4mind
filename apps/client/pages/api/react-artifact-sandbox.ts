@@ -6,6 +6,7 @@ import {
   SANDBOX_SCRIPT_HOSTS,
   LUCIDE_WRAPPER_FN,
 } from '@client/app/utils/reactArtifactDeps';
+import { IMPORT_SCANNER_FACTORY_SRC } from '@client/app/utils/importStatements';
 
 /**
  * GET /api/react-artifact-sandbox - iframe target for client-rendered REACT artifacts.
@@ -64,7 +65,9 @@ const BASE_SCRIPT_TAGS = BASE_SANDBOX_SCRIPTS.map(src => `<script src="${src}"><
  *
  * Regex backslashes are doubled (`\\s`) because this string is a template literal whose
  * content becomes the literal script source. The body avoids inner template literals to
- * keep the escaping tractable.
+ * keep the escaping tractable. The import scanner is the exception: it is the source text of
+ * createImportScanner (app/utils/importStatements.ts), interpolated as a value, so it is NOT
+ * backslash-doubled and is the same code the publish transpiler runs on the server.
  *
  * FOOTGUN: never write the literal sequence `</script>` anywhere in this template -
  * not even inside a JS comment or string. The HTML tokenizer is in script-data state for the
@@ -91,6 +94,13 @@ const SANDBOX_HTML = `<!DOCTYPE html>
 </head>
 <body>
   <div id="root"></div>
+  <script>
+    // Own block so a factory that fails to parse is reported by the self-check below instead of
+    // taking the whole render script down with it.
+    var importScanner = null;
+    var importScannerError = '';
+    try { importScanner = (${IMPORT_SCANNER_FACTORY_SRC})(); } catch (e) { importScannerError = String((e && e.message) || e); }
+  </script>
   <script>
     var ALLOWED = ${JSON.stringify(ALLOWED_DEPENDENCIES)};
     var OPTIONAL_DEPS = ${JSON.stringify(OPTIONAL_DEP_CDN)};
@@ -133,24 +143,65 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     // LUCIDE_WRAPPER_FN in reactArtifactDeps.ts) so preview and published output stay identical.
     ${LUCIDE_WRAPPER_FN}
 
+    // Probes every scanner entry point the render path calls, so a bundler-introduced free
+    // reference in any one of them surfaces here instead of as a ReferenceError mid-render.
+    function importScannerFault() {
+      // typeof guards: if the factory block failed to parse, neither variable was ever declared.
+      if (typeof importScanner === 'undefined' || !importScanner) {
+        var why = typeof importScannerError === 'string' && importScannerError ? importScannerError : 'factory did not run';
+        return 'Import scanner failed to load: ' + why;
+      }
+      try {
+        var probe = importScanner.scanImportStatements("import a from 'x' import { b as c } from 'y'");
+        var ok = probe.length === 2 && probe[1].clause === '{ b as c }' && probe[1].specifier === 'y' &&
+          importScanner.stripTypeOnlyImports("import type T from 't';import { type U, v } from 'u';") === "import { v } from 'u';" &&
+          importScanner.findRelativeImport("import a from './a'") === './a' &&
+          importScanner.renameAsBindings('{ b as c, d }') === '{ b: c, d }' &&
+          importScanner.replaceImportStatements("import a from 'x'", {}, function (st) { return st.specifier; }) === 'x';
+        return ok ? '' : 'Import scanner self-check failed';
+      } catch (e) {
+        return 'Import scanner self-check failed: ' + String((e && e.message) || e);
+      }
+    }
+
+    // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
+    // const-destructure is a syntax error). Same match set as the unanchored global regex this
+    // replaced, but linear; the publish transpiler instead normalizes each comma-split specifier.
+    function renameNamed(clause) { return importScanner.renameAsBindings(clause); }
+
+    // Statement boundaries come from the shared scanner; this callback is sandbox-local and differs
+    // from the publish transpiler's (every react import is dropped here, React being a global).
+    function rewriteImportsForSandbox(code) {
+      return importScanner.replaceImportStatements(code, {}, function (statement) {
+        var imports = statement.clause;
+        var module = statement.specifier;
+        if (module === 'react') return '// React is global';
+        if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
+        // Namespace import (import * as d3 from 'd3') -> const d3 = require('d3'). Without this it
+        // would emit an invalid \`const * as d3 = require(...)\` (matches the publish transpiler).
+        var ns = imports.trim().match(/^\\*\\s+as\\s+(\\w+)$/);
+        if (ns) return 'const ' + ns[1] + " = require('" + module + "');";
+        // Mixed default + named (import Foo, { bar } from 'mod') -> bind default, then destructure
+        // the named off it; otherwise the fallback emits invalid \`const Foo, { bar } = require()\`.
+        var mixed = imports.trim().match(/^(\\w+)\\s*,\\s*(\\{[\\s\\S]*\\})$/);
+        if (mixed) return 'const ' + mixed[1] + " = require('" + module + "'); const " + renameNamed(mixed[2]) + ' = ' + mixed[1] + ';';
+        return 'const ' + renameNamed(imports) + " = require('" + module + "');";
+      });
+    }
+
     function renderArtifact(code, dependencies, mode) {
+      var scannerFault = importScannerFault();
+      if (scannerFault) {
+        showError(scannerFault);
+        postError(scannerFault);
+        return;
+      }
       // Strip TS type-only import syntax FIRST, before any check or rewrite below sees it: whole
       // \`import type ...\` statements and inline \`{ type X, y }\` specifiers carry no runtime
       // binding. This must precede the relative-import guard so a type-only relative import
-      // (\`import type Foo from './x'\`) is not misread as a multi-file artifact - matches the
-      // publish transpiler, which strips before findRelativeImport (transpileReactArtifact.ts).
-      // A binding named \`type\` (\`type as T\`) is kept. Mirrors stripTypeOnlyImports there.
-      var withoutTypeImports = code
-        .replace(/import\\s+type\\s+[\\s\\S]*?\\s+from\\s+['"][^'"]+['"]\\s*;?/g, '')
-        .replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"][^'"]+['"]\\s*;?/g, function (stmt, clause) {
-          var brace = clause.match(/\\{([\\s\\S]*?)\\}/);
-          if (!brace) return stmt;
-          var kept = brace[1].split(',').map(function (s) { return s.trim(); })
-            .filter(Boolean).filter(function (s) { return !/^type\\s+(?!as\\b)\\w/.test(s); });
-          var beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\\s*$/, '').trim();
-          if (!kept.length && !beforeBrace) return '';
-          return stmt.replace(/\\{[\\s\\S]*?\\}/, '{ ' + kept.join(', ') + ' }');
-        });
+      // (\`import type Foo from './x'\`) is not misread as a multi-file artifact - same order as
+      // the publish transpiler, which runs this same stripTypeOnlyImports before findRelativeImport.
+      var withoutTypeImports = importScanner.stripTypeOnlyImports(code);
 
       // Multi-file artifacts aren't supported yet (#9403 follow-up): the require() shim below
       // resolves only npm packages, not sibling artifact files. Detect a relative import up
@@ -159,12 +210,9 @@ const SANDBOX_HTML = `<!DOCTYPE html>
       // Catch every relative-reference form: import-from, export-from, side-effect import,
       // and require() of a "./" or "../" path — all unresolvable by the npm-only shim below.
       // Run on the type-stripped view so a type-only relative import is already gone.
-      var relImport =
-        withoutTypeImports.match(/(?:import|export)\\b[^;'"]*\\bfrom\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
-        withoutTypeImports.match(/\\bimport\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
-        withoutTypeImports.match(/\\brequire\\(\\s*['"](\\.\\.?\\/[^'"]+)['"]\\s*\\)/);
-      if (relImport) {
-        var msg = 'Multi-file artifacts are not supported yet — this one references "' + relImport[1] +
+      var relImport = importScanner.findRelativeImport(withoutTypeImports);
+      if (relImport !== null) {
+        var msg = 'Multi-file artifacts are not supported yet \u2014 this one references "' + relImport +
           '" from a separate file. Ask for a single, self-contained component (one file, one default export).';
         showError(msg);
         postError(msg);
@@ -186,22 +234,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           throw new Error('Module "' + module + '" is not available');
         };
 
-        // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
-        // const-destructure is a syntax error). Kept in sync with the publish transpiler.
-        var renameNamed = function (clause) { return clause.replace(/(\\w+)\\s+as\\s+(\\w+)/g, '$1: $2'); };
-        var transformedCode = withoutTypeImports.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
-          if (module === 'react') return '// React is global';
-          if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
-          // Namespace import (import * as d3 from 'd3') -> const d3 = require('d3'). Without this it
-          // would emit an invalid \`const * as d3 = require(...)\` (matches the publish transpiler).
-          var ns = imports.trim().match(/^\\*\\s+as\\s+(\\w+)$/);
-          if (ns) return 'const ' + ns[1] + " = require('" + module + "');";
-          // Mixed default + named (import Foo, { bar } from 'mod') -> bind default, then destructure
-          // the named off it; otherwise the fallback emits invalid \`const Foo, { bar } = require()\`.
-          var mixed = imports.trim().match(/^(\\w+)\\s*,\\s*(\\{[\\s\\S]*\\})$/);
-          if (mixed) return 'const ' + mixed[1] + " = require('" + module + "'); const " + renameNamed(mixed[2]) + ' = ' + mixed[1] + ';';
-          return 'const ' + renameNamed(imports) + " = require('" + module + "');";
-        });
+        var transformedCode = rewriteImportsForSandbox(withoutTypeImports);
 
         var R = React;
         var useState = R.useState, useEffect = R.useEffect, useRef = R.useRef, useMemo = R.useMemo,

@@ -1,4 +1,4 @@
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
 
 export interface ApiKeyScopeOption {
   value: ApiKeyScope;
@@ -150,7 +150,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     label: 'Data Lakes: Share',
     description:
       'Change who can reach a lake - its visibility and its ownership. Not implied by write: grant only to keys that must re-share',
-    endpoints: ['POST /api/data-lakes/:id/visibility', 'POST /api/data-lakes/:id/transfer-ownership'],
+    endpoints: [
+      'POST /api/data-lakes/:id/visibility',
+      'POST /api/data-lakes/:id/transfer-ownership',
+      'DELETE /api/data-lakes/:id/transfer-ownership',
+      'POST /api/data-lakes/ownership-offers/:offerId/accept',
+      'POST /api/data-lakes/ownership-offers/:offerId/decline',
+    ],
   },
   {
     value: ApiKeyScope.OVERWATCH_READ,
@@ -174,8 +180,20 @@ export const USER_API_KEY_SCOPE_VALUES: ApiKeyScope[] = USER_API_KEY_SCOPES.map(
  * Scopes that are minted only through a dedicated flow (not the generic New-Key
  * modals), because they require extra binding the modals do not collect. Embed
  * keys need an agentId + origin allow-list (epic #41 Phase E).
+ *
+ * Derived from CONFINED_API_KEY_SCOPES (@bike4mind/common) rather than listed again
+ * here, so a new confined scope only has to be declared once. A confined scope must
+ * be a key's ONLY scope - `createUserApiKey` rejects a mint that mixes one with
+ * anything else - and the generic modals are multi-select, so offering one there
+ * would hand the user a selection the mint route refuses. Intersecting with the
+ * catalog above keeps this to the confined scopes actually documented for users:
+ * the rest (`cc-bridge:connect`, `overwatch-ingest:write`) live in
+ * NON_MINTABLE_API_KEY_SCOPES and ADMIN_ONLY_API_KEY_SCOPES and never reach a modal
+ * at all.
  */
-export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScope> = new Set([ApiKeyScope.EMBED_CHAT]);
+export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScope> = new Set(
+  USER_API_KEY_SCOPES.filter(s => CONFINED_API_KEY_SCOPES.includes(s.value)).map(s => s.value)
+);
 
 /** Scopes offered in the generic profile/admin New-Key modals (excludes dedicated-flow scopes). */
 export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
@@ -189,6 +207,12 @@ export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SC
  * the coverage test in apiKeyScopes.test.ts can tell "deliberately unmintable"
  * from "someone added an enum value and forgot to register it" - the failure mode
  * that once left the `datalake:*` scopes impossible to mint.
+ *
+ * Not derivable from CONFINED_API_KEY_SCOPES: confinement and mintability are
+ * different questions. `embed:chat` and `overwatch-ingest:write` are confined yet
+ * mintable (through their own flows), and `admin:*` is unmintable yet deliberately
+ * not confined. The overlap that does matter - a confined scope must never be
+ * offered in the generic modals - is asserted in apiKeyScopes.test.ts.
  */
 export const NON_MINTABLE_API_KEY_SCOPES: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.ADMIN,

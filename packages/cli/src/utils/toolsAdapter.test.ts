@@ -11,7 +11,9 @@ import { promises as fs, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import {
   wrapToolWithHooks,
+  wrapToolWithPermission,
   isPathAccessDenial,
+  isSandboxFailure,
   deriveGrantDirectory,
   persistToolTrust,
   type HookWrapperContext,
@@ -19,9 +21,12 @@ import {
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { PermissionManager } from './PermissionManager.js';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { ApiClient } from '../auth/ApiClient.js';
+import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import type { AgentHooks, HookMatcher } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
 import type { ShellCommandPermissionDeps } from './commandPermission.js';
+import { useCliStore } from '../store/index.js';
 
 // Mock the hookExecutor module
 vi.mock('../agents/hookExecutor.js', () => ({
@@ -677,5 +682,273 @@ describe('persistToolTrust (folder-trust gate)', () => {
     // Trusted-path persistence must NOT also write it to the global layer.
     const reloadedGlobal = JSON.parse(await fs.readFile(globalConfigPath, 'utf-8'));
     expect(reloadedGlobal.trustedTools ?? []).not.toContain('file_read');
+  });
+});
+
+describe('isSandboxFailure', () => {
+  it('is false when the command was not sandboxed', () => {
+    expect(isSandboxFailure(false, 'sandbox-exec: deny(1) file-write-data /x')).toBe(false);
+    expect(isSandboxFailure(false, 'touch: /etc/hosts: Operation not permitted')).toBe(false);
+  });
+
+  it('matches the sandbox launcher/denial markers', () => {
+    expect(isSandboxFailure(true, 'sandbox-exec: deny(1) file-write-data /x')).toBe(true);
+    expect(isSandboxFailure(true, 'bwrap: Creating new namespace failed')).toBe(true);
+  });
+
+  it('matches a real macOS Seatbelt denial (EPERM with no marker prefix)', () => {
+    // A real Seatbelt denial surfaces as the denied syscall's own EPERM printed by
+    // the tool that hit it, with NO `sandbox-exec:` prefix. Matching it is what keeps
+    // the unsandboxed-retry offer and the `/sandbox:network on` tip reachable on macOS
+    // for the two most common cases: a write outside the workspace and a blocked connect.
+    expect(isSandboxFailure(true, 'touch: /etc/hosts: Operation not permitted')).toBe(true);
+    expect(isSandboxFailure(true, 'curl: (7) Failed to connect to example.com port 443: Operation not permitted')).toBe(
+      true
+    );
+  });
+
+  it('accepts the cheap false positive on a bare EPERM (deniable prompt only)', () => {
+    // e.g. `kill` on a foreign pid also prints this. We accept the deniable retry
+    // prompt because a false NEGATIVE would silently drop the recovery path entirely.
+    expect(isSandboxFailure(true, 'kill: 1: Operation not permitted')).toBe(true);
+  });
+});
+
+describe('wrapToolWithPermission sandbox cwd confinement', () => {
+  const noopPrompt = vi.fn(async () => ({ action: 'allow-session' as const }));
+
+  function createOrchestrator() {
+    return {
+      shouldSandbox: vi.fn(() => ({
+        type: 'sandbox',
+        wrappedCommand: { commandString: 'sandboxed-command', cleanupPaths: [] },
+      })),
+      recordBlocked: vi.fn(),
+      recordSandboxed: vi.fn(),
+      recordUnsandboxed: vi.fn(),
+      recordViolation: vi.fn().mockResolvedValue(undefined),
+    } as unknown as SandboxOrchestrator;
+  }
+
+  function wrap(orchestrator: SandboxOrchestrator, allowedDirectories?: string[]) {
+    const toolFn = vi.fn().mockResolvedValue('ok');
+    const tool = createMockTool('bash_execute', toolFn);
+    const permissionManager = {
+      needsPermission: vi.fn(() => false),
+      trustToolForSession: vi.fn(),
+    } as unknown as PermissionManager;
+    const agentContext = { currentAgent: null, observationQueue: [] };
+    const wrapped = wrapToolWithPermission(
+      tool,
+      permissionManager,
+      noopPrompt,
+      agentContext,
+      {},
+      {} as ApiClient,
+      orchestrator,
+      allowedDirectories
+    );
+    return { wrapped, toolFn };
+  }
+
+  it('blocks a cwd outside the workspace and never runs the command', async () => {
+    const orchestrator = createOrchestrator();
+    const outside = path.join(path.parse(process.cwd()).root, 'definitely-outside-workspace');
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    const result = await wrapped.toolFn({ command: 'ls', cwd: outside });
+
+    expect(result).toContain('Command blocked by sandbox');
+    expect(orchestrator.recordBlocked).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recordSandboxed).not.toHaveBeenCalled();
+    expect(toolFn).not.toHaveBeenCalled();
+  });
+
+  it('sandboxes and runs an in-workspace cwd', async () => {
+    const orchestrator = createOrchestrator();
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    const result = await wrapped.toolFn({ command: 'ls' });
+
+    expect(result).toBe('ok');
+    expect(orchestrator.recordSandboxed).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recordBlocked).not.toHaveBeenCalled();
+    expect(toolFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('sandboxes a cwd granted via allowedDirectories', async () => {
+    const orchestrator = createOrchestrator();
+    const granted = path.join(path.parse(process.cwd()).root, 'granted-dir');
+    const { wrapped, toolFn } = wrap(orchestrator, [granted]);
+
+    await wrapped.toolFn({ command: 'ls', cwd: granted });
+
+    expect(orchestrator.recordSandboxed).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recordBlocked).not.toHaveBeenCalled();
+    expect(toolFn).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a symlinked cwd that realpath-resolves outside the workspace', async () => {
+    // A symlink inside an allowed dir that points outside must not let the sandbox
+    // bind a writable root outside the workspace: realpathSync(cwd) resolves the link
+    // before the allow-list check, so confinement is on the real target, not the lexical path.
+    const orchestrator = createOrchestrator();
+    const workspace = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'b4m-ws-')));
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'b4m-out-')));
+    const link = path.join(workspace, 'escape');
+    await fs.symlink(outside, link);
+    const { wrapped, toolFn } = wrap(orchestrator, [workspace]);
+
+    const result = await wrapped.toolFn({ command: 'ls', cwd: link });
+
+    expect(result).toContain('outside the sandbox writable root');
+    expect(orchestrator.recordBlocked).toHaveBeenCalledTimes(1);
+    expect(toolFn).not.toHaveBeenCalled();
+  });
+
+  // Point shouldSandbox at a real temp file standing in for the Seatbelt .sb
+  // profile, so cleanup is observable via the filesystem rather than a bare [].
+  async function orchestratorWithProfile(): Promise<{ orchestrator: SandboxOrchestrator; profile: string }> {
+    const orchestrator = createOrchestrator();
+    const profile = path.join(await fs.mkdtemp(path.join(tmpdir(), 'b4m-sb-')), 'sandbox.sb');
+    await fs.writeFile(profile, '(version 1)');
+    (orchestrator.shouldSandbox as ReturnType<typeof vi.fn>).mockReturnValue({
+      type: 'sandbox',
+      wrappedCommand: { commandString: 'sandboxed-command', cleanupPaths: [profile] },
+    });
+    return { orchestrator, profile };
+  }
+
+  it('cleans up the temp profile and records a violation when cwd is rejected', async () => {
+    const { orchestrator, profile } = await orchestratorWithProfile();
+    const outside = path.join(path.parse(process.cwd()).root, 'definitely-outside-workspace');
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    const result = await wrapped.toolFn({ command: 'ls', cwd: outside });
+
+    expect(result).toContain('outside the sandbox writable root');
+    expect(existsSync(profile)).toBe(false); // profile not leaked on the reject path
+    expect(orchestrator.recordViolation).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'filesystem', blockedBy: 'config' })
+    );
+    expect(toolFn).not.toHaveBeenCalled();
+  });
+
+  afterEach(() => {
+    useCliStore.setState({ interactionMode: 'normal' });
+  });
+
+  // Each success-path return MUST `await executeAndRecord()` inside the try/finally.
+  // A bare `return <promise>` runs the finally synchronously at the return, rmSync'ing
+  // the .sb profile before the spawned sandbox-exec opens it - breaking every sandboxed
+  // macOS command. This drives the profile-present check through a given branch; the
+  // `await Promise.resolve()` models the async gap (the real profile read is a tick
+  // after the spawn), so reverting that branch's `await` turns the test red.
+  async function assertProfileSurvivesRun(wrapFn: typeof wrapToolWithPermission, needsPermission: boolean) {
+    const { orchestrator, profile } = await orchestratorWithProfile();
+    let profilePresentDuringRun: boolean | null = null;
+    const toolFn = vi.fn(async () => {
+      await Promise.resolve();
+      profilePresentDuringRun = existsSync(profile);
+      return 'ok';
+    });
+    const permissionManager = {
+      needsPermission: vi.fn(() => needsPermission),
+      trustToolForSession: vi.fn(),
+    } as unknown as PermissionManager;
+    const agentContext = { currentAgent: null, observationQueue: [] };
+    const wrapped = wrapFn(
+      createMockTool('bash_execute', toolFn),
+      permissionManager,
+      noopPrompt,
+      agentContext,
+      {},
+      {} as ApiClient,
+      orchestrator,
+      []
+    );
+
+    const result = await wrapped.toolFn({ command: 'ls' });
+
+    expect(result).toBe('ok');
+    expect(profilePresentDuringRun).toBe(true); // present while the command ran
+    expect(existsSync(profile)).toBe(false); // cleaned up afterwards
+    expect(toolFn).toHaveBeenCalledTimes(1);
+  }
+
+  it('profile survives the run: trusted / needs-no-permission branch', async () => {
+    await assertProfileSurvivesRun(wrapToolWithPermission, false);
+  });
+
+  it('profile survives the run: prompt-allow branch', async () => {
+    // needsPermission true + noopPrompt returns allow-session -> falls through to the
+    // final return await after the prompt.
+    await assertProfileSurvivesRun(wrapToolWithPermission, true);
+  });
+
+  it('profile survives the run: auto-accept branch', async () => {
+    useCliStore.setState({ interactionMode: 'auto-accept' });
+    await assertProfileSurvivesRun(wrapToolWithPermission, true);
+  });
+
+  it('profile survives the run: host-allowlist branch', async () => {
+    // The allowlist patterns are read from a module-cached env, so exercise this
+    // branch in a fresh module instance with the tool allowlisted; restore after.
+    process.env.B4M_ALLOWED_TOOLS = JSON.stringify(['bash_execute']);
+    vi.resetModules();
+    try {
+      const fresh = await import('./toolsAdapter.js');
+      await assertProfileSurvivesRun(fresh.wrapToolWithPermission, false);
+    } finally {
+      delete process.env.B4M_ALLOWED_TOOLS;
+      vi.resetModules();
+    }
+  });
+
+  it('hands execution the realpath-resolved cwd, not the lexical symlink path', async () => {
+    // Pins the writable-root threading: without `cwd,` in sandboxedArgs the tool would
+    // run in the unresolved (symlinked) path, diverging from the profile's baked root.
+    const orchestrator = createOrchestrator();
+    const workspace = await fs.realpath(await fs.mkdtemp(path.join(tmpdir(), 'b4m-ws-')));
+    const realTarget = path.join(workspace, 'real');
+    await fs.mkdir(realTarget);
+    const link = path.join(workspace, 'link');
+    await fs.symlink(realTarget, link);
+    const { wrapped, toolFn } = wrap(orchestrator, [workspace]);
+
+    await wrapped.toolFn({ command: 'ls', cwd: link });
+
+    expect(realTarget).not.toBe(link); // the resolved path really differs from the lexical one
+    expect(orchestrator.recordSandboxed).toHaveBeenCalledTimes(1);
+    expect(toolFn).toHaveBeenCalledWith(expect.objectContaining({ cwd: realTarget, command: 'sandboxed-command' }));
+  });
+
+  it('records a blocked decision as a violation and never runs the command', async () => {
+    const orchestrator = createOrchestrator();
+    (orchestrator.shouldSandbox as ReturnType<typeof vi.fn>).mockReturnValue({
+      type: 'blocked',
+      reason: 'excluded command',
+    });
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    const result = await wrapped.toolFn({ command: 'docker run x' });
+
+    expect(result).toContain('Command blocked by sandbox: excluded command');
+    expect(orchestrator.recordBlocked).toHaveBeenCalledTimes(1);
+    expect(orchestrator.recordViolation).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'filesystem', blockedBy: 'config' })
+    );
+    expect(orchestrator.recordSandboxed).not.toHaveBeenCalled();
+    expect(toolFn).not.toHaveBeenCalled();
+  });
+
+  it('cleans up the temp profile on the happy path', async () => {
+    const { orchestrator, profile } = await orchestratorWithProfile();
+    const { wrapped, toolFn } = wrap(orchestrator, []);
+
+    await wrapped.toolFn({ command: 'ls' });
+
+    expect(existsSync(profile)).toBe(false);
+    expect(toolFn).toHaveBeenCalledTimes(1);
   });
 });

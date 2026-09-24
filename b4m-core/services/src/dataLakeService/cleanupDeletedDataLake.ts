@@ -1,5 +1,6 @@
 import type {
   IDataLakeAccessGrantRepository,
+  IDataLakeCorpusActionRepository,
   IDataLakeFindingRepository,
   IDataLakeProposalRepository,
   IDataLakeResearchConfigRepository,
@@ -47,6 +48,12 @@ interface CleanupDeletedDataLakeAdapters {
      * already chunked for the Lambda budget.
      */
     dataLakeFindings?: Pick<IDataLakeFindingRepository, 'deleteForLake' | 'deleteForPurgedDocuments'>;
+    /**
+     * The curator corpus-action trail (#3046). ONE sweep, not two: unlike the findings above, a
+     * row here quotes no prose, so a purged document creates no retention obligation and the
+     * record of what a human did survives its subject. See the repository interface.
+     */
+    dataLakeCorpusActions?: Pick<IDataLakeCorpusActionRepository, 'deleteForLake'>;
     batches: Pick<IDataLakeBatchRepository, 'find' | 'delete'>;
     fabFiles: Pick<
       IFabFileRepository,
@@ -110,6 +117,13 @@ async function inChunks<T>(
  *
  * Retrieval-index removal is the one step deliberately allowed to abort the sweep, which is why it
  * runs first. See `strictIndexRemove` in ports.ts for that posture and what it does not cover.
+ *
+ * Deliberately touches no owner's storage quota: every file this sweep hard-deletes was already
+ * soft-deleted by `deleteDataLake`, which debits each owner's `currentStorageSize` at that point.
+ * `deleteDataLake`'s terminal settle is the only write that puts a lake INTO 'deleted' (a purge
+ * accepted from there can bounce it back via `releasePurgingToDeleted` if the enqueue fails, but
+ * that never re-touches file state or storage, so the debit this sweep relies on already happened
+ * whichever door it re-enters through). Debiting again here would double-count.
  */
 export const cleanupDeletedDataLake = async (
   actor: ManageActor,
@@ -286,6 +300,11 @@ export const cleanupDeletedDataLake = async (
   // the one consequence here that is a data-retention question rather than a tidiness one.
   // Idempotent.
   await db.dataLakeFindings?.deleteForLake(dataLakeId);
+
+  // 4g. And this lake's curator corpus-action trail (#3046). Scoped to the lake, with no
+  // per-document sweep: the rows carry ids, a file name and a curator's note rather than document
+  // prose, so unlike 4f this is tidiness, not retention. Idempotent.
+  await db.dataLakeCorpusActions?.deleteForLake(dataLakeId);
 
   // 5. Delete the lake record last, so a mid-sweep failure leaves it recoverable/re-runnable.
   await db.dataLakes.delete(dataLakeId);

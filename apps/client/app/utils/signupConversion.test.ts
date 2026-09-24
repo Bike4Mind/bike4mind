@@ -1,11 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
-const { mockTrackRedditEvent } = vi.hoisted(() => ({
+const { mockTrackRedditEvent, mockTrackMetaEvent } = vi.hoisted(() => ({
   mockTrackRedditEvent: vi.fn(),
+  mockTrackMetaEvent: vi.fn(),
 }));
 
 vi.mock('./redditPixel', () => ({
   trackRedditEvent: mockTrackRedditEvent,
+}));
+
+vi.mock('./metaPixel', () => ({
+  trackMetaEvent: mockTrackMetaEvent,
 }));
 
 import { trackSignupConversion } from './signupConversion';
@@ -38,6 +43,11 @@ describe('trackSignupConversion', () => {
     expect(mockTrackRedditEvent).toHaveBeenCalledExactlyOnceWith('SignUp');
   });
 
+  it("fires Meta's CompleteRegistration for the same conversion", () => {
+    trackSignupConversion('password');
+    expect(mockTrackMetaEvent).toHaveBeenCalledExactlyOnceWith('CompleteRegistration');
+  });
+
   it('stamps first-touch and session-UTM attribution from the shared cookies', () => {
     setCookie('b4m-first-touch', {
       source: 'reddit',
@@ -66,10 +76,11 @@ describe('trackSignupConversion', () => {
     expect(mockGtag).toHaveBeenCalledWith('event', 'sign_up', { method: 'password' });
   });
 
-  it('still fires the Reddit event when gtag is absent', () => {
+  it('still fires both ad-pixel events when gtag is absent', () => {
     vi.unstubAllGlobals();
     trackSignupConversion('password');
     expect(mockGtag).not.toHaveBeenCalled();
     expect(mockTrackRedditEvent).toHaveBeenCalledExactlyOnceWith('SignUp');
+    expect(mockTrackMetaEvent).toHaveBeenCalledExactlyOnceWith('CompleteRegistration');
   });
 });

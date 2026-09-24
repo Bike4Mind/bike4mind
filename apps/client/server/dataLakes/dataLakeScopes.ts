@@ -18,6 +18,10 @@ import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@serv
  * member's lake grants below the service boundary, which is why a membership route
  * needs a data-lake scope at all.
  *
+ * The ownership-offer doors are the third: the transfer-ownership DELETE and the
+ * recipient `ownership-offers/[offerId]/accept` and `/decline` all assert
+ * `assertDataLakeShareScope`, because each one moves or settles who owns the lake.
+ *
  * Keep that enumeration complete. A scope preflight is sized from the enforcement
  * sites for a scope, not from its home prefix (docs/architecture/api-key-scope-rollout.md,
  * step 2), so a `datalake:share` preflight run over `/api/data-lakes` alone would miss

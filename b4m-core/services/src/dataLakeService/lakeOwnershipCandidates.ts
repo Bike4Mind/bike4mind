@@ -43,6 +43,25 @@ export function isOrgOwnershipCandidate(
 }
 
 /**
+ * Whether `userId` currently holds ADMIN rights in `org` - the app-side `administeredOrgIds`
+ * derivation (`organizationRepository.findIdsWithAdminRights`): the billing owner, the team manager,
+ * or an appointed admin.
+ *
+ * Deliberately NARROWER than `isOrgOwnershipCandidate`, which answers "may RECEIVE the lake" and
+ * admits anyone on the roster. This answers "may HAND IT AWAY", which `resolveLakeTransferAuthority`
+ * grants only through `administeredOrgIds`. Accept-time re-validation needs exactly this distinction:
+ * checking roster membership would let an admin demoted to plain member still authorize the transfer
+ * their offer opened.
+ */
+export function isOrgAdminOf(
+  org: Pick<IOrganizationDocument, 'userId' | 'managerId' | 'adminUserIds'>,
+  userId: string
+): boolean {
+  if (!userId) return false;
+  return org.userId === userId || org.managerId === userId || (org.adminUserIds ?? []).includes(userId);
+}
+
+/**
  * The acting principal for a transfer decision: `ManageActor` plus the actor's CURRENT org
  * membership, which the transfer rule needs and `canManageLake` does not.
  *

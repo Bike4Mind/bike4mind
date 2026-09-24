@@ -520,6 +520,128 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
       expect(countGateExcludedLakes).toHaveBeenCalledTimes(1);
       expect(res.excludedByAccessCount).toBe(0);
     });
+
+    // #3155 (review): pins the DELIBERATE default - `entitlementKeysResolved` omitted (as every
+    // call site but ChatCompletionProcess.getDataLakeAccessContext does today) must run the count,
+    // not silently treat every unaware caller as "unknown". Flipping this default to require an
+    // explicit `true` would regress `lakeViewComplete` for those callers too (deriveRetrievalTags.ts
+    // reads it to decide whether a session's tag list is narrow-able), so the default stays
+    // optimistic; this test is what makes changing it a deliberate, visible decision instead of a
+    // silent one.
+    it('omitting entitlementKeysResolved (every call site but ChatCompletionProcess, today) still runs the count', async () => {
+      const countGateExcludedLakes = vi.fn().mockResolvedValue(3);
+      const res = await getDynamicDataLakeAccess({
+        db: {
+          dataLakes: {
+            findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+            countGateExcludedLakes,
+          } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        },
+        user: { id: 'alice', tags: [] },
+        // entitlementKeysResolved deliberately omitted - the point under test.
+      });
+      expect(countGateExcludedLakes).toHaveBeenCalledTimes(1);
+      expect(res.excludedByAccessCount).toBe(3);
+      expect(res.lakeViewComplete).toBe(true);
+    });
+
+    // #3155: a rejected entitlement lookup upstream (ChatCompletionProcess.resolveEntitlementKeys)
+    // degrades `entitlementKeys` to `[]` before this resolver ever runs - indistinguishable from a
+    // caller who legitimately holds no keys unless the caller also says so via
+    // `entitlementKeysResolved: false`. An entitlement-gated lake must not be miscounted as excluded
+    // over an infra read failure.
+    it('skips the count and reports unknown when the caller flags a failed entitlement lookup', async () => {
+      const countGateExcludedLakes = vi.fn().mockResolvedValue(5);
+      const logger = { warn: vi.fn() } as never;
+      const res = await getDynamicDataLakeAccess({
+        db: {
+          dataLakes: {
+            findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+            countGateExcludedLakes,
+          } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        },
+        user: { id: 'alice', tags: [] },
+        entitlementKeys: [],
+        entitlementKeysResolved: false,
+        logger,
+      });
+      expect(countGateExcludedLakes).not.toHaveBeenCalled();
+      expect(res.excludedByAccessCount).toBeUndefined();
+      // A degraded `[]` entitlementKeys is not just a count input - it is the same array passed to
+      // findActiveByUserTagsAndEntitlements, so an entitlement-gated lake the caller genuinely holds
+      // the key for can silently drop out of the resolved set too (review finding, #3155).
+      expect(res.lakeViewComplete).toBe(false);
+      // One warn, from the count-skip site only (review: a second, seed-time warn was removed as a
+      // duplicate - see that removal's own comment).
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/count skipped.*entitlement/));
+    });
+
+    // #3155: the enforce-flag read failing degrades `includeReaders` to `false` (report-only)
+    // without throwing (resolveEnforceReadGrants never throws), so the sibling catch a few lines up
+    // never fires for it - it must be detected on its own via resolveEnforceReadGrantsResult.
+    it('skips the count and reports unknown when the enforce-flag read fails', async () => {
+      const countGateExcludedLakes = vi.fn().mockResolvedValue(5);
+      const logger = { warn: vi.fn() } as never;
+      const res = await getDynamicDataLakeAccess({
+        db: {
+          dataLakes: {
+            findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+            countGateExcludedLakes,
+            findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+          } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+          dataLakeAccessGrants: {
+            listByPrincipal: vi.fn().mockResolvedValue([]),
+            listActiveByLakes: vi.fn().mockResolvedValue([]),
+          } as never,
+          adminSettings: { getSettingsValue: vi.fn().mockRejectedValue(new Error('settings down')) } as never,
+        },
+        user: { id: 'alice', tags: [] },
+        logger,
+      });
+      expect(countGateExcludedLakes).not.toHaveBeenCalled();
+      expect(res.excludedByAccessCount).toBeUndefined();
+      expect(res.lakeViewComplete).toBe(false);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('enforce-flag read failed'));
+    });
+
+    // #3155 (review): both prerequisite reads can fail on the same turn - pins that the combination
+    // degrades no worse than either alone (still unknown, still incomplete, still warns for both).
+    it('skips the count and reports incomplete when BOTH the entitlement and enforce-flag reads fail', async () => {
+      const countGateExcludedLakes = vi.fn().mockResolvedValue(5);
+      const logger = { warn: vi.fn() } as never;
+      const res = await getDynamicDataLakeAccess({
+        db: {
+          dataLakes: {
+            findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+            countGateExcludedLakes,
+            findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+          } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+          dataLakeAccessGrants: {
+            listByPrincipal: vi.fn().mockResolvedValue([]),
+            listActiveByLakes: vi.fn().mockResolvedValue([]),
+          } as never,
+          adminSettings: { getSettingsValue: vi.fn().mockRejectedValue(new Error('settings down')) } as never,
+        },
+        user: { id: 'alice', tags: [] },
+        entitlementKeys: [],
+        entitlementKeysResolved: false,
+        logger,
+      });
+      expect(countGateExcludedLakes).not.toHaveBeenCalled();
+      expect(res.excludedByAccessCount).toBeUndefined();
+      expect(res.lakeViewComplete).toBe(false);
+      // Three warns (review): the raw settings-read failure (resolveEnforceReadGrantsResult's own),
+      // this resolver's own enforce-flag-specific warn, and the single count-skip warn - no longer
+      // four, since the redundant seed-time entitlement warn was removed.
+      expect(logger.warn).toHaveBeenCalledTimes(3);
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('enforce-flag read failed'));
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringMatching(/count skipped.*entitlement.*enforce-flag/));
+    });
   });
 });
 
@@ -542,7 +664,7 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
 
   it('restricts the query to exactly the given identity tags', async () => {
     const countGateExcludedLakes = vi.fn().mockResolvedValue(1);
-    await measureIdentityNamedExclusion(
+    const res = await measureIdentityNamedExclusion(
       {
         db: {
           dataLakes: { countGateExcludedLakes } as never,
@@ -553,6 +675,9 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
       },
       ['datalake:b']
     );
+    // Review, #3155: this test's own mocked count was never asserted - pin the happy path too,
+    // not just the query shape.
+    expect(res).toBe(1);
     expect(countGateExcludedLakes).toHaveBeenCalledWith(
       ['x'],
       ['k:pro'],
@@ -599,6 +724,50 @@ describe('measureIdentityNamedExclusion - the per-turn-scoped sibling of the cou
       ['datalake:a']
     );
     expect(res).toBeUndefined();
+  });
+
+  // #3155: same "unknown, not a false count" contract as the account-wide count above, for the two
+  // upstream reads this function shares with it.
+  it('degrades to undefined without querying when the caller flags a failed entitlement lookup', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(5);
+    const logger = { warn: vi.fn() } as never;
+    const res = await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+        },
+        user: { id: 'alice', tags: [] },
+        entitlementKeys: [],
+        entitlementKeysResolved: false,
+        logger,
+      },
+      ['datalake:a']
+    );
+    expect(res).toBeUndefined();
+    expect(countGateExcludedLakes).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('entitlement lookup failed'));
+  });
+
+  it('degrades to undefined when the enforce-flag read fails', async () => {
+    const countGateExcludedLakes = vi.fn().mockResolvedValue(5);
+    const logger = { warn: vi.fn() } as never;
+    const res = await measureIdentityNamedExclusion(
+      {
+        db: {
+          dataLakes: { countGateExcludedLakes } as never,
+          organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
+          dataLakeAccessGrants: { listByPrincipal: vi.fn().mockResolvedValue([]) } as never,
+          adminSettings: { getSettingsValue: vi.fn().mockRejectedValue(new Error('settings down')) } as never,
+        },
+        user: { id: 'alice', tags: [] },
+        logger,
+      },
+      ['datalake:a']
+    );
+    expect(res).toBeUndefined();
+    expect(countGateExcludedLakes).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('enforce-flag read failed'));
   });
 });
 
