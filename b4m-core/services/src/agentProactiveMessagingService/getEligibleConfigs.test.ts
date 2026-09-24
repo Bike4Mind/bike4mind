@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, Mock } from 'vitest';
 import { getEligibleConfigs } from './getEligibleConfigs';
 import { createMockSessionAgentConfigRepository, createMockSessionRepository } from '../__tests__/utils/testUtils';
 import { ISessionAgentConfigRepository, ISessionRepository } from '@bike4mind/common';
@@ -30,9 +30,16 @@ describe('getEligibleConfigs - stale config handling', () => {
   let mockSessionRepo: ISessionRepository;
 
   beforeEach(() => {
+    // activeHours.endHour is exclusive, so on the real clock BASE_CONFIG is ineligible from 23:00 to 23:59 UTC.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-15T12:00:00Z'));
     mockConfigRepo = createMockSessionAgentConfigRepository();
     mockSessionRepo = createMockSessionRepository();
     (mockConfigRepo.findAllWithProactiveMessagingEnabled as Mock).mockResolvedValue([BASE_CONFIG]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   // Skips rather than deletes: this scan's view of session/attachment state can be stale by the
