@@ -851,6 +851,18 @@ export type DataLakeMembershipScope =
     };
 
 /**
+ * A file a delete/restore lifecycle sweep flipped in or out of the counted set, carrying just
+ * enough to attribute the storage-quota delta to its own owner: lake membership has no ownership
+ * conjunct on the meta-tag arm (a contributor's file is a full member of someone else's lake), so
+ * a sweep spanning several owners' files cannot be billed to one user.
+ */
+export interface DataLakeSweptFile {
+  id: string;
+  userId: string;
+  fileSize: number;
+}
+
+/**
  * The lake arms an attachment resolution may add to its CASL scope. Server-supplied only - a
  * `creatorUserId` inside a membership scope widens what the query matches, so a value reaching this
  * from request input would let a caller name any user and read their files. Same contract as
@@ -1871,26 +1883,30 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
    * the restored batch whose archivedAt equals it (the batch this lake's own archive wrote) -
    * everything else keeps its archive marker untouched.
    *
-   * Returns the ids it actually flipped, not a count: each row moves under its own conditional
+   * Returns the files it actually flipped, not a count: each row moves under its own conditional
    * write, so the restore door can record one membership `added` per file it genuinely revived
    * rather than per file it hoped to. Two restores re-entering the transitional 'restoring' state
    * concurrently therefore split the batch between them instead of both claiming all of it.
+   * Carries `userId`/`fileSize` alongside `id` so the caller can credit each file's OWN owner's
+   * storage quota - lake membership carries no ownership conjunct (a contributor's file is a
+   * member of someone else's lake), so this cannot be collapsed to one owner per call.
    */
   undeleteByDataLakeTag(
     scope: DataLakeMembershipScope,
     excludeIds?: string[],
     stampedAt?: Date,
     archiveStampToClear?: Date
-  ): Promise<string[]>;
+  ): Promise<DataLakeSweptFile[]>;
   /**
    * Soft-delete (phase 1) all member files, stamped `at`.
    *
-   * Returns the ids this call itself stamped, matched back by stamp equality - not the ids it
+   * Returns the files this call itself stamped, matched back by stamp equality - not the ids it
    * selected. A row another delete door claimed in between carries a different stamp and is left
    * out, so the teardown records one membership departure per file it genuinely took out of the
-   * lake rather than one per file it hoped to.
+   * lake rather than one per file it hoped to. Carries `userId`/`fileSize` alongside `id` for the
+   * same reason as `undeleteByDataLakeTag` above - see its note.
    */
-  softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<string[]>;
+  softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at?: Date): Promise<DataLakeSweptFile[]>;
   /**
    * Hard-delete (phase 2) all member files, including soft-deleted. Returns purged ids. Idempotent.
    *
