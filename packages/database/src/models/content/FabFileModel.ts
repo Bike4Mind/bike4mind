@@ -6,6 +6,7 @@ import {
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   type DataLakeMembershipFileCounts,
+  type DataLakeSweptFile,
   effectiveTagPrefixArm,
   FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
@@ -2998,21 +2999,22 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     excludeIds: string[] = [],
     stampedAt?: Date,
     archiveStampToClear?: Date
-  ): Promise<string[]> {
+  ): Promise<DataLakeSweptFile[]> {
     const base: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: stampedAt ?? { $ne: null },
     };
     if (excludeIds.length > 0) base._id = { $nin: excludeIds };
 
-    // Enumerate, then flip each row under its own conditional write, and report the ids that
+    // Enumerate, then flip each row under its own conditional write, and report the rows that
     // actually moved. A single updateMany is cheaper but reports one aggregate count, and the
     // restore door mints a durable per-file membership fact from this - two restores re-entering
     // the 'restoring' state concurrently would otherwise both claim to have revived every row.
     // includeDeleted: the soft-delete plugin's pre('find') hook otherwise ANDs `deletedAt: null`
     // onto the filter, which contradicts the stamp bound and matches nothing.
-    const candidates = await this.fabFileModel.find(base, null, { includeDeleted: true }).select('_id');
-    const restored: string[] = [];
+    // userId/fileSize are carried through so the caller can credit each file's own owner's quota.
+    const candidates = await this.fabFileModel.find(base, null, { includeDeleted: true }).select('_id userId fileSize');
+    const restored: DataLakeSweptFile[] = [];
     for (const candidate of candidates) {
       // An aggregation-pipeline $set so one atomic write covers both fields: a row stamped by THIS
       // lake's own archive gets both cleared, any other value (a different lake's stamp, or none)
@@ -3028,29 +3030,41 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
           },
         },
       ]);
-      if (result.modifiedCount === 1) restored.push(candidate._id.toString());
+      if (result.modifiedCount === 1) {
+        restored.push({
+          id: candidate._id.toString(),
+          userId: String(candidate.userId),
+          fileSize: candidate.fileSize ?? 0,
+        });
+      }
     }
     return restored;
   }
 
-  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {
-    const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
-    const ids = docs.map(d => d._id.toString());
-    if (ids.length === 0) return [];
-    // `deletedAt: null` is re-asserted in the UPDATE, not just the read above, so this is write-once
-    // the way archiveByDataLakeTag already is. Without it the read-modify-write is racy: two sweeps
-    // overlapping in time both select the same rows, and the loser's stamp overwrites the winner's.
-    // Harmless while both carry the same stamp, unrecoverable the moment they do not.
-    await this.fabFileModel.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { deletedAt: at } });
-    // Read back by exact stamp equality rather than returning the selected ids: `updateMany` gives
-    // no per-row outcome, and a row another door soft-deleted between the read and the write above
-    // carries that door's stamp instead. The caller mints one permanent membership row per id it is
-    // handed, so an id this call did not actually flip would become a second `removed` for a
-    // departure something else already recorded. Includes deleted rows - these all are now.
-    const flipped = await this.fabFileModel
-      .find({ _id: { $in: ids }, deletedAt: at }, { _id: 1 })
-      .setOptions({ includeDeleted: true });
-    return flipped.map(d => d._id.toString());
+  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<DataLakeSweptFile[]> {
+    const docs = await this.fabFileModel.find(
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
+      { _id: 1, userId: 1, fileSize: 1 }
+    );
+    if (docs.length === 0) return [];
+    // Per-row conditional write, not a bulk updateMany + read-back-by-stamp-equality: a bulk write
+    // can't say which caller's write actually landed, and reading back "every row now carrying this
+    // stamp" answers a DIFFERENT question - "who else shares it" - not "did THIS call flip it".
+    // Those used to be the same answer because the only consumer was a membership-audit log, where
+    // two overlapping sweeps sharing a stamp both reporting the full set was harmless (a duplicate
+    // `removed` row). It stopped being harmless the moment a second consumer - the owner's storage
+    // debit - started reading the same return value: two concurrent deletes on one lake (a
+    // double-click, a retried request) legitimately share a stamp via claimFilesDeletedAt's
+    // set-if-unset read-back, and the bulk form let both compute and apply the same debit. Mirrors
+    // undeleteByDataLakeTag's own per-row modifiedCount gate for the identical reason.
+    const flipped: DataLakeSweptFile[] = [];
+    for (const doc of docs) {
+      const result = await this.fabFileModel.updateOne({ _id: doc._id, deletedAt: null }, { $set: { deletedAt: at } });
+      if (result.modifiedCount === 1) {
+        flipped.push({ id: doc._id.toString(), userId: String(doc.userId), fileSize: doc.fileSize ?? 0 });
+      }
+    }
+    return flipped;
   }
 
   async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
