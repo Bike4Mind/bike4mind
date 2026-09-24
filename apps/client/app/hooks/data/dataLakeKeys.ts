@@ -38,6 +38,12 @@ export const dataLakeKeys = {
    * access-view refresh.
    */
   ownershipCandidates: (dataLakeId: string) => ['data-lakes', 'ownership-candidates', dataLakeId] as const,
+  /**
+   * The caller's OWN pending ownership offers (GET /api/data-lakes/ownership-offers). Kept under
+   * the `data-lakes` prefix on purpose: accepting one changes the lake list, so the two refresh
+   * together, and an accept/decline invalidates this key explicitly.
+   */
+  ownershipOffers: ['data-lakes', 'ownership-offers'] as const,
   /** One page-set of the public-lake discovery catalog, per search term. */
   public: (search: string) => ['data-lakes', 'public', { search }] as const,
   archived: ['data-lakes', 'archived'] as const,

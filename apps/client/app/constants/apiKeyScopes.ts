@@ -150,7 +150,13 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     label: 'Data Lakes: Share',
     description:
       'Change who can reach a lake - its visibility and its ownership. Not implied by write: grant only to keys that must re-share',
-    endpoints: ['POST /api/data-lakes/:id/visibility', 'POST /api/data-lakes/:id/transfer-ownership'],
+    endpoints: [
+      'POST /api/data-lakes/:id/visibility',
+      'POST /api/data-lakes/:id/transfer-ownership',
+      'DELETE /api/data-lakes/:id/transfer-ownership',
+      'POST /api/data-lakes/ownership-offers/:offerId/accept',
+      'POST /api/data-lakes/ownership-offers/:offerId/decline',
+    ],
   },
   {
     value: ApiKeyScope.OVERWATCH_READ,

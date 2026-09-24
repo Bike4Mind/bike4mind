@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
+import type { LakePendingOwnershipOffer } from './DataLakeOwnershipOfferTypes';
 
 // ── Data Lake Access Grant ───────────────────────────────────────────────────
 //
@@ -118,6 +119,12 @@ export interface LakeOwnershipCandidateList {
     requiredUserTag?: string;
     requiredEntitlement?: string;
   };
+  /**
+   * The lake's live pending ownership offer, when one is open. Carried beside the candidate list
+   * because the same dialog renders both: who MAY receive the lake, and whether one already has.
+   * Absent/null means no offer is pending.
+   */
+  pendingOffer?: LakePendingOwnershipOffer | null;
 }
 
 export interface IDataLakeAccessGrantRepository extends IBaseRepository<IDataLakeAccessGrantDocument> {

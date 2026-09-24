@@ -15,6 +15,7 @@ import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { DataLakeSettingsModal } from './DataLakeSettingsModal';
 import type { EditableLake } from './DataLakeSettingsModal';
 import { DataLakeAccessModal } from './DataLakeAccessModal';
+import LakeOwnershipOffersBanner from './LakeOwnershipOffersBanner';
 import { FallbackLakeSettingsModal } from './FallbackLakeSettingsModal';
 import type { EditableFallbackLake } from './FallbackLakeSettingsModal';
 import TaxonomyReviewPanel from './TaxonomyReviewPanel';
@@ -179,78 +180,82 @@ export default function DataLakeManagerPanel() {
 
   return (
     // No header bar: the nav floats as a full-height card (same chrome as the in-chat tree)
-    // and the modal's ModalClose sits in the top-right corner across from it.
+    // and the modal's ModalClose sits in the top-right corner across from it. The column wrapper
+    // exists only to place the recipient's pending-offer banner above the two panes.
     <Box
       data-testid="datalake-manager-panel"
-      sx={{ display: 'flex', height: '100%', minHeight: 0, overflow: 'hidden', p: '12px', gap: '12px' }}
+      sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, overflow: 'hidden', p: '12px' }}
     >
-      <ManagerNav
-        lakes={dataLakes}
-        lakesLoading={isLoading}
-        lakeCount={lakeCount}
-        taxonomyBatchByLakeId={taxonomyBatchByLakeId}
-        activeLake={activeLake}
-        path={path}
-        selectedFileId={selectedFile?.id ?? null}
-        onSelectLake={selectLake}
-        onNavigate={p => {
-          setPath(p);
-          setSelectedFile(null);
-        }}
-        onExitLake={() => {
-          setLakeId(null);
-          setPath([]);
-          setSelectedFile(null);
-        }}
-        onSelectFile={setSelectedFile}
-        onCreateLake={openWizard}
-        onDiscover={openDiscover}
-        onReviewTaxonomy={setReviewingBatchId}
-      />
-      {activeLake ? (
-        selectedFile ? (
-          <DataLakeArticlePanel
-            file={selectedFile}
-            dataLakeId={activeLake.id}
-            lakeName={activeLake.name}
-            canManage={activeLake.canManage}
-            // Narrower than canManage on purpose - see DataLakeArticlePanel's canPurge. `isOwn` is
-            // the DTO's effective-owner flag (grant-aware), and it is false for an admin acting on
-            // someone else's lake, whom the service does allow. The FILE-ownership conjunct is the
-            // service's rule too: a lake owner may not destroy a contributor's document.
-            canPurge={(activeLake.isOwn && selectedFile.userId === currentUserId) || isAdmin}
-            onRemoved={() => setSelectedFile(null)}
-          />
+      <LakeOwnershipOffersBanner />
+      <Box sx={{ display: 'flex', flex: 1, minHeight: 0, gap: '12px', overflow: 'hidden' }}>
+        <ManagerNav
+          lakes={dataLakes}
+          lakesLoading={isLoading}
+          lakeCount={lakeCount}
+          taxonomyBatchByLakeId={taxonomyBatchByLakeId}
+          activeLake={activeLake}
+          path={path}
+          selectedFileId={selectedFile?.id ?? null}
+          onSelectLake={selectLake}
+          onNavigate={p => {
+            setPath(p);
+            setSelectedFile(null);
+          }}
+          onExitLake={() => {
+            setLakeId(null);
+            setPath([]);
+            setSelectedFile(null);
+          }}
+          onSelectFile={setSelectedFile}
+          onCreateLake={openWizard}
+          onDiscover={openDiscover}
+          onReviewTaxonomy={setReviewingBatchId}
+        />
+        {activeLake ? (
+          selectedFile ? (
+            <DataLakeArticlePanel
+              file={selectedFile}
+              dataLakeId={activeLake.id}
+              lakeName={activeLake.name}
+              canManage={activeLake.canManage}
+              // Narrower than canManage on purpose - see DataLakeArticlePanel's canPurge. `isOwn` is
+              // the DTO's effective-owner flag (grant-aware), and it is false for an admin acting on
+              // someone else's lake, whom the service does allow. The FILE-ownership conjunct is the
+              // service's rule too: a lake owner may not destroy a contributor's document.
+              canPurge={(activeLake.isOwn && selectedFile.userId === currentUserId) || isAdmin}
+              onRemoved={() => setSelectedFile(null)}
+            />
+          ) : (
+            <LakeInfoPanel
+              lake={activeLake}
+              fileCount={lakeCount(activeLake)}
+              armCounts={lakeArmCounts(activeLake)}
+              taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
+              onOpenSettings={() => setEditingLakeId(activeLake.id)}
+              onOpenAccess={() => setAccessLakeId(activeLake.id)}
+              onOpenFallbackSettings={() => setEditingFallbackLakeId(activeLake.id)}
+              onReviewTaxonomy={setReviewingBatchId}
+              onArchived={() => {
+                setLakeId(null);
+                setPath([]);
+                setSelectedFile(null);
+              }}
+              onDeleted={() => {
+                setLakeId(null);
+                setPath([]);
+                setSelectedFile(null);
+              }}
+            />
+          )
+        ) : managerTab === 'discover' ? (
+          // Public-lake catalog (store deep-link openManager('discover') or the footer button).
+          <Box sx={{ ...TREE_SCROLL_SX, minWidth: 0, px: 1 }}>
+            <DataLakeDiscoverPanel />
+          </Box>
         ) : (
-          <LakeInfoPanel
-            lake={activeLake}
-            fileCount={lakeCount(activeLake)}
-            armCounts={lakeArmCounts(activeLake)}
-            taxonomyBatch={taxonomyBatchByLakeId.get(activeLake.id)}
-            onOpenSettings={() => setEditingLakeId(activeLake.id)}
-            onOpenAccess={() => setAccessLakeId(activeLake.id)}
-            onOpenFallbackSettings={() => setEditingFallbackLakeId(activeLake.id)}
-            onReviewTaxonomy={setReviewingBatchId}
-            onArchived={() => {
-              setLakeId(null);
-              setPath([]);
-              setSelectedFile(null);
-            }}
-            onDeleted={() => {
-              setLakeId(null);
-              setPath([]);
-              setSelectedFile(null);
-            }}
-          />
-        )
-      ) : managerTab === 'discover' ? (
-        // Public-lake catalog (store deep-link openManager('discover') or the footer button).
-        <Box sx={{ ...TREE_SCROLL_SX, minWidth: 0, px: 1 }}>
-          <DataLakeDiscoverPanel />
-        </Box>
-      ) : (
-        <ManagerOverview />
-      )}
+          <ManagerOverview />
+        )}
+      </Box>
 
       <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
       <FallbackLakeSettingsModal lake={editingFallbackLake} onClose={() => setEditingFallbackLakeId(null)} />

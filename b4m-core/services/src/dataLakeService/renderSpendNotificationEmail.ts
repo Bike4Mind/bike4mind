@@ -10,7 +10,7 @@ import type {
  * (viewerSecurity.ts) - this module lives in b4m-core/services, which cannot import
  * apps/client code.
  */
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
