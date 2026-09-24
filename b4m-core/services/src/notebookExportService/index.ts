@@ -706,7 +706,7 @@ export class NotebookExportService {
 
     // Add metadata
     if (message.promptMeta && options.includeMetadata) {
-      const { model, tokenUsage, performance, context } = message.promptMeta;
+      const { model, tokenUsage, performance, context, citables } = message.promptMeta;
       exportedMessage.promptMeta = {
         model,
         tokenUsage,
@@ -715,6 +715,7 @@ export class NotebookExportService {
         // export has never contained, and that `anonymize` does not strip.
         performance: performance && { totalResponseTime: performance.totalResponseTime },
         context: context && { contextWindowUsage: context.contextWindowUsage },
+        citables,
       };
     }
 
