@@ -87,33 +87,40 @@ export function buildApiKeyTable(keys: EffectiveLLMKeys): ApiKeyTable {
  * table - there is no key to pass.
  */
 export function apiKeyTableForBackend(backend: ModelBackend, apiKey: string): ApiKeyTable {
-  return KEYLESS_LISTING_BACKENDS.includes(backend) ? {} : { [backend]: apiKey };
+  return LISTING_KIND[backend] === 'keyless' ? {} : { [backend]: apiKey };
 }
 
 /**
- * Listing backends that take no credential. They still need real AWS credentials
- * at dispatch, which a self-host install does not have (its AWS_ACCESS_KEY_ID is
- * the local MinIO credential), so `isSelfHost` withholds them rather than
- * offering choices that can only fail once selected.
+ * How getAvailableModels constructs each backend's listing. Total over
+ * ModelBackend, so a new provider is a compile error here instead of a silent
+ * fail-closed omission.
+ *
+ * - `keyless`: takes no credential. Still needs real AWS credentials at dispatch,
+ *   which a self-host install does not have (its AWS_ACCESS_KEY_ID is the local
+ *   MinIO credential), so `isSelfHost` withholds them rather than offering choices
+ *   that can only fail once selected.
+ * - `keyed`: constructed with a credential from resolveListingKey.
+ * - `unlisted`: no entry in the getAvailableModels fan-out at all (VoyageAI), so no
+ *   caller can list it and a catalog row naming it must fail closed.
  */
-const KEYLESS_LISTING_BACKENDS: readonly string[] = [ModelBackend.Bedrock, ModelBackend.AWS];
+const LISTING_KIND: Readonly<Record<ModelBackend, 'keyless' | 'keyed' | 'unlisted'>> = {
+  [ModelBackend.Bedrock]: 'keyless',
+  [ModelBackend.AWS]: 'keyless',
+  [ModelBackend.OpenAI]: 'keyed',
+  [ModelBackend.Anthropic]: 'keyed',
+  [ModelBackend.Gemini]: 'keyed',
+  [ModelBackend.Ollama]: 'keyed',
+  [ModelBackend.BFL]: 'keyed',
+  [ModelBackend.XAI]: 'keyed',
+  [ModelBackend.Kimi]: 'keyed',
+  [ModelBackend.DeepSeek]: 'keyed',
+  [ModelBackend.LocalImage]: 'keyed',
+  [ModelBackend.VoyageAI]: 'unlisted',
+};
 
-/**
- * Backends with a listing constructor that takes a credential. VoyageAI is
- * deliberately absent: it has no entry in the getAvailableModels fan-out at all,
- * so no caller can list it and a catalog row naming it must fail closed.
- */
-const KEYED_LISTING_BACKENDS: readonly string[] = [
-  ModelBackend.OpenAI,
-  ModelBackend.Anthropic,
-  ModelBackend.Gemini,
-  ModelBackend.Ollama,
-  ModelBackend.BFL,
-  ModelBackend.XAI,
-  ModelBackend.Kimi,
-  ModelBackend.DeepSeek,
-  ModelBackend.LocalImage,
-];
+/** Catalog rows carry a plain string backend, which may name no enum member. */
+const listingKindOf = (backend: string) =>
+  Object.hasOwn(LISTING_KIND, backend) ? LISTING_KIND[backend as ModelBackend] : 'unlisted';
 
 /**
  * The credential getAvailableModels constructs the listing backend for `backend`
@@ -146,7 +153,8 @@ export function resolveListingKey(backend: ModelBackend, ctx: BackendGateContext
  * build cannot list fail closed.
  */
 export function isBackendUsable(backend: string, ctx: BackendGateContext): boolean {
-  if (KEYLESS_LISTING_BACKENDS.includes(backend)) return !ctx.isSelfHost;
-  if (!KEYED_LISTING_BACKENDS.includes(backend)) return false;
+  const kind = listingKindOf(backend);
+  if (kind === 'keyless') return !ctx.isSelfHost;
+  if (kind === 'unlisted') return false;
   return resolveListingKey(backend as ModelBackend, ctx) !== null;
 }

@@ -77,8 +77,8 @@ describe('buildApiKeyTable', () => {
     expect(isBackendUsable(ModelBackend.Kimi, without)).toBe(false);
   });
 
-  it('gates DeepSeek on its own key, which KEYED_LISTING_BACKENDS has to name', () => {
-    // Omission from KEYED_LISTING_BACKENDS fails closed and silently: a valid key
+  it('gates DeepSeek on its own key, which LISTING_KIND has to name', () => {
+    // Marked anything but keyed in LISTING_KIND, it fails closed and silently: a valid key
     // and a working adapter still list nothing.
     const ctx = { apiKeys: buildApiKeyTable(ALL_KEYS), isSelfHost: false };
     expect(isBackendUsable(ModelBackend.DeepSeek, ctx)).toBe(true);
