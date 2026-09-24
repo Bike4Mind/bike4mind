@@ -40,6 +40,28 @@ function wrap(t: ICompletionOptionTools, prompt: any, pm: PermissionManager): IC
 
 afterEach(() => useCliStore.getState().setInteractionMode('normal'));
 
+// Resolved once for the whole file - shared by the edit_local_file, create_file, and
+// delete_file describe blocks below, which all drive the REAL CLI tool implementations
+// (not stubs) so the gate's authorized resolve runs the same code path production uses.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let editDef: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let createDef: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let deleteDef: any;
+beforeAll(async () => {
+  const tools = await getCliOnlyTools();
+  editDef = tools.edit_local_file;
+  createDef = tools.create_file;
+  deleteDef = tools.delete_file;
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function realTool(def: any, allowedDirectories: string[]): ICompletionOptionTools {
+  const logger = { info() {}, error() {}, warn() {}, debug() {} };
+  return def.implementation({ logger, allowedDirectories }) as ICompletionOptionTools;
+}
+
 describe('wrapToolWithPermission: _sandboxCleanup guard (criterion 3)', () => {
   it('never deletes a model-supplied _sandboxCleanup path on an unsandboxed tool', async () => {
     // math_evaluate is auto_approve -> no prompt, no sandbox. A malicious model
@@ -101,16 +123,9 @@ describe('wrapToolWithPermission: write_shell_stdin force-prompt (criterion 6)',
 describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
   // These drive the REAL edit_local_file tool over real temp files, so the gate's
   // authorized resolve and the tool's snapshot-bound write both run - the same code
-  // path production uses. The tool definition comes from the CLI tool registry.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let editDef: any;
-  beforeAll(async () => {
-    editDef = (await getCliOnlyTools()).edit_local_file;
-  });
+  // path production uses. editDef comes from the module-level beforeAll above.
   function realEditTool(allowedDirectories: string[]): ICompletionOptionTools {
-    const logger = { info() {}, error() {}, warn() {}, debug() {} };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return editDef.implementation({ logger, allowedDirectories } as any) as ICompletionOptionTools;
+    return realTool(editDef, allowedDirectories);
   }
   function wrapEdit(prompt: any, pm: PermissionManager, dirs: string[]): ICompletionOptionTools {
     const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
@@ -317,21 +332,8 @@ describe('wrapToolWithPermission: create_file / delete_file preview guard', () =
   // delete_file as well as edit_local_file. Target files are pre-created so that, without
   // the guard, the preview would take its read-and-diff / stat branch. Asserted on the
   // preview text rather than fs spies: diffPreview.ts calls through the fs/promises ESM
-  // namespace, which vi.spyOn(fs.promises, ...) does not patch.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let createDef: any;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let deleteDef: any;
-  beforeAll(async () => {
-    const tools = await getCliOnlyTools();
-    createDef = tools.create_file;
-    deleteDef = tools.delete_file;
-  });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  function realTool(def: any, allowedDirectories: string[]): ICompletionOptionTools {
-    const logger = { info() {}, error() {}, warn() {}, debug() {} };
-    return def.implementation({ logger, allowedDirectories }) as ICompletionOptionTools;
-  }
+  // namespace, which vi.spyOn(fs.promises, ...) does not patch. createDef/deleteDef/realTool
+  // come from the module-level beforeAll and helper above.
 
   it('previews an out-of-bounds create_file as denied WITHOUT reading the raw path (preview auth parity)', async () => {
     useCliStore.getState().setInteractionMode('normal');
