@@ -15,7 +15,7 @@ export async function handleToolResultStreaming(
 ): Promise<void> {
   const filtered = filterToolArtifactMarkup(toolName, String(toolResult));
 
-  if (filtered !== null && filtered.includes('<artifact')) {
+  if (filtered !== null) {
     await streamCallback([filtered]);
   }
 }
