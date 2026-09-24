@@ -152,11 +152,9 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
         overflow: 'visible',
         borderWidth: 1,
         borderColor: theme.palette.reading.cardLine,
-        transition: 'all 0.2s ease-in-out',
-        '&:hover': {
-          transform: 'translateY(-2px)',
-          boxShadow: 'sm',
-        },
+        // No hover lift, unlike the other artifact cards: this one has no card-level
+        // onClick, so the lift promised something to click that was not there. The
+        // trailing icon buttons are the interactive parts and carry their own hover.
       })}
     >
       {/* Type badge: the language in a pill overhanging the card corner. Matches
