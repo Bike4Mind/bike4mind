@@ -122,6 +122,10 @@ export const modelDiscoveryDocsParserShiftAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ModelDiscoveryDocsParserShiftAlarm')
   : undefined;
 
+export const modelDiscoveryJoinCoverageAlarm = isMonitoredStage
+  ? new sst.aws.SnsTopic('ModelDiscoveryJoinCoverageAlarm')
+  : undefined;
+
 export const deprecatedModelRequestAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
   : undefined;
@@ -140,9 +144,7 @@ export const replSandboxUnavailableAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
   : undefined;
 
-export const sessionReuseRevokedAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm')
-  : undefined;
+export const sessionReuseRevokedAlarm = isMonitoredStage ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm') : undefined;
 
 export const sessionRecoveredHighRateAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('SessionRecoveredHighRateAlarm')
@@ -1024,6 +1026,43 @@ if (isMonitoredStage) {
       Severity: 'Low',
     },
   });
+
+  /**
+   * Alarm: Aggregator join-coverage collapse
+   *
+   * AggregatorJoinCoverage (0-100) is the fraction of catalog model IDs that an
+   * aggregator matched during a discovery run. A sudden drop means the source
+   * changed its model-id format: the run still returns HTTP 200, so RunFailures
+   * stays zero while pricing/context-window data for unmatched models goes stale.
+   * Minimum over three consecutive 6-hour periods (18h total) before firing
+   * avoids transient noise from a single anomalous run.
+   *
+   * Metric emitted by: server/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
+   * Namespace: Lumina5/ModelDiscovery / AggregatorJoinCoverage
+   * Dimensions: { Stage, Host: 'hosted', Aggregator } -- all three required;
+   * omitting Aggregator would watch an empty series (INSUFFICIENT_DATA forever).
+   * MUST STAY IN SYNC with the source names in sources/modelsDev.ts and sources/litellm.ts.
+   */
+  for (const aggregator of ['models.dev', 'litellm'] as const) {
+    new aws.cloudwatch.MetricAlarm(`modelDiscoveryJoinCoverage-${aggregator}`, {
+      name: `${$app.name}-${$app.stage}-model-discovery-join-coverage-${aggregator}`,
+      alarmDescription: `Model discovery aggregator ${aggregator} join coverage below 50% for 3 consecutive runs - source model-id format may have changed`,
+      comparisonOperator: 'LessThanThreshold',
+      evaluationPeriods: 3,
+      metricName: 'AggregatorJoinCoverage',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 21600, // 6 hours, the run cadence
+      statistic: 'Minimum',
+      threshold: 50,
+      treatMissingData: 'notBreaching',
+      dimensions: { Stage: $app.stage, Host: 'hosted', Aggregator: aggregator },
+      alarmActions: [modelDiscoveryJoinCoverageAlarm!.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: requests pinned to a deprecated model
