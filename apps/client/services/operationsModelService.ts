@@ -3,6 +3,7 @@ import {
   buildApiKeyTable,
   getAvailableModels,
   getLlmByModel,
+  resolveSuccessorChain,
   type ApiKeyTable,
   type ICompletionBackend,
 } from '@bike4mind/llm-adapters';
@@ -117,7 +118,12 @@ export class OperationsModelService {
     if (!modelInfo) {
       throw new Error('No text models available for operations');
     }
-    return modelInfo;
+    // Bedrock enumerates legacy ids first, and AWS denies a Legacy model outright to an
+    // account that has not invoked it in 30 days - so "any text model" must not land on one.
+    // resolveSuccessorChain, not resolveDeprecatedModelId: this is our own fallback, not a
+    // pinned request, so it must not count toward the [model-sunset] metric.
+    const successorId = resolveSuccessorChain(modelInfo.id);
+    return models.find(m => m.id === successorId) ?? modelInfo;
   }
 
   /**

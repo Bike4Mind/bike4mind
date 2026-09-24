@@ -109,3 +109,39 @@ describe('OperationsModelService.getOperationsTextModel', () => {
     expect(result.modelId).toBe('gpt-4o-mini');
   });
 });
+
+// A deployment with no OpenAI key (e.g. a PR preview) cannot run the configured
+// gpt-* operations model, so selection falls through to "any text model" - and
+// Bedrock enumerates its legacy ids first. AWS denies a Legacy model outright to
+// an account that has not invoked it in 30 days, which failed every summarize,
+// auto-name and tag event on such a deployment.
+describe('OperationsModelService.getOperationsModel without the configured backend', () => {
+  const LEGACY_HAIKU = model('anthropic.claude-3-haiku-20240307-v1:0', 'text', ModelBackend.Bedrock);
+  const HAIKU_4_5 = model('us.anthropic.claude-haiku-4-5-20251001-v1:0', 'text', ModelBackend.Bedrock);
+  const configured = { settingValue: { modelId: 'gpt-4.1-mini-2025-04-14', imageModelId: 'x', speechModelId: 'y' } };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.B4M_SELF_HOST;
+    mockGetLlmByModel.mockReturnValue({ complete: vi.fn() });
+    mockGetDefaultImageModel.mockReturnValue(undefined);
+    mockAdminSettings.findOne.mockReturnValue({ lean: () => ({ exec: async () => configured }) });
+    mockGetEffectiveLLMApiKeys.mockResolvedValue({ ...noCloudKeys, ollama: null });
+  });
+
+  it('redirects a superseded fallback pick to its available successor', async () => {
+    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU, HAIKU_4_5]);
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe(HAIKU_4_5.id);
+  });
+
+  it('keeps the superseded pick when its successor is not available', async () => {
+    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU]);
+
+    const result = await OperationsModelService.getOperationsModel();
+
+    expect(result.modelId).toBe(LEGACY_HAIKU.id);
+  });
+});
