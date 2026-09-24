@@ -359,6 +359,18 @@ export function wrapToolWithPermission(
           execArgs = { ...effectiveArgs, confirmedFuzzyHash: editPlan.contentHash };
         }
 
+        // Hand the write path the gate's already-resolved span, so it can skip its own
+        // resolveEdit() pass when the file still hashes to what the gate saw. The write
+        // path still always reads the file fresh - the read itself can't be skipped,
+        // since the file can change between the gate and the write with no permission
+        // prompt involved at all (another tool call, a formatter, a watcher).
+        if (toolName === 'edit_local_file' && editPlan) {
+          execArgs = {
+            ...execArgs,
+            gateSnapshot: { contentHash: editPlan.contentHash, resolvedEdit: editPlan.resolvedEdit },
+          };
+        }
+
         // Host allowlist (claude --allowedTools): auto-approve tools matching an
         // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
         const allowedPatterns = getAllowedToolPatterns();
