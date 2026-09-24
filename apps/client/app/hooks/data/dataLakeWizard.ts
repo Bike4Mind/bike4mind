@@ -352,6 +352,9 @@ export function useBatchProgressListener() {
         // DataLakeUploadIndicator in the Notebook layout) - a separate change, and one that needs
         // the double-subscribe interaction checked rather than assumed.
         queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+        // Same reason again: ingestion is what actually tags the files, so the browse tree's
+        // counts (and an emptied lake's very presence in it) are stale until this fires too (#3234).
+        queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
       }
       if (message.taxonomyStatus !== undefined) {
         updates.taxonomyStatus = message.taxonomyStatus;
