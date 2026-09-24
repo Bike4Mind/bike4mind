@@ -1,3 +1,5 @@
+import type { WebSearchPlace } from '../../constants/locationMap';
+
 /**
  * Source classification for UI rendering
  * Determines icon, color, and behavior
@@ -118,6 +120,11 @@ export interface CitableSource {
      * here later would change that classification - see promptMetaRedaction.ts.
      */
     conflictsWith?: string[];
+    /**
+     * A place web_search found with provider coordinates, for the inline `b4m_map` widget. The map
+     * takes its pins from here only - see WebSearchPlace.
+     */
+    place?: WebSearchPlace;
     [key: string]: unknown;
   };
 }

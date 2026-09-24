@@ -19,7 +19,7 @@ import {
   type PublishUser,
   type SandboxAsset,
 } from '@server/services/publish';
-import { stripSearchResultCardFences } from '@bike4mind/common';
+import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@server/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
@@ -79,7 +79,7 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * gated on `source.kind` - a fabfile body never contains this fence, so stripping is a no-op.
  */
 function replyBodyForExport(artifact: PublishedArtifactLean): string {
-  return stripSearchResultCardFences(artifact.renderedBody ?? '');
+  return stripSearchResultCardFences(artifact.renderedBody ?? '', artifact.citables);
 }
 
 /**
@@ -1305,6 +1305,9 @@ interface PublishedArtifactLean {
   storageKeyPrefix: string;
   manifest: Array<{ path: string; mimeType: string }>;
   renderedBody?: string;
+  /** Snapshot of the source reply's citables, so a `b4m_map` fence in `renderedBody` resolves
+   *  even after the source Quest changes or is deleted. Reply source only. */
+  citables?: CitableSource[];
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;

@@ -124,13 +124,18 @@ export function proxy(request: NextRequest) {
   const mirrorOrigin = resolvePyodideMirrorOrigin(process.env.PYODIDE_BASE_URL);
   const pyodideHost = mirrorOrigin ? ` ${mirrorOrigin}` : '';
 
+  // Inline location-map tiles (TILE_URL in app/components/Session/LocationMap.tsx). In both img-src
+  // and connect-src because the service worker's image runtime cache re-fetches <img> loads, and a
+  // fetch from the worker is checked against connect-src.
+  const mapTileHost = ' https://tile.openstreetmap.org';
+
   const cspHeader = `
     default-src 'self';
     script-src ${scriptSrcPolicy}${pyodideHost};
     style-src ${styleSrcPolicy};
-    img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com;
+    img-src 'self' blob: data: https://*.amazonaws.com https://www.google.com https://*.gstatic.com https://*.cloudfront.net${filesHost}${blogHost} https://avatars.githubusercontent.com https://*.google-analytics.com https://alb.reddit.com https://www.facebook.com${mapTileHost};
     font-src 'self' https://fonts.gstatic.com https://fonts.googleapis.com data:;
-    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://assets.mailerlite.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud;
+    connect-src 'self' https://*.amazonaws.com wss://*.amazonaws.com https://*.googleapis.com https://*.google.com https://fonts.gstatic.com https://api.bigdatacloud.net https://*.anthropic.com https://*.mail.anthropic.com https://assets.mailerlite.com https://*.stripe.com ws://localhost:* wss://localhost:* http://127.0.0.1:48732 http://localhost:48732 https://*.openai.com https://unpkg.com https://*.cloudfront.net${filesHost}${blogHost} https://cdn.jsdelivr.net${pyodideHost} https://*.google-analytics.com https://pixel-config.reddit.com https://alb.reddit.com https://www.facebook.com https://api.elevenlabs.io wss://api.elevenlabs.io https://*.livekit.cloud wss://*.livekit.cloud${mapTileHost};
     frame-src 'self' blob: https://accounts.google.com https://js.stripe.com https://hooks.stripe.com https://docs.google.com https://drive.google.com https://sheets.google.com https://slides.google.com https://forms.google.com https://www.youtube-nocookie.com;
     object-src 'none';
     media-src 'self' blob: https://*.amazonaws.com https://*.cloudfront.net https://*.googleapis.com;

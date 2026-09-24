@@ -525,7 +525,11 @@ const MessageContent: React.FC<ContentProps> = memo(
     // Stripped here, at the read boundary, so every consumer below (Copy button, Download menu,
     // publish/share markdown) never sees raw b4m_cards fence JSON - only the reply renderer
     // (PromptReplies.tsx) intercepts the fence to render cards instead.
-    const extractedReplies = useMemo(() => extractReplies(messageData).map(stripSearchResultCardFences), [messageData]);
+    const extractedReplies = useMemo(
+      () =>
+        extractReplies(messageData).map(reply => stripSearchResultCardFences(reply, messageData.promptMeta?.citables)),
+      [messageData]
+    );
 
     // Publish-and-share: snapshot this reply to a public /p/r URL + social bar.
     const { publishAndShare: publishAndShareReply, modal: shareModal } = usePublishShare();
