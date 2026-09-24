@@ -1,4 +1,5 @@
-import { LOCATION_MAP_LANGUAGE, locationMapFallbackMarkdown } from './locationMap';
+import { LOCATION_MAP_LANGUAGE, locationMapFallbackMarkdown, placesFromCitables } from './locationMap';
+import type { CitableSource } from '../types/entities/CitableSourceTypes';
 
 /**
  * The fence language the model writes to place image cards inline in a reply.
@@ -40,7 +41,9 @@ const FENCE_OPEN_RE = new RegExp(
  *
  * A ```` ```b4m_map ``` ```` block is rewritten rather than removed: its places become a markdown
  * list with "open in maps" links (locationMapFallbackMarkdown), since the map usually replaces the
- * list the model would otherwise have written in prose.
+ * list the model would otherwise have written in prose. Pass the reply's `citables` so those
+ * entries resolve against the stored provider places, same as the live widget - without them, a
+ * `b4m_map` block always rewrites to nothing (safe default: no citables, no unverified names).
  *
  * Handles an unclosed fence (a truncated/streamed reply persisted mid-block) by dropping from the
  * opening fence to end of string, rather than leaving a dangling JSON blob in the output.
@@ -65,7 +68,8 @@ const FENCE_OPEN_RE = new RegExp(
  *   - apps/client/app/utils/replyDownloads.ts (skips the fence by language name rather than
  *     calling this function - not a caller either, listed for completeness)
  */
-export function stripSearchResultCardFences(markdown: string): string {
+export function stripSearchResultCardFences(markdown: string, citables?: CitableSource[]): string {
+  const placesById = placesFromCitables(citables);
   let result = '';
   let rest = markdown;
   for (;;) {
@@ -91,7 +95,7 @@ export function stripSearchResultCardFences(markdown: string): string {
       break;
     }
     if (openMatch[4] === LOCATION_MAP_LANGUAGE) {
-      result += locationMapFallbackMarkdown(afterOpenLine.slice(0, closeMatch.index));
+      result += locationMapFallbackMarkdown(afterOpenLine.slice(0, closeMatch.index), placesById);
     }
     rest = afterOpenLine.slice(closeMatch.index + closeMatch[0].length);
   }

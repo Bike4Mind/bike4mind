@@ -563,7 +563,13 @@ export function createSearxngProvider(baseUrl: string): WebSearchProvider {
       const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
       try {
         const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
-        if (!response.ok) return [];
+        if (!response.ok) {
+          Logger.globalInstance.error('WebSearch Tool: SearXNG place search error', {
+            status: response.status,
+            statusText: response.statusText,
+          });
+          return [];
+        }
         return parseSearxngPlaces(await response.json(), limit ?? DEFAULT_PLACE_RESULTS);
       } catch (error) {
         Logger.globalInstance.error('WebSearch Tool: SearXNG place search failed:', error);

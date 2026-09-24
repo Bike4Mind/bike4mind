@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
+import { Logger } from '@bike4mind/observability';
 
 vi.mock('../../../../apiKeyService', () => ({
   getSerperKey: vi.fn(),
@@ -452,5 +453,19 @@ describe('searchPlaces', () => {
     expect(places).toEqual([
       { id: 'way/1', name: 'Tivoli Gardens', lat: 55.6736, lng: 12.5681, address: 'Vesterbrogade 3, Copenhagen' },
     ]);
+  });
+
+  it('logs the response status and resolves to [] on a non-OK SearXNG response', async () => {
+    const errorSpy = vi.spyOn(Logger.globalInstance, 'error').mockImplementation(() => undefined);
+    fetchMock.mockResolvedValue(jsonRes({}, false, 503));
+
+    const places = await createSearxngProvider('http://searx.local/').searchPlaces!('tivoli');
+
+    expect(places).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith(
+      'WebSearch Tool: SearXNG place search error',
+      expect.objectContaining({ status: 503 })
+    );
+    errorSpy.mockRestore();
   });
 });

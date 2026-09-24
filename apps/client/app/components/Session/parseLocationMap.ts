@@ -7,10 +7,10 @@
  * valid, 'invalid' once it is complete but unusable, and never raw JSON.
  */
 
-import { parseLocationMapFence, type CitableSource, type WebSearchPlace } from '@bike4mind/common';
+import { parseLocationMapFence, type WebSearchPlace } from '@bike4mind/common';
 import { isStructurallyClosed } from './parseSearchResultCards';
 
-export { LOCATION_MAP_LANGUAGE } from '@bike4mind/common';
+export { LOCATION_MAP_LANGUAGE, placesFromCitables } from '@bike4mind/common';
 
 export interface LocationMapPlace extends WebSearchPlace {
   note?: string;
@@ -26,15 +26,6 @@ export interface ResolvedLocationMap {
 }
 
 export type ParsedLocationMap = { state: 'ok'; map: ResolvedLocationMap } | { state: 'pending' } | { state: 'invalid' };
-
-export function placesFromCitables(citables: CitableSource[] | undefined): Map<string, WebSearchPlace> {
-  const byId = new Map<string, WebSearchPlace>();
-  for (const citable of citables ?? []) {
-    const place = citable.metadata?.place;
-    if (place && Number.isFinite(place.lat) && Number.isFinite(place.lng)) byId.set(place.id, place);
-  }
-  return byId;
-}
 
 export function parseLocationMap(content: string, placesById: ReadonlyMap<string, WebSearchPlace>): ParsedLocationMap {
   const trimmed = content.trim();

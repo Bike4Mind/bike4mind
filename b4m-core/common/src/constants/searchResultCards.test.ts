@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { stripSearchResultCardFences } from './searchResultCards';
+import type { CitableSource } from '../types/entities/CitableSourceTypes';
+
+const placeCitable = (id: string, name: string): CitableSource => ({
+  id: `place:${id}`,
+  type: 'web_url',
+  title: name,
+  metadata: { place: { id, name, lat: 55.67, lng: 12.57 } },
+});
 
 const FENCE = (body: string) => '```b4m_cards\n' + body + '\n```';
 
@@ -61,9 +69,9 @@ describe('stripSearchResultCardFences', () => {
 describe('stripSearchResultCardFences - b4m_map fences', () => {
   const MAP_FENCE = (body: string) => '```b4m_map\n' + body + '\n```';
 
-  it('rewrites a map fence as a readable list in place, leaving card fences stripped', () => {
+  it('rewrites a map fence as a readable list in place, resolved against the citables, leaving card fences stripped', () => {
     const input = `Dinner ideas:\n\n${MAP_FENCE('{"places":[{"id":"ChIJa","name":"Barr"}]}')}\n\n${FENCE('{"cards":[]}')}\n\nEnjoy.`;
-    expect(stripSearchResultCardFences(input)).toBe(
+    expect(stripSearchResultCardFences(input, [placeCitable('ChIJa', 'Barr')])).toBe(
       'Dinner ideas:\n\n' +
         '- **Barr** ([Open in Google Maps](https://www.google.com/maps/search/?api=1&query=Barr&query_place_id=ChIJa))' +
         '\n\n\n\nEnjoy.'
@@ -73,5 +81,21 @@ describe('stripSearchResultCardFences - b4m_map fences', () => {
   it('drops a malformed or unclosed map fence rather than leaking JSON', () => {
     expect(stripSearchResultCardFences(`A\n${MAP_FENCE('{"places":')}\nB`)).toBe('A\n\nB');
     expect(stripSearchResultCardFences('A\n```b4m_map\n{"places":[{"id"')).toBe('A\n');
+  });
+
+  it('drops an id the model invented instead of trusting its name, and drops everything when no citables are passed', () => {
+    const input = `${MAP_FENCE('{"places":[{"id":"ChIJa","name":"Barr"},{"id":"invented","name":"Fake Place"}]}')}`;
+
+    expect(stripSearchResultCardFences(input, [placeCitable('ChIJa', 'Barr')])).toBe(
+      '- **Barr** ([Open in Google Maps](https://www.google.com/maps/search/?api=1&query=Barr&query_place_id=ChIJa))'
+    );
+    expect(stripSearchResultCardFences(input)).toBe('');
+  });
+
+  it('takes the display name and link from the resolved place for an id-only entry', () => {
+    const input = MAP_FENCE('{"places":[{"id":"ChIJa"}]}');
+    expect(stripSearchResultCardFences(input, [placeCitable('ChIJa', 'Barr')])).toBe(
+      '- **Barr** ([Open in Google Maps](https://www.google.com/maps/search/?api=1&query=Barr&query_place_id=ChIJa))'
+    );
   });
 });

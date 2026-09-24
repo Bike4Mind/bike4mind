@@ -1,3 +1,5 @@
+import type { CitableSource } from '../types/entities/CitableSourceTypes';
+
 /**
  * The fence language the model writes to place an inline map of search-result places in a reply.
  *
@@ -96,22 +98,48 @@ export function googleMapsSearchUrl(name: string, placeId?: string): string {
 }
 
 /**
+ * Builds the same id -> place lookup the live map widget resolves the fence against
+ * (apps/client's parseLocationMap.ts re-exports this), so every surface agrees on what a fence
+ * entry's `id` actually names.
+ */
+export function placesFromCitables(citables: CitableSource[] | undefined): Map<string, WebSearchPlace> {
+  const byId = new Map<string, WebSearchPlace>();
+  for (const citable of citables ?? []) {
+    const place = citable.metadata?.place;
+    if (place && Number.isFinite(place.lat) && Number.isFinite(place.lng)) byId.set(place.id, place);
+  }
+  return byId;
+}
+
+/**
  * The fence rewritten as a markdown list with "open in maps" links, for a surface that cannot
  * render the map widget. Empty when the body is not a usable fence, so a broken block disappears
  * rather than leaking JSON.
+ *
+ * Each entry is resolved against `placesById` (the stored provider places) exactly like the live
+ * widget: an id the model invented, or that names no known place, is dropped rather than
+ * rendered from the model's own (unverified) name/id - otherwise this fallback path could tell
+ * the user something the map itself refused to show.
  */
-export function locationMapFallbackMarkdown(body: string): string {
+export function locationMapFallbackMarkdown(body: string, placesById: ReadonlyMap<string, WebSearchPlace>): string {
   const fence = parseLocationMapFence(body);
   if (!fence) return '';
-  const line = (entry: LocationMapFenceEntry, tag?: string) => {
-    const name = entry.name ?? 'Place';
+  const line = (entry: LocationMapFenceEntry, place: WebSearchPlace, tag?: string) => {
     const note = entry.note ? ` - ${entry.note}` : '';
     const label = tag ? ` (${tag})` : '';
-    return `- **${name}**${label}${note} ([Open in Google Maps](${googleMapsSearchUrl(name, entry.id)}))`;
+    return `- **${place.name}**${label}${note} ([Open in Google Maps](${googleMapsSearchUrl(place.name, place.id)}))`;
   };
-  const lines = [
-    ...(fence.anchor ? [line(fence.anchor, fence.anchor.label)] : []),
-    ...fence.places.filter(place => place.id !== fence.anchor?.id).map(place => line(place)),
-  ];
-  return lines.join('\n');
+
+  const anchorPlace = fence.anchor && placesById.get(fence.anchor.id);
+  const anchorLine = fence.anchor && anchorPlace ? [line(fence.anchor, anchorPlace, fence.anchor.label)] : [];
+
+  const placeLines = fence.places
+    .filter(entry => entry.id !== fence.anchor?.id)
+    .map(entry => {
+      const place = placesById.get(entry.id);
+      return place ? line(entry, place) : undefined;
+    })
+    .filter((rendered): rendered is string => rendered !== undefined);
+
+  return [...anchorLine, ...placeLines].join('\n');
 }
