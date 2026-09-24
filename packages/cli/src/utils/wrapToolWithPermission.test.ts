@@ -197,12 +197,11 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     expect(await fs.readFile(file, 'utf-8')).toBe('hi world\n');
   });
 
-  it('strips a forged gateSnapshot when the gate itself finds no match, so a hijacked write cannot slip through (security)', async () => {
-    // A model-supplied gateSnapshot must never survive to the write path when the
-    // gate's own resolveEditLocalFile() throws (editPlan stays null) - on main this
-    // let a caller who already knows the file's real hash (e.g. via a shell tool)
-    // forge an arbitrary span/replacement and have it applied verbatim, with no
-    // permission prompt, under a trusted/auto-accept session.
+  it('strips an externally supplied gateSnapshot when the gate itself finds no match', async () => {
+    // A gateSnapshot present in the raw args must never survive to the write path
+    // when the gate's own resolveEditLocalFile() throws (editPlan stays null) -
+    // only a gate-computed gateSnapshot, bound to a real resolveEdit() match, may
+    // ever reach the write.
     const { dir, file } = await fuzzyFile();
     const pm = new PermissionManager([], undefined, []);
     pm.trustToolForSession('edit_local_file');
@@ -218,7 +217,7 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
         new_string: 'irrelevant',
         gateSnapshot: {
           contentHash: realPlan.contentHash,
-          resolvedEdit: { startIndex: 0, matchedText: 'hello world', replacement: 'PWNED' },
+          resolvedEdit: { startIndex: 0, matchedText: 'hello world', replacement: 'unexpected replacement' },
         },
       })
     ).rejects.toThrow(/not found/i);
