@@ -77,6 +77,9 @@ import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
 
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
+import LocationMap from './LocationMap';
+import { LOCATION_MAP_LANGUAGE, placesFromCitables } from './parseLocationMap';
+import type { WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
@@ -123,6 +126,16 @@ export const ReplyCompleteContext = createContext(false);
 const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
   const replyComplete = useContext(ReplyCompleteContext);
   return <SearchResultCards content={content} replyComplete={replyComplete} />;
+};
+
+// The web_search places of the reply being rendered, keyed by place id - the only source of map
+// pins. Context for the same identity-stability reason as ReplyCompleteContext above.
+export const ReplyPlacesContext = createContext<ReadonlyMap<string, WebSearchPlace>>(new Map());
+
+const LocationMapInReply: FC<{ content: string }> = ({ content }) => {
+  const replyComplete = useContext(ReplyCompleteContext);
+  const placesById = useContext(ReplyPlacesContext);
+  return <LocationMap content={content} placesById={placesById} replyComplete={replyComplete} />;
 };
 
 // Markdown `code` component: handles inline artifacts in code blocks. The
@@ -192,6 +205,11 @@ export const createCodeComponent = (syntaxTheme: PrismStyle) => {
     // Model-authored image cards for a visual web_search answer, placed inline by the model.
     if (language === SEARCH_RESULT_CARDS_LANGUAGE) {
       return <SearchResultCardsInReply content={codeContent} />;
+    }
+
+    // Model-placed inline map of a location web_search's places.
+    if (language === LOCATION_MAP_LANGUAGE) {
+      return <LocationMapInReply content={codeContent} />;
     }
 
     // Recharts inline rendering
@@ -1253,6 +1271,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const replyTheme = useTheme();
   const syntaxTheme = useMemo(() => getMarkdownSyntaxTheme(replyTheme.palette.mode), [replyTheme.palette.mode]);
   const codeComponent = useMemo(() => createCodeComponent(syntaxTheme), [syntaxTheme]);
+  const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1743,44 +1762,49 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           // reading typography or land in the `> *` measure rules.
                           <div className="b4m-md">
                             <ReplyCompleteContext.Provider value={!!completed}>
-                              <ReactMarkdown
-                                components={{
-                                  ...markdownComponents,
-                                  code: codeComponent,
-                                  img: ({ alt, src, title }) => {
-                                    if (!src) {
-                                      return null;
-                                    }
+                              <ReplyPlacesContext.Provider value={placesById}>
+                                <ReactMarkdown
+                                  components={{
+                                    ...markdownComponents,
+                                    code: codeComponent,
+                                    img: ({ alt, src, title }) => {
+                                      if (!src) {
+                                        return null;
+                                      }
 
-                                    const srcStr = typeof src === 'string' ? src : '';
-                                    if (
-                                      srcStr.startsWith('/mnt/') ||
-                                      srcStr.startsWith('/tmp/') ||
-                                      srcStr.startsWith('file://') ||
-                                      srcStr.startsWith('sandbox:') ||
-                                      srcStr.includes('/mnt/data/')
-                                    ) {
-                                      return null;
-                                    }
+                                      const srcStr = typeof src === 'string' ? src : '';
+                                      if (
+                                        srcStr.startsWith('/mnt/') ||
+                                        srcStr.startsWith('/tmp/') ||
+                                        srcStr.startsWith('file://') ||
+                                        srcStr.startsWith('sandbox:') ||
+                                        srcStr.includes('/mnt/data/')
+                                      ) {
+                                        return null;
+                                      }
 
-                                    return (
-                                      <ImageContainer
-                                        src={srcStr}
-                                        index={0}
-                                        totalImages={1}
-                                        images={[srcStr]}
-                                        onSendMessage={onSendMessage}
-                                      />
-                                    );
-                                  },
-                                  a: link,
-                                }}
-                                remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
-                                rehypePlugins={[rehypeKatex]}
-                                remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                              >
-                                {mathReadyContent}
-                              </ReactMarkdown>
+                                      return (
+                                        <ImageContainer
+                                          src={srcStr}
+                                          index={0}
+                                          totalImages={1}
+                                          images={[srcStr]}
+                                          onSendMessage={onSendMessage}
+                                        />
+                                      );
+                                    },
+                                    a: link,
+                                  }}
+                                  remarkPlugins={[
+                                    remarkGfmNoSingleTilde,
+                                    [remarkMath, { singleDollarTextMath: false }],
+                                  ]}
+                                  rehypePlugins={[rehypeKatex]}
+                                  remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                                >
+                                  {mathReadyContent}
+                                </ReactMarkdown>
+                              </ReplyPlacesContext.Provider>
                             </ReplyCompleteContext.Provider>
                           </div>
                         )}

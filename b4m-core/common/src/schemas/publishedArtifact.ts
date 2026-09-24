@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { VisibilitySchema } from './artifacts';
 import { CommentPolicySchema } from './annotation';
 import { ArtifactTypeSchema } from '../types/entities/ArtifactTypes';
+import { CitableSourceSchema } from './promptMeta';
 
 /**
  * Published-artifact schemas - the B4M instantiation of the `artifact-publishing`
@@ -425,6 +426,9 @@ export const PublishedArtifactSchema = z.object({
 
   /** Rendered body snapshot for reply/fabfile viewer pages (markdown or text). */
   renderedBody: z.string().optional(),
+  /** Snapshot of the source reply's citables (reply source only), so a `b4m_map` fence in
+   *  `renderedBody` can still resolve its place ids after the source Quest is edited or deleted. */
+  citables: z.array(CitableSourceSchema).optional(),
 
   publishedAt: z.date(),
   previousVersionMeta: ArtifactVersionMetaSchema.optional(),

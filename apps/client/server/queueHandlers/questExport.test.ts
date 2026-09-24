@@ -350,6 +350,30 @@ describe('questExport reply extraction', () => {
     expect(markdown).not.toContain('b4m_cards');
     expect(markdown).not.toContain('"cards"');
   });
+
+  it('resolves a b4m_map fence using the quest promptMeta citables, dropping an unresolved id', async () => {
+    const markdown = await exportQuest({
+      reply: null,
+      replies: [
+        'Here are some options.\n\n```b4m_map\n{"places":[{"id":"place-1","name":"Barr"},{"id":"invented","name":"Fake"}]}\n```\n',
+      ],
+      promptMeta: {
+        citables: [
+          {
+            id: 'place:place-1',
+            type: 'web_url',
+            title: 'Barr',
+            metadata: { place: { id: 'place-1', name: 'Barr', lat: 55.67, lng: 12.57 } },
+          },
+        ],
+      },
+    });
+    expect(markdown).toContain('Barr');
+    expect(markdown).toContain('Open in Google Maps');
+    expect(markdown).not.toContain('Fake');
+    expect(markdown).not.toContain('invented');
+    expect(markdown).not.toContain('b4m_map');
+  });
 });
 
 /**

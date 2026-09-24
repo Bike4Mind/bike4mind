@@ -63,4 +63,31 @@ describe('processMarkdownForSlack', () => {
     // URL truncates at first ) - known limitation
     expect(text).not.toContain('Mars_(planet)');
   });
+
+  it('resolves a b4m_map fence against the passed citables, dropping an unresolved id', () => {
+    const input =
+      'Here are some options.\n\n```b4m_map\n{"places":[{"id":"place-1","name":"Barr"},{"id":"invented","name":"Fake"}]}\n```\n';
+    const citables = [
+      {
+        id: 'place:place-1',
+        type: 'web_url' as const,
+        title: 'Barr',
+        metadata: { place: { id: 'place-1', name: 'Barr', lat: 55.67, lng: 12.57 } },
+      },
+    ];
+
+    const { text } = processMarkdownForSlack(input, citables);
+
+    expect(text).toContain('Barr');
+    expect(text).not.toContain('Fake');
+    expect(text).not.toContain('invented');
+    expect(text).not.toContain('b4m_map');
+  });
+
+  it('drops a b4m_map fence entirely when no citables are passed', () => {
+    const input = 'Options:\n\n```b4m_map\n{"places":[{"id":"place-1","name":"Barr"}]}\n```\n';
+    const { text } = processMarkdownForSlack(input);
+    expect(text).not.toContain('Barr');
+    expect(text).not.toContain('b4m_map');
+  });
 });
