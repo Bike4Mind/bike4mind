@@ -19,7 +19,7 @@ import {
 
 /**
  * The preset sizes listed for `model`. Kontext is sized by its input image and has none;
- * both callers hide the row for it, so the empty list is the belt to that braces.
+ * both callers already hide the row for it, so the empty list is a redundant guard.
  */
 export const getImageSizePresets = (model?: string | null): readonly string[] => {
   if (isGPTImage2Model(model)) return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes;
