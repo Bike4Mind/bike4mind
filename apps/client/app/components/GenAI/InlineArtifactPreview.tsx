@@ -104,6 +104,11 @@ const generateSanitizedSVG = (svgContent: string) => {
 
 /** Ceiling for a self-sized React preview - generous, so it only catches runaways. */
 const REACT_PREVIEW_MAX_HEIGHT = 640;
+// The ceiling on an expanded HTML frame. The height arrives by postMessage from a window
+// where the artifact's own scripts run, so `event.source` proves which frame sent it, not
+// which code did - an artifact can ask for any height it likes. Generous enough that a real
+// page is never cut short by it.
+const HTML_PREVIEW_MAX_HEIGHT = 2400;
 
 const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact, type, maxHeight = 400, onError }) => {
   const [isLoading, setIsLoading] = useState(true);
@@ -182,9 +187,9 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
     return () => window.removeEventListener('message', handler);
   }, [type]);
 
-  // React sizes to what it renders: the sandbox measures itself and posts its height back,
-  // because a cross-origin iframe cannot be measured from out here. HTML keeps the fixed
-  // `maxHeight` - a page has no natural size worth honouring in a transcript.
+  // React and HTML both size to what they render: the sandbox measures itself and posts its
+  // height back, because a cross-origin iframe cannot be measured from out here. Both paths
+  // clamp what comes back - see HTML_PREVIEW_MAX_HEIGHT.
   const [reactContentHeight, setReactContentHeight] = useState<number | null>(null);
   useEffect(() => {
     if (type !== 'react') return;
@@ -212,7 +217,7 @@ const InlineArtifactPreview: React.FC<InlineArtifactPreviewProps> = ({ artifact,
       if (event.data?.type !== 'artifact-sandbox-height') return;
       const reported = Number(event.data.height);
       if (!Number.isFinite(reported) || reported <= 0) return;
-      setHtmlContentHeight(reported);
+      setHtmlContentHeight(Math.min(reported, HTML_PREVIEW_MAX_HEIGHT));
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);

@@ -77,10 +77,47 @@ const SANDBOX_HTML = `<!DOCTYPE html>
   // so the measurement has to originate here. Set up AFTER document.write, which replaces
   // the document (and with it the old body) wholesale.
   var lastReportedHeight = 0;
-  function reportHeight() {
+  // Measure how far the content reaches, NOT scrollHeight. documentElement.scrollHeight is
+  // never smaller than the viewport, and the viewport is the frame the parent sizes from
+  // this number - so a body with min-height 100vh reports frame height + margins, the parent
+  // grows the frame, the body grows with it, and the ResizeObserver below reports again,
+  // without end. The bottom edge of the body's children carries no viewport term, so it is
+  // stable under a resize. Fixed-position children are skipped for the same reason: their
+  // rects are viewport-anchored.
+  function contentHeight() {
     var body = document.body;
-    var docEl = document.documentElement;
-    var height = Math.ceil(Math.max(body ? body.scrollHeight : 0, docEl ? docEl.scrollHeight : 0));
+    if (!body) return 0;
+    var scrollY = window.scrollY || window.pageYOffset || 0;
+    var bottom = 0;
+    var children = body.children;
+    for (var i = 0; i < children.length; i++) {
+      var child = children[i];
+      var position = '';
+      try {
+        position = window.getComputedStyle(child).position;
+      } catch (e) {
+        position = '';
+      }
+      if (position === 'fixed') continue;
+      var childBottom = child.getBoundingClientRect().bottom + scrollY;
+      if (childBottom > bottom) bottom = childBottom;
+    }
+    // Nothing measurable (no children, or every child is fixed): fall back to the old
+    // measurement. Such a page has no content to grow into, so the loop cannot start.
+    if (bottom <= 0) return Math.max(body.scrollHeight, document.documentElement.scrollHeight);
+    var style;
+    try {
+      style = window.getComputedStyle(body);
+    } catch (e) {
+      style = null;
+    }
+    if (style) {
+      bottom += (parseFloat(style.paddingBottom) || 0) + (parseFloat(style.marginBottom) || 0);
+    }
+    return bottom;
+  }
+  function reportHeight() {
+    var height = Math.ceil(contentHeight());
     if (!height || Math.abs(height - lastReportedHeight) < 2) return;
     lastReportedHeight = height;
     window.parent.postMessage({ type: 'artifact-sandbox-height', height: height }, '*');
