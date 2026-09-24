@@ -3,7 +3,6 @@ import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
-import { useDataLakeBatchCompletionSync } from '@client/app/hooks/data/dataLakeWizard';
 
 /**
  * Floating indicator that shows data lake upload progress
@@ -14,10 +13,6 @@ export default function DataLakeUploadIndicator() {
   const progress = useDataLakeWizardStore(s => s.uploadProgress);
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const setStep = useDataLakeWizardStore(s => s.setStep);
-
-  // Always mounted (see Notebook layout), so this is where a completed batch's cache invalidation
-  // lives regardless of whether the indicator itself is currently visible below.
-  useDataLakeBatchCompletionSync();
 
   // Only show when wizard is closed and upload is active or just finished
   const shouldShow = !isOpen && progress.status !== 'idle' && progress.totalFiles > 0;
