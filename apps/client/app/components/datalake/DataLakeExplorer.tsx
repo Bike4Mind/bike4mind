@@ -6,7 +6,7 @@ import DataLakeLakePicker from './DataLakeLakePicker';
 import DataLakeTreeEmptyState from './DataLakeTreeEmptyState';
 import { UNCATEGORIZED_KEY } from './DataLakeTreeView';
 import { resolveEmptyVariant } from './resolveEmptyVariant';
-import { scopeTagCountsToLakes } from './scopeTagCountsToLakes';
+import { scopeTagCountsToLakes, seedEmptyLakeTags, type TagScopeLake } from './scopeTagCountsToLakes';
 import SelectedLakeHeader from './SelectedLakeHeader';
 import ActiveLakeScopeStrip from './ActiveLakeScopeStrip';
 import { lakeIdsForTags, tagsForLakeIds } from './tagsForLakeIds';
@@ -101,6 +101,10 @@ interface DataLakeExplorerProps {
 
 /** True only for drags carrying real files (not text/image-from-page drags). */
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
+
+/** Stable empty fallback for seedEmptyLakeTags below, so an in-flight lake list never churns
+ *  the memo it feeds (see lakesInScope). */
+const EMPTY_LAKES: TagScopeLake[] = [];
 
 export default function DataLakeExplorer({
   articleId,
@@ -333,7 +337,36 @@ export default function DataLakeExplorer({
     () => scopeTagCountsToLakes(tagCountsData?.tagCounts ?? [], selectedLakes),
     [tagCountsData, selectedLakes]
   );
-  const tree = useMemo(() => buildTagTree(scopedTagCounts), [scopedTagCounts]);
+
+  // Truthful distinct-file count (the tree's fileCounts are tag-occurrence sums, which
+  // overcount multi-tagged articles ~2x). Follows the lake scope so it describes what is on screen.
+  // Sums across a multi-lake scope, which overcounts a file that sits in two of them. It feeds
+  // only isScopeEmpty below - a zero/non-zero test that an overcount cannot flip - and is never
+  // shown, unlike the picker's trigger count, which withholds itself for exactly this reason.
+  const totalArticles =
+    selectedLakes.length === 0
+      ? (tagCountsData?.totalLakeFileCount ?? 0)
+      : selectedLakes.reduce((sum, lake) => sum + (tagCountsData?.lakeFileCounts?.[lake.datalakeTag] ?? 0), 0);
+
+  /** Nothing to browse in the CURRENT scope. Says nothing about how many lakes exist. Computed
+   *  from scopedTagCounts (pre-seed) rather than the tree below, so seeding an empty lake's row
+   *  in a populated scope can never flip this - it must stay exactly the "is there really
+   *  nothing here" test DataLakeTreeEmptyState's variants key off. */
+  const isScopeEmpty = !tagCountsLoading && !tagCountsError && totalArticles === 0 && scopedTagCounts.length === 0;
+
+  // Seeds a zero-count root for every lake in scope that has no tagged files yet, so a freshly
+  // restored/emptied lake still gets a row instead of vanishing from a tree built purely from tag
+  // counts (#3234) - withheld while isScopeEmpty, where the whole scope has nothing to browse:
+  // DataLakeTreeEmptyState's CTA is the better answer there, and seeding would just swap it for a
+  // bare, action-less folder naming the same lake. Seeded against the FULL accessible list in the
+  // all-lakes scope (an empty selection means "every lake", not "no lakes" - see selectedLakes
+  // above); narrowed to the selection itself once one is picked.
+  const lakesInScope = selectedLakes.length > 0 ? selectedLakes : (lakes ?? EMPTY_LAKES);
+  const seededTagCounts = useMemo(
+    () => (isScopeEmpty ? scopedTagCounts : seedEmptyLakeTags(scopedTagCounts, lakesInScope)),
+    [isScopeEmpty, scopedTagCounts, lakesInScope]
+  );
+  const tree = useMemo(() => buildTagTree(seededTagCounts), [seededTagCounts]);
 
   // Derive the current leaf tag from breadcrumb + tree state. A branch node (has children) can
   // ALSO carry files tagged with its own exact path, which DataLakeTreeView renders mixed into
@@ -460,19 +493,6 @@ export default function DataLakeExplorer({
   // viewer closes on its own Close button (see the layout subscription above). The highlight also
   // stays, so returning to the file's category still shows which one is open.
   const handleNavigate = useCallback((newBreadcrumb: string[]) => setBreadcrumb(newBreadcrumb), []);
-
-  // Truthful distinct-file count (the tree's fileCounts are tag-occurrence sums, which
-  // overcount multi-tagged articles ~2x). Follows the lake scope so it describes what is on screen.
-  // Sums across a multi-lake scope, which overcounts a file that sits in two of them. It feeds
-  // only isScopeEmpty below - a zero/non-zero test that an overcount cannot flip - and is never
-  // shown, unlike the picker's trigger count, which withholds itself for exactly this reason.
-  const totalArticles =
-    selectedLakes.length === 0
-      ? (tagCountsData?.totalLakeFileCount ?? 0)
-      : selectedLakes.reduce((sum, lake) => sum + (tagCountsData?.lakeFileCounts?.[lake.datalakeTag] ?? 0), 0);
-
-  /** Nothing to browse in the CURRENT scope. Says nothing about how many lakes exist. */
-  const isScopeEmpty = !tagCountsLoading && !tagCountsError && totalArticles === 0 && tree.length === 0;
 
   // Precedence lives in resolveEmptyVariant (pure + unit-tested) rather than inline here, because
   // the ORDER of its checks is the whole fix - see that module's contract.

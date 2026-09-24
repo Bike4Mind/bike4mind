@@ -33,7 +33,12 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBatchUpload, useBatchProgressListener, useCreateLakeFromDrive } from './dataLakeWizard';
+import {
+  useBatchUpload,
+  useBatchProgressListener,
+  useCreateLakeFromDrive,
+  useDataLakeBatchCompletionSync,
+} from './dataLakeWizard';
 import { slugifyDataLakeName } from './dataLakeSlug';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
@@ -991,7 +996,7 @@ describe('useBatchProgressListener - processingFailedFiles (#1412)', () => {
  * the lake list at SUBMIT time - too early, since ingestion has not run - so completion is the only
  * moment that can refresh it. Without this the count sits stale until a hard refresh.
  */
-describe('useBatchProgressListener - refreshes the lake list on completion', () => {
+describe('useBatchProgressListener - progress status only, no cache invalidation (#3234 follow-up)', () => {
   const seedActiveBatch = () =>
     useDataLakeWizardStore.setState({
       uploadProgress: {
@@ -1027,7 +1032,11 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
   });
 
   it.each(['completed', 'completed_with_errors'] as const)(
-    'invalidates the lake list when the batch reports %s',
+    // This listener unsubscribes as soon as Done (resetWizard) clears currentBatchId - which
+    // happens the moment browser uploads finish, before a still-ingesting batch's completed
+    // message can arrive - so it must not own cache invalidation. That moved to
+    // useDataLakeBatchCompletionSync below, which stays subscribed independent of this store field.
+    'updates progress status to complete on %s, but invalidates nothing',
     status => {
       mountHook(useBatchProgressListener);
       const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
@@ -1036,15 +1045,12 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
         onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', status });
       });
 
-      // `['data-lakes']` is dataLakeKeys.list - asserted as a literal so a rename of the key's VALUE
-      // (not just its name) still fails here rather than silently agreeing with itself.
-      expect(invalidatedKeys()).toContain(JSON.stringify(['data-lakes']));
+      expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete');
+      expect(invalidatedKeys()).toEqual([]);
     }
   );
 
-  it('does NOT invalidate the lake list on an ordinary progress tick', () => {
-    // The guard against "just invalidate on every message": mid-ingest the server rollup has not
-    // run yet, so refetching then would re-cache the stale count and cost a request per tick.
+  it('does not invalidate on an ordinary progress tick either', () => {
     mountHook(useBatchProgressListener);
     const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
 
@@ -1052,6 +1058,92 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
       onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
     });
 
-    expect(invalidatedKeys()).not.toContain(JSON.stringify(['data-lakes']));
+    expect(invalidatedKeys()).toEqual([]);
+  });
+});
+
+describe('useDataLakeBatchCompletionSync - keeps lake/health/tag-counts/article/file caches in sync with ANY batch completion', () => {
+  let spy: ReturnType<typeof vi.spyOn>;
+
+  const invalidatedKeys = () =>
+    spy.mock.calls.map(([arg]) => JSON.stringify((arg as { queryKey?: unknown })?.queryKey));
+
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    spy.mockRestore();
+  });
+
+  it.each(['completed', 'completed_with_errors'] as const)(
+    'invalidates the lake list, health, tag-counts, articles, and files roots on %s',
+    status => {
+      mountHook(useDataLakeBatchCompletionSync);
+      const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+      act(() => {
+        onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', status });
+      });
+
+      // Literal key values, not just names, so a rename of a key's VALUE still fails here rather
+      // than silently agreeing with itself.
+      expect(invalidatedKeys()).toEqual(
+        expect.arrayContaining([
+          JSON.stringify(['data-lakes']),
+          JSON.stringify(['dataLakeHealth']),
+          JSON.stringify(['dataLakeTagCounts']),
+          // #3238 review (onoya): an already-open category/Uncategorized view queries these
+          // independently of the tag-count tree, and was staying stale without this.
+          JSON.stringify(['dataLakeArticles']),
+          JSON.stringify(['dataLakeFiles']),
+        ])
+      );
+    }
+  );
+
+  it('does not invalidate on an ordinary progress tick', () => {
+    // The guard against "just invalidate on every message": mid-ingest the server rollup has not
+    // run yet, so refetching then would re-cache the stale count and cost a request per tick.
+    mountHook(useDataLakeBatchCompletionSync);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
+    });
+
+    expect(invalidatedKeys()).toEqual([]);
+  });
+
+  it('invalidates even with no active batch in the wizard store - the Done/resetWizard regression (#3234)', () => {
+    // Mirrors what actually happens: Done clears currentBatchId to undefined synchronously, before
+    // browser uploads have even finished chunking/vectorizing server-side.
+    useDataLakeWizardStore.setState({
+      uploadProgress: {
+        totalFiles: 0,
+        uploadedFiles: 0,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'idle',
+        currentBatchId: undefined,
+      },
+    });
+
+    mountHook(useDataLakeBatchCompletionSync);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'batch-still-ingesting-in-background',
+        status: 'completed',
+      });
+    });
+
+    expect(invalidatedKeys()).toContain(JSON.stringify(['dataLakeTagCounts']));
   });
 });

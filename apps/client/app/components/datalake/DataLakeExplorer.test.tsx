@@ -660,6 +660,35 @@ describe('DataLakeExplorer - lake scope in chat mode (#1943)', () => {
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb');
   });
 
+  // The tree is built purely from tag counts, which have nothing to seed a branch from for a
+  // lake with zero files - so an accessible-but-empty lake used to vanish from it entirely (#3234).
+  it('adds a row for an accessible lake with no tagged files yet, alongside populated ones (#3234)', () => {
+    lakesState.value = [
+      ...lakesState.value,
+      { id: 'lake-3', name: 'Lake C', datalakeTag: 'datalake:lake-c', fileTagPrefix: 'lakec', canManage: true },
+    ];
+    renderExplorer();
+
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', 'lakea,lakeb,lakec');
+  });
+
+  // Narrowing the picker to THAT lake alone makes the whole scope empty again - the case the
+  // seeding is deliberately withheld for (isScopeEmpty), so the existing "lake is empty, add
+  // files" CTA still wins over a bare, action-less folder naming the same lake.
+  it('keeps the richer empty-lake CTA when the picker scopes to it alone, rather than a bare row', () => {
+    lakesState.value = [
+      ...lakesState.value,
+      { id: 'lake-3', name: 'Lake C', datalakeTag: 'datalake:lake-c', fileTagPrefix: 'lakec', canManage: true },
+    ];
+    renderExplorer();
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-lake-3'));
+
+    expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'lake-empty');
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', '');
+  });
+
   it('scopes the tree to the picked lake and drops the outgoing breadcrumb', () => {
     renderExplorer();
 
@@ -916,5 +945,18 @@ describe('DataLakeExplorer - honest empty states in chat mode (#1943)', () => {
 
     tagCountsState.tagCounts = [];
     tagCountsState.total = 0;
+  });
+
+  // Regression guard for #3234's fix: seeding a lake's zero-count row must never fire when the
+  // WHOLE scope has nothing to browse, or it would silently swap this CTA for a bare, unclickable
+  // folder naming the caller's one (empty) lake.
+  it('withholds the seeded empty-lake row when the whole scope has nothing to browse, keeping this CTA', () => {
+    lakesState.value = [
+      { id: 'lake-1', name: 'Lake A', datalakeTag: 'datalake:lake-a', fileTagPrefix: 'lakea', canManage: true },
+    ];
+    renderExplorer();
+
+    expect(screen.getByTestId('datalake-tree-empty')).toHaveAttribute('data-variant', 'all-lakes-empty');
+    expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-segments', '');
   });
 });

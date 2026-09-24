@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { scopeTagCountsToLakes, type TagCount } from './scopeTagCountsToLakes';
+import { scopeTagCountsToLakes, seedEmptyLakeTags, type TagCount } from './scopeTagCountsToLakes';
 
 const counts: TagCount[] = [
   { tag: 'research:reports:market', count: 3 },
@@ -82,5 +82,59 @@ describe('scopeTagCountsToLakes', () => {
 
   it('handles an empty payload without throwing', () => {
     expect(scopeTagCountsToLakes([], [{ fileTagPrefix: 'research:' }])).toEqual([]);
+  });
+});
+
+describe('seedEmptyLakeTags', () => {
+  it('adds a zero-count entry for a lake with no tagged files', () => {
+    expect(seedEmptyLakeTags(counts, [{ fileTagPrefix: 'empty-lake:' }])).toEqual([
+      ...counts,
+      { tag: 'empty-lake', count: 0 },
+    ]);
+  });
+
+  it('strips the trailing colon so the seed tag matches buildTagTree splitting', () => {
+    expect(seedEmptyLakeTags([], [{ fileTagPrefix: 'acme:' }])).toEqual([{ tag: 'acme', count: 0 }]);
+  });
+
+  it('leaves a lake with existing tagged content untouched, not seeded twice', () => {
+    expect(seedEmptyLakeTags(counts, [{ fileTagPrefix: 'research:' }])).toBe(counts);
+  });
+
+  it('does not match a prefix that merely shares a leading substring', () => {
+    // 'research:' must not read 'researchers:notes' as content, or a genuinely empty
+    // "research" lake would silently skip its seed.
+    const withNeighbour: TagCount[] = [{ tag: 'researchers:notes', count: 9 }];
+    expect(seedEmptyLakeTags(withNeighbour, [{ fileTagPrefix: 'research:' }])).toEqual([
+      ...withNeighbour,
+      { tag: 'research', count: 0 },
+    ]);
+  });
+
+  it('seeds a nested prefix as its own multi-segment tag, not the bare first segment', () => {
+    // A bare "acme" seed would misfile under a sibling lake sharing that first segment
+    // (e.g. a plain "acme:" lake) rather than staying its own nested branch.
+    expect(seedEmptyLakeTags([], [{ fileTagPrefix: 'acme:legal:' }])).toEqual([{ tag: 'acme:legal', count: 0 }]);
+  });
+
+  it('seeds every empty lake in a multi-lake list, once each', () => {
+    expect(
+      seedEmptyLakeTags(counts, [{ fileTagPrefix: 'empty-a:' }, { fileTagPrefix: 'empty-b:' }]).slice(counts.length)
+    ).toEqual([
+      { tag: 'empty-a', count: 0 },
+      { tag: 'empty-b', count: 0 },
+    ]);
+  });
+
+  it('returns the input untouched (identity) when every lake already has content', () => {
+    expect(seedEmptyLakeTags(counts, [{ fileTagPrefix: 'research:' }, { fileTagPrefix: 'legal:' }])).toBe(counts);
+  });
+
+  it('skips a lake with no usable prefix rather than throwing - malformed/legacy data only', () => {
+    expect(seedEmptyLakeTags(counts, [{ fileTagPrefix: '' }])).toBe(counts);
+  });
+
+  it('handles an empty lakes list without throwing', () => {
+    expect(seedEmptyLakeTags(counts, [])).toBe(counts);
   });
 });
