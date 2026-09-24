@@ -224,7 +224,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const { changeSession, currentSessionId: contextSessionId, setCurrentSessionId, setCurrentSession } = useSessions();
   const queryClient = useQueryClient();
-  const { migrateQuests, migrateSession } = useSessionCacheMigration();
+  const { migrateQuests, migrateSession, cleanupOptimistic } = useSessionCacheMigration();
   const pendingFirstMessage = useSessionLayout(s => s.pendingFirstMessage);
   const layout = useSessionLayout(s => s.layout);
   const knowledgeViewerWidth = useSessionLayout(s => s.knowledgeViewerWidth) || 50;
@@ -274,6 +274,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
         queryClient,
         migrateQuests,
         migrateSession,
+        cleanupOptimistic,
         setCurrentSessionId,
         setCurrentSession,
         onSessionCreated: onSessionCreatedRef.current,
@@ -305,7 +306,16 @@ const SessionContainer: FC<SessionLayoutProps> = ({
       unsubscribe();
       clearTimeout(projectInvalidationTimer.current);
     };
-  }, [subscribeToAction, navigate, setCurrentSession, setCurrentSessionId, queryClient, migrateQuests, migrateSession]);
+  }, [
+    subscribeToAction,
+    navigate,
+    setCurrentSession,
+    setCurrentSessionId,
+    queryClient,
+    migrateQuests,
+    migrateSession,
+    cleanupOptimistic,
+  ]);
 
   // Measure SessionBottom height for dynamic positioning of scroll to bottom
   const sessionBottomRef = useRef<HTMLDivElement>(null);

@@ -6,8 +6,9 @@ import { updateAllQueryData } from '@client/app/utils/react-query';
 
 export type ApplySessionCreatedDeps = {
   queryClient: QueryClient;
-  migrateQuests: (tmpId: string, realId: string) => void;
+  migrateQuests: (tmpId: string, realId: string, options?: { keepTmp?: boolean }) => void;
   migrateSession: (tmpId: string, realId: string, realSession: ISessionDocument) => void;
+  cleanupOptimistic: (tmpId: string) => void;
   setCurrentSessionId: Dispatch<SetStateAction<string | null>>;
   setCurrentSession: Dispatch<SetStateAction<ISessionDocument | null>>;
   onSessionCreated?: (realId: string) => void;
@@ -47,7 +48,8 @@ export async function applySessionCreated(
   setSessionLayout({ pendingRealSessionId: realId });
 
   if (tmpId !== realId) {
-    deps.migrateQuests(tmpId, realId);
+    // The tmp quests stay until the URL has moved off the tmpId (see migrateQuests).
+    deps.migrateQuests(tmpId, realId, { keepTmp: true });
     deps.migrateSession(tmpId, realId, realSession);
   }
 
@@ -57,6 +59,7 @@ export async function applySessionCreated(
 
   // replace: the tmpId never lands in the browser history stack.
   await deps.navigateToSession(realId);
+  if (tmpId !== realId) deps.cleanupOptimistic(tmpId);
 
   // Cleared only after navigation so the effectiveSessionId guard in SessionContainer
   // (pendingFirstMessage ? undefined : currentSessionId) never briefly exposes the tmpId to API

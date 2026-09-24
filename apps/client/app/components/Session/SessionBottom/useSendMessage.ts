@@ -1147,16 +1147,21 @@ export function useSendMessage({
     // connected in a fresh session), the optimistic ID is still set. Use the API
     // response to perform the same cache migration that session.created would have.
     if (isNewSession && optimisticTmpId && data?.session?.id) {
-      const { pendingOptimisticId } = useSessionLayout.getState();
-      if (pendingOptimisticId && pendingOptimisticId !== data.session.id) {
+      const { pendingOptimisticId, pendingRealSessionId } = useSessionLayout.getState();
+      // A recorded real id means session.created is already migrating and navigating; a second
+      // copy from the tmp entry it keeps until then would overwrite frames written since.
+      if (pendingOptimisticId && pendingOptimisticId !== data.session.id && pendingRealSessionId !== data.session.id) {
         const realId = data.session.id;
-        migrateQuests(optimisticTmpId, realId);
-        migrateSession(optimisticTmpId, realId, data.session);
+        const tmpId = optimisticTmpId;
+        migrateQuests(tmpId, realId, { keepTmp: true });
+        migrateSession(tmpId, realId, data.session);
         setCurrentSessionId(realId);
         setCurrentSession(data.session);
         // pendingRealSessionId keeps this session's frames flowing until the navigation commits.
         setSessionLayout({ pendingFirstMessage: null, pendingOptimisticId: null, pendingRealSessionId: realId });
-        navigate({ to: '/notebooks/$id', params: { id: realId }, replace: true });
+        void navigate({ to: '/notebooks/$id', params: { id: realId }, replace: true }).then(() =>
+          cleanupOptimistic(tmpId)
+        );
       }
     }
 

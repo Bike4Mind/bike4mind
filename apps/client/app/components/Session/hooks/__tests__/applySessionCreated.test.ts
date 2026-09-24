@@ -20,10 +20,12 @@ const setup = (current: ISessionDocument | null) => {
   });
   let currentSession = current;
   let pendingRealAtNavigate: string | null | undefined;
+  let tmpQuestsAtNavigate: unknown;
   const deps: ApplySessionCreatedDeps = {
     queryClient,
     migrateQuests: vi.fn(),
     migrateSession: vi.fn(),
+    cleanupOptimistic: vi.fn(),
     setCurrentSessionId: vi.fn(),
     setCurrentSession: vi.fn(next => {
       currentSession = typeof next === 'function' ? next(currentSession) : next;
@@ -31,11 +33,18 @@ const setup = (current: ISessionDocument | null) => {
     onSessionCreated: vi.fn(),
     navigateToSession: vi.fn(async () => {
       pendingRealAtNavigate = useSessionLayout.getState().pendingRealSessionId;
+      tmpQuestsAtNavigate = (deps.cleanupOptimistic as ReturnType<typeof vi.fn>).mock.calls.length;
     }),
   };
   const listIds = () =>
     queryClient.getQueryData<InfiniteData<SessionPage>>(OWN_LIST_KEY)?.pages.flatMap(p => p.data.map(s => s.id));
-  return { deps, listIds, current: () => currentSession, pendingRealAtNavigate: () => pendingRealAtNavigate };
+  return {
+    deps,
+    listIds,
+    current: () => currentSession,
+    pendingRealAtNavigate: () => pendingRealAtNavigate,
+    cleanupsBeforeNavigate: () => tmpQuestsAtNavigate,
+  };
 };
 
 describe('applySessionCreated', () => {
@@ -54,6 +63,7 @@ describe('applySessionCreated', () => {
     expect(deps.setCurrentSessionId).not.toHaveBeenCalled();
     expect(deps.navigateToSession).not.toHaveBeenCalled();
     expect(deps.migrateQuests).not.toHaveBeenCalled();
+    expect(deps.cleanupOptimistic).not.toHaveBeenCalled();
     expect(deps.onSessionCreated).not.toHaveBeenCalled();
     expect(current()).toBe(viewing);
   });
@@ -80,14 +90,17 @@ describe('applySessionCreated', () => {
 
   it('switches the minting tab to its new session and lists it', async () => {
     useSessionLayout.setState({ pendingOptimisticId: TMP_ID });
-    const { deps, listIds, current, pendingRealAtNavigate } = setup(session(TMP_ID));
+    const { deps, listIds, current, pendingRealAtNavigate, cleanupsBeforeNavigate } = setup(session(TMP_ID));
     const created = session('real-new');
 
     const minted = await applySessionCreated(created, deps);
 
     expect(minted).toBe(true);
     expect(listIds()).toEqual(['real-new', 'older']);
-    expect(deps.migrateQuests).toHaveBeenCalledWith(TMP_ID, 'real-new');
+    // The tmp quests stay readable until the URL has left the tmpId, or the view paints empty.
+    expect(deps.migrateQuests).toHaveBeenCalledWith(TMP_ID, 'real-new', { keepTmp: true });
+    expect(cleanupsBeforeNavigate()).toBe(0);
+    expect(deps.cleanupOptimistic).toHaveBeenCalledWith(TMP_ID);
     expect(deps.migrateSession).toHaveBeenCalledWith(TMP_ID, 'real-new', created);
     expect(deps.setCurrentSessionId).toHaveBeenCalledWith('real-new');
     expect(current()).toBe(created);

@@ -26,10 +26,11 @@ import { ProviderBundle } from './contexts/ProviderBundle';
 import { premiumRoutes } from './premium-generated/premiumRoutes.generated';
 import { partitionPremiumRoutes } from './premiumRoutePartition';
 import { defaultFeedbackRollupWindow } from './utils/feedbackRollupWindow';
+import { lazyWithPreload } from './utils/lazyWithPreload';
 
 // Lazy load all route components for code splitting
 const NewNotebookPage = lazy(() => import('./routes/notebooks/new'));
-const NotebookPage = lazy(() => import('./routes/notebooks/$id'));
+const NotebookPage = lazyWithPreload(() => import('./routes/notebooks/$id'));
 const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
@@ -286,9 +287,9 @@ const newRoute = createRoute({
   path: '/new',
   loader: () => {
     // Kick off the NotebookPage chunk download while the user is typing their first
-    // message. By the time they hit send and the optimistic navigation fires, the
-    // chunk is already cached so the Suspense boundary resolves instantly.
-    void import('./routes/notebooks/$id');
+    // message. Once it has loaded, the optimistic navigation on send mounts NotebookPage
+    // synchronously instead of painting the Suspense fallback (see lazyWithPreload).
+    void NotebookPage.preload();
   },
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
