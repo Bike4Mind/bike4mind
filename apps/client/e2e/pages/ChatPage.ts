@@ -2,6 +2,25 @@ import { expect } from '@playwright/test';
 import { TIMEOUTS } from '../constants';
 import { BasePage } from './BasePage';
 
+/**
+ * The streaming wait exhausted its budget: the reply was still unfinished when the cap expired.
+ *
+ * A distinct type because only this failure is a latency measurement. Everything else
+ * sendMessageAndWaitForResponse can throw - the send button never enabling, the response container
+ * never mounting - is setup or UI breakage with no timing to report, and recording it as a slow
+ * response would page the latency channel and fail the nightly for something that is not AI
+ * slowness. Callers that record latency must narrow on this rather than on any throw.
+ */
+export class StreamingTimeoutError extends Error {
+  constructor(
+    readonly timeoutMs: number,
+    stage: string
+  ) {
+    super(`Streaming did not complete within ${timeoutMs}ms - ${stage}`);
+    this.name = 'StreamingTimeoutError';
+  }
+}
+
 export class ChatPage extends BasePage {
   readonly chatInput = this.page.getByTestId('lexical-chat-input-container');
   readonly sendButton = this.page.getByTestId('send-message-btn');
@@ -162,7 +181,7 @@ export class ChatPage extends BasePage {
       // growing reply means the stream itself is slow. The two have different fixes and the bare
       // message sent triage down the wrong path.
       const stage = text1.length === 0 ? 'no text streamed yet (tool work still in flight?)' : 'reply still growing';
-      throw new Error(`Streaming did not complete within ${timeout}ms - ${stage}`);
+      throw new StreamingTimeoutError(timeout, stage);
     }
   }
 

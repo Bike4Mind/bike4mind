@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { test, expect } from './fixtures';
 import { TIMEOUTS } from './constants';
+import { StreamingTimeoutError } from './pages/ChatPage';
 import {
   resolveSelectedModel,
   dailySeed,
@@ -9,6 +10,14 @@ import {
   type PromptScenario,
   type PromptResult,
 } from './ai-latency-helpers';
+import {
+  assertBudgetConfig,
+  textStreamBudgetMs,
+  completedResult,
+  incompleteResult,
+  mergeResults,
+  gatedAverageSec,
+} from './ai-latency-budget';
 
 // Normalizes to NFKC and strips invisible Unicode chars (zero-width joiners, soft hyphens,
 // non-breaking spaces) before matching - innerText-scraped AI text can differ invisibly and break a plain .includes().
@@ -36,6 +45,7 @@ export function createAiLatencySuite({
   resultsFilename,
   disableSmartTools = false,
 }: AiLatencySuiteOptions) {
+  assertBudgetConfig(prompts);
   const selectedPrompts = pickDeterministic(prompts, 3, dailySeed);
   const collectedResults: PromptResult[] = [];
   // Resolved on the first prompt against the live AI Settings modal, then reused for the
@@ -67,19 +77,8 @@ export function createAiLatencySuite({
       // First prompt (no file yet) or an unreadable/partial file - start from an empty set.
     }
 
-    // Dedupe by id, last write wins so a retry's result supersedes the original.
-    const results = [...new Map([...priorResults, ...newResults].map(r => [r.id, r])).values()];
-
-    // The gated latency average must stay text-streaming-only. Image/artifact prompts measure a
-    // much longer, different thing (deliverable generation, which for artifacts runs during the
-    // stream), so fold only the text prompts into the average - otherwise the workflow's
-    // AVG > thresholdSec check would go red on generation time and mask real streaming regressions.
-    // Any 3-of-N pick includes at least one text prompt, but guard the empty case anyway.
-    const gatedResults = results.filter(r => !r.measuresDeliverable);
-    const averageResponseTimeSec =
-      gatedResults.length > 0
-        ? Math.round((gatedResults.reduce((sum, r) => sum + r.responseTimeSec, 0) / gatedResults.length) * 1000) / 1000
-        : 0;
+    const results = mergeResults(priorResults, newResults);
+    const averageResponseTimeSec = gatedAverageSec(results);
 
     // Never downgrade an already-resolved model back to 'unknown' (a recycled worker starts fresh).
     const output = {
@@ -91,33 +90,6 @@ export function createAiLatencySuite({
     };
 
     fs.writeFileSync(resultsPath, JSON.stringify(output, null, 2));
-  }
-
-  // The streaming cap must never be tighter than the latency budget the suite itself declares:
-  // capping at AI_RESPONSE while thresholdSec allows more fails a response the suite would have
-  // accepted, and reports it as a hang instead of as slow. A tool-heavy scenario overrides this
-  // with its own budget, since its first token can trail minutes of tool work.
-  function textStreamBudgetMs(scenario: PromptScenario): number {
-    return Math.max(TIMEOUTS.AI_RESPONSE, (scenario.streamingBudgetSec ?? thresholdSec) * 1000);
-  }
-
-  // Stand-in result for a prompt that never finished. responseTimeSec is the elapsed time at the
-  // point it was abandoned, so it understates the real latency - but it keeps the prompt inside the
-  // gated average instead of dropping it, which is what let a cell whose worst prompt timed out
-  // still average well under thresholdSec.
-  function incompleteResult(scenario: PromptScenario, elapsedMs: number): PromptResult {
-    return {
-      id: scenario.id,
-      prompt: scenario.prompt,
-      response: '',
-      responseTimeMs: elapsedMs,
-      responseTimeSec: Math.round(elapsedMs) / 1000,
-      responseRateCharsPerSec: 0,
-      renderTimeMs: 0,
-      renderTimeSec: 0,
-      measuresDeliverable: Boolean(scenario.expectsImage || scenario.generatesArtifact),
-      incomplete: true,
-    };
   }
 
   function prompt(index: number) {
@@ -137,10 +109,6 @@ export function createAiLatencySuite({
       // separate, much longer measurement, so latency and streaming rate below are taken over the
       // stream window only and the render/settle tail is recorded separately as renderTimeMs.
       let streamEndMs: number;
-      // Scoped to the send/settle block only: a failure here is the latency signal we must not
-      // lose, whereas a navigation or model-selection failure earlier is a setup problem and has no
-      // latency to report. Records the elapsed time and re-throws - the test still fails, it just
-      // stops taking its own worst number out of the average on the way out.
       try {
         if (scenario.expectsImage) {
           // The image is tool-produced around the stream (the stop button can hide only once
@@ -153,8 +121,11 @@ export function createAiLatencySuite({
           imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
         } else {
           // An artifact is likewise generated around the stream, so an artifact prompt needs the
-          // image-generation budget for the send; plain text uses the streaming budget below.
-          const sendBudget = scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : textStreamBudgetMs(scenario);
+          // image-generation budget for the send; plain text takes the derived streaming budget
+          // (see textStreamBudgetMs in ai-latency-budget.ts).
+          const sendBudget = scenario.generatesArtifact
+            ? TIMEOUTS.IMAGE_GENERATION
+            : textStreamBudgetMs(thresholdSec, scenario);
           await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
           streamEndMs = Date.now();
           // Streaming completing does not mean the artifact resolved; wait out the placeholders so
@@ -164,9 +135,17 @@ export function createAiLatencySuite({
           }
         }
       } catch (err: unknown) {
-        const result = incompleteResult(scenario, Date.now() - startMs);
-        collectedResults.push(result);
-        persistResults(resolvedModel, [result]);
+        // Only a blown streaming budget is a latency observation. The send path also does
+        // pre-stream setup - waiting for the send button to enable, gating on the response
+        // container mounting - and stamping one of those flakes `incomplete` would count it into
+        // the gated average, page the slow-responses channel and fail the nightly for something
+        // that is not AI slowness. Anything else propagates untouched: the test still fails
+        // loudly, it just does not claim a timing it never took.
+        if (err instanceof StreamingTimeoutError) {
+          const result = incompleteResult(scenario, Date.now() - startMs);
+          collectedResults.push(result);
+          persistResults(resolvedModel, [result]);
+        }
         throw err;
       }
       const settleEndMs = Date.now();
@@ -179,10 +158,6 @@ export function createAiLatencySuite({
 
       const allTexts = await chatPage.aiResponseRoot.allInnerTexts();
       const responseText = allTexts.join('\n');
-
-      const responseTimeSec = responseTimeMs / 1000;
-      const responseRateCharsPerSec =
-        responseText.length > 0 && responseTimeSec > 0 ? Math.round(responseText.length / responseTimeSec) : 0;
 
       // An image prompt's only trustworthy signal is the rendered image. Its keyword list is
       // generic prose ("here", "picture", "generated") that a refusal or any description also
@@ -218,23 +193,7 @@ export function createAiLatencySuite({
           .toBeTruthy();
       }
 
-      const result: PromptResult = {
-        id: scenario.id,
-        prompt: scenario.prompt,
-        response: responseText,
-        responseTimeMs,
-        responseTimeSec: Math.round(responseTimeSec * 1000) / 1000,
-        responseRateCharsPerSec,
-        // Time spent rendering the image / settling the artifact after the stream ended. 0 for
-        // plain text prompts. Kept as its own field so "this artifact took N seconds to mount"
-        // stays visible without polluting the streaming latency/rate above.
-        renderTimeMs,
-        renderTimeSec: Math.round(renderTimeMs) / 1000,
-        // Even measured stream-only, an artifact prompt's stream window runs for minutes, so flag
-        // image/artifact prompts to keep them out of the gated latency average - it must stay a
-        // text-streaming signal that still catches a real text regression.
-        measuresDeliverable: Boolean(scenario.expectsImage || scenario.generatesArtifact),
-      };
+      const result = completedResult(scenario, { response: responseText, responseTimeMs, renderTimeMs });
       collectedResults.push(result);
       // Persist immediately so this prompt's numbers survive a later prompt's timeout/worker recycle.
       persistResults(resolvedModel, [result]);
