@@ -18,8 +18,8 @@ type SlackOptionGroup = {
 /**
  * Group label per backend, in dropdown order. Total over ModelBackend so a new
  * provider is a compile error here rather than an unlabeled group sorted last.
- * The image/embedding backends never survive the text filter below; they are
- * listed so the Record stays total.
+ * BFL and LocalImage never survive the text filter below, and VoyageAI is never
+ * listed at all; they are here so the Record stays total.
  */
 export const BACKEND_DISPLAY_NAMES: Readonly<Record<ModelBackend, string>> = {
   [ModelBackend.OpenAI]: 'OpenAI',
@@ -37,6 +37,11 @@ export const BACKEND_DISPLAY_NAMES: Readonly<Record<ModelBackend, string>> = {
 };
 
 const BACKEND_ORDER = Object.keys(BACKEND_DISPLAY_NAMES) as ModelBackend[];
+
+// views.open must land within Slack's 3s trigger_id window, so one slow backend
+// (a blackholed Ollama or IMAGE_GEN_BASE_URL host) contributes nothing rather
+// than failing the whole modal. Same deadline as the web picker.
+const PER_BACKEND_TIMEOUT_MS = 2_000;
 
 /**
  * Fetch enabled text models from all backends and return them as Slack
@@ -56,14 +61,10 @@ export async function buildSlackModelOptionsFromDashboard(): Promise<{
     };
     const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
 
-    let allModels = await getAvailableModels(buildApiKeyTable(coreKeys), { includePrivate: false });
-
-    // Filter deprecated models
-    const today = new Date(new Date().toISOString().slice(0, 10));
-    allModels = allModels.filter(m => {
-      if (!m.deprecationDate) return true;
-      const cutoff = new Date(m.deprecationDate + 'T00:00:00Z');
-      return today.getTime() < cutoff.getTime();
+    // Deprecated models are already filtered inside getAvailableModels.
+    let allModels = await getAvailableModels(buildApiKeyTable(coreKeys), {
+      includePrivate: false,
+      perBackendTimeoutMs: PER_BACKEND_TIMEOUT_MS,
     });
 
     // Filter to text models only (Slack chat uses text models)
