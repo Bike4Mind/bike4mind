@@ -24,7 +24,7 @@ export const proxiedImageSrc = (url: string) => `/api/search-image?url=${encodeU
  * an image request - every tile would 401. Fetching the bytes ourselves keeps the route behind
  * normal auth, and `blob:` is already on the CSP `img-src` allowlist.
  */
-function useProxiedImage(url: string): { src?: string; failed: boolean } {
+export function useProxiedImage(url: string): { src?: string; failed: boolean } {
   const [src, setSrc] = useState<string>();
   const [failed, setFailed] = useState(false);
 

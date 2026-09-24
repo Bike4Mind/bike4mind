@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx';
-import { stripSearchResultCardFences } from '@bike4mind/common';
+import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { visibleReplyForExport } from '@client/app/utils/replyUtils';
 import { Document, Paragraph, TextRun, Packer, HeadingLevel, BorderStyle } from 'docx';
 import {
@@ -37,6 +37,7 @@ export interface ExportedChatMessage {
       inputTokens?: number;
       outputTokens?: number;
     };
+    citables?: CitableSource[];
   };
 }
 
@@ -88,7 +89,7 @@ export async function notebooksToExcel(data: BulkExportData): Promise<Blob> {
           Notebook: nb.name,
           Timestamp: msg.timestamp ? new Date(msg.timestamp).toISOString() : '',
           Role: 'Assistant',
-          Content: stripSearchResultCardFences(reply),
+          Content: stripSearchResultCardFences(reply, msg.promptMeta?.citables),
           Model: msg.promptMeta?.model?.name || '',
           Tokens: msg.promptMeta?.tokenUsage?.outputTokens || '',
         });
@@ -334,7 +335,12 @@ export async function notebooksToDocx(data: BulkExportData): Promise<Blob> {
           // Message content with background shading and left border
           children.push(
             new Paragraph({
-              children: [new TextRun({ text: stripSearchResultCardFences(reply), size: DocxFontSizes.small })],
+              children: [
+                new TextRun({
+                  text: stripSearchResultCardFences(reply, msg.promptMeta?.citables),
+                  size: DocxFontSizes.small,
+                }),
+              ],
               shading: { fill: roleStyle.backgroundColor },
               border: {
                 left: {
@@ -419,7 +425,7 @@ export function notebooksToMarkdown(data: BulkExportData): string {
         // Assistant reply: one entry per turn, not per stored slot
         const reply = visibleReplyForExport(msg);
         if (reply) {
-          md += `**AI**:\n\n${stripSearchResultCardFences(reply)}\n\n`;
+          md += `**AI**:\n\n${stripSearchResultCardFences(reply, msg.promptMeta?.citables)}\n\n`;
         }
       }
     }

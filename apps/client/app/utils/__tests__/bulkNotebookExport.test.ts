@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { notebooksToExcel, notebooksToDocx, notebooksToMarkdown, downloadBlob } from '../bulkNotebookExport';
+import {
+  notebooksToExcel,
+  notebooksToDocx,
+  notebooksToMarkdown,
+  downloadBlob,
+  type BulkExportData,
+} from '../bulkNotebookExport';
 import {
   mockBulkExportData,
   mockEmptyBulkExportData,
@@ -90,6 +96,51 @@ describe('bulkNotebookExport', () => {
       expect(md.match(/\*\*AI\*\*:/g)).toHaveLength(1);
       expect(md).not.toContain('reasoning');
       expect(md).not.toContain('<think>');
+    });
+
+    /**
+     * Without the reply's citables, stripSearchResultCardFences can't tell a real place from an
+     * invented one and drops the whole map fence - the safe default, but it must actually receive
+     * them (bulkNotebookExport used to strip with no citables at all, so a b4m_map fence never
+     * resolved to a place list here even when the reply carried a real one).
+     */
+    it('resolves a b4m_map fence using the message promptMeta citables', () => {
+      const data: BulkExportData = {
+        exportVersion: '1.0',
+        exportedAt: '2024-01-15T12:00:00Z',
+        notebooks: [
+          {
+            id: 'notebook-map',
+            name: 'Map Session',
+            firstCreated: '2024-01-10T09:00:00Z',
+            lastUpdated: '2024-01-10T09:10:00Z',
+            chatHistory: [
+              {
+                id: 'msg-map',
+                timestamp: '2024-01-10T09:00:00Z',
+                type: 'user',
+                prompt: 'restaurants near my hotel',
+                replies: ['Here are some options.\n\n```b4m_map\n{"places":[{"id":"place-1","name":"Barr"}]}\n```\n'],
+                promptMeta: {
+                  citables: [
+                    {
+                      id: 'place:place-1',
+                      type: 'web_url',
+                      title: 'Barr',
+                      metadata: { place: { id: 'place-1', name: 'Barr', lat: 55.67, lng: 12.57 } },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        ],
+      };
+
+      const md = notebooksToMarkdown(data);
+      expect(md).toContain('Barr');
+      expect(md).toContain('Open in Google Maps');
+      expect(md).not.toContain('b4m_map');
     });
   });
 

@@ -5,6 +5,7 @@ import {
   IChatHistoryItem,
   mapMimeTypeToArtifactType as mapMimeTypeToSharedArtifactType,
   SEARCH_RESULT_CARDS_LANGUAGE,
+  LOCATION_MAP_LANGUAGE,
 } from '@bike4mind/common';
 
 /**
@@ -159,7 +160,7 @@ function extractArtifactTags(content: string, messageId: string, timestamp: Date
 }
 
 /** Fence languages that exist only to drive inline rendering, never to be curated as artifacts. */
-const PRESENTATION_ONLY_LANGUAGES = new Set<string>([SEARCH_RESULT_CARDS_LANGUAGE]);
+const PRESENTATION_ONLY_LANGUAGES = new Set<string>([SEARCH_RESULT_CARDS_LANGUAGE, LOCATION_MAP_LANGUAGE]);
 
 /**
  * Extract code blocks from markdown-style fenced code

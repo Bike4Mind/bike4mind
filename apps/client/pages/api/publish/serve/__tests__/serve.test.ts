@@ -1313,6 +1313,44 @@ describe('GET /api/publish/serve - ?format=raw plain-text alternate', () => {
     expect(body).toContain('Body markdown.');
   });
 
+  // The map fence refers to places by id only - the served artifact must carry its own
+  // citables snapshot to resolve them, since the source Quest may since have changed or
+  // been deleted (#3250 follow-up).
+  it('resolves a b4m_map fence using the artifact citables snapshot, dropping an unresolved id', async () => {
+    mockArtifactFindOne.mockReturnValue({
+      publicId: 'r2',
+      title: 'A map reply',
+      visibility: 'public',
+      ownerId: 'owner1',
+      source: { kind: 'reply' },
+      renderedBody:
+        'Here are some options.\n\n```b4m_map\n{"places":[{"id":"place-1","name":"Barr"},{"id":"invented","name":"Fake"}]}\n```\n',
+      citables: [
+        {
+          id: 'place:place-1',
+          type: 'web_url',
+          title: 'Barr',
+          metadata: { place: { id: 'place-1', name: 'Barr', lat: 55.67, lng: 12.57 } },
+        },
+      ],
+      storageKeyPrefix: '',
+      manifest: [],
+      tier: 'user',
+      scopeId: 's',
+      slug: 'y',
+    });
+
+    const { res, promise } = run(['r', 'r2'], { format: 'raw' });
+    await promise;
+
+    const body = res._getData() as string;
+    expect(body).toContain('Barr');
+    expect(body).toContain('Open in Google Maps');
+    expect(body).not.toContain('Fake');
+    expect(body).not.toContain('invented');
+    expect(body).not.toContain('b4m_map');
+  });
+
   it('returns 404 for ?format=raw on a private bundle (never a raw leak of gated content)', async () => {
     mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', ownerId: 'owner1' }));
 

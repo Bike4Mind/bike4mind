@@ -3,6 +3,7 @@ import {
   ARTIFACT_TYPE_REGISTRY,
   SupportedFabFileMimeTypes,
   SEARCH_RESULT_CARDS_LANGUAGE,
+  LOCATION_MAP_LANGUAGE,
 } from '@bike4mind/common';
 import { parseArtifacts } from './artifactParser';
 import { COMMON_FILE_FORMATS, detectFileFormat, getFormatByMimeType, FileFormatOption } from './fileFormatUtils';
@@ -159,7 +160,8 @@ function extractFenceBlocks(cleanedContent: string): ExtractedBlock[] {
         const infoString = match[1].trim();
         if (!infoString) continue; // no language attached - not worth a download entry
         const language = infoString.split(/\s+/)[0]?.toLowerCase();
-        if (language === SEARCH_RESULT_CARDS_LANGUAGE) continue; // model-authored card JSON, not a downloadable file
+        // Model-authored card/map JSON, not a downloadable file.
+        if (language === SEARCH_RESULT_CARDS_LANGUAGE || language === LOCATION_MAP_LANGUAGE) continue;
         const body = match[2];
         const nonEmptyLines = body.split('\n').filter(line => line.trim().length > 0);
         if (nonEmptyLines.length < 2) continue; // too small to be worth a download entry

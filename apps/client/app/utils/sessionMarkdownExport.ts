@@ -15,7 +15,7 @@ export function convertSessionToMarkdown(quests: IChatHistoryItemDocument[]): st
     }
     const reply = visibleReplyForExport(quest);
     if (reply) {
-      lines.push(`**AI:** ${stripSearchResultCardFences(reply)}`);
+      lines.push(`**AI:** ${stripSearchResultCardFences(reply, quest.promptMeta?.citables)}`);
       lines.push('');
     }
     lines.push('---');
