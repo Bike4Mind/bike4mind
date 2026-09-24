@@ -64,7 +64,7 @@ describe('DataLakeUploadIndicator - batch-completion cache sync stays live while
     expect(subscribeToAction).toHaveBeenCalledWith('data_lake_batch_progress', expect.any(Function));
   });
 
-  it('invalidates the lake list, health, and tag-counts roots on batch completion, with no active batch id in the wizard store', () => {
+  it('invalidates the lake list, health, tag-counts, articles, and files roots on batch completion, with no active batch id in the wizard store', () => {
     const { spy } = mountIndicator();
     const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
 
@@ -81,6 +81,8 @@ describe('DataLakeUploadIndicator - batch-completion cache sync stays live while
         JSON.stringify(['data-lakes']),
         JSON.stringify(['dataLakeHealth']),
         JSON.stringify(['dataLakeTagCounts']),
+        JSON.stringify(['dataLakeArticles']),
+        JSON.stringify(['dataLakeFiles']),
       ])
     );
   });
