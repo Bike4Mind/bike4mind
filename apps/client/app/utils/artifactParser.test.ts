@@ -921,6 +921,19 @@ describe('convertCodeBlocksToArtifacts - linear fence detectors', () => {
     const input = '```html\n<!DOCTYPE html>\n' + '<div>x</div>\n'.repeat(3800);
     expect(convertCodeBlocksToArtifacts(input)).toBe(input);
   });
+
+  it('leaves an unclosed tool-output result field untouched, scaling linearly', () => {
+    // convertToolOutputsToArtifacts used to end with a tail fallback scanning
+    // /"result":\s*"([^"]*(?:\\"[^"]*)*)"[^}]*\}/g. Its capture could not hold an escaped
+    // quote (the greedy [^"]* swallows the backslash, so the alternation never engages),
+    // which made the promotion below it unreachable. The scan still ran, and when no '}'
+    // follows the result field the tail fails and the match walks the ambiguous
+    // [^"]* / \\" alternation over the whole run: quadratic in its length. Sized so the
+    // pre-fix baseline clears MIN_BASELINE_MS, leaving the growth ratio as the real
+    // check: measured in-suite at 3.97 against the block, versus a 2ms total without
+    // it. 'mermaid' is required to clear the hasTargetType gate on the whole function.
+    assertLinearGrowth(n => '{"result":"mermaid ' + '\\"word\\" '.repeat(n), 4000);
+  });
 });
 
 /**
