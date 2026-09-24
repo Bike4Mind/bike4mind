@@ -171,17 +171,24 @@ const GearsPage = () => {
       }}
     >
       {cards.map(gear => (
+        // Every card looks the same whether or not its gear is earned: the page is
+        // a place to read about features, and a checkmark grid turns it into a
+        // score. The unlock still happens and still pays - it just is not what
+        // this surface is for.
         <Card
           key={gear.key}
-          variant={gear.unlocked ? 'soft' : 'outlined'}
+          variant="outlined"
           data-testid={`gear-card-${gear.key}`}
           sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}
         >
-          <Stack direction="row" alignItems="center" justifyContent="space-between">
+          <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
             <Stack direction="row" alignItems="center" gap={1}>
               {GEAR_ICONS[gear.key] ?? <SettingsOutlinedIcon />}
               <Typography level="title-md">{gear.title}</Typography>
             </Stack>
+            {/* The ONLY thing on the card that knows whether the gear is earned.
+                The card itself stays identical either way - greying the whole
+                card out said "this is spent", when what is spent is the reward. */}
             {gear.unlocked ? (
               <Stack direction="row" alignItems="center" gap={0.75}>
                 {gear.rewardPending && (
@@ -205,13 +212,8 @@ const GearsPage = () => {
           <Typography level="body-sm" sx={{ flex: 1, opacity: 0.85 }}>
             {gear.intro}
           </Typography>
-          <Button
-            size="sm"
-            variant={gear.unlocked ? 'plain' : 'solid'}
-            onClick={() => onCta(gear)}
-            data-testid={`gear-cta-${gear.key}`}
-          >
-            {gear.unlocked ? 'Open' : gear.cta}
+          <Button size="sm" variant="solid" onClick={() => onCta(gear)} data-testid={`gear-cta-${gear.key}`}>
+            {gear.cta}
           </Button>
         </Card>
       ))}
