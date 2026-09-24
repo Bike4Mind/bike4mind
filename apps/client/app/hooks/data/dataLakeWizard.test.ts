@@ -1062,7 +1062,7 @@ describe('useBatchProgressListener - progress status only, no cache invalidation
   });
 });
 
-describe('useDataLakeBatchCompletionSync - keeps lake/health/tag-counts caches in sync with ANY batch completion', () => {
+describe('useDataLakeBatchCompletionSync - keeps lake/health/tag-counts/article/file caches in sync with ANY batch completion', () => {
   let spy: ReturnType<typeof vi.spyOn>;
 
   const invalidatedKeys = () =>
@@ -1078,7 +1078,7 @@ describe('useDataLakeBatchCompletionSync - keeps lake/health/tag-counts caches i
   });
 
   it.each(['completed', 'completed_with_errors'] as const)(
-    'invalidates the lake list, health, and tag-counts roots on %s',
+    'invalidates the lake list, health, tag-counts, articles, and files roots on %s',
     status => {
       mountHook(useDataLakeBatchCompletionSync);
       const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
@@ -1094,6 +1094,10 @@ describe('useDataLakeBatchCompletionSync - keeps lake/health/tag-counts caches i
           JSON.stringify(['data-lakes']),
           JSON.stringify(['dataLakeHealth']),
           JSON.stringify(['dataLakeTagCounts']),
+          // #3238 review (onoya): an already-open category/Uncategorized view queries these
+          // independently of the tag-count tree, and was staying stale without this.
+          JSON.stringify(['dataLakeArticles']),
+          JSON.stringify(['dataLakeFiles']),
         ])
       );
     }
