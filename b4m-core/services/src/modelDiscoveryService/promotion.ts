@@ -16,9 +16,10 @@ export const NOT_INVOCABLE_REASON = 'discovered, not invocable by this build';
  * clause it can ever satisfy, so every model discovery finds for it stays
  * `discovered` forever - and because `isDispatchBlocked` wins in `reasonFor`, the
  * admin queue reports "not invocable by this build" and never mentions the
- * credential. Exported for the coverage test that enforces this.
+ * credential. The Record is total, so an omission is a compile error; exported
+ * for the coverage test that checks each predicate actually reads a credential.
  */
-export const CREDENTIAL_OF_BACKEND: Record<string, (creds: DiscoveryCredentials) => boolean> = {
+export const CREDENTIAL_OF_BACKEND: Readonly<Record<ModelBackend, (creds: DiscoveryCredentials) => boolean>> = {
   [ModelBackend.OpenAI]: creds => creds.openai !== null,
   [ModelBackend.Anthropic]: creds => creds.anthropic !== null,
   [ModelBackend.Gemini]: creds => creds.gemini !== null,
