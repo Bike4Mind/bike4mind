@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { chunkFabfile, commitFabFileChunks, prepareFabFileChunks } from './chunk';
-import { CHUNK_STALL_REASONS, ChunkClaimLostError, DocumentDateSource } from '@bike4mind/common';
+import { CHUNK_STALL_REASONS, ChunkClaimLostError, DocumentDateSource, FabFileSourceType } from '@bike4mind/common';
 import { computeServerTextHash } from '../dataLakeService/admissionContract';
 import type { IUserDocument } from '@bike4mind/common';
 
@@ -493,6 +493,45 @@ describe('chunkFabfile', () => {
 
       expect(persisted().documentDate).toBeNull();
       expect(persisted().documentDateSource).toBeNull();
+    });
+
+    it('refuses to take an export rendition date for an un-pinned Drive Editors row', async () => {
+      // A legacy Slides row ingested before this PR, or one whose createdTime this pass couldn't
+      // read: no stored DRIVE_CREATED pin, and no driveMd5Checksum because Editors files never
+      // have one. The chunker still reads the stored .pptx export's docProps/core.xml - that date
+      // is the export moment, not the document's, so it must not become the vintage just because
+      // no pin was ever stored.
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        sourceType: FabFileSourceType.GOOGLE_DRIVE,
+        documentDate: null,
+        documentDateSource: null,
+      });
+      withChunkerDate({ date: new Date('2026-09-23T00:00:00.000Z'), source: DocumentDateSource.DOCUMENT_PROPERTIES });
+
+      await run();
+
+      expect(persisted().documentDate).toBeNull();
+      expect(persisted().documentDateSource).toBeNull();
+    });
+
+    it('still accepts an extracted date for a native Drive upload with an md5 checksum', async () => {
+      // The provenance check must not blanket-refuse every GOOGLE_DRIVE row - a native binary
+      // (e.g. an uploaded PDF) synced through Drive has real bytes of its own and a stored md5, so
+      // its own embedded metadata is exactly as trustworthy as any other native upload's.
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        sourceType: FabFileSourceType.GOOGLE_DRIVE,
+        driveMd5Checksum: 'abc123',
+        documentDate: null,
+        documentDateSource: null,
+      });
+      withChunkerDate({ date: new Date('2019-03-04T00:00:00.000Z'), source: DocumentDateSource.PDF_METADATA });
+
+      await run();
+
+      expect(persisted().documentDate).toEqual(new Date('2019-03-04T00:00:00.000Z'));
+      expect(persisted().documentDateSource).toBe(DocumentDateSource.PDF_METADATA);
     });
 
     it('lets a content-derived vintage replace a content-derived one', async () => {

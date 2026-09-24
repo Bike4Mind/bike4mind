@@ -18,6 +18,29 @@ import { countCodePoints, DocumentDateSource, MIN_CHUNK_CHARS_FLOOR } from '@bik
  */
 const pdfMetadataFailure = vi.hoisted(() => ({ message: null as string | null }));
 
+/**
+ * Forces `JSZip.loadAsync` to reject on the next container opened, so the guards in
+ * `readWorkbookDocumentDate` and `openOoxmlContainerForDate` can be driven. A fixture cannot reach
+ * these: any buffer a real writer (xlsx, mammoth's own docx builder) produces is one JSZip opens
+ * fine, so only the container's own EXISTING entries can be damaged in place - never the open call
+ * itself. Only `loadAsync` is patched; every other export, including the `JSZip` class the fixture
+ * builders construct with `new`, is the real library.
+ */
+const jsZipLoadFailure = vi.hoisted(() => ({ message: null as string | null }));
+
+vi.mock('jszip', async importOriginal => {
+  const actual = await importOriginal<typeof import('jszip')>();
+  const RealJSZip = actual.default;
+  class PatchedJSZip extends RealJSZip {
+    static loadAsync(...args: Parameters<(typeof RealJSZip)['loadAsync']>) {
+      const message = jsZipLoadFailure.message;
+      if (message) return Promise.reject(new Error(message));
+      return RealJSZip.loadAsync(...args);
+    }
+  }
+  return { ...actual, default: PatchedJSZip };
+});
+
 // Passthrough by default, so every other PDF test in this file still drives the REAL unpdf reader.
 vi.mock('unpdf', async importOriginal => {
   const actual = await importOriginal<typeof import('unpdf')>();
@@ -697,6 +720,7 @@ describe('chunkFile captures a document date', () => {
   });
   afterEach(() => {
     chunker.freeEncoder();
+    jsZipLoadFailure.message = null;
   });
 
   // Every mime in the allowlist, because they reach the scan through the same default branch and a
@@ -775,6 +799,19 @@ describe('chunkFile captures a document date', () => {
     it('leaves the slot empty for a DOCX with no core properties', async () => {
       const chunks = await chunker.chunkFile(await buildDatedDocx(null), DOCX_MIME);
       expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toBeUndefined();
+    });
+
+    // Regression: mammoth extracts the text through its OWN zip read, entirely separate from the
+    // one opened here just for the date - so a second opener choking on the same bytes must cost
+    // the file only its vintage, not the chunks mammoth already produced.
+    it('still extracts text when the container cannot be reopened for its date', async () => {
+      const docx = await buildDatedDocx(
+        '<dcterms:created xsi:type="dcterms:W3CDTF">2019-03-04T09:15:00Z</dcterms:created>'
+      );
+      jsZipLoadFailure.message = 'zip end of central directory not found';
+      const chunks = await chunker.chunkFile(docx, DOCX_MIME);
+      expect(chunks.map(c => c.text).join(' ')).toContain('Quarterly revenue report');
       expect(chunker.getDocumentDate()).toBeUndefined();
     });
   });
@@ -873,9 +910,12 @@ describe('chunkFile captures a document date', () => {
       });
     });
 
-    // The .xlsx reader returns a real Date for the same workbook, so both branches of the
-    // normalisation are exercised against the library rather than against an assumption about it.
-    it('captures the same date from the OOXML reader, which returns a Date', async () => {
+    // .xlsx no longer takes this date through SheetJS's Props reader at all - it goes through
+    // docProps/core.xml like docx and pptx (see readWorkbookDocumentDate) - so this pins that the
+    // SAME workbook still yields the same date via that other path, against the real writer rather
+    // than a hand-shaped fixture. The offset-bearing and dc:date-fallback cases below cover the
+    // core.xml path itself in detail.
+    it('captures the same date from the real writer, via the OOXML core.xml path', async () => {
       const xlsx = await buildDatedWorkbook('xlsx', new Date('2019-03-04T00:00:00Z'));
       const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
       expect(chunks.length).toBeGreaterThan(0);
@@ -890,6 +930,20 @@ describe('chunkFile captures a document date', () => {
       const chunks = await chunker.chunkFile(xls, XLS_MIME);
       expect(chunks.length).toBeGreaterThan(0);
       expect(chunker.getDocumentDate()).toBeUndefined();
+    });
+
+    // Regression: readWorkbookDocumentDate now tries JSZip.loadAsync unconditionally, not just when
+    // isZipContainer's byte sniff already said yes - so a container that opener chokes on entirely
+    // must fall back to the SheetJS-parsed date already in hand, not lose the vintage outright.
+    it('falls back to the SheetJS date when the workbook container cannot be opened at all', async () => {
+      const xlsx = await buildDatedWorkbook('xlsx', new Date('2019-03-04T00:00:00Z'));
+      jsZipLoadFailure.message = 'zip end of central directory not found';
+      const chunks = await chunker.chunkFile(xlsx, XLSX_MIME);
+      expect(chunks.length).toBeGreaterThan(0);
+      expect(chunker.getDocumentDate()).toEqual({
+        date: new Date('2019-03-04T00:00:00.000Z'),
+        source: DocumentDateSource.DOCUMENT_PROPERTIES,
+      });
     });
 
     /**

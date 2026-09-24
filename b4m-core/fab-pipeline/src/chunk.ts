@@ -565,17 +565,20 @@ export class SmartChunker {
     content: Buffer,
     sheetJsCreatedDate: Date | string | undefined
   ): Promise<ExtractedDocumentDate | undefined> {
-    if (!isZipContainer(content)) {
-      return acceptDocumentDate(sheetJsCreatedDate ?? null, DocumentDateSource.DOCUMENT_PROPERTIES);
-    }
     try {
+      // Tried unconditionally, not gated on isZipContainer's position-0 byte sniff: a zip with a
+      // few bytes prepended (a stray BOM, a mangled preamble) fails that sniff even though JSZip -
+      // which scans from the end for the central directory - still finds the entry.
       return await this.readOoxmlDocumentDate(await JSZip.loadAsync(content));
     } catch (error) {
       // Guarded for the same reason readOoxmlDocumentDate guards its own read: SheetJS has already
       // parsed the workbook by this point, so a container this second opener chokes on must cost
-      // the file its vintage and nothing else.
-      this.logger.warn(`Could not open the workbook container for a document date: ${(error as Error).message}`);
-      return undefined;
+      // the file its vintage and nothing else. A legacy .xls hits this on every file - it is not a
+      // zip at all - so only worth a warning when the leading bytes actually claimed to be one.
+      if (isZipContainer(content)) {
+        this.logger.warn(`Could not open the workbook container for a document date: ${(error as Error).message}`);
+      }
+      return acceptDocumentDate(sheetJsCreatedDate ?? null, DocumentDateSource.DOCUMENT_PROPERTIES);
     }
   }
 
@@ -753,9 +756,26 @@ export class SmartChunker {
     this.lastExtractedText = result.value;
     // mammoth exposes no metadata API at all, so the container is opened separately for the one
     // property wanted. Lazy: JSZip reads the directory here, not every entry's bytes.
-    this.lastDocumentDate = await this.readOoxmlDocumentDate(await JSZip.loadAsync(content));
+    const zip = await this.openOoxmlContainerForDate(content);
+    this.lastDocumentDate = zip ? await this.readOoxmlDocumentDate(zip) : undefined;
     // Chunk the extracted text as plain text
     return this.chunkText(result.value);
+  }
+
+  /**
+   * Opens a zip container purely to read its OOXML core-properties date, tolerating a container
+   * that fails to open at all - not just a core.xml entry that fails to inflate, which
+   * readOoxmlDocumentDate already guards on its own. Only for a caller where the open is auxiliary
+   * to content already extracted another way (mammoth, for chunkDOCX): the file's actual chunks
+   * must not be lost to a second reader choking on the same bytes, only its vintage.
+   */
+  private async openOoxmlContainerForDate(content: Buffer): Promise<JSZip | undefined> {
+    try {
+      return await JSZip.loadAsync(content);
+    } catch (error) {
+      this.logger.warn(`Could not open the OOXML container for a document date: ${(error as Error).message}`);
+      return undefined;
+    }
   }
 
   // Chunks PPTX (PowerPoint) content. A .pptx is a zip of XML; slide text lives in

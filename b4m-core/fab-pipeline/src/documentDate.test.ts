@@ -178,6 +178,16 @@ describe('parseFrontmatterDate', () => {
     expect(iso(parseFrontmatterDate(text))).toBe('2019-03-04T00:00:00.000Z');
   });
 
+  it('prefers publishdate over pubdate', () => {
+    const text = '---\npubdate: 2018-01-01\npublishdate: 2019-03-04\n---\n';
+    expect(iso(parseFrontmatterDate(text))).toBe('2019-03-04T00:00:00.000Z');
+  });
+
+  it('reads a BOM-prefixed block with CRLF line endings', () => {
+    const text = '﻿---\r\ntitle: Report\r\ndate: 2019-03-04\r\n---\r\n\r\nBody text';
+    expect(iso(parseFrontmatterDate(text))).toBe('2019-03-04T00:00:00.000Z');
+  });
+
   it.each(['pub_date', 'pub-date', 'pubDate', 'publish_date', 'publish-date', 'publishDate'])(
     'accepts the separator spelling %s',
     key => {
@@ -213,6 +223,19 @@ describe('parseFrontmatterDate', () => {
   it('does not scan past the leading-bytes limit', () => {
     const padded = `---\n${'filler: x\n'.repeat(2000)}date: 2019-03-04\n---\n`;
     expect(parseFrontmatterDate(padded)).toBeNull();
+  });
+
+  it('refuses a `---`...`---` span that is prose, not YAML, even with a date-shaped line inside', () => {
+    // A markdown thematic break opens and closes on a bare `---` too, so the block regex alone
+    // cannot tell this apart from real frontmatter. A heading and a plain sentence are what give
+    // it away - neither is a `key:` line, an indented continuation, or a list item.
+    const text = '---\n\n# Notes\n\nSome text\ncreated: 2016-02-02 by bob\n\n---\nmore';
+    expect(parseFrontmatterDate(text)).toBeNull();
+  });
+
+  it('accepts a YAML list item alongside the date key', () => {
+    const text = '---\ndate: 2019-03-04\ntags:\n  - report\n  - q1\n---\n';
+    expect(iso(parseFrontmatterDate(text))).toBe('2019-03-04T00:00:00.000Z');
   });
 });
 

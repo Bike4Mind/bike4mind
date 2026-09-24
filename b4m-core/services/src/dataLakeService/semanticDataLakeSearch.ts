@@ -801,6 +801,10 @@ async function scanAndRank(args: {
           fileId: chunk.fabFileId,
           fileName: file.fileName,
           fileTags: file.fileTags,
+          // `?? null` despite the field now being required above: the type stops a TYPED builder
+          // from dropping it, this stops an undefined reaching the row from a structurally-typed
+          // caller. SemanticChunkResult's contract is null-for-undated, and the render channels key
+          // on it. Same defence as annVectorSearch.ts's identical coalesce.
           documentDate: file.documentDate ?? null,
           chunkText: chunk.text ?? '',
           score,

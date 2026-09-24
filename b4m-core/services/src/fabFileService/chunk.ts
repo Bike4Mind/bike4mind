@@ -2,6 +2,7 @@ import {
   ChunkClaimLostError,
   countCodePoints,
   DocumentDateSource,
+  FabFileSourceType,
   IFabFileChunkDocument,
   IFabFileRepository,
   IUserDocument,
@@ -190,6 +191,17 @@ export const prepareFabFileChunks = async (
   const keepsIngestVintage =
     fabFile.documentDateSource === DocumentDateSource.DRIVE_CREATED && fabFile.documentDate != null;
 
+  // A Google Editors file (Docs/Sheets/Slides) has no bytes of its own even when it isn't already
+  // pinned above: what the chunker just read is Drive's export rendition, and any date embedded in
+  // it (e.g. a .pptx export's docProps/core.xml dcterms:created) is the export moment, not the
+  // document's. driveMd5Checksum is only ever populated for a native Drive upload (see
+  // driveClient.ts), so its absence on a GOOGLE_DRIVE row identifies an Editors file - one whose
+  // extracted date must not be trusted just because a pin never got stored (a legacy row, or a
+  // createdTime this pass couldn't read). There is nothing trustworthy to fall back to here, unlike
+  // the keepsIngestVintage case above.
+  const isUnpinnedDriveEditorsFile =
+    !keepsIngestVintage && fabFile.sourceType === FabFileSourceType.GOOGLE_DRIVE && !fabFile.driveMd5Checksum;
+
   return {
     fabFileId: fabFile.id,
     embeddingModel,
@@ -199,8 +211,16 @@ export const prepareFabFileChunks = async (
     effectivePassageTokenTarget,
     previousChunkEmbeddingModels,
     serverTextHash,
-    documentDate: keepsIngestVintage ? (fabFile.documentDate ?? null) : (extractedDate?.date ?? null),
-    documentDateSource: keepsIngestVintage ? (fabFile.documentDateSource ?? null) : (extractedDate?.source ?? null),
+    documentDate: keepsIngestVintage
+      ? (fabFile.documentDate ?? null)
+      : isUnpinnedDriveEditorsFile
+        ? null
+        : (extractedDate?.date ?? null),
+    documentDateSource: keepsIngestVintage
+      ? (fabFile.documentDateSource ?? null)
+      : isUnpinnedDriveEditorsFile
+        ? null
+        : (extractedDate?.source ?? null),
   };
 };
 

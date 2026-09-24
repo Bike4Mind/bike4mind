@@ -162,6 +162,17 @@ export function parseOoxmlCoreCreated(xml: string): Date | null {
 }
 
 /**
+ * A line the block regex's `---`...`---` pair could plausibly hold if it really is YAML: a
+ * top-level `key:` (with or without a value on the same line), an indented continuation of one, or
+ * a `-` list item. A markdown thematic break also opens and closes on a bare `---`, so without this
+ * a `key: value`-shaped line sitting anywhere between two unrelated breaks (a heading, a quote, a
+ * paragraph) would be read as frontmatter. Deliberately permissive about VALUE shape - value
+ * plausibility is `parseIsoDatePrefix`'s job - and about which key matches, since only the date
+ * keys matter below; this only rules out lines that could not be a YAML mapping's own syntax.
+ */
+const FRONTMATTER_LINE_SHAPE = /^(?:[ \t]+\S|-[ \t]|[A-Za-z_][\w-]*[ \t]*:)/;
+
+/**
  * Pull a document date out of a leading YAML frontmatter block.
  *
  * Hand-scanned rather than handed to a YAML parser: the only thing wanted here is a scalar date on
@@ -174,8 +185,11 @@ export function parseFrontmatterDate(text: string): Date | null {
   const block = /^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/.exec(head);
   if (!block) return null;
 
+  const lines = block[1].split(/\r?\n/);
+  if (lines.some(line => line.trim() !== '' && !FRONTMATTER_LINE_SHAPE.test(line))) return null;
+
   const found = new Map<string, Date>();
-  for (const line of block[1].split(/\r?\n/)) {
+  for (const line of lines) {
     // Top-level keys only: an indented line belongs to a nested mapping, where `date` means
     // something else (a nested object's own field), not the document's vintage.
     const pair = /^([A-Za-z_][\w-]*)[ \t]*:[ \t]*(.+?)[ \t]*$/.exec(line);
@@ -208,8 +222,10 @@ export function acceptDocumentDate(
   // TypeError and cost the file every one of its chunks, not just its vintage. Normalising here
   // rather than at each call site is the same reason the plausibility check lives here.
   // Strings go through the anchored ISO parser, never `new Date(...)`, so a non-date string is
-  // refused rather than guessed at.
-  const parsed = typeof date === 'string' ? parseIsoDatePrefix(date) : date;
+  // refused rather than guessed at. `instanceof Date`, not a bare truthiness check, for the same
+  // reason: a producer whose declared type lied once could lie again with some other truthy
+  // non-Date value, and isPlausibleDocumentDate's getTime() call has no other guard against that.
+  const parsed = typeof date === 'string' ? parseIsoDatePrefix(date) : date instanceof Date ? date : null;
   if (!parsed || !isPlausibleDocumentDate(parsed, now)) return undefined;
   return { date: parsed, source };
 }
