@@ -916,3 +916,28 @@ The worker runs its existing stuck-batch reconciliation once at startup and at 0
 Startup and scheduled reconciliation share one in-flight guard and shutdown drain budget. A scheduled slot that overlaps an active run is skipped, as is an immediate retry after failure. Clock checks occur at most 60 seconds apart: a delayed wake or forward clock jump coalesces missed slots into one run, with at most one scheduled invocation per UTC day in that process. A backward clock adjustment does not replay consumed days. The separate startup run can add one invocation. There is no persistent schedule history or coordination between multiple workers; run one worker for this schedule.
 
 This changes only when `runStuckBatchSweep` runs. Its existing database updates, taxonomy queue/status effects and CloudWatch metric attempts remain unchanged; it is not a Mongo-only maintenance job. It does not enable the full hosted reconciliation handler or other hosted daily maintenance jobs.
+
+### Agent execution service
+
+Optional and opt-in, behind the `agent-executor` profile - a fresh install that doesn't opt in gets the rest of the app (chat, notebooks, everything else) with agent execution simply unavailable. Build the app and executor from the same revision when adopting the container agent transport:
+
+```sh
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost build app agentexecutor
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile agent-executor up -d
+```
+
+Uncomment `AGENT_EXECUTOR_SERVICE=http://agentexecutor:8080` in `.env.selfhost` and generate an `AGENT_EXECUTOR_INTERNAL_SECRET` with `openssl rand -hex 32`. Both services load the same `.env.selfhost`. The executor also requires `MONGODB_URI`, `AGENT_CONTINUATION_QUEUE`, the SQS endpoint/credentials, and the same model and storage settings as the app. Its internal port is not published on the host. Hosted deployments continue using their linked Lambda function when `AGENT_EXECUTOR_SERVICE` is absent.
+
+**Upgrading an existing install:** `AGENT_EXECUTOR_SERVICE` and `AGENT_EXECUTOR_INTERNAL_SECRET` are new. An existing `.env.selfhost` predating this feature has neither set, and the `agentexecutor` container is behind the `agent-executor` profile, so `docker compose ... up -d` with your current command line brings the stack up exactly as before - the app is not gated on the executor's health. Skip the rest of this section and nothing changes. To adopt container agent execution, add the two variables above to your existing `.env.selfhost` and re-run `up -d` with `--profile agent-executor` as shown above.
+
+The executor validates its required configuration at startup. `/health` is ready only after Mongo and the configured queue are reachable. Check it inside the service:
+
+```sh
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost exec agentexecutor node -e 'fetch("http://localhost:8080/health").then(async r=>{console.log(r.status,await r.text());process.exit(r.ok?0:1)})'
+```
+
+HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the same service consumes starts, permission/confidence resumes, continuations, and dispatched children. Queue persistence is required for broker recreation recovery. Each consumer takes one message, supplies a decreasing 13-minute execution budget, and leaves unsuccessful deliveries for redelivery after 16 minutes. `AGENT_EXECUTOR_CONCURRENCY` defaults to 8 (range 2-64), allowing child work alongside parents. Shutdown stops admission and waits up to 13.5 minutes; Compose allows 14 minutes.
+
+An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
+
+Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.
