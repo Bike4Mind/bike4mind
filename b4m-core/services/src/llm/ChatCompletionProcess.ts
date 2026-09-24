@@ -1844,6 +1844,16 @@ export class ChatCompletionProcess {
         await saveQuest(quest);
         return;
       }
+      // A stop can land between invoke creating the quest and this point (the client defers a
+      // first-turn Stop until the quest exists). The save below would write 'running' back over
+      // it and the cancel watcher would never see it, so honour it here. The finally block sends
+      // the terminal 'stopped' frame.
+      const latestQuestStatus = await this.db.quests.findByIdWithStatus(questId);
+      if (latestQuestStatus?.status === 'stopped') {
+        logger.info(`Quest ${questId} was stopped before processing started`);
+        quest.status = 'stopped';
+        return;
+      }
       quest.status = 'running';
 
       // Captured HERE, ahead of every consumer, because getAccessibleDataLakeAccess memoizes per
@@ -5877,6 +5887,18 @@ export class ChatCompletionProcess {
       // the branch below) - reading quest.replies live would pick up the FIRST call's own error
       // text as if it were streamed content and stack every subsequent message on top of it.
       const streamedRepliesBeforeError = quest.replies;
+      // The cancel watcher aborting before the first chunk throws here. That is the user's own
+      // Stop, not a failure: end as stopped with whatever streamed rather than an error reply
+      // (the error save below would also overwrite the 'stopped' status).
+      // A failed lookup falls through to the error path below rather than escaping this handler.
+      const stoppedByUser =
+        isAbortError(err) && (await this.db.quests.findByIdWithStatus(questId).catch(() => null))?.status === 'stopped';
+      if (stoppedByUser) {
+        logger.log(`Chat completion was stopped by user for quest ${questId}`);
+        quest.status = 'stopped';
+        finalQuest = await saveQuest(quest);
+        return;
+      }
       const setErrorReply = (message: string) => {
         const visiblePartial = (streamedRepliesBeforeError ?? [])
           .map(r => visibleReplyText(r))
