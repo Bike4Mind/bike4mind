@@ -90,6 +90,9 @@ const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models
  * Floored to a round number for headroom against that formula being retuned.
  */
 const ANTHROPIC_NONSTREAMING_MAX_TOKENS = 21_000;
+// Outside CLEAN_FINISH_REASONS (common/src/utils/stopReasons.ts), so a turn the user
+// stopped mid-stream is never reported as a clean finish.
+const STREAM_ABORTED_STOP_REASON = 'aborted';
 
 /**
  * Output budget used when the caller names none. Only applies to models that do NOT spend
@@ -1124,6 +1127,9 @@ export class AnthropicBackend implements ICompletionBackend {
       // stale assistant content. The in-promise `degenerateVerdict` is invisible
       // from there.
       let degeneratedThisTurn = false;
+      // Same reasoning as degeneratedThisTurn: tool calls collected from a stream that
+      // ended before message_stop may have half-written arguments and must not run.
+      let streamEndedEarlyThisTurn = false;
       // Capture per-turn token usage so the post-stream tool-recursion site
       // can carry it forward as accumulated multi-turn billable usage.
       // Populated from the message_delta event inside the streaming Promise.
@@ -1238,6 +1244,10 @@ export class AnthropicBackend implements ICompletionBackend {
               if (requestTimeout) clearTimeout(requestTimeout);
 
               let isInThinkingBlock = false;
+              let thinkingBlockIndex = 0;
+              // The SDK iterator returns normally, without throwing, both on abort and when
+              // the HTTP body ends early, so message_stop is the only proof of a finished turn.
+              let sawMessageStop = false;
               const reasoningEscaper = createThinkMarkerEscaper();
               // Collect all content blocks for preservation (thinking, text, tool_use)
               const collectedContent: Record<string, unknown>[] = [];
@@ -1333,6 +1343,7 @@ export class AnthropicBackend implements ICompletionBackend {
                   if (event.type === 'content_block_start') {
                     if ('content_block' in event && event.content_block.type === 'thinking') {
                       isInThinkingBlock = true;
+                      thinkingBlockIndex = event.index;
                       // Initialize the thinking block in our collection. The start event's
                       // content_block carries type/thinking (empty at start) plus signature -
                       // spread it directly; thinking_delta events accumulate into it below.
@@ -1470,6 +1481,8 @@ export class AnthropicBackend implements ICompletionBackend {
                     if (deltaStopReason) {
                       stopReason = deltaStopReason;
                     }
+                  } else if (event.type === 'message_stop') {
+                    sawMessageStop = true;
                   }
                 }
               } finally {
@@ -1517,6 +1530,45 @@ export class AnthropicBackend implements ICompletionBackend {
                 reject(
                   new Error(
                     `Anthropic API stream timeout - no response received within ${idleTimeoutMsForError / 1000} seconds. The model may be overloaded. Try simplifying your request or using fewer tools.`
+                  )
+                );
+                return;
+              }
+
+              if (!sawMessageStop) {
+                streamEndedEarlyThisTurn = true;
+                if (isInThinkingBlock) {
+                  isInThinkingBlock = false;
+                  const closing: string[] = [];
+                  closing[thinkingBlockIndex] = reasoningEscaper.flush() + '</think>';
+                  await cb(closing, { toolsUsed });
+                }
+                if (options.abortSignal?.aborted) {
+                  this.logger.info('[AnthropicBackend] Stream ended before message_stop after abort', { model });
+                  await cb([], {
+                    toolsUsed,
+                    stopReason: STREAM_ABORTED_STOP_REASON,
+                    inputTokens:
+                      accumInputTokens + ((usageInfo as { input_tokens?: number } | undefined)?.input_tokens ?? 0),
+                    outputTokens:
+                      accumOutputTokens + ((usageInfo as { output_tokens?: number } | undefined)?.output_tokens ?? 0),
+                  });
+                  resolve();
+                  return;
+                }
+                this.logger.warn('[AnthropicBackend] Stream ended before message_stop - rejecting as truncated', {
+                  model,
+                  eventCount,
+                  lastEventType,
+                  funcEntries: func.filter(f => f?.name).length,
+                });
+                // Worded to include "stream timeout" so ChatCompletionProcess's
+                // isStreamIdleTimeoutError retries once and then falls back, the same as
+                // the Bedrock truncation error in bedrockBackend/base.ts. Must not say
+                // "aborted": isAbortError would then treat it as a benign cancel.
+                reject(
+                  new Error(
+                    `Anthropic API stream timeout - the stream ended after ${eventCount} events without message_stop, so the response is truncated.`
                   )
                 );
                 return;
@@ -1718,7 +1770,7 @@ export class AnthropicBackend implements ICompletionBackend {
         // is from a stream we deliberately cut off, so executing it and recursing
         // would resume the run, overwrite the degeneration stop reason, and replay
         // stale assistant content.
-        if (!degeneratedThisTurn && func.some(f => f && f.name)) {
+        if (!degeneratedThisTurn && !streamEndedEarlyThisTurn && func.some(f => f && f.name)) {
           // Track tool usage first (including ID for history reconstruction)
           const toolCallNames = func.filter(t => t?.name).map(t => t.name);
           this.logger.info('[Tool Execution] Model requested tool calls', {
