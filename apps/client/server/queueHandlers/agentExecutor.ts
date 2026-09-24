@@ -2641,22 +2641,46 @@ async function processExecution(
           : firstIterationQuery;
 
       resetLastIterationConfidence();
-      iterationResult = await agent.runIteration(firstIterationMessage, {
-        maxIterations,
-        confidenceGate,
-        previousMessages,
-        // Cache the (large, static) system prompt + tool schemas across iterations. An
-        // agent run is always multi-iteration, and previously this was omitted - so the
-        // full system prompt + tools were re-sent at full input price EVERY iteration
-        // (the chat path already caches via ChatCompletionProcess). Enabling it is the
-        // single biggest cost reduction for multi-iteration runs; cache-read tokens are
-        // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
-        enableCaching: true,
-        // Pre-execution permission gate - see `toolGate` above. The agent withholds a
-        // gated call instead of running it, so nothing is spent on a call the user has
-        // not approved yet.
-        toolGate,
-      });
+      // The watchdog above only checks BETWEEN iterations, so a single iteration whose LLM
+      // call runs longer than the remaining Lambda time would otherwise be hard-killed
+      // mid-flight - skipping every catch block below and leaving the quest silently stuck
+      // in 'running' forever (#3223). Abort the in-flight call ourselves once the remaining
+      // time drops below the same buffer, so runIteration fails cleanly and the outer catch
+      // (which persists a user-visible error) always gets to run.
+      const iterationDeadlineController = new AbortController();
+      const iterationRemainingMs = Math.max(0, context.getRemainingTimeInMillis() - TIMEOUT_BUFFER_MS);
+      const iterationDeadlineTimer = setTimeout(() => iterationDeadlineController.abort(), iterationRemainingMs);
+      iterationDeadlineTimer.unref?.();
+      try {
+        iterationResult = await agent.runIteration(firstIterationMessage, {
+          maxIterations,
+          confidenceGate,
+          previousMessages,
+          // Cache the (large, static) system prompt + tool schemas across iterations. An
+          // agent run is always multi-iteration, and previously this was omitted - so the
+          // full system prompt + tools were re-sent at full input price EVERY iteration
+          // (the chat path already caches via ChatCompletionProcess). Enabling it is the
+          // single biggest cost reduction for multi-iteration runs; cache-read tokens are
+          // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
+          enableCaching: true,
+          // Pre-execution permission gate - see `toolGate` above. The agent withholds a
+          // gated call instead of running it, so nothing is spent on a call the user has
+          // not approved yet.
+          toolGate,
+          signal: iterationDeadlineController.signal,
+        });
+      } catch (iterationErr) {
+        // runIteration always rethrows on abort (ReActAgent just downgrades the log
+        // severity for it) - reclassify it here into a recognizable message so the
+        // outer catch's toUserFacingFailureMessage routes it to the timeout copy
+        // instead of the generic fallback.
+        if (iterationDeadlineController.signal.aborted) {
+          throw new Error('Agent iteration timed out: exceeded the remaining Lambda execution budget');
+        }
+        throw iterationErr;
+      } finally {
+        clearTimeout(iterationDeadlineTimer);
+      }
 
       iterationIndex = iterationResult.checkpoint.iteration;
 

@@ -5859,7 +5859,16 @@ export class ChatCompletionProcess {
 
       quest.promptMeta!.performance!.totalResponseTime = totalResponseTime;
       quest.promptMeta!.generatedAt = new Date().toISOString();
-      quest.reply = (err as Error).message;
+      // extractReplies (client) prefers a non-empty replies[] over reply, so a stale partial
+      // replies array left behind by the failed run (e.g. an unclosed '<think>' block) would
+      // otherwise outrank this error message and the user sees a blank turn instead of the
+      // error (#3223). Every branch below that overrides quest.reply must go through this so
+      // the two never drift apart across the extra saveQuest calls those branches make.
+      const setErrorReply = (message: string) => {
+        quest.reply = message;
+        quest.replies = [message];
+      };
+      setErrorReply((err as Error).message);
       quest.type = 'error';
       quest.status = 'done';
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -5883,7 +5892,7 @@ export class ChatCompletionProcess {
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
-        quest.reply = 'The request was interrupted. Please try sending your message again.';
+        setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5898,7 +5907,7 @@ export class ChatCompletionProcess {
         // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5906,14 +5915,14 @@ export class ChatCompletionProcess {
       } else if (err instanceof Error && isToolPairingError(err)) {
         // User-friendly error message instead of stuck spinner
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'I encountered an issue with the conversation history. Please try again or start a new session.';
+        setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
