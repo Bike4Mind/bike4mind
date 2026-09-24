@@ -135,6 +135,7 @@ describe('OperationsModelService.getOperationsModel without the configured backe
     const result = await OperationsModelService.getOperationsModel();
 
     expect(result.modelId).toBe(HAIKU_4_5.id);
+    expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining(`using its successor ${HAIKU_4_5.id}`));
   });
 
   it('keeps the superseded pick when its successor is not available', async () => {
@@ -143,6 +144,7 @@ describe('OperationsModelService.getOperationsModel without the configured backe
     const result = await OperationsModelService.getOperationsModel();
 
     expect(result.modelId).toBe(LEGACY_HAIKU.id);
+    expect(mockLogger.warn).toHaveBeenCalledWith(expect.stringContaining(`${LEGACY_HAIKU.id} is superseded`));
   });
 
   it('does not overwrite the admin-configured operations model when falling back', async () => {

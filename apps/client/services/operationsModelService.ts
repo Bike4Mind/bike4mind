@@ -112,18 +112,36 @@ export class OperationsModelService {
       modelInfo = models.find(m => (m.id as string) === 'gpt-3.5-turbo');
     }
     if (!modelInfo) {
-      // Last resort: any available text model
-      modelInfo = models.find(m => m.type === 'text');
+      modelInfo = OperationsModelService.pickAnyTextModel(models);
     }
     if (!modelInfo) {
       throw new Error('No text models available for operations');
     }
-    // Bedrock enumerates legacy ids first, and AWS denies a Legacy model outright to an
-    // account that has not invoked it in 30 days - so "any text model" must not land on one.
-    // resolveSuccessorChain, not resolveDeprecatedModelId: this is our own fallback, not a
-    // pinned request, so it must not count toward the [model-sunset] metric.
-    const successorId = resolveSuccessorChain(modelInfo.id);
-    return models.find(m => m.id === successorId) ?? modelInfo;
+    return modelInfo;
+  }
+
+  /**
+   * Last-resort pick: the first text model, walked to its successor when the caller can run it.
+   * Bedrock enumerates legacy ids first, and AWS denies a Legacy model outright to an account
+   * that has not invoked it in 30 days. resolveSuccessorChain, not resolveDeprecatedModelId:
+   * this is our own fallback, not a pinned request, so it must not count toward [model-sunset].
+   */
+  private static pickAnyTextModel(models: ModelInfo[]): ModelInfo | undefined {
+    const first = models.find(m => m.type === 'text');
+    if (!first) return undefined;
+
+    const successorId = resolveSuccessorChain(first.id);
+    if (successorId === first.id) return first;
+
+    const successor = models.find(m => m.id === successorId);
+    if (!successor) {
+      this.logger.warn(
+        `Operations fallback ${first.id} is superseded and its successor ${successorId} is unavailable; keeping it`
+      );
+      return first;
+    }
+    this.logger.info(`Operations fallback ${first.id} is superseded; using its successor ${successorId}`);
+    return successor;
   }
 
   /**
