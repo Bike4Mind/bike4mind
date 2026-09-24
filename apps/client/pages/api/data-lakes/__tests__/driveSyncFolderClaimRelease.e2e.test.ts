@@ -110,6 +110,9 @@ async function seedLake(userId: string, organizationId: string) {
     datalakeTag: `datalake:dc-${suffix}`,
     createdByUserId: userId,
     organizationId,
+    // Every test here binds a Drive folder to this lake, and the bind door only accepts a lake
+    // that declares it takes connector content.
+    origin: 'connector-fed',
     status: 'active',
   });
   return lake.id as string;

@@ -3434,3 +3434,43 @@ describe('DataLakeRepository - LIST_PROJECTION excludes inconsistencyReport', ()
     expect(row.inconsistencyReport).toBeUndefined();
   });
 });
+
+describe('origin', () => {
+  setupMongoTest();
+
+  it('defaults to curated', async () => {
+    const lake = await DataLakeModel.create({
+      name: 'Acme Docs',
+      slug: 'acme-docs',
+      fileTagPrefix: 'acme:',
+      datalakeTag: 'datalake:acme-docs',
+      createdByUserId: 'user-1',
+    });
+    expect(lake.origin).toBe('curated');
+  });
+
+  it('accepts connector-fed', async () => {
+    const lake = await DataLakeModel.create({
+      name: 'Drive Docs',
+      slug: 'drive-docs',
+      fileTagPrefix: 'drive:',
+      datalakeTag: 'datalake:drive-docs',
+      createdByUserId: 'user-1',
+      origin: 'connector-fed',
+    });
+    expect(lake.origin).toBe('connector-fed');
+  });
+
+  it('rejects an unknown origin', async () => {
+    await expect(
+      DataLakeModel.create({
+        name: 'Bad',
+        slug: 'bad-origin',
+        fileTagPrefix: 'bad:',
+        datalakeTag: 'datalake:bad-origin',
+        createdByUserId: 'user-1',
+        origin: 'machine-fed',
+      })
+    ).rejects.toThrow();
+  });
+});

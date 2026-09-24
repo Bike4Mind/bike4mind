@@ -29,6 +29,7 @@ import {
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
   DATA_LAKE_STATUSES,
+  DATA_LAKE_ORIGINS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
 } from '@bike4mind/common';
 
@@ -113,6 +114,7 @@ const DataLakeSchema = new mongoose.Schema(
     // dedicated index - same rationale as isPublic/requiredEntitlement (tiny collection).
     auditQueryTextEnabled: { type: Boolean, default: false },
     status: { type: String, enum: [...DATA_LAKE_STATUSES], default: 'draft' },
+    origin: { type: String, enum: [...DATA_LAKE_ORIGINS], default: 'curated', required: true },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     totalChunkedChars: { type: Number, default: 0 },

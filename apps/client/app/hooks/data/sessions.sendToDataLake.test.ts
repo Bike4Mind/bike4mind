@@ -43,7 +43,12 @@ describe('useSendSessionToDataLake', () => {
     mockGetChatMessages.mockResolvedValue({
       data: [
         { prompt: 'Hello', replies: ['Hi there'] },
-        { prompt: 'Second question', replies: ['First reply', 'Second reply'] },
+        // A tool-using turn: a think-only slot plus two text slots, exported as the one reply the
+        // chat bubble renders (see visibleReplyForExport).
+        {
+          prompt: 'Second question',
+          replies: ['<think>private reasoning</think>', 'First reply', 'Second reply'],
+        },
       ],
     });
 
@@ -61,13 +66,16 @@ describe('useSendSessionToDataLake', () => {
     expect(payload.fileName).toBe('My Chat.md');
     expect(payload.mimeType).toBe('text/markdown');
     expect(payload.sourceLabel).toBe('session');
-    // Every prompt and every reply in the session is included in the markdown.
+    // Every prompt and every turn's visible reply is included in the markdown.
     expect(payload.content).toContain('# My Chat');
     expect(payload.content).toContain('**User:** Hello');
     expect(payload.content).toContain('**AI:** Hi there');
     expect(payload.content).toContain('**User:** Second question');
-    expect(payload.content).toContain('**AI:** First reply');
-    expect(payload.content).toContain('**AI:** Second reply');
+    expect(payload.content).toContain('**AI:** First replySecond reply');
+    // One AI entry per turn, not per slot, and no reasoning leaks into grounding content.
+    expect(payload.content.match(/\*\*AI:\*\*/g)).toHaveLength(2);
+    expect(payload.content).not.toContain('<think>');
+    expect(payload.content).not.toContain('private reasoning');
     expect(mockToastError).not.toHaveBeenCalled();
   });
 

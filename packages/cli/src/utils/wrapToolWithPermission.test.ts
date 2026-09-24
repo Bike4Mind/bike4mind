@@ -40,6 +40,28 @@ function wrap(t: ICompletionOptionTools, prompt: any, pm: PermissionManager): IC
 
 afterEach(() => useCliStore.getState().setInteractionMode('normal'));
 
+// Resolved once for the whole file - shared by the edit_local_file, create_file, and
+// delete_file describe blocks below, which all drive the REAL CLI tool implementations
+// (not stubs) so the gate's authorized resolve runs the same code path production uses.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let editDef: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let createDef: any;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let deleteDef: any;
+beforeAll(async () => {
+  const tools = await getCliOnlyTools();
+  editDef = tools.edit_local_file;
+  createDef = tools.create_file;
+  deleteDef = tools.delete_file;
+});
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function realTool(def: any, allowedDirectories: string[]): ICompletionOptionTools {
+  const logger = { info() {}, error() {}, warn() {}, debug() {} };
+  return def.implementation({ logger, allowedDirectories }) as ICompletionOptionTools;
+}
+
 describe('wrapToolWithPermission: _sandboxCleanup guard (criterion 3)', () => {
   it('never deletes a model-supplied _sandboxCleanup path on an unsandboxed tool', async () => {
     // math_evaluate is auto_approve -> no prompt, no sandbox. A malicious model
@@ -101,16 +123,9 @@ describe('wrapToolWithPermission: write_shell_stdin force-prompt (criterion 6)',
 describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
   // These drive the REAL edit_local_file tool over real temp files, so the gate's
   // authorized resolve and the tool's snapshot-bound write both run - the same code
-  // path production uses. The tool definition comes from the CLI tool registry.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let editDef: any;
-  beforeAll(async () => {
-    editDef = (await getCliOnlyTools()).edit_local_file;
-  });
+  // path production uses. editDef comes from the module-level beforeAll above.
   function realEditTool(allowedDirectories: string[]): ICompletionOptionTools {
-    const logger = { info() {}, error() {}, warn() {}, debug() {} };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return editDef.implementation({ logger, allowedDirectories } as any) as ICompletionOptionTools;
+    return realTool(editDef, allowedDirectories);
   }
   function wrapEdit(prompt: any, pm: PermissionManager, dirs: string[]): ICompletionOptionTools {
     const agentContext = { currentAgent: null, observationQueue: [] as Array<{ toolName: string; result: unknown }> };
@@ -309,5 +324,47 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
     expect(prompt).toHaveBeenCalledTimes(1);
     vi.unstubAllEnvs();
     vi.resetModules();
+  });
+});
+
+describe('wrapToolWithPermission: create_file / delete_file preview guard', () => {
+  // The isPathAllowed guard in generateToolPreview (toolsAdapter.ts) covers create_file and
+  // delete_file as well as edit_local_file. Target files are pre-created so that, without
+  // the guard, the preview would take its read-and-diff / stat branch. Asserted on the
+  // preview text rather than fs spies: diffPreview.ts calls through the fs/promises ESM
+  // namespace, which vi.spyOn(fs.promises, ...) does not patch. createDef/deleteDef/realTool
+  // come from the module-level beforeAll and helper above.
+
+  it('previews an out-of-bounds create_file as denied WITHOUT reading the raw path (preview auth parity)', async () => {
+    useCliStore.getState().setInteractionMode('normal');
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'b4m-create-'));
+    const file = path.join(dir, 'existing.txt');
+    await fs.writeFile(file, 'do not read me\n');
+    const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
+    // No allowedDirectories => the temp file is outside cwd, so authorization rejects it.
+    const wrapped = wrap(realTool(createDef, []), prompt, new PermissionManager([], undefined, []));
+
+    await expect(wrapped.toolFn({ path: file, content: 'new content' })).rejects.toThrow();
+
+    const preview = prompt.mock.calls[0][2] as string;
+    expect(preview).toContain('Path outside allowed directories');
+    expect(preview).not.toContain('do not read me'); // the existing file was never diffed
+    expect(await fs.readFile(file, 'utf-8')).toBe('do not read me\n'); // untouched
+  });
+
+  it('previews an out-of-bounds delete_file as denied WITHOUT statting the raw path (preview auth parity)', async () => {
+    useCliStore.getState().setInteractionMode('normal');
+    const dir = await fs.mkdtemp(path.join(tmpdir(), 'b4m-delete-'));
+    const file = path.join(dir, 'existing.txt');
+    await fs.writeFile(file, 'do not delete me\n');
+    const prompt = vi.fn().mockResolvedValue({ action: 'deny' });
+    const wrapped = wrap(realTool(deleteDef, []), prompt, new PermissionManager([], undefined, []));
+
+    await expect(wrapped.toolFn({ path: file })).rejects.toThrow();
+
+    const preview = prompt.mock.calls[0][2] as string;
+    expect(preview).toContain('Path outside allowed directories');
+    expect(preview).not.toContain('bytes'); // generateFileDeletePreview's size/mtime line never ran
+    expect(existsSync(file)).toBe(true); // untouched
   });
 });

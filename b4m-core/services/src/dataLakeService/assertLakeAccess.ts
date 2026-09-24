@@ -168,6 +168,11 @@ async function resolveFallbackLake(
     ...config,
     createdByUserId: '',
     status: 'active',
+    // Fixed, not overlay-settable: a registry fallback has no connector binding door to begin
+    // with (assertLakeWritable refuses every write), so it is curated by construction - unlike a
+    // DB lake, where 'curated' is only the default and createDataLake lets the wizard override it
+    // to connector-fed when a Drive folder was picked before the lake existed.
+    origin: 'curated',
     createdAt: new Date(0),
     updatedAt: new Date(0),
     ...(overlay?.groundingMode ? { groundingMode: overlay.groundingMode } : {}),

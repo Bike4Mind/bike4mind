@@ -58,6 +58,50 @@ describe('sessionExport', () => {
       expect(exportable.name).toBe('Empty Session');
     });
 
+    /**
+     * This is the single boundary every downloadable format (md/json/csv/xlsx/docx) reads
+     * through, so a raw walk of `replies` leaked the same defect into all five: a tool-using
+     * turn persists several slots, some holding only a thinking block.
+     */
+    it('collapses a tool-loop turn into one assistant message without thinking text', () => {
+      const toolLoopTurn = [
+        {
+          id: 'msg-tool',
+          timestamp: new Date('2024-01-15T11:00:00Z'),
+          type: 'user',
+          prompt: 'look it up',
+          replies: ['<think>first reasoning</think>', 'PARTIAL <think>second reasoning</think>FINAL'],
+          creditsUsed: 0.25,
+        },
+      ] as unknown as typeof mockChatHistory;
+
+      const assistantMessages = toExportableSession(mockSession, toolLoopTurn).messages.filter(
+        m => m.role === 'assistant'
+      );
+
+      expect(assistantMessages).toHaveLength(1);
+      expect(assistantMessages[0].content).toBe('PARTIAL FINAL');
+      // Per-slot rows copied the turn's creditsUsed onto each one, so summing over-counted.
+      expect(assistantMessages.reduce((sum, m) => sum + (m.creditsUsed ?? 0), 0)).toBe(0.25);
+    });
+
+    it('emits no assistant message for a turn that only produced thinking', () => {
+      const thinkOnlyTurn = [
+        {
+          id: 'msg-think',
+          timestamp: new Date('2024-01-15T11:05:00Z'),
+          type: 'user',
+          prompt: 'a question',
+          replies: ['<think>reasoning that never produced an answer</think>'],
+        },
+      ] as unknown as typeof mockChatHistory;
+
+      const exportable = toExportableSession(mockSession, thinkOnlyTurn);
+
+      expect(exportable.messages.filter(m => m.role === 'assistant')).toHaveLength(0);
+      expect(exportable.messages.filter(m => m.role === 'user')).toHaveLength(1);
+    });
+
     it('should clean a raw JSON-literal session name', () => {
       const jsonNamed = { ...mockSession, name: '{ "headline": "The Epistemology of Cats" }' };
       const exportable = toExportableSession(jsonNamed, mockChatHistory);
