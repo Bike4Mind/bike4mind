@@ -62,7 +62,7 @@ describe('buildIncompleteAnswerNotice', () => {
     toolCallCount: 2,
     visibleCharsAfterLastToolCall: 0,
     stopReason: 'end_turn',
-    producedAttachment: false,
+    producedNonTextDeliverable: false,
   };
 
   it('flags a tool-loop turn with no visible text after its last tool call', () => {
@@ -85,9 +85,13 @@ describe('buildIncompleteAnswerNotice', () => {
   });
 
   it('stays silent when a tool delivered an attachment, including on max_tokens', () => {
-    expect(buildIncompleteAnswerNotice({ ...unanswered, producedAttachment: true })).toBeNull();
+    expect(buildIncompleteAnswerNotice({ ...unanswered, producedNonTextDeliverable: true })).toBeNull();
     expect(
-      buildIncompleteAnswerNotice({ ...unanswered, producedAttachment: true, stopReason: TRUNCATED_FINISH_REASON })
+      buildIncompleteAnswerNotice({
+        ...unanswered,
+        producedNonTextDeliverable: true,
+        stopReason: TRUNCATED_FINISH_REASON,
+      })
     ).toBeNull();
   });
 });

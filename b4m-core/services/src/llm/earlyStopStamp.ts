@@ -58,10 +58,11 @@ export interface AnswerCompletenessInput {
   visibleCharsAfterLastToolCall: number;
   stopReason: string | undefined | null;
   /**
-   * A tool delivered a non-text result (image, audio, music, spreadsheet) this turn. That is
-   * the answer even with no caption, and "please try again" would re-run a paid generation.
+   * A tool delivered a non-text result this turn: a file (image, audio, music, spreadsheet),
+   * or a pendingAction the user must act on (model picker, MCP confirmation). That is the
+   * answer even with no caption, and "please try again" would re-run a paid generation.
    */
-  producedAttachment: boolean;
+  producedNonTextDeliverable: boolean;
 }
 
 /**
@@ -72,7 +73,7 @@ export interface AnswerCompletenessInput {
 export function buildIncompleteAnswerNotice(input: AnswerCompletenessInput): string | null {
   // Also suppresses the max_tokens variant: the truncation banner (TRUNCATION_WARNING) still
   // shows, and the deliverable is intact, so only the retry advice would be wrong.
-  if (input.stopped || input.producedAttachment || input.visibleCharsAfterLastToolCall > 0) return null;
+  if (input.stopped || input.producedNonTextDeliverable || input.visibleCharsAfterLastToolCall > 0) return null;
   if (input.stopReason === TRUNCATED_FINISH_REASON) return TRUNCATED_ANSWER_NOTICE;
   if (input.toolCallCount > 0) return INCOMPLETE_ANSWER_NOTICE;
   return null;

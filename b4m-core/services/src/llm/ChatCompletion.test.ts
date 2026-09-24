@@ -1333,6 +1333,29 @@ describe('ChatCompletionProcess', () => {
         expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
       });
 
+      it('adds no notice when a tool left a pendingAction for the user and wrote no text', async () => {
+        setupTurn(async cb => {
+          const toolsUsed = [{ name: 'image_generation', arguments: '{"prompt":"a cat"}', id: 't1' }];
+          // What the image tool's model-picker statusUpdate({ pendingAction }) does.
+          mockQuest.pendingAction = { tool: 'image_generation', params: { prompt: 'a cat' }, ts: Date.now() };
+          await cb(['<think>picker shown</think>'], { toolsUsed });
+          await cb([], { toolsUsed, stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('still adds the notice when the pendingAction is left over from an earlier turn', async () => {
+        mockQuest.pendingAction = { tool: 'image_generation', params: { prompt: 'old' }, ts: 1 };
+        setupTurn(cb => toolLoop(cb, ['<think>', 'more reasoning', '</think>']));
+
+        await runTurn();
+
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+      });
+
       it('adds no notice to a stopped turn', async () => {
         setupTurn(async (cb, opts) => {
           const toolsUsed = [{ name: 'web_search', arguments: '{}', id: 't1' }];

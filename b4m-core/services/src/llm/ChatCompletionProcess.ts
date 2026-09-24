@@ -4220,6 +4220,9 @@ export class ChatCompletionProcess {
       // Generating tools deliver through statusUpdate({ images }), which applyQuestStatusChanges
       // (tools/ToolBuilder.ts) merges into quest.images with dedup, so growth means a new file.
       const imageCountAtTurnStart = quest.images?.length ?? 0;
+      // Tools set pendingAction to a fresh object (imageGeneration's model picker, MCP confirm
+      // tokens via ToolBuilder onPendingAction), so a changed reference means this turn set one.
+      const pendingActionAtTurnStart = quest.pendingAction;
       const countVisibleChars = (slots: readonly string[] | undefined) =>
         (slots ?? [])
           .map(slot => visibleReplyText(slot))
@@ -4769,7 +4772,9 @@ export class ChatCompletionProcess {
           toolCallCount: toolCallsSeen,
           visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
           stopReason: actualTokenUsage.stopReason,
-          producedAttachment: (quest.images?.length ?? 0) > imageCountAtTurnStart,
+          producedNonTextDeliverable:
+            (quest.images?.length ?? 0) > imageCountAtTurnStart ||
+            (quest.pendingAction != null && quest.pendingAction !== pendingActionAtTurnStart),
         });
         if (incompleteAnswerNotice) {
           logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
