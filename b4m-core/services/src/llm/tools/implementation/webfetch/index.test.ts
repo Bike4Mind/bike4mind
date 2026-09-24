@@ -2,9 +2,13 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Controls what the mocked Firecrawl scrapeUrl returns for each test.
 let scrapeMarkdown = '';
-const scrapeUrl = vi.fn(async () => ({
+// Only returned when the request actually asked for the rawHtml format, mirroring Firecrawl (which
+// omits a format's field from the response when it was not requested).
+let scrapeRawHtml: string | undefined;
+const scrapeUrl = vi.fn(async (_url: string, params?: { formats?: string[] }) => ({
   markdown: scrapeMarkdown,
   metadata: { title: 'Test Title' },
+  ...(params?.formats?.includes('rawHtml') ? { rawHtml: scrapeRawHtml } : {}),
 }));
 
 vi.mock('./firecrawlApp', () => ({
@@ -84,6 +88,7 @@ async function runTool(url = 'https://example.com/doc', offset?: number) {
 
 beforeEach(() => {
   scrapeUrl.mockClear();
+  scrapeRawHtml = undefined;
   fetchMock.mockClear();
   fetchMock.mockImplementation(async () => fetchRes(404));
   dnsLookup.mockClear();
@@ -358,6 +363,66 @@ describe('firecrawlFetch input hardening', () => {
     // The full pair starts the next chunk intact.
     const next = await firecrawlFetch(adapters, 'https://example.com/doc', { offset: res.offset + res.extractedChars });
     expect(next.markdown.startsWith('\u{1F600}')).toBe(true);
+  });
+});
+
+// Opt-in raw HTML alongside the main-content markdown (Bob's siteChrome header/nav/footer link
+// recovery, b4m-bob#312): onlyMainContent strips that chrome from markdown, so a caller that needs
+// it asks for the unmodified document too via includeRawHtml.
+describe('firecrawlFetch includeRawHtml', () => {
+  it('requests the rawHtml format and returns it on the Firecrawl path when set', async () => {
+    scrapeMarkdown = '# Acme\nWe sell rockets.';
+    scrapeRawHtml = '<html><header><a href="/pricing">Pricing</a></header><body>...</body></html>';
+
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { includeRawHtml: true });
+
+    expect(scrapeUrl).toHaveBeenCalledWith(
+      'https://example.com/doc',
+      expect.objectContaining({ formats: ['markdown', 'rawHtml'] })
+    );
+    expect(res.rawHtml).toBe(scrapeRawHtml);
+    expect(res.markdown).toBe(scrapeMarkdown); // markdown itself is untouched by the option
+  });
+
+  it('sends the same markdown-only request and leaves rawHtml undefined when not set', async () => {
+    scrapeMarkdown = '# Acme\nWe sell rockets.';
+
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc');
+
+    expect(scrapeUrl).toHaveBeenCalledWith(
+      'https://example.com/doc',
+      expect.objectContaining({ formats: ['markdown'] })
+    );
+    expect(res.rawHtml).toBeUndefined();
+  });
+
+  it('forwards includeRawHtml to the keyless plain-fetch path and returns what it fetched', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    mockPlainFetch.mockResolvedValueOnce({
+      markdown: 'plain-markdown-content',
+      title: 'Plain Title',
+      rawHtml: '<html><footer><a href="/privacy">Privacy</a></footer></html>',
+    });
+
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', { includeRawHtml: true });
+
+    expect(mockPlainFetch).toHaveBeenCalledWith(
+      'https://example.com/doc',
+      expect.objectContaining({ includeRawHtml: true })
+    );
+    expect(res.rawHtml).toBe('<html><footer><a href="/privacy">Privacy</a></footer></html>');
+  });
+
+  it('does not ask the keyless path for rawHtml when not set (unchanged default)', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc');
+
+    expect(mockPlainFetch).toHaveBeenCalledWith(
+      'https://example.com/doc',
+      expect.objectContaining({ includeRawHtml: undefined })
+    );
+    expect(res.rawHtml).toBeUndefined();
   });
 });
 

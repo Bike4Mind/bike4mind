@@ -156,4 +156,19 @@ describe('plainFetchScrape', () => {
     expect(String(calledUrl)).toBe('https://example.com/page');
     expect((calledInit as { headers: Record<string, string> }).headers.Host).toBeUndefined();
   });
+
+  it('returns the fetched HTML unmodified as rawHtml when includeRawHtml is requested', async () => {
+    const html =
+      '<html><head><title>My Title</title></head><body><header><a href="/pricing">Pricing</a></header></body></html>';
+    fetchMock.mockResolvedValueOnce(htmlRes(html));
+
+    const res = await plainFetchScrape('https://example.com/page', { includeRawHtml: true });
+
+    expect(res.rawHtml).toBe(html);
+  });
+
+  it('omits rawHtml by default', async () => {
+    const res = await plainFetchScrape('https://example.com/page');
+    expect(res.rawHtml).toBeUndefined();
+  });
 });

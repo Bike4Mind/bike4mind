@@ -21,6 +21,10 @@ interface WebFetchResult {
   /** One chunk of the extracted content: markdown.slice(offset, offset + WEB_FETCH_CONTENT_CAP). */
   markdown: string;
   title?: string;
+  /** Unmodified page HTML, only present when the caller passed `includeRawHtml` (see
+   *  FirecrawlFetchOptions). Unlike markdown, it is never windowed/capped - callers that ask for it
+   *  (e.g. Bob's siteChrome header/nav/footer link extraction) need the whole document. */
+  rawHtml?: string;
   /** Length of the returned chunk. */
   extractedChars: number;
   /** Total length Firecrawl extracted, before any offset/cap window was applied. */
@@ -147,6 +151,11 @@ type FirecrawlFetchOptions = {
   /** Char offset into the extracted content to start the returned chunk at (continuation).
    *  Firecrawl has no native paging, so the full page is re-scraped and re-sliced here. */
   offset?: number;
+  /** Also scrape and return the unmodified page HTML (WebFetchResult.rawHtml), alongside the
+   *  main-content-only markdown. onlyMainContent strips header/nav/footer chrome from markdown;
+   *  this lets a caller recover those links from the raw document instead. No effect on markdown
+   *  or on any other WebFetchResult field. */
+  includeRawHtml?: boolean;
 };
 
 /**
@@ -156,7 +165,8 @@ type FirecrawlFetchOptions = {
  * @param adapters - Database adapters for fetching Firecrawl API key
  * @param url - URL to fetch
  * @param options - Optional configuration (maxTimeoutMs for Lambda-constrained callers; offset to
- *                  window into a long page for continuation)
+ *                  window into a long page for continuation; includeRawHtml to also get the
+ *                  unmodified page HTML alongside the main-content markdown)
  * @returns One [offset, offset+cap) chunk of markdown, title, and size/truncation metrics (see WebFetchResult)
  */
 export async function firecrawlFetch(
@@ -183,16 +193,22 @@ export async function firecrawlFetch(
   // plainFetchScrape).
   if (!app) {
     const startedAt = Date.now();
-    const { markdown, title } = await plainFetchScrape(url, { timeoutMs });
-    return buildWebFetchResult(markdown, title, url, options?.offset, Date.now() - startedAt);
+    const { markdown, title, rawHtml } = await plainFetchScrape(url, {
+      timeoutMs,
+      includeRawHtml: options?.includeRawHtml,
+    });
+    return buildWebFetchResult(markdown, title, url, options?.offset, Date.now() - startedAt, rawHtml);
   }
 
   Logger.globalInstance.log(
     `📥 WebFetch Tool: Scraping URL with Firecrawl${isPdf ? ' (PDF mode, extended timeout)' : ''}...`
   );
 
-  // PDF URLs skip the JS wait action - Firecrawl parses them directly
-  const baseParams = { formats: ['markdown' as const], timeout: timeoutMs };
+  // PDF URLs skip the JS wait action - Firecrawl parses them directly. `rawHtml` is only added to
+  // the request when a caller asks for it (includeRawHtml) - unrequested, this stays byte-identical
+  // to the markdown-only request every other caller sends today.
+  const formats: ('markdown' | 'rawHtml')[] = options?.includeRawHtml ? ['markdown', 'rawHtml'] : ['markdown'];
+  const baseParams = { formats, timeout: timeoutMs };
 
   const startedAt = Date.now();
   let result;
@@ -232,7 +248,8 @@ export async function firecrawlFetch(
     throw new Error('No content could be extracted from the URL');
   }
 
-  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs);
+  const rawHtml = 'rawHtml' in result && typeof result.rawHtml === 'string' ? result.rawHtml : undefined;
+  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs, rawHtml);
 }
 
 /**
@@ -251,7 +268,8 @@ async function buildWebFetchResult(
   title: string | undefined,
   url: string,
   rawOffset: number | undefined,
-  durationMs: number
+  durationMs: number,
+  rawHtml?: string
 ): Promise<WebFetchResult> {
   // Coerce a non-finite offset (e.g. a model passing offset:"abc" on the unvalidated tool/CLI
   // paths) to 0 rather than letting slice(NaN, NaN) return a silent empty string.
@@ -280,6 +298,7 @@ async function buildWebFetchResult(
   return {
     markdown,
     title,
+    rawHtml,
     extractedChars,
     originalChars,
     offset,

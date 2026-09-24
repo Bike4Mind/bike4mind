@@ -14,6 +14,8 @@ const READABLE_CONTENT_TYPES = ['text/html', 'application/xhtml+xml', 'text/plai
 export interface PlainFetchResult {
   markdown: string;
   title?: string;
+  /** The fetched HTML, unmodified - only set when `includeRawHtml` was requested. */
+  rawHtml?: string;
 }
 
 export function isPdfUrl(url: string): boolean {
@@ -65,8 +67,14 @@ async function readCappedText(res: Response, maxBytes: number): Promise<string> 
  * Returns the FULL extracted markdown; callers window/cap it (web_fetch to WEB_FETCH_CONTENT_CAP,
  * deep_research to 10k). Known gaps vs Firecrawl: no headless browser (JS-heavy pages render poorly)
  * and no PDF parser - a PDF URL returns a clear message instead of garbage.
+ *
+ * `includeRawHtml` returns the fetched HTML unmodified alongside the markdown, for callers that
+ * need header/nav/footer chrome the markdown extraction drops.
  */
-export async function plainFetchScrape(url: string, options?: { timeoutMs?: number }): Promise<PlainFetchResult> {
+export async function plainFetchScrape(
+  url: string,
+  options?: { timeoutMs?: number; includeRawHtml?: boolean }
+): Promise<PlainFetchResult> {
   if (isPdfUrl(url)) {
     return {
       markdown:
@@ -128,5 +136,5 @@ export async function plainFetchScrape(url: string, options?: { timeoutMs?: numb
   if (!markdown) {
     throw new Error('No content could be extracted from the URL');
   }
-  return { markdown, title };
+  return { markdown, title, rawHtml: options?.includeRawHtml ? html : undefined };
 }
