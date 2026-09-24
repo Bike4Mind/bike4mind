@@ -1042,7 +1042,24 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
     }
   );
 
-  it('does NOT invalidate the lake list on an ordinary progress tick', () => {
+  it.each(['completed', 'completed_with_errors'] as const)(
+    // #3234: without this, a freshly-tagged (or freshly-emptied) lake's browse-tree row stayed
+    // stale until staleTime or a hard refresh - ingestion is what actually produces the tags.
+    'invalidates the tag-counts tree when the batch reports %s',
+    status => {
+      mountHook(useBatchProgressListener);
+      const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+      act(() => {
+        onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', status });
+      });
+
+      // `['dataLakeTagCounts']` is dataLakeKeys.tagCountsRoot - literal for the same reason as above.
+      expect(invalidatedKeys()).toContain(JSON.stringify(['dataLakeTagCounts']));
+    }
+  );
+
+  it('does NOT invalidate the lake list or tag counts on an ordinary progress tick', () => {
     // The guard against "just invalidate on every message": mid-ingest the server rollup has not
     // run yet, so refetching then would re-cache the stale count and cost a request per tick.
     mountHook(useBatchProgressListener);
@@ -1053,5 +1070,6 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
     });
 
     expect(invalidatedKeys()).not.toContain(JSON.stringify(['data-lakes']));
+    expect(invalidatedKeys()).not.toContain(JSON.stringify(['dataLakeTagCounts']));
   });
 });
