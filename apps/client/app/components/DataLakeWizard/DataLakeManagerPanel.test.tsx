@@ -49,6 +49,11 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
+    // The recipient's pending-offer banner renders at the top of the panel. Default: no offers, so
+    // it renders nothing; a test that wants one overrides these.
+    useOwnLakeOwnershipOffers: () => ({ data: [] }),
+    useAcceptLakeOwnershipOffer: mutation,
+    useDeclineLakeOwnershipOffer: mutation,
     useArchiveDataLake: () => ({ mutate: archiveMutate, isPending: false }),
     useUnarchiveDataLake: mutation,
     useRestoreDeletedDataLake: mutation,
