@@ -32,7 +32,7 @@ vi.mock('@bike4mind/database', () => ({
       if (findThrows.value) throw new Error('mongo exploded');
       return fakeQuests
         .filter(q => ids.includes(q.agentExecutionId) && !TERMINAL.includes(q.status))
-        .map(({ agentExecutionId: _a, status: _s, ...content }) => content);
+        .map(({ status: _s, ...content }) => content);
     }),
     // Mirrors the real conditional write: a quest that reached a terminal
     // status after the read above is not patched, and the caller is told so.
@@ -80,7 +80,7 @@ describe('settleStrandedQuests', () => {
     // never reached `running` and the liveness recovery cannot see it.
     addQuest({ status: 'pending' });
 
-    expect(await settle(['exec1'])).toEqual({ settled: 1, failed: false });
+    expect(await settle(['exec1'])).toEqual({ settled: 1, failed: false, failedExecutionIds: [] });
     expect(updates).toEqual([{ id: 'q1', status: 'done', type: 'error', reply: ABANDONED_REPLY }]);
   });
 
@@ -139,7 +139,7 @@ describe('settleStrandedQuests', () => {
     addQuest({ status: 'done', reply: 'complete answer' });
     addQuest({ status: 'stopped' });
 
-    expect(await settle(['exec1'])).toEqual({ settled: 0, failed: false });
+    expect(await settle(['exec1'])).toEqual({ settled: 0, failed: false, failedExecutionIds: [] });
     expect(updates).toEqual([]);
   });
 
@@ -151,8 +151,9 @@ describe('settleStrandedQuests', () => {
     // The caller's primary job already succeeded, so one bad write must not
     // strand the rest of the batch - but the execution behind q1 is already
     // terminal, so nothing revisits it. Reporting a clean pass would hide a
-    // permanently stranded bubble from the metric watching for exactly that.
-    expect(await settle(['exec1'])).toEqual({ settled: 1, failed: true });
+    // permanently stranded bubble from the metric watching for exactly that -
+    // and `failedExecutionIds` is what lets the caller persist a retry marker.
+    expect(await settle(['exec1'])).toEqual({ settled: 1, failed: true, failedExecutionIds: ['exec1'] });
     expect(updates.map(u => u.id)).toEqual(['q2']);
   });
 
@@ -163,7 +164,7 @@ describe('settleStrandedQuests', () => {
     addQuest({ status: 'pending' });
     terminalOnWrite.add('q1');
 
-    expect(await settle(['exec1'])).toEqual({ settled: 0, failed: false });
+    expect(await settle(['exec1'])).toEqual({ settled: 0, failed: false, failedExecutionIds: [] });
     expect(updates).toEqual([]);
   });
 
@@ -172,22 +173,24 @@ describe('settleStrandedQuests', () => {
     findThrows.value = true;
 
     // Both settle 0; only `failed` tells a crashed pass from "nothing stranded",
-    // which is what the separate CloudWatch metric is emitted from.
-    expect(await settle(['exec1'])).toEqual({ settled: 0, failed: true });
+    // which is what the separate CloudWatch metric is emitted from. The read
+    // itself failed, so every requested execution comes back as failed - there
+    // is no per-quest information to narrow it down.
+    expect(await settle(['exec1'])).toEqual({ settled: 0, failed: true, failedExecutionIds: ['exec1'] });
     expect(logger.error).toHaveBeenCalled();
   });
 
   it('is a no-op when nothing was swept', async () => {
     addQuest({ status: 'pending' });
 
-    expect(await settle([])).toEqual({ settled: 0, failed: false });
+    expect(await settle([])).toEqual({ settled: 0, failed: false, failedExecutionIds: [] });
     expect(updates).toEqual([]);
   });
 
   it('ignores quests belonging to executions that were not swept', async () => {
     addQuest({ agentExecutionId: 'other-exec', status: 'pending' });
 
-    expect(await settle(['exec1'])).toEqual({ settled: 0, failed: false });
+    expect(await settle(['exec1'])).toEqual({ settled: 0, failed: false, failedExecutionIds: [] });
     expect(updates).toEqual([]);
   });
 });

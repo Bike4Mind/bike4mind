@@ -974,7 +974,9 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
    * the quest, so without this the UI spins forever on a run the backend knows
    * is dead. Returns only the content fields the terminal-patch decision reads
    * (`terminalRecoveryFor`), not whole quest documents - a sweep can match many
-   * rows and the checkpoint/context fields are large.
+   * rows and the checkpoint/context fields are large. `agentExecutionId` is
+   * included so a caller whose write to a specific quest fails can attribute
+   * that failure back to the execution that owns it.
    *
    * `done` and `stopped` are the terminal statuses; anything else (`pending`,
    * `running`) is still claiming to be live. Terminal quests are excluded rather
@@ -988,7 +990,16 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
     const docs = await this.model
       .find(
         { agentExecutionId: { $in: agentExecutionIds }, status: { $nin: TERMINAL_QUEST_STATUSES } },
-        { _id: 1, reply: 1, replies: 1, images: 1, videos: 1, structuredReplies: 1, toolResults: 1 }
+        {
+          _id: 1,
+          agentExecutionId: 1,
+          reply: 1,
+          replies: 1,
+          images: 1,
+          videos: 1,
+          structuredReplies: 1,
+          toolResults: 1,
+        }
       )
       .lean<Array<Omit<UnfinishedQuestView, 'id'> & { _id: mongoose.Types.ObjectId }>>();
     return docs.map(({ _id, ...content }) => ({ ...content, id: _id.toString() }));
@@ -1236,7 +1247,7 @@ export const questRepository = new QuestRepository(Quest);
  */
 export type UnfinishedQuestView = { id: string } & Pick<
   IChatHistoryItem,
-  'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
+  'agentExecutionId' | 'reply' | 'replies' | 'images' | 'videos' | 'structuredReplies' | 'toolResults'
 >;
 
 /**
