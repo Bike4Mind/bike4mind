@@ -21,6 +21,13 @@ interface MermaidChartProps {
   chromeless?: boolean;
 }
 
+/**
+ * How many frames to keep re-checking a zero-width container before leaving it to the
+ * ResizeObserver. A few frames covers the common case (a container that has not been laid
+ * out yet on first paint) without spinning for a chart that is display:none indefinitely.
+ */
+const ZERO_WIDTH_RETRY_FRAMES = 30;
+
 const MermaidChart: React.FC<MermaidChartProps> = ({
   chartDefinition,
   title,
@@ -45,6 +52,10 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       // PNG export serializes the inline <svg> that render() returns (see handleExportPNG),
       // which 'strict' leaves in place - only 'sandbox' (iframe-wrapped output) would break it.
       securityLevel: 'strict',
+      // Without this, a parse failure draws mermaid's error diagram into the temporary
+      // container it appends to <body> and throws before its own cleanup runs. The
+      // component renders its own error state below, so the built-in one is pure litter.
+      suppressErrorRendering: true,
     });
   }, [theme.palette.mode]);
 
@@ -54,31 +65,45 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
 
     let cancelled = false;
     let retryFrame: number | null = null;
+    let retriesLeft = ZERO_WIDTH_RETRY_FRAMES;
+    let rendering = false;
     const container = elementRef.current;
 
     const renderChart = async () => {
       if (cancelled || !elementRef.current) return;
+      // Two entry points reach this - the initial call and the ResizeObserver below - and
+      // mermaid.render is async, so without this guard a container that gains width mid
+      // render starts a second one over the top of the first.
+      if (rendering) return;
       // Don't render into a zero-size container, and retry on the next frame rather than
       // waiting for a resize that may never come. The observer below only fires on a LATER
       // size change, so a card whose container measures 0 on first paint and is never
       // resized again stayed blank until something else moved the layout - opening the
       // artifact viewer, say, which is how this surfaced.
+      //
+      // Bounded, because a chart under a display:none ancestor never gains width: an
+      // unbounded retry would read layout every frame for the life of the component. Once
+      // the budget is spent the observer is the only thing left waiting, which is the right
+      // tool for a container that becomes visible much later.
       if (elementRef.current.offsetWidth === 0 && typeof process !== 'undefined' && process.env.NODE_ENV !== 'test') {
+        if (retriesLeft <= 0) return;
+        retriesLeft--;
         retryFrame = requestAnimationFrame(() => {
           retryFrame = null;
           renderChart();
         });
         return;
       }
+      rendering = true;
+      // Unique per render: mermaid injects a temporary element under this id, so two
+      // charts sharing one collide - and the same diagram routinely mounts twice at once
+      // (the inline card and the artifact viewer). The loser rendered nothing until some
+      // later re-render happened to find the id free, which is why closing the viewer
+      // appeared to "fix" a blank card. Matches TavernArtifactRenderer, which already
+      // generates a unique id.
+      const renderId = 'mermaid-chart-' + Math.random().toString(36).slice(2);
       try {
         setError(null);
-        // Unique per render: mermaid injects a temporary element under this id, so two
-        // charts sharing one collide - and the same diagram routinely mounts twice at once
-        // (the inline card and the artifact viewer). The loser rendered nothing until some
-        // later re-render happened to find the id free, which is why closing the viewer
-        // appeared to "fix" a blank card. Matches TavernArtifactRenderer, which already
-        // generates a unique id.
-        const renderId = 'mermaid-chart-' + Math.random().toString(36).slice(2);
         const { svg } = await mermaid.render(renderId, localDefinition);
         if (cancelled || !elementRef.current) return;
 
@@ -106,6 +131,13 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       } catch (err) {
         console.error('Mermaid chart rendering error:', err);
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to render chart');
+      } finally {
+        rendering = false;
+        // mermaid removes its temp container itself on success, but throws before doing so
+        // on a parse error. A fixed id used to mean the next render swept the orphan; with
+        // a unique id per render nothing would, and invalid model-written mermaid is common.
+        document.getElementById('d' + renderId)?.remove();
+        document.getElementById(renderId)?.remove();
       }
     };
 
@@ -115,6 +147,8 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
     const observer = new ResizeObserver(entries => {
       const entry = entries[0];
       if (entry && entry.contentRect.width > 0 && !container.querySelector('svg')) {
+        // The frame budget above may already be spent; a real size change earns a fresh one.
+        retriesLeft = ZERO_WIDTH_RETRY_FRAMES;
         renderChart();
       }
     });
