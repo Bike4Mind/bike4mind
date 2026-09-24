@@ -6,14 +6,19 @@ import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { getFabFileById } from '@server/managers/fabFileManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, NotFoundError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError, parseOrBadRequest } from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { Request } from 'express';
 import { Resource } from 'sst';
+import { z } from 'zod';
 
-type ReprocessBody = { fabFileId?: string; dataLakeId?: string };
+const ReprocessInput = z.object({
+  fabFileId: z.string().min(1),
+  dataLakeId: z.string().min(1).optional(),
+});
+type ReprocessBody = z.infer<typeof ReprocessInput>;
 
 /**
  * Resolve the file this caller may reprocess, or null if no grant applies.
@@ -65,7 +70,11 @@ const resolveReprocessableFabFile = async (
   });
 
   const [file] = await fabFileRepository.findAllInIds([fabFileId]);
-  if (!file) return null;
+  // `findAllInIds` carries no soft-delete filter (unlike the whole-lake sibling's
+  // `findChunkedFilesByScope`, which pins `deletedAt: null, archivedAt: null`), so a trashed or
+  // archived member is excluded here rather than left reachable through the lake arm - it would
+  // otherwise reset and re-chunk a file its owner removed, under the owner's own identity.
+  if (!file || file.deletedAt || file.archivedAt) return null;
   // `resolveLakeMembershipScope`, not `lakeMembershipScope`: `assertLakeRebuildAccess` can hand back
   // a STATIC REGISTRY lake, whose synthetic document has no creator - an `owned` scope over it fails
   // closed to meta-tag-only and would drop the prefix arm most of a registry lake is made of.
@@ -90,8 +99,10 @@ const resolveReprocessableFabFile = async (
  */
 const handler = baseApi().post(
   asyncHandler(async (req: Request<unknown, unknown, ReprocessBody>, res) => {
-    const { fabFileId, dataLakeId } = req.body;
-    if (!fabFileId) throw new BadRequestError('Missing parameter: fabFileId');
+    // Zod, not a hand-written `!fabFileId` check, for the same reason the whole-lake sibling
+    // parses with `RechunkInput`: `dataLakeId` now flows straight into `assertLakeRebuildAccess`'s
+    // id-or-slug lookup, and an untyped JSON body is not what that gate's `string` contract expects.
+    const { fabFileId, dataLakeId } = parseOrBadRequest(ReprocessInput, req.body);
 
     const fabFile = await resolveReprocessableFabFile(req, fabFileId, dataLakeId);
     if (!fabFile) throw new NotFoundError('FabFile not found');

@@ -211,8 +211,31 @@ describe('reprocess handler (unit) - authorization', () => {
   it('refuses a missing fabFileId before any authorization work', async () => {
     const { res } = makeRes();
 
-    await expect(run({ dataLakeId: LAKE_ID }, res)).rejects.toThrow(/Missing parameter: fabFileId/);
+    await expect(run({ dataLakeId: LAKE_ID }, res)).rejects.toThrow(BadRequestError);
     expect(h.getFabFileById).not.toHaveBeenCalled();
+  });
+
+  it('refuses a non-string dataLakeId before it can reach the lake gate', async () => {
+    const { res } = makeRes();
+
+    await expect(run({ fabFileId: 'f1', dataLakeId: { $ne: null } }, res)).rejects.toThrow(BadRequestError);
+    expect(h.assertLakeRebuildAccess).not.toHaveBeenCalled();
+  });
+
+  it('refuses a lake member that the owner soft-deleted', async () => {
+    h.findAllInIds.mockResolvedValue([memberFile({ deletedAt: new Date() })]);
+    const { res } = makeRes();
+
+    await expect(run({ fabFileId: 'f1', dataLakeId: LAKE_ID }, res)).rejects.toThrow(NotFoundError);
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
+  });
+
+  it('refuses a lake member that the owner archived', async () => {
+    h.findAllInIds.mockResolvedValue([memberFile({ archivedAt: new Date() })]);
+    const { res } = makeRes();
+
+    await expect(run({ fabFileId: 'f1', dataLakeId: LAKE_ID }, res)).rejects.toThrow(NotFoundError);
+    expect(h.resetChunkStateByIds).not.toHaveBeenCalled();
   });
 
   it('reports the in-flight file as busy when the reset loses the worker CAS', async () => {
