@@ -12,13 +12,16 @@ import type { NextFunction, Request, RequestHandler, Response } from 'express';
 const METHODS = ['all', 'get', 'head', 'post', 'put', 'patch', 'delete', 'options', 'trace'] as const;
 
 /**
- * Picks only `keys` off `obj`. Used to scope `pathParams`/`queryParams` validation to
- * each schema's own fields before parsing (see the call sites below) - relying on
- * Zod's default key-stripping alone would break for a `.strict()` or `.passthrough()`
- * schema, since both are parsed against the same merged `req.query`.
+ * Returns `obj` without `keys`. Used to keep `pathParams` and `queryParams` from
+ * seeing each other's fields before parsing (see the call sites below), since both
+ * are parsed against the same merged `req.query`. Deliberately excludes only the
+ * SIBLING schema's own declared keys, not every undeclared key: a `.strict()` or
+ * `.passthrough()` schema must still see (and reject, or pass through) a real,
+ * unexpected query key - only the other schema's field belongs to it, not this one.
  */
-function pick(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
-  return Object.fromEntries(keys.filter(k => k in obj).map(k => [k, obj[k]]));
+function omit(obj: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const excluded = new Set(keys);
+  return Object.fromEntries(Object.entries(obj).filter(([key]) => !excluded.has(key)));
 }
 
 /**
@@ -78,26 +81,27 @@ export function nextRouteForContract<C extends EndpointContract>(
   // Next's file-based routing merges dynamic segments into req.query, not req.params
   // (there is no req.params in a Next.js API route) - see the pathParams doc comment.
   const pathParamsSchema = contract.pathParams;
+  const queryParamsSchema = contract.queryParams;
+  const queryParamsKeys = queryParamsSchema ? Object.keys(queryParamsSchema.shape) : [];
+  const pathParamsKeys = pathParamsSchema ? Object.keys(pathParamsSchema.shape) : [];
+
   if (pathParamsSchema) {
     prelude.push((req, _res, next) => {
-      req.validatedParams = pathParamsSchema.parse(
-        pick(req.query, Object.keys(pathParamsSchema.shape))
-      ) as PathParamsOf<C>;
+      req.validatedParams = pathParamsSchema.parse(omit(req.query, queryParamsKeys)) as PathParamsOf<C>;
       next();
     });
   }
 
   // Real query-string fields, validated after path params but before the body -
   // same precedence reasoning: address/filter the resource before its payload.
-  // Each schema is scoped to its own declared keys via `pick` before parsing (not
-  // just relying on Zod's default strip mode), so pathParams and queryParams stay
-  // independent of each other even if either is declared `.strict()`/`.passthrough()`.
-  const queryParamsSchema = contract.queryParams;
+  // Only the sibling's own declared keys are excluded before parsing (never every
+  // undeclared key - see the omit() doc comment), so pathParams and queryParams
+  // stay independent of each other even if either is declared
+  // `.strict()`/`.passthrough()`, without changing what either schema does with a
+  // real, unexpected query key.
   if (queryParamsSchema) {
     prelude.push((req, _res, next) => {
-      req.validatedQuery = queryParamsSchema.parse(
-        pick(req.query, Object.keys(queryParamsSchema.shape))
-      ) as QueryParamsOf<C>;
+      req.validatedQuery = queryParamsSchema.parse(omit(req.query, pathParamsKeys)) as QueryParamsOf<C>;
       next();
     });
   }
