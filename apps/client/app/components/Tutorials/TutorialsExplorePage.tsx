@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { Box, Button, Sheet, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
+import { Box, Button, Tab, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import { styled } from '@mui/system';
 import { profileTabListSx } from '@client/app/routes/profile/profileTabListSx';
+import PageFrame from '@client/app/components/common/PageFrame';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import TutorialCard from './TutorialCard';
@@ -35,128 +36,91 @@ const TutorialsExplorePage = () => {
   const [openKey, setOpenKey] = useState<string | null>(null);
 
   return (
-    <Box
-      sx={{
-        height: '100%',
-        // The page is the only scroller: the frame grows to its content and this
-        // container scrolls it. Padding (not centring) sets the gap above the
-        // frame, so the same gap is there when scrolled back to the top - a
-        // centred frame would collapse that space as soon as content overflowed.
-        overflowY: 'auto',
-        // Side gutters keep the frame off the viewport edges once it is narrower
-        // than its 1400px cap; the vertical padding stays tighter so the 80vh
-        // frame is not squeezed on short screens.
-        px: { xs: '16px', sm: '24px', md: '40px' },
-        py: { xs: '16px', md: '24px' },
-      }}
-    >
-      <Sheet
-        variant="outlined"
-        data-testid="tutorials-page-frame"
-        sx={theme => ({
-          width: '100%',
-          maxWidth: '1400px',
-          mx: 'auto',
-          // Fills the viewport when a tab is short, grows past it when a tab is
-          // long. Subtracts this container's own vertical padding so the frame
-          // ends exactly where the bottom gap begins.
-          minHeight: { xs: 'calc(100vh - 32px)', md: 'calc(100vh - 48px)' },
+    <PageFrame testId="tutorials-page-frame">
+      <Box
+        sx={{
           display: 'flex',
-          flexDirection: 'column',
-          borderRadius: '12px',
-          borderColor: theme.palette.divider,
-          // Same frame colour as the first-run slider: the sidebar surface in dark
-          // mode, the Joy Sheet default in light. Keeps the two tutorial surfaces
-          // reading as one family while both exist.
-          backgroundColor: theme.palette.mode === 'dark' ? theme.palette.background.surface2 : undefined,
-          p: { xs: '20px', md: '32px' },
-        })}
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: '16px',
+          flexWrap: 'wrap',
+        }}
       >
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'flex-start',
-            justifyContent: 'space-between',
-            gap: '16px',
-            flexWrap: 'wrap',
-          }}
-        >
-          <Box>
-            <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
-              Tutorials
-            </Typography>
-            {/* Placeholder copy, pending the real subtitle. */}
-            <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', color: 'text.tertiary' }}>
-              Lorem ipsum id pellentesque nibh neque ultrices elit sem nisl et volutpat amet lacus venenatis sem at
-              quisque ullamcorper ante.
-            </Typography>
-            <Typography
-              level="body-sm"
-              data-testid="tutorials-wip-notice"
-              sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', fontWeight: 500, color: 'primary.500' }}
-            >
-              Work in progress - nothing here is wired up yet. The cards are placeholders and the text is not final.
-            </Typography>
-          </Box>
-
-          {/* Interim: the Help Center is its own sidenav surface today and moves
-              under this page later, so this is a link out rather than a tab. */}
-          <Button
-            variant="outlined"
-            color="neutral"
-            size="sm"
-            startDecorator={<HelpCenterOutlinedIcon />}
-            onClick={() => openHelpPanel()}
-            data-testid="tutorials-helpcenter-btn"
-            sx={theme => ({
-              // Matches the sidebar's profile card (profile-menu-card): body bg in
-              // light, surface in dark. The resting colour is a plain declaration on
-              // purpose - Joy's outlined variant defines no `--variant-outlinedBg`,
-              // so it paints no background at rest and there is nothing to lose to.
-              // Hover DOES come from a variant variable, so that one must be set as a
-              // variable or the variant's own rule wins.
-              backgroundColor:
-                theme.palette.mode === 'light' ? theme.palette.background.body : theme.palette.background.surface,
-              '--variant-outlinedHoverBg': theme.palette.notebooklist.hoverBg,
-              // Joy sizes a Button from its own min-height variable; a plain `height`
-              // would be fought by it on the taller size tokens. Padding-inline is a
-              // flat value per size (not a variable), so it is set directly.
-              '--Button-minHeight': '36px',
-              paddingInline: '12px',
-              fontSize: '13px',
-            })}
+        <Box>
+          <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
+            Tutorials
+          </Typography>
+          {/* Placeholder copy, pending the real subtitle. */}
+          <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', color: 'text.tertiary' }}>
+            Lorem ipsum id pellentesque nibh neque ultrices elit sem nisl et volutpat amet lacus venenatis sem at
+            quisque ullamcorper ante.
+          </Typography>
+          <Typography
+            level="body-sm"
+            data-testid="tutorials-wip-notice"
+            sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', fontWeight: 500, color: 'primary.500' }}
           >
-            Help Center
-          </Button>
+            Work in progress - nothing here is wired up yet. The cards are placeholders and the text is not final.
+          </Typography>
         </Box>
 
-        <Tabs
-          value={tab}
-          onChange={(_, value) => {
-            setTab(value as TutorialsTabKey);
-            setOpenKey(null);
-          }}
-          sx={{ mt: '32px' }}
-          aria-label="Tutorial categories"
+        {/* Interim: the Help Center is its own sidenav surface today and moves
+              under this page later, so this is a link out rather than a tab. */}
+        <Button
+          variant="outlined"
+          color="neutral"
+          size="sm"
+          startDecorator={<HelpCenterOutlinedIcon />}
+          onClick={() => openHelpPanel()}
+          data-testid="tutorials-helpcenter-btn"
+          sx={theme => ({
+            // Matches the sidebar's profile card (profile-menu-card): body bg in
+            // light, surface in dark. The resting colour is a plain declaration on
+            // purpose - Joy's outlined variant defines no `--variant-outlinedBg`,
+            // so it paints no background at rest and there is nothing to lose to.
+            // Hover DOES come from a variant variable, so that one must be set as a
+            // variable or the variant's own rule wins.
+            backgroundColor:
+              theme.palette.mode === 'light' ? theme.palette.background.body : theme.palette.background.surface,
+            '--variant-outlinedHoverBg': theme.palette.notebooklist.hoverBg,
+            // Joy sizes a Button from its own min-height variable; a plain `height`
+            // would be fought by it on the taller size tokens. Padding-inline is a
+            // flat value per size (not a variable), so it is set directly.
+            '--Button-minHeight': '36px',
+            paddingInline: '12px',
+            fontSize: '13px',
+          })}
         >
-          <TabList data-testid="tutorials-tablist" sx={tabListSx}>
-            {TABS.map(({ key, label }) => (
-              <StyledTab key={key} value={key} data-testid={`tutorials-tab-${key}`}>
-                {/* Colour set here, as on /profile: the opacity step in StyledTab is what
-                    separates active from inactive, so the label itself stays primary ink. */}
-                <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
-              </StyledTab>
-            ))}
-          </TabList>
+          Help Center
+        </Button>
+      </Box>
 
-          {TABS.map(({ key }) => (
-            <TabPanel key={key} value={key} sx={{ px: 0, pt: '24px', pb: 0 }}>
-              <TutorialsPanel tab={key} openKey={openKey} onOpen={setOpenKey} />
-            </TabPanel>
+      <Tabs
+        value={tab}
+        onChange={(_, value) => {
+          setTab(value as TutorialsTabKey);
+          setOpenKey(null);
+        }}
+        sx={{ mt: '32px' }}
+        aria-label="Tutorial categories"
+      >
+        <TabList data-testid="tutorials-tablist" sx={tabListSx}>
+          {TABS.map(({ key, label }) => (
+            <StyledTab key={key} value={key} data-testid={`tutorials-tab-${key}`}>
+              {/* Colour set here, as on /profile: the opacity step in StyledTab is what
+                    separates active from inactive, so the label itself stays primary ink. */}
+              <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
+            </StyledTab>
           ))}
-        </Tabs>
-      </Sheet>
-    </Box>
+        </TabList>
+
+        {TABS.map(({ key }) => (
+          <TabPanel key={key} value={key} sx={{ px: 0, pt: '24px', pb: 0 }}>
+            <TutorialsPanel tab={key} openKey={openKey} onOpen={setOpenKey} />
+          </TabPanel>
+        ))}
+      </Tabs>
+    </PageFrame>
   );
 };
 
