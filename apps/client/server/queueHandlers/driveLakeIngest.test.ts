@@ -52,6 +52,7 @@ const h = vi.hoisted(() => ({
   finalizeBatchIfComplete: vi.fn(),
   sendToQueue: vi.fn(),
   assertLakeAdmission: vi.fn(),
+  assertCanWriteDataLakeTags: vi.fn(),
   // Bypasses the real AdminSettingsCache singleton, which would otherwise persist whatever the
   // first call in this file resolved across every later test that shares the same test process.
   getSettingsMap: vi.fn(),
@@ -125,6 +126,7 @@ vi.mock('@bike4mind/services', () => ({
       claims.metaTagNames.length > 0 || claims.prefixArmLakes.length > 0,
     recomputeLakeStats: h.recomputeLakeStats,
     assertLakeAdmission: h.assertLakeAdmission,
+    assertCanWriteDataLakeTags: h.assertCanWriteDataLakeTags,
   },
   fabFilesService: { deleteFabFile: h.deleteFabFile },
 }));
@@ -293,6 +295,9 @@ describe('driveLakeIngest consumer', () => {
     // admission gate to its happy-path default so a later test's own rejection can't leak forward into
     // whichever test runs next in file order.
     h.assertLakeAdmission.mockResolvedValue(undefined);
+    // Same leak risk as assertLakeAdmission above: reset the origin gate to its happy-path default
+    // so one test's rejection cannot bleed into whichever test runs next in file order.
+    h.assertCanWriteDataLakeTags.mockResolvedValue(undefined);
     // Empty map -> MaxFileSize falls back to its coded default (30 MB), and a permissive user ->
     // checkStorageLimit falls back to its 1000 MB default too - both well above every fixture's
     // byte size below, so neither new gate fires unless a test overrides it.
@@ -2017,6 +2022,62 @@ describe('driveLakeIngest consumer', () => {
     // Only a BadRequestError is a verdict; a settings-store outage is transient and must retry.
     h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
     h.assertLakeAdmission.mockRejectedValue(new Error('settings store unreachable'));
+
+    await expect(run()).rejects.toThrow('settings store unreachable');
+    expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
+  // The origin gate (unattended writes into a curated lake). Mirrors the three admission tests
+  // above exactly, because both sit in the same try/catch and must be handled identically.
+  it('gates the lake once per sync, against the connecting user as a synthetic admin actor', async () => {
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+      { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    // Once, not per candidate: the lake and the owner-to-be are the same for every file.
+    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledTimes(1);
+    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledWith(
+      { userId: 'user1', isAdmin: true },
+      ['lake-tag'],
+      expect.objectContaining({
+        db: expect.objectContaining({
+          dataLakes: expect.anything(),
+          adminSettings: expect.anything(),
+          scopedSettings: expect.anything(),
+        }),
+        unattended: true,
+      })
+    );
+  });
+
+  it('refuses the whole sync cleanly on an origin refusal - no batch, no retry spiral', async () => {
+    // A refusal is deterministic (same origin, same policy on every retry), so rethrowing it would
+    // spin this message to the DLQ. Recorded as guidance and returned, like the admission refusal.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.assertCanWriteDataLakeTags.mockRejectedValue(new BadRequestError('"Lake" is curated'));
+
+    await run();
+
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.fetchDriveFileContent).not.toHaveBeenCalled();
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', expect.stringContaining('is curated'));
+    // The try wraps both the admission and origin gates, so the reason must go on the log line
+    // too - without it, on-call cannot tell which gate refused without querying the connection.
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[driveLakeIngest] data lake refused this sync at admission or authorization',
+      expect.objectContaining({ reason: expect.stringContaining('is curated') })
+    );
+  });
+
+  it('lets a non-origin failure from the gate reach SQS for retry', async () => {
+    // Only a BadRequestError is a verdict; a settings-store outage is transient and must retry.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.assertCanWriteDataLakeTags.mockRejectedValue(new Error('settings store unreachable'));
 
     await expect(run()).rejects.toThrow('settings store unreachable');
     expect(h.batchCreate).not.toHaveBeenCalled();

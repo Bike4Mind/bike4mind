@@ -489,3 +489,17 @@ describe('LakeInfoPanel - publish/draft', () => {
     expect(screen.queryByTestId('datalake-demote-btn-lake-1')).not.toBeInTheDocument();
   });
 });
+
+describe('LakeInfoPanel - origin chip', () => {
+  it('shows the Connector-fed chip for a connector-fed lake', () => {
+    renderPanel({ ...baseLake, origin: 'connector-fed' } as ManagerLake);
+
+    expect(screen.getByTestId('datalake-origin-chip-lake-1')).toHaveTextContent('Connector-fed');
+  });
+
+  it('shows no origin chip for a curated lake', () => {
+    renderPanel({ ...baseLake, origin: 'curated' } as ManagerLake);
+
+    expect(screen.queryByTestId('datalake-origin-chip-lake-1')).not.toBeInTheDocument();
+  });
+});

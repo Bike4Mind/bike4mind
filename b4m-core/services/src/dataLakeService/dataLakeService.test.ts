@@ -1539,6 +1539,7 @@ describe('redactLakeForActor - editor-only fields on the raw-document exits', ()
         'lastSyncAt',
         'name',
         'organizationId',
+        'origin',
         'requiredEntitlement',
         'requiredUserTag',
         'slug',

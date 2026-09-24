@@ -45,12 +45,14 @@ import { useFeatureFlags } from '@client/app/hooks/useAdminSettingsCache';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import {
   DATA_LAKE_GROUNDING_MODES,
+  DATA_LAKE_ORIGINS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
+  DEFAULT_DATA_LAKE_ORIGIN,
   DEFAULT_PASSAGE_TOKEN_TARGET,
   MIN_PASSAGE_TOKEN_TARGET,
   OVERSIZED_PASSAGE_TOKEN_THRESHOLD,
 } from '@bike4mind/common';
-import type { DataLakeGroundingMode } from '@bike4mind/common';
+import type { DataLakeGroundingMode, DataLakeOrigin } from '@bike4mind/common';
 import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
@@ -68,6 +70,12 @@ const GROUNDING_MODE_LABELS: Record<DataLakeGroundingMode, string> = {
   retrieve: 'Retrieve (recommended)',
   inline: 'Inline into the prompt',
   'auto-by-size': 'Auto (decide by size)',
+};
+
+/** Human-facing labels for the origin picker, keyed by the shared enum. */
+const ORIGIN_LABELS: Record<DataLakeOrigin, string> = {
+  curated: 'Curated',
+  'connector-fed': 'Connector-fed',
 };
 
 export interface EditableLake {
@@ -111,9 +119,17 @@ export interface EditableLake {
    */
   lakeMemoryEnabled: boolean;
   /**
+   * Who may fill this lake - a DECLARATION, not a record of what happened (see IDataLake.origin).
+   * `curated` refuses unattended connector ingest; `connector-fed` admits it, which is what the
+   * Drive-folder connect door requires before it will bind a folder to the lake. Required, like
+   * groundingMode - a caller that forgets to thread it through fails at compile time rather than
+   * silently seeding every lake as curated (see DataLakeManagerPanel's editingLake).
+   */
+  origin: DataLakeOrigin;
+  /**
    * Whether the caller may manage this lake - server-computed, see DataLakeConfig.canManage.
    * Gates the editor-only per-lake config fields (System prompt, Preferred prompt, Grounding mode,
-   * Required passage size).
+   * Origin, Required passage size).
    */
   canManage: boolean;
   /**
@@ -239,6 +255,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [systemPrompt, setSystemPrompt] = useState('');
   const [preferredSystemPromptId, setPreferredSystemPromptId] = useState('');
   const [groundingMode, setGroundingMode] = useState<DataLakeGroundingMode>(DEFAULT_DATA_LAKE_GROUNDING_MODE);
+  const [origin, setOrigin] = useState<DataLakeOrigin>(DEFAULT_DATA_LAKE_ORIGIN);
   const [lakeMemoryEnabled, setLakeMemoryEnabled] = useState(false);
   // Held as a STRING, not a number: '' is the "inherit the platform default" state and is what the
   // save maps to the server's `null` clear sentinel. A numeric state would have to overload 0 or
@@ -277,6 +294,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setSystemPrompt(lake.systemPrompt ?? '');
       setPreferredSystemPromptId(lake.preferredSystemPromptId ?? '');
       setGroundingMode(lake.groundingMode ?? DEFAULT_DATA_LAKE_GROUNDING_MODE);
+      setOrigin(lake.origin ?? DEFAULT_DATA_LAKE_ORIGIN);
       setLakeMemoryEnabled(lake.lakeMemoryEnabled);
       setRequiredPassageTokenTarget(
         typeof lake.requiredPassageTokenTarget === 'number' ? String(lake.requiredPassageTokenTarget) : ''
@@ -342,6 +360,10 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
         // Editor-only, same manage gate. Always a concrete mode (no clear sentinel - a lake always
         // has a grounding mode), so it is sent as the chosen enum value.
         ...(lake.canManage ? { groundingMode } : {}),
+        // Editor-only, same manage gate. Sent only when changed, same shape as lakeMemoryEnabled
+        // below: an unrelated field's save must not resubmit a stale seed and demote a live
+        // connector-fed lake back to curated out from under whoever promoted it.
+        ...(lake.canManage && origin !== lake.origin ? { origin } : {}),
         // Editor-only. Sent only when changed, for the same reason as preferredSystemPromptId: never
         // resubmit a value the editor didn't touch, since a PUT that changes nothing still moves
         // `lastUpdatedByUserId`. The server STORES a `true` even while the platform flag is off
@@ -481,6 +503,27 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
           <FormHelperText data-testid="datalake-grounding-mode-help">
             How a chat started with this lake uses its documents. Retrieve searches the lake on demand (same for owners
             and readers); Inline pastes the documents into the prompt; Auto decides by corpus size.
+          </FormHelperText>
+        </FormControl>
+      )}
+      {lake?.canManage && (
+        <FormControl>
+          <FormLabel>Origin</FormLabel>
+          <Select
+            value={origin}
+            onChange={(_e, value) => setOrigin(value ?? DEFAULT_DATA_LAKE_ORIGIN)}
+            data-testid="datalake-settings-origin-select"
+            slotProps={{ button: { 'data-testid': 'datalake-settings-origin-button' } }}
+          >
+            {DATA_LAKE_ORIGINS.map(value => (
+              <Option key={value} value={value} data-testid={`datalake-settings-origin-${value}`}>
+                {ORIGIN_LABELS[value]}
+              </Option>
+            ))}
+          </Select>
+          <FormHelperText data-testid="datalake-settings-origin-help">
+            Connector-fed lakes accept content a connected Drive folder adds on its own; curated lakes accept only files
+            someone adds by hand. Either way, a connected folder can still remove files it previously added.
           </FormHelperText>
         </FormControl>
       )}

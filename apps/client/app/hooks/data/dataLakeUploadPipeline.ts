@@ -184,6 +184,10 @@ export async function createWizardLake(config: DataLakeFormValues, tagPrefix: st
   // Scope to the active account-switcher org (Personal -> undefined). activeOrgId reads the store
   // at call time, like the wizard config itself, so it can't go stale.
   const organizationId = activeOrgId();
+  // Same "read the store at call time" idiom as activeOrgId: both create callers (runBatchUpload,
+  // useCreateLakeFromDrive) already have a pendingDriveFolder in scope, so read it here rather
+  // than threading it through as a parameter both would just forward unchanged.
+  const { pendingDriveFolder } = useDataLakeWizardStore.getState();
   const res = await api.post<{ id: string }>('/api/data-lakes', {
     name: config.name,
     // The slug we ask for. The server disambiguates it against lakes in scope, so the created
@@ -194,6 +198,11 @@ export async function createWizardLake(config: DataLakeFormValues, tagPrefix: st
     requiredUserTag: config.requiredUserTag || undefined,
     requiredEntitlement: config.requiredEntitlement || undefined,
     ...(organizationId ? { organizationId } : {}),
+    // The user picked a Drive folder before creating the lake, so THIS request is their
+    // declaration that the lake is connector-fed - not an inferred flip on bind (see the schema
+    // comment on CreateDataLakeRequestInput). No folder picked -> omit, and the server default
+    // ('curated') applies.
+    ...(pendingDriveFolder ? { origin: 'connector-fed' as const } : {}),
   } satisfies CreateDataLakeRequestInputType);
   return res.data.id;
 }

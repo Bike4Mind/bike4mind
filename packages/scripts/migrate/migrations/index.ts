@@ -121,6 +121,7 @@ import EnsureQuestCorrectsIndex from './20260917000200_ensure-quest-corrects-ind
 import EnsureFeedbackOrgCreatedAtIndex from './20260918000000_ensure-feedback-org-createdat-index';
 import EnsureUserOrganizationIdIndex from './20260918010000_ensure-user-organizationid-index';
 import EnsureDataLakeFindingIndexes from './20260921000000_ensure-data-lake-finding-indexes';
+import BackfillDataLakeOrigin from './20260921000100_backfill-data-lake-origin';
 // Renumbered from 20260922000000 to 20260921100000 to resolve an id collision with
 // EnsureOAuthGrantClientUserIndex below, which merged into main first, and to keep this id
 // below the fail-closed backfill's, which must stay the highest id on disk (see its own test).
@@ -252,6 +253,7 @@ const coreMigrations: MigrationFile[] = [
   EnsureFeedbackOrgCreatedAtIndex,
   EnsureUserOrganizationIdIndex,
   EnsureDataLakeFindingIndexes,
+  BackfillDataLakeOrigin,
   EnsureDataLakeCorpusActionIndexes,
   EnsureDataLakeInconsistencyScanIndex,
   EnsureOAuthGrantClientUserIndex,

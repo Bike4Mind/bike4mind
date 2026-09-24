@@ -34,6 +34,7 @@ const FIELD_LABEL: Record<LakeConfigChangeField, string> = {
   auditQueryTextEnabled: 'Query-text auditing',
   lakeMemoryEnabled: 'Lake memory',
   status: 'Status',
+  origin: 'Origin',
   createdByUserId: 'Created by',
   effectiveOwnerUserId: 'Owner',
   accessGrant: 'Access grant',
