@@ -17,7 +17,7 @@ vi.mock('../di/registry', () => ({
   getSlackDb: () => ({ apiKeyRepository: {}, adminSettingsRepository: {}, AdminSettings: { findOne } }),
 }));
 
-import { BACKEND_DISPLAY_NAMES, buildSlackModelOptionsFromDashboard } from './slack-model-options';
+import { buildSlackModelOptionsFromDashboard } from './slack-model-options';
 
 const model = (overrides: Partial<ModelInfo>): ModelInfo =>
   ({ id: 'm', name: 'M', backend: ModelBackend.OpenAI, type: 'text', ...overrides }) as ModelInfo;
@@ -33,7 +33,10 @@ describe('buildSlackModelOptionsFromDashboard', () => {
 
     await buildSlackModelOptionsFromDashboard();
 
-    expect(getAvailableModels).toHaveBeenCalledWith({ openai: 'sk-openai' }, { includePrivate: false });
+    expect(getAvailableModels).toHaveBeenCalledWith(
+      { openai: 'sk-openai' },
+      { includePrivate: false, perBackendTimeoutMs: 2_000 }
+    );
   });
 
   it('groups every backend the fan-out returns, labeled and in display order', async () => {
@@ -46,16 +49,28 @@ describe('buildSlackModelOptionsFromDashboard', () => {
 
     const { option_groups, flat } = await buildSlackModelOptionsFromDashboard();
 
-    expect(option_groups.map(g => g.label.text)).toEqual(Object.values(BACKEND_DISPLAY_NAMES));
+    expect(option_groups.map(g => g.label.text)).toEqual([
+      'OpenAI',
+      'Anthropic',
+      'Bedrock',
+      'Gemini',
+      'xAI',
+      'Moonshot (Kimi)',
+      'DeepSeek',
+      'Ollama',
+      'AWS',
+      'Black Forest Labs',
+      'Voyage AI',
+      'Local image',
+    ]);
     expect(flat).toHaveLength(allBackends.length);
   });
 
-  it('drops non-text, deprecated and admin-disabled models', async () => {
+  it('drops non-text and admin-disabled models', async () => {
     findOne.mockResolvedValue({ settingValue: [{ id: 'disabled', enabled: false }] });
     getAvailableModels.mockResolvedValue([
       model({ id: 'keep' }),
       model({ id: 'image', type: 'image' }),
-      model({ id: 'old', deprecationDate: '2000-01-01' }),
       model({ id: 'disabled' }),
     ]);
 
