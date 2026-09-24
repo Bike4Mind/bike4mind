@@ -6,7 +6,12 @@
  * using the same pipeline.
  */
 
-import { ClaudeArtifactMimeTypes, type IChatHistoryItemDocument, type ModelInfo } from '@bike4mind/common';
+import {
+  parseToolArtifactAttributes,
+  TOOL_ARTIFACT_EMITTERS,
+  type IChatHistoryItemDocument,
+  type ModelInfo,
+} from '@bike4mind/common';
 import { type BaseStorage } from '@bike4mind/utils';
 import {
   type ApiKeyTable,
@@ -273,22 +278,7 @@ const VALID_SIDE_EFFECT_TYPES = new Set([
   'populateFamilyProblem',
   'populateDecomposition',
 ]);
-// The tools whose results wrapToolsForSentinels turns into artifacts, each pinned to the one
-// type it emits: any other tool's output (web pages, files, subagent replies) is untrusted and
-// can carry forged markup. A new artifact-emitting tool must be added here or its artifact is dropped.
-const TOOL_ARTIFACT_EMITTERS: ReadonlyMap<string, string> = new Map([
-  ['recharts', ClaudeArtifactMimeTypes.RECHARTS],
-  ['mermaid_chart', ClaudeArtifactMimeTypes.MERMAID],
-  ['lattice_create_model', ClaudeArtifactMimeTypes.LATTICE],
-  ['blog_draft', ClaudeArtifactMimeTypes.BLOG_DRAFT],
-  ['chess_engine', ClaudeArtifactMimeTypes.CHESS],
-]);
 const TOOL_ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/gi;
-// Value is anchored to its own quote kind so a double-quoted value can contain
-// apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
-// body, group 3 the single-quoted one; exactly one matches. Must stay in sync
-// with ATTRIBUTE_REGEX in utils/artifactParser.ts and the client mirror.
-const TOOL_ATTR_RE = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
 
 // ---------------------------------------------------------------------------
 // Main function
@@ -685,16 +675,13 @@ function wrapToolsForSentinels(
             let artifactMatch;
             while ((artifactMatch = TOOL_ARTIFACT_RE.exec(result)) !== null) {
               const [, attrsStr, content] = artifactMatch;
-              const attrs: Record<string, string> = {};
-              let attrMatch;
-              TOOL_ATTR_RE.lastIndex = 0;
-              while ((attrMatch = TOOL_ATTR_RE.exec(attrsStr)) !== null) {
-                attrs[attrMatch[1]] = attrMatch[2] ?? attrMatch[3];
-              }
+              const attrs = parseToolArtifactAttributes(attrsStr);
 
               // Checked on the final value, so a repeated type= attribute cannot smuggle one past.
               if (attrs.type !== allowedArtifactType) {
-                logger.warn(`[toolArtifact] Dropped ${attrs.type} artifact from ${toolName}: not the type it emits`);
+                logger.warn(
+                  `[toolArtifact] Dropped ${JSON.stringify(attrs.type?.slice(0, 80))} artifact from ${toolName}: not the type it emits`
+                );
                 continue;
               }
 

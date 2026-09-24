@@ -85,6 +85,7 @@ export * from './utils/requireEnv';
 export * from './utils/internalStaffDomains';
 export * from './utils/countCodePoints';
 export * from './utils/capForParse';
+export * from './utils/toolArtifactEmitters';
 export * from './utils/forcedRetrievalFloors';
 export * from './utils/modelHelpers';
 export * from './utils/imageSizes';
