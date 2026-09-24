@@ -41,6 +41,7 @@ import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { openInNewTab } from '@client/app/utils/externalLinks';
+import PageFrame from '@client/app/components/common/PageFrame';
 
 /**
  * Gears - the earned-nav progression page.
@@ -209,20 +210,16 @@ const GearsPage = () => {
   );
 
   return (
-    // Own scroll container (same pattern as the Agents/Projects pages): the app
-    // layout is a fixed-height shell, so a page taller than the viewport must
-    // scroll itself or the overflow is simply clipped.
-    <Box sx={{ height: '100%', overflowY: 'auto', overflowX: 'hidden' }} data-testid="gears-page">
-      <Box sx={{ maxWidth: 960, mx: 'auto', px: 3, py: 4 }}>
-        <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 0.5 }}>
-          <SettingsOutlinedIcon />
-          <Typography level="h2">Gears</Typography>
-        </Stack>
-        <Typography level="body-md" sx={{ mb: 1, opacity: 0.8 }}>
+    <PageFrame testId="gears-page">
+      <Box data-testid="gears-page-body">
+        <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
+          Gears
+        </Typography>
+        <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', color: 'text.tertiary' }}>
           Every feature you use for the first time earns a checkmark and a credit bonus - destinations also earn their
           place in your sidebar.
         </Typography>
-        <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 3 }}>
+        <Stack direction="row" alignItems="center" gap={1.5} sx={{ mt: '20px', mb: 3 }}>
           <LinearProgress
             determinate={!isPending}
             value={gears.length ? (unlockedCount / gears.length) * 100 : 0}
@@ -253,7 +250,7 @@ const GearsPage = () => {
           </>
         )}
       </Box>
-    </Box>
+    </PageFrame>
   );
 };
 
