@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getSettingsByNames, invalidateSettingsCache } from '@bike4mind/utils';
-import { EXPIRED_KEY_SENTINEL, getDiscoveryCredentials, type DiscoveryCredentialAdapters } from './credentials';
+import {
+  DISCOVERY_ENV_KEYS,
+  EXPIRED_KEY_SENTINEL,
+  getDiscoveryCredentials,
+  type DiscoveryCredentialAdapters,
+} from './credentials';
 
 type ResolvedKeys = Awaited<ReturnType<NonNullable<DiscoveryCredentialAdapters['resolveLLMKeys']>>>;
 
@@ -10,6 +15,8 @@ const keys = (overrides: Partial<ResolvedKeys> = {}): ResolvedKeys => ({
   gemini: 'sk-gemini',
   bfl: 'sk-bfl',
   xai: 'sk-xai',
+  kimi: 'sk-kimi',
+  deepseek: 'sk-deepseek',
   voyageai: 'sk-voyage',
   ollama: null,
   imageGen: null,
@@ -100,20 +107,38 @@ describe('getDiscoveryCredentials', () => {
     expect(fresh.resolveLLMKeys.mock.calls[0][2]).toEqual({ skipCache: true });
   });
 
-  it('leaves every unset provider null instead of inventing a placeholder', async () => {
-    const creds = await getDiscoveryCredentials(
-      adapters(keys({ openai: null, anthropic: null, gemini: null, bfl: null, xai: null, voyageai: null })),
-      {}
-    );
-
-    expect([creds.openai, creds.anthropic, creds.gemini, creds.bfl, creds.xai, creds.voyageai]).toEqual([
-      null,
-      null,
-      null,
-      null,
-      null,
-      null,
+  it('pins which providers read a discovery env secret', () => {
+    // Pinned rather than derived: a keyed provider left off DISCOVERY_ENV_KEYS
+    // silently falls back to the demo-key tier on hosted, so a new one should fail
+    // here until someone decides. BFL has a keyed source but no env secret today.
+    expect(Object.keys(DISCOVERY_ENV_KEYS).sort()).toEqual([
+      'anthropic',
+      'deepseek',
+      'gemini',
+      'kimi',
+      'openai',
+      'xai',
     ]);
+  });
+
+  it.each(Object.entries(DISCOVERY_ENV_KEYS))('prefers %s from its env secret %s', async (provider, envVar) => {
+    const creds = await getDiscoveryCredentials(adapters(keys({ [provider]: `demo-${provider}` })), {
+      [envVar]: `secret-${provider}`,
+    });
+
+    expect(creds[provider as keyof typeof DISCOVERY_ENV_KEYS]).toBe(`secret-${provider}`);
+  });
+
+  it('leaves every unset provider null instead of inventing a placeholder', async () => {
+    const allUnset = Object.fromEntries(Object.keys(keys()).map(field => [field, null])) as Partial<ResolvedKeys>;
+    const creds = await getDiscoveryCredentials(adapters(keys(allUnset)), {});
+
+    // Every credential field, so a provider added to DiscoveryCredentials is
+    // covered without editing this list.
+    const { awsIam: _awsIam, isSelfHost: _isSelfHost, ...credentialFields } = creds;
+    for (const [field, value] of Object.entries(credentialFields)) {
+      expect(value, `${field} resolved a credential from nothing`).toBeNull();
+    }
   });
 });
 
