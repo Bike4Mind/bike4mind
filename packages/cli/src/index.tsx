@@ -1241,7 +1241,9 @@ function CliApp() {
 
   // Tavern presence: when cc-bridge is running on this machine, announce
   // this CLI session over loopback so a sprite appears in the tavern
-  // (D14 - bridge is the sole tavern gateway). No-op if bridge absent.
+  // (D14 - bridge is the sole tavern gateway). Fail-closed: absent bridge =
+  // quiet background retry; a foreign/undeterminable port owner never gets the
+  // secret (see BridgePresence).
   //
   // Gated on the `features.tavern` toggle: with Tavern off we never probe the
   // bridge, so a stale `~/.b4m/cc-bridge.json` (left over from a past session
