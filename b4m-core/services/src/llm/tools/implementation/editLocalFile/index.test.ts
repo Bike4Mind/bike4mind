@@ -167,4 +167,33 @@ describe('editLocalFile: the write path reuses the gate-resolved span, but alway
     expect(message).toContain('File edited successfully');
     expect(await readFile(file, 'utf-8')).toBe('hi there\n');
   });
+
+  it('rejects a gateSnapshot whose hash matches but whose resolvedEdit span is forged/inconsistent with the real content', async () => {
+    const dir = await freshDir('b4m-forged-span-');
+    const file = join(dir, 'note.txt');
+    await writeFile(file, 'hello world\n');
+    const tool = editTool([dir]);
+
+    // A real contentHash (as a caller with independent read access could compute),
+    // paired with a resolvedEdit that was never actually resolved from it - matchedText
+    // does not correspond to the real bytes at startIndex. Simulates a forged
+    // gateSnapshot reaching the write path with no editPlan ever computed for it.
+    const plan = await resolveEditLocalFile({ path: file, old_string: 'hello world', new_string: 'hi world' }, [dir]);
+    const forged = {
+      contentHash: plan.contentHash,
+      resolvedEdit: { startIndex: 0, matchedText: 'totally made up span', replacement: 'PWNED' },
+    };
+
+    const message = await tool.toolFn({
+      path: file,
+      old_string: 'hello world',
+      new_string: 'hi world',
+      gateSnapshot: forged,
+    });
+
+    // The forged span is rejected (matchedText is not the real bytes at startIndex),
+    // so the write falls back to a genuine resolveEdit() over old_string/new_string.
+    expect(message).toContain('File edited successfully');
+    expect(await readFile(file, 'utf-8')).toBe('hi world\n');
+  });
 });
