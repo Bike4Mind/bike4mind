@@ -338,46 +338,51 @@ describe('BACKEND_PRIORITY section order', () => {
  * needs a representative here. Checked at runtime: client tests are outside tsc.
  */
 describe('provider classifiers cover every backend', () => {
-  // null = not a chat model, so never in a text fallback; the picker still groups it.
-  const REPRESENTATIVE: Record<ModelBackend, { id: string; name: string; label: string | null }> = {
-    [ModelBackend.OpenAI]: { id: 'gpt-5', name: 'GPT-5', label: 'OpenAI' },
-    [ModelBackend.Anthropic]: { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', label: 'Anthropic direct' },
-    [ModelBackend.Bedrock]: { id: 'us.anthropic.claude-sonnet-5', name: 'Claude Sonnet 5', label: 'Bedrock' },
-    [ModelBackend.Gemini]: { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', label: 'Google' },
-    [ModelBackend.XAI]: { id: 'grok-4', name: 'Grok 4', label: 'xAI' },
-    [ModelBackend.Kimi]: { id: 'kimi-k3', name: 'Kimi K3', label: 'Moonshot direct' },
-    [ModelBackend.DeepSeek]: { id: 'deepseek-flash', name: 'DeepSeek Flash', label: 'DeepSeek' },
-    [ModelBackend.Ollama]: { id: 'llama3.3', name: 'llama3.3', label: 'Ollama' },
-    [ModelBackend.BFL]: { id: 'flux-pro-1.1', name: 'FLUX 1.1 [pro]', label: null },
-    [ModelBackend.AWS]: { id: 'aws-transcribe', name: 'Amazon Transcribe', label: null },
-    [ModelBackend.VoyageAI]: { id: 'voyage-3', name: 'Voyage 3', label: null },
-    [ModelBackend.LocalImage]: { id: 'local-image/sd15', name: 'sd15', label: null },
+  // section null = never grouped by maker (speech-to-text, embeddings, and
+  // self-host-only images, covered by the self-hosted grouping tests above).
+  // label null = not a chat model, so never in a text fallback.
+  const REPRESENTATIVE: Record<
+    ModelBackend,
+    { id: string; name: string; section: string | null; label: string | null }
+  > = {
+    [ModelBackend.OpenAI]: { id: 'gpt-5', name: 'GPT-5', section: 'OpenAI', label: 'OpenAI' },
+    [ModelBackend.Anthropic]: {
+      id: 'claude-sonnet-5',
+      name: 'Claude Sonnet 5',
+      section: 'Anthropic',
+      label: 'Anthropic direct',
+    },
+    [ModelBackend.Bedrock]: {
+      id: 'us.anthropic.claude-sonnet-5',
+      name: 'Claude Sonnet 5',
+      section: 'Anthropic',
+      label: 'Bedrock',
+    },
+    [ModelBackend.Gemini]: { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', section: 'Google', label: 'Google' },
+    [ModelBackend.XAI]: { id: 'grok-4', name: 'Grok 4', section: 'xAI', label: 'xAI' },
+    [ModelBackend.Kimi]: { id: 'kimi-k3', name: 'Kimi K3', section: 'Moonshot', label: 'Moonshot direct' },
+    [ModelBackend.DeepSeek]: { id: 'deepseek-flash', name: 'DeepSeek Flash', section: 'DeepSeek', label: 'DeepSeek' },
+    [ModelBackend.Ollama]: { id: 'llama3.3', name: 'llama3.3', section: 'Meta', label: 'Ollama' },
+    [ModelBackend.BFL]: { id: 'flux-pro-1.1', name: 'FLUX 1.1 [pro]', section: 'Black Forest Labs', label: null },
+    [ModelBackend.AWS]: { id: 'aws-transcribe', name: 'Amazon Transcribe', section: null, label: null },
+    [ModelBackend.VoyageAI]: { id: 'voyage-3', name: 'Voyage 3', section: null, label: null },
+    [ModelBackend.LocalImage]: { id: 'local-image/sd15', name: 'sd15', section: null, label: null },
   };
   const makeModel = (backend: ModelBackend): ModelInfo =>
     ({ ...REPRESENTATIVE[backend], backend, description: '', type: 'text' }) as unknown as ModelInfo;
-  // Never grouped by maker: speech-to-text, embeddings, and self-host-only
-  // images (covered by the self-hosted grouping tests above).
-  const NOT_MAKER_GROUPED: ReadonlySet<ModelBackend> = new Set([
-    ModelBackend.AWS,
-    ModelBackend.VoyageAI,
-    ModelBackend.LocalImage,
-  ]);
-  const PICKER_BACKENDS = Object.values(ModelBackend).filter(b => !NOT_MAKER_GROUPED.has(b));
+  const PICKER_BACKENDS = Object.values(ModelBackend).filter(b => REPRESENTATIVE[b]?.section);
 
   it.each(Object.values(ModelBackend))('%s has a representative model', backend => {
     expect(REPRESENTATIVE).toHaveProperty(backend);
   });
 
-  it.each(PICKER_BACKENDS)('%s groups under an ordered picker section, not "Other"', backend => {
+  it.each(PICKER_BACKENDS)('%s groups under its expected, ordered picker section', backend => {
     const section = getModelBackend(makeModel(backend));
-    expect(section).not.toBe('Other');
+    expect(section).toBe(REPRESENTATIVE[backend].section);
     expect(BACKEND_PRIORITY).toContain(section);
   });
 
-  it.each(Object.values(ModelBackend).filter(b => REPRESENTATIVE[b]?.label))(
-    '%s gets a provider label in the fallback tooltip',
-    backend => {
-      expect(getModelProviderLabel(REPRESENTATIVE[backend].id, backend)).toBe(REPRESENTATIVE[backend].label);
-    }
-  );
+  it.each(Object.values(ModelBackend))('%s gets the expected fallback tooltip label', backend => {
+    expect(getModelProviderLabel(REPRESENTATIVE[backend].id, backend)).toBe(REPRESENTATIVE[backend].label ?? undefined);
+  });
 });
