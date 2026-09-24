@@ -403,7 +403,13 @@ export function useSendMessage({
       }
     }
 
-    setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
+    // A client-created session is known before anything is posted, so the stream gate can hold
+    // the still-null view to it; a server-minted one is recorded on session.created.
+    setSessionLayout({
+      selectedArtifactId: undefined,
+      artifactData: undefined,
+      pendingRealSessionId: dataLakeCreated?.id ?? null,
+    });
     const session = currentSession;
     let sessionToSend = session;
     if (dataLakeCreated) sessionToSend = dataLakeCreated;
@@ -878,6 +884,7 @@ export function useSendMessage({
             dispatchModel
           );
           dispatchSessionId = realSession.id;
+          setSessionLayout({ pendingRealSessionId: realSession.id });
           setCurrentSession(realSession);
           setCurrentSessionId(realSession.id);
           // Insert into the sessions list cache so the new notebook appears
@@ -1035,7 +1042,7 @@ export function useSendMessage({
         toast.error(error instanceof Error ? error.message : 'Failed to start agent execution');
         if (isNewSession && optimisticTmpId) {
           cleanupOptimistic(optimisticTmpId);
-          setSessionLayout({ pendingFirstMessage: null, pendingOptimisticId: null });
+          setSessionLayout({ pendingFirstMessage: null, pendingOptimisticId: null, pendingRealSessionId: null });
           setCurrentSession(null);
           setCurrentSessionId(null);
           navigate({ to: '/new', search: projectId ? { projectId } : {}, replace: true });
@@ -1145,7 +1152,8 @@ export function useSendMessage({
         migrateSession(optimisticTmpId, realId, data.session);
         setCurrentSessionId(realId);
         setCurrentSession(data.session);
-        setSessionLayout({ pendingFirstMessage: null, pendingOptimisticId: null });
+        // pendingRealSessionId keeps this session's frames flowing until the navigation commits.
+        setSessionLayout({ pendingFirstMessage: null, pendingOptimisticId: null, pendingRealSessionId: realId });
         navigate({ to: '/notebooks/$id', params: { id: realId }, replace: true });
       }
     }

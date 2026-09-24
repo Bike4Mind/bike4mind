@@ -20,6 +20,8 @@ import {
   IDLE_CHAT_COMPLETION,
   isTerminalQuestStatus,
   shouldAcceptStreamFrame,
+  shouldAcceptRapidReply,
+  blankRapidReplies,
   shouldResetOnSessionChange,
   terminalQuests,
 } from './chatCompletionState';
@@ -72,6 +74,20 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
   const metrics = useStreamingMetrics();
   const artifactPersistence = useStreamingArtifactPersistence();
 
+  // Everything the frame gates read besides the frame itself; read at frame time.
+  const streamGateContext = useCallback(() => {
+    const { pendingOptimisticId, pendingRealSessionId } = useSessionLayout.getState();
+    return {
+      sessionId,
+      pendingSessionId: pendingSessionRef.current,
+      current: chatCompletionRef.current,
+      // Both are written by this tab's own send and outlive the remount. A null view counts
+      // too: the /new provider is still mounted for a moment after the send navigates.
+      mintingOwnSession: !!pendingOptimisticId && (!sessionId || sessionId === pendingOptimisticId),
+      mintedSessionId: pendingRealSessionId,
+    };
+  }, [sessionId]);
+
   // PERFORMANCE FIX: Stable message handler that doesn't depend on state
   const handleStreamingMessage = useCallback(
     async (msg: IMessageDataToClient | IResearchModeStreamAction) => {
@@ -118,6 +134,24 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
           );
 
           console.log('🚀 [useSubscribeChatCompletion] Rapid Reply stream message:', rapidReplyMessage);
+
+          // Acks fan out to every tab of the user, and the bubble renders under whichever quest
+          // holds this view's streaming slot, so another session's ack would read as ours.
+          // The schema marks both ids required, but a first send from /new posts neither.
+          const isOwnRapidReply = shouldAcceptRapidReply({
+            ...streamGateContext(),
+            frameSessionId: rapidReplyMessage.sessionId || undefined,
+            frameQuestId: rapidReplyMessage.questId || undefined,
+            claimBlank: () => blankRapidReplies.claim(),
+          });
+          if (!isOwnRapidReply) {
+            console.warn(`[QUEST-DROP] Wrong session for rapid reply - subscription ${metrics.subscriptionId}`, {
+              rapidReplySessionId: rapidReplyMessage.sessionId,
+              expectedSessionId: sessionId,
+              questId: rapidReplyMessage.questId,
+            });
+            return;
+          }
 
           // Update the rapid reply state
           setChatCompletion(prev => ({
@@ -173,13 +207,9 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
         // must not be dropped - but neither may another session's stream be
         // adopted, or its Stop button bleeds into this composer.
         const isValidSession = shouldAcceptStreamFrame({
+          ...streamGateContext(),
           frameSessionId: typedMsg.quest.sessionId,
           frameQuestId: typedMsg.quest.id,
-          sessionId,
-          pendingSessionId: pendingSessionRef.current,
-          current: chatCompletionRef.current,
-          // pendingOptimisticId is set by this tab's own /new send and outlives the remount.
-          mintingOwnSession: isOptimisticId(sessionId) && useSessionLayout.getState().pendingOptimisticId === sessionId,
         });
 
         if (!isValidSession) {
@@ -356,6 +386,7 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
     },
     [
       sessionId,
+      streamGateContext,
       updateStreamingQuest,
       metrics,
       artifactPersistence,

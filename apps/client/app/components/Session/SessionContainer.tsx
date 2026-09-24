@@ -278,6 +278,10 @@ const SessionContainer: FC<SessionLayoutProps> = ({
       // clearing useEffect had a chance to run.
       const { pendingOptimisticId: tmpId } = useSessionLayout.getState();
 
+      // Recorded first so the stream gate adopts this session's frames (and only these) while
+      // the view is still on the tmpId during the navigation below.
+      if (tmpId) setSessionLayout({ pendingRealSessionId: realId });
+
       // When pre-navigation was used (tmpId set and different from realId), migrate
       // all cached data from the temporary client-generated ID to the real server ID.
       if (tmpId && tmpId !== realId) {
@@ -328,7 +332,9 @@ const SessionContainer: FC<SessionLayoutProps> = ({
       // setCurrentSessionId(realId), so clearing pendingFirstMessage is safe.
       // Only clear the optimistic ID guard here - pendingFirstMessage is cleared by
       // SessionMiddle once it has real data, to avoid a flash of empty content.
-      setSessionLayout({ pendingOptimisticId: null });
+      setSessionLayout(
+        tmpId ? { pendingOptimisticId: null, pendingRealSessionId: null } : { pendingOptimisticId: null }
+      );
     });
 
     return () => {

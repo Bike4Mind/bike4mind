@@ -127,6 +127,11 @@ interface SessionLayoutControlState {
   // .getState() in session.created handler to avoid stale-ref migration bugs.
   // Not persisted.
   pendingOptimisticId: string | null;
+  // Real id of the session this tab's in-flight first send created, once known (session.created
+  // for a server-minted session, the create response for a client-created one). While the view is
+  // still on a null/optimistic id, only frames for this session are adopted - see
+  // shouldAcceptStreamFrame. Not persisted.
+  pendingRealSessionId: string | null;
 }
 
 const useSessionLayout = create<SessionLayoutControlState>()(
@@ -142,6 +147,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       pendingModerationEvents: {},
       pendingFirstMessage: null,
       pendingOptimisticId: null,
+      pendingRealSessionId: null,
       // Floating chat window defaults - centered with reasonable size
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },

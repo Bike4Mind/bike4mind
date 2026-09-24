@@ -26,6 +26,7 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 
 import { useSubscribeChatCompletion } from './useSubscribeChatCompletion';
 import useSessionLayout from './useSessionLayout';
+import { blankRapidReplies } from './chatCompletionState';
 
 const mount = (sessionId: string | null) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -158,7 +159,7 @@ describe('useSubscribeChatCompletion - first send from /new', () => {
 
   beforeEach(() => {
     subscribeToAction.mockClear();
-    useSessionLayout.setState({ pendingOptimisticId: null });
+    useSessionLayout.setState({ pendingOptimisticId: null, pendingRealSessionId: null });
   });
 
   const stream = async (msg: unknown) => {
@@ -174,6 +175,8 @@ describe('useSubscribeChatCompletion - first send from /new', () => {
     });
     useSessionLayout.setState({ pendingOptimisticId: OPTIMISTIC_ID });
     rerender({ sessionId: OPTIMISTIC_ID });
+    // session.created for this tab's send, recorded before the view leaves the optimistic id.
+    useSessionLayout.setState({ pendingRealSessionId: 'real-1' });
 
     await stream(frame('own-q1', 'real-1', 'running', 'Running...'));
     expect(result.current.chatCompletion.quest?.id).toBe('own-q1');
@@ -204,7 +207,7 @@ describe('useSubscribeChatCompletion - first send from /new', () => {
 
   it('adopts the own first frame after the /new -> notebook remount wiped the placeholder', async () => {
     // Fresh provider mounted straight on the optimistic URL, as the route swap does.
-    useSessionLayout.setState({ pendingOptimisticId: OPTIMISTIC_ID });
+    useSessionLayout.setState({ pendingOptimisticId: OPTIMISTIC_ID, pendingRealSessionId: 'real-3' });
     const { result } = mount(OPTIMISTIC_ID);
     expect(result.current.chatCompletion.completed).toBe(true);
 
@@ -224,6 +227,159 @@ describe('useSubscribeChatCompletion - first send from /new', () => {
     await stream(frame('foreign-q', 'foreign-session', 'running', 'Running...'));
     expect(result.current.chatCompletion.completed).toBe(true);
     expect(result.current.chatCompletion.quest).toBeUndefined();
+  });
+});
+
+describe('useSubscribeChatCompletion - another tab streaming during a /new send', () => {
+  const OPTIMISTIC_ID = 'optimistic-session-tab-b';
+  const foreign = (status: 'running' | 'done' = 'running') => ({
+    ...frame('tab-a-q', 'tab-a-session', status, 'Tab A status'),
+    quest: { id: 'tab-a-q', sessionId: 'tab-a-session', type: 'message', status, replies: ['tab A reply'] },
+  });
+
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    useSessionLayout.setState({ pendingOptimisticId: null, pendingRealSessionId: null });
+  });
+
+  const stream = async (msg: unknown) => {
+    await act(async () => {
+      await latestStreamHandler()(msg);
+    });
+  };
+
+  it('refuses the foreign stream before the real session is known, then adopts only its own', async () => {
+    useSessionLayout.setState({ pendingOptimisticId: OPTIMISTIC_ID });
+    const { result } = mount(OPTIMISTIC_ID);
+
+    await stream(foreign());
+    expect(result.current.chatCompletion.quest).toBeUndefined();
+    expect(result.current.chatCompletion.completed).toBe(true);
+
+    useSessionLayout.setState({ pendingRealSessionId: 'tab-b-session' });
+    await stream(foreign());
+    expect(result.current.chatCompletion.quest).toBeUndefined();
+
+    await stream(frame('tab-b-q', 'tab-b-session', 'running', 'Running...'));
+    expect(result.current.chatCompletion.quest?.id).toBe('tab-b-q');
+    expect(result.current.chatCompletion.completed).toBe(false);
+
+    await stream(foreign('done'));
+    expect(result.current.chatCompletion.quest).toMatchObject({ id: 'tab-b-q', replies: ['partial'] });
+    expect(result.current.chatCompletion.statusMessage).toBe('Running...');
+    expect(result.current.chatCompletion.completed).toBe(false);
+
+    await stream(frame('tab-b-q', 'tab-b-session', 'done'));
+    expect(result.current.chatCompletion.completed).toBe(true);
+  });
+
+  it('refuses the foreign stream on the /new provider that has not unmounted yet', async () => {
+    const { result } = mount(null);
+    act(() => {
+      result.current.setChatCompletion(prev => ({ ...prev, completed: false, statusMessage: 'Generating' }));
+    });
+    useSessionLayout.setState({ pendingOptimisticId: OPTIMISTIC_ID });
+
+    await stream(foreign());
+    expect(result.current.chatCompletion.quest).toBeUndefined();
+    expect(result.current.chatCompletion.statusMessage).toBe('Generating');
+  });
+
+  it('holds a still-null view to a client-created session once it is recorded', async () => {
+    const { result } = mount(null);
+    act(() => {
+      result.current.setChatCompletion(prev => ({ ...prev, completed: false, statusMessage: 'Generating' }));
+    });
+    useSessionLayout.setState({ pendingRealSessionId: 'lake-session' });
+
+    await stream(foreign());
+    expect(result.current.chatCompletion.quest).toBeUndefined();
+
+    await stream(frame('lake-q', 'lake-session', 'running'));
+    expect(result.current.chatCompletion.quest?.id).toBe('lake-q');
+  });
+});
+
+describe('useSubscribeChatCompletion - rapid-reply acks', () => {
+  const OPTIMISTIC_ID = 'optimistic-session-rapid';
+  const ack = (ids: { sessionId?: string; questId?: string }, content = 'On it') => ({
+    action: 'streamed_rapid_reply',
+    ...ids,
+    rapidReply: { content, status: 'completed', modelId: 'm', mappingId: 'map' },
+  });
+
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    useSessionLayout.setState({ pendingOptimisticId: null, pendingRealSessionId: null });
+    while (blankRapidReplies.claim());
+  });
+
+  const stream = async (msg: unknown) => {
+    await act(async () => {
+      await latestStreamHandler()(msg);
+    });
+  };
+
+  it("refuses another session's ack on a real view and accepts the view's own", async () => {
+    const { result } = mount('s1');
+
+    await stream(ack({ sessionId: 'tab-a-session' }, 'Tab A ack'));
+    expect(result.current.chatCompletion.rapidReply).toBeUndefined();
+
+    await stream(ack({ sessionId: 's1' }));
+    expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
+  });
+
+  it("refuses another session's ack on the optimistic view before and after the real id is recorded", async () => {
+    useSessionLayout.setState({ pendingOptimisticId: OPTIMISTIC_ID });
+    const { result } = mount(OPTIMISTIC_ID);
+
+    await stream(ack({ sessionId: 'tab-a-session' }, 'Tab A ack'));
+    expect(result.current.chatCompletion.rapidReply).toBeUndefined();
+
+    useSessionLayout.setState({ pendingRealSessionId: 'tab-b-session' });
+    await stream(ack({ sessionId: 'tab-a-session' }, 'Tab A ack'));
+    expect(result.current.chatCompletion.rapidReply).toBeUndefined();
+
+    await stream(ack({ sessionId: 'tab-b-session' }));
+    expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
+  });
+
+  it('accepts the own id-less /new ack once, whether it lands before or after session.created', async () => {
+    useSessionLayout.setState({ pendingOptimisticId: OPTIMISTIC_ID });
+    const { result, rerender } = mount(OPTIMISTIC_ID);
+
+    // Another tab's id-less ack with no request of ours in flight.
+    await stream(ack({}, 'Tab C ack'));
+    expect(result.current.chatCompletion.rapidReply).toBeUndefined();
+
+    const release = blankRapidReplies.begin();
+    useSessionLayout.setState({ pendingOptimisticId: null, pendingRealSessionId: null });
+    rerender({ sessionId: 'tab-b-session' });
+    await stream(ack({}));
+    expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
+
+    // Claimed: a second id-less ack is not ours.
+    await stream(ack({}, 'Tab C ack'));
+    expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
+    release();
+  });
+
+  it('accepts a quest-only ack just for the held quest', async () => {
+    const { result } = mount(null);
+    act(() => {
+      result.current.setChatCompletion(prev => ({
+        ...prev,
+        completed: false,
+        quest: { id: 'own-q', sessionId: 'real', type: 'message', status: 'running' },
+      }));
+    });
+
+    await stream(ack({ questId: 'foreign-q' }, 'Foreign'));
+    expect(result.current.chatCompletion.rapidReply).toBeUndefined();
+
+    await stream(ack({ questId: 'own-q' }));
+    expect(result.current.chatCompletion.rapidReply?.content).toBe('On it');
   });
 });
 

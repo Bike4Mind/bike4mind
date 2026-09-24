@@ -2,10 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   IDLE_CHAT_COMPLETION,
   TerminalQuestTracker,
+  BlankRapidReplyTracker,
   adoptSentQuest,
   isChatCompletionActiveFor,
   isTerminalQuestStatus,
   resolveStopFailure,
+  shouldAcceptRapidReply,
   shouldAcceptStreamFrame,
   shouldResetOnSessionChange,
 } from './chatCompletionState';
@@ -104,17 +106,29 @@ describe('shouldAcceptStreamFrame', () => {
 });
 
 describe('shouldAcceptStreamFrame - own first send after the provider remounts', () => {
+  const minting = (frameSessionId: string, mintedSessionId: string | null, current = IDLE_CHAT_COMPLETION) =>
+    shouldAcceptStreamFrame({
+      frameSessionId,
+      frameQuestId: 'q1',
+      sessionId: OPTIMISTIC,
+      pendingSessionId: null,
+      current,
+      mintingOwnSession: true,
+      mintedSessionId,
+    });
+
   it("adopts the tab's own first frame on the optimistic id even though the remounted state reads idle", () => {
-    expect(
-      shouldAcceptStreamFrame({
-        frameSessionId: 'real',
-        frameQuestId: 'q1',
-        sessionId: OPTIMISTIC,
-        pendingSessionId: null,
-        current: IDLE_CHAT_COMPLETION,
-        mintingOwnSession: true,
-      })
-    ).toBe(true);
+    expect(minting('real', 'real')).toBe(true);
+  });
+
+  it('accepts nothing before the real session id is recorded, even with a send awaiting', () => {
+    expect(minting('real', null)).toBe(false);
+    expect(minting('other', null, awaitingOwnSend)).toBe(false);
+  });
+
+  it('refuses any other session once the real id is recorded', () => {
+    expect(minting('other', 'real')).toBe(false);
+    expect(minting('other', 'real', awaitingOwnSend)).toBe(false);
   });
 
   it('still refuses a second quest once the first is held', () => {
@@ -128,6 +142,50 @@ describe('shouldAcceptStreamFrame - own first send after the provider remounts',
         mintingOwnSession: true,
       })
     ).toBe(false);
+  });
+});
+
+describe('BlankRapidReplyTracker', () => {
+  it('lets each in-flight request claim exactly one id-less ack', () => {
+    const tracker = new BlankRapidReplyTracker();
+    expect(tracker.claim()).toBe(false);
+    const release = tracker.begin();
+    expect(tracker.claim()).toBe(true);
+    expect(tracker.claim()).toBe(false);
+    release();
+    expect(tracker.claim()).toBe(false);
+  });
+
+  it('drops a request whose ack never came once it settles', () => {
+    const tracker = new BlankRapidReplyTracker();
+    const release = tracker.begin();
+    release();
+    release();
+    expect(tracker.claim()).toBe(false);
+  });
+});
+
+describe('shouldAcceptRapidReply', () => {
+  const base = { sessionId: 's1', pendingSessionId: null, current: IDLE_CHAT_COMPLETION };
+
+  it('applies the stream-frame rule when the ack names a session', () => {
+    const claimBlank = () => true;
+    expect(shouldAcceptRapidReply({ ...base, frameSessionId: 's1', frameQuestId: undefined, claimBlank })).toBe(true);
+    expect(shouldAcceptRapidReply({ ...base, frameSessionId: 's2', frameQuestId: undefined, claimBlank })).toBe(false);
+  });
+
+  it('only claims a blank request for an ack with neither id', () => {
+    let claimed = 0;
+    const claimBlank = () => {
+      claimed++;
+      return true;
+    };
+    expect(shouldAcceptRapidReply({ ...base, frameSessionId: 's2', frameQuestId: undefined, claimBlank })).toBe(false);
+    expect(claimed).toBe(0);
+    expect(shouldAcceptRapidReply({ ...base, frameSessionId: undefined, frameQuestId: undefined, claimBlank })).toBe(
+      true
+    );
+    expect(claimed).toBe(1);
   });
 });
 

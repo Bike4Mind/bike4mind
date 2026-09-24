@@ -25,13 +25,14 @@ const isCreatingSession = (sessionId: string | null) => !sessionId || isOptimist
 
 /**
  * Whether a streamed frame belongs to the viewed session. While the session id is still
- * null/optimistic the frame carries a session id the tab doesn't know yet, so only the
- * quest this tab just sent is accepted: the one already held, or the first frame to land
- * while the tab's own send is awaiting it.
- *
- * `mintingOwnSession` is that same "awaiting" signal when the held state can't carry it:
- * the /new -> /notebooks/<optimistic id> navigation remounts the chat-completion provider,
- * so the placeholder set at send time is gone and the fresh state reads idle.
+ * null/optimistic the frame carries a session id the view doesn't show yet, so only this tab's
+ * own send is accepted: the quest already held, or a frame from `mintedSessionId` - the real
+ * session the send created. Session creation always precedes the quest (the server sends
+ * session.created before dispatching it), so while `mintingOwnSession` and nothing is recorded
+ * no frame can be ours yet and none is accepted. The /new -> /notebooks/<optimistic id>
+ * navigation remounts the provider, which is why these come from the store, not held state.
+ * A null view with neither signal (a server-minted session outside /new) keeps the old rule:
+ * the first frame while a send is awaiting.
  */
 export function shouldAcceptStreamFrame(params: {
   frameSessionId: string | undefined;
@@ -40,14 +41,60 @@ export function shouldAcceptStreamFrame(params: {
   pendingSessionId: string | null;
   current: Pick<IChatCompletion, 'completed' | 'quest'>;
   mintingOwnSession?: boolean;
+  mintedSessionId?: string | null;
 }): boolean {
-  const { frameSessionId, frameQuestId, sessionId, pendingSessionId, current, mintingOwnSession } = params;
+  const { frameSessionId, frameQuestId, sessionId, pendingSessionId, current, mintingOwnSession, mintedSessionId } =
+    params;
   if (!frameSessionId) return false;
   if (frameSessionId === sessionId) return true;
   if (!isCreatingSession(sessionId)) return false;
   if (pendingSessionId && frameSessionId === pendingSessionId) return true;
   if (current.quest?.id) return current.quest.id === frameQuestId;
-  return !current.completed || !!mintingOwnSession;
+  if (mintedSessionId) return frameSessionId === mintedSessionId;
+  if (mintingOwnSession) return false;
+  return !current.completed;
+}
+
+/**
+ * Rapid-reply acks this tab has requested for a brand-new session. The server echoes the
+ * request's ids, and a first send from /new has neither, so the ack arrives id-less and this is
+ * the only way to tell this tab's own ack from another tab's. One per tab, like terminalQuests.
+ */
+export class BlankRapidReplyTracker {
+  private readonly pending = new Set<symbol>();
+
+  /** Registers an in-flight request; returns its release, safe to call more than once. */
+  begin(): () => void {
+    const token = Symbol('blank-rapid-reply');
+    this.pending.add(token);
+    return () => {
+      this.pending.delete(token);
+    };
+  }
+
+  /** Claims one in-flight request for an arriving id-less ack; false when none is ours. */
+  claim(): boolean {
+    const token = this.pending.values().next().value;
+    if (token === undefined) return false;
+    this.pending.delete(token);
+    return true;
+  }
+}
+
+export const blankRapidReplies = new BlankRapidReplyTracker();
+
+/**
+ * Whether a rapid-reply ack belongs to the viewed session: the stream-frame rule when it carries a
+ * session id, the held quest when it carries only a quest id, and an in-flight request of this
+ * tab's own when it carries neither (see BlankRapidReplyTracker).
+ */
+export function shouldAcceptRapidReply(
+  params: Parameters<typeof shouldAcceptStreamFrame>[0] & { claimBlank: () => boolean }
+): boolean {
+  const { claimBlank, ...frame } = params;
+  if (frame.frameSessionId) return shouldAcceptStreamFrame(frame);
+  if (frame.frameQuestId) return frame.current.quest?.id === frame.frameQuestId;
+  return claimBlank();
 }
 
 /**
