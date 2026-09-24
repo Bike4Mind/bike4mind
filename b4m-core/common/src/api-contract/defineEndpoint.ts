@@ -14,7 +14,11 @@ import type { EndpointContract } from './types';
  */
 export function defineEndpoint<const C extends EndpointContract<z.ZodTypeAny>>(contract: C): C {
   if (contract.pathParams && contract.queryParams) {
-    const overlap = Object.keys(contract.pathParams.shape).filter(key => key in contract.queryParams!.shape);
+    // A `key in shape` check would also match Object.prototype names (`constructor`,
+    // `toString`, ...) that queryParams never declared - build the query side's own
+    // keys as a Set first, so only an actually-declared field name can overlap.
+    const queryKeys = new Set(Object.keys(contract.queryParams.shape));
+    const overlap = Object.keys(contract.pathParams.shape).filter(key => queryKeys.has(key));
     if (overlap.length > 0) {
       // Next merges the URL-template segment and the real query string into the
       // same req.query, keyed by name - see the pathParams/queryParams doc
