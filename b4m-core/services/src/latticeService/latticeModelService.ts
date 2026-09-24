@@ -14,6 +14,7 @@ import type {
   LatticeModelType,
   PrimitiveValue,
 } from '@bike4mind/common';
+import { normalizeId } from '@bike4mind/utils';
 import { HydrationEngine } from './HydrationEngine';
 
 // TYPES
@@ -44,11 +45,15 @@ export interface LatticeModelServiceDeps {
 }
 
 /**
- * User context for authorization
+ * User context for authorization.
+ *
+ * Both ids are id-ish rather than `string` because callers pass them straight off a hydrated
+ * Mongoose `req.user`, where `organizationId` is an ObjectId. Never compare either field raw -
+ * go through `canReadModel` / `isModelOwner`, which normalize both sides.
  */
 export interface LatticeModelUser {
   id: string;
-  organizationId?: string;
+  organizationId?: unknown;
 }
 
 /**
@@ -80,31 +85,62 @@ export interface HydrationResult {
   computedAt: Date;
 }
 
+// AUTHORIZATION PREDICATES
+
+/**
+ * The model's creator, compared through `normalizeId` on both sides.
+ *
+ * This is the WRITE gate (via `getModelForWrite`) and the owner arm of the read gate, and the
+ * subagent Lattice tools in `llm/tools/implementation/lattice` import it so the two surfaces
+ * cannot drift apart again.
+ */
+export function isModelOwner(model: Pick<ILatticeModel, 'userId'>, user: Pick<LatticeModelUser, 'id'>): boolean {
+  const ownerId = normalizeId(model.userId);
+  // An absent owner id must never match an absent caller id.
+  return ownerId !== undefined && ownerId === normalizeId(user.id);
+}
+
+/**
+ * READ gate: the creator, or a member of the organization the model was created in.
+ *
+ * Both org ids go through `normalizeId` because they are NOT the same runtime type:
+ * `LatticeModel.organizationId` is a String schema path while `req.user.organizationId` is an
+ * ObjectId on the hydrated user document, so a raw `===` was always false and silently collapsed
+ * org sharing to owner-only everywhere.
+ *
+ * Write authority stays narrower on purpose - see `getModelForWrite`.
+ */
+export function canReadModel(model: Pick<ILatticeModel, 'userId' | 'organizationId'>, user: LatticeModelUser): boolean {
+  if (isModelOwner(model, user)) return true;
+
+  // Both org ids must be present: a model with no org is private, and an org-less caller is in no
+  // org to share through.
+  const modelOrgId = normalizeId(model.organizationId);
+  return modelOrgId !== undefined && modelOrgId === normalizeId(user.organizationId);
+}
+
 // SERVICE IMPLEMENTATION
 
 /**
- * Create a new Lattice model
+ * The document every newly created model starts from: ownership, org membership, session/project
+ * scoping, and the empty three-layer skeleton.
+ *
+ * Exported because `lattice_create_model` cannot go through `createModel` - it persists a model
+ * together with its entities and rules in a single insert - and hand-rolling its own document is
+ * exactly how it came to omit `organizationId` and `sessionId`. A chat-created model was therefore
+ * invisible to the session-scoped list and unshareable with the organization no matter what the
+ * read gate said. Both paths build from here so they cannot drift apart again.
  */
-export async function createModel(
-  user: LatticeModelUser,
-  options: CreateModelOptions,
-  deps: LatticeModelServiceDeps
-): Promise<ILatticeModel> {
+export function buildNewModel(user: LatticeModelUser, options: CreateModelOptions): Partial<ILatticeModel> {
   const { name, description, modelType = 'custom', sessionId, projectId } = options;
-
-  // Validate name
-  if (!name || name.trim().length === 0) {
-    throw new Error('Model name is required');
-  }
-
-  // Create model with defaults
   const now = new Date();
-  const modelData: Partial<ILatticeModel> = {
+
+  return {
     name: name.trim(),
     description: description?.trim(),
     modelType,
     userId: user.id,
-    organizationId: user.organizationId,
+    organizationId: normalizeId(user.organizationId),
     sessionId,
     projectId,
     data: { entities: [], relationships: [] },
@@ -124,8 +160,21 @@ export async function createModel(
     createdAt: now,
     updatedAt: now,
   };
+}
 
-  return deps.db.latticeModels.create(modelData);
+/**
+ * Create a new Lattice model
+ */
+export async function createModel(
+  user: LatticeModelUser,
+  options: CreateModelOptions,
+  deps: LatticeModelServiceDeps
+): Promise<ILatticeModel> {
+  if (!options.name || options.name.trim().length === 0) {
+    throw new Error('Model name is required');
+  }
+
+  return deps.db.latticeModels.create(buildNewModel(user, options));
 }
 
 /**
@@ -142,19 +191,7 @@ export async function getModel(
     return null;
   }
 
-  // Authorization check - user must own the model or be in the same org.
-  // Org-based sharing is only allowed when both org IDs are present and equal.
-  const isOwner = model.userId === user.id;
-  const sameOrg =
-    model.organizationId !== undefined &&
-    user.organizationId !== undefined &&
-    model.organizationId === user.organizationId;
-
-  if (!isOwner && !sameOrg) {
-    return null;
-  }
-
-  return model;
+  return canReadModel(model, user) ? model : null;
 }
 
 /**
@@ -170,7 +207,8 @@ export async function getModel(
  * Lattice models carry no share/grant field, so the creator is the only principal that can hold
  * write authority today. If an explicit write grant is ever added, this is the one place to admit
  * it - keeping the check here rather than inlined in six mutators is what makes that a one-line
- * change instead of a six-site audit.
+ * change instead of a six-site audit. The subagent Lattice tools mutate outside this helper (they
+ * hit the repository directly) and so import `isModelOwner` to stay on the same rule.
  */
 async function getModelForWrite(
   user: LatticeModelUser,
@@ -179,11 +217,16 @@ async function getModelForWrite(
 ): Promise<ILatticeModel | null> {
   const model = await getModel(user, modelId, deps);
   if (!model) return null;
-  return model.userId === user.id ? model : null;
+  return isModelOwner(model, user) ? model : null;
 }
 
 /**
- * List models for a user
+ * List models the caller may read.
+ *
+ * The session and project branches fetch every model on that session/project and filter with the
+ * shared read gate, so org-shared models show up there. The unfiltered branch is owner-only by
+ * query (`findByUserId`), which keeps "my models" meaning exactly that; widening it to the whole
+ * organization is a product decision, not part of the id-normalization fix.
  */
 export async function listModels(
   user: LatticeModelUser,
@@ -198,22 +241,14 @@ export async function listModels(
     models = await deps.db.latticeModels.findBySessionId(options.sessionId);
 
     // Authorization: only include models owned by the user or in the same organization
-    models = models.filter(
-      model =>
-        model.userId === user.id ||
-        (model.organizationId != null && user.organizationId != null && model.organizationId === user.organizationId)
-    );
+    models = models.filter(model => canReadModel(model, user));
 
     total = models.length;
   } else if (options.projectId) {
     models = await deps.db.latticeModels.findByProjectId(options.projectId);
 
     // Authorization: only include models owned by the user or in the same organization
-    models = models.filter(
-      model =>
-        model.userId === user.id ||
-        (model.organizationId != null && user.organizationId != null && model.organizationId === user.organizationId)
-    );
+    models = models.filter(model => canReadModel(model, user));
 
     total = models.length;
   } else {
@@ -557,7 +592,7 @@ export async function duplicateModel(
     description: model.description ? `Copy of ${model.description}` : undefined,
     modelType: model.modelType,
     userId: user.id,
-    organizationId: user.organizationId,
+    organizationId: normalizeId(user.organizationId),
     data: structuredClone(model.data),
     rules: structuredClone(model.rules),
     views: structuredClone(model.views),
