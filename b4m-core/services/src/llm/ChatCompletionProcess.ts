@@ -121,7 +121,7 @@ import {
   ELISION_MATCH_MAX,
   ELISION_NAME_MAX,
 } from './elisionStamp';
-import { buildEarlyStopStamp } from './earlyStopStamp';
+import { buildEarlyStopStamp, buildIncompleteAnswerNotice } from './earlyStopStamp';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -4212,6 +4212,16 @@ export class ChatCompletionProcess {
       let toolPairingRetried = false;
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
+      // Where the last tool call landed in the visible reply, so the end of the turn can tell
+      // an answer written after the tools ran from a preamble written before them. The slots
+      // themselves can't say this: every iteration appends into the same indices.
+      let toolCallsSeen = 0;
+      let visibleCharsAtLastToolCall = 0;
+      const countVisibleChars = (slots: readonly string[] | undefined) =>
+        (slots ?? [])
+          .map(slot => visibleReplyText(slot))
+          .join('')
+          .trim().length;
 
       // Rapid reply handoff: initialize handoff variables outside streaming callback
       let handOff = false;
@@ -4236,6 +4246,8 @@ export class ChatCompletionProcess {
             actualTokenUsage.cacheReadInputTokens = undefined;
             actualTokenUsage.cacheCreationInputTokens = undefined;
             actualTokenUsage.stopReason = undefined;
+            toolCallsSeen = 0;
+            visibleCharsAtLastToolCall = 0;
 
             // Same reasoning for tool-credit reservations: quest.promptMeta.functionCalls
             // is reassigned (not appended) per attempt, but toolCreditsMap is instance
@@ -4449,6 +4461,13 @@ export class ChatCompletionProcess {
                     logger.info(`🔄 [DEBUG] Unknown transition mode: ${transitionMode}`);
                   }
                   // Note: 'enhance' mode would be more complex and could be implemented later
+                }
+
+                // Snapshot before this chunk lands: backends grow toolsUsed only after the
+                // tool-calling stream ends, so this chunk already belongs to the next iteration.
+                if (toolsUsed.length > toolCallsSeen) {
+                  toolCallsSeen = toolsUsed.length;
+                  visibleCharsAtLastToolCall = countVisibleChars(quest.replies);
                 }
 
                 streamedTexts.forEach((text, index) => {
@@ -4741,6 +4760,28 @@ export class ChatCompletionProcess {
 
         // Mark quest as done when all the replies are received
         quest.status = successStatus();
+
+        const incompleteAnswerNotice = buildIncompleteAnswerNotice({
+          stopped: quest.status === 'stopped',
+          toolCallCount: toolCallsSeen,
+          visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
+          stopReason: actualTokenUsage.stopReason,
+        });
+        if (incompleteAnswerNotice) {
+          logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
+            questId,
+            model: currentModel.id,
+            stopReason: actualTokenUsage.stopReason,
+            toolCallCount: toolCallsSeen,
+          });
+          // Same shape as setErrorReply in the catch below: the notice is its own slot and
+          // quest.reply carries the visible text. Visible only, because the client's
+          // extractThinking reads reply AND replies, so raw slots here would show the
+          // reasoning twice. The leading break keeps it off the preamble's line, since
+          // extractReplies joins slots with ''.
+          quest.replies = [...(quest.replies ?? []), `\n\n${incompleteAnswerNotice}`];
+          quest.reply = quest.replies.map(slot => visibleReplyText(slot)).join('');
+        }
 
         const modelInferenceTime = Date.now() - modelInferenceStartTime;
         quest.promptMeta!.performance!.modelInferenceTime = modelInferenceTime;

@@ -42,3 +42,31 @@ export function buildEarlyStopStamp(finishReason: string | undefined | null): Ea
   }
   return null;
 }
+
+/** Appended as its own reply slot when a tool-loop turn finishes without writing an answer. */
+export const INCOMPLETE_ANSWER_NOTICE = 'The response ended before an answer was written. Please try again.';
+
+/** The max_tokens variant: the output budget ran out (usually on reasoning) before the answer. */
+export const TRUNCATED_ANSWER_NOTICE =
+  'The response hit the output length limit before an answer was written. Please try again, or ask for a shorter answer.';
+
+export interface AnswerCompletenessInput {
+  /** A stopped turn ended because the user asked it to, so an empty answer is expected. */
+  stopped: boolean;
+  toolCallCount: number;
+  /** Visible (non-reasoning) characters streamed after the last tool call was requested. */
+  visibleCharsAfterLastToolCall: number;
+  stopReason: string | undefined | null;
+}
+
+/**
+ * The notice for a turn that ended on the success path without an answer, or null. A plain
+ * turn with no tool calls is only flagged when it was truncated; an empty clean finish there
+ * is left alone, since nothing distinguishes it from an intentionally empty reply.
+ */
+export function buildIncompleteAnswerNotice(input: AnswerCompletenessInput): string | null {
+  if (input.stopped || input.visibleCharsAfterLastToolCall > 0) return null;
+  if (input.stopReason === TRUNCATED_FINISH_REASON) return TRUNCATED_ANSWER_NOTICE;
+  if (input.toolCallCount > 0) return INCOMPLETE_ANSWER_NOTICE;
+  return null;
+}

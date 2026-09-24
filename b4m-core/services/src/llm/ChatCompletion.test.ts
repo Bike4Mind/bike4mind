@@ -52,6 +52,7 @@ import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
+import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -1244,6 +1245,116 @@ describe('ChatCompletionProcess', () => {
       expect(statuses.length).toBeGreaterThan(0);
       expect(statuses.at(-1)).toBe('stopped');
       expect(mockQuest.status).toBe('stopped');
+    });
+
+    describe('incomplete answer notice', () => {
+      type Emit = (chunks: string[], info?: Record<string, unknown>) => Promise<void>;
+
+      function setupTurn(run: (cb: Emit, opts: { abortSignal: AbortSignal }) => Promise<void>) {
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => run(cb, opts)),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      }
+
+      const runTurn = () =>
+        service.process({
+          body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+          logger: mockLogger,
+        });
+
+      // Mirrors the Anthropic backend: the preamble streams, toolsUsed grows once the
+      // tool-calling stream ends, and the next iteration streams against the grown array.
+      async function toolLoop(cb: Emit, finalIteration: string[], stopReason = 'end_turn') {
+        const toolsUsed: Array<Record<string, unknown>> = [];
+        await cb(["I'll pull current figures first."], { toolsUsed });
+        toolsUsed.push({ name: 'web_search', arguments: '{"q":"figures"}', id: 't1' });
+        await cb(['<think>checking results</think>'], { toolsUsed });
+        toolsUsed.push({ name: 'web_fetch', arguments: '{"url":"x"}', id: 't2' });
+        for (const chunk of finalIteration) await cb([chunk], { toolsUsed });
+        await cb([], { toolsUsed, stopReason });
+      }
+
+      it('appends a notice when the final tool-loop iteration emits only thinking', async () => {
+        setupTurn(cb => toolLoop(cb, ['<think>', 'more reasoning', '</think>']));
+
+        await runTurn();
+
+        expect(mockQuest.status).toBe('done');
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+        // Visible text only: the client reads thinking from reply as well as replies.
+        expect(mockQuest.reply).toBe(`I'll pull current figures first.\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[IncompleteAnswer]'),
+          expect.objectContaining({ questId: 'quest1', stopReason: 'end_turn' })
+        );
+      });
+
+      it('adds no notice when the tool loop ends with a real answer', async () => {
+        setupTurn(cb => toolLoop(cb, ['<think>ok</think>', 'Here are the figures.']));
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+        expect(mockQuest.replies.join('')).toContain('Here are the figures.');
+      });
+
+      it('adds no notice to a stopped turn', async () => {
+        setupTurn(async (cb, opts) => {
+          const toolsUsed = [{ name: 'web_search', arguments: '{}', id: 't1' }];
+          await cb(['<think>thinking</think>'], { toolsUsed });
+          mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal.aborted) return resolve();
+            opts.abortSignal.addEventListener('abort', () => resolve());
+            setTimeout(resolve, 3000);
+          });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.status).toBe('stopped');
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('appends the truncation notice on max_tokens with no final text', async () => {
+        setupTurn(cb => toolLoop(cb, ['<think>', 'long reasoning'], 'max_tokens'));
+
+        await runTurn();
+
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${TRUNCATED_ANSWER_NOTICE}`);
+      });
+
+      it('adds no notice to a plain answer with no tool calls', async () => {
+        setupTurn(async cb => {
+          await cb(['Hi!'], { toolsUsed: [] });
+          await cb([], { toolsUsed: [], stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies).toEqual(['Hi!']);
+      });
     });
 
     // Every other test in this file mocks messageTruncation: null, which never exercises the
