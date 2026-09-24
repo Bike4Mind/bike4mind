@@ -36,6 +36,29 @@ function makeBaseExecution(overrides: Partial<Parameters<typeof agentExecutionRe
 describe('AgentExecutionRepository', () => {
   setupMongoTest();
 
+  describe('restoreRejectedResume', () => {
+    it('atomically restores the paused marker after a definitive dispatch rejection', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ status: 'continuing' }));
+      const permission = { toolName: 'web_search', toolInput: {}, requestedAt: new Date() };
+      expect(
+        await agentExecutionRepository.restoreRejectedResume(execution.id, {
+          status: 'awaiting_permission',
+          pendingPermission: permission,
+        })
+      ).toBe(true);
+      const restored = await agentExecutionRepository.findById(execution.id);
+      expect(restored?.status).toBe('awaiting_permission');
+      expect(restored?.pendingPermission?.toolName).toBe('web_search');
+    });
+    it('does not overwrite a claimed or aborted execution', async () => {
+      for (const status of ['running', 'aborted'] as const) {
+        const execution = await agentExecutionRepository.create(makeBaseExecution({ status }));
+        expect(await agentExecutionRepository.restoreRejectedResume(execution.id, { status: 'paused' })).toBe(false);
+        expect((await agentExecutionRepository.findById(execution.id))?.status).toBe(status);
+      }
+    });
+  });
+
   describe('countActiveByUserId', () => {
     it('counts top-level executions in any active status', async () => {
       const userId = new mongoose.Types.ObjectId().toString();
