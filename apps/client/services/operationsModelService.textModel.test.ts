@@ -144,4 +144,21 @@ describe('OperationsModelService.getOperationsModel without the configured backe
 
     expect(result.modelId).toBe(LEGACY_HAIKU.id);
   });
+
+  it('does not overwrite the admin-configured operations model when falling back', async () => {
+    mockGetAvailableModels.mockResolvedValue([LEGACY_HAIKU, HAIKU_4_5]);
+
+    await OperationsModelService.getOperationsModel();
+
+    const [filter, update, options] = mockAdminSettings.findOneAndUpdate.mock.calls[0];
+    expect(filter).toEqual({ settingName: 'operationsModel' });
+    expect(update).not.toHaveProperty('settingValue');
+    expect(update).toEqual({
+      $setOnInsert: {
+        settingName: 'operationsModel',
+        settingValue: expect.objectContaining({ modelId: 'gpt-4o-mini' }),
+      },
+    });
+    expect(options).toEqual({ upsert: true });
+  });
 });

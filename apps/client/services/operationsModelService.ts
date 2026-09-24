@@ -408,13 +408,17 @@ export class OperationsModelService {
       speechModelId: 'whisper-1',
     };
 
-    // Try to seed the default setting, but don't fail if database is unavailable
+    // Seed the default setting, but don't fail if database is unavailable. $setOnInsert:
+    // this also runs when a configured model is merely unavailable here (e.g. no key for its
+    // backend), and that must not overwrite the admin's choice.
     try {
       await AdminSettings.findOneAndUpdate(
         { settingName: 'operationsModel' },
         {
-          settingName: 'operationsModel',
-          settingValue: defaultConfig,
+          $setOnInsert: {
+            settingName: 'operationsModel',
+            settingValue: defaultConfig,
+          },
         },
         { upsert: true }
       );
