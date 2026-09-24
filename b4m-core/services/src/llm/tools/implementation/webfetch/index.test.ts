@@ -409,6 +409,26 @@ describe('firecrawlFetch Firecrawl config threading', () => {
   });
 });
 
+describe('firecrawlFetch onlyMainContent', () => {
+  it("leaves Firecrawl's default in place when the caller does not set it", async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    await firecrawlFetch(adapters, 'https://example.com/doc');
+    expect(scrapeUrl).toHaveBeenCalledWith('https://example.com/doc', expect.not.objectContaining({ onlyMainContent: expect.anything() }));
+  });
+
+  it('passes onlyMainContent: false through so headers, navs and footers are kept', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    await firecrawlFetch(adapters, 'https://example.com/doc', { onlyMainContent: false });
+    expect(scrapeUrl).toHaveBeenCalledWith('https://example.com/doc', expect.objectContaining({ onlyMainContent: false }));
+  });
+
+  it('keeps the option on the PDF path too', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    await firecrawlFetch(adapters, 'https://example.com/doc.pdf', { onlyMainContent: false });
+    expect(scrapeUrl).toHaveBeenCalledWith('https://example.com/doc.pdf', expect.objectContaining({ onlyMainContent: false }));
+  });
+});
+
 describe('firecrawlFetch keyless plain-fetch fallback', () => {
   it('falls back to plainFetchScrape when Firecrawl is not configured', async () => {
     mockCreateApp.mockReturnValueOnce(null);
