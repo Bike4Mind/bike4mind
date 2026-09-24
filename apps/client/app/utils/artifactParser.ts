@@ -956,17 +956,9 @@ function extractComponentName(code: string): string | null {
   return null;
 }
 
-/**
- * Extracts title from HTML content, minus any double quote. Every caller interpolates
- * the result into title="...", and the artifact attribute parser (ATTRIBUTE_REGEX) has
- * no escape mechanism, so an embedded " in this model-controlled text would truncate
- * the attribute and leave the rest of the title to be read as further attributes.
- * Apostrophes are safe inside a double-quoted value and are kept.
- */
 function extractHTMLTitle(code: string): string | null {
   const titleMatch = code.match(/<title>(.*?)<\/title>/i);
-  if (!titleMatch) return null;
-  return titleMatch[1].replace(/[<>"]/g, '') || null;
+  return titleMatch ? titleMatch[1] : null;
 }
 
 // Strip <, >, and " before interpolating a document-controlled title into title="...".

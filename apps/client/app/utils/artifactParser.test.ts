@@ -141,12 +141,18 @@ describe('parseArtifactsWithFallback', () => {
     expect(result.artifacts[0].title).toBe('A test page');
   });
 
-  it('sanitizes < > and " from the title of a fenced HTML fragment', () => {
+  it('falls back to HTML Snippet when a fenced fragment has no title tag', () => {
     const fence = '```html\n<div><h1>Hi</h1></div>\n<!-- title tag is in a comment -->\n```';
-    // No title tag => falls back to HTML Snippet (safe by construction, but run the path).
     const result = parseArtifactsWithFallback(fence);
     expect(result.artifacts).toHaveLength(1);
     expect(result.artifacts[0].title).toBe('HTML Snippet');
+  });
+
+  it('sanitizes < > and " from the title of a fenced HTML fragment', () => {
+    const fence = '```html\n<div><h1>Hi</h1></div>\n<title>Bad<>Title"</title>\n```';
+    const result = parseArtifactsWithFallback(fence);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('BadTitle');
   });
 
   it('promotes a bare HTML document even when an explicit artifact is also present', () => {
