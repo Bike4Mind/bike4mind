@@ -20,6 +20,20 @@ interface EditLocalFileParams {
    * Exact matches are deterministic and ignore it.
    */
   confirmedFuzzyHash?: string;
+  /**
+   * Internal, NOT part of the tool schema. The gate's already-resolved span (see
+   * {@link resolveEditLocalFile}), paired with the content hash it was resolved
+   * against. The write path still reads the file fresh - the file can change between
+   * the gate and the write with no permission prompt involved (another tool call, a
+   * formatter, a watcher), so the read itself can never be safely skipped - but when
+   * the fresh hash still matches `contentHash`, it reuses `resolvedEdit` instead of
+   * re-running resolveEdit()'s string-matching pass. Injected by the CLI permission
+   * layer; the model cannot set it.
+   */
+  gateSnapshot?: {
+    contentHash: string;
+    resolvedEdit: ResolvedEdit;
+  };
 }
 
 interface EditLocalFileResult {
@@ -36,7 +50,7 @@ interface DiffResult {
 }
 
 /** The span of the file to replace and what to replace it with. */
-interface ResolvedEdit {
+export interface ResolvedEdit {
   startIndex: number;
   matchedText: string;
   replacement: string;
@@ -160,6 +174,12 @@ export interface EditPlan {
   strategy?: FuzzyStrategy;
   /** Diff of the real matched span -> replacement, for the permission preview. */
   diffPreview: string;
+  /**
+   * The span resolved from `contentHash`'s bytes. Handed back to the write path as
+   * `gateSnapshot` (see {@link EditLocalFileParams}) so a call doesn't pay for a
+   * second resolveEdit() pass when the file hasn't changed since.
+   */
+  resolvedEdit: ResolvedEdit;
 }
 
 /**
@@ -187,11 +207,12 @@ export async function resolveEditLocalFile(
     contentHash: sha256(currentContent),
     strategy: resolved.strategy,
     diffPreview: formatSpanPreview(filePath, resolved.matchedText, resolved.replacement),
+    resolvedEdit: resolved,
   };
 }
 
 async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: string[]): Promise<EditLocalFileResult> {
-  const { path: filePath, old_string, new_string, confirmedFuzzyHash } = params;
+  const { path: filePath, old_string, new_string, confirmedFuzzyHash, gateSnapshot } = params;
 
   // Validate path is within allowed directories (cwd is always included)
   const resolvedPath = assertPathAllowed(filePath, allowedDirectories, 'edit');
@@ -201,15 +222,25 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
     throw new Error(`File not found: ${filePath}`);
   }
 
+  // The file can change between the gate's resolve and this write with no permission
+  // prompt involved at all (another tool call, a formatter, a watcher) - see the
+  // TOCTOU regression test this guards. The read can never be safely skipped, so it
+  // always happens here, same as before this file's gateSnapshot reuse existed.
   const currentContent = await fs.readFile(resolvedPath, 'utf-8');
   const currentHash = sha256(currentContent);
-  const resolved = resolveEdit(currentContent, old_string, new_string);
+
+  // Reuse the gate's already-resolved span only when the file hasn't changed since -
+  // this is what skips the redundant resolveEdit() string-matching pass.
+  const resolved =
+    gateSnapshot && gateSnapshot.contentHash === currentHash
+      ? gateSnapshot.resolvedEdit
+      : resolveEdit(currentContent, old_string, new_string);
 
   // A fuzzy fallback can write a wider span than old_string names, so it must be
   // confirmed against the exact bytes present. Refuse unless the caller approved
   // THIS content hash; the CLI re-prompts on this and retries bound to the hash.
-  // Exact matches are deterministic and need no confirmation. Verified here,
-  // against the same read that writes below, so there is no gate -> write window.
+  // Exact matches are deterministic and need no confirmation. Verified here, against
+  // the same read that writes below, so there is no gate -> write window.
   if (resolved.strategy && confirmedFuzzyHash !== currentHash) {
     throw new FuzzyEditConfirmationRequiredError(
       resolvedPath,
