@@ -80,6 +80,17 @@ export function buildApiKeyTable(keys: EffectiveLLMKeys): ApiKeyTable {
 }
 
 /**
+ * The key table for a caller that holds one credential and knows which backend it
+ * belongs to (the syncModelDescriptions script). Keyed by the stated backend, never
+ * by the model id: `deepseek-r1:latest` is an Ollama pull and `moonshot.kimi-*` is
+ * Bedrock, so id text cannot say whose key it is. The AWS-IAM backends get an empty
+ * table - there is no key to pass.
+ */
+export function apiKeyTableForBackend(backend: ModelBackend, apiKey: string): ApiKeyTable {
+  return KEYLESS_LISTING_BACKENDS.includes(backend) ? {} : { [backend]: apiKey };
+}
+
+/**
  * Listing backends that take no credential. They still need real AWS credentials
  * at dispatch, which a self-host install does not have (its AWS_ACCESS_KEY_ID is
  * the local MinIO credential), so `isSelfHost` withholds them rather than

@@ -1,6 +1,6 @@
 import { ModelBackend } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { buildApiKeyTable, isBackendUsable, resolveListingKey } from './backendGate';
+import { apiKeyTableForBackend, buildApiKeyTable, isBackendUsable, resolveListingKey } from './backendGate';
 import { getAvailableModels } from './index';
 
 /**
@@ -85,6 +85,27 @@ describe('buildApiKeyTable', () => {
 
     const without = { apiKeys: buildApiKeyTable({ ...ALL_KEYS, deepseek: null }), isSelfHost: false };
     expect(isBackendUsable(ModelBackend.DeepSeek, without)).toBe(false);
+  });
+});
+
+describe('apiKeyTableForBackend', () => {
+  it('files the key under the stated backend, whatever the id would suggest', () => {
+    // The ids that used to be sniffed onto the wrong key: an Ollama deepseek pull
+    // resolved to the DeepSeek-direct key, so Ollama was never listed.
+    expect(apiKeyTableForBackend(ModelBackend.Ollama, 'http://localhost:11434')).toEqual({
+      [ModelBackend.Ollama]: 'http://localhost:11434',
+    });
+    for (const backend of Object.values(ModelBackend)) {
+      if (KEYLESS.has(backend)) continue;
+      expect(apiKeyTableForBackend(backend, 'k')).toEqual({ [backend]: 'k' });
+    }
+  });
+
+  it('passes no key for the AWS-IAM backends', () => {
+    // Bedrock-served deepseek.* and moonshot.* ids used to resolve to the
+    // DeepSeek and Moonshot direct keys.
+    expect(apiKeyTableForBackend(ModelBackend.Bedrock, 'k')).toEqual({});
+    expect(apiKeyTableForBackend(ModelBackend.AWS, 'k')).toEqual({});
   });
 });
 
