@@ -149,6 +149,18 @@ describe('notifyKeptPersonalLakeShares', () => {
     expect(warn).toHaveBeenCalled();
   });
 
+  // MailService resolves `false` on a send failure instead of rejecting, so this branch is the only
+  // thing that tells a half-delivered run from a clean one.
+  it('counts a send that resolves false as failed, and still resolves', async () => {
+    const sendEmail = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const { deps: d, warn } = deps(sendEmail);
+
+    await expect(notifyKeptPersonalLakeShares(shares, context, d)).resolves.toBeUndefined();
+
+    expect(sendEmail).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(expect.any(String), { failed: 1 });
+  });
+
   it('never throws when the user lookup does', async () => {
     const { deps: d, warn } = deps(vi.fn());
     vi.mocked(d.db.users.findActiveEmailsByIds).mockRejectedValue(new Error('db down'));
