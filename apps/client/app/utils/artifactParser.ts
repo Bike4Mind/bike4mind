@@ -623,49 +623,9 @@ ${stripArtifactTagsFromRawBody(String(toolOutput.content))}
     });
   }
 
-  // Fallback: If no patterns matched, try a more aggressive approach.
-  // Currently unreachable: fallbackPattern's capture starts with a greedy [^"]*, which
-  // swallows the backslash of the first \" pair, so the alternation that was meant to walk
-  // escaped quotes never engages and the capture always ends at the payload's first quote.
-  // JSON.parse then fails at every escaping depth. Kept (and hardened alongside the live
-  // branches above) because a fix to that pattern would reach this body interpolation.
-  if (processedContent === content && hasTargetType) {
-    // Look for the basic structure: "result":"{ ... "type":"mermaid" ... }"
-    const fallbackPattern = /"result":\s*"([^"]*(?:\\"[^"]*)*)"[^}]*\}/g;
-    let fallbackMatch;
-
-    while ((fallbackMatch = fallbackPattern.exec(content)) !== null) {
-      const resultContent = fallbackMatch[1];
-
-      // Check if this result contains our target types
-      if (/(?:rechart|recharts|mermaid)/.test(resultContent)) {
-        // Try to reconstruct the JSON by unescaping
-        let reconstructed = resultContent;
-        try {
-          // Simple unescaping for the most common cases
-          reconstructed = reconstructed.replace(/\\"/g, '"').replace(/\\n/g, '\n');
-
-          // Try to parse as JSON
-          const toolOutput = JSON.parse(reconstructed);
-
-          if (toolOutput.type === 'mermaid' && toolOutput.content) {
-            const identifier = `mermaid-${Date.now()}`;
-            const title = sanitizeToolOutputTitle(toolOutput.metadata?.title || 'Mermaid Diagram') || 'Mermaid Diagram';
-
-            const artifactSyntax = `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">
-${stripArtifactTagsFromRawBody(String(toolOutput.content))}
-</artifact>`;
-
-            // Replace the original match with artifact syntax
-            processedContent = processedContent.replace(fallbackMatch[0], artifactSyntax);
-          }
-        } catch (parseError) {
-          console.warn('🔧 Fallback JSON parsing failed:', parseError);
-        }
-      }
-    }
-  }
-
+  // Deliberately no tail fallback below this loop. The one that used to sit here could
+  // not capture an escaped quote, so it never promoted anything, and its scan was
+  // quadratic on a payload that carried no closing brace.
   return processedContent;
 }
 
