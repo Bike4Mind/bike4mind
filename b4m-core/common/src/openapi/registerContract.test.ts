@@ -103,6 +103,32 @@ describe('registerContract - queryParams', () => {
     });
   });
 
+  it('does not throw for a queryParams object that carries a .refine() alongside a bare coerced field', () => {
+    // zod 4's `.extend()` refuses to overwrite keys on an object schema that carries a
+    // refinement ("Cannot overwrite keys on object schemas containing refinements. Use
+    // .safeExtend() instead."), which withAccurateCoercedParams's rebuild would trigger
+    // for a range-check contract like `from <= to`. `.safeExtend()` is the same override,
+    // minus that restriction.
+    const rangeQuery: EndpointContract = {
+      ...contract,
+      operationId: 'getFixtureRange',
+      path: '/api/v1/fixture-range',
+      pathParams: undefined,
+      queryParams: z
+        .object({ from: z.coerce.number(), to: z.coerce.number() })
+        .refine(v => v.from <= v.to, { message: '`from` must not exceed `to`' }),
+    };
+    expect(() => registerContract(rangeQuery)).not.toThrow();
+    const generated = new OpenApiGeneratorV31(registry.definitions).generateDocument({
+      openapi: '3.1.0',
+      info: { title: 'fixture', version: '0.0.0' },
+    });
+    const op = getOperation(generated, '/api/v1/fixture-range');
+    const byName = Object.fromEntries((op.parameters ?? []).map(p => [p.name, p]));
+    expect(byName.from).toMatchObject({ in: 'query', required: true, schema: { type: 'number' } });
+    expect(byName.to).toMatchObject({ in: 'query', required: true, schema: { type: 'number' } });
+  });
+
   it('auto-documents a 422 for a contract with only queryParams (no request body or pathParams)', () => {
     const queryOnly: EndpointContract = {
       ...contract,
