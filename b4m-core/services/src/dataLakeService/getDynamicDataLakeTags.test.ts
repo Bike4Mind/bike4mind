@@ -662,6 +662,9 @@ describe('getDynamicDataLakeAccess - the #3055 gate-excluded-lake count', () => 
       expect(res.excludedByAccessCount).toBeUndefined();
       expect(res.lakeViewComplete).toBe(false);
       expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('enforce-flag read failed'));
+      // The skip is an incident here, not this host's standing contract - which is the only thing
+      // `countPrerequisiteReadFailed` buys on this branch, and nothing else observes it.
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('gate-excluded-lake count skipped'));
     });
 
     // #3155 (review): both prerequisite reads can fail on the same turn - pins that the combination

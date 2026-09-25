@@ -383,10 +383,9 @@ export async function getDynamicDataLakeAccess(context: DataLakeAccessContext): 
   // key list nobody stands behind - and a count is the one output where that is indistinguishable
   // from a real exclusion.
   //
-  // No warn here for an incomplete seed: the count this gates only exists inside the
-  // `context.db.dataLakes` branch below, which already warns once, correctly, when it actually
-  // skips the query - warning here too would double-log on a wired host, and warn about a count
-  // that was never going to run at all on a registry-only one.
+  // No warn here for an incomplete seed: the branch below warns when a prerequisite read actually
+  // failed, and a host that merely never stated completeness skips silently. Warning here would
+  // double-log the first and bury it under the second.
   let excludedByAccessCountPrerequisitesComplete = context.entitlementKeysResolved === true;
   // Separates "a read this count depends on FAILED" from "this host merely never stated
   // completeness". Both skip the count, but only the first is worth a log line: the structural
