@@ -100,6 +100,7 @@ export * from './openSearchRetrievalIndex';
 export * from './attributeAccessedLakes';
 export * from './recordLakeAccessEvent';
 export * from './assembleLakeConfigHistory';
+export * from './diffLakeMembership';
 export * from './canonicalSourceKey';
 export * from './applyCorpusAction';
 export * from './recordLakeFindings';
