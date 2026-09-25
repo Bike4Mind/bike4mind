@@ -238,8 +238,11 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
               </Typography>
             )}
           </Typography>
-          {/* Chips are full-width and stack, so a default bottom tooltip lands on the next
-              chip - which for the conflict badge is often the very source it names. */}
+          {/* Both badges below pin placement="top": chips are full-width and stack, so Joy's
+              default bottom lands the box on the next chip down. Note this does not clear the
+              conflict case entirely - conflicts are stamped symmetrically, so the lower chip of
+              a pair now opens over the partner above it. No placement clears both on a stacked
+              list; removing it needs a design change, not a prop (#3290). */}
           {isTruncated && (
             <Tooltip
               size="sm"
