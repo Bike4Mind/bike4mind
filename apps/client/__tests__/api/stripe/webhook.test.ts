@@ -31,6 +31,7 @@ const mockPostMessageToSlack = vi.fn();
 const mockSendToClient = vi.fn();
 const mockStripeChargesRetrieve = vi.fn();
 const mockConstructEvent = vi.fn();
+const mockDeactivateAll = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   creditLotRepository: {},
@@ -47,6 +48,12 @@ vi.mock('@bike4mind/database', () => ({
     findById: (...args: unknown[]) => mockFindById(...args),
     update: (...args: unknown[]) => mockUserUpdate(...args),
     incrementCredits: vi.fn(),
+  },
+}));
+
+vi.mock('@bike4mind/database/auth', () => ({
+  userApiKeyRepository: {
+    deactivateAllByUserId: (...args: unknown[]) => mockDeactivateAll(...args),
   },
 }));
 
@@ -322,6 +329,38 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       await expect(invokeWebhookWithEvent(disputeEvent)).resolves.not.toThrow();
     });
 
+    it('deactivates the user API keys before setting disputePending', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+      mockSubtractCredits.mockResolvedValue({ currentCredits: 300 });
+
+      await invokeWebhookWithEvent(disputeEvent);
+
+      expect(mockDeactivateAll).toHaveBeenCalledTimes(1);
+      expect(mockDeactivateAll).toHaveBeenCalledWith('user123');
+      expect(mockDeactivateAll.mock.invocationCallOrder[0]).toBeLessThan(mockUserUpdate.mock.invocationCallOrder[0]);
+    });
+
+    it('does not deactivate keys when the user is already flagged', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser, disputePending: true });
+      mockSubtractCredits.mockResolvedValue({ currentCredits: 300 });
+
+      await invokeWebhookWithEvent(disputeEvent);
+
+      expect(mockDeactivateAll).not.toHaveBeenCalled();
+    });
+
+    it('still deactivates keys on a retry whose clawback is a duplicate (code 11000)', async () => {
+      mockFindByPaymentIntentId.mockResolvedValue(mockTx);
+      mockFindById.mockResolvedValue({ ...mockUser });
+      mockSubtractCredits.mockRejectedValue(Object.assign(new Error('E11000 duplicate key'), { code: 11000 }));
+
+      await invokeWebhookWithEvent(disputeEvent);
+
+      expect(mockDeactivateAll).toHaveBeenCalledWith('user123');
+    });
+
     it('sends Slack alert and skips clawback when user not found', async () => {
       mockFindByPaymentIntentId.mockResolvedValue(null);
       mockStripeChargesRetrieve.mockResolvedValue({ customer: 'cus_unknown' });
@@ -371,6 +410,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       const updatedUser = mockUserUpdate.mock.calls[0][0];
       expect(updatedUser.disputePending).toBe(false);
       expect(mockPostMessageToSlack).toHaveBeenCalledWith(expect.stringContaining('dp_close_abc'));
+      expect(mockDeactivateAll).not.toHaveBeenCalled();
     });
 
     it('takes no action when dispute is lost', async () => {

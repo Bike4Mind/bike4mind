@@ -6,6 +6,7 @@ import {
   organizationRepository,
   userRepository,
 } from '@bike4mind/database';
+import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { CreditHolderType, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@server/models/Subscription';
@@ -343,10 +344,14 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
       }
 
       if (user) {
+        // Before the flag write: if deactivation throws, Stripe's retry still sees the flag unset.
+        if (!user.disputePending) {
+          await userApiKeyRepository.deactivateAllByUserId(user.id);
+        }
         await userRepository.update({ id: user.id, disputePending: true });
 
         await postMessageToSlack(
-          `🚨 *Stripe Dispute Created* — dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated.`
+          `🚨 *Stripe Dispute Created* \u2014 dispute ${dispute.id}\n*User:* ${user.name || user.email} (${user.id})\n*Amount:* $${(dispute.amount / 100).toFixed(2)} ${dispute.currency.toUpperCase()}\n*Reason:* ${dispute.reason}\nAccount flagged, credits clawback initiated, API keys deactivated.`
         );
         req.logger.info(`User ${user.id} flagged disputePending=true for dispute ${dispute.id}`);
       } else {
