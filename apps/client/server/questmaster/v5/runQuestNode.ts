@@ -2,12 +2,13 @@ import { agentExecutionRepository, questNodeRepository, Quest } from '@bike4mind
 import type { AgentExecutionStatus, IQuestGraphDocument, IQuestNodeDocument } from '@bike4mind/common';
 import { BadRequestError, InternalServerError } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
 import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
-import { resolveAgentExecutorFunctionName } from '@server/utils/agentExecutorFunctionName';
-
-const lambdaClient = new LambdaClient({});
+import {
+  dispatchAgentExecution,
+  resolveAgentExecutorTarget,
+  AgentExecutorRejectedError,
+} from '@server/utils/dispatchAgentExecution';
 
 /**
  * A node run is dispatched with no browser attached, so there is no live
@@ -90,8 +91,8 @@ export async function runQuestNode(args: {
   // Resolved BEFORE the claim: an unlinked executor is a deployment gap, and
   // failing here leaves the node untouched rather than claiming it, rolling it
   // back to `failed`, and making the operator wonder what they did wrong.
-  const executorFunctionName = resolveAgentExecutorFunctionName();
-  if (!executorFunctionName) {
+  const executorTarget = resolveAgentExecutorTarget();
+  if (!executorTarget) {
     throw new InternalServerError(
       'Agent executor is not linked to this deployment; a stack deploy is needed before nodes can run'
     );
@@ -110,6 +111,7 @@ export async function runQuestNode(args: {
   const query = buildNodeQuery(claimed);
   let questId: string | undefined;
   let executionId: string | undefined;
+  let dispatchAttempted = false;
 
   try {
     // Author the chat-history Quest before the execution so the execution's
@@ -176,32 +178,35 @@ export async function runQuestNode(args: {
       throw new Error(`node ${node.id} disappeared before its execution ref could be written`);
     }
 
-    await lambdaClient.send(
-      new InvokeCommand({
-        FunctionName: executorFunctionName,
-        InvocationType: 'Event',
-        Payload: Buffer.from(
-          JSON.stringify({
-            executionId,
-            userId,
-            sessionId: graph.sessionId,
-            questId: quest.id,
-            query,
-            model,
-            connectionId: HEADLESS_CONNECTION_ID,
-            // The node's scoped toolset - the per-node tool boundary that makes
-            // a v5 node a bounded unit of work rather than a full-toolbelt run.
-            // Empty means "no restriction", matching the executor's own
-            // `pickEffectiveEnabledTools` semantics.
-            ...(claimed.enabledTools.length ? { enabledTools: claimed.enabledTools } : {}),
-          })
-        ),
-      })
+    dispatchAttempted = true;
+    await dispatchAgentExecution(
+      {
+        executionId,
+        userId,
+        sessionId: graph.sessionId,
+        questId: quest.id,
+        query,
+        model,
+        connectionId: HEADLESS_CONNECTION_ID,
+        // The node's scoped toolset - the per-node tool boundary that makes
+        // a v5 node a bounded unit of work rather than a full-toolbelt run.
+        // Empty means "no restriction", matching the executor's own
+        // `pickEffectiveEnabledTools` semantics.
+        ...(claimed.enabledTools.length ? { enabledTools: claimed.enabledTools } : {}),
+      },
+      executorTarget
     );
 
     logger.info('[questmaster-v5] node dispatched', { nodeId: node.id, graphId: graph.id, executionId });
     return { executionId, node: linked ?? claimed };
   } catch (err) {
+    if (dispatchAttempted && executorTarget.kind === 'http' && !(err instanceof AgentExecutorRejectedError)) {
+      const failure = new InternalServerError(
+        `Node execution dispatch could not be confirmed. Check execution ${executionId} before retrying.`
+      );
+      failure.cause = err;
+      throw failure;
+    }
     logger.error('[questmaster-v5] node dispatch failed - rolling the node back to failed', {
       nodeId: node.id,
       questId,

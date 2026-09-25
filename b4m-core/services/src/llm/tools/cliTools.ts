@@ -27,6 +27,25 @@
 import type { ToolDefinition } from './base/types';
 import type { CliLlmTools, LlmTools } from './index';
 
+// The shared realpath-resolved path validator, re-exported through the CLI's
+// single tool entry point so CLI-only tools (get_file_structure, find_definition,
+// skill @file) confine paths through the same validator the core file tools use.
+export { isPathAllowed, assertPathAllowed, type PathValidationResult } from './utils/pathValidation';
+// The exact fuzzy matcher edit_local_file uses to resolve a block-anchor edit,
+// re-exported so the CLI permission preview can show the SAME span that will be
+// replaced (not just the model's typed old_string).
+export { fuzzyMatch, type FuzzyMatchResult } from './implementation/editLocalFile/fuzzyMatch';
+// Authorized resolve-only preflight + snapshot-binding surface, re-exported so the
+// CLI permission layer decides whether to re-confirm a fuzzy edit through the SAME
+// path authorization and matcher the tool uses at write time (no raw-path read),
+// and binds approval to the resolved content hash.
+export {
+  resolveEditLocalFile,
+  FuzzyEditConfirmationRequiredError,
+  isFuzzyEditConfirmationRequired,
+  type EditPlan,
+} from './implementation/editLocalFile';
+
 // Static imports - these modules do NOT use dynamic path.resolve(process.cwd(), ...)
 // and are safe from Turbopack's broad file pattern tracing.
 import { fileReadTool } from './implementation/fileRead';

@@ -34,10 +34,10 @@ const makeReq = () =>
 const makeRes = () => ({ once: vi.fn(), statusCode: 200 }) as unknown as Response;
 
 /** Runs the middleware and reports whether it called next() or threw. */
-const run = async (required: ApiKeyScope[] | undefined, req: Request) => {
+const run = async (required: ApiKeyScope[] | undefined, req: Request, alsoRequired?: ApiKeyScope[]) => {
   const next = vi.fn() as unknown as NextFunction;
   try {
-    await apiKeyAuth(required)(req, makeRes(), next);
+    await apiKeyAuth(required, alsoRequired)(req, makeRes(), next);
   } catch (err) {
     return { passed: false, error: err as Error };
   }
@@ -140,6 +140,28 @@ describe('apiKeyAuth scope gate', () => {
       rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
     });
     expect((await run([ApiKeyScope.OVERWATCH_INGEST_WRITE], makeReq())).passed).toBe(true);
+  });
+
+  it('403s on a missing alsoRequiredScopes entry even though the OR list matches', async () => {
+    const req = makeReq();
+    const { passed, error } = await run([ApiKeyScope.AI_CHAT], req, [ApiKeyScope.OPTIHASHI_COMPUTE]);
+    expect(passed).toBe(false);
+    expect(error?.message).toMatch(/Insufficient API key permissions/);
+    expect(req.logger.warn).toHaveBeenCalledWith(
+      'API key scope check failed',
+      expect.objectContaining({ alsoRequiredScopes: [ApiKeyScope.OPTIHASHI_COMPUTE] })
+    );
+  });
+
+  it('admits once the key holds both the OR match and every alsoRequiredScopes entry', async () => {
+    validateUserApiKeyMock.mockResolvedValue({
+      isValid: true,
+      keyId: 'key-1',
+      userId: 'user-1',
+      scopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.OPTIHASHI_COMPUTE],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    expect((await run([ApiKeyScope.AI_CHAT], makeReq(), [ApiKeyScope.OPTIHASHI_COMPUTE])).passed).toBe(true);
   });
 });
 

@@ -136,4 +136,53 @@ describe('decideScopeGate', () => {
       decideScopeGate([ApiKeyScope.OPTIHASHI_READ], [ApiKeyScope.OPTIHASHI_READ], new Set([ApiKeyScope.OPTIHASHI_READ]))
     ).toEqual({ outcome: 'allow' });
   });
+
+  describe('alsoRequiredScopes (AND)', () => {
+    it('allows when both the OR match and every AND scope are held', () => {
+      const also = [ApiKeyScope.OPTIHASHI_READ, ApiKeyScope.OPTIHASHI_COMPUTE];
+      const held = [ApiKeyScope.AI_CHAT, ...also];
+      expect(decideScopeGate([ApiKeyScope.AI_CHAT], held, NONE, also)).toEqual({ outcome: 'allow' });
+    });
+
+    it('denies when the OR list matches but an AND scope is missing', () => {
+      expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.AI_CHAT], NONE, [ApiKeyScope.OPTIHASHI_READ])).toEqual(
+        { outcome: 'deny' }
+      );
+    });
+
+    it('denies for a missing AND scope even on an otherwise scope-less route', () => {
+      // requiredScopes undefined would normally allow any ordinary key - the AND
+      // gate must still hold even with no OR list declared.
+      expect(decideScopeGate(undefined, [ApiKeyScope.AI_CHAT], NONE, [ApiKeyScope.OPTIHASHI_READ])).toEqual({
+        outcome: 'deny',
+      });
+    });
+
+    it('has no staging grace period - a staged AND scope still denies', () => {
+      const staged = new Set<string>([ApiKeyScope.OPTIHASHI_READ]);
+      expect(
+        decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.AI_CHAT], staged, [ApiKeyScope.OPTIHASHI_READ])
+      ).toEqual({ outcome: 'deny' });
+    });
+
+    it('is a no-op when omitted or empty, so every existing 3-arg call keeps its exact behavior', () => {
+      expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.AI_CHAT], NONE, [])).toEqual({ outcome: 'allow' });
+      expect(decideScopeGate([ApiKeyScope.AI_CHAT], [ApiKeyScope.AI_CHAT], NONE, undefined)).toEqual({
+        outcome: 'allow',
+      });
+    });
+
+    it('still denies a confined key that lacks the AND scope, even on its own named route', () => {
+      const also = [ApiKeyScope.OPTIHASHI_READ];
+      expect(decideScopeGate([ApiKeyScope.EMBED_CHAT], [ApiKeyScope.EMBED_CHAT], NONE, also)).toEqual({
+        outcome: 'deny',
+      });
+    });
+
+    it('still allows a confined key on its own named route once the AND scope is also held', () => {
+      const also = [ApiKeyScope.OPTIHASHI_READ];
+      const held = [ApiKeyScope.EMBED_CHAT, ApiKeyScope.OPTIHASHI_READ];
+      expect(decideScopeGate([ApiKeyScope.EMBED_CHAT], held, NONE, also)).toEqual({ outcome: 'allow' });
+    });
+  });
 });

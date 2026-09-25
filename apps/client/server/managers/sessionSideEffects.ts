@@ -4,6 +4,7 @@ import {
   SessionEvents as AnalyticsSessionEvents,
   ProjectEvents,
   redactSessionForClient,
+  PersistedSessionSummaryTrigger,
 } from '@bike4mind/common';
 import { ClientMessageSender } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -109,7 +110,7 @@ export function recordNotebookAddedToProjectActivity(projectId: string, userId: 
  */
 export async function publishSummarizeSession(
   sessionId: string,
-  trigger: ISessionDocument['summaryTrigger']
+  trigger: PersistedSessionSummaryTrigger
 ): Promise<void> {
   // Imported lazily to publish to EventBridge instead of SQS.
   const { SessionEvents } = await import('@server/utils/eventBus');

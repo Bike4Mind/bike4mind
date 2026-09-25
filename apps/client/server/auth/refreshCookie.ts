@@ -7,8 +7,9 @@ import type { Request, Response } from 'express';
  * instead of localStorage: script-writable storage is capped at ~7 days by WebKit ITP (so
  * mobile Safari users were being silently logged out), and a long-lived credential sitting
  * in localStorage is directly exfiltratable by any XSS. The access token stays in JS memory
- * (useAccessToken) because the WebSocket is on a different registrable domain and
- * authenticates with `?token=<accessToken>` - a cookie can't reach it.
+ * (useAccessToken) because the WebSocket is on a different registrable domain: JS uses the token
+ * to mint a single-use connect ticket (POST /api/websocket/ticket) and the socket authenticates
+ * with `?ticket=<ticket>` - a cookie can't reach it.
  *
  * Non-browser callers (CLI, OAuth authorization-code + device flows) keep passing the refresh
  * token in the request body and receive no cookie - they have no cookie jar. The refresh

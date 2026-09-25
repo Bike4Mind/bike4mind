@@ -17,6 +17,10 @@ export {
   LocalImageService,
 };
 
+// The SSRF-guarded image fetch. Every caller that turns a URL into image bytes must go through
+// this rather than calling axios directly - see its doc comment.
+export { downloadImageAsBuffer } from './imageProcessorUtils';
+
 // Export types
 export type { ImageEditResponse } from './AIImageService';
 

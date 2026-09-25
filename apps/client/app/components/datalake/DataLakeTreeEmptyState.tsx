@@ -42,6 +42,7 @@ export default function DataLakeTreeEmptyState({
     'no-lakes': { title: copy.zeroTitle, hint: copy.zeroHint },
     'lakes-error': { title: copy.lakesErrorTitle, hint: copy.lakesErrorHint },
     'lake-empty': { title: copy.lakeEmptyTitle, hint: copy.lakeEmptyHint },
+    'lakes-empty': { title: copy.lakesEmptyTitle, hint: copy.lakesEmptyHint },
     'all-lakes-empty': { title: copy.allLakesEmptyTitle, hint: copy.allLakesEmptyHint },
   }[variant];
 

@@ -21,7 +21,7 @@ import {
   scrubInternalReferences,
   isNoVariantContent,
 } from '@bike4mind/services';
-import { ChatModels } from '@bike4mind/common';
+import { ChatModels, WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
 import {
   sanitizeContentForLLM,
   buildWhatsNewPrompt,
@@ -265,7 +265,7 @@ async function processModalGeneration(
 
   // Log generation context for fork tracking
   const repositoryName = payload.repositoryUrl.split('/').pop() || 'unknown';
-  const isMainRepository = payload.repositoryUrl.includes('MillionOnMars/lumina5');
+  const isMainRepository = payload.repositoryUrl.includes(WHATS_NEW_DEFAULT_REPOSITORY);
 
   logger.log('Modal generation context', {
     repository: repositoryName,

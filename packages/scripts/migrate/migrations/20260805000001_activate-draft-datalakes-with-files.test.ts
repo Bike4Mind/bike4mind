@@ -58,8 +58,8 @@ describe('activate-draft-datalakes-with-files', () => {
     await migration.up();
 
     expect(mockRecompute).toHaveBeenCalledTimes(2);
-    expect(logged.join('\n')).toContain('activated "Filled" (3 file(s))');
-    expect(logged.join('\n')).toContain('activated 1 lake(s); 1 still empty, 0 failed, 2 scanned');
+    expect(logged.join('\n')).toContain('recomputed "Filled" (3 file(s); stays draft)');
+    expect(logged.join('\n')).toContain('recomputed 1 draft lake(s) holding files; 1 still empty, 0 failed, 2 scanned');
   });
 
   it('hands recomputeLakeStats the whole lake document, not a narrowed shape', async () => {
@@ -88,7 +88,7 @@ describe('activate-draft-datalakes-with-files', () => {
 
     await expect(migration.up()).resolves.toBeUndefined();
 
-    expect(logged.join('\n')).toContain('activated 1 lake(s); 0 still empty, 1 failed, 2 scanned');
+    expect(logged.join('\n')).toContain('recomputed 1 draft lake(s) holding files; 0 still empty, 1 failed, 2 scanned');
     expect(logged.join('\n')).toContain('"Broken"');
   });
 

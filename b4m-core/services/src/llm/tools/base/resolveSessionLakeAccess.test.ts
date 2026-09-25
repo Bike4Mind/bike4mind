@@ -127,6 +127,21 @@ describe('resolveSessionLakeAccess', () => {
     expect(out.lakes).toEqual([]);
   });
 
+  // The two empty scopes, adjacent on purpose: they carry the identical `sessionRetrievalTags`
+  // and differ only by the sidecar, which is the whole reason the sidecar is threaded here. Before
+  // it was, both took the branch below and a chat deliberately scoped to no lake searched them all.
+  it('returns no lakes when the session deliberately grounds on none', async () => {
+    getDynamicDataLakeAccessMock.mockResolvedValue(RESOLVED);
+    const out = await resolveSessionLakeAccess(
+      makeContext({ sessionRetrievalTags: [], sessionLakeScopeExplicit: true })
+    );
+
+    expect(out.lakes).toEqual([]);
+    expect(out.dataLakeTags).toEqual([]);
+    expect(out.dataLakeTagPrefixes).toEqual([]);
+    expect(out.scopedTagPrefixes).toEqual([]);
+  });
+
   it('leaves the resolved access unchanged when the session names no lake opinion', async () => {
     getDynamicDataLakeAccessMock.mockResolvedValue(RESOLVED);
     const out = await resolveSessionLakeAccess(makeContext({ sessionRetrievalTags: undefined }));

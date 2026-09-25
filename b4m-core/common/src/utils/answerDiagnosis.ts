@@ -57,9 +57,22 @@ const SEVERITY: Record<DiagnosisStatus, number> = { fail: 3, warn: 2, unknown: 1
 const worstOf = (statuses: DiagnosisStatus[]): DiagnosisStatus =>
   statuses.reduce<DiagnosisStatus>((worst, s) => (SEVERITY[s] > SEVERITY[worst] ? s : worst), 'ok');
 
-const FORCED_SKIP_COPY: Record<'attached_files' | 'personal_corpus', string> = {
+// Keyed off the schema's own union, not a hand-written copy of it: a new skip reason must fail to
+// compile here rather than reach a reader as `undefined`.
+type ForcedSkipReason = NonNullable<NonNullable<PromptMeta['retrieval']>['forcedSkipReason']>;
+
+const FORCED_SKIP_COPY: Record<ForcedSkipReason, string> = {
   attached_files: 'files attached to this message took priority over a library search',
   personal_corpus: 'the personal corpus path took priority over a library search',
+  no_lake_scope: 'this chat is set to ground on no data lake',
+};
+
+// Per-reason, because the fix differs: the first two are about what this turn carried and can be
+// worked around by asking differently, the last is a standing choice on the session that cannot.
+const FORCED_SKIP_REMEDY: Record<ForcedSkipReason, string> = {
+  attached_files: 'Ask again without the attachment, or in a session whose knowledge base holds the material.',
+  personal_corpus: 'Ask again without the attachment, or in a session whose knowledge base holds the material.',
+  no_lake_scope: 'Pick the data lakes this chat should use, or clear the choice to use every one you can reach.',
 };
 
 const countDocuments = (promptMeta: PromptMeta): number =>
@@ -92,7 +105,7 @@ function diagnoseRetrieval(promptMeta: PromptMeta): DiagnosisCheck {
         label,
         status: 'warn',
         detail: `Retrieval was configured but skipped: ${FORCED_SKIP_COPY[skip]}.`,
-        remedy: 'Ask again without the attachment, or in a session whose knowledge base holds the material.',
+        remedy: FORCED_SKIP_REMEDY[skip],
       };
     }
     return {
@@ -186,13 +199,58 @@ function diagnoseVolume(promptMeta: PromptMeta, retrieval: NonNullable<PromptMet
   // reported as zero when nothing citable was recorded.
   const documents = countDocuments(promptMeta);
   const from = documents > 0 ? ` from ${documents} ${documents === 1 ? 'document' : 'documents'}` : '';
+  const attribution = attributeVolume(retrieval);
 
   return {
     id: 'retrieval',
     label,
     status: 'ok',
-    detail: `${passages}${from} reached the model.`,
+    detail: `${passages}${from} reached the model.${attribution ? ` ${attribution}` : ''}`,
   };
+}
+
+const SURFACE_LABEL: Record<string, string> = {
+  'forced-retrieval': 'forced retrieval',
+  'lake-memory': 'lake memory',
+  knowledgeBaseSearch: 'the knowledge base search tool',
+  knowledgeBaseRetrieve: 'the knowledge base retrieve tool',
+};
+
+const surfaceLabel = (surface: string): string => SURFACE_LABEL[surface] ?? surface;
+
+const joinLabels = (labels: string[]): string =>
+  labels.length <= 1 ? (labels[0] ?? '') : `${labels.slice(0, -1).join(', ')} and ${labels[labels.length - 1]}`;
+
+/**
+ * `injected.chunks` sums every surface (see mergeRetrievalSummary), while the forced-retrieval
+ * floors gate only their own surface - so an unattributed total reads as "the floor let these
+ * through" on a turn where lake memory supplied every passage and the floor admitted none.
+ *
+ * Forced retrieval's own contribution is bounded above by its candidate counts (pre -> post ->
+ * postSpread -> chunks, see RetrievalSummarySchema.injected), which only it writes. So an empty
+ * pool is proof it injected nothing, and any other value is only an upper bound - the per-surface
+ * split of `chunks` is not recorded, so a mixed turn is named as mixed rather than divided up.
+ */
+function attributeVolume(retrieval: NonNullable<PromptMeta['retrieval']>): string | undefined {
+  // Required by the schema, but this renders stored turns that predate it without re-parsing them.
+  const surfaces = retrieval.surfaces ?? [];
+  const injected = retrieval.injected;
+  if (!injected) return undefined;
+
+  const forcedPool =
+    injected.postSpreadFloorCandidates ?? injected.postRelativeFloorCandidates ?? injected.preRelativeFloorCandidates;
+  const others = surfaces.filter(s => s !== 'forced-retrieval');
+  if (surfaces.includes('forced-retrieval') && forcedPool === 0 && others.length > 0) {
+    return `None came from forced retrieval, which admitted no passage past its similarity floors. Other surfaces that ran this turn: ${joinLabels(others.map(surfaceLabel))}.`;
+  }
+
+  // Worded to hold even when a listed surface injected nothing (a zero-recall lake memory, an early
+  // forced exit that records no pool): `surfaces` says what ran, not what contributed.
+  if (surfaces.length > 1) {
+    const notOnly = surfaces.includes('forced-retrieval') ? ', not only forced retrieval' : '';
+    return `That total sums every surface that ran this turn (${joinLabels(surfaces.map(surfaceLabel))})${notOnly}.`;
+  }
+  return undefined;
 }
 
 function diagnoseCorpus(promptMeta: PromptMeta): DiagnosisCheck {

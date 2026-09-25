@@ -1,4 +1,4 @@
-import type { IChatHistoryItem } from '@bike4mind/common';
+import { visibleReplyText, type IChatHistoryItem } from '@bike4mind/common';
 
 /**
  * A quest is considered stuck as a pure function of LIVENESS, not content: it is still 'running'
@@ -58,11 +58,16 @@ export type QuestContentView = Pick<
  * terminal bubble with neither an answer nor an error - the silent blank the
  * abandoned-run message exists to prevent. An assistant turn carrying no
  * content blocks and a tool result with an empty body both render nothing.
+ *
+ * `reply`/`replies` are checked through `visibleReplyText`, not a bare truthy
+ * check: a process that died mid-stream can leave behind nothing but an
+ * unclosed `<think>` marker, which is real text but renders nothing (#3223) -
+ * counting it as content would mark the quest done with no error and no answer.
  */
 function hasRenderableContent(quest: QuestContentView): boolean {
   return Boolean(
-    quest.reply ||
-    quest.replies?.some(r => r) ||
+    visibleReplyText(quest.reply) ||
+    quest.replies?.some(r => visibleReplyText(r)) ||
     quest.images?.length ||
     quest.videos?.length ||
     quest.structuredReplies?.some(sr => sr?.content?.length) ||

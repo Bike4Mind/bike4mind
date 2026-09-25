@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { isValidSessionId, SESSION_ID_PATTERN } from './validateSessionId.js';
 
 export class Logger {
   private static instance: Logger | null = null;
@@ -22,6 +23,11 @@ export class Logger {
    * Initialize the logger with a session ID
    */
   async initialize(sessionId: string): Promise<void> {
+    // The id becomes a filename below, so validate at this sink too - not only at
+    // the CLI entrypoint - so no caller path reaches it with a traversing value.
+    if (!isValidSessionId(sessionId)) {
+      throw new Error(`Invalid session id "${sessionId}": must match ${SESSION_ID_PATTERN.source}`);
+    }
     this.sessionId = sessionId;
     const debugDir = path.join(os.homedir(), '.bike4mind', 'debug');
 

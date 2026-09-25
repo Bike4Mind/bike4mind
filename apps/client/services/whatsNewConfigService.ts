@@ -1,6 +1,12 @@
 import { Logger } from '@bike4mind/observability';
 import { AdminSettings } from '@bike4mind/database';
-import { WhatsNewConfig, WhatsNewConfigSchema, WHATS_NEW_VALIDATION_LIMITS } from '@bike4mind/common';
+import {
+  WhatsNewConfig,
+  WhatsNewConfigSchema,
+  WHATS_NEW_VALIDATION_LIMITS,
+  WHATS_NEW_DEFAULT_REPOSITORY,
+  WHATS_NEW_DEFAULT_TARGET_BRANCH,
+} from '@bike4mind/common';
 
 // Maximum number of config history entries to keep
 const MAX_HISTORY_ENTRIES = 10;
@@ -26,8 +32,8 @@ const DEFAULT_CONFIG: WhatsNewConfig = {
   maxCommitMessageLength: 200,
   maxPRBodyLength: 500,
   maxChangelogLength: 1000,
-  repository: 'MillionOnMars/lumina5',
-  targetBranch: 'prod',
+  repository: WHATS_NEW_DEFAULT_REPOSITORY,
+  targetBranch: WHATS_NEW_DEFAULT_TARGET_BRANCH,
 };
 
 export class WhatsNewConfigService {

@@ -12,4 +12,8 @@
  */
 export const SHELL_LIKE_TOOL_COMMAND_FIELDS: Record<string, string> = {
   bash_execute: 'command',
+  // Stdin written to a live background shell runs unfiltered (see shellSession's
+  // SECURITY BOUNDARY note). Classify the chars so a destructive line (e.g.
+  // `rm -rf ~`) still forces a prompt under session trust and auto-accept.
+  write_shell_stdin: 'chars',
 };

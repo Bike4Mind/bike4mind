@@ -233,6 +233,7 @@ describe('buildOpenApiDocument', () => {
       ['/api/ai/music', 'post'],
       ['/api/ai/sound-effects', 'post'],
       ['/api/sessions/{id}', 'put'],
+      ['/api/v1/me', 'get'],
     ];
     for (const [path, method] of baseApiServed) {
       const headers = doc.paths[path][method].responses['200'].headers;

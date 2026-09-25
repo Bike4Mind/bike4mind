@@ -38,6 +38,12 @@ export const dataLakeKeys = {
    * access-view refresh.
    */
   ownershipCandidates: (dataLakeId: string) => ['data-lakes', 'ownership-candidates', dataLakeId] as const,
+  /**
+   * The caller's OWN pending ownership offers (GET /api/data-lakes/ownership-offers). Kept under
+   * the `data-lakes` prefix on purpose: accepting one changes the lake list, so the two refresh
+   * together, and an accept/decline invalidates this key explicitly.
+   */
+  ownershipOffers: ['data-lakes', 'ownership-offers'] as const,
   /** One page-set of the public-lake discovery catalog, per search term. */
   public: (search: string) => ['data-lakes', 'public', { search }] as const,
   archived: ['data-lakes', 'archived'] as const,
@@ -110,6 +116,15 @@ export const dataLakeKeys = {
   proposals: (dataLakeId: string | null, status?: string) => ['dataLakeProposals', dataLakeId, { status }] as const,
   /** Invalidation prefix covering every status variant of one lake's queue. */
   proposalsOf: (dataLakeId: string) => ['dataLakeProposals', dataLakeId] as const,
+  /**
+   * One lake's detected corpus problems (GET /api/data-lakes/:id/findings), #3039. Outside `list`
+   * for the same reason as `spend` and `proposals`, and keyed by the filter pair because the route
+   * narrows server-side - a client-side filter over one cached page would hide rows the bound cut.
+   */
+  findings: (dataLakeId: string | null, filters?: { status?: string; kind?: string; limit?: number }) =>
+    ['dataLakeFindings', dataLakeId, filters ?? {}] as const,
+  /** Invalidation prefix covering every filter variant of one lake's findings. */
+  findingsOf: (dataLakeId: string) => ['dataLakeFindings', dataLakeId] as const,
   /**
    * One lake's saved research configurations (GET /api/data-lakes/:id/research/configs), #1682.
    * Outside `list` for the same reason as `spend` and `proposals`.

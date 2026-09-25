@@ -18,8 +18,8 @@ interface CancelInviteByIdAdapters {
 /**
  * Cancels a SINGLE invite by its invite id (distinct from `cancelInvite`, which
  * cancels every invite on a document). Zeroes `remaining` and clears the pending
- * list but keeps `refused`. Share-scoped via `authorizeByInviteType` (owner /
- * users-share / groups-share), replacing the manager's CASL `Permission.share` check.
+ * list but keeps `refused`. Requires manage-groups authority for Org/Group invites
+ * (billing owner, appointed org admin, or platform admin) and share access for others.
  */
 export const cancelInviteById = async (
   user: IUserDocument,
@@ -31,7 +31,7 @@ export const cancelInviteById = async (
   const invite = await db.invites.findById(id);
   if (!invite) throw new NotFoundError('Invite not found');
 
-  await authorizeByInviteType(user, invite.type, invite.documentId, db);
+  await authorizeByInviteType(user, invite.type, invite.documentId, db, { requireManageGroups: true });
 
   invite.remaining = 0;
   if (invite.recipients) {

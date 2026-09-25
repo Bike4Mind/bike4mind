@@ -23,11 +23,14 @@ import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts
 import { membershipOrgIdsForTurn } from '../../../../dataLakeService/membershipOrgIdsForTurn';
 import {
   defangRetrievedContent,
-  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
-import { buildRetrievalConflictNote, type RetrievalPassage } from '../../../../dataLakeService/retrievalConflictNote';
+import {
+  buildRetrievalConflictSignal,
+  type RetrievalConflictSignal,
+  type RetrievalPassage,
+} from '../../../../dataLakeService/retrievalConflictNote';
 import { prependRetrievedLakePrompts } from '../retrievedLakePrompts';
 import { GROUNDED_NO_INVENTION_RULE } from '../../../prompts';
 import { PARTIAL_RESULTS_STATUS_SUFFIX } from '../../../../dataLakeService/embeddingMismatch';
@@ -80,6 +83,21 @@ interface SkipNotice {
 }
 
 /**
+ * The passages a semantic search will actually SERVE, shaped for the conflict detector.
+ *
+ * `servedPassageText`, not `r.chunkText`: a conflict whose evidence was clipped out of the block
+ * would be a note about content the model cannot check. That is the same clip formatSemanticResults
+ * emits and emitSemanticCitables stores as `fullContext`, so all three agree on what was served.
+ *
+ * Lifted out of formatSemanticResults (#3041) because the detector's single pass now feeds two
+ * channels that live in different functions - the model's note here, the chips' `conflictsWith`
+ * there - and emitSemanticCitables runs first. The tool body owns the one call.
+ */
+function semanticConflictPassages(results: SemanticChunkResult[], maxChunkChars: number): RetrievalPassage[] {
+  return results.map(r => ({ fabFileId: r.fileId, text: servedPassageText(r, maxChunkChars).text }));
+}
+
+/**
  * Format semantic passages WITH their content so the model can answer without retrieving.
  *
  * Passage text is untrusted: a lake can serve content its owner did not author (a shared source
@@ -107,6 +125,13 @@ interface SkipNotice {
 function formatSemanticResults(
   results: SemanticChunkResult[],
   maxChunkChars: number,
+  /**
+   * Required, and produced by {@link semanticConflictPassages} + buildRetrievalConflictSignal in the
+   * tool body rather than computed here, because the SAME pass also marks the citation chips - and
+   * emitSemanticCitables has already fired by the time this runs. Not optional on purpose: a new
+   * caller must decide what to pass rather than silently drop the model's conflict warning.
+   */
+  conflictNote: string,
   scan?: SemanticSearchScanAccounting,
   skipNotice?: SkipNotice | null,
   logger?: Logger,
@@ -114,28 +139,22 @@ function formatSemanticResults(
 ): string {
   let clippedCount = 0;
   let longestChars = 0;
-  // Fed the SERVED text, not r.chunkText: a conflict whose evidence was clipped out of the block
-  // would be a note about content the model cannot check.
-  const conflictPassages: RetrievalPassage[] = [];
   const blocks = results.map((r, i) => {
     // Measured AFTER trim on purpose: the budget governs what this function emits, and the trimmed
     // string is what it emits. A padded chunk that fits once trimmed is served whole, correctly.
     longestChars = Math.max(longestChars, r.chunkText.trim().length);
     const { text, clipped } = servedPassageText(r, maxChunkChars);
     if (clipped) clippedCount++;
-    conflictPassages.push({ fabFileId: r.fileId, text });
     // The file name is content-adjacent and equally attacker-influenced: without toContentLabel a
-    // crafted name carries a newline plus a forged marker into the label line. Neither the id nor
-    // the date needs that wrap - the id is MongoDB-generated and documentDateClause emits digits and
-    // separators only.
+    // crafted name carries a newline plus a forged marker into the label line. The id needs no wrap
+    // - it is MongoDB-generated.
     //
     // The id is here so this channel attributes a passage the same way the other two do
     // (`### Name (ID: ...)`): the conflict note that precedes the block names documents by
     // `fabFileId` alone, and without it on the heading the model has no way to map a named id back
     // to a passage it can read.
     return (
-      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})` +
-      `${documentDateClause(r.fileCreatedAt)}\n` +
+      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})\n` +
       text
     );
   });
@@ -179,7 +198,6 @@ function formatSemanticResults(
   // "answer directly" line below, which is the opposite instruction for a corpus that disagrees with
   // itself. The notes above are about what was reached and how much of it was served; this one is
   // about the served passages contradicting each other, so it gets the last word.
-  const conflictNote = buildRetrievalConflictNote(conflictPassages);
   return (
     formatSkipNotice(skipNotice) +
     partial +
@@ -401,17 +419,22 @@ async function emitSemanticCitables(
   ranked: SemanticChunkResult[],
   corpusLabel: string,
   maxChunkChars: number,
+  /** The reader half of the same pass whose note formatSemanticResults renders for the model. */
+  conflictsByFileId: RetrievalConflictSignal['conflictsByFileId'],
   skipNotice?: SkipNotice | null,
   dataLakeTags: string[] = [],
   /** Undefined when attribution was inconclusive - see the schema field's own doc. */
   dataLakeTagsWithCandidates?: string[]
 ): Promise<void> {
-  // Citables - dedup to one chip per file (multiple chunks can match the same article)
+  // Citables - dedup to one chip per file (multiple chunks can match the same article).
+  // `ranked` is score-descending, so the chunk that survives the dedup is the file's BEST hit,
+  // and that is the passage chunkId/fullContext anchor the reader is deep-linked to.
   const seenFile = new Set<string>();
   const citables: CitableSource[] = [];
   for (const r of ranked) {
     if (seenFile.has(r.fileId)) continue;
     seenFile.add(r.fileId);
+    const conflictsWith = conflictsByFileId.get(r.fileId);
     citables.push({
       id: r.fileId,
       type: 'document',
@@ -424,7 +447,19 @@ async function emitSemanticCitables(
           .join(', ') || undefined,
       timestamp: new Date().toISOString(),
       status: 'complete',
-      metadata: { sourceSystem: 'knowledge_base', tags: r.fileTags, relevanceScore: r.score },
+      metadata: {
+        sourceSystem: 'knowledge_base',
+        tags: r.fileTags,
+        relevanceScore: r.score,
+        chunkId: r.chunkId,
+        // The passage as SERVED, not as stored: same clip and defang the model was given, so the
+        // reader is shown what grounded the claim rather than a longer chunk it never saw.
+        fullContext: servedPassageText(r, maxChunkChars).text,
+        // Spread and COPIED: an absent key must leave the field off entirely rather than stamping
+        // an empty array the chip would badge with no partner to name, and the chip must not alias
+        // the detector's own array.
+        ...(conflictsWith ? { conflictsWith: [...conflictsWith] } : {}),
+      },
     });
   }
   const names = citables.slice(0, 3).map(c => prettyFileName(c.title));
@@ -714,11 +749,15 @@ async function trySemanticKbSearch(
     // `scan?.` for the same reason `alternateModelsEmbedded ?? []` above needs a fallback: a test
     // double built from a partial result object carries no scan block.
     const lakesWithCandidates = dataLakeTags.filter(tag => !!search.scan?.filesByLake?.[tag]);
+    // One pass over the served passages, feeding the chips below and the model's note further down,
+    // so the reader is marked with exactly the conflicts the model is warned about (#3041).
+    const conflict = buildRetrievalConflictSignal(semanticConflictPassages(ranked, budgets.maxChunkChars));
     await emitSemanticCitables(
       context,
       ranked,
       'the data lake',
       budgets.maxChunkChars,
+      conflict.conflictsByFileId,
       skipNotice,
       dataLakeTags,
       lakesWithCandidates.length > 0 ? lakesWithCandidates : undefined
@@ -729,17 +768,25 @@ async function trySemanticKbSearch(
 
     // Provenance for retrieval-scoped lake-prompt injection: which lakes these passages came from.
     return {
-      output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger, {
-        budgetBound: bound.budgetBound,
-        // Against `ceiling`, not the full retrieved set: `search.results` can hold up to
-        // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
-        // `ceiling` was never admissible in the first place (a model-supplied max_results
-        // narrows it below the widened topK) - attributing those to "the budget withheld them"
-        // overstates what the budget actually did. Still measured off `search.results`: the cap
-        // pass above returns its input untouched when the cap is off, so it is not a ceiling
-        // bound of its own.
-        droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
-      }),
+      output: formatSemanticResults(
+        ranked,
+        budgets.maxChunkChars,
+        conflict.note,
+        search.scan,
+        skipNotice,
+        context.logger,
+        {
+          budgetBound: bound.budgetBound,
+          // Against `ceiling`, not the full retrieved set: `search.results` can hold up to
+          // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
+          // `ceiling` was never admissible in the first place (a model-supplied max_results
+          // narrows it below the widened topK) - attributing those to "the budget withheld them"
+          // overstates what the budget actually did. Still measured off `search.results`: the cap
+          // pass above returns its input untouched when the cap is off, so it is not a ceiling
+          // bound of its own.
+          droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
+        }
+      ),
       skipNotice,
       datalakeTags: datalakeTagsFrom(ranked.flatMap(r => r.fileTags)),
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
@@ -857,21 +904,39 @@ async function tryScopedSemanticKbSearch(
       logger: context.logger,
     });
     const ranked = bound.kept;
-    await emitSemanticCitables(context, ranked, "this agent's knowledge base", budgets.maxChunkChars, skipNotice, []);
+    // Same single pass as the owner-scoped arm above; see its comment.
+    const conflict = buildRetrievalConflictSignal(semanticConflictPassages(ranked, budgets.maxChunkChars));
+    await emitSemanticCitables(
+      context,
+      ranked,
+      "this agent's knowledge base",
+      budgets.maxChunkChars,
+      conflict.conflictsByFileId,
+      skipNotice,
+      []
+    );
     // Agent-scoped results never carry a lake prompt: this arm must not consult owner-wide access
     // or imply a wider corpus, so its provenance is intentionally empty (no injection downstream).
     return {
-      output: formatSemanticResults(ranked, budgets.maxChunkChars, search.scan, skipNotice, context.logger, {
-        budgetBound: bound.budgetBound,
-        // Against `ceiling`, not the full retrieved set: `search.results` can hold up to
-        // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
-        // `ceiling` was never admissible in the first place (a model-supplied max_results
-        // narrows it below the widened topK) - attributing those to "the budget withheld them"
-        // overstates what the budget actually did. Still measured off `search.results`: the cap
-        // pass above returns its input untouched when the cap is off, so it is not a ceiling
-        // bound of its own.
-        droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
-      }),
+      output: formatSemanticResults(
+        ranked,
+        budgets.maxChunkChars,
+        conflict.note,
+        search.scan,
+        skipNotice,
+        context.logger,
+        {
+          budgetBound: bound.budgetBound,
+          // Against `ceiling`, not the full retrieved set: `search.results` can hold up to
+          // KB_SEARCH_MAX_RESULTS candidates once the budget widens topK, but everything past
+          // `ceiling` was never admissible in the first place (a model-supplied max_results
+          // narrows it below the widened topK) - attributing those to "the budget withheld them"
+          // overstates what the budget actually did. Still measured off `search.results`: the cap
+          // pass above returns its input untouched when the cap is off, so it is not a ceiling
+          // bound of its own.
+          droppedCount: Math.min(search.results.length, ceiling) - ranked.length,
+        }
+      ),
       skipNotice,
       datalakeTags: [],
       fileHits: ranked.map(r => ({ id: r.fileId, fileName: r.fileName })),
@@ -1417,7 +1482,11 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           // reaches here; the outer catch writes 'failed' with no volume.
           const keywordArmNoHitsInjected = { chunks: 0, chars: 0 };
 
-          // Emit citable source chips so search results appear as clickable citations
+          // Emit citable source chips so search results appear as clickable citations.
+          // No metadata.chunkId/fullContext here, deliberately: this is the KEYWORD arm, ranking
+          // whole IFabFileDocuments by a metadata-only proxy (see the note above the ranking). No
+          // chunk was scored, so there is no cited passage to deep-link to - a chunk anchor here
+          // could only be a guess, and the reader lands on the whole document, which is honest.
           if (rankedResults.length > 0) {
             const citables: CitableSource[] = rankedResults.map((file: IFabFileDocument, index: number) => {
               const fileTags = (file.tags?.map(t => t.name) || [])

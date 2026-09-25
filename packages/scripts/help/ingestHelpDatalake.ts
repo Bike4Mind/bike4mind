@@ -167,6 +167,9 @@ async function ensureLake(deps: HelpDatalakeIngestDeps, opts: HelpDatalakeIngest
       datalakeTag: HELP_DATALAKE_TAG,
       createdByUserId: opts.userId,
       status: 'active',
+      // Machine-fed: a production cron runs this ingest unattended on a schedule (see
+      // infra/cron.ts), which is exactly what 'curated' declares this lake does NOT accept.
+      origin: 'connector-fed',
     });
     return created?.id ?? null;
   }
@@ -176,6 +179,14 @@ async function ensureLake(deps: HelpDatalakeIngestDeps, opts: HelpDatalakeIngest
     // Update only the field we're changing; spreading the whole doc would $set
     // every field (timestamps, counters) and risk clobbering on a shape change.
     if (!opts.dryRun) await deps.db.dataLakes.update({ id: existing.id, status: 'active' });
+  }
+  if (existing.origin !== 'connector-fed') {
+    deps.logger.info(`Repairing data lake "${HELP_DATALAKE_SLUG}" origin (was ${existing.origin})`);
+    // This script owns this lake's origin the same way it owns its status: the cron
+    // (infra/cron.ts) writes here unattended, so a row that predates this field - or one an
+    // admin manually flipped to 'curated' - must not stay that way. That flip not sticking is
+    // intended, not a bug.
+    if (!opts.dryRun) await deps.db.dataLakes.update({ id: existing.id, origin: 'connector-fed' });
   }
   return existing.id;
 }

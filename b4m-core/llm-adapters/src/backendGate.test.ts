@@ -16,8 +16,11 @@ describe('resolveListingKey', () => {
     expect(resolveListingKey(ModelBackend.XAI, { apiKeys: null, isSelfHost: false })).toBeNull();
   });
 
-  it('always resolves BFL, falling back to the demo key', () => {
-    expect(resolveListingKey(ModelBackend.BFL, { apiKeys: null, isSelfHost: false })).toBe('demo-key');
+  it('resolves BFL only from a real key, never a demo-key stand-in', () => {
+    // A 'demo-key' fallback here listed the Flux models on a keyless deployment, and the
+    // client then defaulted image generation to one of them - a guaranteed provider 403.
+    expect(resolveListingKey(ModelBackend.BFL, { apiKeys: null, isSelfHost: false })).toBeNull();
+    expect(resolveListingKey(ModelBackend.BFL, { apiKeys: { bfl: null }, isSelfHost: true })).toBeNull();
     expect(resolveListingKey(ModelBackend.BFL, { apiKeys: { bfl: 'real' }, isSelfHost: false })).toBe('real');
   });
 
@@ -62,6 +65,7 @@ describe('isBackendUsable', () => {
       ModelBackend.Gemini,
       ModelBackend.Ollama,
       ModelBackend.XAI,
+      ModelBackend.BFL,
     ]) {
       expect(isBackendUsable(backend, { apiKeys: null, isSelfHost: false })).toBe(false);
       expect(isBackendUsable(backend, { apiKeys: { [backend]: 'k' }, isSelfHost: false })).toBe(true);

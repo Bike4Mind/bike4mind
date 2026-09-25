@@ -12,14 +12,19 @@ import {
 import { OAuthAuthorizationCodeModel, User } from '@bike4mind/database';
 
 /**
- * Pins the ordering in pages/api/oauth/token.ts: consumeValidCode() runs BEFORE the
- * client_id/redirect_uri mismatch check, so a mismatch at redemption burns the code
- * instead of leaving it live for a retry with corrected parameters. RFC 6819 treats a
- * mismatch as a code-injection signal, and burning on the spot closes the retry
- * oracle; the ordering itself is not spec-mandated, so only a test keeps it from
- * reverting to lazy marking. Drives the real repository/model against
- * createMongoServer, since a mocked consumeValidCode could not show the stored row
- * actually flipping.
+ * Pins the ordering in pages/api/oauth/token.ts: the code is READ (findValidCode) and validated
+ * against client_id/redirect_uri/PKCE BEFORE it is atomically consumed (consumeValidCode). So a
+ * redemption that fails those checks does NOT burn the code - the legitimate client can still redeem
+ * it with corrected parameters. Single-use is preserved by the atomic consume, which runs only once
+ * validation passes: a successfully redeemed code cannot be redeemed a second time.
+ *
+ * (This reverses the earlier consume-first / burn-on-mismatch behavior, per the review on
+ * token.ts:64 - PKCE / client-secret already stop a mismatched party from COMPLETING the exchange,
+ * so burning on mismatch added no real code-injection protection while denying honest retries and
+ * handing anyone with a leaked code a way to invalidate the victim's login.)
+ *
+ * Drives the real repository/model against createMongoServer, since a mocked consumeValidCode could
+ * not show the stored row's `used` flag actually staying false on a mismatch and flipping on success.
  */
 
 // The route builds itself as baseApi().use(rateLimit).post(handler); unwrap it to the bare
@@ -113,8 +118,8 @@ const redeem = async (params: { code: string; client_id: string; redirect_uri: s
   return res;
 };
 
-describe('POST /api/oauth/token single-use enforcement (real consumeValidCode)', () => {
-  it('burns the code on a client_id mismatch, then rejects the correct retry as already consumed', async () => {
+describe('POST /api/oauth/token validate-before-consume (real repository)', () => {
+  it('does NOT burn the code on a client_id mismatch; the corrected retry then succeeds', async () => {
     const user = await User.create({
       username: 'oauth-user-1',
       name: 'OAuth User 1',
@@ -129,20 +134,13 @@ describe('POST /api/oauth/token single-use enforcement (real consumeValidCode)',
       error_description: 'client_id or redirect_uri mismatch',
     });
 
-    // Same code, now with the CORRECT client params. If the code were still live this would
-    // hit the mismatch branch a second time (same description); it must instead die at
-    // consumeValidCode, proving the first request already burned it.
+    // Same code, now with the CORRECT client params. The mismatch above only READ the code, so it is
+    // still live and the honest client completes the exchange.
     const retry = await redeem({ code, client_id: CLIENT_A.clientId, redirect_uri: CLIENT_A.redirectUri });
-    expect(retry._getStatusCode()).toBe(400);
-    expect(retry._getJSONData()).toMatchObject({
-      error: 'invalid_grant',
-      error_description: 'Invalid or expired authorization code',
-    });
-
-    expect(mismatched._getJSONData().error_description).not.toBe(retry._getJSONData().error_description);
+    expect(retry._getStatusCode()).toBe(200);
   });
 
-  it('burns the code on a redirect_uri mismatch, then rejects the correct retry as already consumed', async () => {
+  it('does NOT burn the code on a redirect_uri mismatch; the corrected retry then succeeds', async () => {
     const user = await User.create({
       username: 'oauth-user-2',
       name: 'OAuth User 2',
@@ -159,16 +157,10 @@ describe('POST /api/oauth/token single-use enforcement (real consumeValidCode)',
     });
 
     const retry = await redeem({ code, client_id: CLIENT_A.clientId, redirect_uri: CLIENT_A.redirectUri });
-    expect(retry._getStatusCode()).toBe(400);
-    expect(retry._getJSONData()).toMatchObject({
-      error: 'invalid_grant',
-      error_description: 'Invalid or expired authorization code',
-    });
-
-    expect(mismatched._getJSONData().error_description).not.toBe(retry._getJSONData().error_description);
+    expect(retry._getStatusCode()).toBe(200);
   });
 
-  it('marks the row used in the database on a mismatch, not just in the response', async () => {
+  it('leaves the row unused in the database after a mismatch (read, not consumed)', async () => {
     const user = await User.create({
       username: 'oauth-user-3',
       name: 'OAuth User 3',
@@ -180,7 +172,7 @@ describe('POST /api/oauth/token single-use enforcement (real consumeValidCode)',
 
     // Re-read from the database rather than trusting the handler's own response.
     const row = await OAuthAuthorizationCodeModel.findOne({ code }).lean();
-    expect(row?.used).toBe(true);
+    expect(row?.used).toBe(false);
   });
 
   it('positive control: a fresh code with fully correct params reaches 200', async () => {
@@ -193,5 +185,28 @@ describe('POST /api/oauth/token single-use enforcement (real consumeValidCode)',
 
     const res = await redeem({ code, client_id: CLIENT_A.clientId, redirect_uri: CLIENT_A.redirectUri });
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('is still single-use: a successfully redeemed code cannot be redeemed again', async () => {
+    const user = await User.create({
+      username: 'oauth-user-5',
+      name: 'OAuth User 5',
+      email: 'oauth-user-5@example.com',
+    });
+    const code = await seedCode(String(user._id));
+
+    const first = await redeem({ code, client_id: CLIENT_A.clientId, redirect_uri: CLIENT_A.redirectUri });
+    expect(first._getStatusCode()).toBe(200);
+
+    // The atomic consume flipped used->true; a replay of the same code is rejected as spent.
+    const replay = await redeem({ code, client_id: CLIENT_A.clientId, redirect_uri: CLIENT_A.redirectUri });
+    expect(replay._getStatusCode()).toBe(400);
+    expect(replay._getJSONData()).toMatchObject({
+      error: 'invalid_grant',
+      error_description: 'Invalid or expired authorization code',
+    });
+
+    const row = await OAuthAuthorizationCodeModel.findOne({ code }).lean();
+    expect(row?.used).toBe(true);
   });
 });

@@ -9,7 +9,9 @@ import { Logger } from '@bike4mind/observability';
 
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
+import { buildNewModel, isModelOwner } from '../../../../latticeService/latticeModelService';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
+import { escapeArtifactBodyJson, sanitizeArtifactTitle } from '../../utils/artifactEmission';
 
 // Shared types
 
@@ -66,43 +68,6 @@ interface LatticeExplainParams {
 
 // Tool: create model
 
-/**
- * Create model data structure (used when database is not available)
- */
-function createModelData(
-  name: string,
-  modelType: string,
-  userId: string,
-  description?: string,
-  sessionId?: string
-): Partial<ILatticeModel> {
-  const now = new Date();
-
-  return {
-    name,
-    description: description || '',
-    modelType: modelType as ILatticeModel['modelType'],
-    userId,
-    sessionId,
-    data: { entities: [], relationships: [] },
-    rules: { rules: [], rulesets: [] },
-    views: { views: [] },
-    settings: {
-      currency: 'USD',
-      fiscalYearStart: '01-01',
-      periodGrain: 'quarter',
-      defaultDecimalPlaces: 2,
-      negativeFormat: 'parentheses',
-    },
-    scenarios: [],
-    operations: [],
-    operationIndex: -1,
-    version: 1,
-    createdAt: now,
-    updatedAt: now,
-  };
-}
-
 export const latticeCreateModelTool: ToolDefinition = {
   name: 'lattice_create_model',
   implementation: (context: Omit<ToolContext, 'config'>) => ({
@@ -118,7 +83,14 @@ export const latticeCreateModelTool: ToolDefinition = {
         ruleCount: initialData?.rules?.length || 0,
       });
 
-      const modelData = createModelData(name, modelType, context.userId, description);
+      // Built by the service so a chat-created model carries the same `organizationId` and
+      // `sessionId` as an API-created one. Omitting either silently un-shares the model: without
+      // an org id `canReadModel` can never match a colleague, and without a session id the
+      // session-scoped list cannot find it.
+      const modelData = buildNewModel(
+        { id: context.userId, organizationId: context.user?.organizationId },
+        { name, description, modelType: modelType as ILatticeModel['modelType'], sessionId: context.sessionId }
+      );
 
       if (initialData?.entities && modelData.data) {
         const now = new Date();
@@ -261,11 +233,16 @@ export const latticeCreateModelTool: ToolDefinition = {
       // Return as artifact block that client can parse and display
       const entityCount = model.data?.entities?.length || 0;
       const ruleCount = model.rules?.rules?.length || 0;
+      // Model-controlled, and the whole tool result - prose included - is scanned for
+      // <artifact> tags by the tool_result extractor in llm/sharedToolBuilder.ts, which
+      // runs with no artifacts-enabled gate. So the name is sanitized everywhere it is
+      // emitted, not just inside the tag attribute.
+      const artifactTitle = sanitizeArtifactTitle(name);
 
-      return `Created "${name}" model with ${entityCount} entities and ${ruleCount} rules.
+      return `Created "${artifactTitle}" model with ${entityCount} entities and ${ruleCount} rules.
 
-<artifact identifier="${model.id}" type="application/vnd.b4m.lattice" title="${name}">
-${JSON.stringify(artifactData, null, 2)}
+<artifact identifier="${model.id}" type="application/vnd.b4m.lattice" title="${artifactTitle}">
+${escapeArtifactBodyJson(JSON.stringify(artifactData, null, 2))}
 </artifact>
 
 The model is ready for viewing. You can add more data by asking to add line items or create formulas.`;
@@ -415,8 +392,9 @@ export const latticeAddEntityTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
-          if (model && model.userId === context.userId) {
+          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
+          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
+          if (model && isModelOwner(model, { id: context.userId })) {
             // Check if entity already exists
             const existingIndex = model.data.entities.findIndex(e => e.id === entityId);
             if (existingIndex >= 0) {
@@ -573,8 +551,9 @@ export const latticeSetValueTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
-          if (model && model.userId === context.userId) {
+          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
+          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
+          if (model && isModelOwner(model, { id: context.userId })) {
             const entity = model.data.entities.find(e => e.id === entityId || toEntityId(e.name) === entityId);
             if (!entity) {
               context.logger.warn(`[Lattice] Entity ${entityName} not found in model ${modelId}`);
@@ -741,8 +720,9 @@ export const latticeCreateRuleTool: ToolDefinition = {
       if (context.db.latticeModels && modelId && isObjectIdShaped(modelId)) {
         try {
           const model = await context.db.latticeModels.findById(modelId);
-          // Owner-only: Lattice models have no share arrays, so a foreign id is denied
-          if (model && model.userId === context.userId) {
+          // Owner-only, via the same predicate `latticeModelService.getModelForWrite` uses: these
+          // tools MUTATE, and read access to a model (owner OR same org) is not write access.
+          if (model && isModelOwner(model, { id: context.userId })) {
             // Check if output entity exists, if not create it
             const outputEntityExists = model.data.entities.some(
               e => e.id === outputEntityId || e.name.toLowerCase() === parsedRule.outputEntity.toLowerCase()

@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
   userFindById: vi.fn(),
   storageDelete: vi.fn(async () => {}),
   shredMemoryFromSource: vi.fn(async () => 2),
+  findingsDeleteForPurgedDocument: vi.fn(async () => 0),
   findByDatalakeTag: vi.fn(),
   extractDataLakeMetaTags: vi.fn((tagNames: readonly unknown[]) =>
     Array.from(
@@ -63,6 +64,7 @@ vi.mock('@bike4mind/services', () => ({
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findByDatalakeTag: h.findByDatalakeTag },
   dataLakeAccessGrantRepository: {},
+  dataLakeFindingRepository: { deleteForPurgedDocument: h.findingsDeleteForPurgedDocument },
   fabFileRepository: {},
   fabFileChunkRepository: {},
   sessionRepository: {},
@@ -194,6 +196,21 @@ describe('POST /api/data-lakes/[id]/files/[fabFileId]/purge', () => {
     const db = h.purgeDataLakeDocument.mock.calls[0][3].db;
     expect(db.lakeConfigChangeEvents).toBeDefined();
     expect(db.adminSettings).toBeDefined();
+  });
+
+  it('wires the findings repo, so the retention sweep at the purge door cannot silently stop running', async () => {
+    // The service reaches this port through `?.` (purgeDataLakeDocument.ts), so an unwired repo is
+    // a no-op that typechecks forever - deleting the wiring line would otherwise leave this whole
+    // suite green while every purge stopped sweeping the excerpts it was paid to destroy.
+    const { res } = makeRes();
+    await call(req({ id: 'lake-oid-1', fabFileId: FILE_ID }), res);
+
+    const db = h.purgeDataLakeDocument.mock.calls[0][3].db;
+    expect(db.dataLakeFindings).toBeDefined();
+
+    // Defined is not enough: assert the wired object is the repo, reachable with the purged id.
+    await db.dataLakeFindings.deleteForPurgedDocument(FILE_ID);
+    expect(h.findingsDeleteForPurgedDocument).toHaveBeenCalledWith(FILE_ID);
   });
 
   it("returns the destroyed bytes to the FILE OWNER's quota, not the caller's", async () => {

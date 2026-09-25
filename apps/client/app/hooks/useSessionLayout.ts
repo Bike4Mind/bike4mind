@@ -64,6 +64,22 @@ export interface PendingMessageFile {
   uploadSessionId: string | null;
 }
 
+/**
+ * The passage a lake citation points at, set when the chip is clicked so the reader lands on the
+ * cited text rather than the top of the document (#3038).
+ *
+ * `passage` is the text as SERVED - trimmed, clipped, defanged - not the stored chunk, so the
+ * reader is shown exactly what grounded the claim. It rides the store rather than the URL because
+ * a passage does not belong in a query string and there is no endpoint that resolves `chunkId`
+ * back to its text; a shared or reloaded link therefore lands on the whole document, as it does
+ * today. `chunkId` is carried for the curator surfaces that key on it, not used by the viewer.
+ *
+ * The shape itself is declared on the React-free primitive (components/Knowledge/citedPassage) and
+ * re-exported here for the existing importers: the store depends on the primitive, not the reverse.
+ */
+import type { CitedPassage } from '@client/app/components/Knowledge/citedPassage';
+export type { CitedPassage };
+
 interface SessionLayoutControlState {
   layout: DefaultLayoutType;
   artifactData?: ArtifactData;
@@ -72,6 +88,10 @@ interface SessionLayoutControlState {
   // viewer renders it as one extra tab; replaced by the next View, cleared on session switch.
   // Not persisted: a preview is a transient look, not session state.
   previewFile: IFabFileDocument | null;
+  // Set alongside previewFile by a citation click; cleared wherever previewFile is. Not persisted,
+  // for the same reason previewFile is not - an anchor outliving the reload that dropped the
+  // document it points into would mark nothing, or worse, the wrong thing.
+  citedPassage: CitedPassage | null;
   recentArtifacts: ArtifactData[]; // Collection of recently clicked artifacts
   selectedArtifactId?: string;
   // Selected version number for viewing, keyed by artifact id. Per-artifact so a version
@@ -107,6 +127,11 @@ interface SessionLayoutControlState {
   // .getState() in session.created handler to avoid stale-ref migration bugs.
   // Not persisted.
   pendingOptimisticId: string | null;
+  // Real id of the session this tab's in-flight first send created, once known (session.created
+  // for a server-minted session, the create response for a client-created one). While the view is
+  // still on a null/optimistic id, only frames for this session are adopted - see
+  // shouldAcceptStreamFrame. Not persisted.
+  pendingRealSessionId: string | null;
 }
 
 const useSessionLayout = create<SessionLayoutControlState>()(
@@ -114,6 +139,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
     _set => ({
       layout: 'hide',
       previewFile: null,
+      citedPassage: null,
       knowledgeViewerWidth: 50, // Default to 50% width
       recentArtifacts: [],
       maxRecentArtifacts: 10, // Default max cache size
@@ -121,6 +147,7 @@ const useSessionLayout = create<SessionLayoutControlState>()(
       pendingModerationEvents: {},
       pendingFirstMessage: null,
       pendingOptimisticId: null,
+      pendingRealSessionId: null,
       // Floating chat window defaults - centered with reasonable size
       floatingChatPosition: { x: -1, y: -1 }, // -1 indicates "center on first use"
       floatingChatSize: { width: 450, height: 600 },
@@ -183,6 +210,22 @@ export const addArtifactToRecent = (artifact: ArtifactData): ArtifactData[] => {
   }
 
   return updated;
+};
+
+/**
+ * Drop the viewer state that belongs to the session being left: the data-lake View preview and the
+ * citation anchor scoped to it.
+ *
+ * The anchor is checked INDEPENDENTLY of the preview - a chip click writes it synchronously
+ * (CitableSources), so it can be set with no preview open and would otherwise survive into the next
+ * notebook, where the same file is still reachable through the workbench and a stale anchor would
+ * mark a passage nothing in that session cited. No-ops when neither is set, so a session switch in
+ * the common case does not touch the store at all.
+ */
+export const clearSessionScopedViewerState = (): void => {
+  const { previewFile, citedPassage } = useSessionLayout.getState();
+  if (!previewFile && !citedPassage) return;
+  setSessionLayout({ previewFile: null, citedPassage: null });
 };
 
 export const setSessionLayout = (
@@ -346,6 +389,17 @@ export const patchPendingMessageFileModerationStatus = (
 };
 
 /**
+ * Gives up on images whose moderation scan never reported back: `'scanning'` -> `'error'`,
+ * so the composer is released and the user can remove the file. Never `'complete'` - an
+ * image only becomes sendable on a server-confirmed clean scan, and `'error'` is excluded
+ * by `getSendableMessageFileIds`. A clean result that lands later still applies.
+ */
+export const markModerationScanTimedOut = (files: PendingMessageFile[], fabFileIds: string[]): PendingMessageFile[] =>
+  files.map(item =>
+    item.status === 'scanning' && fabFileIds.includes(item.fabFile.id) ? { ...item, status: 'error' } : item
+  );
+
+/**
  * True when the composer must hold the Send button disabled because a pending message file
  * is still uploading or being content-moderation-scanned. `'blocked'` is
  * intentionally excluded - a blocked file is terminal (it will never become sendable) and
@@ -379,7 +433,8 @@ export const getSendableMessageFileIds = (
       hadBlocked = true;
       continue;
     }
-    if (item.status === 'scanning') continue;
+    // 'error' covers a failed upload and a moderation scan that timed out unconfirmed.
+    if (item.status === 'scanning' || item.status === 'error') continue;
     ids.push(item.fabFile.id);
   }
 

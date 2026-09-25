@@ -29,7 +29,9 @@ export class SandboxOrchestrator {
   private violationStore: ViolationLogStore | null = null;
 
   constructor(config?: SandboxConfig, runtime?: SandboxRuntime | null, proxyManager?: ProxyManager | null) {
-    this.config = config ?? DEFAULT_SANDBOX_CONFIG;
+    // Clone so a runtime mutation (e.g. setNetworkEnabled) never writes through to
+    // the shared DEFAULT_SANDBOX_CONFIG singleton both entrypoints fall back to.
+    this.config = structuredClone(config ?? DEFAULT_SANDBOX_CONFIG);
     this.runtime = runtime ?? null;
     this.proxyManager = proxyManager ?? null;
   }
@@ -80,6 +82,11 @@ export class SandboxOrchestrator {
       command,
       cwd,
       filesystemConfig: this.config.filesystem,
+      // Belt-and-braces: never claim network is on to the runtime unless a proxy is
+      // actually running to filter it. This is the single consumption choke point, so
+      // any path that leaves a stale network.enabled flag (e.g. /sandbox:disable or
+      // /sandbox:mode) still fails closed here - the flag alone can't grant raw egress.
+      networkEnabled: this.config.network.enabled && (this.proxyManager?.isRunning() ?? false),
       env: proxyEnv,
       ...(this.runtime.platform === 'linux' &&
         this.config.platform.linux.seccompProfile && {
@@ -116,9 +123,47 @@ export class SandboxOrchestrator {
     return this.config;
   }
 
-  /** Update config (does not persist - caller must save) */
-  updateConfig(config: SandboxConfig): void {
-    this.config = config;
+  /**
+   * Toggle network egress at runtime and keep the runtime flag and the actual
+   * proxy in lockstep - this is the SINGLE lifecycle owner. Fail-closed: when
+   * enabling, the proxy must be running afterwards or the flag stays false. The
+   * flag is not trusted on its own either - shouldSandbox additionally gates on
+   * proxyManager.isRunning(), so a stale network.enabled left by any other path
+   * can never hand the runtime raw egress. Note the proxy only filters clients
+   * that honor HTTP(S)_PROXY; raw sockets (`curl --noproxy`, `nc`) still egress
+   * when network is on, so allowedDomains binds proxy-aware traffic only.
+   * Returns whether network is enabled on return. Does not persist - caller saves.
+   */
+  async setNetworkEnabled(enabled: boolean): Promise<boolean> {
+    if (!enabled) {
+      // Flip off first so a concurrent shouldSandbox denies, then tear down.
+      this.config.network.enabled = false;
+      this.proxyManager?.setEnabled(false);
+      await this.proxyManager?.stop().catch(() => {});
+      return false;
+    }
+
+    // Enabling requires a proxy to filter through - without one, egress would be
+    // raw and unfiltered, so fail closed rather than set the flag.
+    if (!this.proxyManager) {
+      this.config.network.enabled = false;
+      return false;
+    }
+
+    // Enabling: start the proxy FIRST; only grant egress if it actually runs.
+    this.proxyManager.setEnabled(true);
+    try {
+      await this.proxyManager.start();
+    } catch {
+      // fall through to the isRunning check -> fail closed
+    }
+    if (!this.proxyManager.isRunning()) {
+      this.proxyManager.setEnabled(false);
+      this.config.network.enabled = false;
+      return false;
+    }
+    this.config.network.enabled = true;
+    return true;
   }
 
   /** Get the ProxyManager instance (if any) */
@@ -126,14 +171,18 @@ export class SandboxOrchestrator {
     return this.proxyManager;
   }
 
-  /** Start the network proxy (if configured) */
-  async startProxy(): Promise<void> {
-    await this.proxyManager?.start();
-  }
-
-  /** Stop the network proxy */
-  async stopProxy(): Promise<void> {
-    await this.proxyManager?.stop();
+  /**
+   * Trust a domain for network egress. Updates BOTH the persisted config (the
+   * source of truth getConfig/saveSandboxConfig read) and the live proxy - the
+   * config is structuredClone'd at construction, so updating only the proxy would
+   * leave getConfig()'s allowedDomains stale and a later /sandbox:network or
+   * /sandbox:enable save would silently drop the grant. No-op on a duplicate.
+   */
+  addAllowedDomain(domain: string): void {
+    if (!this.config.network.allowedDomains.includes(domain)) {
+      this.config.network.allowedDomains.push(domain);
+    }
+    this.proxyManager?.addAllowedDomain(domain);
   }
 
   /** Get full status information for display */

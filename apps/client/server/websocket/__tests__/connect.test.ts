@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
  * Regression test for the web `$connect` credential swap: the web client now
  * presents a single-use `?ticket=<t>` instead of the session JWT in the URL.
  * These pin the ticket path (atomic consume + tokenVersion kill-switch), the
- * legacy-token fallback kept for rollout, and the reject-when-neither case.
+ * removal of the legacy `?token=` query path, and the reject-when-neither case.
  *
  * withWebSocketContext is stubbed to the identity wrapper so `func` is invoked
  * as the raw handler; only the DB / verify seams are mocked.
@@ -96,14 +96,9 @@ describe('web $connect ticket path', () => {
     expect(h.connectionCreate).not.toHaveBeenCalled();
   });
 
-  it('still accepts a legacy ?token= JWT during rollout', async () => {
-    (h.verifyToken as Mock).mockReturnValue({ id: 'u1', tokenVersion: 5 });
-
-    const res = await call(eventWith({ token: 'legacy.jwt' }));
-
-    expect(res.statusCode).toBe(200);
-    expect(h.consume).not.toHaveBeenCalled();
-    expect(h.verifyToken).toHaveBeenCalledWith('legacy.jwt');
-    expect(h.connectionCreate).toHaveBeenCalledWith(expect.objectContaining({ source: 'web' }));
+  it('rejects a legacy ?token= JWT: the query-token path is removed', async () => {
+    await expect(call(eventWith({ token: 'legacy.jwt' }))).rejects.toThrow(/No authentication token/i);
+    expect(h.verifyToken).not.toHaveBeenCalled();
+    expect(h.connectionCreate).not.toHaveBeenCalled();
   });
 });

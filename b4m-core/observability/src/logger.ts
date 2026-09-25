@@ -78,35 +78,88 @@ export class Logger implements ILogger {
     return Logger.LOG_LEVELS[level] >= Logger.LOG_LEVELS[this.minLevel];
   }
 
+  // JSON.stringify drops name/message/stack from an Error (they're non-enumerable),
+  // which silently loses the stack wherever an Error is nested inside metadata. Spread
+  // first so own enumerable properties (HTTPError's statusCode/additionalInfo, axios's
+  // code/response, ...) survive alongside them.
+  private static errorReplacer(_key: string, value: unknown): unknown {
+    if (value instanceof Error) {
+      return { ...value, name: value.name, message: value.message, stack: value.stack };
+    }
+    return value;
+  }
+
   /**
    * Safely stringify a value, handling circular references
    */
   private safeStringify(value: unknown, indent?: number): string {
     try {
-      return JSON.stringify(value, null, indent);
+      return JSON.stringify(value, Logger.errorReplacer, indent);
     } catch {
       return '[Circular]';
     }
   }
 
   /**
-   * Parse log arguments to extract message and optional metadata
+   * An object carrying structured fields, as opposed to a message part
+   * (Errors and arrays stay in the message so their shape survives).
+   */
+  private isMetadataArg(value: unknown): value is Record<string, unknown> {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+    try {
+      // `instanceof` walks the prototype chain via [[GetPrototypeOf]], which a hostile
+      // proxy (throwing trap, revoked proxy) can throw out of - must not crash the log
+      // call itself.
+      return !(value instanceof Error);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Leading-position metadata is held to a stricter bar than trailing: a class
+   * instance (Date, Map, ...) spreads to `{}` in output(), so lifting one out of
+   * the message would erase it rather than structure it.
+   */
+  private isPlainObject(value: unknown): value is Record<string, unknown> {
+    if (!this.isMetadataArg(value)) return false;
+    try {
+      const proto = Object.getPrototypeOf(value);
+      return proto === Object.prototype || proto === null;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Parse log arguments to extract message and optional metadata.
+   * Metadata may be the last argument (`msg, meta`) or, pino-style, the first
+   * (`meta, msg`); a trailing object wins when a call supplies both.
    */
   private parseArgs(args: unknown[], errorAware = false): { message: string; metadata?: Record<string, unknown> } {
     if (args.length === 0) {
       return { message: '' };
     }
 
-    const lastArg = args[args.length - 1];
-    const hasMetadata =
-      args.length > 1 &&
-      typeof lastArg === 'object' &&
-      lastArg !== null &&
-      !Array.isArray(lastArg) &&
-      !(lastArg instanceof Error);
+    let metadata: Record<string, unknown> | undefined;
+    let messageArgs = args;
 
-    const metadata = hasMetadata ? (lastArg as Record<string, unknown>) : undefined;
-    const messageArgs = hasMetadata ? args.slice(0, -1) : args;
+    const lastArg = args[args.length - 1];
+    const firstArg = args[0];
+
+    if (args.length > 1 && this.isMetadataArg(lastArg)) {
+      metadata = lastArg;
+      messageArgs = args.slice(0, -1);
+    } else if (
+      args.length > 1 &&
+      this.isPlainObject(firstArg) &&
+      // Only when what follows reads as a message; a call whose later args are
+      // objects too is a value dump, not `(meta, msg)`.
+      args.slice(1).every(a => a === null || typeof a !== 'object')
+    ) {
+      metadata = firstArg;
+      messageArgs = args.slice(1);
+    }
 
     const message = messageArgs
       .map(a => {

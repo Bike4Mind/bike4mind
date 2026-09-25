@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { S3Storage } from '@bike4mind/fab-pipeline';
 import { UploadTooLargeError, spoolRequestToFile } from '@server/utils/spoolRequestToFile';
+import { buildNotebookImportKeys, isValidNotebookImportId } from '@server/utils/notebookImportKeys';
 import { Resource } from 'sst';
 import type { Request, Response } from 'express';
 
@@ -14,16 +15,6 @@ import type { Request, Response } from 'express';
  * exported as JSON.
  */
 export const MAX_NOTEBOOK_IMPORT_UPLOAD_BYTES = 100 * 1024 * 1024; // 100 MB
-
-/**
- * importId is the only client-supplied part of the key: pages/api/notebooks/import.ts already
- * wrote the sibling `<importId>.options.json` using this same timestamp, so it must round-trip
- * unchanged. It is validated as digits-only so it can never carry a path segment out of the
- * caller's own prefix.
- */
-const isValidImportId = (importId: string): boolean => /^\d+$/.test(importId);
-
-const notebookImportKey = (userId: string, importId: string): string => `notebooks/${userId}/${importId}.json`;
 
 const handler = baseApi({ maxBodySize: MAX_NOTEBOOK_IMPORT_UPLOAD_BYTES })
   /**
@@ -40,7 +31,7 @@ const handler = baseApi({ maxBodySize: MAX_NOTEBOOK_IMPORT_UPLOAD_BYTES })
       }
 
       const importId = String((req.query as { importId?: string }).importId ?? '');
-      if (!isValidImportId(importId)) {
+      if (!isValidNotebookImportId(importId)) {
         return res.status(400).json({ error: 'Invalid importId' });
       }
       // Same gate the POST applies, re-checked here: this route accepts bytes on its own, so it
@@ -64,8 +55,8 @@ const handler = baseApi({ maxBodySize: MAX_NOTEBOOK_IMPORT_UPLOAD_BYTES })
       }
 
       try {
-        const key = notebookImportKey(String(req.user.id), importId);
-        await new S3Storage(Resource.historyImportBucket.name).upload(spooled.path, key);
+        const { dataKey } = buildNotebookImportKeys(String(req.user.id), importId);
+        await new S3Storage(Resource.historyImportBucket.name).upload(spooled.path, dataKey);
         req.logger?.info(
           `[notebooks/import] proxied upload user=${req.user.id} importId=${importId} bytes=${spooled.bytes}`
         );

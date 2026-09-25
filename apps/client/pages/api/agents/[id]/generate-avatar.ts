@@ -159,8 +159,8 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
 
     // Determine which image model to use
     // Priority: user's selected model > operations model
-    let imageModelId: string;
-    let imageModelInfo: ModelInfo | undefined;
+    let imageModelId: string | null;
+    let imageModelInfo: ModelInfo | null | undefined;
 
     if (userImageModel) {
       // User specified an image model - use it
@@ -201,6 +201,12 @@ const handler = baseApi().post<Request<{ id: string }, AgentAvatarResponse, Agen
         );
       }
       imageLogger.info(`Using operations image model: ${imageModelId}`);
+    }
+
+    // Re-asserted here (both branches above already guarantee this): narrows the type for
+    // every use below, which the if/else diamond above does not do on its own.
+    if (!imageModelId || !imageModelInfo) {
+      throw new BadRequestError('No image generation model available.');
     }
 
     imageLogger.info(`Generating avatar for agent ${agent.name}`, {

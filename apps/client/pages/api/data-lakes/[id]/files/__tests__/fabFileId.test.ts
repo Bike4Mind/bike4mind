@@ -38,6 +38,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeAccessGrantRepository: {},
   fabFileRepository: {},
   lakeConfigChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
+  lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   adminSettingsRepository: {
     findBySettingNames: vi.fn().mockResolvedValue([]),
     findAll: vi.fn().mockResolvedValue([]),

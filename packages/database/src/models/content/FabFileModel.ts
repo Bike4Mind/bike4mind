@@ -6,6 +6,7 @@ import {
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   type DataLakeMembershipFileCounts,
+  type DataLakeSweptFile,
   effectiveTagPrefixArm,
   FabFileChunkPolicyConflict,
   IFabFileChunkDocument,
@@ -14,6 +15,7 @@ import {
   IFabFileRepository,
   IFabFileVersion,
   type LakeMembershipMemberRow,
+  type LakeSupersession,
   FabFileSourceType,
   KnowledgeType,
   normalizeTagPrefix,
@@ -861,6 +863,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
       vectorizedOnly?: boolean;
+      /** See executeSearch - opts a lake-scoped search back into curator ruling metadata. */
+      includeSupersessionRulings?: boolean;
     }
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });
@@ -875,6 +879,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       skip: number;
       limit: number;
       excludeContent?: boolean;
+      includeSupersessionRulings?: boolean;
     },
     pageSize: number
   ) {
@@ -886,6 +891,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
 
     if (query.excludeContent) {
       findQuery.select({ content: 0, chunks: 0, vector: 0 });
+    }
+
+    // supersededInLakes is `select: false` on the schema (see FabFileSchema) - a plain search never
+    // returns it. The curator-supersession collapse (partitionBySupersession) is the one consumer
+    // that needs it, so its callers opt in explicitly rather than every search exposing curator
+    // ruling metadata by default.
+    if (query.includeSupersessionRulings) {
+      findQuery.select('+supersededInLakes');
     }
 
     // Mirror collation on the count query so total can never diverge from the
@@ -1447,6 +1460,50 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       { $sort: { fileCount: -1 } },
     ]);
     return result;
+  }
+
+  async claimTagRewriteByUserId(
+    userId: string,
+    tag: string,
+    newTag: string | null,
+    excludeIds: readonly string[] = []
+  ): Promise<Pick<IFabFileDocument, 'id' | 'userId' | 'tags'> | null> {
+    if (!tag) return null;
+    // The SAME anchored, escaped, case-insensitive match removeTagByUserId/updateTagsByUserId run,
+    // so a claim and the bulk mop-up behind it can never act on different file sets.
+    const nameRegex = new RegExp(`^${escapeRegex(tag)}$`, 'i');
+    // One file per call, claimed by the write itself: the returned pre-image is the state THIS
+    // write saw, so a caller minting a durable per-file fact from a bulk tag rewrite describes a
+    // transition it actually caused. A snapshot read plus updateMany cannot do that - updateMany
+    // reports one aggregate count, and two concurrent requests reading the same snapshot would
+    // both claim to have moved every file.
+    //
+    // `excludeIds` is what terminates the caller's loop: a case-only rename still matches
+    // nameRegex after the rewrite, so the caller excludes what it has already claimed rather than
+    // relying on the filter no longer matching.
+    //
+    // deletedAt conjunct, unlike those writes: a soft-deleted file is already out of every lake
+    // read, so a membership event for it would double-report against the delete door's own.
+    const filter: Record<string, unknown> = {
+      userId,
+      deletedAt: null,
+      tags: { $elemMatch: { name: nameRegex } },
+    };
+    if (excludeIds.length > 0) filter._id = { $nin: convertIds([...excludeIds]) };
+    // `$[elem]` and not `$`, matching updateTagsByUserId: the first-positional operator rewrites
+    // only the first matching element, leaving a stale copy on a file carrying the name twice.
+    const prior = newTag
+      ? await this.fabFileModel.findOneAndUpdate(
+          filter,
+          { $set: { 'tags.$[elem].name': newTag } },
+          { new: false, projection: 'userId tags', arrayFilters: [{ 'elem.name': nameRegex }] }
+        )
+      : await this.fabFileModel.findOneAndUpdate(
+          filter,
+          { $pull: { tags: { name: nameRegex } } },
+          { new: false, projection: 'userId tags' }
+        );
+    return prior ? prior.toJSON() : null;
   }
 
   async removeTagByUserId(userId: string, tag: string): Promise<number> {
@@ -2942,50 +2999,72 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     excludeIds: string[] = [],
     stampedAt?: Date,
     archiveStampToClear?: Date
-  ): Promise<number> {
+  ): Promise<DataLakeSweptFile[]> {
     const base: Record<string, unknown> = {
       ...buildDataLakeMembershipFilter(scope),
       deletedAt: stampedAt ?? { $ne: null },
     };
     if (excludeIds.length > 0) base._id = { $nin: excludeIds };
 
-    if (!archiveStampToClear) {
-      const result = await this.fabFileModel.updateMany(base, { $set: { deletedAt: null } });
-      return result.modifiedCount;
+    // Enumerate, then flip each row under its own conditional write, and report the rows that
+    // actually moved. A single updateMany is cheaper but reports one aggregate count, and the
+    // restore door mints a durable per-file membership fact from this - two restores re-entering
+    // the 'restoring' state concurrently would otherwise both claim to have revived every row.
+    // includeDeleted: the soft-delete plugin's pre('find') hook otherwise ANDs `deletedAt: null`
+    // onto the filter, which contradicts the stamp bound and matches nothing.
+    // userId/fileSize are carried through so the caller can credit each file's own owner's quota.
+    const candidates = await this.fabFileModel.find(base, null, { includeDeleted: true }).select('_id userId fileSize');
+    const restored: DataLakeSweptFile[] = [];
+    for (const candidate of candidates) {
+      // An aggregation-pipeline $set so one atomic write covers both fields: a row stamped by THIS
+      // lake's own archive gets both cleared, any other value (a different lake's stamp, or none)
+      // only un-deletes and keeps its archive marker - the equality bound that stops this freeing
+      // a prefix-sharing sibling's independently-archived files.
+      const result = await this.fabFileModel.updateOne({ ...base, _id: candidate._id }, [
+        {
+          $set: {
+            deletedAt: null,
+            ...(archiveStampToClear
+              ? { archivedAt: { $cond: [{ $eq: ['$archivedAt', archiveStampToClear] }, null, '$archivedAt'] } }
+              : {}),
+          },
+        },
+      ]);
+      if (result.modifiedCount === 1) {
+        restored.push({
+          id: candidate._id.toString(),
+          userId: String(candidate.userId),
+          fileSize: candidate.fileSize ?? 0,
+        });
+      }
     }
-
-    // Two parallel queries partitioned on `archivedAt`, not one update followed by another - not
-    // for snapshot isolation (Mongo gives none across separate updateMany calls), but because the
-    // shared `deletedAt: stampedAt` base filter is a barrier: once either query flips a row's
-    // `deletedAt` to null, that row no longer matches EITHER filter, so it cannot be picked up
-    // twice. A row stamped by THIS lake's own archive gets both fields cleared; any other value (a
-    // different lake's stamp, or none) only un-deletes, leaving its archive marker exactly as it
-    // was - the equality bound that keeps this from freeing a prefix-sharing sibling's
-    // independently-archived files.
-    const [ownStamp, otherStamp] = await Promise.all([
-      this.fabFileModel.updateMany(
-        { ...base, archivedAt: archiveStampToClear },
-        { $set: { deletedAt: null, archivedAt: null } }
-      ),
-      this.fabFileModel.updateMany(
-        { ...base, archivedAt: { $ne: archiveStampToClear } },
-        { $set: { deletedAt: null } }
-      ),
-    ]);
-    return ownStamp.modifiedCount + otherStamp.modifiedCount;
+    return restored;
   }
 
-  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<string[]> {
-    const docs = await this.fabFileModel.find({ ...buildDataLakeMembershipFilter(scope), deletedAt: null }, { _id: 1 });
-    const ids = docs.map(d => d._id.toString());
-    if (ids.length === 0) return [];
-    // `deletedAt: null` is re-asserted in the UPDATE, not just the read above, so this is write-once
-    // the way archiveByDataLakeTag already is. Without it the read-modify-write is racy: two sweeps
-    // overlapping in time both select the same rows, and the loser's stamp overwrites the winner's.
-    // Harmless while both carry the same stamp, unrecoverable the moment they do not - and the
-    // return stays the ids this call selected, which is what the index removal and its re-run want.
-    await this.fabFileModel.updateMany({ _id: { $in: ids }, deletedAt: null }, { $set: { deletedAt: at } });
-    return ids;
+  async softDeleteByDataLakeTag(scope: DataLakeMembershipScope, at: Date = new Date()): Promise<DataLakeSweptFile[]> {
+    const docs = await this.fabFileModel.find(
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
+      { _id: 1, userId: 1, fileSize: 1 }
+    );
+    if (docs.length === 0) return [];
+    // Per-row conditional write, not a bulk updateMany + read-back-by-stamp-equality: a bulk write
+    // can't say which caller's write actually landed, and reading back "every row now carrying this
+    // stamp" answers a DIFFERENT question - "who else shares it" - not "did THIS call flip it".
+    // Those used to be the same answer because the only consumer was a membership-audit log, where
+    // two overlapping sweeps sharing a stamp both reporting the full set was harmless (a duplicate
+    // `removed` row). It stopped being harmless the moment a second consumer - the owner's storage
+    // debit - started reading the same return value: two concurrent deletes on one lake (a
+    // double-click, a retried request) legitimately share a stamp via claimFilesDeletedAt's
+    // set-if-unset read-back, and the bulk form let both compute and apply the same debit. Mirrors
+    // undeleteByDataLakeTag's own per-row modifiedCount gate for the identical reason.
+    const flipped: DataLakeSweptFile[] = [];
+    for (const doc of docs) {
+      const result = await this.fabFileModel.updateOne({ _id: doc._id, deletedAt: null }, { $set: { deletedAt: at } });
+      if (result.modifiedCount === 1) {
+        flipped.push({ id: doc._id.toString(), userId: String(doc.userId), fileSize: doc.fileSize ?? 0 });
+      }
+    }
+    return flipped;
   }
 
   async hardDeleteByIds(fabFileIds: string[]): Promise<string[]> {
@@ -3139,6 +3218,25 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return result.modifiedCount;
   }
 
+  async pushTagReturningPriorState(
+    fabFileId: string,
+    tagName: string,
+    strength = 0
+  ): Promise<Pick<IFabFileDocument, 'userId' | 'tags'> | null> {
+    if (!tagName) return null;
+    // Same filtered-push semantics and exact-name matching as pushTagsByFabFileId (read its note
+    // on why case-insensitivity here would be wrong), but returning the PRE-IMAGE instead of a
+    // count. The count only says the name was absent; a caller deciding whether the file was
+    // already a data lake member through some OTHER signal needs the document the winning write
+    // saw, and reading it separately would race with a concurrent writer.
+    const prior = await this.fabFileModel.findOneAndUpdate(
+      { _id: fabFileId, 'tags.name': { $ne: tagName } },
+      { $push: { tags: { name: tagName, strength } } },
+      { new: false, projection: 'userId tags' }
+    );
+    return prior ? prior.toJSON() : null;
+  }
+
   async pullTagsByFabFileId(fabFileId: string, tagNames: string[]): Promise<number> {
     // The schema has timestamps, so an empty $in would still rewrite updatedAt and report a
     // modification for a write that removes nothing.
@@ -3147,8 +3245,14 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // removals of different tags on the same file can't clobber each other. Idempotent -
     // absent names are a no-op. Exact names only, deliberately: a prefix pattern here would
     // mean building a regex from a user-chosen prefix, and an empty one matches every tag.
+    //
+    // The `tags.name` conjunct is what makes the returned count mean "a tag was removed": the
+    // schema has timestamps, so without it an unmatched $pull still rewrites updatedAt and
+    // reports modifiedCount 1. Callers that mint a durable fact from a removal (the lake
+    // membership audit trail) read this count to tell a real removal from the losing half of
+    // two concurrent removals, so an unmatched pull has to report 0.
     const result = await this.fabFileModel.updateOne(
-      { _id: fabFileId },
+      { _id: fabFileId, 'tags.name': { $in: tagNames } },
       { $pull: { tags: { name: { $in: tagNames } } } }
     );
     // A primaryTag naming a tag the file no longer carries later fails the data-lake write
@@ -3160,16 +3264,93 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     // concurrency $pull buys. The cost of two writes is that a crash between them leaves a
     // primaryTag pointing at a removed tag, which the gate above then rejects until it is set
     // again. A stale label that blocks one edit beats a lost concurrent removal.
-    await this.fabFileModel.updateOne(
-      { _id: fabFileId, primaryTag: { $in: tagNames } },
-      { $unset: { primaryTag: '' } }
-    );
+    //
+    // Best-effort: the $pull above has already committed by this point, so letting this reject
+    // propagate would throw out of a membership removal that in fact happened - every caller
+    // (removeFileFromLake, the corpus-action merge door) has no compensating action for a
+    // "removal partially failed" state, only for "removal did not happen." A stale primaryTag
+    // is self-correcting the next time the file's tags are written through setDataLakeFileTags.
+    try {
+      await this.fabFileModel.updateOne(
+        { _id: fabFileId, primaryTag: { $in: tagNames } },
+        { $unset: { primaryTag: '' } }
+      );
+    } catch {
+      // swallowed - see the best-effort note above.
+    }
     return result.modifiedCount;
+  }
+
+  async setLakeSupersession(fabFileId: string, entry: LakeSupersession): Promise<boolean> {
+    // UPDATE-then-INSERT, never pull-then-push. Both orderings need two writes - the array has no
+    // upsert-an-element op - but they fail differently, and only one of them fails safe:
+    //
+    //   pull-then-push leaves the file UNRULED between the two, so a concurrent re-rule of the
+    //   same lake can have its own push refused by the `$ne` guard and report failure for a file
+    //   that exists, having already destroyed the ruling that was there.
+    //
+    //   this ordering never removes anything. The positional `$set` replaces an existing ruling
+    //   in one atomic write; the `$push` only runs when there was none, and its `$ne` filter is
+    //   what keeps two racing first-rulings from stacking two entries. A loser of that race
+    //   simply re-reads on the second pass and takes the `$set` path.
+    //
+    // Both ops are filtered on the lake id, so a ruling in a DIFFERENT lake is never touched.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const replaced = await this.fabFileModel.updateOne(
+        { _id: fabFileId, 'supersededInLakes.dataLakeId': entry.dataLakeId },
+        { $set: { 'supersededInLakes.$': entry } }
+      );
+      if (replaced.matchedCount > 0) return true;
+
+      const inserted = await this.fabFileModel.updateOne(
+        { _id: fabFileId, 'supersededInLakes.dataLakeId': { $ne: entry.dataLakeId } },
+        { $push: { supersededInLakes: entry } }
+      );
+      if (inserted.matchedCount > 0) return true;
+      // Neither matched: either the file is gone, or a concurrent writer inserted this lake's
+      // entry between the two filters. One more pass distinguishes them - the `$set` above now
+      // matches if it was the race.
+    }
+    return false;
+  }
+
+  async clearLakeSupersession(fabFileId: string, dataLakeId: string): Promise<boolean> {
+    // The lake term is in the FILTER, and `matchedCount` is what the answer reads - not
+    // `modifiedCount`. The schema has timestamps, so a `$pull` that removes nothing still rewrites
+    // `updatedAt` and reports a modification: keyed on `_id` alone this returned true for every
+    // call, including "clear a ruling that was never made". Same trap as `pullTagsByFabFileId`'s
+    // empty-`$in` guard next door.
+    const result = await this.fabFileModel.updateOne(
+      { _id: fabFileId, 'supersededInLakes.dataLakeId': dataLakeId },
+      { $pull: { supersededInLakes: { dataLakeId } } }
+    );
+    return result.matchedCount > 0;
+  }
+
+  async getLakeSupersessionWinner(fabFileId: string, dataLakeId: string): Promise<string | null> {
+    // supersededInLakes is select:false - a plain findById would no longer see it, and the
+    // write-time cycle walk (applyCorpusAction.wouldCloseSupersessionCycle) is the one internal
+    // caller that needs it outside the collapse's own search. `+supersededInLakes`, the same
+    // explicit opt-in executeSearch uses, is what actually overrides the schema default here - an
+    // object-style inclusion projection on a sub-path does not.
+    const doc = await this.fabFileModel.findById(fabFileId).select('+supersededInLakes').lean();
+    return doc?.supersededInLakes?.find(r => r.dataLakeId === dataLakeId)?.supersededByFabFileId ?? null;
   }
 }
 
 // Non-destructive AI-edit history for binary Office documents. `_id: false` keeps entries
 // as plain sub-objects (they are addressed by `version`, not ObjectId).
+/** See IFabFile.supersededInLakes. `_id: false` - the lake id is the key and nothing references a row. */
+const LakeSupersessionSchema = new Schema(
+  {
+    dataLakeId: { type: String, required: true },
+    supersededByFabFileId: { type: String, required: true },
+    decidedByUserId: { type: String, required: true },
+    decidedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
 const FabFileVersionSchema = new Schema<IFabFileVersion>(
   {
     version: { type: Number, required: true },
@@ -3302,6 +3483,15 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     driveMd5Checksum: { type: String },
     sourceLakeId: { type: String },
     driveConnectionId: { type: String },
+    // Curator supersession rulings, one per lake - see IFabFile.supersededInLakes. `default:
+    // undefined` so an unruled file stores no empty array, matching `versions` above.
+    // `select: false`: this is control-plane data (who ruled, when, which lake), never something a
+    // client renders, and toJSON is not a boundary (see the comment there) - a schema-level default
+    // exclusion is what actually keeps every PLAIN read/update from round-tripping it, rather than
+    // relying on every caller to remember to strip it. The two readers the curator-supersession
+    // collapse depends on (FabFileRepository.executeSearch, via `search`) opt back in explicitly
+    // with `includeSupersessionRulings` - see fabFileSearchQuery.ts.
+    supersededInLakes: { type: [LakeSupersessionSchema], select: false, default: undefined },
     archivedAt: { type: Date },
     // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
     versions: { type: [FabFileVersionSchema], default: undefined },
@@ -3321,6 +3511,13 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
         if (ret.mimeType === 'application/pdf') {
           delete ret.content;
         }
+        // supersededInLakes is deliberately NOT stripped here. toJSON is not a client boundary -
+        // BaseRepository.findById and FabFileRepository.executeSearch both return doc.toJSON(), and
+        // executeSearch is one of the two reads the curator-supersession collapse
+        // (partitionBySupersession) depends on. Stripping it here made every ruling invisible to
+        // retrieval too. The real boundary is the schema's `select: false` on the field itself (see
+        // its own comment): every plain read/update omits it by default, and only the collapse's own
+        // `search` calls opt back in via `includeSupersessionRulings`.
       },
     },
     toObject: {

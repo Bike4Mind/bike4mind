@@ -147,6 +147,15 @@ type FirecrawlFetchOptions = {
   /** Char offset into the extracted content to start the returned chunk at (continuation).
    *  Firecrawl has no native paging, so the full page is re-scraped and re-sliced here. */
   offset?: number;
+  /** Firecrawl's main-content filter, which drops headers, navs and footers before markdown is
+   *  generated. Firecrawl defaults it to true; pass false when the page chrome matters (pricing or
+   *  legal links in a nav or footer). Unset leaves Firecrawl's default.
+   *
+   *  Firecrawl-only, and only honored in one direction on the keyless path: the plain-fetch
+   *  fallback converts the whole document and has no main-content filter, so false already matches
+   *  what it does, but true would NOT be honored there - a self-host with no Firecrawl key still
+   *  gets the full chrome. Only pass true if that is acceptable for the caller. */
+  onlyMainContent?: boolean;
 };
 
 /**
@@ -192,7 +201,11 @@ export async function firecrawlFetch(
   );
 
   // PDF URLs skip the JS wait action - Firecrawl parses them directly
-  const baseParams = { formats: ['markdown' as const], timeout: timeoutMs };
+  const baseParams = {
+    formats: ['markdown' as const],
+    timeout: timeoutMs,
+    ...(options?.onlyMainContent !== undefined && { onlyMainContent: options.onlyMainContent }),
+  };
 
   const startedAt = Date.now();
   let result;
