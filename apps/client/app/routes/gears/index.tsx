@@ -1,4 +1,4 @@
-import { Box, Card, Chip, Stack, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
+import { Box, Card, Chip, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -42,6 +42,7 @@ import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import PageFrame from '@client/app/components/common/PageFrame';
+import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 
@@ -88,6 +89,9 @@ const GEAR_ICONS: Partial<Record<GearKey, React.ReactNode>> = {
   matheval: <CalculateOutlinedIcon />,
   clidocs: <MenuBookOutlinedIcon />,
 };
+
+/** The reward as prose, for the tooltips: the chip shows the bare number. */
+const creditText = (gear: GearStatus) => `${gear.credits.toLocaleString()} credit${gear.credits === 1 ? '' : 's'}`;
 
 type GearsTabKey = 'destinations' | 'features';
 
@@ -231,25 +235,62 @@ const GearsPage = () => {
                 The card itself stays identical either way - greying the whole
                 card out said "this is spent", when what is spent is the reward. */}
               {gear.unlocked ? (
-                <Stack direction="row" alignItems="center" gap={0.75}>
-                  {gear.rewardPending && (
-                    <Chip size="sm" variant="soft" color="warning" data-testid={`gear-pending-${gear.key}`}>
-                      +{gear.credits} on first visitor
+                gear.rewardPending ? (
+                  <Tooltip title="Reward not claimed yet">
+                    <Chip
+                      size="sm"
+                      variant="soft"
+                      color="warning"
+                      startDecorator={<Bike4MindIcon size="12" />}
+                      data-testid={`gear-pending-${gear.key}`}
+                      // Joy sets gap as a plain declaration per size (3px on sm), not
+                      // as a variable, so it is overridden directly.
+                      sx={{ gap: '6px' }}
+                    >
+                      {gear.credits.toLocaleString()}
                     </Chip>
-                  )}
-                  <CheckCircleIcon color="success" fontSize="small" data-testid={`gear-unlocked-${gear.key}`} />
-                </Stack>
+                  </Tooltip>
+                ) : (
+                  // The checkmark stands for a claimed reward, so it waits for the
+                  // payout rather than the unlock - and it is the only trace of the
+                  // amount, the chip that carried the number being gone by then.
+                  <Tooltip title={`Reward claimed - ${creditText(gear)}`}>
+                    <CheckCircleIcon color="success" fontSize="small" data-testid={`gear-unlocked-${gear.key}`} />
+                  </Tooltip>
+                )
               ) : (
                 gear.credits > 0 && (
-                  <Chip size="sm" variant="soft" color="success">
-                    +{gear.credits}
-                  </Chip>
+                  <Tooltip title={`Earn ${creditText(gear)} the first time you use this.`}>
+                    <Chip
+                      size="sm"
+                      variant="soft"
+                      color="success"
+                      startDecorator={<Bike4MindIcon size="12" />}
+                      sx={{ gap: '6px' }}
+                    >
+                      {gear.credits.toLocaleString()}
+                    </Chip>
+                  </Tooltip>
                 )
               )}
             </Stack>
             <Typography level="body-sm" sx={{ opacity: 0.85, mt: '16px' }}>
               {gear.intro}
             </Typography>
+            {/* The deferred payout gets a full line rather than chip text: it is the
+                one state a glance at a colour cannot explain, and there is room here.
+                Worded for Published, the only gear that declares a rewardCheck - a
+                second one would need this copy to come from the gear instead. */}
+            {gear.rewardPending && (
+              <Typography
+                level="body-xs"
+                data-testid={`gear-pending-note-${gear.key}`}
+                // The same token the soft chip paints its own text with.
+                sx={{ mt: '16px', color: 'warning.softColor' }}
+              >
+                {creditText(gear)} will be claimed once someone else opens your artifact link.
+              </Typography>
+            )}
             {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}
             <Typography
               level="body-sm"
