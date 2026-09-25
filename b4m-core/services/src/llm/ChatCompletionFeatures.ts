@@ -57,6 +57,7 @@ import {
   FORCED_RETRIEVAL_RELATIVE_FLOOR_PCT_DEFAULT,
   FORCED_RETRIEVAL_SETTING_KEYS,
   backgroundScoreOf,
+  citationTagDescription,
   compareForcedRetrievalRank,
   cosineFloorPctForSpace,
   forcedRetrievalRelativeCutoff,
@@ -3188,16 +3189,12 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
         const file = fileById.get(fid);
         const cited = citedChunkByFile.get(fid);
         const conflictsWith = conflict.conflictsByFileId.get(fid);
-        const tagDesc = (file?.tags?.map(t => t.name) || [])
-          .filter(t => !t.startsWith('datalake:'))
-          .slice(0, 4)
-          .join(', ');
         return {
           id: fid,
           type: 'document' as const,
           title: file?.fileName || fid,
           url: `/opti?mode=datalake&article=${fid}`,
-          description: tagDesc || undefined,
+          description: citationTagDescription(file?.tags?.map(t => t.name) || []),
           timestamp: new Date().toISOString(),
           status: 'complete' as const,
           metadata: {
