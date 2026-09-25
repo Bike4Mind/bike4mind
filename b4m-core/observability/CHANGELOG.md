@@ -1,5 +1,11 @@
 # @bike4mind/observability
 
+## 0.2.2
+
+### Patch Changes
+
+- [#3314](https://github.com/Bike4Mind/bike4mind/pull/3314) [`a401245`](https://github.com/Bike4Mind/bike4mind/commit/a40124590f2bc00c3dd0ced05429d617f209f348) Thanks [@cleffrem-dev](https://github.com/cleffrem-dev)! - keep Logger and its env reads out of the client bundle
+
 ## 0.2.1
 
 ### Patch Changes

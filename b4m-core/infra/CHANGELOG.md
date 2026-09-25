@@ -1,5 +1,17 @@
 # @bike4mind/infra
 
+## 1.1.0
+
+### Minor Changes
+
+- [#3195](https://github.com/Bike4Mind/bike4mind/pull/3195) [`bef318c`](https://github.com/Bike4Mind/bike4mind/commit/bef318c78b56e34ab5c4b8f79a876a0d77f73479) Thanks [@onoya](https://github.com/onoya)! - capture real document vintage at ingest
+
+### Patch Changes
+
+- [#3156](https://github.com/Bike4Mind/bike4mind/pull/3156) [`34b7bdd`](https://github.com/Bike4Mind/bike4mind/commit/34b7bdd18eeab2a8c0798131587ea7915e926c3b) Thanks [@aflordelis](https://github.com/aflordelis)! - read the help corpus docs tree with execFileSync
+
+- [#3337](https://github.com/Bike4Mind/bike4mind/pull/3337) [`43974f8`](https://github.com/Bike4Mind/bike4mind/commit/43974f8ca8434c5aafc951a6099cc50724edbc52) Thanks [@aflordelis](https://github.com/aflordelis)! - stop copying tiktoken_bg.wasm onto the MCP Lambda
+
 ## 1.0.1
 
 ### Patch Changes

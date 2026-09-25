@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/auth",
-  "version": "0.8.10",
+  "version": "0.8.11",
   "publishConfig": {
     "access": "restricted"
   },
