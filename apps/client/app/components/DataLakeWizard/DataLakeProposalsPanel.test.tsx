@@ -148,7 +148,7 @@ describe('DataLakeProposalsPanel', () => {
   it('reads as caught up rather than broken when the queue is empty', () => {
     renderPanel({ proposals: [] });
 
-    expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(/All caught up/);
+    expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(/Nothing is waiting for review/);
   });
 
   it('flags a source a reviewer previously declined rather than hiding it', () => {
