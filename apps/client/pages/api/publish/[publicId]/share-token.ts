@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact } from '@bike4mind/database';
 import { generateShareToken } from '@server/services/publish';
 import type { Request, Response } from 'express';
+import { Types } from 'mongoose';
 import * as z from 'zod';
 
 const shareTokenBodySchema = z.object({
@@ -98,9 +99,49 @@ const handler = baseApi()
     const precondition = regenerate
       ? { shareToken: artifact.shareToken ?? { $exists: false } }
       : { shareToken: { $exists: false } };
+    const now = new Date();
     const won = await PublishedArtifact.findOneAndUpdate(
       { publicId: artifact.publicId, deletedAt: null, ...precondition },
-      { $set: { shareToken: candidate, shareTokenUpdatedAt: new Date() } },
+      // The scalar stays the race arbiter through the rollout (#3255 step 1) and the array is
+      // mirrored in the SAME write, so only the racer whose compare-and-set lands appends, and
+      // the two shapes cannot diverge. A rotate marks the outgoing entry revoked rather than
+      // dropping it, so the token can never be re-minted and its view count survives.
+      //
+      // An aggregation pipeline rather than $push + $set: revoking the outgoing entry and
+      // appending the new one both touch `shareTokens`, which a plain update rejects as a
+      // conflicting path. Splitting them into two writes is not an option either - a crash
+      // between them would leave the rotated-away token still live in the array, i.e. a
+      // revoked link that keeps working. `_id` is generated here because a pipeline update
+      // bypasses Mongoose casting and would otherwise leave the entry without the very handle
+      // the owner UI revokes by.
+      [
+        {
+          $set: {
+            shareToken: candidate,
+            shareTokenUpdatedAt: now,
+            shareTokens: {
+              $concatArrays: [
+                regenerate && artifact.shareToken
+                  ? {
+                      $map: {
+                        input: { $ifNull: ['$shareTokens', []] },
+                        as: 'entry',
+                        in: {
+                          $cond: [
+                            { $eq: ['$$entry.token', artifact.shareToken] },
+                            { $mergeObjects: ['$$entry', { revokedAt: now }] },
+                            '$$entry',
+                          ],
+                        },
+                      },
+                    }
+                  : { $ifNull: ['$shareTokens', []] },
+                [{ _id: new Types.ObjectId(), token: candidate, createdAt: now, revokedAt: null, viewCount: 0 }],
+              ],
+            },
+          },
+        },
+      ],
       { new: true }
     ).lean<{ shareToken?: string }>();
 
@@ -129,15 +170,23 @@ const handler = baseApi()
     if (artifact.shareToken && artifact.accessGate && artifact.visibility !== 'public') {
       return res.status(400).json({
         error:
-          'This share link is the only thing enforcing the artifact\'s access gate - clear the gate or set visibility to public before revoking the link',
+          "This share link is the only thing enforcing the artifact's access gate - clear the gate or set visibility to public before revoking the link",
         code: 'REVOKE_WOULD_ORPHAN_GATE',
       });
     }
 
     if (artifact.shareToken) {
+      // Mirrors the scalar unset onto every live entry (#3255 step 1). Stamped rather than
+      // pulled, so the token stays claimed in the unique index and its view count survives.
+      // `arrayFilters` is safe here where it was not on the mint path: nothing is appended in
+      // this write, so there is no conflicting update to `shareTokens` itself.
       await PublishedArtifact.updateOne(
         { publicId: artifact.publicId, deletedAt: null },
-        { $unset: { shareToken: '' }, $set: { shareTokenUpdatedAt: null } }
+        {
+          $unset: { shareToken: '' },
+          $set: { shareTokenUpdatedAt: null, 'shareTokens.$[live].revokedAt': new Date() },
+        },
+        { arrayFilters: [{ 'live.revokedAt': null }] }
       );
       req.logger.info(`[PUBLISH] share-token revoked publicId=${artifact.publicId} by=${req.user!.id}`);
     }

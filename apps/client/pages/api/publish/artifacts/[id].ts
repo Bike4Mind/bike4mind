@@ -105,7 +105,7 @@ const handler = baseApi()
     // Exclude the share-token capability: this GET is reachable by ANY viewer of a public
     // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('-shareToken -shareTokenUpdatedAt')
+      .select('-shareToken -shareTokenUpdatedAt -shareTokens.token')
       .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
