@@ -8,13 +8,6 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
-// PR3344-PROBE: temporary verification logging, removed before merge. Falls back to console.info
-// when req.logger (or its `info` method) is absent, matching the route's other probe.
-function probeInfo(req: Request, msg: string): void {
-  if (typeof req.logger?.info === 'function') req.logger.info(msg);
-  else console.info(msg);
-}
-
 const UpdateBatchInput = z.object({
   status: z.enum(['preparing', 'uploading', 'processing', 'completed', 'completed_with_errors', 'failed', 'cancelled']),
   failedFiles: z.number().nonnegative().optional(),
@@ -98,11 +91,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     if (updated) {
       await recomputeLakeAfterTerminal(data.status, batch.dataLakeId, req.logger);
     }
-
-    probeInfo(
-      req,
-      `[PR3344-PROBE] PUT batches/${batchId} previousStatus=${batch.status} newStatus=${data.status} updated=${!!updated}`
-    );
 
     return res.json({ success: true });
   })

@@ -994,9 +994,6 @@ export const ACTIVE_BATCHES_POLL_MS = 10_000;
  * GET drives server-side stuck-batch reconciliation. */
 export const IDLE_BATCHES_POLL_MS = 60_000;
 
-// PR3344-PROBE: temporary poll-cadence tracing, removed before merge.
-let lastProbeInterval: number | null = null;
-
 /**
  * Fast only while ingest or AI-tagging is non-terminal; a batch waiting on review or failed can
  * sit for days, so it must not hold the fast cadence.
@@ -1005,18 +1002,7 @@ export function activeBatchesPollInterval(batches: IDataLakeBatchSummary[] | und
   const isMoving = (b: IDataLakeBatchSummary) =>
     BATCH_NON_TERMINAL_STATUSES.includes(b.status) ||
     (!!b.taxonomyStatus && TAXONOMY_NON_TERMINAL_STATUSES.includes(b.taxonomyStatus));
-  const moving = batches?.some(isMoving) ?? false;
-  const interval = moving ? ACTIVE_BATCHES_POLL_MS : IDLE_BATCHES_POLL_MS;
-  if (lastProbeInterval === null || interval !== lastProbeInterval) {
-    console.info('[PR3344-PROBE] activeBatchesPollInterval', {
-      interval,
-      reason: moving ? 'moving' : 'idle',
-      batchCount: batches?.length ?? 0,
-      batches: (batches ?? []).map(b => ({ id: b.id, status: b.status, taxonomyStatus: b.taxonomyStatus })),
-    });
-    lastProbeInterval = interval;
-  }
-  return interval;
+  return batches?.some(isMoving) ? ACTIVE_BATCHES_POLL_MS : IDLE_BATCHES_POLL_MS;
 }
 
 /**
@@ -1025,45 +1011,13 @@ export function activeBatchesPollInterval(batches: IDataLakeBatchSummary[] | und
  * independent clocks (a batch can be fully 'completed' while 'analyzing'), reconciled
  * server-side on every call - see GET /api/data-lakes/batches.
  */
-// PR3344-PROBE: temporary fetch-cadence tracing, removed before merge.
-let lastProbeFetchAt: number | null = null;
-
 export function useActiveDataLakeBatches(enabled = true) {
   return useQuery({
     queryKey: dataLakeKeys.activeBatches,
     enabled,
     queryFn: async () => {
-      const startedAt = Date.now();
-      const sinceLastMs = lastProbeFetchAt === null ? null : startedAt - lastProbeFetchAt;
-      lastProbeFetchAt = startedAt;
-      const visibility = typeof document !== 'undefined' ? document.visibilityState : 'unknown';
-      console.info('[PR3344-PROBE] fetch start', {
-        time: new Date(startedAt).toISOString(),
-        sinceLastMs,
-        visibility,
-        enabled,
-      });
-      try {
-        const response = await api.get<{ data: IDataLakeBatchSummary[] }>('/api/data-lakes/batches', {
-          headers: {
-            'x-b4m-probe-client-interval': String(lastProbeInterval ?? 'none'),
-            'x-b4m-probe-visibility': visibility,
-          },
-        });
-        const data = response.data.data;
-        console.info('[PR3344-PROBE] fetch done', {
-          time: new Date().toISOString(),
-          count: data.length,
-          statuses: data.map(b => b.status),
-          visibility,
-          enabled,
-        });
-        return data;
-      } catch (error) {
-        const status = isAxiosError(error) ? error.response?.status : undefined;
-        console.info('[PR3344-PROBE] fetch error', { status, visibility, enabled });
-        throw error;
-      }
+      const response = await api.get<{ data: IDataLakeBatchSummary[] }>('/api/data-lakes/batches');
+      return response.data.data;
     },
     refetchInterval: query => (enabled ? activeBatchesPollInterval(query.state.data) : false),
     refetchOnWindowFocus: false,
@@ -1127,7 +1081,6 @@ export function useApplyTaxonomySuggestions(batchId: string) {
         // `applied` is only ever empty on the all-skipped arm above, which cannot reach here.
         toast.success(applied);
       }
-      console.info(`[PR3344-PROBE] invalidate activeBatches from applyTaxonomy batch=${batchId}`);
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
@@ -1149,7 +1102,6 @@ export function useReanalyzeTaxonomy(batchId: string) {
       return res.data;
     },
     onSuccess: () => {
-      console.info(`[PR3344-PROBE] invalidate activeBatches from reanalyzeTaxonomy batch=${batchId}`);
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
     },
     onError: (error: Error) => {
@@ -1171,7 +1123,6 @@ export function useDismissTaxonomy(batchId: string) {
       return res.data;
     },
     onSuccess: () => {
-      console.info(`[PR3344-PROBE] invalidate activeBatches from dismissTaxonomy batch=${batchId}`);
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
     },
     onError: (error: Error) => {

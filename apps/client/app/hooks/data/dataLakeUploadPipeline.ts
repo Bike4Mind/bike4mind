@@ -516,9 +516,6 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     });
 
     batchId = batchRes.data.id;
-    console.info(
-      `[PR3344-PROBE] batch created batchId=${batchId} fileCount=${included.length} time=${new Date().toISOString()}`
-    );
     cb.onBatchCreated();
 
     // Switch to upload step and set initial progress
@@ -616,7 +613,6 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
       if (targetLake) {
         // Append: keep the user's existing lake, but delete the orphan FabFiles, account
         // the failures, and finalize (upload-complete does all three server-side).
-        console.info(`[PR3344-PROBE] upload-complete sent batchId=${batchId} failedFiles=${failedCount}`);
         await api
           .post('/api/data-lakes/batches/upload-complete', {
             batchId,
@@ -673,7 +669,6 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     // describes - so it stays remembered, and a later retry that goes back to that prefix can
     // still reuse it.
     if (recoverableLake?.id === dataLakeId) cb.setRecoverableLake(null);
-    console.info(`[PR3344-PROBE] upload-complete sent batchId=${batchId} failedFiles=${failedCount}`);
     await api
       .post('/api/data-lakes/batches/upload-complete', {
         batchId,
@@ -718,7 +713,6 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     // Nothing uploaded on this path, so roll back what setup created (best-effort - a
     // cleanup failure must not mask the real error; the reconciler is the backstop).
     if (!reconciled) {
-      console.info(`[PR3344-PROBE] setup failure rollback batchId=${batchId ?? 'none'} dataLakeId=${dataLakeId}`);
       if (batchId) {
         await api.put(`/api/data-lakes/batches/${batchId}`, { status: 'failed' }).catch(() => {});
       }

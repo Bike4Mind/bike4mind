@@ -23,13 +23,6 @@ import { z } from 'zod';
  */
 const FAILED_FILE_ID_CHUNK = 10000;
 
-// PR3344-PROBE: temporary verification logging, removed before merge. Falls back to console.info
-// when req.logger (or its `info` method) is absent.
-function probeInfo(req: Request, msg: string): void {
-  if (typeof req.logger?.info === 'function') req.logger.info(msg);
-  else console.info(msg);
-}
-
 /**
  * A 24-char hex Mongo ObjectId string. Unvalidated, one malformed id made the id-scoped read throw a
  * Mongoose CastError, which errorHandler renders as a 404 - logged at warn, so it never alerted.
@@ -84,9 +77,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // Shared with the presign/create routes (see assertBatchOwnership) - this route doesn't
     // attach a new file, but it still mutates an existing batch by a client-suppliable id, so
     // the same ownership guard applies.
-    const batch = await dataLakeService.assertBatchOwnership(userId, batchId, {
-      db: { batches: dataLakeBatchRepository },
-    });
+    await dataLakeService.assertBatchOwnership(userId, batchId, { db: { batches: dataLakeBatchRepository } });
 
     // Remove the orphan FabFiles the failed uploads created. A plain soft-delete is
     // complete for these: 0 chunks (nothing to tear down), no S3 object (the PUT never
@@ -152,10 +143,6 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
     // increments that landed concurrently; finalize is itself guarded (runs once) and
     // recomputes lake stats from source - now that the orphans above are gone.
     const fresh = await dataLakeBatchRepository.findById(batchId);
-    probeInfo(
-      req,
-      `[PR3344-PROBE] upload-complete batchId=${batchId} previousStatus=${batch.status} newStatus=${fresh?.status ?? 'unknown'}`
-    );
     await finalizeBatchIfComplete(fresh, req.logger);
 
     // Background AI-tag suggestion: not gated on chunk/vectorize completion, only on the
