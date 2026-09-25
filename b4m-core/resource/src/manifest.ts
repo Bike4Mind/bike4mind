@@ -38,6 +38,7 @@ export const DEFAULT_MANIFEST = {
   OVERWATCH_INGEST_ENABLED: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_KEY: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_INGEST_URL: { kind: 'secret', optional: true }, // transient: removed after product extraction
+  OVERWATCH_PRODUCT_INGEST_KEYS: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OVERWATCH_PSEUDONYM_SALT: { kind: 'secret', optional: true }, // transient: removed after product extraction
   OPTIHASHI_API_TOKEN: { kind: 'secret', optional: true },
   OPTIHASHI_API_URL: { kind: 'secret', optional: true },
