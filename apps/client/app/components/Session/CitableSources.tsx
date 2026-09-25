@@ -14,25 +14,27 @@ import { useNavigate } from '@tanstack/react-router';
 import { useCitationInteraction } from './CitationInteractionContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { citedPassageOf } from '@client/app/components/Knowledge/citedPassage';
+import { ExpandCollapseButton } from './ExpandCollapseButton';
 
 interface CitableSourcesProps {
   citables: CitableSource[];
-  /** Maximum height in pixels before scrolling */
-  maxHeight?: number;
 }
+
+/** Sources shown before the reader asks for the rest. Enough to see the list has substance. */
+const COLLAPSED_COUNT = 3;
 
 const getIconForType = (type: CitableSourceType) => {
   switch (type) {
     case 'web_url':
-      return <WebIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <WebIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     case 'document':
-      return <DocumentIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <DocumentIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     case 'dataset':
-      return <DatasetIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <DatasetIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     case 'mcp':
-      return <McpIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <McpIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
     default:
-      return <WebIcon sx={{ fontSize: '1rem', color: 'text.tertiary' }} />;
+      return <WebIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary' }} />;
   }
 };
 
@@ -160,27 +162,37 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
       onClick={handleClick}
       target={!renderAsButton && source.url ? '_blank' : undefined}
       rel={!renderAsButton && source.url ? 'noopener noreferrer' : undefined}
-      sx={{
+      sx={theme => ({
         display: 'flex',
         alignItems: 'center',
-        gap: 1.5,
-        p: 1,
-        borderRadius: 'sm',
-        bgcolor: 'background.level1',
-        border: '1px solid',
-        borderColor: 'divider',
-        transition: 'all 0.2s',
-        textDecoration: 'none',
-        cursor: source.url ? 'pointer' : 'default',
-        flexShrink: 0,
-        background: 'none',
+        gap: '12px',
+        py: 1.25,
+        px: '16px',
         width: '100%',
         textAlign: 'left',
-        '&:hover': {
-          bgcolor: 'background.level2',
-          borderColor: 'primary.outlinedBorder',
-        },
-      }}
+        textDecoration: 'none',
+        // The artifact-card frame (see ArtifactPreviewCard), so a source reads as the same
+        // family as every other framed thing a reply produces. It previously set
+        // background.level1 and hovered to level2 - neither of which this theme defines -
+        // and then killed both with `background: 'none'` on the next line, so the row had
+        // no fill at all.
+        backgroundColor: theme.palette.reading.cardBase,
+        backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
+        borderRadius: '8px',
+        borderWidth: 1,
+        borderStyle: 'solid',
+        borderColor: theme.palette.reading.cardLine,
+        transition: 'all 0.2s ease-in-out',
+        cursor: source.url ? 'pointer' : 'default',
+        // A source with nowhere to go does not lift: the same hover on a dead row is a
+        // promise the click cannot keep.
+        ...(source.url && {
+          '&:hover': {
+            transform: 'translateY(-2px)',
+            boxShadow: 'sm',
+          },
+        }),
+      })}
     >
       {/* Favicon or fallback icon */}
       <Box
@@ -199,8 +211,8 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             alt=""
             onError={() => setFaviconError(true)}
             style={{
-              width: 16,
-              height: 16,
+              width: 20,
+              height: 20,
               borderRadius: '2px',
             }}
           />
@@ -287,10 +299,19 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
 };
 
 /**
- * CitableSources - Displays a scrollable list of sources referenced in AI responses
- * Shows web search results, documents, datasets, and MCP tool results
+ * The sources a reply drew on: web results, documents, datasets and MCP tool results.
+ *
+ * A bare list, not a card. Each source carries the artifact frame itself, and wrapping
+ * framed rows in another frame read as a box of boxes.
+ *
+ * Bounded by COUNT rather than by height. It used to cap at 200px and scroll inside, which
+ * put a nested scroll region between the reply and the next turn - the reader had to find
+ * the inner scroller to reach a source the text cited. It uses the reply's own rounded
+ * Show More pill, not the bare control a code card carries - that one sits INSIDE an
+ * artifact frame, and this list has no frame of its own to sit in.
  */
-const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) => {
+const CitableSources: FC<CitableSourcesProps> = ({ citables }) => {
+  const [expanded, setExpanded] = useState(false);
   // Citables accumulate across multiple tool calls (e.g. several search_knowledge_base
   // invocations returning overlapping files), so the same source can appear more than
   // once. Dedupe by a stable identity before rendering - otherwise repeated ids produce
@@ -318,19 +339,11 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
     return null;
   }
 
+  const visible = expanded ? uniqueCitables : uniqueCitables.slice(0, COLLAPSED_COUNT);
+  const hiddenCount = uniqueCitables.length - COLLAPSED_COUNT;
+
   return (
-    <Box
-      sx={{
-        mt: 1.5,
-        mb: 1,
-        p: 1.5,
-        borderRadius: 'sm',
-        bgcolor: 'background.surface',
-        border: '1px solid',
-        borderColor: 'divider',
-      }}
-      data-testid="citable-sources"
-    >
+    <Box sx={{ mt: 1.5, mb: 1 }} data-testid="citable-sources">
       <Typography
         level="body-xs"
         sx={{
@@ -344,30 +357,11 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
         Sources ({uniqueCitables.length})
       </Typography>
 
-      <Stack
-        spacing={0.75}
-        sx={{
-          maxHeight,
-          overflowY: 'auto',
-          pr: 0.5, // Space for scrollbar
-          // Custom scrollbar styling
-          '&::-webkit-scrollbar': {
-            width: '6px',
-          },
-          '&::-webkit-scrollbar-track': {
-            bgcolor: 'background.level1',
-            borderRadius: '3px',
-          },
-          '&::-webkit-scrollbar-thumb': {
-            bgcolor: 'neutral.400',
-            borderRadius: '3px',
-            '&:hover': {
-              bgcolor: 'neutral.500',
-            },
-          },
-        }}
-      >
-        {uniqueCitables.map((source, index) => (
+      {/* The whole gap to the pill below. It does NOT add to the pill's own 8px top margin:
+          block-level siblings collapse to the larger of the two, so this value alone is what
+          shows. */}
+      <Stack spacing={1} sx={{ mb: '16px' }}>
+        {visible.map((source, index) => (
           <CitableSourceItem
             key={source.id || source.url || index}
             source={source}
@@ -375,6 +369,14 @@ const CitableSources: FC<CitableSourcesProps> = ({ citables, maxHeight = 200 }) 
           />
         ))}
       </Stack>
+
+      <ExpandCollapseButton
+        needsTruncation={hiddenCount > 0}
+        isExpanded={expanded}
+        onToggle={() => setExpanded(v => !v)}
+        collapsedLabel={`Show ${hiddenCount} More`}
+        testId="citable-sources-show-more-btn"
+      />
     </Box>
   );
 };

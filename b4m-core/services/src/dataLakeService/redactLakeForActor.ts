@@ -116,6 +116,9 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // derived state leaks only a boolean, never the raw timestamp this field withholds.
   lakeMemoryExtractionAt: 'withheld',
   lakeMemoryCursor: 'withheld',
+  // Model inconsistency run lease (#3057): internal bookkeeping on the same footing as the lease
+  // above, and it would tell a reader when the owner last paid to have the corpus read.
+  modelInconsistencyRunAt: 'withheld',
   // Purge fence: same class of internal bookkeeping, and it would tell a reader when a manager wiped
   // what the lake had learned - a management action, not a property of the corpus they can search.
   lakeMemoryPurgedAt: 'withheld',

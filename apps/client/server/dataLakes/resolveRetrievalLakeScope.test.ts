@@ -239,6 +239,9 @@ describe('resolveRetrievalLakeScope', () => {
       },
       user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: ['optihashi:pro'],
+      // Stated, not omitted: this seam's entitlement resolution propagates a failure instead of
+      // degrading to `[]`, so the keys above are always the caller's real ones.
+      entitlementKeysResolved: true,
     });
   });
 
@@ -295,6 +298,7 @@ describe('resolveRetrievalLakeScope', () => {
       },
       user: { id: 'u1', tags: [] },
       entitlementKeys: [],
+      entitlementKeysResolved: true,
     });
   });
 
@@ -316,6 +320,7 @@ describe('resolveRetrievalLakeScope', () => {
       },
       user: { id: 'u1', tags: ['Opti'] },
       entitlementKeys: [],
+      entitlementKeysResolved: true,
     });
   });
 

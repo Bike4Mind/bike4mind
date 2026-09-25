@@ -11,6 +11,7 @@
  *
  * Schedule: every 5 minutes
  * Enabled: production + dev
+ * Self-host: the worker runs `runQuestTimeoutSweep` on the same cadence (server/worker/questTimeoutSweep.ts).
  */
 
 import { connectDB, questRepository } from '@bike4mind/database';
@@ -50,6 +51,19 @@ export async function handler() {
   await emitMetric(CLOUDWATCH_NAMESPACE, 'TimeoutSweepRuns', 1, { Stage: stage }, StandardUnit.Count);
 
   await connectDB(Config.MONGODB_URI.replace('%STAGE%', stage));
+  return runQuestTimeoutSweep();
+}
+
+/**
+ * The sweep against an already-open connection. The self-host worker passes
+ * `emitMetrics: false`: it has no CloudWatch, so a PutMetricData there only waits
+ * on a credential lookup before logging a failure.
+ */
+export async function runQuestTimeoutSweep({ emitMetrics = true } = {}) {
+  const stage = Resource.App.stage;
+  const metric = async (name: string, value: number) => {
+    if (emitMetrics) await emitMetric(CLOUDWATCH_NAMESPACE, name, value, { Stage: stage }, StandardUnit.Count);
+  };
 
   const nowMs = Date.now();
   const staleQuests = await questRepository.findStaleRunning({
@@ -61,13 +75,7 @@ export async function handler() {
   // Candidate depth is its own metric because `recovered` cannot distinguish a
   // run that drained the backlog from one that hit the cap with more waiting -
   // the difference that matters during an incident stranding thousands of quests.
-  await emitMetric(
-    CLOUDWATCH_NAMESPACE,
-    'TimeoutSweepCandidates',
-    staleQuests.length,
-    { Stage: stage },
-    StandardUnit.Count
-  );
+  await metric('TimeoutSweepCandidates', staleQuests.length);
 
   if (staleQuests.length >= SWEEP_LIMIT) {
     logger.warn('[QuestTimeoutSweep] Hit the per-run candidate cap; more quests may be waiting', {
@@ -77,7 +85,7 @@ export async function handler() {
 
   if (staleQuests.length === 0) {
     logger.info('[QuestTimeoutSweep] No stuck quests found');
-    await emitMetric(CLOUDWATCH_NAMESPACE, 'TimeoutSweepRecovered', 0, { Stage: stage }, StandardUnit.Count);
+    await metric('TimeoutSweepRecovered', 0);
     return { status: 'OK', recovered: 0 };
   }
 
@@ -107,7 +115,7 @@ export async function handler() {
     candidates: staleQuests.length,
     recovered,
   });
-  await emitMetric(CLOUDWATCH_NAMESPACE, 'TimeoutSweepRecovered', recovered, { Stage: stage }, StandardUnit.Count);
+  await metric('TimeoutSweepRecovered', recovered);
 
   return { status: 'OK', recovered };
 }

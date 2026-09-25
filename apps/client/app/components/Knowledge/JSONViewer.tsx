@@ -1,7 +1,6 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React from 'react';
 import { Box, Typography } from '@mui/joy';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 interface JSONViewerProps {
   content: string;
@@ -23,14 +22,12 @@ const JSONViewer: React.FC<JSONViewerProps> = ({ content }) => {
           Invalid JSON: {error}
         </Typography>
       ) : (
-        <SyntaxHighlighter
+        <HighlightedCode
           className="json-viewer-content"
+          code={formatted}
           language="json"
-          style={oneDark}
-          customStyle={{ margin: 0, borderRadius: '4px', minHeight: '100%' }}
-        >
-          {formatted}
-        </SyntaxHighlighter>
+          customStyle={{ minHeight: '100%' }}
+        />
       )}
     </Box>
   );

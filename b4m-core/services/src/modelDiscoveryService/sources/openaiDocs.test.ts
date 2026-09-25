@@ -171,6 +171,22 @@ describe('openai long-context breakpoint', () => {
     expect(parseOpenAiLongContextBreakpoint(read('model-gpt-5.4.md'))).toBe(272_000);
   });
 
+  it('reads the spelled-out comparison', () => {
+    expect(parseOpenAiLongContextBreakpoint(read('model-gpt-6-sol.md'))).toBe(272_000);
+    for (const comparison of ['over', 'above', 'exceeding', '>=', '> ']) {
+      expect(parseOpenAiLongContextBreakpoint(`- Prompts with ${comparison} 200K input tokens are priced at 2x.`)).toBe(
+        200_000
+      );
+    }
+  });
+
+  it('takes no breakpoint from a sentence that only mentions input tokens', () => {
+    expect(parseOpenAiLongContextBreakpoint('- Prompts with up to 200K input tokens use the standard rate.')).toBe(
+      undefined
+    );
+    expect(parseOpenAiLongContextBreakpoint(read('pricing.md'))).toBeUndefined();
+  });
+
   it('is undefined for a model with no long-context pricing', () => {
     expect(parseOpenAiLongContextBreakpoint(read('model-gpt-5.4-mini.md'))).toBeUndefined();
   });

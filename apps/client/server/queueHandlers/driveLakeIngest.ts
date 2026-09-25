@@ -51,6 +51,7 @@ import {
 import {
   walkFolder,
   fetchDriveFileContent,
+  driveDocumentVintage,
   isUnderRoot,
   DriveWalkTimeBudgetExceededError,
   type WalkedDriveFile,
@@ -1434,6 +1435,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             sourceType: FabFileSourceType.GOOGLE_DRIVE,
             driveFileId: file.id,
             ...(file.modifiedTime && { driveModifiedTime: new Date(file.modifiedTime) }),
+            // Document vintage (#3048), present only for a file Drive itself authored. An uploaded
+            // binary's vintage comes from its own embedded metadata during chunking instead.
+            ...driveDocumentVintage(file),
             ...(file.md5Checksum && { driveMd5Checksum: file.md5Checksum }),
             sourceLakeId: connection.targetDataLakeId,
             driveConnectionId: connectionId,

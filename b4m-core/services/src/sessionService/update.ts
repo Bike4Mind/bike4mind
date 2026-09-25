@@ -161,9 +161,14 @@ export const updateSession = async (
   }
   update.lastUpdated = new Date();
 
-  const updated = await db.sessions.update(update);
+  // The read above authorizes; the write re-checks, since a share revocation or soft-delete can land
+  // during addFilesToProjects or lake derivation. Same arms as findUpdateAccessById (global write off).
+  const updated = await db.sessions.updateWithUpdateAccess(user, update);
+  if (!updated) {
+    throw new NotFoundError('Session not found');
+  }
 
-  return updated ?? session;
+  return updated;
 };
 
 const addFilesToProjects = async (

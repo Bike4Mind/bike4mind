@@ -11,6 +11,10 @@ const mockRefs = vi.hoisted(() => ({
   deleteHandler: null as null | ((req: any, res: any) => unknown),
 }));
 
+// Set by the withTransaction mock only after the wrapped callback resolves, so a test can assert the
+// notifier saw a committed transaction rather than merely that both were called in some order.
+const txState = vi.hoisted(() => ({ committed: false }));
+
 const assertDataLakeShareScope = vi.hoisted(() => vi.fn());
 const lakeConfigAuditPrincipal = vi.hoisted(() => vi.fn(() => undefined as unknown));
 vi.mock('@server/dataLakes/dataLakeScopes', () => ({
@@ -39,14 +43,21 @@ const leave = vi.hoisted(() =>
     name: 'Acme',
     billingContact: 'billing@acme.com',
     stripeCustomerId: 'cus_SECRET',
+    users: [],
   }))
 );
+const reportAndNotifyKeptPersonalLakeShares = vi.hoisted(() => vi.fn().mockResolvedValue(1));
+vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({ reportAndNotifyKeptPersonalLakeShares }));
 vi.mock('@bike4mind/services', () => ({ organizationService: { leave } }));
 // A factory must name every export the module graph reaches, or the missing binding throws. The
 // lake repos the route passes to the service throw when the handler runs; the audit pair behind
 // `lakeConfigAuditDb` throws at IMPORT time, taking the suite to zero tests.
 vi.mock('@bike4mind/database', () => ({
-  withTransaction: (fn: any) => fn(),
+  withTransaction: async (fn: any) => {
+    const result = await fn();
+    txState.committed = true;
+    return result;
+  },
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   lakeConfigChangeEventRepository: {},
@@ -126,5 +137,47 @@ describe('DELETE /api/organizations/[id]/members (leave) - safe serialization', 
         logger,
       })
     );
+  });
+});
+
+describe('DELETE /api/organizations/[id]/members (leave) - personal-lake shares kept', () => {
+  beforeEach(() => {
+    txState.committed = false;
+  });
+
+  it('reports and notifies once after the commit, and returns no count to the leaver', async () => {
+    reportAndNotifyKeptPersonalLakeShares.mockClear();
+    let committedWhenNotified: boolean | undefined;
+    reportAndNotifyKeptPersonalLakeShares.mockImplementationOnce(async () => {
+      committedWhenNotified = txState.committed;
+      return 1;
+    });
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+    (req as any).user = { id: 'member2', isAdmin: false };
+    (req as any).ability = {};
+
+    await mockRefs.deleteHandler!(req, res);
+
+    expect(reportAndNotifyKeptPersonalLakeShares).toHaveBeenCalledTimes(1);
+    expect(reportAndNotifyKeptPersonalLakeShares).toHaveBeenCalledWith(
+      'member2',
+      expect.objectContaining({ id: 'org1', name: 'Acme', userId: 'owner1' }),
+      undefined
+    );
+    expect(committedWhenNotified).toBe(true);
+    const body = res._getJSONData();
+    expect('personalLakeSharesKept' in body).toBe(false);
+  });
+
+  it('never notifies when the service call rejects', async () => {
+    reportAndNotifyKeptPersonalLakeShares.mockClear();
+    leave.mockRejectedValueOnce(new Error('boom'));
+    const { req, res } = createMocks({ method: 'DELETE', query: { id: 'org1' } });
+    (req as any).user = { id: 'member2', isAdmin: false };
+    (req as any).ability = {};
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('boom');
+
+    expect(reportAndNotifyKeptPersonalLakeShares).not.toHaveBeenCalled();
   });
 });

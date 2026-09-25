@@ -17,6 +17,7 @@ import {
   MAX_DISCOVERY_PASSES,
   MAX_PERSISTED_RUN_DETAIL,
   PROBE_MAX_ATTEMPTS,
+  presentationOwnedOutsideDiscovery,
   runModelDiscovery,
 } from './runModelDiscovery';
 import type {
@@ -1696,5 +1697,37 @@ describe('runModelDiscovery', () => {
       // charge it would be re-probed with live calls every run forever.
       expect(bench.state.states.get('gpt-6')).toMatchObject({ probeAttempts: 1 });
     });
+  });
+});
+
+describe('presentationOwnedOutsideDiscovery', () => {
+  const presenting = (modelId: string, source: string, ownedGroups: string[] = ['presentation']) =>
+    ({
+      modelId,
+      source,
+      ownedGroups,
+      patch: {},
+      schemaVersion: 1,
+      effectiveFrom: new Date(0),
+    }) as unknown as Parameters<typeof presentationOwnedOutsideDiscovery>[0][number];
+
+  it('names models a seed or operator row presents, never ones only discovery presents', () => {
+    const owned = presentationOwnedOutsideDiscovery(
+      [
+        presenting('seeded', 'seed'),
+        presenting('curated', 'operator'),
+        presenting('discovered', 'discovery'),
+        presenting('seeded-limits-only', 'seed', ['limits']),
+      ],
+      new Set()
+    );
+
+    expect([...owned].sort()).toEqual(['curated', 'seeded']);
+  });
+
+  it('includes every adapter literal id, with or without a row in force', () => {
+    const owned = presentationOwnedOutsideDiscovery([presenting('in-code', 'discovery')], new Set(['in-code']));
+
+    expect(owned.has('in-code')).toBe(true);
   });
 });

@@ -43,12 +43,17 @@ const MockInsufficientCreditsError = vi.hoisted(
 vi.mock('@bike4mind/services', () => ({
   assertOwnerHasCredits: mockAssertOwnerHasCredits,
   assertKeySpendWithinCap: mockAssertKeySpendWithinCap,
-  apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
+  apiKeyService: { getEffectiveLLMApiKeys: mockGetEffectiveLLMApiKeys },
 }));
 
-vi.mock('@bike4mind/services/cliCompletions', () => ({
-  executeCompletion: mockExecuteCompletion,
-}));
+vi.mock('@bike4mind/services/cliCompletions', async () => {
+  // The REAL alias resolver: the route's model gate has to resolve a bare OpenAI name
+  // exactly as executeCompletion does, so a stub here would hide the mismatch it guards.
+  const actual = await vi.importActual<typeof import('@bike4mind/services/cliCompletions')>(
+    '@bike4mind/services/cliCompletions'
+  );
+  return { executeCompletion: mockExecuteCompletion, resolveOpenAiBareModelAlias: actual.resolveOpenAiBareModelAlias };
+});
 
 vi.mock('@bike4mind/services/llm', async () => {
   // Mirror the real resolveQuestErrorCode against the stand-in class, delegating
@@ -66,7 +71,10 @@ vi.mock('@bike4mind/services/llm', async () => {
 });
 
 vi.mock('@bike4mind/llm-adapters', () => ({
-  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  // adapterFamily is what the embed reasoning gate reads; a catalog row always carries one.
+  getAvailableModels: vi
+    .fn()
+    .mockResolvedValue([{ id: 'test-model', backend: 'anthropic', adapterFamily: 'anthropic-messages' }]),
   getLlmByModel: vi.fn(() => ({ currentModel: '', complete: vi.fn() })),
 }));
 
@@ -111,6 +119,7 @@ vi.mock('@server/cli/auth', () => ({
 const mockVerifyEmbedSessionToken = vi.hoisted(() => vi.fn());
 vi.mock('@server/embed/embedSessionToken', () => ({ verifyEmbedSessionToken: mockVerifyEmbedSessionToken }));
 
+const mockGetEffectiveLLMApiKeys = vi.hoisted(() => vi.fn());
 const mockCheckApiKeyRateLimit = vi.hoisted(() => vi.fn());
 vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({ checkApiKeyRateLimit: mockCheckApiKeyRateLimit }));
 
@@ -159,6 +168,7 @@ beforeEach(() => {
   mockAssertOwnerHasCredits.mockReturnValue(undefined);
   mockAssertKeySpendWithinCap.mockReturnValue(undefined);
   mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: true });
+  mockGetEffectiveLLMApiKeys.mockResolvedValue({ openai: 'k' });
   mockCheckEmbedSessionRateLimit.mockResolvedValue({ allowed: true });
   mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-1', fileIds: ['f1', 'f2'], deletedAt: null });
   mockUserFindById.mockResolvedValue({ id: 'user-1', groups: [] });
@@ -174,7 +184,7 @@ beforeEach(() => {
     projectId: 'proj-1',
   });
   mockExecuteCompletion.mockImplementation(async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
-    await params.onChunk(['', 'hello from the agent'], { outputTokens: 5 });
+    await params.onChunk(['hello from the agent'], { outputTokens: 5 });
   });
 });
 
@@ -712,10 +722,10 @@ describe('POST /api/embed/chat - server-side tools', () => {
     // the route must strip it so the anonymous client sees text and tokens only.
     mockExecuteCompletion.mockImplementation(
       async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
-        await params.onChunk(['', ''], {
+        await params.onChunk([''], {
           toolsUsed: [{ name: 'search_knowledge_base', arguments: { query: 'internal query' }, id: 't1' }],
         });
-        await params.onChunk(['', 'hello from the agent'], { outputTokens: 5 });
+        await params.onChunk(['hello from the agent'], { outputTokens: 5 });
       }
     );
 
@@ -727,6 +737,149 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(text).not.toContain('internal query');
     expect(text).not.toContain('tool_use');
     expect(text).not.toContain('web_search');
+  });
+
+  it('keeps adaptive-model reasoning off the wire', async () => {
+    // An adaptive Claude model opens a thinking block on every turn regardless of the
+    // request, so the adapter tags those frames and the route must not render them.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['<think>'], { channel: 'reasoning' });
+        await params.onChunk(['the user is asking about internal pricing'], { channel: 'reasoning' });
+        await params.onChunk(['</think>'], { channel: 'reasoning' });
+        await params.onChunk(['hello from the agent'], { outputTokens: 5 });
+      }
+    );
+
+    const text = await (await post(CHAT)).text();
+    expect(text).toContain('hello from the agent');
+    expect(text).not.toContain('internal pricing');
+    expect(text).not.toContain('<think>');
+    expect(text).not.toContain('</think>');
+  });
+
+  it('keeps a raw tool artifact off the wire', async () => {
+    // web_fetch is in the embed tool set and handleToolResultStreaming pushes the whole
+    // result when it contains artifact markup - third-party text the page author controls.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['<artifact type="application/vnd.ant.react">raw page body</artifact>'], {
+          channel: 'tool-artifact',
+        });
+        await params.onChunk(['here is what I found'], { outputTokens: 5 });
+      }
+    );
+
+    const text = await (await post(CHAT)).text();
+    expect(text).toContain('here is what I found');
+    expect(text).not.toContain('raw page body');
+    expect(text).not.toContain('<artifact');
+  });
+
+  it('never enables thinking on the completion request', async () => {
+    // Load-bearing: anthropic families are admitted by the model gate because their
+    // reasoning is OPT-IN. Nothing filters the text, so if this route ever asked for
+    // thinking, the reasoning would stream straight to an anonymous visitor.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['hello from the agent'], { outputTokens: 5 });
+      }
+    );
+
+    await post(CHAT);
+
+    const { options } = mockExecuteCompletion.mock.calls[0][0] as { options: Record<string, unknown> };
+    expect(options).not.toHaveProperty('thinking');
+    expect(Object.keys(options).sort()).toEqual(['maxTokens', 'stream', 'temperature']);
+  });
+
+  it.each([
+    [
+      'the spend cap',
+      () =>
+        mockAssertKeySpendWithinCap.mockImplementation(() => {
+          throw spendCapExceededError('This embed key has reached its spend cap');
+        }),
+    ],
+    ['the rate limiter', () => mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: false, error: 'too many' })],
+  ])('starts no key or catalog lookup once %s has rejected the request', async (_gate, reject) => {
+    // The catalog read can miss its cache and reach a provider, so a caller past either
+    // limit must not be able to drive that work by retrying.
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    reject();
+
+    await post(CHAT);
+
+    expect(mockGetEffectiveLLMApiKeys).not.toHaveBeenCalled();
+    expect(vi.mocked(getAvailableModels)).not.toHaveBeenCalled();
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['deepseek', 'a family that wraps reasoning in the text channel'],
+    ['ollama', 'a family that wraps reasoning in the text channel'],
+    [undefined, 'a model the catalog cannot describe'],
+  ])('refuses %s before opening the stream (%s)', async (adapterFamily, _why) => {
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { id: 'test-model', backend: 'anthropic', adapterFamily } as never,
+    ]);
+
+    const res = await post(CHAT);
+
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({ code: 'agent_model_not_embeddable' });
+    // Pre-stream refusal: nothing was billed and no SSE frame was written.
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('accepts a bare OpenAI model alias by resolving it to its catalog id', async () => {
+    // The catalog stores the dated snapshot, and executeCompletion resolves the bare name
+    // before its own lookup. A gate reading the raw id finds no family and fail-closes on a
+    // model the completion would have accepted.
+    const { getAvailableModels } = await import('@bike4mind/llm-adapters');
+    vi.mocked(getAvailableModels).mockResolvedValueOnce([
+      { id: 'gpt-4.1-mini-2025-04-14', backend: 'openai', adapterFamily: 'openai-chat' } as never,
+    ]);
+    hydrateWith({ model: 'gpt-4.1-mini' });
+
+    const res = await post(CHAT);
+
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalled();
+    // The tool context is pointed at the resolved id too, not the alias the catalog lacks.
+    const deps = mockBuildSharedTools.mock.calls[0]?.[0] as { model: string } | undefined;
+    expect(deps?.model).toBe('gpt-4.1-mini-2025-04-14');
+  });
+
+  it('keeps text already streamed when the run fails afterwards', async () => {
+    // It was generated and paid for; a later failure must not swallow it.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['the operator is <']);
+        throw new Error('backend exploded');
+      }
+    );
+
+    const text = await (await post(CHAT)).text();
+    expect(text).toContain('the operator is <');
+    expect(text.indexOf('the operator is <')).toBeLessThan(text.indexOf('"type":"error"'));
+  });
+
+  it('delivers an answer whose chunks split a literal marker', async () => {
+    // Nothing is held back waiting for a marker, so both halves reach the wire in order
+    // and the visitor sees the whole answer they paid for.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['use the <']);
+        await params.onChunk(['think> tag'], { outputTokens: 5 });
+      }
+    );
+
+    const text = await (await post(CHAT)).text();
+    expect(text).toContain('use the <');
+    expect(text).toContain('think> tag');
+    expect(text.indexOf('think> tag')).toBeLessThan(text.indexOf('[DONE]'));
   });
 
   it('a missing key owner runs the completion persona-only instead of failing', async () => {
