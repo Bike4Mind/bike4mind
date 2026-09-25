@@ -7,6 +7,7 @@ const h = vi.hoisted(() => ({
   update: vi.fn(),
   recordDetected: vi.fn(),
   listByLake: vi.fn(),
+  tryIncrementWithinLimitFixedWindow: vi.fn(),
   loggerWarn: vi.fn(),
   loggerError: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
@@ -84,6 +85,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { update: h.update },
   dataLakeAccessGrantRepository: {},
   dataLakeFindingRepository: { recordDetected: h.recordDetected, listByLake: h.listByLake },
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrementWithinLimitFixedWindow },
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
@@ -91,13 +93,13 @@ vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAcces
 vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
 vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 
-import { MODEL_INCONSISTENCY_RUN_LEASE_MS } from '@bike4mind/common';
+import { ForbiddenError, MODEL_INCONSISTENCY_RUN_LEASE_MS } from '@bike4mind/common';
 import handler from '../inconsistencies';
 
 const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme' };
 const makeRes = () => {
   const json = vi.fn();
-  return { res: { json, status: vi.fn(() => ({ json })) }, json };
+  return { res: { json, status: vi.fn(() => ({ json })), setHeader: vi.fn() }, json };
 };
 const invoke = (body: Record<string, unknown> = {}, method = 'POST', query: Record<string, unknown> = {}) => {
   const { res, json } = makeRes();
@@ -145,7 +147,10 @@ beforeEach(() => {
   h.update.mockResolvedValue(lake);
   h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
   h.listByLake.mockResolvedValue([]);
+  h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 1000) });
 });
+
+const LAKE_CAP_KEY = 'rate-limit:lake:lakeDoc1:data-lakes/inconsistencies/model/lake';
 
 describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
   it('gates on WRITE access, not read access - the response carries document excerpts', async () => {
@@ -280,6 +285,7 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
     await done;
 
     expect(h.listByLake).toHaveBeenCalledWith('lakeDoc1', {
+      detector: 'lexical',
       status: ['open', 'resolved'],
       seenSince: new Date('2026-06-01T00:00:00Z'),
       limit: 200,
@@ -319,6 +325,37 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
     await done;
 
     expect(json.mock.calls[0][0]).toBeNull();
+  });
+
+  it('lists only lexical rows on a lake that has also run the model pass', async () => {
+    // The lexical summary's `countsByKind` has `narrative-contradiction: 0`, so a model row served here
+    // would sit beside a count that does not include it, and could take a slot under the findings cap.
+    const lexicalRow = { id: 'f-lex', detector: 'lexical', kind: 'expired-claim', subject: 'roadmap', status: 'open' };
+    const modelRow = {
+      id: 'f-model',
+      detector: 'model',
+      kind: 'narrative-contradiction',
+      subject: 'x',
+      status: 'open',
+    };
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report({ countsByKind: { 'expired-claim': 1, 'narrative-contradiction': 0 } }),
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    h.listByLake.mockImplementation(async (_id: string, opts: { detector?: string; status?: string | string[] }) => {
+      const rows = opts.status === 'dismissed' ? [{ ...modelRow, status: 'dismissed' }] : [lexicalRow, modelRow];
+      return opts.detector ? rows.filter(r => r.detector === opts.detector) : rows;
+    });
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(h.listByLake).toHaveBeenCalledTimes(2);
+    for (const [, opts] of h.listByLake.mock.calls) expect(opts.detector).toBe('lexical');
+    const body = json.mock.calls[0][0];
+    expect(body.findings).toEqual([lexicalRow]);
+    expect(body.countsByKind).toMatchObject({ 'expired-claim': 1, 'narrative-contradiction': 0 });
   });
 
   it('is manage-gated too, because the payload carries document excerpts either way', async () => {
@@ -478,21 +515,55 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
     const { done } = invoke({}, 'POST', { detector: 'model' });
     await done;
 
-    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model/lake']).toBe(1);
-    const options = h.rateLimitOptionsByBucket['data-lakes/inconsistencies/model/lake'];
-    expect((options?.limit as () => number)()).toBe(6);
-    // Keyed on the lake, not the caller - that IS the fix.
-    const subject = options?.subject as (req: unknown) => string | undefined;
-    expect(subject({ query: { id: 'lake1' } })).toBe('lake:lake1');
-    // A malformed id falls back to the default subject, which can only ever be stricter.
-    expect(subject({ query: {} })).toBeUndefined();
+    // Keyed on the RESOLVED lake id, not the caller or the route id - that IS the fix.
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledTimes(1);
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(LAKE_CAP_KEY, 6, 60 * 60 * 1000);
+  });
+
+  it('does not let a caller without manage access consume the lake bucket', async () => {
+    // Otherwise a read-scoped caller with no grant could drain a lake's hourly budget and lock out
+    // the curators who do have one. The refusal itself is unchanged: the access gate's own error.
+    const refusal = new ForbiddenError('no access');
+    h.assertLakeWriteAccess.mockRejectedValue(refusal);
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+
+    await expect(done).rejects.toBe(refusal);
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model/lake']).toBeUndefined();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    // The per-caller cap is still taken up front, so such a caller stays bounded by their own budget.
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model']).toBe(1);
+  });
+
+  it('refuses with a 429 and enqueues nothing once the lake bucket is spent', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({
+      success: false,
+      expiresAt: new Date(Date.now() + 120_000),
+    });
+
+    const { res, done } = invoke({}, 'POST', { detector: 'model' });
+
+    await expect(done).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(res.setHeader).toHaveBeenCalledWith('Retry-After', expect.any(Number));
+  });
+
+  it('lifts the per-lake cap in development', async () => {
+    h.isDevelopment.mockReturnValueOnce(true);
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
   });
 
   it('leaves the per-lake bucket untouched on a lexical run', async () => {
     const { done } = invoke({}, 'POST');
     await done;
 
-    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model/lake']).toBeUndefined();
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
   });
 
   it('enqueues the run and returns 202 rather than doing the LLM work in the request', async () => {
@@ -536,6 +607,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
       message: expect.stringMatching(/already in progress/i),
     });
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
   });
 
   it('treats a lease older than the window as free, so a crashed run does not wedge the lake', async () => {
@@ -559,6 +631,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () 
 
     await expect(done).rejects.toThrow(/queue url not found/i);
     expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
   });
 });
 
