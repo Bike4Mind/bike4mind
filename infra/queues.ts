@@ -696,7 +696,7 @@ const questExportQueueSubscription = questExportQueue.subscribe(
 
 // Data Lake Cleanup Queue
 // Background phase-2 hard-delete sweep for a soft-deleted lake, offloaded off the request path.
-// Pure Mongo (no buckets/websocket), so DB secrets are all it needs.
+// Links fabFileBucket because the sweep deletes each purged file's stored objects; no websocket.
 const dataLakeCleanupQueueDLQ = new sst.aws.Queue('dataLakeCleanupQueueDLQ', {});
 const dataLakeCleanupQueue = new sst.aws.Queue('dataLakeCleanupQueue', {
   visibilityTimeout: '12 minutes', // > the 10-minute handler timeout + margin
@@ -711,7 +711,7 @@ const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
     runtime: 'nodejs24.x',
     timeout: '10 minutes',
     vpc: lambdaVpc,
-    link: [...allSecrets],
+    link: [...allSecrets, fabFileBucket],
     logging: {
       retention: '3 days',
     },
