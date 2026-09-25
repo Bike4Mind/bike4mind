@@ -74,6 +74,14 @@ interface ConfigDraft {
 
 const microUsdToUsdInput = (micro: number): string => (micro / 1_000_000).toFixed(2);
 
+/**
+ * Full precision, unlike `microUsdToUsdInput`: a saved ceiling can be sub-cent (e.g. $0.004), and
+ * `toFixed(2)` would seed the field with "0.00", which then fails the "above $0" range check and
+ * blocks Save, or rounds up and saves a different ceiling than the one on screen. Micro-USD is an
+ * integer, so `String` on the quotient is exact - JS renders the shortest round-tripping decimal.
+ */
+const microUsdToUsdDraftInput = (micro: number): string => String(micro / 1_000_000);
+
 /** Spend is routinely a fraction of a cent, so two decimals would render every run as $0.00. */
 const formatSpend = (micro: number): string => `$${(micro / 1_000_000).toFixed(4)}`;
 
@@ -112,7 +120,7 @@ const draftFromConfig = (config: IDataLakeResearchConfigDocument): ConfigDraft =
   maxProposals: String(config.maxProposals),
   recencyDays: config.recencyDays == null ? '' : String(config.recencyDays),
   minRelevance: String(config.minRelevance),
-  costCeilingUsd: microUsdToUsdInput(config.costCeilingMicroUsd),
+  costCeilingUsd: microUsdToUsdDraftInput(config.costCeilingMicroUsd),
   allowedDomains: config.allowedDomains.join('\n'),
   blockedDomains: config.blockedDomains.join('\n'),
   proposedTags: config.proposedTags.join(', '),

@@ -273,6 +273,19 @@ describe('DataLakeResearchPanel', () => {
       expect(spies.onCreate).not.toHaveBeenCalled();
     });
 
+    // toFixed(2) would seed this field with "0.00", which fails the "above $0" check and blocks
+    // Save, or rounds up and saves a ceiling other than the one that was loaded.
+    it('round-trips a sub-cent cost ceiling through Edit and Save unchanged', () => {
+      const spies = renderPanel({ configs: [config({ costCeilingMicroUsd: 4_000 })] });
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect((screen.getByTestId('datalake-research-cost-ceiling-input') as HTMLInputElement).value).toBe('0.004');
+      expect(screen.getByTestId('datalake-research-save-btn')).not.toBeDisabled();
+
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(spies.onUpdate).toHaveBeenCalledWith('config-1', expect.objectContaining({ costCeilingMicroUsd: 4_000 }));
+    });
+
     // undefined would mean "unchanged" and the stored value would come straight back.
     it('sends null for a cleared recency, so clearing it actually clears it', () => {
       const spies = renderPanel({ configs: [config()] });
