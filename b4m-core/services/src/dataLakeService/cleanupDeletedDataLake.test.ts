@@ -46,6 +46,7 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
     hardDeleteOneById: vi.fn(async () => true),
     findById: vi.fn(async () => undefined as never),
     pullTagsByFabFileId: vi.fn(async () => {}),
+    findStorageKeysByIds: vi.fn(async () => [] as never),
   },
   fabFileChunks: {
     deleteManyByFabFileId: vi.fn(async () => {}),
@@ -303,5 +304,120 @@ describe('cleanupDeletedDataLake', () => {
     await cleanupDeletedDataLake(ADMIN, 'lake-1', { db } as never);
 
     expect(incrementCurrentStorage).not.toHaveBeenCalled();
+  });
+
+  describe('storage object deletion (#3258)', () => {
+    const withFile = (
+      db: ReturnType<typeof makeDb>,
+      files: Record<string, { filePath?: string; versions?: { filePath?: string }[] }>
+    ) => {
+      db.fabFiles.findStorageKeysByIds = vi.fn(
+        async (ids: string[]) => ids.filter(id => files[id]).map(id => ({ id, ...files[id] })) as never
+      );
+      return db;
+    };
+
+    it("reads each slice's keys through the include-deleted batch read, never findById", async () => {
+      // Every id this sweep sees is soft-deleted, and the soft-delete plugin hides those rows from
+      // findById - reading keys through it returns null for all of them and deletes nothing.
+      const db = withFile(makeDb(['f1', 'f2', 'f3']), {
+        f1: { filePath: 'org/f1.bin' },
+        f2: { filePath: 'org/f2.bin' },
+        f3: { filePath: 'org/f3.bin' },
+      });
+      const storage = { delete: vi.fn(async () => {}) };
+
+      await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, storage, chunkSize: 2 });
+
+      expect(db.fabFiles.findStorageKeysByIds.mock.calls).toEqual([[['f1', 'f2']], [['f3']]]);
+      expect(db.fabFiles.findById).not.toHaveBeenCalled();
+      expect(storage.delete).toHaveBeenCalledTimes(3);
+    });
+
+    it("deletes each purged file's stored object", async () => {
+      const db = withFile(makeDb(['f1', 'f2']), {
+        f1: { filePath: 'org/f1.bin' },
+        f2: { filePath: 'org/f2.bin' },
+      });
+      const storage = { delete: vi.fn(async () => {}) };
+
+      await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, storage });
+
+      expect(storage.delete).toHaveBeenCalledTimes(2);
+      expect(storage.delete).toHaveBeenCalledWith('org/f1.bin');
+      expect(storage.delete).toHaveBeenCalledWith('org/f2.bin');
+    });
+
+    it('deletes every prior version key too, before the current one, deduping a version that repeats it', async () => {
+      const db = withFile(makeDb(['f1']), {
+        f1: {
+          filePath: 'org/f1-v3.bin',
+          versions: [{ filePath: 'org/f1-v1.bin' }, { filePath: 'org/f1-v2.bin' }, { filePath: 'org/f1-v3.bin' }],
+        },
+      });
+      const order: string[] = [];
+      const storage = {
+        delete: vi.fn(async (path: string) => {
+          order.push(path);
+        }),
+      };
+
+      await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, storage });
+
+      // The current key is deduped out of versionKeys and attempted last, mirroring
+      // purgeDataLakeDocument.ts - not just called, in this exact order.
+      expect(order).toEqual(['org/f1-v1.bin', 'org/f1-v2.bin', 'org/f1-v3.bin']);
+    });
+
+    it('deletes storage BEFORE the row, and aborts the sweep without hard-deleting when the object delete fails', async () => {
+      const db = withFile(makeDb(['f1', 'f2']), {
+        f1: { filePath: 'org/f1.bin' },
+        f2: { filePath: 'org/f2.bin' },
+      });
+      const storage = {
+        delete: vi.fn(async () => {
+          throw new Error('bucket unreachable');
+        }),
+      };
+
+      await expect(cleanupDeletedDataLake(ADMIN, 'lake-1', { db, chunkSize: 1, storage })).rejects.toThrow(
+        'bucket unreachable'
+      );
+
+      // f1's storage delete failed before its row was ever touched - the id stays resolvable by
+      // findIdsByDataLakeTag on a DLQ retry, rather than hard-deleting a row over a live object.
+      expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+      expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    });
+
+    it('skips the storage call for a file with no stored keys, but still hard-deletes its row', async () => {
+      const db = withFile(makeDb(['f1']), { f1: {} });
+      const storage = { delete: vi.fn(async () => {}) };
+
+      await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, storage });
+
+      expect(storage.delete).not.toHaveBeenCalled();
+      expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalledWith('f1');
+    });
+
+    it('still hard-deletes every file when no storage adapter is wired, but warns once', async () => {
+      const db = makeDb(['f1', 'f2']);
+      const warn = vi.fn();
+
+      await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, logger: { warn } });
+
+      expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalledTimes(2);
+      const unwiredWarnings = warn.mock.calls.filter(([msg]) => String(msg).includes('no storage adapter wired'));
+      expect(unwiredWarnings).toHaveLength(1);
+    });
+
+    it('stays quiet about the unwired storage adapter when the lake had no files to destroy', async () => {
+      const db = makeDb([]);
+      const warn = vi.fn();
+
+      await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, logger: { warn } });
+
+      expect(warn.mock.calls.filter(([msg]) => String(msg).includes('no storage adapter wired'))).toHaveLength(0);
+    });
   });
 });

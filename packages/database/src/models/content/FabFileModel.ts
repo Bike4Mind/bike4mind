@@ -3106,6 +3106,20 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => d._id.toString());
   }
 
+  async findStorageKeysByIds(fabFileIds: string[]) {
+    if (fabFileIds.length === 0) return [];
+    // includeDeleted is the whole point: every caller's ids are soft-deleted rows (see the interface).
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: convertIds(fabFileIds) } }, { filePath: 1, 'versions.filePath': 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    return docs.map(d => ({
+      id: d._id.toString(),
+      filePath: d.filePath ?? undefined,
+      versions: (d.versions ?? []).map(v => ({ filePath: v.filePath })),
+    }));
+  }
+
   async updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number> {
     if (!tag || !newTag) return 0;
     // Anchored and escaped for the same reason as removeTagByUserId: unanchored, renaming `q1`
