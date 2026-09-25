@@ -25,6 +25,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { EmailEvents } from '@server/utils/eventBus';
 import { postFeedbackToSlack } from '@server/integrations/slack/slack';
 import { NotFoundError } from '@server/utils/errors';
+import { isValidObjectId } from '@server/utils/objectId';
 import { hydrateFeedbackText, toRedactedFeedback } from '@server/utils/redactedFeedback';
 import { Config } from '@server/utils/config';
 import { resolveFeedbackContext } from '@server/utils/feedbackContext';
@@ -90,7 +91,7 @@ const ListFeedbackQuerySchema = z.object({
   userId: z.string().min(1).optional(),
   sessionId: z.string().min(1).optional(),
   questId: z.string().min(1).optional(),
-  organizationId: z.string().min(1).optional(),
+  organizationId: z.string().refine(isValidObjectId, { error: 'Invalid organizationId format' }).optional(),
   // Legacy free-text org label. The admin dropdown builds its options out of the documents
   // themselves, so it still selects on this; `organizationId` is the key programmatic callers
   // (rollups, deep links) should use.
