@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
-import { IPC_CHANNELS, type AppInfo } from '../shared/ipc';
+import { IPC_CHANNELS, type AppInfo } from '@shared/ipc';
+import { registerAuth } from './auth';
 
 // electron-vite sets this in dev only; a packaged build loads the renderer off disk.
 const rendererDevUrl = process.env.ELECTRON_RENDERER_URL;
@@ -47,8 +48,18 @@ function createWindow(): void {
 
 ipcMain.handle(IPC_CHANNELS.getAppInfo, buildAppInfo);
 
-void app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  // After ready, not before: safeStorage is only usable once the app is ready, and the vault
+  // asks it whether encryption is available on its first access.
+  const auth = registerAuth();
+  app.once('will-quit', () => auth.dispose());
+
   createWindow();
+
+  // Restoring runs alongside the window opening rather than gating it: the renderer starts in
+  // the `initializing` state and is pushed the outcome, so a slow or unreachable backend
+  // delays the auth card, not the whole app.
+  void auth.initialize();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

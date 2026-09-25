@@ -13,6 +13,14 @@ export default defineConfig(({ mode }) => {
   return {
     main: {
       resolve: { alias: { '@shared': sharedDir } },
+      // The brand's default backend, baked in at build time exactly as the CLI bakes it via
+      // tsdown. A packaged app inherits no shell environment, so reading it at runtime would
+      // always be empty; substituting only this one expression leaves every other
+      // `process.env` lookup in main working normally. Empty for an unbranded fork, which
+      // then has no hosted option in the environment picker.
+      define: {
+        'process.env.B4M_DEFAULT_API_URL': JSON.stringify(process.env.B4M_DEFAULT_API_URL ?? ''),
+      },
       plugins: [externalizeDepsPlugin()],
     },
     preload: {

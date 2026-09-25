@@ -1,7 +1,7 @@
 # @bike4mind/desktop
 
-Electron desktop client for Bike4Mind. This package is the T1 scaffold: it boots a window
-to a placeholder screen. There is no auth, no chat, and no packaging/installer yet.
+Electron desktop client for Bike4Mind. It signs in against a Bike4Mind backend and stops
+there: no chat, no session list, no model picker, no packaging/installer yet.
 
 The web SPA (`apps/client`) cannot be wrapped: it is a Next.js server-rendered shell that
 hydrates Tanstack Router, not a static bundle. So this app has its own lean renderer
@@ -30,7 +30,8 @@ Electron against it with HMR.
 ## Layout
 
 ```
-src/main/       main process (Node). Owns windows and, later, the OAuth device flow.
+src/main/       main process (Node). Owns windows, the OAuth device flow and every token.
+src/main/auth/  device flow, keychain-backed token vault, refresh timer, auth IPC handlers.
 src/preload/    contextBridge boundary. Exposes window.b4m.
 src/renderer/   the UI (React + MUI Joy + Tanstack Router).
 src/shared/     IPC channel names and payload types, imported by main and preload.
@@ -39,9 +40,45 @@ src/shared/     IPC channel names and payload types, imported by main and preloa
 `contextIsolation: true`, `nodeIntegration: false`, `sandbox: true`. The preload exposes
 one hand-written method per IPC channel rather than a generic `invoke(channel, ...args)`
 passthrough, because a passthrough would let renderer code reach every handler main ever
-registers. That matters for the next task: the OAuth device flow runs in **main** so tokens
-never enter the renderer, and the IPC contract in `src/shared/ipc.ts` states the invariant
-that channels may return auth *state* but never a token.
+registers. The OAuth device flow runs in **main** so tokens never enter the renderer, and
+the IPC contract in `src/shared/ipc.ts` states the invariant that channels may return auth
+*state* but never a token.
+
+## Authentication
+
+The whole RFC 8628 device flow lives in `src/main/auth`, on top of the shared
+`@bike4mind/client-auth` package (the same one the CLI uses). The renderer only ever receives
+derived state - signed out, awaiting approval (with the user code to display), signed in, or
+one of the two blocked states below - and there is deliberately no IPC channel that returns a
+token.
+
+- **Client id.** This app registers as `b4m-desktop`. One `DeviceFlowClient` is constructed
+  with it and serves both `/api/oauth/device/initiate` and `/api/oauth/device/token`, because
+  the token endpoint rejects a device code whose stored `clientId` differs from the redeeming
+  `client_id` (RFC 8628 s3.4).
+- **Storage.** Tokens go to the OS keychain via Electron `safeStorage`, keyed per normalized
+  API URL, in `<userData>/auth-vault.json`. Deliberately not the CLI's plaintext
+  `~/.bike4mind/config.json`. `safeStorage` is only usable after the app `ready` event, so
+  `registerAuth()` must be called from inside `whenReady()`. Where
+  `safeStorage.isEncryptionAvailable()` is false (Linux with no keyring) the vault degrades to
+  memory-only and the UI says so - it never falls back to writing plaintext.
+- **Per-environment tokens.** Switching between Production, Local Dev and a self-hosted URL
+  restores the session already cached for that endpoint instead of forcing another device
+  flow, matching the CLI.
+- **Proactive refresh.** Access tokens live 30 minutes. A timer refreshes 5 minutes before
+  expiry rather than waiting for a 401, because a later task mints WebSocket connect tickets
+  from the live token and an open socket never produces the 401 a lazy refresh waits for.
+- **Two states that are not login failures.** A 403 carrying `policyAcceptanceRequired` and a
+  401 carrying `mfaPending` are authenticated states; the session is kept and the UI offers the
+  browser link that resolves each, plus a retry. Rendering either as "sign-in failed" would
+  leave the user with no way forward.
+- **Never logged.** No access token, refresh token or device code is logged at any level.
+  Debug logging is opt-in via `B4M_DESKTOP_VERBOSE=1` rather than on in dev, because the shared
+  HTTP client debug-logs request bodies.
+
+`B4M_DEFAULT_API_URL` is baked into the main bundle at build time (see the `define` block in
+`electron.vite.config.ts`), exactly as the CLI bakes it via tsdown. Empty for an unbranded
+fork, which then has no Production option and must pick Local Dev or a custom URL.
 
 Routing uses hash history. A packaged build loads the renderer over `file://`, which has no
 origin for the History API to push against, so hash history is the one mode that behaves
@@ -80,7 +117,9 @@ not installed directly.
 
 ## Importing `@bike4mind/common` into the renderer
 
-It works, and it does **not** drag in server-only dependencies. The package's runtime
+The renderer no longer imports it (auth needs only main-process code), but the two
+workarounds below stay in `electron.vite.config.ts` for the tasks that will. It works, and it
+does **not** drag in server-only dependencies. The package's runtime
 dependencies are `@bike4mind/hearth`, `axios`, `dayjs` and `zod`. No mongoose, no AWS SDK.
 
 Two things did need handling, both because the renderer is a sandboxed browser with no Node

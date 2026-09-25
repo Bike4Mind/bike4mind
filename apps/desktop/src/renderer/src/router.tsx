@@ -1,12 +1,12 @@
 import { createHashHistory, createRootRoute, createRoute, createRouter } from '@tanstack/react-router';
-import { Placeholder } from './routes/Placeholder';
+import { Home } from './routes/Home';
 
 const rootRoute = createRootRoute();
 
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/',
-  component: Placeholder,
+  component: Home,
 });
 
 // A packaged build loads the renderer over file://, which has no origin for the History
