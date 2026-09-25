@@ -90,6 +90,11 @@ const Config = {
   ),
   OVERWATCH_INGEST_URL: readOptionalSecret('OVERWATCH_INGEST_URL', () => Resource.OVERWATCH_INGEST_URL.value),
   OVERWATCH_INGEST_KEY: readOptionalSecret('OVERWATCH_INGEST_KEY', () => Resource.OVERWATCH_INGEST_KEY.value),
+  // JSON map of productId -> ingest key, for other products this deployment serves.
+  OVERWATCH_PRODUCT_INGEST_KEYS: readOptionalSecret(
+    'OVERWATCH_PRODUCT_INGEST_KEYS',
+    () => Resource.OVERWATCH_PRODUCT_INGEST_KEYS.value
+  ),
   B4M_ANALYTICS_ENABLED: readOptionalSecret('B4M_ANALYTICS_ENABLED', () => Resource.B4M_ANALYTICS_ENABLED.value),
   OVERWATCH_PSEUDONYM_SALT: readOptionalSecret(
     'OVERWATCH_PSEUDONYM_SALT',

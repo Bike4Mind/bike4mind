@@ -185,6 +185,10 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
+    "OVERWATCH_PRODUCT_INGEST_KEYS": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "OVERWATCH_PSEUDONYM_SALT": {
       "type": "sst.sst.Secret"
       "value": string
