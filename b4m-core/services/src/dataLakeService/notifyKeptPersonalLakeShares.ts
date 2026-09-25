@@ -1,4 +1,5 @@
 import type { IUserRepository } from '@bike4mind/common';
+import { userDisplayName } from './assembleLakeAccessView';
 import type { KeptPersonalLakeShares } from './reportKeptPersonalLakeShares';
 import { escapeHtml, wrapLakeEmail } from './renderSpendNotificationEmail';
 import type { LakeConfigAuditLogger } from './resolveLakeConfigAuditRetention';
@@ -61,7 +62,7 @@ export async function notifyKeptPersonalLakeShares(
       deps.db.users.findByIds([context.departedUserId]),
       deps.db.users.findActiveEmailsByIds(shares.byOwner.map(o => o.ownerUserId)),
     ]);
-    const memberName = member?.name || member?.username || member?.email || 'A former member';
+    const memberName = userDisplayName(member) ?? 'A former member';
     const emails = new Map(emailRows.map(u => [u.id, u.email]));
     const skippedOwnerIds = shares.byOwner.map(o => o.ownerUserId).filter(id => !emails.has(id));
     if (skippedOwnerIds.length > 0) {

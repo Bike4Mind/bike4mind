@@ -48,7 +48,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_SHARE_SCOPES }).delete(async
   // the org's to revoke; their owners are told instead.
   const personalLakeSharesKept = await reportAndNotifyKeptPersonalLakeShares(
     req.query.userId as string,
-    organization.name,
+    organization,
     req.logger
   );
 

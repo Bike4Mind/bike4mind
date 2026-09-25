@@ -120,7 +120,7 @@ const handler = baseApi()
 
     // After the commit, as on the removal route. The leaver gets no count back: they already know
     // what they were shared.
-    await reportAndNotifyKeptPersonalLakeShares(req.user.id, organization.name, req.logger);
+    await reportAndNotifyKeptPersonalLakeShares(req.user.id, organization, req.logger);
 
     await logEvent(
       {

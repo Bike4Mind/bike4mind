@@ -16,6 +16,10 @@ const mockRefs = vi.hoisted(() => ({
   baseApiOptions: undefined as unknown,
 }));
 
+// Set by the withTransaction mock only after the wrapped callback resolves, so a test can assert the
+// notifier saw a committed transaction rather than merely that both were called in some order.
+const txState = vi.hoisted(() => ({ committed: false }));
+
 vi.mock('@server/middlewares/baseApi', () => {
   const chain: any = {
     use: () => chain,
@@ -35,7 +39,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const revokeAccess = vi.hoisted(() =>
-  vi.fn(async () => ({ id: 'org1', userId: 'owner1', name: 'Acme', stripeCustomerId: 'cus_SECRET' }))
+  vi.fn(async () => ({ id: 'org1', userId: 'owner1', name: 'Acme', stripeCustomerId: 'cus_SECRET', users: [] }))
 );
 const reportAndNotifyKeptPersonalLakeShares = vi.hoisted(() => vi.fn().mockResolvedValue(2));
 vi.mock('@server/utils/keptPersonalLakeSharesNotifier', () => ({ reportAndNotifyKeptPersonalLakeShares }));
@@ -51,7 +55,11 @@ vi.mock('@server/dataLakes/dataLakeScopes', () => ({
 // A factory must name every export the module graph reaches, or the missing binding throws. The
 // audit pair behind `lakeConfigAuditDb` throws at IMPORT time, taking the suite to zero tests.
 vi.mock('@bike4mind/database', () => ({
-  withTransaction: (fn: any) => fn(),
+  withTransaction: async (fn: any) => {
+    const result = await fn();
+    txState.committed = true;
+    return result;
+  },
   dataLakeRepository: {},
   dataLakeAccessGrantRepository: {},
   lakeConfigChangeEventRepository: {},
@@ -77,6 +85,7 @@ describe('DELETE /api/organizations/[id]/members/[userId]', () => {
     revokeAccess.mockClear();
     lakeConfigAuditPrincipal.mockClear();
     lakeConfigAuditPrincipal.mockReturnValue(undefined);
+    txState.committed = false;
   });
 
   it('declares datalake:share at the door', () => {
@@ -133,13 +142,33 @@ describe('DELETE /api/organizations/[id]/members/[userId]', () => {
 describe('DELETE /api/organizations/[id]/members/[userId] - personal-lake shares kept', () => {
   it('reports and notifies once after the commit, and tells the admin only how many shares were kept', async () => {
     reportAndNotifyKeptPersonalLakeShares.mockClear();
+    let committedWhenNotified: boolean | undefined;
+    reportAndNotifyKeptPersonalLakeShares.mockImplementationOnce(async () => {
+      committedWhenNotified = txState.committed;
+      return 2;
+    });
     const { req, res } = request();
 
     await mockRefs.deleteHandler!(req, res);
 
     expect(reportAndNotifyKeptPersonalLakeShares).toHaveBeenCalledTimes(1);
-    expect(reportAndNotifyKeptPersonalLakeShares).toHaveBeenCalledWith('member2', 'Acme', undefined);
+    expect(reportAndNotifyKeptPersonalLakeShares).toHaveBeenCalledWith(
+      'member2',
+      expect.objectContaining({ id: 'org1', name: 'Acme', userId: 'owner1' }),
+      undefined
+    );
+    expect(committedWhenNotified).toBe(true);
     const body = res._getJSONData();
     expect(body.personalLakeSharesKept).toBe(2);
+  });
+
+  it('never notifies when the service call rejects', async () => {
+    reportAndNotifyKeptPersonalLakeShares.mockClear();
+    revokeAccess.mockRejectedValueOnce(new Error('boom'));
+    const { req, res } = request();
+
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow('boom');
+
+    expect(reportAndNotifyKeptPersonalLakeShares).not.toHaveBeenCalled();
   });
 });

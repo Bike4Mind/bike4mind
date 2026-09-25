@@ -47,8 +47,12 @@ const harness = (opts: {
   };
 };
 
-const run = (h: ReturnType<typeof harness>, departed = DEPARTED) =>
-  reportKeptPersonalLakeShares(departed, h.adapters, NOW);
+// Every owner used across the pre-existing scenarios below, so they keep exercising what they
+// exercised before the allowlist existed. Tests about the allowlist itself pass their own.
+const ALL_TEST_OWNERS = ['alice', 'bob', 'carol', 'dave'];
+
+const run = (h: ReturnType<typeof harness>, opts: { departed?: string; memberUserIds?: string[] } = {}) =>
+  reportKeptPersonalLakeShares(opts.departed ?? DEPARTED, opts.memberUserIds ?? ALL_TEST_OWNERS, h.adapters, NOW);
 
 describe('reportKeptPersonalLakeShares', () => {
   it('reports a held grant on a personal lake, grouped under its owner', async () => {
@@ -129,5 +133,36 @@ describe('reportKeptPersonalLakeShares', () => {
     await expect(run(h)).resolves.toEqual(NO_KEPT_SHARES);
     expect(h.findByIds).not.toHaveBeenCalled();
     expect(h.listActiveByLakes).not.toHaveBeenCalled();
+  });
+
+  it('does not count or report a personal lake owned entirely by a non-member', async () => {
+    const outside = hexId(9);
+    const h = harness({ held: [grant(outside, 'reader')], lakes: [personal(outside, 'outsider')] });
+
+    await expect(run(h, { memberUserIds: ['alice'] })).resolves.toEqual(NO_KEPT_SHARES);
+  });
+
+  it('counts and reports a personal lake owned by a current member', async () => {
+    const owned = hexId(10);
+    const h = harness({ held: [grant(owned, 'reader')], lakes: [personal(owned, 'alice')] });
+
+    await expect(run(h, { memberUserIds: ['alice'] })).resolves.toEqual({
+      lakeCount: 1,
+      byOwner: [{ ownerUserId: 'alice', lakes: [{ id: owned, name: `Lake ${owned}` }] }],
+    });
+  });
+
+  it('counts a lake once and lists only the member when one of two owners is not a member', async () => {
+    const mixed = hexId(11);
+    const h = harness({
+      held: [grant(mixed, 'reader')],
+      lakes: [personal(mixed, 'someoneElse')],
+      activeGrants: [grant(mixed, 'owner', 'alice'), grant(mixed, 'owner', 'outsider')],
+    });
+
+    await expect(run(h, { memberUserIds: ['alice'] })).resolves.toEqual({
+      lakeCount: 1,
+      byOwner: [{ ownerUserId: 'alice', lakes: [{ id: mixed, name: `Lake ${mixed}` }] }],
+    });
   });
 });

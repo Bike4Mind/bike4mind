@@ -75,7 +75,7 @@ describe('a reader-only grant', () => {
       },
     };
 
-    const shares = await reportKeptPersonalLakeShares('dana', adapters);
+    const shares = await reportKeptPersonalLakeShares('dana', ['alice'], adapters);
     expect(shares).toEqual({
       lakeCount: 1,
       byOwner: [{ ownerUserId: 'alice', lakes: [{ id: lakeId, name: 'Research' }] }],
