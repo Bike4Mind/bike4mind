@@ -630,18 +630,18 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             // continuation round come back empty.
             const roundReasoningBlocks = this.takeReasoningBlocks();
 
-            // The real, top-level callback - pinned through every recursion level via
-            // _internal.artifactCallback - so a CHAINED tool call's artifact always reaches
-            // the client directly instead of the (possibly buffering) recursive guard below.
-            // See anthropicBackend for the same pattern.
-            const artifactCallback = options._internal?.artifactCallback ?? callback;
+            // The single shared guard for this whole recursive chain - reused unchanged if an
+            // earlier level already created one, so a CHAINED tool call's artifact and any text
+            // buffered ahead of it stay in one true generation order. See anthropicBackend and
+            // createRecursiveArtifactGuard for the same pattern.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
 
             // Track artifact streaming: the model can echo the tool's own <artifact> tag back
             // in its final reply once it reads it from the tool result, and the reply parser
             // would render that echo as a second, empty card - strip it from history (below)
             // and, as a backstop, from the recursive completion's buffered text (after the
             // loop). See anthropicBackend for the same pattern.
-            let anyArtifactWasStreamed = false;
             // Inject results in original order
             for (const outcome of outcomes) {
               if (outcome.ok) {
@@ -650,8 +650,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
                   thisToolHadArtifact = true;
-                  anyArtifactWasStreamed = true;
-                  await artifactCallback(results, { ...buildCompletionInfo(), ...artifactInfo });
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                  await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
                 });
 
                 // Strip artifact markup from every tool result, not only the ones that
@@ -695,12 +695,6 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             // Add newline separator before recursive call to ensure proper markdown rendering
             await callback(['\n\n'], buildCompletionInfo());
 
-            // If any artifact was already streamed, buffer the recursive response and strip
-            // any duplicate artifact markup the model echoes back in it before it reaches the
-            // client - see anthropicBackend for the same pattern. A genuinely NEW artifact from
-            // a chained tool call bypasses this guard entirely via artifactCallback above.
-            const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(callback) : undefined;
-
             // Carry this turn's tokens forward so the terminal recursive call
             // emits the full multi-turn billable total to cb.
             await this.complete(
@@ -721,14 +715,15 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + inputTokens,
                   accumOutputTokens: accumOutputTokens + outputTokens,
-                  artifactCallback,
+                  artifactGuard,
                 },
               },
-              guard?.callback ?? callback,
+              artifactGuard?.callback ?? callback,
               toolsUsed
             );
 
-            if (guard) await guard.flush();
+            // See anthropicBackend for why only a guard this level created is flushed.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             Logger.globalInstance.log('[BaseBedrockBackend] executeTools=false, passing tool calls to callback');
@@ -780,13 +775,12 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
               // One take for the whole round - see the streaming path above.
               const roundReasoningBlocks = this.takeReasoningBlocks();
 
-              // See the streaming branch above for why artifactCallback exists.
-              const artifactCallback = options._internal?.artifactCallback ?? callback;
+              // See the streaming branch above for why the shared artifactGuard exists.
+              const inheritedArtifactGuard = options._internal?.artifactGuard;
+              let artifactGuard = inheritedArtifactGuard;
 
               // Execute each resolved call and push its result, so the model sees
               // every tool it invoked on the recursive turn, then recurse once.
-              // See the streaming branch above for why anyArtifactWasStreamed exists.
-              let anyArtifactWasStreamed = false;
               for (const { id, name, parameters } of executable) {
                 const toolFn = options.tools?.find(o => o.toolSchema.name === name)?.toolFn;
                 if (!toolFn) continue;
@@ -811,8 +805,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(name, result, async (results, artifactInfo) => {
                   thisToolHadArtifact = true;
-                  anyArtifactWasStreamed = true;
-                  await artifactCallback(results, { ...buildCompletionInfo(), ...artifactInfo });
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                  await artifactGuard.emitArtifact(results, { ...buildCompletionInfo(), ...artifactInfo });
                 });
 
                 // Strip artifact markup from every tool result, not only the ones that
@@ -827,12 +821,6 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
               // Add newline separator before recursive call to ensure proper markdown rendering
               await callback(['\n\n'], buildCompletionInfo());
-
-              // If any artifact was already streamed, buffer the recursive response and strip
-              // any duplicate artifact markup the model echoes back in it before it reaches the
-              // client - see the streaming branch above for the same pattern. A genuinely NEW
-              // artifact from a chained tool call bypasses this guard via artifactCallback above.
-              const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(callback) : undefined;
 
               // Recursively call complete to continue the conversation.
               // Carry this turn's tokens forward so the terminal recursive call
@@ -852,14 +840,15 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                     toolCallCount: toolCallCount + 1,
                     accumInputTokens: accumInputTokens + inputTokens,
                     accumOutputTokens: accumOutputTokens + outputTokens,
-                    artifactCallback,
+                    artifactGuard,
                   },
                 },
-                guard?.callback ?? callback,
+                artifactGuard?.callback ?? callback,
                 toolsUsed
               );
 
-              if (guard) await guard.flush();
+              // See anthropicBackend for why only a guard this level created is flushed.
+              if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
 
               return; // Exit after recursive call
             }
