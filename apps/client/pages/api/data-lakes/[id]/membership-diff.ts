@@ -31,7 +31,9 @@ const parseInstant = (raw: string | undefined, field: string): Date | undefined 
   // Checked against the literal date fields, not a `toISOString()` round trip, which an offset
   // legitimately shifts across midnight.
   const [year, month, day] = raw.slice(0, 10).split('-').map(Number);
-  const asUtc = new Date(Date.UTC(year, month - 1, day));
+  // setUTCFullYear, not Date.UTC: the latter maps years 0-99 onto 1900-1999.
+  const asUtc = new Date(0);
+  asUtc.setUTCFullYear(year, month - 1, day);
   if (asUtc.getUTCFullYear() !== year || asUtc.getUTCMonth() !== month - 1 || asUtc.getUTCDate() !== day) {
     throw new BadRequestError(`\`${field}\` names a date that does not exist.`);
   }

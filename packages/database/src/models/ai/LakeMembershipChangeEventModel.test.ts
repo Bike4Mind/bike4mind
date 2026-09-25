@@ -168,6 +168,19 @@ describe('LakeMembershipChangeEventModel / lakeMembershipChangeEventRepository.r
       expect(tied[0].createdAt.getTime()).toBe(tied[1].createdAt.getTime());
     });
 
+    it('takes the tie-break from the sort spec, not from whichever index the planner walks', async () => {
+      // With the compound index in place its `_id: -1` key would order a tie on its own, so the case
+      // above passes even if the query dropped `_id` from its sort. Without the index, only the sort
+      // spec can put the later write first.
+      await LakeMembershipChangeEventModel.collection.dropIndex('dataLakeId_1_createdAt_-1__id_-1');
+      vi.setSystemTime(at(0));
+      await repo.record(baseInput({ fabFileId: 'tied-first' }));
+      await repo.record(baseInput({ fabFileId: 'tied-second' }));
+
+      const events = await repo.listByLakeSince('lake-1', at(-1));
+      expect(events.map(e => e.fabFileId)).toEqual(['tied-second', 'tied-first']);
+    });
+
     it('is empty for a lake with no recorded changes', async () => {
       await seed();
 

@@ -1,5 +1,4 @@
-import { isObjectIdShaped } from '@bike4mind/common';
-import { BadRequestError } from '@bike4mind/utils';
+import { BadRequestError, isObjectIdShaped } from '@bike4mind/common';
 import type {
   IDataLakeDocument,
   IFabFileRepository,
@@ -101,9 +100,12 @@ export async function diffLakeMembership(
   const windowEnd = to && to.getTime() < now.getTime() ? to : now;
   // `to` clamps to now, so a `from` in the future leaves the window ending before it starts. Every
   // read over such a span looks empty, which would otherwise be served as a confident
-  // `unchangedCount` of today's whole membership.
-  if (windowEnd.getTime() < from.getTime()) {
+  // `unchangedCount` of today's whole membership. Split so the error names the field at fault.
+  if (from.getTime() > now.getTime()) {
     throw new BadRequestError('`from` must not be in the future.');
+  }
+  if (windowEnd.getTime() < from.getTime()) {
+    throw new BadRequestError('`to` must not be earlier than `from`.');
   }
   const pageSize = clampLakeMembershipDiffLimit(limit);
 
