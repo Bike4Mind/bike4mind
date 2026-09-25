@@ -27,15 +27,11 @@ import MarkdownViewer from '@client/app/components/Knowledge/MarkdownViewer';
 import RemoveFileFromLakeDialog from './RemoveFileFromLakeDialog';
 import type { IFabFileDocument } from '@bike4mind/common';
 import type { DataLakeMemberFile } from '@client/app/hooks/data/dataLakes';
-import { describePipelineStall, satisfiesTagPrefix, submittedTagPrefix } from '@bike4mind/common';
+import { describePipelineStall, humanizeTagSegment, satisfiesTagPrefix, submittedTagPrefix } from '@bike4mind/common';
 import DataLakeTreeView, { type DataLakeTreeChrome } from '@client/app/components/datalake/DataLakeTreeView';
 import MembershipArmBadge from '@client/app/components/datalake/MembershipArmBadge';
 
 // Utilities
-
-function humanizeSegment(segment: string): string {
-  return segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
-}
 
 function cleanFileName(fileName: string): string {
   return fileName.replace(/\.[^/.]+$/, '').replace(/^\[.*?\]\s*/, '');
@@ -258,7 +254,7 @@ function TreeSidebar({
           )}
           <ListItemContent>
             <Typography level="body-sm" sx={{ fontWeight: 'md' }}>
-              {humanizeSegment(node.segment)}
+              {humanizeTagSegment(node.segment)}
             </Typography>
           </ListItemContent>
           <Chip size="sm" variant="soft" color="neutral" sx={{ minHeight: 20, fontSize: '11px' }}>
@@ -284,7 +280,7 @@ function TreeSidebar({
         </ListItemButton>
       </ListItem>
     ),
-    humanize: segment => humanizeSegment(segment),
+    humanize: humanizeTagSegment,
     allCategoriesLabel: 'All Categories',
     emptyFilesLabel: 'No files found',
     errorLabel: 'Failed to load files',
