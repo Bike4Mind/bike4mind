@@ -163,6 +163,17 @@ describe('Lattice tools - failed writes report success: false', () => {
     expect(model.data.entities[0].attributes).toEqual([expect.objectContaining({ key: 'value', value: 175 })]);
   });
 
+  it('lattice_set_value resolves an entity by name when its id is not name-derived', async () => {
+    // UI-created entities get id: uuidv4() (see useLattice.ts addEntity), not toEntityId(name),
+    // so name lookup must fall back to comparing toEntityId(e.name) rather than e.id alone.
+    const { context, update } = makeContext('owner', 'owner');
+    const model = await context.db.latticeModels.findById(MODEL_ID);
+    model.data.entities = [{ id: 'a1b2', name: 'Revenue', attributes: [] }];
+    const result = JSON.parse(await setValue(context, 'revenue', 'value'));
+    expect(update).toHaveBeenCalledOnce();
+    expect(result.success).toBe(true);
+  });
+
   it('lattice_set_value caps the listed entities and counts the rest', async () => {
     const { context } = makeContext('owner', 'owner');
     const model = await context.db.latticeModels.findById(MODEL_ID);
