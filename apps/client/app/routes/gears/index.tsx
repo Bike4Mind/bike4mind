@@ -1,6 +1,6 @@
 import { Box, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
-import { useEffect, useRef, useState } from 'react';
+import { cloneElement, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import CheckIcon from '@mui/icons-material/Check';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
@@ -8,7 +8,7 @@ import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import KeyIcon from '@mui/icons-material/Key';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import TerminalOutlinedIcon from '@mui/icons-material/TerminalOutlined';
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
 import MicOutlinedIcon from '@mui/icons-material/MicOutlined';
@@ -58,7 +58,7 @@ import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
  * icons and the ctaAction interpreter.
  */
 
-const GEAR_ICONS: Partial<Record<GearKey, React.ReactNode>> = {
+const GEAR_ICONS: Partial<Record<GearKey, React.ReactElement>> = {
   projects: <HubOutlinedIcon />,
   agents: <SmartToyOutlinedIcon />,
   datalakes: <DataLakeIcon />,
@@ -71,7 +71,7 @@ const GEAR_ICONS: Partial<Record<GearKey, React.ReactNode>> = {
   python: <DataObjectOutlinedIcon />,
   voice: <MicOutlinedIcon />,
   shareproject: <GroupAddOutlinedIcon />,
-  apikey: <KeyIcon />,
+  apikey: <KeyOutlinedIcon />,
   apicall: <TerminalOutlinedIcon />,
   forknotebook: <ForkRightOutlinedIcon />,
   downloadnotebook: <DownloadOutlinedIcon />,
@@ -97,6 +97,48 @@ const GEAR_ICONS: Partial<Record<GearKey, React.ReactNode>> = {
 
 /** The reward as prose, for the tooltips: the chip shows the bare number. */
 const creditText = (gear: GearStatus) => `${gear.credits.toLocaleString()} credit${gear.credits === 1 ? '' : 's'}`;
+
+/**
+ * Each glyph's own bounds inside MUI's 24x24 box, measured with getBBox and
+ * squared off, used as the icon's viewBox.
+ *
+ * Material's keylines differ by shape on purpose - a circle spans 20 units, a
+ * square 18, a bar 16 - so at one font-size the drawings range from 16 to 24 and
+ * a column of them reads as a jumble. Cropping the box to the glyph makes every
+ * drawing fill the same 20px, where scaling the svg would have grown the element
+ * past it. Only the glyphs that miss the common '2 2 20' keyline are listed.
+ */
+/** The slot every icon occupies, and the glyph drawn inside it. A fixed slot
+ *  keeps the titles aligned across cards whatever the glyph does. */
+const ICON_SLOT = 20;
+const ICON_BOX = 16;
+const GLYPH_VIEWBOX: Partial<Record<GearKey, string>> = {
+  projects: '0 -0.5 24 24',
+  agents: '1 0.5 22 22',
+  datalakes: '2 2.5 20 20',
+  hearth: '2.5 2 19 19',
+  image: '3 3 18 18',
+  models: '3 3 18 18',
+  voice: '2.5 2 19 19',
+  shareproject: '0 0 24 24',
+  apikey: '1 1 22 22',
+  forknotebook: '4 3 18 18',
+  downloadnotebook: '3.5 3 17 17',
+  questmaster: '1 1 22 22',
+  mementos: '3 3 18 18',
+  music: '3 3 18 18',
+  mcp: '3 3 18 18',
+  mfa: '1 1 22 22',
+  importopenai: '0 0 24 24',
+  importclaude: '0 0 24 24',
+  research: '2 1.75 20.5 20.5',
+  rapidreply: '3 3 18 18',
+  shareagent: '1 1 22 22',
+  websearch: '3 3 17.49 17.49',
+  wolfram: '4 4 16 16',
+  matheval: '3 3 18 18',
+  clidocs: '1 2 22 22',
+};
 
 type GearsTabKey = 'getting-started' | 'features' | 'generators' | 'integrations';
 
@@ -261,17 +303,27 @@ const GearsPage = () => {
             })}
           >
             <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-              {/* GEAR_ICONS holds bare elements, so size and colour are set once here
-                rather than repeated on every entry in the map. Tertiary because an
-                icon at title strength competes with the title beside it, thirty
-                times over. */}
-              <Stack
-                direction="row"
-                alignItems="center"
-                gap={1}
-                sx={{ '& > svg': { fontSize: '20px', color: 'text.tertiary' } }}
-              >
-                {GEAR_ICONS[gear.key] ?? <SettingsOutlinedIcon />}
+              {/* GEAR_ICONS holds bare elements, so size and colour are set once
+                here rather than repeated on every entry in the map. */}
+              <Stack direction="row" alignItems="center" gap={1}>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    width: `${ICON_SLOT}px`,
+                    height: `${ICON_SLOT}px`,
+                    flexShrink: 0,
+                    // Tertiary because an icon at title strength competes with the
+                    // title beside it, thirty times over.
+                    color: 'text.tertiary',
+                    '& > svg': { fontSize: `${ICON_BOX}px` },
+                  }}
+                >
+                  {cloneElement(GEAR_ICONS[gear.key] ?? <SettingsOutlinedIcon />, {
+                    viewBox: GLYPH_VIEWBOX[gear.key] ?? '2 2 20 20',
+                  })}
+                </Box>
                 <Typography level="title-md">{gear.title}</Typography>
               </Stack>
               {/* The ONLY thing on the card that knows whether the gear is earned.
