@@ -37,6 +37,32 @@ export default function DataLakeManagerPanel() {
   const currentUserId = useUser(state => state.currentUser?.id);
   const { data: dataLakes, isLoading } = useGetDataLakes();
   const { data: activeBatches } = useActiveDataLakeBatches();
+
+  // PR3344-PROBE: temporary mount/unmount + visibility tracing, removed before merge.
+  useEffect(() => {
+    console.info(`[PR3344-PROBE] DataLakeManagerPanel mount time=${new Date().toISOString()}`);
+    return () => {
+      console.info(`[PR3344-PROBE] DataLakeManagerPanel unmount time=${new Date().toISOString()}`);
+    };
+  }, []);
+
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      console.info(
+        `[PR3344-PROBE] visibilitychange state=${document.visibilityState} time=${new Date().toISOString()}`
+      );
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, []);
+
+  useEffect(() => {
+    console.info(
+      `[PR3344-PROBE] activeBatches changed count=${activeBatches?.length ?? 0} statuses=${JSON.stringify(
+        (activeBatches ?? []).map(b => b.status)
+      )}`
+    );
+  }, [activeBatches]);
   // Id only, not the batch object - `reviewingBatch` below is derived from the live, polled
   // `activeBatches` list so a re-analyze's cache refresh flows into the open review panel
   // instead of leaving it stuck showing pre-refresh suggestions.

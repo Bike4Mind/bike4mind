@@ -150,9 +150,11 @@ export function useBatchUpload() {
         setStep,
         setRecoverableLake,
         onBatchCreated: () => {
+          console.info('[PR3344-PROBE] onBatchCreated -> invalidate activeBatches');
           queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
         },
         onUploadComplete: () => {
+          console.info('[PR3344-PROBE] onUploadComplete fired');
           queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
           // First lake unlocks the 'datalakes' nav slot; first file unlocks 'files'.
           // Reveal them without waiting out the gears/status staleTime (#833).
@@ -385,6 +387,7 @@ export function useDataLakeBatchCompletionSync() {
   useEffect(() => {
     const unsubscribe = subscribeToAction('data_lake_batch_progress', async (message: IMessageDataToClient) => {
       if (message.action !== 'data_lake_batch_progress') return;
+      console.info(`[PR3344-PROBE] websocket batch progress batchId=${message.batchId} status=${message.status}`);
       if (message.status !== 'completed' && message.status !== 'completed_with_errors') return;
 
       // The message carries no lake id, so refresh every mounted health badge; only the active

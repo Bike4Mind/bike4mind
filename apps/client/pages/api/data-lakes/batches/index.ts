@@ -17,6 +17,14 @@ import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
 import { enqueueTaxonomyAnalysisIfWanted } from '@server/queueHandlers/dataLakeBatchProgress';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
 
+// PR3344-PROBE: temporary verification logging, removed before merge. req.logger?.info is the
+// convention on this route, but a test's stub logger can omit `info` - fall back to console.info
+// rather than throwing on `undefined(...)`.
+function probeInfo(req: Request, msg: string): void {
+  if (typeof req.logger?.info === 'function') req.logger.info(msg);
+  else console.info(msg);
+}
+
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET: list batches the user still needs to see - either ingest is in flight, or the
@@ -24,6 +32,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   // clocks: a batch can be fully 'completed' (ingest) while 'analyzing' (taxonomy), so they
   // are fetched, reconciled, and re-fetched as two separate sets, then merged for the caller.
   .get(async (req: Request, res) => {
+    const startedAt = Date.now();
     const userId = req.user.id;
     const [ingestActive, taxonomyActive] = await Promise.all([
       dataLakeBatchRepository.findActiveByUserId(userId),
@@ -33,37 +42,45 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // Read-time reconciliation: force non-terminal batches idle past the timeout to a
     // terminal state (guarded), and recompute lake stats from source. The daily
     // dataLakeBatchReconcile cron is the fallback for batches nobody ever opens the list for.
-    await dataLakeService.reconcileStuckBatches(ingestActive, dataLakeService.DEFAULT_STUCK_BATCH_TIMEOUT_MS, {
-      // Audit repos wired: this reconciler forces terminal the batches that never reached
-      // finalizeBatchIfComplete, so it is the only path that can activate those lakes.
-      db: {
-        dataLakes: dataLakeRepository,
-        batches: dataLakeBatchRepository,
-        fabFiles: fabFileRepository,
-        ...lakeConfigAuditDb,
-      },
-      logger: console,
-      // Forced-terminal is rare, so the awaited emit only costs latency on the exceptional path; the
-      // stuck gauge is deliberately omitted here (it belongs on the cron's fixed cadence, not per read).
-      // Also backstops the taxonomy enqueue for a batch that never reached upload-complete NOR
-      // a terminal chunk/vectorize event (finalizeBatchIfComplete already backstops the latter
-      // case) - this is the last resort for a batch that is genuinely stuck, not just one whose
-      // upload-complete request happened to fail.
-      metrics: {
-        emitForcedTerminal: batch =>
-          Promise.all([
-            recordReconcilerForcedTerminal().catch(() => {}),
-            enqueueTaxonomyAnalysisIfWanted(batch, console).catch(() => {}),
-          ]).then(() => {}),
-      },
-    });
+    const forcedIngestIds = await dataLakeService.reconcileStuckBatches(
+      ingestActive,
+      dataLakeService.DEFAULT_STUCK_BATCH_TIMEOUT_MS,
+      {
+        // Audit repos wired: this reconciler forces terminal the batches that never reached
+        // finalizeBatchIfComplete, so it is the only path that can activate those lakes.
+        db: {
+          dataLakes: dataLakeRepository,
+          batches: dataLakeBatchRepository,
+          fabFiles: fabFileRepository,
+          ...lakeConfigAuditDb,
+        },
+        logger: console,
+        // Forced-terminal is rare, so the awaited emit only costs latency on the exceptional path; the
+        // stuck gauge is deliberately omitted here (it belongs on the cron's fixed cadence, not per read).
+        // Also backstops the taxonomy enqueue for a batch that never reached upload-complete NOR
+        // a terminal chunk/vectorize event (finalizeBatchIfComplete already backstops the latter
+        // case) - this is the last resort for a batch that is genuinely stuck, not just one whose
+        // upload-complete request happened to fail.
+        metrics: {
+          emitForcedTerminal: batch =>
+            Promise.all([
+              recordReconcilerForcedTerminal().catch(() => {}),
+              enqueueTaxonomyAnalysisIfWanted(batch, console).catch(() => {}),
+            ]).then(() => {}),
+        },
+      }
+    );
     // taxonomyActive is the non-terminal working set only (not the capped/sorted list-response
     // set - see findActiveTaxonomyByUserId), so a batch stuck for hours is never excluded here
     // just because it's not among the user's most-recently-updated attention batches.
-    await dataLakeService.reconcileStuckTaxonomy(taxonomyActive, dataLakeService.DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS, {
-      db: { batches: dataLakeBatchRepository },
-      logger: console,
-    });
+    const forcedTaxonomyIds = await dataLakeService.reconcileStuckTaxonomy(
+      taxonomyActive,
+      dataLakeService.DEFAULT_STUCK_TAXONOMY_TIMEOUT_MS,
+      {
+        db: { batches: dataLakeBatchRepository },
+        logger: console,
+      }
+    );
 
     const [freshIngestActive, freshTaxonomyAttention] = await Promise.all([
       dataLakeBatchRepository.findActiveByUserId(userId),
@@ -73,7 +90,18 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // Both finders currently project the same fields, so this is not load-bearing for shape
     // today, but if that symmetry is ever broken again, freshTaxonomyAttention must stay last.
     const byId = new Map([...freshIngestActive, ...freshTaxonomyAttention].map(b => [b.id, b]));
-    return res.json({ data: Array.from(byId.values()) });
+    const result = Array.from(byId.values());
+
+    probeInfo(
+      req,
+      `[PR3344-PROBE] GET batches userId=${userId} count=${result.length} ` +
+        `forcedTerminal=${forcedIngestIds.length + forcedTaxonomyIds.length} durationMs=${Date.now() - startedAt} ` +
+        `clientInterval=${req.headers?.['x-b4m-probe-client-interval'] ?? 'none'} ` +
+        `clientVisibility=${req.headers?.['x-b4m-probe-visibility'] ?? 'none'} ` +
+        `batches=${JSON.stringify(result.map(b => ({ id: b.id, status: b.status, taxonomyStatus: b.taxonomyStatus })))}`
+    );
+
+    return res.json({ data: result });
   })
   // POST: create a new batch
   .post(async (req: Request, res) => {
@@ -129,6 +157,10 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // presigned-but-never-uploaded file (client fails outright, or the tab closes before any
     // byte lands) cannot count toward that membership no matter which door recomputes the lake
     // or how long the row survives.
+    probeInfo(
+      req,
+      `[PR3344-PROBE] POST batches created batchId=${batch.id} lakeId=${dataLake.id} status=${batch.status}`
+    );
     return res.json(batch);
   });
 
