@@ -292,6 +292,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakeSlackAdd',
   'EnableDataLakeGroundingMode',
   'EnableLakeMemory',
+  'EnableLakeModelInconsistencyDetection',
   'EnableDataLakeVectorSearch',
   'EnableRetrievalSupersessionCollapse',
   'PauseLakeConvergence',
@@ -2138,6 +2139,23 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 91,
+    dependsOn: 'EnableDataLakes',
+  }),
+  EnableLakeModelInconsistencyDetection: makeBooleanSetting({
+    key: 'EnableLakeModelInconsistencyDetection',
+    name: 'Data Lakes: Model-driven contradiction pass',
+    defaultValue: false,
+    description:
+      'Gate for the model-driven reading pass (#3057) that finds cross-document contradictions the ' +
+      'lexical pattern rules cannot - two documents stating incompatible things in ordinary prose. ' +
+      'Off by default: unlike the free lexical pass, this reads corpus content through an LLM, so ' +
+      'it costs real money per run. Findings land in the same durable findings collection ' +
+      "(detector: 'model') as the lexical pass, triggered the same way (POST " +
+      '/api/data-lakes/:id/inconsistencies?detector=model), gated separately here and rate-limited ' +
+      'far lower per caller. Detect only - see the guardrail on corpusInconsistency.ts.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 98,
     dependsOn: 'EnableDataLakes',
   }),
   EnableDataLakeVectorSearch: makeBooleanSetting({
