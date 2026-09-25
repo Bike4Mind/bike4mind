@@ -247,4 +247,39 @@ describe('BaseBedrockBackend does not duplicate an echoed tool artifact card (#3
     expect(toolResultBlock?.content).not.toContain('<artifact');
     expect(toolResultBlock?.content).toContain('[Artifact rendered and delivered to user]');
   });
+
+  it('pin: a genuinely NEW artifact the model composes in its own reply text is not mistaken for an echo', async () => {
+    // Regression: the echo backstop used to strip EVERY complete <artifact> block from the
+    // buffered reply, not just ones matching an artifact already delivered this turn - so a
+    // model-authored artifact with a different identifier was silently deleted.
+    const NEW_ARTIFACT =
+      '<artifact identifier="mermaid-2" type="application/vnd.ant.mermaid" title="Second">graph TD;C-->D</artifact>';
+    const backend = new TestBedrockBackend();
+    let callIndex = 0;
+    const bodies = [
+      asBedrockInvokeBody(nonStreamingToolCallChunk()),
+      asBedrockInvokeBody(nonStreamingTextChunk(`Here's another one I drew myself:\n\n${NEW_ARTIFACT}`)),
+    ];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (backend as unknown as { _bedrockRuntime: any })._bedrockRuntime = {
+      send: async () => ({ body: bodies[callIndex++] }),
+    };
+
+    const messages: IMessage[] = [{ role: 'user', content: 'a simple process flow diagram' }];
+    const { calls, cb } = captureCb();
+
+    await backend.complete(
+      TEST_MODEL,
+      messages,
+      { stream: false, tools: [mermaidTool], executeTools: true } as Partial<ICompletionOptions>,
+      cb
+    );
+
+    const clientText = calls
+      .flatMap(c => c.text)
+      .filter((r): r is string => typeof r === 'string')
+      .join('');
+    expect(clientText).toContain('identifier="mermaid-1"');
+    expect(clientText).toContain('identifier="mermaid-2"');
+  });
 });
