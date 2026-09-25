@@ -127,6 +127,45 @@ describe('GET /api/data-lakes/[id]/membership-diff', () => {
       expect(h.diffLakeMembership).not.toHaveBeenCalled();
     });
 
+    it('refuses the same loose forms on `to`', async () => {
+      const { res } = makeRes();
+
+      for (const to of ['2026', 'June 1 2026', '2026-07-01T00:00:00']) {
+        await expect(call(req({ id: 'lake1', from: FROM, to }), res)).rejects.toThrow(/ISO-8601/);
+      }
+      expect(h.diffLakeMembership).not.toHaveBeenCalled();
+    });
+
+    it('accepts a real leap day and an offset that crosses midnight UTC', async () => {
+      const { res } = makeRes();
+
+      await call(req({ id: 'lake1', from: '2024-02-29T00:00:00.000Z' }), res);
+      // Local Feb 28 23:30 at -05:00 is Feb 29 in UTC; the date check reads the literal fields.
+      await call(req({ id: 'lake1', from: '2023-02-28T23:30:00-05:00' }), res);
+
+      expect(h.diffLakeMembership).toHaveBeenNthCalledWith(
+        1,
+        expect.anything(),
+        expect.objectContaining({ from: new Date('2024-02-29T00:00:00.000Z') })
+      );
+      expect(h.diffLakeMembership).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        expect.objectContaining({ from: new Date('2023-03-01T04:30:00.000Z') })
+      );
+    });
+
+    it('accepts a year below 100 rather than reading it as 19xx', async () => {
+      const { res } = makeRes();
+
+      await call(req({ id: 'lake1', from: '0050-01-01T00:00:00.000Z' }), res);
+
+      expect(h.diffLakeMembership).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ from: new Date('0050-01-01T00:00:00.000Z') })
+      );
+    });
+
     it('accepts a non-UTC offset', async () => {
       const { res } = makeRes();
 
@@ -171,6 +210,28 @@ describe('GET /api/data-lakes/[id]/membership-diff', () => {
       await call(req({ id: 'lake1', from: FROM, to: FROM }), res);
 
       expect(json).toHaveBeenCalledWith({ data: view });
+      expect(h.diffLakeMembership).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ from: new Date(FROM), to: new Date(FROM) })
+      );
+    });
+
+    it('passes `?limit=10` through as a number and a bare `?limit=` as absent', async () => {
+      const { res } = makeRes();
+
+      await call(req({ id: 'lake1', from: FROM, limit: '10' }), res);
+      await call(req({ id: 'lake1', from: FROM, limit: '' }), res);
+
+      expect(h.diffLakeMembership).toHaveBeenNthCalledWith(
+        1,
+        expect.anything(),
+        expect.objectContaining({ limit: 10 })
+      );
+      expect(h.diffLakeMembership).toHaveBeenNthCalledWith(
+        2,
+        expect.anything(),
+        expect.objectContaining({ limit: undefined })
+      );
     });
 
     it('refuses a backwards window instead of serving an empty diff for it', async () => {

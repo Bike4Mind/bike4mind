@@ -60,6 +60,9 @@ export interface LakeMembershipDiffView {
    *
    * A count rather than ids: an unchanged file has no move to attribute, and the membership list
    * itself is already answerable from the files collection.
+   *
+   * Best-effort even when present: the audit write is itself best-effort and lands after the
+   * membership write, and the reads behind this count are not one snapshot.
    */
   unchangedCount?: number;
   unchangedUnknownReason?: LakeMembershipDiffUnknownReason;
@@ -81,8 +84,11 @@ export interface LakeMembershipDiffView {
    * True when the read hit its cap, so `added`/`removed` are a window on the window: moves in the
    * earliest part of the span are missing. The listed entries are then unreliable in DIRECTION too,
    * not only incomplete - a file whose earlier flip fell off the tail is classified from its first
-   * surviving event, so a remove-then-readd can surface as a plain `added`. A consumer must caption
-   * a truncated diff as partial rather than present it as the window's changes.
+   * surviving event, so a remove-then-readd can surface as a plain `added`, and an add-then-remove
+   * whose `added` fell off can surface in `removed` for a file that was a member at neither end.
+   * Left as-is rather than suppressed: which files lost a row to the cap is not knowable from the
+   * surviving page. A consumer must caption a truncated diff as partial rather than present it as
+   * the window's changes.
    */
   truncated: boolean;
   generatedAt: Date;

@@ -93,6 +93,15 @@ describe('clampLakeMembershipDiffLimit', () => {
     expect(clampLakeMembershipDiffLimit(0)).toBe(1);
     expect(clampLakeMembershipDiffLimit(999999)).toBe(LAKE_MEMBERSHIP_DIFF_MAX_LIMIT);
   });
+
+  it('floors fractions and negatives, and treats an infinite request as absent', () => {
+    expect(clampLakeMembershipDiffLimit(-5)).toBe(1);
+    expect(clampLakeMembershipDiffLimit(0.9)).toBe(1);
+    expect(clampLakeMembershipDiffLimit(1)).toBe(1);
+    expect(clampLakeMembershipDiffLimit(10.7)).toBe(10);
+    expect(clampLakeMembershipDiffLimit(LAKE_MEMBERSHIP_DIFF_MAX_LIMIT)).toBe(LAKE_MEMBERSHIP_DIFF_MAX_LIMIT);
+    expect(clampLakeMembershipDiffLimit(Number.POSITIVE_INFINITY)).toBe(LAKE_MEMBERSHIP_DIFF_LIMIT);
+  });
 });
 
 describe('diffLakeMembership', () => {
@@ -259,13 +268,18 @@ describe('diffLakeMembership', () => {
 
     it('reads LIVE members only, so a tombstone never reaches the rewind', async () => {
       const { adapters: a, findLiveMembersByDataLakeTag } = adapters([], {
-        memberIds: [],
+        memberIds: ['steady'],
         oldestEventAt: new Date('2026-05-01T00:00:00Z'),
       });
+      // The tombstone-inclusive read sits on the same adapter; were it consulted, `dead` would count.
+      const findIdsByDataLakeTag = vi.fn().mockResolvedValue(['steady', 'dead']);
+      a.db.fabFiles = { findLiveMembersByDataLakeTag, findIdsByDataLakeTag } as never;
 
-      await diffLakeMembership(lake(), a);
+      const view = await diffLakeMembership(lake(), a);
 
+      expect(view.unchangedCount).toBe(1);
       expect(findLiveMembersByDataLakeTag).toHaveBeenCalledTimes(1);
+      expect(findIdsByDataLakeTag).not.toHaveBeenCalled();
     });
 
     it('never counts a file that left inside the window as having sat through it', async () => {
@@ -454,7 +468,7 @@ describe('diffLakeMembership', () => {
       });
 
       await expect(
-        diffLakeMembership(lake(), { ...a, from: new Date('2030-01-01T00:00:00Z'), to: undefined })
+        diffLakeMembership(lake(), { ...a, from: new Date(NOW.getTime() + 1), to: undefined })
       ).rejects.toThrow(/must not be in the future/i);
     });
 
@@ -467,10 +481,33 @@ describe('diffLakeMembership', () => {
       await expect(
         diffLakeMembership(lake(), {
           ...a,
-          from: new Date('2030-01-01T00:00:00Z'),
-          to: new Date('2031-01-01T00:00:00Z'),
+          from: new Date(NOW.getTime() + 1),
+          to: new Date(NOW.getTime() + 2),
         })
       ).rejects.toThrow(/must not be in the future/i);
+    });
+
+    it('names `to` when both instants are past and `to` is the earlier one', async () => {
+      const { adapters: a, listByLakeSince } = adapters([], {
+        memberIds: ['m1'],
+        oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+      });
+
+      await expect(diffLakeMembership(lake(), { ...a, from: TO, to: FROM })).rejects.toThrow(
+        /`to` must not be earlier than `from`/
+      );
+      expect(listByLakeSince).not.toHaveBeenCalled();
+    });
+
+    it('accepts a `from` of exactly now', async () => {
+      const { adapters: a } = adapters([], {
+        memberIds: ['steady'],
+        oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+      });
+
+      const view = await diffLakeMembership(lake(), { ...a, from: NOW, to: undefined });
+
+      expect(view.to).toEqual(NOW);
     });
 
     it('serves an instantaneous window where `to` equals `from`', async () => {
