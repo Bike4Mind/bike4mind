@@ -122,10 +122,6 @@ export const modelDiscoveryDocsParserShiftAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ModelDiscoveryDocsParserShiftAlarm')
   : undefined;
 
-export const modelDiscoveryJoinCoverageAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('ModelDiscoveryJoinCoverageAlarm')
-  : undefined;
-
 export const deprecatedModelRequestAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('DeprecatedModelRequestAlarm')
   : undefined;
@@ -1034,8 +1030,12 @@ if (isMonitoredStage) {
    * aggregator matched during a discovery run. A sudden drop means the source
    * changed its model-id format: the run still returns HTTP 200, so RunFailures
    * stays zero while pricing/context-window data for unmatched models goes stale.
-   * Minimum over three consecutive 6-hour periods (18h total) before firing
-   * avoids transient noise from a single anomalous run.
+   * Maximum over three consecutive 6-hour periods (18h total): a period only
+   * breaches when the best run in it is still below 50%, so a transient dip that
+   * recovers within the same period does not fire. Minimum would breach on any
+   * single bad run even after recovery.
+   *
+   * Routed to dlqAlarmTopic (Slack-subscribed) so alerts reach on-call directly.
    *
    * Metric emitted by: server/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
    * Namespace: Lumina5/ModelDiscovery / AggregatorJoinCoverage
@@ -1052,11 +1052,11 @@ if (isMonitoredStage) {
       metricName: 'AggregatorJoinCoverage',
       namespace: 'Lumina5/ModelDiscovery',
       period: 21600, // 6 hours, the run cadence
-      statistic: 'Minimum',
+      statistic: 'Maximum',
       threshold: 50,
       treatMissingData: 'notBreaching',
       dimensions: { Stage: $app.stage, Host: 'hosted', Aggregator: aggregator },
-      alarmActions: [modelDiscoveryJoinCoverageAlarm!.arn],
+      alarmActions: [dlqAlarmTopic.arn],
       tags: {
         Application: 'ModelDiscovery',
         Severity: 'High',
