@@ -266,6 +266,30 @@ describe('DataLakeProposalsPanel', () => {
     expect(screen.getAllByTestId('datalake-proposal-superseded')).toHaveLength(1);
   });
 
+  it('disables restore on a declined row whose source now has a newer pending proposal', () => {
+    renderPanel({
+      view: 'declined',
+      onRestore: vi.fn(),
+      proposals: [proposal({ id: 'declined-1', status: 'declined', excerpt: null })],
+      pendingCanonicalSourceKeys: new Set(['https://example.com/report']),
+    });
+
+    expect(screen.getByTestId('datalake-proposal-restore-btn')).toBeDisabled();
+    expect(screen.getByTestId('datalake-proposal-superseded')).toBeInTheDocument();
+  });
+
+  it('leaves restore enabled on a declined row whose source has no pending proposal', () => {
+    renderPanel({
+      view: 'declined',
+      onRestore: vi.fn(),
+      proposals: [proposal({ id: 'declined-1', status: 'declined', excerpt: null })],
+      pendingCanonicalSourceKeys: new Set(['https://example.com/some-other-report']),
+    });
+
+    expect(screen.getByTestId('datalake-proposal-restore-btn')).not.toBeDisabled();
+    expect(screen.queryByTestId('datalake-proposal-superseded')).not.toBeInTheDocument();
+  });
+
   it('reads as empty, not caught up, when nothing has been declined', () => {
     renderPanel({ view: 'declined', onViewChange: vi.fn(), proposals: [] });
 

@@ -175,6 +175,13 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
     proposalsViewFor && proposalsViewFor.lakeId === lake?.id ? proposalsViewFor.view : 'pending';
   const shownProposals = proposalsView === 'declined' ? declinedProposals : proposals;
   const reviewProposal = useReviewDataLakeProposal(lake?.id ?? '');
+  // Always derived from the pending fetch above (not gated on the declined tab being open), so a
+  // declined row superseded by a still-pending proposal for the same source reads as superseded the
+  // moment the declined tab is opened, rather than only after the pending tab has been visited once.
+  const pendingCanonicalSourceKeys = useMemo(
+    () => new Set((proposals.data ?? []).map(p => p.canonicalSourceKey)),
+    [proposals.data]
+  );
   // Hidden while the queue is empty rather than shown with an empty state: until a producer runs
   // there is nothing to review, and a permanently-empty tab reads as a broken feature.
   const queueHasItems =
@@ -752,6 +759,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                       reviewProposal.mutate({ proposalId, decision: 'decline', reason })
                     }
                     onRestore={proposalId => reviewProposal.mutate({ proposalId, decision: 'restore' })}
+                    pendingCanonicalSourceKeys={pendingCanonicalSourceKeys}
                   />
                 </TabPanel>
                 <TabPanel value="research" sx={{ p: 0 }}>

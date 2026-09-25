@@ -39,6 +39,13 @@ export interface DataLakeProposalsPanelProps {
   /** Absent, the panel shows the pending queue only, with no way to switch to declined. */
   onViewChange?: (view: ProposalsView) => void;
   onRestore?: (proposalId: string) => void;
+  /**
+   * `canonicalSourceKey`s of the current pending queue, used only in the declined view: a declined
+   * row whose source has a newer pending proposal is a tombstone too, the same as an older declined
+   * row a later decline superseded - restoring it hits the server's `pending_exists` refusal. The
+   * server remains the guard for the later-approved case; this only prevents the guaranteed error.
+   */
+  pendingCanonicalSourceKeys?: ReadonlySet<string>;
 }
 
 /** Past this, an excerpt is collapsed until the reviewer asks for the rest. */
@@ -122,24 +129,29 @@ export function DataLakeProposalsPanel({
   view = 'pending',
   onViewChange,
   onRestore,
+  pendingCanonicalSourceKeys,
 }: DataLakeProposalsPanelProps) {
   const [decliningId, setDecliningId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
   const [sort, setSort] = useState<ProposalSort>('relevance');
   const declinedView = view === 'declined';
   // The declined list is newest first, so a later occurrence of a source is a superseded tombstone
-  // the server will refuse to restore (see restoreDataLakeProposal).
+  // the server will refuse to restore (see restoreDataLakeProposal). A source that instead came back
+  // as a still-pending proposal is the same refusal (`pending_exists`) under a different cause, so it
+  // is folded into the same set.
   const supersededIds = useMemo(() => {
     const seen = new Set<string>();
     const superseded = new Set<string>();
     if (declinedView) {
       for (const p of proposals ?? []) {
-        if (seen.has(p.canonicalSourceKey)) superseded.add(p.id);
+        if (seen.has(p.canonicalSourceKey) || pendingCanonicalSourceKeys?.has(p.canonicalSourceKey)) {
+          superseded.add(p.id);
+        }
         seen.add(p.canonicalSourceKey);
       }
     }
     return superseded;
-  }, [proposals, declinedView]);
+  }, [proposals, declinedView, pendingCanonicalSourceKeys]);
   const sorted = useMemo(
     () => (proposals && !declinedView ? sortProposals(proposals, sort) : proposals),
     [proposals, sort, declinedView]
