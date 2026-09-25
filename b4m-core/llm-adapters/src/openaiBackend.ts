@@ -1348,13 +1348,14 @@ export class OpenAIBackend implements ICompletionBackend {
               let thisToolHadArtifact = false;
 
               // Stream artifact-generating tool results immediately to the client.
-              await handleToolResultStreaming(outcome.name, outcome.result, async results => {
+              await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
                 thisToolHadArtifact = true;
                 anyArtifactWasStreamed = true;
                 await callback(results, {
                   inputTokens: 0,
                   outputTokens: 0,
                   toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+                  ...artifactInfo,
                 });
               });
 
@@ -1730,7 +1731,7 @@ export class OpenAIBackend implements ICompletionBackend {
           // Emit accum + this turn's tokens - same shape as the per-chunk emit
           // above so wrappedOnChunk's cumulative running total isn't reset by
           // a smaller this-turn-only value.
-          await handleToolResultStreaming(outcome.name, outcome.result, async results => {
+          await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
             thisToolHadArtifact = true;
             anyArtifactWasStreamed = true;
             await callback(results, {
@@ -1741,6 +1742,7 @@ export class OpenAIBackend implements ICompletionBackend {
               outputTokens: accumOutputTokens + outputTokens,
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
               cacheStats,
+              ...artifactInfo,
             });
           });
 

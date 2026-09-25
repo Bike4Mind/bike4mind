@@ -1,4 +1,4 @@
-import { filterToolArtifactMarkup } from '@bike4mind/common';
+import { filterToolArtifactMarkup, type StreamChannel } from '@bike4mind/common';
 
 /**
  * Helper function to handle tool result streaming for artifact-generating tools
@@ -7,15 +7,18 @@ import { filterToolArtifactMarkup } from '@bike4mind/common';
  *
  * Only the emitters in TOOL_ARTIFACT_EMITTERS stream, and only their pinned artifact type:
  * streamed text is parsed into reply artifacts, so any other tool's markup would render.
+ *
+ * What does stream is still a raw tool artifact rather than reply prose, so `streamCallback`
+ * receives the channel tag and a public surface drops the text on that tag alone.
  */
 export async function handleToolResultStreaming(
   toolName: string,
   toolResult: unknown,
-  streamCallback: (results: string[]) => Promise<void>
+  streamCallback: (results: string[], info: { channel: StreamChannel }) => Promise<void>
 ): Promise<void> {
   const filtered = filterToolArtifactMarkup(toolName, String(toolResult));
 
   if (filtered !== null) {
-    await streamCallback([filtered]);
+    await streamCallback([filtered], { channel: 'tool-artifact' });
   }
 }
