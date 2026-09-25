@@ -1,12 +1,17 @@
 import mongoose, { Model, model, Schema } from 'mongoose';
-import BaseRepository from '@bike4mind/db-core';
-import { ShareableDocumentRepository, ShareableDocumentSchema } from '../content/SharableDocumentModel';
+import BaseRepository, { convertId } from '@bike4mind/db-core';
+import {
+  ShareableDocumentRepository,
+  ShareableDocumentSchema,
+  updateAccessArms,
+} from '../content/SharableDocumentModel';
 import {
   DATA_LAKE_GROUNDING_MODES,
   PERSISTED_SESSION_SUMMARY_TRIGGERS,
   ISession,
   ISessionDocument,
   ISessionRepository,
+  IUserDocument,
   SearchOptions,
   tagAttemptDueFilter,
 } from '@bike4mind/common';
@@ -292,6 +297,25 @@ export class SessionRepository extends BaseRepository<ISessionDocument> implemen
       hasMore,
       total,
     };
+  }
+
+  /**
+   * Partial update that matches only while `user` still holds update access and the session is not
+   * soft-deleted, so a revocation or delete landing between the authorizing read and this write
+   * makes it a no-op (null) instead of a write. `deletedAt: null` is explicit because
+   * softDeletePlugin does not hook findOneAndUpdate.
+   */
+  async updateWithUpdateAccess(
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<ISessionDocument> & { id: string },
+    opts?: { includeGlobalWrite?: boolean }
+  ): Promise<ISessionDocument | null> {
+    const { id, ...updateData } = data;
+    if (!mongoose.isObjectIdOrHexString(id)) return null;
+    return this._plainUpdate(
+      { _id: convertId(id), deletedAt: null, $or: updateAccessArms(user, opts) },
+      updateData as Record<string, unknown>
+    );
   }
 
   async upsertByOpenaiConversationId(openaiConversationId: string, update: Partial<ISession>) {
