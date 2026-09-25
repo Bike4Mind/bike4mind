@@ -161,13 +161,13 @@ function resolveEdit(currentContent: string, old_string: string, new_string: str
 }
 
 /**
- * Defense in depth for a reused `gateSnapshot.resolvedEdit`: confirm both that the
- * span it claims is the real bytes at that offset in `currentContent`, AND that the
- * span/replacement actually correspond to THIS call's `old_string`/`new_string` -
- * matching bytes alone doesn't prove the span came from resolving old_string/new_string
- * (a caller could point startIndex/matchedText at any real substring of the file).
- * Only the exact-match case can be verified this cheaply (matchedText must equal
- * old_string verbatim); a fuzzy-resolved span's matchedText legitimately differs from
+ * Defense in depth for a reused `gateSnapshot.resolvedEdit`: confirm the span is the
+ * real bytes at that offset in `currentContent`, that it actually corresponds to THIS
+ * call's `old_string`/`new_string`, AND that `old_string` is unique in the content -
+ * matching bytes and matching old_string/new_string alone still don't rule out a
+ * caller pointing a genuine occurrence's startIndex at one of SEVERAL matches, which
+ * `resolveEdit()` would reject as ambiguous. Only the exact-match case can be verified
+ * this cheaply; a fuzzy-resolved span's matchedText legitimately differs from
  * old_string, so its provenance can't be checked without re-running the matcher -
  * reuse is refused for it and the caller falls back to a genuine resolveEdit().
  */
@@ -182,7 +182,12 @@ function isResolvedEditConsistent(
     edit.startIndex + edit.matchedText.length <= currentContent.length &&
     currentContent.slice(edit.startIndex, edit.startIndex + edit.matchedText.length) === edit.matchedText;
   if (!bytesMatch || edit.strategy) return false;
-  return edit.matchedText === old_string && edit.replacement === new_string;
+  if (edit.matchedText !== old_string || edit.replacement !== new_string) return false;
+  // Same uniqueness contract resolveEdit() enforces (occurrences > 1 -> ambiguous,
+  // rejected) - without it a caller could point a real occurrence's span at any one of
+  // several matches and skip that rejection entirely.
+  const occurrences = currentContent.split(old_string).length - 1;
+  return occurrences === 1;
 }
 
 /** A preview of the REAL span an edit will replace (not the model's typed old_string). */
