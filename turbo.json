@@ -70,6 +70,16 @@
     "@bike4mind/scripts#test": {
       "dependsOn": ["^build", "@bike4mind/client#codegen"]
     },
+    // electron-vite writes three bundles (main, preload, renderer) to out/, not dist/, and
+    // its config plus the split tsconfigs sit outside the generic task's "src/**" inputs.
+    // Package-specific config REPLACES the generic entry, so ^build is repeated here.
+    // No "codegen" dependency on purpose: the desktop app must not consume the premium
+    // overlay glue that @bike4mind/client's codegen task generates.
+    "@bike4mind/desktop#build": {
+      "dependsOn": ["^build"],
+      "outputs": ["out/**"],
+      "inputs": ["src/**", "electron.vite.config.ts", "tsconfig*.json", "package.json"]
+    },
     "test": {
       "dependsOn": ["^build"]
     },

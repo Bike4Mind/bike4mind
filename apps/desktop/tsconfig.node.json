@@ -1,0 +1,25 @@
+{
+  "extends": "@bike4mind/typescript-config/base.json",
+  "compilerOptions": {
+    "target": "ES2024",
+    "lib": [
+      "ES2024"
+    ],
+    "moduleResolution": "bundler",
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@shared/*": [
+        "./src/shared/*"
+      ]
+    }
+  },
+  "include": [
+    "src/main/**/*.ts",
+    "src/preload/**/*.ts",
+    "src/shared/**/*.ts",
+    "electron.vite.config.ts",
+    "vitest.config.ts"
+  ]
+}
