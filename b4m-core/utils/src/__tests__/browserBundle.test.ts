@@ -3,10 +3,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { build, type Plugin } from 'esbuild';
+import { build, type Metafile, type Plugin } from 'esbuild';
 
-// Env keys the Logger constructor in @bike4mind/observability reads.
-const LOGGER_ENV_KEYS = ['IS_LOCAL', 'NODE_ENV', 'SST_LIVE', 'LOG_JSON', 'LOG_PRETTY', 'LOG_LEVEL'];
 const utilsRoot = fileURLToPath(new URL('../..', import.meta.url));
 
 // Stubbing @bike4mind/common keeps the recorded env reads down to this package and observability.
@@ -25,7 +23,16 @@ const stubCommon: Plugin = {
   },
 };
 
-describe('browser bundle of artifactParser', () => {
+// metafile.inputs lists tree-shaken files too; only outputs[*].inputs reflects emitted bytes.
+function emittedInputs(metafile: Metafile, match: (path: string) => boolean): string[] {
+  return Object.values(metafile.outputs).flatMap(output =>
+    Object.entries(output.inputs)
+      .filter(([path, info]) => match(path) && info.bytesInOutput > 0)
+      .map(([path]) => path)
+  );
+}
+
+describe('esbuild bundles of utils', () => {
   const originalEnv = process.env;
   let tempDir: string | undefined;
 
@@ -35,7 +42,7 @@ describe('browser bundle of artifactParser', () => {
     tempDir = undefined;
   });
 
-  it('reads none of the Logger env keys when the bundle is evaluated', async () => {
+  it('reads no env keys when the bundle is evaluated', async () => {
     const result = await build({
       entryPoints: [join(utilsRoot, 'src/artifactParser.ts')],
       bundle: true,
@@ -63,15 +70,38 @@ describe('browser bundle of artifactParser', () => {
     const mod = await import(/* @vite-ignore */ pathToFileURL(bundlePath).href);
 
     expect(typeof mod.parseArtifacts).toBe('function');
-    expect(readKeys.filter(key => LOGGER_ENV_KEYS.includes(key))).toEqual([]);
+    expect(readKeys).toEqual([]);
   });
 
-  it('leaves no observability bytes in the output for an unused Logger import', async () => {
+  it('drops the whole utils barrel for an unused import (needs utils sideEffects: false)', async () => {
+    // Without the flag esbuild keeps every barrel module whose top-level code it cannot prove pure
+    // (most of them today). The js loader matters: the ts loader elides unused imports outright.
+    const result = await build({
+      stdin: {
+        contents: `import { Logger } from ${JSON.stringify(join(utilsRoot, 'src/index.ts'))};\nexport const x = 1;\n`,
+        resolveDir: utilsRoot,
+        loader: 'js',
+      },
+      bundle: true,
+      platform: 'node',
+      packages: 'external',
+      format: 'esm',
+      write: false,
+      metafile: true,
+      logLevel: 'silent',
+    });
+
+    expect(emittedInputs(result.metafile, path => path !== '<stdin>')).toEqual([]);
+  });
+
+  it('leaves no observability bytes in a browser bundle for an unused Logger import', async () => {
+    // Holds while either observability's sideEffects flag or the pure lazy globalInstance stays;
+    // it does not isolate the flag.
     const result = await build({
       stdin: {
         contents: "import { Logger } from '@bike4mind/observability';\nexport const x = 1;\n",
         resolveDir: utilsRoot,
-        loader: 'ts',
+        loader: 'js',
       },
       bundle: true,
       platform: 'browser',
@@ -81,10 +111,6 @@ describe('browser bundle of artifactParser', () => {
       logLevel: 'silent',
     });
 
-    // metafile.inputs lists tree-shaken files too; only outputs[*].inputs reflects emitted bytes.
-    const emittedObservability = Object.values(result.metafile.outputs).flatMap(output =>
-      Object.entries(output.inputs).filter(([path, info]) => path.includes('observability') && info.bytesInOutput > 0)
-    );
-    expect(emittedObservability).toEqual([]);
+    expect(emittedInputs(result.metafile, path => path.includes('observability'))).toEqual([]);
   });
 });
