@@ -6,6 +6,7 @@ import { PromptMeta } from './PromptMetaTypes';
 import { SearchOptions } from '../../search';
 import { ChatModelName } from '../../models';
 import { MessageContentObject } from './MessageTypes';
+import type { IUserDocument } from './UserTypes';
 import type { DataLakeGroundingMode } from '../../constants/dataLakes';
 import type { PersistedSessionSummaryTrigger } from '../../constants/sessionSummary';
 import type { ApiErrorCode } from '../../apiErrorCodes';
@@ -841,6 +842,15 @@ export interface ISessionFavoriteItem {
 
 export interface ISessionRepository extends IBaseRepository<ISessionDocument> {
   shareable: IShareableStaticMethods<ISessionDocument>;
+  /**
+   * Partial update that re-checks update access and not-deleted in the write filter; null when the
+   * session is gone, deleted, or no longer writable by `user`.
+   */
+  updateWithUpdateAccess: (
+    user: Pick<IUserDocument, 'id' | 'groups'>,
+    data: Partial<ISessionDocument> & { id: string },
+    opts?: { includeGlobalWrite?: boolean }
+  ) => Promise<ISessionDocument | null>;
   upsertByOpenaiConversationId: <Txn>(
     openaiConversationId: string,
     update: Partial<ISession>,

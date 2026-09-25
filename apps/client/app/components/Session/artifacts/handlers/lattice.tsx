@@ -80,19 +80,17 @@ const LatticePreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
           successMessage: 'Saved financial model as file',
         })}
         actions={{ copy: true, save: true }}
-        // No inline render: the model is an editable spreadsheet and belongs in the
-        // side panel, not the chat stream.
+        // No inline render AND no inline source: the model is an editable spreadsheet that
+        // belongs in the side panel, and its serialised JSON is not something a reader gets
+        // anything from. The card is its summary; clicking it opens the real thing.
+        inlineSource={false}
         stats={
-          <>
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {entityCount || 0} entities, {ruleCount || 0} rules
-            </Typography>
-            {currency && (
-              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                {currency}
-              </Typography>
-            )}
-          </>
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            {/* One line, not two siblings - see the same note in the python handler. */}
+            {[`${entityCount || 0} entities, ${ruleCount || 0} rules`, currency || null]
+              .filter(Boolean)
+              .join(' \u2022 ')}
+          </Typography>
         }
       />
     </Box>

@@ -187,8 +187,10 @@ export interface AssembleLakeAccessViewAdapters {
  * accumulates readers across tenants), and leaking an email as a "name" into a manager's export
  * would disclose a cross-tenant identity the manager was never meant to see. An unresolved user
  * shows as its opaque id, not its address.
+ *
+ * Same concern elsewhere: `lakeGrantWriteRule.ts`'s USER-principal carve-out, `keptPersonalLakeSharesNotifier.ts`.
  */
-const userDisplayName = (u: { name?: string; username?: string } | undefined): string | undefined =>
+export const userDisplayName = (u: { name?: string; username?: string } | undefined): string | undefined =>
   u ? u.name || u.username || undefined : undefined;
 
 /**

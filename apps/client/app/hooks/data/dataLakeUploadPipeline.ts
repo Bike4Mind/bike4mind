@@ -416,6 +416,9 @@ export interface BatchUploadCallbacks {
   setStep: (step: WizardStep) => void;
   /** Store writer, injected so the pipeline never subscribes to react state. See RecoverableLake. */
   setRecoverableLake: (lake: RecoverableLake | null) => void;
+  /** Refresh the active-batches list as soon as the batch exists; onUploadComplete only fires
+   * after every file uploads. */
+  onBatchCreated: () => void;
   /** Invalidate the lake list + gears status after upload-complete (the hook passes a closure over queryClient). */
   onUploadComplete: () => void;
 }
@@ -525,6 +528,7 @@ export async function runBatchUpload(cb: BatchUploadCallbacks): Promise<{
     });
 
     batchId = batchRes.data.id;
+    cb.onBatchCreated();
 
     // Switch to upload step and set initial progress
     cb.setStep('upload');

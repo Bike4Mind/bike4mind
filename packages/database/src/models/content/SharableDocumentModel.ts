@@ -55,6 +55,25 @@ export const ShareableDocumentSchema = {
   },
 };
 
+/**
+ * The `$or` arms granting update access: owner, users[].update, groups[].update. Shared by the
+ * update-access finders below and the write-time re-check in SessionRepository.updateWithUpdateAccess,
+ * so the read that authorizes a write and the write itself cannot drift apart.
+ */
+export const updateAccessArms = (
+  user: Pick<IUserDocument, 'id' | 'groups'>,
+  opts?: { includeGlobalWrite?: boolean }
+): Record<string, unknown>[] => [
+  { userId: user.id },
+  { users: { $elemMatch: { userId: user.id, permissions: { $in: ['update'] } } } },
+  { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['update'] } } } },
+  // Opt-in: a global-write share grants update access (mirrors the CASL rule
+  // allow(update, resource, { isGlobalWrite: true })). Off by default so sharing-mutation
+  // callers keep the strict owner/user-update/group-update arms - a global-write sharee must
+  // not gain share or delete, only write.
+  ...(opts?.includeGlobalWrite ? [{ isGlobalWrite: true }] : []),
+];
+
 export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T> {
   private model: mongoose.Model<T>;
 
@@ -147,16 +166,7 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
     if (!mongoose.isObjectIdOrHexString(id)) return null;
     return this.model.findOne({
       _id: { $in: id },
-      $or: [
-        { userId: user.id },
-        { users: { $elemMatch: { userId: user.id, permissions: { $in: ['update'] } } } },
-        { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['update'] } } } },
-        // Opt-in: a global-write share grants update access (mirrors the CASL rule
-        // allow(update, resource, { isGlobalWrite: true })). Off by default so sharing-mutation
-        // callers keep the strict owner/user-update/group-update arms - a global-write sharee must
-        // not gain share or delete, only write.
-        ...(opts?.includeGlobalWrite ? [{ isGlobalWrite: true }] : []),
-      ],
+      $or: updateAccessArms(user, opts),
     });
   }
 
@@ -164,11 +174,7 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
   async findAllUpdateAccessByIds(user: Pick<IUserDocument, 'id' | 'groups'>, ids: string[]): Promise<T[]> {
     return this.model.where({
       _id: { $in: usableObjectIds(ids, `${this.model.modelName}.findAllUpdateAccessByIds`) },
-      $or: [
-        { userId: user.id },
-        { users: { $elemMatch: { userId: user.id, permissions: { $in: ['update'] } } } },
-        { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['update'] } } } },
-      ],
+      $or: updateAccessArms(user),
     });
   }
 
