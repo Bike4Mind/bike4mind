@@ -685,3 +685,43 @@ describe('ImageEditService.validateUserCredits (per-member cap)', () => {
     ).resolves.toMatchObject({ requiredCredits: expect.any(Number) });
   });
 });
+
+describe('ImageEditService.invoke (retry quest bound to its session)', () => {
+  const makeInvokeService = (questSessionId: string) => {
+    const update = vi.fn(async () => undefined);
+    const startImageEditProcess = vi.fn(async () => undefined);
+    const service = new ImageEditService({
+      db: {
+        sessions: { findById: vi.fn(async () => ({ id: 'session1' })) },
+        quests: { findById: vi.fn(async () => ({ id: 'quest1', sessionId: questSessionId })), update },
+      },
+      startImageEditProcess,
+    } as never);
+    const invoke = () =>
+      service.invoke({
+        body: {
+          sessionId: 'session1',
+          questId: 'quest1',
+          prompt: 'make it blue',
+          model: 'gpt-image-1',
+          image: 'https://example.invalid/source.png',
+          fabFileIds: ['mask1'],
+        } as never,
+        userId: 'user1',
+      });
+    return { invoke, update, startImageEditProcess };
+  };
+
+  it('refuses a questId from another session before touching the quest', async () => {
+    const { invoke, update, startImageEditProcess } = makeInvokeService('other-session');
+    await expect(invoke()).rejects.toThrow('Quest not found');
+    expect(update).not.toHaveBeenCalled();
+    expect(startImageEditProcess).not.toHaveBeenCalled();
+  });
+
+  it('retries a quest from the same session', async () => {
+    const { invoke, update } = makeInvokeService('session1');
+    await invoke();
+    expect(update).toHaveBeenCalled();
+  });
+});

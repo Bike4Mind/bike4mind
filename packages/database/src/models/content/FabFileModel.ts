@@ -6,6 +6,7 @@ import {
   DATALAKE_TAG_PREFIX,
   DataLakeMembershipScope,
   type DataLakeMembershipFileCounts,
+  type DataLakeLiveMember,
   type DataLakeSweptFile,
   effectiveTagPrefixArm,
   FabFileChunkPolicyConflict,
@@ -16,6 +17,7 @@ import {
   IFabFileVersion,
   type LakeMembershipMemberRow,
   type LakeSupersession,
+  DocumentDateSource,
   FabFileSourceType,
   KnowledgeType,
   normalizeTagPrefix,
@@ -3105,6 +3107,31 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
     return docs.map(d => d._id.toString());
   }
 
+  async findLiveMembersByDataLakeTag(scope: DataLakeMembershipScope): Promise<DataLakeLiveMember[]> {
+    // `deletedAt: null` asserted explicitly rather than left to the soft-delete plugin's find hook,
+    // matching softDeleteByDataLakeTag: a soft delete leaves the lake tags in place, so a tombstone
+    // keeps matching the membership filter and would otherwise read as a current member.
+    const docs = await this.fabFileModel.find(
+      { ...buildDataLakeMembershipFilter(scope), deletedAt: null },
+      { _id: 1, createdAt: 1 }
+    );
+    return docs.map(d => ({ id: d._id.toString(), createdAt: d.createdAt }));
+  }
+
+  async findStorageKeysByIds(fabFileIds: string[]) {
+    if (fabFileIds.length === 0) return [];
+    // includeDeleted is the whole point: every caller's ids are soft-deleted rows (see the interface).
+    const docs = await this.fabFileModel
+      .find({ _id: { $in: convertIds(fabFileIds) } }, { filePath: 1, 'versions.filePath': 1 })
+      .setOptions({ includeDeleted: true })
+      .lean();
+    return docs.map(d => ({
+      id: d._id.toString(),
+      filePath: d.filePath ?? undefined,
+      versions: (d.versions ?? []).map(v => ({ filePath: v.filePath })),
+    }));
+  }
+
   async updateTagsByUserId(userId: string, tag: string, newTag: string): Promise<number> {
     if (!tag || !newTag) return 0;
     // Anchored and escaped for the same reason as removeTagByUserId: unanchored, renaming `q1`
@@ -3484,6 +3511,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
     sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
     sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // The document's own vintage plus where it came from (#3048) - see IFabFile's field docs. Both
+    // stay unset unless a source actually offered one; there is deliberately no createdAt fallback.
+    documentDate: { type: Date },
+    documentDateSource: { type: String, enum: Object.values(DocumentDateSource), required: false },
     // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
     driveFileId: { type: String },
     driveModifiedTime: { type: Date },

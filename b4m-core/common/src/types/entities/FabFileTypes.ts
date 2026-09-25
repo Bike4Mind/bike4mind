@@ -40,6 +40,35 @@ export enum FabFileSourceType {
   PROPOSAL_APPROVAL = 'proposal_approval',
 }
 
+/**
+ * Where a FabFile's `documentDate` came from. Stored alongside the date because the sources differ
+ * in how much they are worth: an embedded metadata slot is the document's own claim about itself,
+ * while a container timestamp is only the container's. Without this, a date that turns out to be
+ * wrong is unattributable - and the last time a wrong date reached a passage header (#3047) that is
+ * exactly what made it hard to see.
+ */
+export enum DocumentDateSource {
+  /** `CreationDate` from the PDF info dictionary. */
+  PDF_METADATA = 'pdf_metadata',
+  /**
+   * The container's own document-properties record: `dcterms:created` in an OOXML
+   * `docProps/core.xml` (docx/pptx/xlsx), or the equivalent summary stream in a legacy `.xls`.
+   */
+  DOCUMENT_PROPERTIES = 'document_properties',
+  /** A date key in a leading YAML frontmatter block. */
+  FRONTMATTER = 'frontmatter',
+  /**
+   * Drive's `createdTime`, and ONLY for a Google Editors document, where the file WAS authored in
+   * Drive at that moment. Never taken for a binary uploaded to Drive: there `createdTime` is the
+   * upload time, which is the same ingestion-time-as-document-date mistake #3047 removed.
+   *
+   * This value is pinned once set - see the precedence rule in `prepareFabFileChunks`. An Editors
+   * file has no bytes of its own, so what the chunker reads is a rendition Drive generated at
+   * fetch time, and that rendition's embedded metadata dates the export rather than the document.
+   */
+  DRIVE_CREATED = 'drive_created',
+}
+
 // Data Lake metadata interface
 export interface IDataLakeMetadata {
   /** The type of entity this represents (e.g., 'Account', 'Contact', 'Report') */
@@ -471,6 +500,22 @@ export interface IFabFile {
   /** Original relative path from folder upload (preserves directory structure) */
   relativePath?: string;
 
+  /**
+   * The document's own vintage - when it was authored, not when we ingested it (#3048).
+   *
+   * Set only from a real signal (embedded metadata, or Drive's createdTime for a Drive-authored
+   * doc) and left undefined otherwise, which is the common case: there is no fallback to
+   * `createdAt`/`updatedAt`, because ingestion time presented as a document date is the bug #3047
+   * removed. Absent therefore means "no source offered one", never "the document is undated".
+   *
+   * Nullable, like `serverTextHash` and for the same reason: the chunk commit writes the pair on
+   * every pass, so an explicit null is how a re-chunk records "this document no longer carries a
+   * vintage" rather than leaving the previous one to outlive the content it described.
+   */
+  documentDate?: Date | null;
+  /** Provenance for `documentDate`. Always set when `documentDate` is, and never on its own. */
+  documentDateSource?: DocumentDateSource | null;
+
   // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
   /** Drive file id this FabFile was ingested from - the stable dedup key within a lake. */
   driveFileId?: string;
@@ -548,10 +593,16 @@ export interface IFabFileDocument extends IFabFile, IShareableDocument {}
  *
  * Also clears the chunk-derived rollups (`chunkedCharCount`, `maxChunkCharLength`, `embeddedChunkCount`,
  * `embeddedCharCount`) and `serverTextHash`, the admission contract's fingerprint of the extracted text
- * (#1679): each is derived from the file's content, so a byte rewrite invalidates them, and the
- * re-chunk / re-vectorize that follows re-stamps them. Leaving the rollups would grade lake health
- * (#1666) against the PREVIOUS content's chunks - reporting a reachability the current bytes do not
- * have; leaving the hash would let a stale fingerprint claim text the file no longer holds.
+ * (#1679): each is derived from the file's content, so a byte rewrite invalidates them. Nothing here
+ * re-chunks: no rewrite site resets `chunked`, so they are re-stamped only by the next Reprocess /
+ * Rebuild / converge pass. Leaving the rollups would grade lake health (#1666) against the PREVIOUS
+ * content's chunks - reporting a reachability the current bytes do not have; leaving the hash would
+ * let a stale fingerprint claim text the file no longer holds.
+ *
+ * `documentDate` / `documentDateSource` are deliberately NOT cleared: they describe the chunks still
+ * being served, which a rewrite leaves in place, and the re-chunk that replaces those chunks
+ * re-derives the pair (prepareFabFileChunks). Clearing them here would only render the old, still
+ * accurately-dated passages undated. Pinned in fabFileExtractedCountInvalidation.test.ts.
  */
 export const FAB_FILE_CONTENT_REWRITE_PATCH = {
   extractedCharCount: null,
@@ -804,6 +855,17 @@ export type DataLakeMembershipFileCounts = {
   total: number;
   /** Members with no tag under the lake's `fileTagPrefix`. 0 when the lake has no usable prefix. */
   uncategorized: number;
+};
+
+/**
+ * One currently-live member of a lake. `createdAt` rides along because the membership change log
+ * does not cover every join - the file-create doors record none - so a reader reconstructing
+ * membership over time needs the file's birth to tell a member that sat through a window from one
+ * that was uploaded into it.
+ */
+export type DataLakeLiveMember = {
+  id: string;
+  createdAt: Date;
 };
 
 /**
@@ -1948,4 +2010,22 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   hardDeleteOneById(fabFileId: string): Promise<boolean>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  /**
+   * Members that are CURRENTLY live - the lake's membership as of now, which is what a reader
+   * reconstructing membership over time has to start from. Distinct from `findIdsByDataLakeTag`
+   * above because a soft delete leaves the lake tags in place, so that one keeps naming files the
+   * lake no longer holds.
+   */
+  findLiveMembersByDataLakeTag(scope: DataLakeMembershipScope): Promise<DataLakeLiveMember[]>;
+  /**
+   * Every stored object key of each row - the current `filePath` and each prior version's - with
+   * soft-deleted rows INCLUDED. The phase-2 lake purge needs this because every id it sweeps was
+   * already soft-deleted, and `findById` hides those rows behind the soft-delete plugin.
+   *
+   * Optional for the same source-compatibility reason as `setLakeSupersession` above; the purge
+   * requires it locally.
+   */
+  findStorageKeysByIds?(
+    fabFileIds: string[]
+  ): Promise<Array<{ id: string; filePath?: string; versions?: Array<Pick<IFabFileVersion, 'filePath'>> }>>;
 }

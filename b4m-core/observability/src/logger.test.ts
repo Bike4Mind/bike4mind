@@ -176,3 +176,49 @@ describe('Logger metadata-first rendering on non-JSON branches', () => {
     expect(metadata).toMatchObject({ context: 'example', error: 'boom' });
   });
 });
+
+describe('Logger.globalInstance lazy construction', () => {
+  const LOGGER_ENV_KEYS = ['IS_LOCAL', 'NODE_ENV', 'SST_LIVE', 'LOG_JSON', 'LOG_PRETTY', 'LOG_LEVEL'];
+  const originalEnv = process.env;
+  let readKeys: string[];
+
+  afterEach(() => {
+    process.env = originalEnv;
+    vi.resetModules();
+  });
+
+  async function importFreshWithRecordedEnv() {
+    vi.resetModules();
+    readKeys = [];
+    process.env = new Proxy(
+      { ...originalEnv },
+      {
+        get(target, key) {
+          if (typeof key === 'string') readKeys.push(key);
+          return Reflect.get(target, key);
+        },
+      }
+    );
+    return (await import('./logger')).Logger;
+  }
+
+  it('reads no env at import, then only Logger keys on first access', async () => {
+    const FreshLogger = await importFreshWithRecordedEnv();
+    expect(readKeys).toEqual([]);
+
+    const first = FreshLogger.globalInstance;
+    expect(readKeys.length).toBeGreaterThan(0);
+    expect(readKeys.every(key => LOGGER_ENV_KEYS.includes(key))).toBe(true);
+
+    const keysAfterFirst = [...readKeys];
+    expect(FreshLogger.globalInstance).toBe(first);
+    expect(readKeys).toEqual(keysAfterFirst);
+  });
+
+  it('routes the static helpers through the memoized instance', async () => {
+    const FreshLogger = await importFreshWithRecordedEnv();
+    const spy = vi.spyOn(FreshLogger.globalInstance, 'info').mockImplementation(() => {});
+    FreshLogger.info('x');
+    expect(spy).toHaveBeenCalledWith('x');
+  });
+});
