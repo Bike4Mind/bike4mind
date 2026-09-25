@@ -1349,7 +1349,10 @@ export class AnthropicBackend implements ICompletionBackend {
                       // spread it directly; thinking_delta events accumulate into it below.
                       collectedContent[event.index] = { ...event.content_block };
                       streamedText[event.index] = '<think>';
-                      await cb(streamedText, { toolsUsed });
+                      // Tagged, not suppressed: an adaptive model opens a thinking block on
+                      // every turn whether or not the caller enabled thinking (see the
+                      // max_tokens note above), so this marker reaches consumers regardless.
+                      await cb(streamedText, { toolsUsed, channel: 'reasoning' });
                     } else if ('content_block' in event && event.content_block.type === 'tool_use') {
                       // Handle tool use start
                       const toolBlock = event.content_block;
@@ -1390,7 +1393,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       // otherwise be indistinguishable from the real <think>/</think> we wrap
                       // around it.
                       streamedText[event.index] = reasoningEscaper.push(thinkingText);
-                      await cb(streamedText, { toolsUsed: toolsUsed });
+                      await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
                     } else if ('delta' in event && event.delta.type === 'text_delta') {
                       streamedText[event.index] = event.delta.text;
                       checkDegenerate(event.delta.text);
@@ -1439,7 +1442,7 @@ export class AnthropicBackend implements ICompletionBackend {
                     if (isInThinkingBlock) {
                       isInThinkingBlock = false;
                       streamedText[event.index] = reasoningEscaper.flush() + '</think>';
-                      await cb(streamedText, { toolsUsed: toolsUsed });
+                      await cb(streamedText, { toolsUsed: toolsUsed, channel: 'reasoning' });
                     } else if (collectedContent[event.index] && collectedContent[event.index].type === 'tool_use') {
                       // Parse the complete tool input when the block ends
                       if (func[event.index] && func[event.index].parameters) {
@@ -1921,8 +1924,8 @@ export class AnthropicBackend implements ICompletionBackend {
                 });
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async results => {
-                  await cb(results, { inputTokens: 0, outputTokens: 0, toolsUsed });
+                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+                  await cb(results, { inputTokens: 0, outputTokens: 0, toolsUsed, ...artifactInfo });
                 });
 
                 // outcome.id (not toolId, which falls back to a fresh randomUUID) is what
@@ -2284,8 +2287,8 @@ export class AnthropicBackend implements ICompletionBackend {
                 });
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async results => {
-                  await cb(results, { toolsUsed });
+                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
+                  await cb(results, { toolsUsed, ...artifactInfo });
                 });
 
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);

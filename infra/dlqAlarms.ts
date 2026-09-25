@@ -35,6 +35,7 @@ import {
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
@@ -313,6 +314,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'DataLakeManagement',
     sourceQueue: 'lakeMemoryQueue',
     queue: lakeMemoryQueueDLQ,
+  },
+  {
+    label: 'lake-inconsistency-model',
+    displayName: 'Lake Model Inconsistency Detection',
+    application: 'DataLakeManagement',
+    sourceQueue: 'lakeInconsistencyModelQueue',
+    queue: lakeInconsistencyModelQueueDLQ,
   },
   {
     label: 'drive-lake-ingest',

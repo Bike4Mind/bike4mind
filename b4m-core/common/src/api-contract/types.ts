@@ -174,11 +174,11 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    *
    * Values arrive as `string` (or `string[]` for a repeated key): use
    * `z.coerce.number()` for numbers, and never `z.coerce.boolean()` for a flag
-   * (`Boolean('false') === true`) - see `queryBool` in `schemas/query.ts`. A
-   * required `z.coerce.number()` field genuinely 422s on a missing value at
-   * runtime, but zod-to-openapi documents it as optional/nullable regardless
-   * (see `registerContract.test.ts`) - a spec-accuracy gap in that dependency,
-   * not in validation.
+   * (`Boolean('false') === true`) - see `queryBool` in `schemas/query.ts`.
+   * `registerContract` corrects zod-to-openapi's own required/nullable derivation
+   * for a bare `z.coerce.*` field before registration (see `undoCoercionForOpenApi`
+   * in `registerContract.ts`), so the generated spec matches the real runtime
+   * guarantee - see `registerContract.test.ts`.
    *
    * Next-only today: `defineNextRoute.ts`'s adapter is the only one that reads this
    * field. The Lambda adapter (`server/cli/defineLambdaRoute.ts`) does not validate

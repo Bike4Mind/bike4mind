@@ -38,6 +38,7 @@ export * from './computeLakeHealth';
 export * from './applyAdmissionDecision';
 export * from './detectAdmissionDuplicates';
 export * from './detectLakeInconsistencies';
+export * from './detectLakeInconsistenciesModel';
 export * from './convergeLakePolicy';
 export * from './rebuildLakePassages';
 export * from './tagPrefixCollision';

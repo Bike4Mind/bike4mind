@@ -195,6 +195,7 @@ export function LakeInfoPanel({
             variant="soft"
             color="primary"
             startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
+            aria-label={`Start chat with ${lake.name}`}
             data-testid={`datalake-startchat-btn-${lake.id}`}
             loading={startingChat}
             onClick={async () => {
@@ -222,6 +223,7 @@ export function LakeInfoPanel({
                 variant="soft"
                 color="primary"
                 startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
+                aria-label={`Add files to ${lake.name}`}
                 data-testid={`datalake-addfiles-btn-${lake.id}`}
                 onClick={() => openWizardForLake(toWizardTargetLake(lake))}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -233,6 +235,7 @@ export function LakeInfoPanel({
                 variant="outlined"
                 color="neutral"
                 startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+                aria-label={`Settings for ${lake.name}`}
                 data-testid={`datalake-settings-btn-${lake.id}`}
                 onClick={onOpenSettings}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -316,6 +319,7 @@ export function LakeInfoPanel({
               variant="outlined"
               color="neutral"
               startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+              aria-label={`Settings for ${lake.name}`}
               data-testid={`datalake-fallback-settings-btn-${lake.id}`}
               onClick={onOpenFallbackSettings}
               sx={{ flexShrink: 0, fontSize: '13px' }}

@@ -111,6 +111,11 @@ export const DEFAULT_MANIFEST = {
   // an operator needs - with no URL configured the enqueue still fails into those catches and
   // says so, rather than accepting a message into a queue nothing is consuming yet.
   lakeMemoryQueue: { kind: 'queue', optional: true },
+  // Reached from POST /api/data-lakes/:id/inconsistencies?detector=model. `optional` for the same
+  // reason as lakeMemoryQueue above: it sits behind an off-by-default admin flag
+  // (`EnableLakeModelInconsistencyDetection`), so a basic install never sets it, and with no URL
+  // configured the route refuses the run outright rather than accepting work nothing will consume.
+  lakeInconsistencyModelQueue: { kind: 'queue', optional: true },
   liveOpsTriageQueue: { kind: 'queue' },
   notebookCurationQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
