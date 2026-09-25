@@ -130,31 +130,49 @@ describe('editLocalFile: fuzzy writes are bound to the confirmed file snapshot (
 });
 
 describe('editLocalFile: the write path reuses the gate-resolved span, but always reads fresh', () => {
-  it('applies the gateSnapshot span instead of re-resolving old_string/new_string when the hash still matches', async () => {
+  it('applies a gateSnapshot whose span/replacement genuinely correspond to a unique old_string/new_string match', async () => {
     const dir = await freshDir('b4m-reuse-');
+    const file = join(dir, 'note.txt');
+    await writeFile(file, 'hello world\n');
+    const tool = editTool([dir]);
+
+    const plan = await resolveEditLocalFile({ path: file, old_string: 'hello world', new_string: 'hi world' }, [dir]);
+    const message = await tool.toolFn({
+      path: file,
+      old_string: 'hello world',
+      new_string: 'hi world',
+      gateSnapshot: { contentHash: plan.contentHash, resolvedEdit: plan.resolvedEdit },
+    });
+
+    expect(message).toContain('File edited successfully');
+    expect(await readFile(file, 'utf-8')).toBe('hi world\n');
+  });
+
+  it('rejects a gateSnapshot pointing at one of several occurrences of old_string (ambiguous - direct-call bypass)', async () => {
+    const dir = await freshDir('b4m-ambiguous-snapshot-');
     const file = join(dir, 'note.txt');
     const content = 'hello world\nhello world\n';
     await writeFile(file, content);
     const tool = editTool([dir]);
 
-    // Two occurrences of old_string: a fresh resolveEdit() would throw "ambiguous
-    // match". A gateSnapshot pinned to the second occurrence, with a matchedText/
-    // replacement that are this call's own old_string/new_string verbatim, proves
-    // the write reused the snapshot's span (skipping resolveEdit's own ambiguity
-    // check) rather than re-resolving from scratch.
+    // old_string occurs twice - a fresh resolveEdit() would throw "ambiguous match".
+    // A snapshot whose matchedText/replacement equal old_string/new_string verbatim,
+    // with real bytes at the SECOND occurrence, must not bypass that rejection - a
+    // caller reaching this tool directly (no CLI wrapper) could otherwise supply the
+    // real hash and pick whichever occurrence it wants.
     const secondOccurrenceIndex = 'hello world\n'.length;
-    const message = await tool.toolFn({
-      path: file,
-      old_string: 'hello world',
-      new_string: 'hi world',
-      gateSnapshot: {
-        contentHash: sha256(content),
-        resolvedEdit: { startIndex: secondOccurrenceIndex, matchedText: 'hello world', replacement: 'hi world' },
-      },
-    });
-
-    expect(message).toContain('File edited successfully');
-    expect(await readFile(file, 'utf-8')).toBe('hello world\nhi world\n');
+    await expect(
+      tool.toolFn({
+        path: file,
+        old_string: 'hello world',
+        new_string: 'hi world',
+        gateSnapshot: {
+          contentHash: sha256(content),
+          resolvedEdit: { startIndex: secondOccurrenceIndex, matchedText: 'hello world', replacement: 'hi world' },
+        },
+      })
+    ).rejects.toThrow(/occurrences/i);
+    expect(await readFile(file, 'utf-8')).toBe(content);
   });
 
   it('still reads the file fresh and re-resolves when the gateSnapshot hash no longer matches (TOCTOU)', async () => {
