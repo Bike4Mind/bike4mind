@@ -4,7 +4,8 @@ import { homedir } from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { ChatModels } from '@bike4mind/common';
-import type { AuthTokens, CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
+import { isAuthTokenValid, swapActiveEnvAuth } from '@bike4mind/client-auth';
+import type { CliConfig, GlobalConfigPatch, ProjectConfig, ProjectLocalConfig } from './types';
 import { getDefaultApiUrl, LOCAL_DEV_URL, getEnvironmentName } from '../utils/apiUrl';
 import {
   DEFAULT_SANDBOX_CONFIG,
@@ -796,29 +797,6 @@ function mergeConfigs(global: CliConfig, project: ProjectConfig | null, local: P
 }
 
 /**
- * Normalize an API URL for use as an `authByEnv` cache key.
- *
- * Without normalization, `/set-api https://x.com` and `/set-api https://x.com/`
- * (or `HTTPS://X.com`) would create separate cache entries, defeating the
- * per-environment token reuse on a later `--dev` / `--prod` switch.
- */
-function normalizeEnvKey(url: string): string {
-  return url.toLowerCase().replace(/\/+$/, '');
-}
-
-/**
- * Treat an auth token as "authenticated" only when it has an `expiresAt` in
- * the future. The startup flow auto-refreshes expired tokens anyway, but
- * without this check the launch banner would briefly claim a saved login is
- * being reused when it's actually about to trigger a re-auth.
- */
-function hasValidAuth(auth: AuthTokens | undefined): boolean {
-  if (!auth) return false;
-  const expiresAt = new Date(auth.expiresAt);
-  return expiresAt > new Date();
-}
-
-/**
  * Manages CLI configuration stored as JSON
  */
 export class ConfigStore {
@@ -1508,7 +1486,6 @@ export class ConfigStore {
     const g = this.globalConfig!;
 
     const prevUrl = g.apiConfig?.customUrl || getDefaultApiUrl();
-    const prevKey = normalizeEnvKey(prevUrl);
 
     let newUrl: string;
     let newApiConfig: CliConfig['apiConfig'];
@@ -1522,37 +1499,24 @@ export class ConfigStore {
       newUrl = target.customUrl;
       newApiConfig = { customUrl: target.customUrl };
     }
-    const newKey = normalizeEnvKey(newUrl);
-
     const envName = getEnvironmentName(newApiConfig);
 
+    const swap = swapActiveEnvAuth(g, prevUrl, newUrl);
+
     // No-op when already pointed at the requested environment - leave auth alone.
-    if (prevKey === newKey) {
-      return { url: newUrl, envName, changed: false, authenticated: hasValidAuth(g.auth) };
+    if (!swap.changed) {
+      return { url: newUrl, envName, changed: false, authenticated: isAuthTokenValid(g.auth) };
     }
-
-    // Stash the current environment's token before switching away from it.
-    // Keyed by a normalized URL (lowercase, no trailing slash) so trivial input
-    // variations like `/set-api https://x.com/` vs `https://X.com` share an entry.
-    const authByEnv: Record<string, AuthTokens> = { ...(g.authByEnv || {}) };
-    if (g.auth) {
-      authByEnv[prevKey] = g.auth;
-    } else {
-      delete authByEnv[prevKey];
-    }
-
-    // Restore the target environment's previously-cached token (if any).
-    const restored = authByEnv[newKey];
 
     g.apiConfig = newApiConfig;
-    g.authByEnv = authByEnv;
-    g.auth = restored; // undefined → user will be prompted to /login
+    g.authByEnv = swap.authByEnv;
+    g.auth = swap.auth; // undefined -> user will be prompted to /login
 
     // No-arg save() persists these global mutations and refreshes features from
     // disk, so a concurrent `b4m plugin add` isn't reverted by this switch.
     await this.save();
 
-    return { url: newUrl, envName, changed: true, authenticated: hasValidAuth(restored) };
+    return { url: newUrl, envName, changed: true, authenticated: isAuthTokenValid(swap.auth) };
   }
 
   /**
