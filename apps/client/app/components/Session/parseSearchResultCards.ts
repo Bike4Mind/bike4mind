@@ -95,7 +95,7 @@ function parseImages(raw: unknown): SearchResultCardImage[] {
  * unclosed one means the generation is still in flight, which is how a half-streamed fence is told
  * apart from a finished-but-broken one.
  */
-function isStructurallyClosed(text: string): boolean {
+export function isStructurallyClosed(text: string): boolean {
   let depth = 0;
   let inString = false;
   let escaped = false;

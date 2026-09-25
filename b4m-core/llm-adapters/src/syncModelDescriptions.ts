@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { getAvailableModels, getLlmByModel } from './index';
+import { apiKeyTableForBackend, getAvailableModels, getLlmByModel, type ApiKeyTable } from './index';
 import { Logger } from '@bike4mind/observability';
 
 // ESM module dirname equivalent
@@ -11,17 +11,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 dotenv.config();
-
-interface ApiKeyTable {
-  openai?: string;
-  anthropic?: string;
-  gemini?: string;
-  ollama?: string;
-  bfl?: string;
-  xai?: string;
-  kimi?: string;
-  deepseek?: string;
-}
 
 interface CompletionInfo {
   inputTokens?: number;
@@ -80,7 +69,8 @@ class SyncModelDescriptions {
 
   constructor(
     private readonly apiKey: string,
-    private readonly modelId: string
+    private readonly modelId: string,
+    private readonly modelBackend: ModelBackend
   ) {
     this.logger = new Logger({
       metadata: {
@@ -1108,33 +1098,16 @@ class SyncModelDescriptions {
   }
 
   private buildApiKeyTable(): ApiKeyTable {
-    // Determine which API key field to use based on model ID patterns
-    if (this.modelId.includes('gpt') || this.modelId.includes('o1')) {
-      return { openai: this.apiKey };
-    } else if (this.modelId.includes('claude')) {
-      return { anthropic: this.apiKey };
-    } else if (this.modelId.includes('gemini')) {
-      return { gemini: this.apiKey };
-    } else if (this.modelId.includes('llama') || this.modelId.includes('ollama')) {
-      return { ollama: this.apiKey };
-    } else if (this.modelId.includes('bfl')) {
-      return { bfl: this.apiKey };
-    } else if (this.modelId.includes('grok') || this.modelId.includes('xai')) {
-      return { xai: this.apiKey };
-    } else if (this.modelId.includes('kimi') || this.modelId.includes('moonshot')) {
-      return { kimi: this.apiKey };
-    } else if (this.modelId.includes('deepseek')) {
-      return { deepseek: this.apiKey };
-    } else {
-      // Default to openai for backward compatibility
-      return { openai: this.apiKey };
-    }
+    return apiKeyTableForBackend(this.modelBackend, this.apiKey);
   }
 }
 
 if (import.meta.url === import.meta.resolve('./syncModelDescriptions.ts')) {
   const apiKey = process.env.API_KEY;
   const modelId = process.env.MODEL_ID;
+  // The backend is stated rather than guessed from MODEL_ID: the same id text
+  // (deepseek-r1, moonshot.kimi-*) is served by more than one backend.
+  const modelBackend = Object.values(ModelBackend).find(b => b === process.env.MODEL_BACKEND);
 
   if (!apiKey) {
     console.error('API_KEY environment variable is required');
@@ -1146,7 +1119,12 @@ if (import.meta.url === import.meta.resolve('./syncModelDescriptions.ts')) {
     process.exit(1);
   }
 
-  void new SyncModelDescriptions(apiKey, modelId)
+  if (!modelBackend) {
+    console.error(`MODEL_BACKEND environment variable must be one of: ${Object.values(ModelBackend).join(', ')}`);
+    process.exit(1);
+  }
+
+  void new SyncModelDescriptions(apiKey, modelId, modelBackend)
     .run()
     .then(exitCode => {
       console.log(`Script completed with exit code: ${exitCode}`);

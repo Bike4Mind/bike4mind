@@ -908,6 +908,47 @@ const lakeHealthSweepCron = new sst.aws.Cron('lakeHealthSweep', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+/**
+ * Scheduled cross-document inconsistency detection over every active lake.
+ *
+ * Detection used to run only when a curator asked for it, so a contradiction appearing between
+ * visits stayed invisible. This grades every active lake on a schedule and persists each problem as
+ * a finding ROW, keyed so a repeat detection updates the existing row rather than duplicating it.
+ * Detect-only: nothing here gates ingest or removes content.
+ *
+ * Timeout is 15 minutes rather than the health sweep's 10: one pass reads up to 1000 chunk
+ * documents. The handler does not rely on this timeout to stop it - it holds its own wall-clock
+ * budget (RUN_BUDGET_MS) and stops a page short, so a long run reports a deferred remainder rather
+ * than being killed mid-write with only its first metric emitted.
+ *
+ * Schedule: daily at 4am UTC, BEFORE lakeHealthSweep (6am) - health renders the stored
+ * inconsistency summary rather than computing it, so the other order would make every daily health
+ * snapshot report counts a day old.
+ */
+const lakeInconsistencySweepCron = new sst.aws.Cron('lakeInconsistencySweep', {
+  schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/lakeInconsistencySweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 export {
   dailyUserActivityReport,
   weeklyUserActivityReport,
@@ -939,4 +980,5 @@ export {
   driveLakeResyncPollCron,
   helpDatalakeIngestCron,
   lakeHealthSweepCron,
+  lakeInconsistencySweepCron,
 };

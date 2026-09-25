@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { SEARCH_RESULT_CARDS_LANGUAGE } from '@bike4mind/common';
+import { LOCATION_MAP_LANGUAGE, SEARCH_RESULT_CARDS_LANGUAGE } from '@bike4mind/common';
 import { buildReplyDownloads } from './replyDownloads';
 
 describe('buildReplyDownloads', () => {
@@ -141,5 +141,16 @@ describe('buildReplyDownloads', () => {
       'All three are automatics.',
     ].join('\n');
     expect(buildReplyDownloads(reply, 'msg-12')).toEqual([]);
+  });
+
+  it('never offers the model-authored map fence as a download', () => {
+    const reply = [
+      'Dinner nearby:',
+      '```' + LOCATION_MAP_LANGUAGE,
+      '{"places":[{"id":"ChIJa","name":"Barr"},',
+      '{"id":"ChIJb","name":"Kadeau"}]}',
+      '```',
+    ].join('\n');
+    expect(buildReplyDownloads(reply, 'msg-13')).toEqual([]);
   });
 });

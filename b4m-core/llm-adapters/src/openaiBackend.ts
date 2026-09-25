@@ -44,8 +44,17 @@ import { handleToolResultStreaming } from './toolStreamingHelper';
 import { DispatchModel } from './dispatchModel';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
-import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
+import {
+  withRetry,
+  isUserInitiatedAbort,
+  isRetryableError,
+  stripToolArtifactMarkup,
+  TOOL_ARTIFACT_EMITTERS,
+} from '@bike4mind/common';
 import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
+
+const ARTIFACT_DELIVERED_PLACEHOLDER = '[Artifact rendered and delivered to user]';
+const ARTIFACT_REMOVED_PLACEHOLDER = '[Artifact markup removed]';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -1311,9 +1320,12 @@ export class OpenAIBackend implements ICompletionBackend {
             for (const outcome of outcomes) {
               if (!outcome.ok) {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-                const errorMsg = `Error processing ${outcome.name} tool: ${
-                  outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
-                }`;
+                const errorMsg = stripToolArtifactMarkup(
+                  `Error processing ${outcome.name} tool: ${
+                    outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
+                  }`,
+                  ARTIFACT_REMOVED_PLACEHOLDER
+                );
                 streamedText[c.index] = errorMsg;
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
                 // Push error result so the model can acknowledge the failure
@@ -1336,26 +1348,23 @@ export class OpenAIBackend implements ICompletionBackend {
               let thisToolHadArtifact = false;
 
               // Stream artifact-generating tool results immediately to the client.
-              await handleToolResultStreaming(outcome.name, outcome.result, async results => {
+              await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
                 thisToolHadArtifact = true;
                 anyArtifactWasStreamed = true;
                 await callback(results, {
                   inputTokens: 0,
                   outputTokens: 0,
                   toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+                  ...artifactInfo,
                 });
               });
 
-              // Sanitize artifact tags from tool result before pushing to conversation history.
-              // The artifact has already been streamed to the client via handleToolResultStreaming(),
-              // so GPT doesn't need raw <artifact> markup - which it tends to echo verbatim,
-              // causing duplicate artifacts.
-              const sanitizedResult = thisToolHadArtifact
-                ? resultStr.replace(
-                    /<artifact(?:\s[^>]*)?>[\s\S]*?<\/artifact>/gi,
-                    '[Artifact rendered and delivered to user]'
-                  )
-                : resultStr;
+              // GPT tends to echo raw <artifact> markup verbatim, and the reply parser would render
+              // the echo: strip it from every tool result, not only the ones that streamed.
+              const sanitizedResult = stripToolArtifactMarkup(
+                resultStr,
+                thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+              );
 
               // Record the sanitized string, not resultStr - that's what the model actually saw.
               recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
@@ -1697,7 +1706,10 @@ export class OpenAIBackend implements ICompletionBackend {
         for (const outcome of outcomes) {
           if (!outcome.ok) {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-            const errorMsg = `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`;
+            const errorMsg = stripToolArtifactMarkup(
+              `Error processing ${outcome.name} tool: ${outcome.error instanceof Error ? outcome.error.message : 'Unknown error'}`,
+              ARTIFACT_REMOVED_PLACEHOLDER
+            );
             recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, errorMsg, false);
             // Push error result so the model can acknowledge the failure
             this.pushToolMessages(
@@ -1719,7 +1731,7 @@ export class OpenAIBackend implements ICompletionBackend {
           // Emit accum + this turn's tokens - same shape as the per-chunk emit
           // above so wrappedOnChunk's cumulative running total isn't reset by
           // a smaller this-turn-only value.
-          await handleToolResultStreaming(outcome.name, outcome.result, async results => {
+          await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
             thisToolHadArtifact = true;
             anyArtifactWasStreamed = true;
             await callback(results, {
@@ -1730,18 +1742,15 @@ export class OpenAIBackend implements ICompletionBackend {
               outputTokens: accumOutputTokens + outputTokens,
               toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
               cacheStats,
+              ...artifactInfo,
             });
           });
 
-          // Sanitize artifact tags from tool result before pushing to conversation history.
-          // The artifact has already been streamed to the client via handleToolResultStreaming(),
-          // so GPT doesn't need raw <artifact> markup - which it tends to echo/reconstruct.
-          const sanitizedResult = thisToolHadArtifact
-            ? resultStr.replace(
-                /<artifact(?:\s[^>]*)?>[\s\S]*?<\/artifact>/gi,
-                '[Artifact rendered and delivered to user]'
-              )
-            : resultStr;
+          // Same echo guard as the streaming path above.
+          const sanitizedResult = stripToolArtifactMarkup(
+            resultStr,
+            thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+          );
 
           recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
@@ -2218,14 +2227,22 @@ export class OpenAIBackend implements ICompletionBackend {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
       if (outcome.ok) {
-        const resultStr = outcome.result.result.toString();
+        // This path never streams, but an emitter's artifact still reaches the user via tool_result
+        // extraction in services sharedToolBuilder; strip it so GPT cannot echo a second copy.
+        const resultStr = stripToolArtifactMarkup(
+          outcome.result.result.toString(),
+          TOOL_ARTIFACT_EMITTERS.has(r.name) ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+        );
         recordToolResult(toolsUsed, { id: r.callId, name: r.name }, resultStr, true);
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, resultStr);
       } else {
         if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
-        const errorMsg = `Error processing ${r.name} tool: ${
-          outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
-        }`;
+        const errorMsg = stripToolArtifactMarkup(
+          `Error processing ${r.name} tool: ${
+            outcome.error instanceof Error ? outcome.error.message : 'Unknown error'
+          }`,
+          ARTIFACT_REMOVED_PLACEHOLDER
+        );
         recordToolResult(toolsUsed, { id: r.callId, name: r.name }, errorMsg, false);
         this.pushToolMessages(messages, { id: r.callId, name: r.name, parameters: r.args }, errorMsg);
       }

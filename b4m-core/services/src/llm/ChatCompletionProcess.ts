@@ -38,6 +38,7 @@ import {
   DEGENERATE_FINISH_REASON,
   TRUNCATED_FINISH_REASON,
   isEarlyStop,
+  visibleReplyText,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -110,8 +111,12 @@ import {
   lakeMembershipsFrom,
   measureIdentityNamedExclusion,
   warnIfManyLakeMemberships,
-  type DataLakeAccessContext,
+  type MeasurableDataLakeAccessContext,
+  type EntitlementResolution,
 } from '../dataLakeService/getDynamicDataLakeTags';
+// Re-exported so the resolver below and the type it returns stay reachable from one import, while
+// the declaration stays beside the context contract it has to satisfy.
+export type { EntitlementResolution };
 import { datalakeTagsFrom } from '../dataLakeService/getDataLakePrompts';
 import {
   buildElisionStamp,
@@ -120,7 +125,7 @@ import {
   ELISION_MATCH_MAX,
   ELISION_NAME_MAX,
 } from './elisionStamp';
-import { buildEarlyStopStamp } from './earlyStopStamp';
+import { buildEarlyStopStamp, buildIncompleteAnswerNotice } from './earlyStopStamp';
 import type { SubagentTelemetryData } from './tools/implementation/delegateToAgent';
 import { createHmac } from 'crypto';
 import { MongoAbility } from '@casl/ability';
@@ -864,9 +869,10 @@ export class ChatCompletionProcess {
   private getEntitlements: IChatCompletionServiceOptions['getEntitlements'];
   private entitlementsResolved = false;
   /**
-   * Set only in `resolveEntitlementKeys()`'s catch branch; read by `getDataLakeAccessContext()` to
-   * set `DataLakeAccessContext.entitlementKeysResolved` - see that field's own doc for the "THREW
-   * vs. legitimately empty" distinction this exists to carry (#3155).
+   * Set only in `resolveEntitlementKeys()`'s catch branch and reported back through that method's
+   * own return value, so no caller can take the keys without also being handed this - see
+   * `DataLakeAccessContext.entitlementKeysResolved` for the "THREW vs. legitimately empty"
+   * distinction it carries (#3155).
    *
    * NOT the same axis as `entitlementsResolved` above (review: the two names read as near-synonyms
    * but answer different questions) - that one means "an attempt has been made this process, so the
@@ -884,7 +890,7 @@ export class ChatCompletionProcess {
    * suppress a healthy turn's telemetry. Caching the in-flight PROMISE (set synchronously, before
    * any `await`) closes the window: every racing caller awaits the same one settlement.
    */
-  private entitlementKeysPromise?: Promise<string[]>;
+  private entitlementKeysPromise?: Promise<EntitlementResolution>;
   /**
    * Per-turn memo for the caller's resolved data-lake access. Shared by the tool-offer check
    * (userHasAccessibleKnowledgeLake), the corpus inline-defer plan (resolveCorpusInlinePlan) and
@@ -901,7 +907,7 @@ export class ChatCompletionProcess {
    * read that can observe a different snapshot (e.g. a grant revoked between the two reads) and
    * disagree with the first about what this caller can reach.
    */
-  private dataLakeAccessContextMemo: DataLakeAccessContext | undefined;
+  private dataLakeAccessContextMemo: MeasurableDataLakeAccessContext | undefined;
   /**
    * This turn's VETTED `session.preauthorizedLakeIds` (see vetPreauthorizedLakeIds), captured on a
    * field because `getAccessibleDataLakeAccess` is a session-less private method and its consumers
@@ -1002,9 +1008,13 @@ export class ChatCompletionProcess {
    * first `await`, so two callers racing before resolution settles converge on the SAME promise
    * instead of each running the try/catch independently - see that field's own doc for the race
    * this closes.
+   *
+   * Returns the keys AND whether they are the caller's real ones, as one value: this method is the
+   * only place the fail-safe `[]` is produced, so handing the two back separately is what let a
+   * lake-access context carry degraded keys without the signal that says so.
    */
-  public async resolveEntitlementKeys(): Promise<string[]> {
-    if (this.entitlementsResolved) return this.entitlementKeys;
+  public async resolveEntitlementKeys(): Promise<EntitlementResolution> {
+    if (this.entitlementsResolved) return this.entitlementResolution();
     if (!this.entitlementKeysPromise) {
       this.entitlementKeysPromise = (async () => {
         try {
@@ -1022,10 +1032,14 @@ export class ChatCompletionProcess {
           this.entitlementResolutionFailed = true;
         }
         this.entitlementsResolved = true;
-        return this.entitlementKeys;
+        return this.entitlementResolution();
       })();
     }
     return this.entitlementKeysPromise;
+  }
+
+  private entitlementResolution(): EntitlementResolution {
+    return { keys: this.entitlementKeys, resolved: !this.entitlementResolutionFailed };
   }
 
   /**
@@ -1050,16 +1064,16 @@ export class ChatCompletionProcess {
    * `getAccessibleDataLakeAccess`'s own resolution. See `dataLakeAccessContextMemo`'s doc for why
    * identity, not field equality, is what those memos key on.
    */
-  private async getDataLakeAccessContext(): Promise<DataLakeAccessContext> {
+  private async getDataLakeAccessContext(): Promise<MeasurableDataLakeAccessContext> {
     if (this.dataLakeAccessContextMemo === undefined) {
-      const entitlementKeys = await this.resolveEntitlementKeys();
+      const { keys: entitlementKeys, resolved } = await this.resolveEntitlementKeys();
       this.dataLakeAccessContextMemo = {
         db: this.db,
         user: this.user,
         entitlementKeys,
         // #3155: lets the exclusion-telemetry count tell a legitimately empty entitlement list
         // apart from a failed lookup - see `entitlementResolutionFailed`'s own doc.
-        entitlementKeysResolved: !this.entitlementResolutionFailed,
+        entitlementKeysResolved: resolved,
         // Without this, a countGateExcludedLakes failure warns into a void: the resolver
         // swallows it internally (never throws), so this call's own try/catch never sees it.
         logger: this.logger,
@@ -1841,6 +1855,16 @@ export class ChatCompletionProcess {
         quest.status = 'stopped';
         quest.replies = ['Session not found. Please create a new session or refresh the page.'];
         await saveQuest(quest);
+        return;
+      }
+      // A stop can land between invoke creating the quest and this point (the client defers a
+      // first-turn Stop until the quest exists). The save below would write 'running' back over
+      // it and the cancel watcher would never see it, so honour it here. The finally block sends
+      // the terminal 'stopped' frame.
+      const latestQuestStatus = await this.db.quests.findByIdWithStatus(questId);
+      if (latestQuestStatus?.status === 'stopped') {
+        logger.info(`Quest ${questId} was stopped before processing started`);
+        quest.status = 'stopped';
         return;
       }
       quest.status = 'running';
@@ -2735,8 +2759,12 @@ export class ChatCompletionProcess {
       const abortSignalHolder: { signal?: AbortSignal } = {};
 
       // Resolve entitlement keys once before building tools so the knowledge tools'
-      // data-lake access (getDynamicDataLakeAccess) sees the same keys as forced retrieval.
-      const entitlementKeys = await this.resolveEntitlementKeys();
+      // data-lake access (getDynamicDataLakeAccess) sees the same keys as forced retrieval. The
+      // resolution's completeness half is not carried into ToolContext: no knowledge tool reads an
+      // exclusion count, so the tool path simply gets `undefined` there (the honest answer for an
+      // unvouched host) while its lake view keeps the optimistic default. Carry the half through if
+      // a tool ever grows a consumer for that count.
+      const { keys: entitlementKeys } = await this.resolveEntitlementKeys();
 
       const toolBuilder = new ToolBuilder({
         user: this.user,
@@ -4136,6 +4164,11 @@ export class ChatCompletionProcess {
         }
       };
 
+      // A user Stop has already persisted 'stopped' (sessionOperations.ts), and an aborted
+      // backend resolves rather than throws, so the success path must not overwrite it.
+      const successStatus = (): 'done' | 'stopped' =>
+        stopSignalSent || abortController.signal.aborted ? 'stopped' : 'done';
+
       // Set up a dedicated cancellation watcher that checks more frequently
       // than the regular status updates
       const startCancellationWatcher = () => {
@@ -4206,6 +4239,22 @@ export class ChatCompletionProcess {
       let toolPairingRetried = false;
       let requestTimeoutRetried = false;
       let streamIdleTimeoutRetried = false;
+      // Where the last tool call landed in the visible reply, so the end of the turn can tell
+      // an answer written after the tools ran from a preamble written before them. The slots
+      // themselves can't say this: every iteration appends into the same indices.
+      let toolCallsSeen = 0;
+      let visibleCharsAtLastToolCall = 0;
+      // Generating tools deliver through statusUpdate({ images }), which applyQuestStatusChanges
+      // (tools/ToolBuilder.ts) merges into quest.images with dedup, so growth means a new file.
+      const imageCountAtTurnStart = quest.images?.length ?? 0;
+      // Tools set pendingAction to a fresh object (imageGeneration's model picker, MCP confirm
+      // tokens via ToolBuilder onPendingAction), so a changed reference means this turn set one.
+      const pendingActionAtTurnStart = quest.pendingAction;
+      const countVisibleChars = (slots: readonly string[] | undefined) =>
+        (slots ?? [])
+          .map(slot => visibleReplyText(slot))
+          .join('')
+          .trim().length;
 
       // Rapid reply handoff: initialize handoff variables outside streaming callback
       let handOff = false;
@@ -4230,6 +4279,8 @@ export class ChatCompletionProcess {
             actualTokenUsage.cacheReadInputTokens = undefined;
             actualTokenUsage.cacheCreationInputTokens = undefined;
             actualTokenUsage.stopReason = undefined;
+            toolCallsSeen = 0;
+            visibleCharsAtLastToolCall = 0;
 
             // Same reasoning for tool-credit reservations: quest.promptMeta.functionCalls
             // is reassigned (not appended) per attempt, but toolCreditsMap is instance
@@ -4443,6 +4494,13 @@ export class ChatCompletionProcess {
                     logger.info(`🔄 [DEBUG] Unknown transition mode: ${transitionMode}`);
                   }
                   // Note: 'enhance' mode would be more complex and could be implemented later
+                }
+
+                // Snapshot before this chunk lands: backends grow toolsUsed only after the
+                // tool-calling stream ends, so this chunk already belongs to the next iteration.
+                if (toolsUsed.length > toolCallsSeen) {
+                  toolCallsSeen = toolsUsed.length;
+                  visibleCharsAtLastToolCall = countVisibleChars(quest.replies);
                 }
 
                 streamedTexts.forEach((text, index) => {
@@ -4734,7 +4792,32 @@ export class ChatCompletionProcess {
         }
 
         // Mark quest as done when all the replies are received
-        quest.status = 'done';
+        quest.status = successStatus();
+
+        const incompleteAnswerNotice = buildIncompleteAnswerNotice({
+          stopped: quest.status === 'stopped',
+          toolCallCount: toolCallsSeen,
+          visibleCharsAfterLastToolCall: countVisibleChars(quest.replies) - visibleCharsAtLastToolCall,
+          stopReason: actualTokenUsage.stopReason,
+          producedNonTextDeliverable:
+            (quest.images?.length ?? 0) > imageCountAtTurnStart ||
+            (quest.pendingAction != null && quest.pendingAction !== pendingActionAtTurnStart),
+        });
+        if (incompleteAnswerNotice) {
+          logger.warn('[IncompleteAnswer] Turn ended without an answer after its last tool call', {
+            questId,
+            model: currentModel.id,
+            stopReason: actualTokenUsage.stopReason,
+            toolCallCount: toolCallsSeen,
+          });
+          // Same shape as setErrorReply in the catch below: the notice is its own slot and
+          // quest.reply carries the visible text. Visible only, because the client's
+          // extractThinking reads reply AND replies, so raw slots here would show the
+          // reasoning twice. The leading break keeps it off the preamble's line, since
+          // extractReplies joins slots with ''.
+          quest.replies = [...(quest.replies ?? []), `\n\n${incompleteAnswerNotice}`];
+          quest.reply = quest.replies.map(slot => visibleReplyText(slot)).join('');
+        }
 
         const modelInferenceTime = Date.now() - modelInferenceStartTime;
         quest.promptMeta!.performance!.modelInferenceTime = modelInferenceTime;
@@ -5473,7 +5556,7 @@ export class ChatCompletionProcess {
           quest.promptMeta.warnings = [...(quest.promptMeta.warnings ?? []), earlyStopStamp.warning];
         }
 
-        quest.status = 'done';
+        quest.status = successStatus();
 
         // Context Telemetry: Finalize and attach to promptMeta
         if (telemetryBuilder) {
@@ -5728,7 +5811,7 @@ export class ChatCompletionProcess {
           }
         }
 
-        quest.status = 'done';
+        quest.status = successStatus();
 
         timer.phase('save');
 
@@ -5833,7 +5916,7 @@ export class ChatCompletionProcess {
         // Post-streaming processing failed, but the reply is already streamed.
         // Do NOT overwrite quest.reply, quest.replies, or quest.status - keep status as 'done'.
         logger.error(`❌ [POST_PROCESS] Error in post-streaming processing for quest ${questId}:`, postProcessError);
-        quest.status = 'done';
+        quest.status = successStatus();
         // Ensure quest is persisted as 'done' even if the error occurred before the normal save
         await saveQuest(quest);
       }
@@ -5859,7 +5942,44 @@ export class ChatCompletionProcess {
 
       quest.promptMeta!.performance!.totalResponseTime = totalResponseTime;
       quest.promptMeta!.generatedAt = new Date().toISOString();
-      quest.reply = (err as Error).message;
+      // extractReplies (client) prefers a non-empty replies[] over reply, so a stale partial
+      // replies array left behind by the failed run (e.g. an unclosed '<think>' block) would
+      // otherwise outrank this error message and the user sees a blank turn instead of the
+      // error (#3223). Every branch below that overrides quest.reply must go through this so
+      // the two never drift apart across the extra saveQuest calls those branches make.
+      //
+      // A slot that already has real visible text (an answer that streamed before the failure
+      // hit) is kept ahead of the error rather than discarded, joined with no separator to match
+      // extractReplies' own join rule. `quest.reply` mirrors the same joined text rather than
+      // just the error - search indexing, export/curation and the public /api/chat response all
+      // read `.reply` alone and expect the full answer, not a truncated error-only string.
+      //
+      // Snapshotted once, before any call: this catch block calls setErrorReply more than once
+      // on some paths (an unconditional raw-message call up front, then a friendlier message in
+      // the branch below) - reading quest.replies live would pick up the FIRST call's own error
+      // text as if it were streamed content and stack every subsequent message on top of it.
+      const streamedRepliesBeforeError = quest.replies;
+      // The cancel watcher aborting before the first chunk throws here. That is the user's own
+      // Stop, not a failure: end as stopped with whatever streamed rather than an error reply
+      // (the error save below would also overwrite the 'stopped' status).
+      // A failed lookup falls through to the error path below rather than escaping this handler.
+      const stoppedByUser =
+        isAbortError(err) && (await this.db.quests.findByIdWithStatus(questId).catch(() => null))?.status === 'stopped';
+      if (stoppedByUser) {
+        logger.log(`Chat completion was stopped by user for quest ${questId}`);
+        quest.status = 'stopped';
+        finalQuest = await saveQuest(quest);
+        return;
+      }
+      const setErrorReply = (message: string) => {
+        const visiblePartial = (streamedRepliesBeforeError ?? [])
+          .map(r => visibleReplyText(r))
+          .filter(text => text.length > 0);
+        const combined = [...visiblePartial, message];
+        quest.replies = combined;
+        quest.reply = combined.join('');
+      };
+      setErrorReply((err as Error).message);
       quest.type = 'error';
       quest.status = 'done';
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
@@ -5883,7 +6003,7 @@ export class ChatCompletionProcess {
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
         logger.log(`Chat completion was stopped by user for quest ${questId}: ${err.message}`);
-        quest.reply = 'The request was interrupted. Please try sending your message again.';
+        setErrorReply('The request was interrupted. Please try sending your message again.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5898,7 +6018,7 @@ export class ChatCompletionProcess {
         // CloudWatch ERROR to LiveOps/Slack alert path that the backend WARN downgrade
         // was meant to avoid.
         logger.warn(`[Timeout] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
@@ -5906,14 +6026,14 @@ export class ChatCompletionProcess {
       } else if (err instanceof Error && isToolPairingError(err)) {
         // User-friendly error message instead of stuck spinner
         logger.error(`[Tool Pairing Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'I encountered an issue with the conversation history. Please try again or start a new session.';
+        setErrorReply('I encountered an issue with the conversation history. Please try again or start a new session.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);
         return;
       } else if (err instanceof Error && isOverloadedError(err)) {
         logger.error(`[Overloaded Error] Quest ${questId}: ${err.message}`);
-        quest.reply = 'The AI service is currently experiencing high demand. Please try again in a few minutes.';
+        setErrorReply('The AI service is currently experiencing high demand. Please try again in a few minutes.');
         quest.type = 'error';
         quest.status = 'done';
         finalQuest = await saveQuest(quest);

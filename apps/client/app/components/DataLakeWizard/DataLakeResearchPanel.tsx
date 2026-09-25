@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -57,6 +57,8 @@ export interface DataLakeResearchPanelProps {
   onUpdate: (configId: string, input: ResearchConfigInput) => void;
   onDelete: (configId: string) => void;
   onStartRun: (configId: string) => void;
+  /** Whether the open create/edit form holds edits not yet saved, so the host can confirm before closing. */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 /** Every field a string, because that is what a form holds; conversion happens once, at submit. */
@@ -254,10 +256,19 @@ export function DataLakeResearchPanel({
   onUpdate,
   onDelete,
   onStartRun,
+  onDirtyChange,
 }: DataLakeResearchPanelProps) {
   // null = the form is closed; '' = creating; an id = editing that config.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ConfigDraft>(emptyDraft);
+  const [draftBaseline, setDraftBaseline] = useState<ConfigDraft>(emptyDraft);
+  const isDirty =
+    editingId !== null && (Object.keys(draft) as (keyof ConfigDraft)[]).some(key => draft[key] !== draftBaseline[key]);
+  // The cleanup reports clean on unmount too: Joy unmounts an inactive TabPanel, which drops the draft.
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+    return () => onDirtyChange?.(false);
+  }, [isDirty, onDirtyChange]);
 
   // Age-bounded on purpose: this mirrors the server's own active-run count, so the button unlocks
   // for exactly the lakes a POST would be accepted for rather than staying dead on an abandoned row.
@@ -267,10 +278,12 @@ export function DataLakeResearchPanel({
 
   const openCreate = () => {
     setDraft(emptyDraft());
+    setDraftBaseline(emptyDraft());
     setEditingId('');
   };
   const openEdit = (config: IDataLakeResearchConfigDocument) => {
     setDraft(draftFromConfig(config));
+    setDraftBaseline(draftFromConfig(config));
     setEditingId(config.id);
   };
   const closeForm = () => setEditingId(null);

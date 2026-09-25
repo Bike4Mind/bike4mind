@@ -19,6 +19,7 @@ import SendToDataLakeModal from '@client/app/components/DataLakeWizard/SendToDat
 import MFAEnforcementWrapper from '../components/auth/MFAEnforcementWrapper';
 import EmailVerificationBanner from '@client/app/components/EmailVerificationBanner';
 import CommandPalette from '../components/CommandPalette';
+import { useDataLakeBatchCompletionSync } from '@client/app/hooks/data/dataLakeWizard';
 
 interface ProviderBundleProps {
   children: ReactNode;
@@ -53,6 +54,11 @@ export const UIProviders: React.FC<{ children: ReactNode }> = ({ children }) => 
 );
 
 export const ProviderBundle: React.FC<ProviderBundleProps> = ({ children }) => {
+  // Nonvisual - mounted here rather than DataLakeUploadIndicator (Notebook-layout-only) so it
+  // subscribes on every route that carries the upload wizard, including standalone premium
+  // routes that render ProviderBundle without NotebookLayout. See its own doc comment.
+  useDataLakeBatchCompletionSync();
+
   return (
     <CoreDataProviders>
       <SessionProviders>

@@ -35,6 +35,15 @@ interface DataLakeArticlePanelProps {
    */
   canManage?: boolean;
   /**
+   * Whether the caller may REBUILD this lake's passages, which is what the per-file Re-process
+   * button actually invokes (`POST /api/files/reprocess` authorizes on `assertLakeRebuildAccess`).
+   * Separate from `canManage` because the two deliberately disagree for a fallback (built-in) lake:
+   * it has no document to manage so `canManage` is always false, but an admin may still rebuild it.
+   * Gating Re-process on `canManage` hid it from the one caller the server grants it to. Mirrors
+   * how LakeInfoPanel gates the whole-lake "Rebuild passages" sibling. Absent -> hidden (fail-safe).
+   */
+  canRebuild?: boolean;
+  /**
    * Whether the caller may DESTROY this document - one rung narrower than `canManage`: a curator or
    * org admin manages membership, but permanent deletion needs lake ownership AND ownership of the
    * file itself (or platform admin), which is exactly what `purgeDataLakeDocument` enforces. Separate
@@ -56,6 +65,7 @@ export default function DataLakeArticlePanel({
   dataLakeId,
   lakeName,
   canManage,
+  canRebuild,
   canPurge,
   onAskAbout,
   onRemoved,
@@ -115,25 +125,39 @@ export default function DataLakeArticlePanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {title}
           </Typography>
-          {/* These mutate lake content, so they are owner-or-admin only (the backend enforces the
-              same). Hidden when viewing a read-only lake. Remove unpicks lake membership and is
-              reversible; Delete permanently destroys the document everywhere and is not. */}
+          {/* Re-process is gated on canRebuild, NOT canManage - one rung WIDER than its neighbours,
+              unlike every other narrowing on this pane. It re-derives chunks from bytes already
+              stored and mutates no lake document, which is why the server authorizes it on
+              `assertLakeRebuildAccess` rather than manage rights. For a fallback (built-in) lake
+              those two flags deliberately disagree - canManage is always false, canRebuild is the
+              admin - so the shared wrapper hid this from the one caller the server grants it to.
+              !!: an absent flag (rolling-deploy skew against an older server) must read as false,
+              matching how LakeInfoPanel coerces the same flag for the whole-lake sibling. */}
+          {!!canRebuild && (
+            <Tooltip title="Re-run chunking + vectorization" size="sm">
+              <Button
+                size="sm"
+                variant="outlined"
+                color="neutral"
+                data-testid={`datalake-reprocess-btn-${file.id}`}
+                startDecorator={<RefreshIcon sx={{ fontSize: 16 }} />}
+                loading={reprocess.isPending}
+                onClick={() => reprocess.mutate(file.id)}
+                sx={{ flexShrink: 0, fontSize: '13px' }}
+              >
+                Re-process
+              </Button>
+            </Tooltip>
+          )}
+          {/* Remove and Delete stay on canManage: both mutate lake MEMBERSHIP or the document
+              itself, which a fallback lake has neither of - the server refuses both with
+              `assertLakeWritable`. Remove unpicks membership and is reversible; Delete permanently
+              destroys the document everywhere and is not. Do NOT hoist canPurge up alongside
+              Re-process: it already ORs in isAdmin, so it is true for exactly the admin-on-a-
+              fallback-lake case above, and would offer a red permanent-delete that 400s only after
+              they have confirmed it. */}
           {canManage && (
             <>
-              <Tooltip title="Re-run chunking + vectorization" size="sm">
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  color="neutral"
-                  data-testid={`datalake-reprocess-btn-${file.id}`}
-                  startDecorator={<RefreshIcon sx={{ fontSize: 16 }} />}
-                  loading={reprocess.isPending}
-                  onClick={() => reprocess.mutate(file.id)}
-                  sx={{ flexShrink: 0, fontSize: '13px' }}
-                >
-                  Re-process
-                </Button>
-              </Tooltip>
               <Tooltip title="Remove this file from the data lake" size="sm">
                 <Button
                   size="sm"

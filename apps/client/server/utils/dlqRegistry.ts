@@ -211,6 +211,12 @@ const DLQ_REGISTRY = [
     sourceQueue: 'lakeMemoryQueue',
   },
   {
+    label: 'lake-inconsistency-model',
+    displayName: 'Lake Model Inconsistency Detection',
+    application: 'DataLakeManagement',
+    sourceQueue: 'lakeInconsistencyModelQueue',
+  },
+  {
     label: 'drive-lake-ingest',
     displayName: 'Drive Lake Ingest',
     application: 'DataLakeManagement',

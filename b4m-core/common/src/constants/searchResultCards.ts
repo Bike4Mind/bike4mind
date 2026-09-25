@@ -1,3 +1,6 @@
+import { LOCATION_MAP_LANGUAGE, locationMapFallbackMarkdown, placesFromCitables } from './locationMap';
+import type { CitableSource } from '../types/entities/CitableSourceTypes';
+
 /**
  * The fence language the model writes to place image cards inline in a reply.
  *
@@ -27,12 +30,20 @@ export const SEARCH_RESULT_CARDS_LANGUAGE = 'b4m_cards';
 // fence and everything up to (and past) the next unrelated ``` would be deleted along with it.
 // Captures the indent and the backtick run length so the matching close can require the same
 // (CommonMark: closing fence must be >= the opening fence's backtick count).
-const FENCE_OPEN_RE = new RegExp('(^|\\n)([ \\t]{0,3})(`{3,})' + SEARCH_RESULT_CARDS_LANGUAGE + '\\b[^\\n]*(\\n|$)');
+const FENCE_OPEN_RE = new RegExp(
+  '(^|\\n)([ \\t]{0,3})(`{3,})(' + SEARCH_RESULT_CARDS_LANGUAGE + '|' + LOCATION_MAP_LANGUAGE + ')\\b[^\\n]*(\\n|$)'
+);
 
 /**
  * Removes every ```` ```b4m_cards ... ``` ```` fenced block from reply markdown, so a surface that
  * cannot render cards (export, download, copy, publish, Slack delivery, notebook curation, the
  * CLI, quest export, ...) never shows the user raw model-authored card JSON instead.
+ *
+ * A ```` ```b4m_map ``` ```` block is rewritten rather than removed: its places become a markdown
+ * list with "open in maps" links (locationMapFallbackMarkdown), since the map usually replaces the
+ * list the model would otherwise have written in prose. Pass the reply's `citables` so those
+ * entries resolve against the stored provider places, same as the live widget - without them, a
+ * `b4m_map` block always rewrites to nothing (safe default: no citables, no unverified names).
  *
  * Handles an unclosed fence (a truncated/streamed reply persisted mid-block) by dropping from the
  * opening fence to end of string, rather than leaving a dangling JSON blob in the output.
@@ -57,7 +68,8 @@ const FENCE_OPEN_RE = new RegExp('(^|\\n)([ \\t]{0,3})(`{3,})' + SEARCH_RESULT_C
  *   - apps/client/app/utils/replyDownloads.ts (skips the fence by language name rather than
  *     calling this function - not a caller either, listed for completeness)
  */
-export function stripSearchResultCardFences(markdown: string): string {
+export function stripSearchResultCardFences(markdown: string, citables?: CitableSource[]): string {
+  const placesById = placesFromCitables(citables);
   let result = '';
   let rest = markdown;
   for (;;) {
@@ -81,6 +93,9 @@ export function stripSearchResultCardFences(markdown: string): string {
       // Unclosed fence: drop everything from the opening fence to EOF rather than leak a
       // dangling JSON blob from a truncated/streamed reply.
       break;
+    }
+    if (openMatch[4] === LOCATION_MAP_LANGUAGE) {
+      result += locationMapFallbackMarkdown(afterOpenLine.slice(0, closeMatch.index), placesById);
     }
     rest = afterOpenLine.slice(closeMatch.index + closeMatch[0].length);
   }

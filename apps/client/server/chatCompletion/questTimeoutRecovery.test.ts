@@ -50,6 +50,22 @@ describe('resolveQuestTimeoutRecovery', () => {
     });
   });
 
+  it('treats an unclosed <think> block as no content, not a real answer (#3223)', () => {
+    // A process killed mid-stream can leave behind nothing but an unclosed reasoning marker -
+    // that is real text (a bare truthy check would count it), but visibleReplyText hides it
+    // entirely, so the recovery must still synthesize the timeout error.
+    expect(resolveQuestTimeoutRecovery(quest({ replies: ['<think>some hidden reasoning'] }), NOW)).toEqual({
+      status: 'done',
+      type: 'error',
+      reply: 'This request timed out. The server did not respond in time. Please try again.',
+    });
+    expect(resolveQuestTimeoutRecovery(quest({ reply: '<think>some hidden reasoning' }), NOW)).toEqual({
+      status: 'done',
+      type: 'error',
+      reply: 'This request timed out. The server did not respond in time. Please try again.',
+    });
+  });
+
   it('does not recover exactly at the threshold (strictly older required)', () => {
     const exactlyAtThreshold = new Date(NOW - QUEST_TIMEOUT_THRESHOLD_MS);
     expect(resolveQuestTimeoutRecovery(quest({ updatedAt: exactlyAtThreshold }), NOW)).toBeNull();

@@ -70,14 +70,12 @@ export function DataLakeProposalsPanel({
   }
 
   if (!proposals?.length) {
-    // Reachable now: the tab stays put for as long as the modal is open, so finishing the last
-    // decision lands here instead of silently bouncing the reviewer into the Settings form.
     return (
       <Stack spacing={1} data-testid="datalake-proposals-empty">
-        <Typography level="body-sm">All caught up - nothing is waiting for review.</Typography>
+        <Typography level="body-sm">Nothing is waiting for review.</Typography>
         <Typography level="body-xs" textColor="text.tertiary">
-          When a research run finds something for this lake it appears here first. Nothing reaches the lake until you
-          approve it.
+          Proposals arrive when a research run finds sources for this lake. Set one up and run it from the Research tab;
+          anything it finds lands here first, and nothing reaches the lake until you approve it.
         </Typography>
       </Stack>
     );

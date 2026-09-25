@@ -19,7 +19,7 @@ import {
   type PublishUser,
   type SandboxAsset,
 } from '@server/services/publish';
-import { stripSearchResultCardFences } from '@bike4mind/common';
+import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 import { getClientIp } from '@server/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
@@ -79,7 +79,7 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * gated on `source.kind` - a fabfile body never contains this fence, so stripping is a no-op.
  */
 function replyBodyForExport(artifact: PublishedArtifactLean): string {
-  return stripSearchResultCardFences(artifact.renderedBody ?? '');
+  return stripSearchResultCardFences(artifact.renderedBody ?? '', artifact.citables);
 }
 
 /**
@@ -612,6 +612,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       canFrameArtifacts,
       exportFormats,
       sharedBy: ownerName ?? undefined,
+      // A share-link holder is already authorized to see everything on this page, and a
+      // signed-in viewer already has an account - the prompt is only for an anonymous
+      // visitor who arrived at a plain public link.
+      signupPrompt: !isShare && !req.user,
     });
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
@@ -1305,6 +1309,9 @@ interface PublishedArtifactLean {
   storageKeyPrefix: string;
   manifest: Array<{ path: string; mimeType: string }>;
   renderedBody?: string;
+  /** Snapshot of the source reply's citables, so a `b4m_map` fence in `renderedBody` resolves
+   *  even after the source Quest changes or is deleted. Reply source only. */
+  citables?: CitableSource[];
   source: { kind: 'bundle' | 'reply' | 'fabfile' };
   sha256Index?: string;
   versions?: Array<{ sha256Index: string }>;
@@ -1619,6 +1626,14 @@ function renderViewerPage(
     standalone?: boolean;
     /** Display name of the artifact owner, shown in the page header. Omitted when unknown. */
     sharedBy?: string;
+    /**
+     * Show the anonymous-visitor sign-up affordances (header link + prompt card). The
+     * content on this page is already fully delivered either way, so this only controls
+     * whether we invite the visitor to make their own - never whether they can read this
+     * one. False for a share-link viewer (already authorized by the link) and a signed-in
+     * viewer (already has an account); see the call site for the exact condition.
+     */
+    signupPrompt?: boolean;
   }
 ): string {
   const {
@@ -1629,6 +1644,7 @@ function renderViewerPage(
     exportFormats = [],
     standalone = false,
     sharedBy,
+    signupPrompt = false,
   } = opts;
   const body = replyBodyForExport(artifact);
   let contentHtml: string;
@@ -1703,8 +1719,10 @@ function renderViewerPage(
         reportPublicId: artifact.publicId,
       }) + buildExportActionsHtml(selfPath, exportFormats);
 
-  // Soft sign-up gate: shown on served pages only (not standalone exports).
-  const gate = standalone ? null : buildSignupGateHtml();
+  // Sign-up prompt: shown to anonymous, non-share-link viewers only (not standalone
+  // exports, share-link holders, or signed-in viewers - all of whom already have full
+  // access, so there is nothing to invite them past).
+  const gate = standalone || !signupPrompt ? null : buildSignupGateHtml();
   const gateStyles = gate?.styles ?? '';
   const gateHtml = gate?.html ?? '';
 
@@ -1797,7 +1815,7 @@ ${
   </div>
   <div class="b4m-ph-right">
     <span class="b4m-live">Live</span>
-    <a href="/register" class="b4m-ph-share">Sign up</a>
+    ${signupPrompt ? '<a href="/register" class="b4m-ph-share">Sign up</a>' : ''}
   </div>
 </header>`
 }

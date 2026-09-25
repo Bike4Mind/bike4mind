@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { QueryClient } from '@tanstack/react-query';
 import type { IChatHistoryItemDocument } from '@bike4mind/common';
-import { swapOptimisticPromptBubbleId, createOptimisticPromptBubble, appendReplyToLatestOptimisticBubble } from './llm';
+import {
+  swapOptimisticPromptBubbleId,
+  createOptimisticPromptBubble,
+  appendReplyToLatestOptimisticBubble,
+  updateOptimisticQuest,
+} from './llm';
 
 const sessionId = 'sess_abc';
 const queryKey = ['quests', 'session', sessionId];
@@ -148,5 +153,38 @@ describe('swapOptimisticPromptBubbleId', () => {
 
     const otherData = qc.getQueryData(otherKey) as { pages: Array<{ data: IChatHistoryItemDocument[] }> } | undefined;
     expect(otherData?.pages[0].data[0].id).toBe('optimistic-quest-sess_xyz-99999');
+  });
+});
+
+describe('updateOptimisticQuest (same-id re-run)', () => {
+  it("resets the cached quest's status before the request resolves", async () => {
+    const qc = seedQueryClient([makeQuest({ id: 'rerun', status: 'done', replies: ['old answer'] })]);
+    let statusDuringRequest: string | undefined = 'unset';
+    let repliesDuringRequest: string[] | undefined;
+
+    await updateOptimisticQuest(qc, 'rerun', sessionId, { replies: [], status: undefined }, async () => {
+      const [cached] = readQuests(qc);
+      statusDuringRequest = cached.status;
+      repliesDuringRequest = cached.replies;
+      return { quest: makeQuest({ id: 'rerun', status: 'running' }), session: { id: sessionId } as never };
+    });
+
+    expect(statusDuringRequest).toBeUndefined();
+    expect(repliesDuringRequest).toEqual([]);
+    expect(readQuests(qc)[0].status).toBe('running');
+  });
+
+  it('still writes the error state when the request fails', async () => {
+    const qc = seedQueryClient([makeQuest({ id: 'rerun', status: 'done' })]);
+
+    await expect(
+      updateOptimisticQuest(qc, 'rerun', sessionId, { status: undefined }, async () => {
+        throw new Error('boom');
+      })
+    ).rejects.toThrow('boom');
+
+    const [cached] = readQuests(qc);
+    expect(cached.status).toBe('done');
+    expect(cached.replies?.[0]).toContain('**Error:**');
   });
 });

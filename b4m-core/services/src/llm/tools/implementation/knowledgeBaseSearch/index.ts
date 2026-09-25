@@ -23,6 +23,7 @@ import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts
 import { membershipOrgIdsForTurn } from '../../../../dataLakeService/membershipOrgIdsForTurn';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
@@ -153,8 +154,12 @@ function formatSemanticResults(
     // (`### Name (ID: ...)`): the conflict note that precedes the block names documents by
     // `fabFileId` alone, and without it on the heading the model has no way to map a named id back
     // to a passage it can read.
+    //
+    // Dated from the document's own vintage (#3048) when it has one, appended after the
+    // parenthetical rather than folded into it - the leading tokens of this shape are what
+    // defangRetrievedContent matches on. Never from `createdAt` (#3047).
     return (
-      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})\n` +
+      `${i + 1}. **${toContentLabel(prettyFileName(r.fileName))}** (ID: ${r.fileId}, relevance ${r.score.toFixed(2)})${documentDateClause(r.documentDate)}\n` +
       text
     );
   });

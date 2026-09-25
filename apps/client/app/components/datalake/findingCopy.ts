@@ -17,6 +17,7 @@ export const FINDING_KIND_LABEL: Record<InconsistencyKind, string> = {
   'metric-disagreement': 'Numbers disagree',
   'relationship-conflict': 'Relationship conflict',
   'expired-claim': 'Expired claim',
+  'narrative-contradiction': 'Narrative contradiction',
 };
 
 export const FINDING_KIND_HINT: Record<InconsistencyKind, string> = {
@@ -25,6 +26,7 @@ export const FINDING_KIND_HINT: Record<InconsistencyKind, string> = {
   'relationship-conflict':
     'The same organization is described as a customer in one document and a prospect in another.',
   'expired-claim': 'A dated claim whose year has already passed.',
+  'narrative-contradiction': 'Two documents make incompatible claims in ordinary prose.',
 };
 
 export const FINDING_STATUS_LABEL: Record<LakeFindingStatus, string> = {

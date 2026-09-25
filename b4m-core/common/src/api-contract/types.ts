@@ -143,9 +143,13 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * Schema for dynamic path segments (e.g. `{id}` in `/api/sessions/{id}`).
    * Values arrive via Next.js's file-based routing convention as `req.query`
    * (Next merges route params into `query`, it does not populate `req.params`),
-   * so the adapter validates `req.query` against this schema, not `req.params`.
-   * Field names must match the `{name}` placeholders in `path`. Must be a plain
-   * ZodObject - that is what zod-to-openapi's `request.params` accepts.
+   * so the adapter validates this schema against `req.query`, not `req.params` -
+   * but only this schema's own declared keys, picked out of `req.query` first
+   * (see the `queryParams` doc below for why): a `.strict()` or `.passthrough()`
+   * modifier on `pathParams` has no effect, since only the exact `{name}`
+   * segments it declares ever reach it. Field names must match the `{name}`
+   * placeholders in `path`. Must be a plain ZodObject - that is what
+   * zod-to-openapi's `request.params` accepts.
    *
    * Next-only today: `defineNextRoute.ts`'s adapter is the only one that reads this
    * field. The Lambda adapter (`server/cli/defineLambdaRoute.ts`) does not validate
@@ -153,6 +157,34 @@ export type EndpointContract<ReqSchema extends z.ZodTypeAny = z.ZodTypeAny> = {
    * param validation there until that adapter is taught to read `pathParams` too.
    */
   pathParams?: z.ZodObject<z.ZodRawShape>;
+  /**
+   * Schema for the real `?key=value` query string (`in: query` in the generated
+   * spec); `pathParams` covers `{id}`-style segments instead (`in: path`). Both
+   * arrive on Next's merged `req.query`, but the adapter scopes them ASYMMETRICALLY,
+   * not by stripping undeclared keys from both alike: `pathParams` is picked down to
+   * exactly its own declared keys (it is a fixed, closed set - only the `{name}`
+   * segments in `path` are ever populated), while `queryParams` only has the
+   * sibling `pathParams`'s declared keys excluded, nothing else - so a real,
+   * undeclared query key reaches it exactly as the schema itself would treat it: a
+   * plain `z.object` strips it, `.strict()` rejects it (422), `.passthrough()`
+   * retains it. Never name the same field in both `pathParams` and `queryParams`
+   * (`defineEndpoint` throws on that overlap; Next would otherwise let the path
+   * segment silently win over the query value). Must be a plain ZodObject - that is
+   * what zod-to-openapi's `request.query` accepts.
+   *
+   * Values arrive as `string` (or `string[]` for a repeated key): use
+   * `z.coerce.number()` for numbers, and never `z.coerce.boolean()` for a flag
+   * (`Boolean('false') === true`) - see `queryBool` in `schemas/query.ts`.
+   * `registerContract` corrects zod-to-openapi's own required/nullable derivation
+   * for a bare `z.coerce.*` field before registration (see `undoCoercionForOpenApi`
+   * in `registerContract.ts`), so the generated spec matches the real runtime
+   * guarantee - see `registerContract.test.ts`.
+   *
+   * Next-only today: `defineNextRoute.ts`'s adapter is the only one that reads this
+   * field. The Lambda adapter (`server/cli/defineLambdaRoute.ts`) does not validate
+   * query params yet, matching its existing `pathParams` gap.
+   */
+  queryParams?: z.ZodObject<z.ZodRawShape>;
   /**
    * Optional OpenAPI-representable projection of `request`, used ONLY for the
    * generated spec. Needed when `request` carries wrappers zod-to-openapi cannot

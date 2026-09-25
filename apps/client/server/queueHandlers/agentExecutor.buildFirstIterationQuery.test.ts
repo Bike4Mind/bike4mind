@@ -565,6 +565,96 @@ describe('buildFirstIterationQuery unreadable-file marking', () => {
   });
 });
 
+describe('buildFirstIterationQuery inline-delivery marking', () => {
+  // Content materialization appends attached-file content after this preamble. Before this marking
+  // the header told the agent to fetch EVERY file with the reader tool, so a small attached HTML
+  // file whose full text was already in the message still got a knowledge-base round trip.
+  const build = (
+    files: IFabFileDocument[],
+    inlined: { inlinedFileIds: string[]; fullyInlinedFileIds: string[] },
+    tools: readonly string[] = TOOLS_WITH_READER
+  ) => {
+    const logger = makeLogger();
+    const repo = makeRepo(vi.fn().mockResolvedValue(files));
+    return buildFirstIterationQuery(
+      BASE_QUERY,
+      { userId: 'u1', messageFileIds: files.map(f => f.id) },
+      [],
+      logger,
+      repo,
+      SCOPE,
+      tools,
+      inlined.inlinedFileIds,
+      inlined.fullyInlinedFileIds
+    ).then(result => ({ result, logger }));
+  };
+  const lineFor = (result: string, id: string) => result.split('\n').find(l => l.includes(`fabFileId: ${id}`));
+
+  it('drops the reader instruction entirely when every listed file is fully inlined', async () => {
+    const { result } = await build([makeFile('page', 'page.html', 'text/html', { chunkCount: 0 })], {
+      inlinedFileIds: ['page'],
+      fullyInlinedFileIds: ['page'],
+    });
+
+    expect(result).toContain('full content of every file listed here is included below');
+    expect(result).not.toContain(CONTENT_READ_TOOL);
+    expect(lineFor(result, 'page')).toContain('[CONTENT INCLUDED IN FULL below');
+  });
+
+  it('marks a fully inlined file and keeps the reader pointer for a file that was not inlined', async () => {
+    const { result } = await build([makeFile('page', 'page.html', 'text/html'), makeFile('spec', 'spec.pdf')], {
+      inlinedFileIds: ['page'],
+      fullyInlinedFileIds: ['page'],
+    });
+
+    expect(lineFor(result, 'page')).toContain('CONTENT INCLUDED IN FULL');
+    expect(lineFor(result, 'spec')).not.toContain('[');
+    expect(result).toContain(`do not call ${CONTENT_READ_TOOL} on it`);
+    expect(result).toContain(`these fabFileId values with ${CONTENT_READ_TOOL}`);
+    expect(result).not.toContain('full content of every file');
+  });
+
+  it('never claims an excerpt is the whole file', async () => {
+    const { result } = await build([makeFile('big', 'big.md', 'text/markdown')], {
+      inlinedFileIds: ['big'],
+      fullyInlinedFileIds: [],
+    });
+
+    expect(lineFor(result, 'big')).toContain(`PARTIAL CONTENT INCLUDED below - use ${CONTENT_READ_TOOL}`);
+    // Nothing is marked in full, so the header must not point at a mark no line carries.
+    expect(result).not.toContain('CONTENT INCLUDED IN FULL');
+    expect(result).not.toContain('full content of every file');
+  });
+
+  it('without a reader, does not call inlined content unavailable and marks only the file that was not inlined', async () => {
+    const { result, logger } = await build(
+      [makeFile('page', 'page.html', 'text/html'), makeFile('spec', 'spec.pdf')],
+      { inlinedFileIds: ['page'], fullyInlinedFileIds: ['page'] },
+      TOOLS_WITHOUT_READER
+    );
+
+    expect(result).not.toContain('METADATA ONLY');
+    expect(result).not.toContain(CONTENT_READ_TOOL);
+    expect(lineFor(result, 'page')).toContain('CONTENT INCLUDED IN FULL');
+    expect(lineFor(result, 'spec')).toContain('NOT READABLE: this run has no file-reading tool');
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[FileContext] Files are attached but this run has no content-reading tool',
+      expect.anything()
+    );
+  });
+
+  it('does not warn about a missing reader when everything it would read is already inlined', async () => {
+    const { result, logger } = await build(
+      [makeFile('page', 'page.html', 'text/html')],
+      { inlinedFileIds: ['page'], fullyInlinedFileIds: ['page'] },
+      TOOLS_WITHOUT_READER
+    );
+
+    expect(result).toContain('full content of every file listed here is included below');
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+});
+
 describe('maybeBuildFirstIterationQuery (gate)', () => {
   // The gate is the headline correctness guarantee of the file-context feature:
   // the preamble must only appear in iteration 0 of a new execution. Every
@@ -635,6 +725,25 @@ describe('maybeBuildFirstIterationQuery (gate)', () => {
 
     // Proves the gate is not dropping the toolbelt on the floor and defaulting to "readable".
     expect(result).toContain('METADATA ONLY');
+  });
+
+  it('forwards fullyInlinedFileIds through the gate', async () => {
+    const repo = makeRepo(vi.fn().mockResolvedValue([makeFile('id1', 'page.html', 'text/html')]));
+    const logger = makeLogger();
+
+    const result = await maybeBuildFirstIterationQuery(
+      {
+        ...baseArgs,
+        isNewExecution: true,
+        iterationIndex: 0,
+        inlinedFileIds: ['id1'],
+        fullyInlinedFileIds: ['id1'],
+      },
+      logger,
+      repo
+    );
+
+    expect(result).toContain('CONTENT INCLUDED IN FULL');
   });
 
   describe('lakeAccess (#1576 attachment door lake-membership arm)', () => {

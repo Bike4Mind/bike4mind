@@ -21,6 +21,7 @@ import {
   isImageServeable,
   ORG_FEEDBACK_SUMMARY_JOB_TYPE,
   stripSearchResultCardFences,
+  type CitableSource,
 } from '@bike4mind/common';
 import { OrgFeedbackSummaryPayload, runOrgFeedbackSummary } from '@server/queueHandlers/orgFeedbackSummary';
 import { getSubQuestStatusIcon } from '@client/app/utils/subQuestStatusPresentation';
@@ -451,7 +452,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
             markdown += `_Response content unavailable._\n\n`;
           } else {
             const replyText = extractQuestReply(chatItem);
-            markdown += replyText ? `${stripSearchResultCardFences(replyText)}\n\n` : `_No response content._\n\n`;
+            const citables = (chatItem.promptMeta as { citables?: CitableSource[] } | undefined)?.citables;
+            markdown += replyText
+              ? `${stripSearchResultCardFences(replyText, citables)}\n\n`
+              : `_No response content._\n\n`;
 
             // Collect images from this chat item
             const images = (chatItem.images as string[]) || [];

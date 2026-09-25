@@ -33,9 +33,15 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBatchUpload, useBatchProgressListener, useCreateLakeFromDrive } from './dataLakeWizard';
+import {
+  useBatchUpload,
+  useBatchProgressListener,
+  useCreateLakeFromDrive,
+  useDataLakeBatchCompletionSync,
+} from './dataLakeWizard';
 import { slugifyDataLakeName } from './dataLakeSlug';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import type { DataLakeStatus } from '@bike4mind/common';
 
 const mountHook = <T>(hook: () => T) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -69,7 +75,7 @@ const seedWizardFile = () =>
     ],
   });
 
-type SeedOpts = { names?: string[]; targetLake?: { id: string; slug: string } | null };
+type SeedOpts = { names?: string[]; targetLake?: { id: string; slug: string; status?: DataLakeStatus } | null };
 
 const seedWizard = ({ names = ['a.txt'], targetLake = null }: SeedOpts = {}) =>
   useDataLakeWizardStore.setState({
@@ -459,6 +465,60 @@ describe('useBatchUpload lake targeting', () => {
 
     expect(presignedLakeRef()).toBe('existing1');
   });
+
+  /**
+   * #3222: the Complete screen discloses a non-serving lake by reading `uploadProgress.lakeStatus`.
+   * Asserted on the STORE, not on createWizardLake's return value - a status that is read from the
+   * response but never reaches the store leaves the screen exactly as silent as before, and a
+   * component test that seeds `lakeStatus` by hand would still pass.
+   */
+  it('records the created lake status, so the Complete screen can disclose a draft', async () => {
+    apiPut.mockResolvedValue({ data: { success: true } });
+    installApiPostRouter();
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', status: 'draft' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        const files = (body?.files ?? []).map(f => ({
+          fileId: `id-${f.fileName}`,
+          fileKey: `key-${f.fileName}`,
+          url: `https://s3.example.com/${f.fileName}`,
+          fileName: f.fileName,
+        }));
+        return Promise.resolve({ data: { files } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    // Asserted at 'complete', the state the screen actually renders - not at the moment the status
+    // is written. The run sets `lakeStatus` early and flips to 'complete' later, so a setter that
+    // replaced rather than merged would still pass a mid-flight assertion and ship a silent screen.
+    await waitFor(() => expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete'));
+    expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
+  });
+
+  // Append mode never calls create, so the status has to come off the target lake - otherwise adding
+  // files to a draft lake reports success and discloses nothing.
+  it('records the target lake status in append mode', async () => {
+    apiPut.mockResolvedValue({ data: { success: true } });
+    installApiPostRouter();
+    seedWizard({ targetLake: { id: 'existing1', slug: 'existing-slug', status: 'draft' } });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete'));
+    expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
+    expect(postCall('/api/data-lakes')).toBeUndefined();
+  });
 });
 
 describe('useBatchUpload rollback (#816)', () => {
@@ -482,12 +542,18 @@ describe('useBatchUpload rollback (#816)', () => {
     act(() => result.current.mutate());
     await waitFor(() => expect(result.current.isError).toBe(true));
 
-    // Empty new lake archived (cascade tears down its FabFiles + batch).
+    // Empty new lake archived (cascade cancels the batch and soft-archives its FabFiles).
     expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
     // Batch driven to a terminal 'failed' state, not left mid-flight.
     expect(putCall('/api/data-lakes/batches/batch1')?.[1]).toMatchObject({ status: 'failed' });
-    // Never closes out as if the upload landed, and never reports success.
-    expect(postCall('/api/data-lakes/batches/upload-complete')).toBeUndefined();
+    // upload-complete IS called here, but only to soft-delete the orphan FabFiles before the
+    // archive sweeps them (see deleteFailedUploadOrphans). "Closing out as if the upload landed"
+    // is the completion accounting - failedFiles/failedFileNames - and that must not be resent:
+    // the PUT above already stamped it, and upload-complete would $inc it a second time.
+    expect(postCall('/api/data-lakes/batches/upload-complete')?.[1]).toEqual({
+      batchId: 'batch1',
+      failedFileIds: ['id-a.txt'],
+    });
     expect(toastMock.success).not.toHaveBeenCalled();
   });
 
@@ -667,6 +733,293 @@ describe('useBatchUpload rollback (#816)', () => {
 });
 
 /**
+ * A retry after a total upload failure (create mode) used to always archive the new lake
+ * and forget its id, so the retry's second `createWizardLake` call collided with the archived
+ * lake's still-held tag prefix and the wizard reported it was blocked, with no visible lake to
+ * delete. The fix remembers the archived lake and, when the retry's tag prefix hasn't changed,
+ * restores and reuses it instead of creating a second one.
+ */
+describe('useBatchUpload retry reuse after a total upload failure', () => {
+  beforeEach(() => {
+    apiPost.mockReset();
+    apiPut.mockReset().mockResolvedValue({ data: { success: true } });
+    apiDelete.mockReset().mockResolvedValue({ data: { success: true } });
+    uploadFileToUrlMock.mockReset();
+    installApiPostRouter();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('a same-prefix retry restores and uploads into the lake the failed attempt archived', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'test:',
+      organizationId: undefined,
+    });
+
+    // Retry: nothing about the config changed, only the upload itself now succeeds.
+    apiPost.mockClear();
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // No second create - the retry restored the archived lake instead.
+    expect(postCall('/api/data-lakes')).toBeUndefined();
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'unarchive' });
+    const presign = postCall('/api/files/generate-presigned-urls-batch');
+    expect((presign?.[1] as { dataLakeSlug: string }).dataLakeSlug).toBe('lake1');
+    // Files landed, so the lake is no longer held as a reuse candidate.
+    expect(useDataLakeWizardStore.getState().recoverableLake).toBeNull();
+  });
+
+  /**
+   * The archive sweeps the lake's members by meta-tag with no status filter, and the retry's
+   * restore reverses exactly that set - so a 0-chunk orphan still live when the lake is archived
+   * comes BACK as a member with no bytes. This asserts the request that prevents it, rather than
+   * the store effect, because the request is the whole fix.
+   */
+  it('soft-deletes the failed files 0-chunk orphans server-side BEFORE archiving the lake', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt', 'b.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    const cleanup = postCall('/api/data-lakes/batches/upload-complete');
+    expect(cleanup?.[1]).toEqual({ batchId: 'batch1', failedFileIds: ['id-a.txt', 'id-b.txt'] });
+    // failedFiles is an $inc and failedFileNames a $set on the batch the PUT above already
+    // stamped - re-sending either here would double-count the same failures.
+    expect(cleanup?.[1]).not.toHaveProperty('failedFiles');
+    expect(cleanup?.[1]).not.toHaveProperty('failedFileNames');
+
+    // Order matters: once the archive has stamped filesArchivedAt, a still-live orphan is inside
+    // the set the retry's restore brings back.
+    const cleanupOrder = apiPost.mock.invocationCallOrder[apiPost.mock.calls.indexOf(cleanup!)];
+    const archiveOrder = apiDelete.mock.invocationCallOrder[0];
+    expect(cleanupOrder).toBeLessThan(archiveOrder);
+  });
+
+  it('a retry with a changed tag prefix creates a fresh lake instead of restoring the old one', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'test:',
+      organizationId: undefined,
+    });
+
+    // The user picked a different tag prefix on Configure before retrying - nothing claims
+    // it, so a fresh create is exactly as valid as a reuse would have been. The create must
+    // answer with a DIFFERENT id than the archived lake's, as a real one would: reusing 'lake1'
+    // here would hide whether the code distinguishes the two lakes at all.
+    useDataLakeWizardStore.getState().setConfig({ tagPrefix: 'other:' });
+    apiPost.mockClear();
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake2' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch2' } });
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        const files = (body?.files ?? []).map(f => ({
+          fileId: `id-${f.fileName}`,
+          fileKey: `key-${f.fileName}`,
+          url: `https://s3.example.com/${f.fileName}`,
+          fileName: f.fileName,
+        }));
+        return Promise.resolve({ data: { files } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(postCall('/api/data-lakes')).toBeDefined();
+    expect(apiPost.mock.calls.some(([url]) => url === '/api/data-lakes/lake1/lifecycle')).toBe(false);
+    // The files landed in a DIFFERENT lake; lake1 is still archived and still holds 'test:'.
+    // Forgetting it here is what would leave that prefix stuck for the rest of the session.
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'test:',
+      organizationId: undefined,
+    });
+  });
+
+  /**
+   * Configure stays editable behind the failure ("Back to Configuration"), so the restored lake's
+   * stored settings are the first attempt's. requiredUserTag / requiredEntitlement are access
+   * gates: silently keeping the originals would land the files in a lake gated more weakly than
+   * the user just asked for, with nothing reported.
+   */
+  it('re-applies Configure edits made between attempts onto the restored lake', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    // Back to Configuration: add an access gate and rename, then retry on the same prefix.
+    useDataLakeWizardStore.getState().setConfig({
+      name: 'Renamed Lake',
+      description: 'now described',
+      requiredUserTag: 'LegalTeam',
+    });
+    apiPost.mockClear();
+    apiPut.mockClear();
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'unarchive' });
+    expect(putCall('/api/data-lakes/lake1')?.[1]).toEqual({
+      name: 'Renamed Lake',
+      description: 'now described',
+      requiredUserTag: 'LegalTeam',
+      // '' is the server's clear sentinel, so a gate removed between attempts is removed too.
+      requiredEntitlement: '',
+    });
+  });
+
+  /**
+   * The unarchive landed but the settings sync didn't. Re-issuing the unarchive on the next retry
+   * would hit 'Cannot restore a data lake in active status' - a 400, which is exactly what the
+   * non-404 branch rethrows, so the reuse would wedge permanently on its own side effect.
+   */
+  it('does not re-unarchive an already-restored lake when a later step failed', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    // Retry 1: the unarchive succeeds, the settings sync fails.
+    apiPut.mockReset().mockRejectedValue(new Error('settings write failed'));
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'test:',
+      organizationId: undefined,
+      restored: true,
+    });
+
+    // Retry 2: the lake is already active, so this one must skip straight to the settings sync.
+    apiPost.mockClear();
+    apiPut.mockReset().mockResolvedValue({ data: { success: true } });
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(apiPost.mock.calls.some(([url]) => url === '/api/data-lakes/lake1/lifecycle')).toBe(false);
+    expect(postCall('/api/data-lakes')).toBeUndefined();
+    expect(putCall('/api/data-lakes/lake1')).toBeDefined();
+    expect(useDataLakeWizardStore.getState().recoverableLake).toBeNull();
+  });
+
+  it('falls back to creating fresh when the archived lake was purged (404)', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'test:',
+      organizationId: undefined,
+    });
+
+    // The remembered lake was permanently deleted from the Archived section and fully purged
+    // between attempts - the server answers with a genuine 404, which is the only failure that
+    // means the prefix claim is actually gone.
+    apiPost.mockReset();
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/data-lakes/lake1/lifecycle') {
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status: 404, data: { error: 'Data lake not found' } },
+        });
+      }
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake2' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch2' } });
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        const files = (body?.files ?? []).map(f => ({
+          fileId: `id-${f.fileName}`,
+          fileKey: 'k',
+          url: `https://s3.example.com/${f.fileName}`,
+          fileName: f.fileName,
+        }));
+        return Promise.resolve({ data: { files } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    uploadFileToUrlMock.mockReset().mockResolvedValue(undefined);
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(postCall('/api/data-lakes')).toBeDefined();
+    const presign = postCall('/api/files/generate-presigned-urls-batch');
+    expect((presign?.[1] as { dataLakeSlug: string }).dataLakeSlug).toBe('lake2');
+    expect(useDataLakeWizardStore.getState().recoverableLake).toBeNull();
+  });
+
+  // The lake still exists (e.g. it moved to a status unarchive won't cross, or the call just
+  // failed transiently) - findCollidingPrefixLakes has no status filter, so it still holds the
+  // prefix claim. Falling back to a fresh create here would reproduce the exact collision above,
+  // so this must surface the restore failure instead of masking it with a second doomed create.
+  it('surfaces the restore failure (not a 404) instead of reproducing the collision', async () => {
+    uploadFileToUrlMock.mockRejectedValue(new Error('PUT failed'));
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'test:',
+      organizationId: undefined,
+    });
+
+    apiPost.mockReset();
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes/lake1/lifecycle') {
+        return Promise.reject({
+          isAxiosError: true,
+          response: { status: 400, data: { error: "Cannot restore a data lake in 'deleted' status" } },
+        });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    // No second create attempt - the restore failure propagated instead of being masked.
+    expect(postCall('/api/data-lakes')).toBeUndefined();
+    expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe(
+      "Cannot restore a data lake in 'deleted' status"
+    );
+    // Still remembered - a later retry (once the transient/status issue clears) can try again.
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'test:',
+      organizationId: undefined,
+    });
+  });
+});
+
+/**
  * The fileless commit (#1916): a lake whose only source is a Google Drive folder. Before this the
  * wizard could not produce one at all - the commit path was an upload pipeline that threw on an
  * empty file set - so these cover the create + connect ordering and, above all, that a commit which
@@ -694,6 +1047,10 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     apiPost.mockReset();
     apiPut.mockReset().mockResolvedValue({ data: { success: true } });
     apiDelete.mockReset().mockResolvedValue({ data: { success: true } });
+    // This suite asserts uploadFileToUrlMock is never called (the fileless commit has no upload
+    // step) - reset its call history too, not just the other mocks, so a call left over from
+    // whichever describe block ran immediately before this one can't produce a false positive.
+    uploadFileToUrlMock.mockClear();
     toastMock.error.mockClear();
     toastMock.success.mockClear();
     installApiPostRouter();
@@ -716,6 +1073,22 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     // No files, so nothing that belongs to the upload pipeline should have run.
     expect(postCall('/api/data-lakes/batches')).toBeUndefined();
     expect(uploadFileToUrlMock).not.toHaveBeenCalled();
+  });
+
+  // #3222: the fileless path has its own commit and its own Complete screen, so it needs its own
+  // wire - the batch path's assignment never runs here.
+  it('records the created lake status on the fileless path too', async () => {
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1', status: 'draft' } });
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(useDataLakeWizardStore.getState().uploadProgress.lakeStatus).toBe('draft');
   });
 
   it('lands the wizard on the upload step with a fileless progress record', async () => {
@@ -762,6 +1135,93 @@ describe('useCreateLakeFromDrive (#1916)', () => {
     );
     // Archive succeeded, so the Failed screen is cleared to say the lake is gone.
     expect(useDataLakeWizardStore.getState().uploadProgress.driveRollback).toBe('archived');
+    // Archived with its prefix claim intact, so a same-prefix retry has to restore it - the
+    // Drive-only path hits #3231 exactly like the upload path does without this.
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'drive:',
+      organizationId: undefined,
+    });
+  });
+
+  /**
+   * The fileless commit archives its own lake on a refused connect, so it holds a prefix claim
+   * the same way a failed upload does. Before this it called createWizardLake unconditionally,
+   * so the second attempt collided on that claim and the user was stuck with no visible lake -
+   * #3231 in the Drive path.
+   */
+  it('a same-prefix retry after a refused connect restores the archived lake instead of colliding', async () => {
+    let connectAttempts = 0;
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/drive-sync') {
+        connectAttempts++;
+        // Refuse the first connect, accept the retry.
+        if (connectAttempts === 1) {
+          return Promise.reject(
+            Object.assign(new Error('Request failed'), {
+              isAxiosError: true,
+              response: { status: 409, data: { error: 'This Drive folder is already connected to another data lake' } },
+            })
+          );
+        }
+        return Promise.resolve({ data: { success: true } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({
+      id: 'lake1',
+      tagPrefix: 'drive:',
+      organizationId: undefined,
+    });
+
+    apiPost.mockClear();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // No second create - the archived lake was restored and reused.
+    expect(postCall('/api/data-lakes')).toBeUndefined();
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/lifecycle', { action: 'unarchive' });
+    expect(postCall('/api/data-lakes/drive-sync')?.[1]).toMatchObject({ dataLakeId: 'lake1' });
+    // The commit landed in that lake, so it stops being a reuse candidate.
+    expect(useDataLakeWizardStore.getState().recoverableLake).toBeNull();
+  });
+
+  it('applies Configure edits made before a Drive retry onto the restored lake', async () => {
+    let connectAttempts = 0;
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/drive-sync') {
+        connectAttempts++;
+        if (connectAttempts === 1) {
+          return Promise.reject(
+            Object.assign(new Error('Request failed'), {
+              isAxiosError: true,
+              response: { status: 403, data: { error: 'Not a manager of that folder' } },
+            })
+          );
+        }
+        return Promise.resolve({ data: { success: true } });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedDriveOnly();
+
+    const { result } = mountDriveCommit();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    useDataLakeWizardStore.getState().setConfig({ requiredUserTag: 'LegalTeam' });
+    apiPut.mockClear();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(putCall('/api/data-lakes/lake1')?.[1]).toMatchObject({ requiredUserTag: 'LegalTeam' });
   });
 
   it('still reports the refusal when the rollback archive also fails', async () => {
@@ -991,7 +1451,7 @@ describe('useBatchProgressListener - processingFailedFiles (#1412)', () => {
  * the lake list at SUBMIT time - too early, since ingestion has not run - so completion is the only
  * moment that can refresh it. Without this the count sits stale until a hard refresh.
  */
-describe('useBatchProgressListener - refreshes the lake list on completion', () => {
+describe('useBatchProgressListener - progress status only, no cache invalidation (#3234 follow-up)', () => {
   const seedActiveBatch = () =>
     useDataLakeWizardStore.setState({
       uploadProgress: {
@@ -1027,7 +1487,11 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
   });
 
   it.each(['completed', 'completed_with_errors'] as const)(
-    'invalidates the lake list when the batch reports %s',
+    // This listener unsubscribes as soon as Done (resetWizard) clears currentBatchId - which
+    // happens the moment browser uploads finish, before a still-ingesting batch's completed
+    // message can arrive - so it must not own cache invalidation. That moved to
+    // useDataLakeBatchCompletionSync below, which stays subscribed independent of this store field.
+    'updates progress status to complete on %s, but invalidates nothing',
     status => {
       mountHook(useBatchProgressListener);
       const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
@@ -1036,15 +1500,12 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
         onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', status });
       });
 
-      // `['data-lakes']` is dataLakeKeys.list - asserted as a literal so a rename of the key's VALUE
-      // (not just its name) still fails here rather than silently agreeing with itself.
-      expect(invalidatedKeys()).toContain(JSON.stringify(['data-lakes']));
+      expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('complete');
+      expect(invalidatedKeys()).toEqual([]);
     }
   );
 
-  it('does NOT invalidate the lake list on an ordinary progress tick', () => {
-    // The guard against "just invalidate on every message": mid-ingest the server rollup has not
-    // run yet, so refetching then would re-cache the stale count and cost a request per tick.
+  it('does not invalidate on an ordinary progress tick either', () => {
     mountHook(useBatchProgressListener);
     const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
 
@@ -1052,6 +1513,92 @@ describe('useBatchProgressListener - refreshes the lake list on completion', () 
       onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
     });
 
-    expect(invalidatedKeys()).not.toContain(JSON.stringify(['data-lakes']));
+    expect(invalidatedKeys()).toEqual([]);
+  });
+});
+
+describe('useDataLakeBatchCompletionSync - keeps lake/health/tag-counts/article/file caches in sync with ANY batch completion', () => {
+  let spy: ReturnType<typeof vi.spyOn>;
+
+  const invalidatedKeys = () =>
+    spy.mock.calls.map(([arg]) => JSON.stringify((arg as { queryKey?: unknown })?.queryKey));
+
+  beforeEach(() => {
+    subscribeToAction.mockClear();
+    spy = vi.spyOn(QueryClient.prototype, 'invalidateQueries').mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    spy.mockRestore();
+  });
+
+  it.each(['completed', 'completed_with_errors'] as const)(
+    'invalidates the lake list, health, tag-counts, articles, and files roots on %s',
+    status => {
+      mountHook(useDataLakeBatchCompletionSync);
+      const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+      act(() => {
+        onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', status });
+      });
+
+      // Literal key values, not just names, so a rename of a key's VALUE still fails here rather
+      // than silently agreeing with itself.
+      expect(invalidatedKeys()).toEqual(
+        expect.arrayContaining([
+          JSON.stringify(['data-lakes']),
+          JSON.stringify(['dataLakeHealth']),
+          JSON.stringify(['dataLakeTagCounts']),
+          // #3238 review (onoya): an already-open category/Uncategorized view queries these
+          // independently of the tag-count tree, and was staying stale without this.
+          JSON.stringify(['dataLakeArticles']),
+          JSON.stringify(['dataLakeFiles']),
+        ])
+      );
+    }
+  );
+
+  it('does not invalidate on an ordinary progress tick', () => {
+    // The guard against "just invalidate on every message": mid-ingest the server rollup has not
+    // run yet, so refetching then would re-cache the stale count and cost a request per tick.
+    mountHook(useDataLakeBatchCompletionSync);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({ action: 'data_lake_batch_progress', batchId: 'batch1', chunkedFiles: 1 });
+    });
+
+    expect(invalidatedKeys()).toEqual([]);
+  });
+
+  it('invalidates even with no active batch in the wizard store - the Done/resetWizard regression (#3234)', () => {
+    // Mirrors what actually happens: Done clears currentBatchId to undefined synchronously, before
+    // browser uploads have even finished chunking/vectorizing server-side.
+    useDataLakeWizardStore.setState({
+      uploadProgress: {
+        totalFiles: 0,
+        uploadedFiles: 0,
+        chunkedFiles: 0,
+        vectorizedFiles: 0,
+        failedFiles: 0,
+        failedFileNames: [],
+        processingFailedFiles: 0,
+        status: 'idle',
+        currentBatchId: undefined,
+      },
+    });
+
+    mountHook(useDataLakeBatchCompletionSync);
+    const [, onMessage] = subscribeToAction.mock.calls.at(-1)!;
+
+    act(() => {
+      onMessage({
+        action: 'data_lake_batch_progress',
+        batchId: 'batch-still-ingesting-in-background',
+        status: 'completed',
+      });
+    });
+
+    expect(invalidatedKeys()).toContain(JSON.stringify(['dataLakeTagCounts']));
   });
 });

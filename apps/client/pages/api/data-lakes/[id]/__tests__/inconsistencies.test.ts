@@ -6,15 +6,23 @@ const h = vi.hoisted(() => ({
   recordLakeFindings: vi.fn(),
   update: vi.fn(),
   recordDetected: vi.fn(),
-  listDismissedKeys: vi.fn(async () => []),
+  listByLake: vi.fn(),
+  tryIncrementWithinLimitFixedWindow: vi.fn(),
   loggerWarn: vi.fn(),
   loggerError: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
+  sendToQueue: vi.fn(),
+  getSourceQueueUrl: vi.fn(() => 'https://sqs.test/lakeInconsistencyModelQueue'),
   // The rate limiter is a middleware, so it is only reachable if the mocked chain below actually
-  // RUNS what the route hands to `.use` - see that mock.
+  // RUNS what the route hands to `.use` - see that mock. Model detection uses its own bucket, so
+  // calls are recorded per-bucket rather than in one shared counter.
   rateLimit: vi.fn(),
-  rateLimitOptions: undefined as Record<string, unknown> | undefined,
+  rateLimitCallsByBucket: {} as Record<string, number>,
+  rateLimitOptionsByBucket: {} as Record<string, Record<string, unknown>>,
   isDevelopment: vi.fn(() => false),
+  // Configurable per test: settings this set blocks with a 403, matching requireFeatureEnabled's
+  // real shape - lets the model-only gate be exercised without disabling EnableDataLakes too.
+  blockedFeatureKeys: new Set<string>(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,48 +54,62 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: (options: Record<string, unknown>) => {
-    h.rateLimitOptions = options;
-    return (req: unknown, res: unknown, next: () => unknown) => (h.rateLimit(), next());
+    const bucket = options.bucket as string;
+    h.rateLimitOptionsByBucket[bucket] = options;
+    return (req: unknown, res: unknown, next: () => unknown) => (
+      (h.rateLimitCallsByBucket[bucket] = (h.rateLimitCallsByBucket[bucket] ?? 0) + 1),
+      h.rateLimit(),
+      next()
+    );
   },
 }));
 vi.mock('@server/utils/config', () => ({ isDevelopment: h.isDevelopment }));
-// Must call `next()` now that the chain above actually runs its middlewares - a no-op stub would
-// short-circuit every request before the verb handler.
+// Configurable so the model-only feature gate (EnableLakeModelInconsistencyDetection) can be tested
+// without also disabling EnableDataLakes, which every request passes through first.
 vi.mock('@server/middlewares/featureFlag', () => ({
-  requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => unknown) => next(),
+  requireFeatureEnabled:
+    (key: string) =>
+    (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => unknown } }, next: () => unknown) =>
+      h.blockedFeatureKeys.has(key) ? res.status(403).json({ error: 'forbidden' }) : next(),
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     assertLakeWriteAccess: h.assertLakeWriteAccess,
     detectLakeInconsistencies: h.detectLakeInconsistencies,
     recordLakeFindings: h.recordLakeFindings,
+    INCONSISTENCY_FINDINGS_CAP: 200,
     INCONSISTENCY_DETECTOR: 'lexical',
   },
 }));
 vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { update: h.update },
   dataLakeAccessGrantRepository: {},
-  dataLakeFindingRepository: { recordDetected: h.recordDetected, listDismissedKeys: h.listDismissedKeys },
+  dataLakeFindingRepository: { recordDetected: h.recordDetected, listByLake: h.listByLake },
+  cacheRepository: { tryIncrementWithinLimitFixedWindow: h.tryIncrementWithinLimitFixedWindow },
   fabFileRepository: {},
   fabFileChunkRepository: {},
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 
+import { ForbiddenError, MODEL_INCONSISTENCY_RUN_LEASE_MS } from '@bike4mind/common';
 import handler from '../inconsistencies';
 
 const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme' };
 const makeRes = () => {
   const json = vi.fn();
-  return { res: { json, status: vi.fn(() => ({ json })) }, json };
+  return { res: { json, status: vi.fn(() => ({ json })), setHeader: vi.fn() }, json };
 };
-const invoke = (body: Record<string, unknown> = {}, method = 'POST') => {
+const invoke = (body: Record<string, unknown> = {}, method = 'POST', query: Record<string, unknown> = {}) => {
   const { res, json } = makeRes();
   return {
     json,
+    res,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
       {
         method,
-        query: { id: 'lake1' },
+        query: { id: 'lake1', ...query },
         body,
         user: { id: 'u1' },
         logger: { warn: h.loggerWarn, error: h.loggerError },
@@ -115,11 +137,20 @@ const report = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Plain objects/Sets, not vi.fn() - clearAllMocks does not touch these, so each test starts clean.
+  h.rateLimitCallsByBucket = {};
+  h.blockedFeatureKeys = new Set();
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.detectLakeInconsistencies.mockResolvedValue(result());
+  h.sendToQueue.mockResolvedValue(undefined);
+  h.getSourceQueueUrl.mockReturnValue('https://sqs.test/lakeInconsistencyModelQueue');
   h.update.mockResolvedValue(lake);
   h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
+  h.listByLake.mockResolvedValue([]);
+  h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({ success: true, expiresAt: new Date(Date.now() + 1000) });
 });
+
+const LAKE_CAP_KEY = 'rate-limit:lake:lakeDoc1:data-lakes/inconsistencies/model/lake';
 
 describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
   it('gates on WRITE access, not read access - the response carries document excerpts', async () => {
@@ -132,8 +163,14 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     expect(h.assertLakeWriteAccess.mock.calls[0][0]).toBe('lake1');
   });
 
-  it('persists the report and its timestamp on the lake', async () => {
-    // Storing is the point: health may not scan chunks, so it renders what this wrote.
+  it('persists the run SUMMARY and its timestamp on the lake, never the findings', async () => {
+    // Storing is the point: health may not scan chunks, so it renders what this wrote. But only the
+    // run-level half - the findings are rows, and a copy here would be an unkeyed duplicate of every
+    // one of them plus a document excerpt nothing can ever sweep.
+    h.detectLakeInconsistencies.mockResolvedValue(
+      result({ findings: [{ kind: 'expired-claim', subject: 's', evidence: [], documentCount: 2 }] })
+    );
+
     const { done } = invoke();
     await done;
 
@@ -141,6 +178,7 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     const payload = h.update.mock.calls[0][0];
     expect(payload.id).toBe('lakeDoc1');
     expect(payload.inconsistencyReport).toMatchObject({ sampled: true });
+    expect(payload.inconsistencyReport).not.toHaveProperty('findings');
     expect(payload.inconsistencyComputedAt).toBeInstanceOf(Date);
   });
 
@@ -176,11 +214,15 @@ describe('POST /api/data-lakes/[id]/inconsistencies (#2242)', () => {
     const { json, done } = invoke();
     await done;
 
-    const stored = h.update.mock.calls[0][0].inconsistencyReport;
-    expect(stored.findings).toHaveLength(260);
-    expect(new Set(stored.findings.map((f: { kind: string }) => f.kind))).toEqual(
+    // Asserted on what the route EMITTED rather than what it stored: the findings are rows now, so
+    // the run's own list reaches the caller and the findings repository, not the lake document.
+    const emitted = h.recordLakeFindings.mock.calls[0][1];
+    expect(emitted).toHaveLength(260);
+    expect(new Set(emitted.map((f: { kind: string }) => f.kind))).toEqual(
       new Set(['expired-claim', 'metric-disagreement'])
     );
+    // The RESPONSE's findings now come from the rows (same shape GET serves), so what it pins here
+    // is only that nothing re-capped what went to the write door.
     // The counts stay exact, so a capped list can never imply fewer findings than exist.
     expect(json.mock.calls[0][0].countsByKind['expired-claim']).toBe(250);
     expect(json.mock.calls[0][0].truncated).toBe(true);
@@ -225,12 +267,95 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
     expect(json.mock.calls[0][0]).toMatchObject({ memberCount: 12, computedAt: new Date('2026-06-01T00:00:00Z') });
   });
 
+  it('reads the findings from the ROWS, bounded and open-or-resolved, not from the lake document', async () => {
+    // The stored summary carries no findings at all any more. `countsByKind` is an exact total over
+    // every finding the run reported, with no notion of a curator's status, so `open` alone could
+    // list fewer findings than the count beside them describes - see the docblock on
+    // `renderStoredReport`. `resolved` is included for that reason; `dismissed` never is, since a
+    // dismissed subject is dropped before the run counts it at all.
+    const row = { id: 'finding-1', kind: 'expired-claim', subject: 'roadmap', status: 'open' };
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report({ memberCount: 3 }),
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    h.listByLake.mockResolvedValue([row]);
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(h.listByLake).toHaveBeenCalledWith('lakeDoc1', {
+      detector: 'lexical',
+      status: ['open', 'resolved'],
+      seenSince: new Date('2026-06-01T00:00:00Z'),
+      limit: 200,
+    });
+    expect(json.mock.calls[0][0]).toMatchObject({ memberCount: 3, findings: [row] });
+  });
+
+  it('selects findings by the stored run date, so counts never sit beside findings they exclude', async () => {
+    // Nothing closes a finding the detector stops reporting - deliberately, since `status` is a
+    // curator's word. So a fixed problem leaves an `open` row behind forever, and listing every
+    // open row beside this run's `countsByKind` would ship counts of zero next to findings they do
+    // not count. The daily sweep would make that gap permanent rather than transient.
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report(),
+      inconsistencyComputedAt: new Date('2026-07-01T00:00:00Z'),
+    });
+
+    const { done } = invoke({}, 'GET');
+    await done;
+
+    expect(h.listByLake.mock.calls[0][1].seenSince).toEqual(new Date('2026-07-01T00:00:00Z'));
+  });
+
+  it('does not read findings for a lake detection never ran against', async () => {
+    // A null summary is the "never asked" answer; querying rows first would spend a read to
+    // discover the same thing.
+    const { done } = invoke({}, 'GET');
+    await done;
+
+    expect(h.listByLake).not.toHaveBeenCalled();
+  });
+
   it('returns null when detection has never run, rather than an empty report', async () => {
     // "Never asked" and "asked and found nothing" are different answers.
     const { json, done } = invoke({}, 'GET');
     await done;
 
     expect(json.mock.calls[0][0]).toBeNull();
+  });
+
+  it('lists only lexical rows on a lake that has also run the model pass', async () => {
+    // The lexical summary's `countsByKind` has `narrative-contradiction: 0`, so a model row served here
+    // would sit beside a count that does not include it, and could take a slot under the findings cap.
+    const lexicalRow = { id: 'f-lex', detector: 'lexical', kind: 'expired-claim', subject: 'roadmap', status: 'open' };
+    const modelRow = {
+      id: 'f-model',
+      detector: 'model',
+      kind: 'narrative-contradiction',
+      subject: 'x',
+      status: 'open',
+    };
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report({ countsByKind: { 'expired-claim': 1, 'narrative-contradiction': 0 } }),
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    h.listByLake.mockImplementation(async (_id: string, opts: { detector?: string; status?: string | string[] }) => {
+      const rows = opts.status === 'dismissed' ? [{ ...modelRow, status: 'dismissed' }] : [lexicalRow, modelRow];
+      return opts.detector ? rows.filter(r => r.detector === opts.detector) : rows;
+    });
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(h.listByLake).toHaveBeenCalledTimes(2);
+    for (const [, opts] of h.listByLake.mock.calls) expect(opts.detector).toBe('lexical');
+    const body = json.mock.calls[0][0];
+    expect(body.findings).toEqual([lexicalRow]);
+    expect(body.countsByKind).toMatchObject({ 'expired-claim': 1, 'narrative-contradiction': 0 });
   });
 
   it('is manage-gated too, because the payload carries document excerpts either way', async () => {
@@ -241,6 +366,71 @@ describe('GET /api/data-lakes/[id]/inconsistencies', () => {
     const { done } = invoke({}, 'GET');
     await expect(done).rejects.toThrow('forbidden');
   });
+
+  it('subtracts a dismissal made after the run from countsByKind, so the served count matches the served findings', async () => {
+    // `resolveFinding` never recomputes the stored summary - a dismissal only ever touches the row.
+    // Serving the stored count as-is would show a non-zero count beside a findings list that no
+    // longer contains that subject, the identical shape `seenSince` was added to close.
+    const computedAt = new Date('2026-06-01T00:00:00Z');
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report({ countsByKind: { ...report().countsByKind, 'expired-claim': 1 } }),
+      inconsistencyComputedAt: computedAt,
+    });
+    h.listByLake.mockImplementation(async (_id: string, opts: { status?: string | string[] }) =>
+      opts.status === 'dismissed' ? [{ id: 'finding-1', kind: 'expired-claim', subject: 'roadmap' }] : []
+    );
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(json.mock.calls[0][0]).toMatchObject({
+      countsByKind: { 'expired-claim': 0 },
+      findings: [],
+    });
+    // seenSince AND resolvedSince together, not either alone - resolvedSince alone would also match
+    // a row this run never re-detected (its lastSeenAt is from an older run), and seenSince alone
+    // would also match a subject dismissed before this run but re-detected by it.
+    const dismissedCall = h.listByLake.mock.calls.find(call => call[1].status === 'dismissed');
+    expect(dismissedCall?.[1]).toMatchObject({ seenSince: computedAt, resolvedSince: computedAt });
+  });
+
+  it('does not subtract a dismissal that predates this run, even if the row was re-detected by it', async () => {
+    // The query itself is the guard: a dismissal dated before `computedAt` cannot match
+    // `resolvedSince: computedAt` regardless of how recently the row's lastSeenAt advanced. This
+    // pins that the route asks for the right field rather than merely happening to pass one named
+    // `resolvedSince` - a kind with a genuinely counted, un-dismissed subject must not move.
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report({ countsByKind: { ...report().countsByKind, 'expired-claim': 1 } }),
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    // A real repository would exclude this row given `resolvedSince`, since it was resolved before
+    // the run; asserting the route never widens that contract to a `seenSince`-only lookup that a
+    // pre-run dismissal, re-detected, would also satisfy.
+    h.listByLake.mockResolvedValue([]);
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(json.mock.calls[0][0]).toMatchObject({ countsByKind: { 'expired-claim': 1 } });
+  });
+
+  it('never drives a count below zero for a kind that was already exhausted', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      inconsistencyReport: report(),
+      inconsistencyComputedAt: new Date('2026-06-01T00:00:00Z'),
+    });
+    h.listByLake.mockImplementation(async (_id: string, opts: { status?: string | string[] }) =>
+      opts.status === 'dismissed' ? [{ id: 'finding-1', kind: 'expired-claim', subject: 'roadmap' }] : []
+    );
+
+    const { json, done } = invoke({}, 'GET');
+    await done;
+
+    expect(json.mock.calls[0][0]).toMatchObject({ countsByKind: { 'expired-claim': 0 } });
+  });
 });
 
 describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {
@@ -248,19 +438,20 @@ describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {
     // The load-bearing detail, and the reason the bucket is explicit. Without it the middleware keys
     // on `req.url`, which carries the lake id - so the cap would be per lake per caller and "loop
     // over every lake I own" would stay unbounded, the amplification converge already closed.
-    expect(h.rateLimitOptions?.bucket).toBe('data-lakes/inconsistencies');
+    expect(h.rateLimitOptionsByBucket['data-lakes/inconsistencies']?.bucket).toBe('data-lakes/inconsistencies');
   });
 
   it('caps detection at 20 runs an hour outside development', () => {
-    const limit = h.rateLimitOptions?.limit as () => number;
+    const options = h.rateLimitOptionsByBucket['data-lakes/inconsistencies'];
+    const limit = options?.limit as () => number;
 
-    expect(h.rateLimitOptions?.windowMs).toBe(60 * 60 * 1000);
+    expect(options?.windowMs).toBe(60 * 60 * 1000);
     expect(limit()).toBe(20);
   });
 
   it('lifts the cap in development', () => {
     h.isDevelopment.mockReturnValueOnce(true);
-    const limit = h.rateLimitOptions?.limit as () => number;
+    const limit = h.rateLimitOptionsByBucket['data-lakes/inconsistencies']?.limit as () => number;
 
     expect(limit()).toBe(Infinity);
   });
@@ -269,7 +460,7 @@ describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {
     const { done } = invoke({});
     await done;
 
-    expect(h.rateLimit).toHaveBeenCalledTimes(1);
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies']).toBe(1);
   });
 
   it('leaves GET outside the cap, so looking at a report is never throttled', async () => {
@@ -281,6 +472,166 @@ describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {
     await done;
 
     expect(h.rateLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () => {
+  it('is gated behind EnableLakeModelInconsistencyDetection, unlike the lexical branch', async () => {
+    h.blockedFeatureKeys.add('EnableLakeModelInconsistencyDetection');
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    // The feature gate sits AHEAD of the rate limiter, so a disabled-feature caller never burns its
+    // (far lower) hourly budget on a request that was always going to 403.
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model']).toBeUndefined();
+  });
+
+  it('does not gate the lexical branch behind the model-only flag', async () => {
+    h.blockedFeatureKeys.add('EnableLakeModelInconsistencyDetection');
+
+    const { done } = invoke({});
+    await done;
+
+    expect(h.detectLakeInconsistencies).toHaveBeenCalledTimes(1);
+  });
+
+  it('buckets rate limiting separately from the lexical run, at its own lower cap', async () => {
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model']).toBe(1);
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies']).toBeUndefined();
+    const options = h.rateLimitOptionsByBucket['data-lakes/inconsistencies/model'];
+    const limit = options?.limit as () => number;
+    expect(limit()).toBe(3);
+  });
+
+  it('also bounds spend per LAKE, which the per-caller cap cannot do', async () => {
+    // The caller cap stops one person spending without limit, but the cost lands on the lake: N
+    // curators with manage rights each get their own allowance, so the caller cap alone lets one lake
+    // be billed N x 3 full LLM passes an hour. The lease serializes those runs, it does not limit them.
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    // Keyed on the RESOLVED lake id, not the caller or the route id - that IS the fix.
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledTimes(1);
+    expect(h.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(LAKE_CAP_KEY, 6, 60 * 60 * 1000);
+  });
+
+  it('does not let a caller without manage access consume the lake bucket', async () => {
+    // Otherwise a read-scoped caller with no grant could drain a lake's hourly budget and lock out
+    // the curators who do have one. The refusal itself is unchanged: the access gate's own error.
+    const refusal = new ForbiddenError('no access');
+    h.assertLakeWriteAccess.mockRejectedValue(refusal);
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+
+    await expect(done).rejects.toBe(refusal);
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model/lake']).toBeUndefined();
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    // The per-caller cap is still taken up front, so such a caller stays bounded by their own budget.
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model']).toBe(1);
+  });
+
+  it('refuses with a 429 and enqueues nothing once the lake bucket is spent', async () => {
+    h.tryIncrementWithinLimitFixedWindow.mockResolvedValue({
+      success: false,
+      expiresAt: new Date(Date.now() + 120_000),
+    });
+
+    const { res, done } = invoke({}, 'POST', { detector: 'model' });
+
+    await expect(done).rejects.toMatchObject({ statusCode: 429 });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(res.setHeader).toHaveBeenCalledWith('Retry-After', expect.any(Number));
+  });
+
+  it('lifts the per-lake cap in development', async () => {
+    h.isDevelopment.mockReturnValueOnce(true);
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the per-lake bucket untouched on a lexical run', async () => {
+    const { done } = invoke({}, 'POST');
+    await done;
+
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+  });
+
+  it('enqueues the run and returns 202 rather than doing the LLM work in the request', async () => {
+    // The whole point of the queue: several sequential LLM calls cannot fit the 60s frontend Lambda, and
+    // run inline a timeout billed every call while persisting nothing. The route must now do no
+    // detection and no findings write of its own.
+    const { res, done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.recordLakeFindings).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
+  });
+
+  it('sends the resolved lake document id and the calling user, not the route id', async () => {
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    const [url, message] = h.sendToQueue.mock.calls[0];
+    expect(url).toBe('https://sqs.test/lakeInconsistencyModelQueue');
+    expect(message).toEqual({ dataLakeId: 'lakeDoc1', userId: 'u1' });
+  });
+
+  it('leaves the lexical blob and the lexical detector untouched', async () => {
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.detectLakeInconsistencies).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses with a 409 while a run already holds the lease, so two clicks cannot double-spend', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({ ...lake, modelInconsistencyRunAt: new Date() });
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+
+    // The STATUS, not just the message. Matching on text alone leaves the guard untested: swapping
+    // ConflictError for a plain Error turns a double click into a 500 with this test still green.
+    await expect(done).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/already in progress/i),
+    });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
+  });
+
+  it('treats a lease older than the window as free, so a crashed run does not wedge the lake', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      modelInconsistencyRunAt: new Date(Date.now() - (MODEL_INCONSISTENCY_RUN_LEASE_MS + 60_000)),
+    });
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses before enqueuing when the queue url is unconfigured', async () => {
+    // A deployment misconfiguration throws on every attempt, so the caller must not be told the run
+    // was accepted by a door that queued nothing.
+    h.getSourceQueueUrl.mockReturnValue(undefined);
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+
+    await expect(done).rejects.toThrow(/queue url not found/i);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    expect(h.tryIncrementWithinLimitFixedWindow).not.toHaveBeenCalled();
   });
 });
 
@@ -319,8 +670,8 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
 
     const [, passed] = h.recordLakeFindings.mock.calls[0];
     expect(passed).toEqual([...findings, dismissedFinding]);
-    // ...and never into the blob, which is what GET and the health counts read.
-    expect(h.update.mock.calls[0][0].inconsistencyReport.findings).toEqual(findings);
+    // ...and never into the summary, which carries no findings at all any more.
+    expect(h.update.mock.calls[0][0].inconsistencyReport).not.toHaveProperty('findings');
   });
 
   it('stamps the rows with the SAME instant it stamped the report', async () => {
@@ -335,50 +686,72 @@ describe('POST /api/data-lakes/[id]/inconsistencies -> durable findings (#3039)'
     expect(h.recordLakeFindings.mock.calls[0][2].seenAt).toBe(computedAt);
   });
 
-  it('writes the rows AFTER the report, so the newer path cannot cost the run its report', async () => {
-    // The blob is still what GET here and the counts on GET /health read, until #3040 moves them.
+  it('writes the rows BEFORE dating the summary, so a summary never outruns its findings', async () => {
+    // The inverse of the order this ran in while the rows were additive behind the blob. Now the
+    // rows ARE the record, and `inconsistencyComputedAt` is what a surface reads as "detection
+    // ran" - so a dated summary standing over findings that were never written is the misleading
+    // half.
     h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
     const order: string[] = [];
-    h.update.mockImplementation(async () => void order.push('report'));
+    h.update.mockImplementation(async () => void order.push('summary'));
     h.recordLakeFindings.mockImplementation(async () => (order.push('findings'), { recorded: 2, failed: 0 }));
 
     const { done } = invoke();
     await done;
 
-    expect(order).toEqual(['report', 'findings']);
+    expect(order).toEqual(['findings', 'summary']);
   });
 
-  it('still returns the stored report when the findings write fails outright', async () => {
-    // The outcome the ordering above exists to produce, which ordering alone does not pin: the blob
-    // write has already committed by the time this path runs, so an uncaught throw would 500 a run
-    // whose report is in the database and make the caller re-run a ~1000-chunk detection pass to
-    // get back something they already have. Deleting the try/catch passes the ordering test.
+  it('dates no summary, and does not 200, when findings went unwritten', async () => {
+    // The failure mode that actually occurs. `recordLakeFindings` isolates per-finding failures
+    // into `failed` and NEVER throws - not even for an unavailable collection - so reordering the
+    // two writes is not on its own a guard: without an explicit gate the handler sails past N
+    // failures and stamps a fresh computedAt and a full countsByKind over zero persisted rows.
+    // Since GET selects findings by that date, the result is counts with no findings beside them.
     h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
-    h.recordLakeFindings.mockRejectedValue(new Error('findings collection unavailable'));
+    h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 2 });
 
-    const { json, done } = invoke();
-    await done;
+    const { done } = invoke();
+    await expect(done).rejects.toThrow(/Recorded 0 of 2 findings/);
 
-    expect(h.update).toHaveBeenCalled();
-    expect(json).toHaveBeenCalledWith(expect.objectContaining({ findings }));
-    // And the run is still reported as partial rather than clean - every finding went unwritten.
+    expect(h.update).not.toHaveBeenCalled();
     expect(h.loggerWarn).toHaveBeenCalledWith(
-      'Lake findings partially recorded',
-      expect.objectContaining({ failed: findings.length })
+      'Lake findings partially recorded; summary not stored',
+      expect.objectContaining({ failed: 2, total: 2 })
     );
   });
 
-  it('reports a partially written run rather than letting it read as clean', async () => {
+  it('does not store a summary for a run that recorded only some of its findings', async () => {
+    // Partial is not a lesser kind of success here: `countsByKind` is exact and unfiltered, so a
+    // summary dated over a subset of rows overstates what a curator can actually open. Retrying is
+    // safe - recordDetected is an idempotent upsert - and the last COMPLETE run's summary stays
+    // correctly dated meanwhile.
     h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
     h.recordLakeFindings.mockResolvedValue({ recorded: 1, failed: 1 });
 
     const { done } = invoke();
+    await expect(done).rejects.toThrow(/Recorded 1 of 2 findings/);
+
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('returns the same shape as GET, so a surface can render both', async () => {
+    // Returning the detector's in-memory findings here would hand a caller rows with no id, no
+    // status and `evidence` where the persisted row has `sources` - so "run it now" could not be
+    // rendered by the same component as "show me the last run", and nothing it just found could be
+    // resolved or assigned without a refetch.
+    const row = { id: 'finding-9', kind: 'expired-claim', subject: 'roadmap', status: 'open', sources: [] };
+    h.detectLakeInconsistencies.mockResolvedValue(result({ findings }));
+    h.recordLakeFindings.mockResolvedValue({ recorded: 2, failed: 0 });
+    h.listByLake.mockResolvedValue([row]);
+
+    const { json, done } = invoke();
     await done;
 
-    expect(h.loggerWarn).toHaveBeenCalledWith(
-      'Lake findings partially recorded',
-      expect.objectContaining({ failed: 1, total: 2 })
-    );
+    expect(json.mock.calls[0][0].findings).toEqual([row]);
+    // Selected against the summary this very run just stored, not a stale one.
+    const { seenSince } = h.listByLake.mock.calls[0][1];
+    expect(seenSince).toBe(h.update.mock.calls[0][0].inconsistencyComputedAt);
   });
 
   it('stays quiet when every finding was recorded', async () => {

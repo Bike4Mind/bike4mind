@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { drive_v3 } from '@googleapis/drive';
-import { SupportedFabFileMimeTypes } from '@bike4mind/common';
-import { walkFolder, fetchDriveFileContent, isUnderRoot, DriveWalkTimeBudgetExceededError } from './driveContent';
+import { DocumentDateSource, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import {
+  walkFolder,
+  fetchDriveFileContent,
+  isUnderRoot,
+  driveDocumentVintage,
+  DriveWalkTimeBudgetExceededError,
+} from './driveContent';
 import { FOLDER_MIME_TYPE, isDriveRateLimitError } from './driveClient';
 
 const folder = (id: string, name: string) => ({ id, name, mimeType: FOLDER_MIME_TYPE });
@@ -277,5 +283,49 @@ describe('isDriveRateLimitError', () => {
   it('is safe on non-object rejections', () => {
     expect(isDriveRateLimitError(undefined)).toBe(false);
     expect(isDriveRateLimitError('429')).toBe(false);
+  });
+});
+
+describe('driveDocumentVintage', () => {
+  const GOOGLE_DOC = 'application/vnd.google-apps.document';
+  const GOOGLE_SHEET = 'application/vnd.google-apps.spreadsheet';
+  const GOOGLE_SLIDES = 'application/vnd.google-apps.presentation';
+
+  const driveFile = (mimeType: string, createdTime?: string) => ({
+    id: 'f1',
+    name: 'doc',
+    mimeType,
+    ...(createdTime ? { createdTime } : {}),
+  });
+
+  it.each([GOOGLE_DOC, GOOGLE_SHEET, GOOGLE_SLIDES])('takes createdTime for the Editors type %s', mimeType => {
+    expect(driveDocumentVintage(driveFile(mimeType, '2019-03-04T09:15:00.000Z'))).toEqual({
+      documentDate: new Date('2019-03-04T09:15:00.000Z'),
+      documentDateSource: DocumentDateSource.DRIVE_CREATED,
+    });
+  });
+
+  // The whole point of the Editors gate: for an uploaded binary, createdTime is when it was
+  // uploaded to Drive, which is the ingestion-time-as-document-date mistake #3047 removed.
+  it.each(['application/pdf', 'text/plain', SupportedFabFileMimeTypes.DOCX])(
+    'refuses createdTime for the uploaded binary %s',
+    mimeType => {
+      expect(driveDocumentVintage(driveFile(mimeType, '2019-03-04T09:15:00.000Z'))).toEqual({});
+    }
+  );
+
+  it('returns nothing when Drive offered no createdTime', () => {
+    expect(driveDocumentVintage(driveFile(GOOGLE_DOC))).toEqual({});
+  });
+
+  it('applies the shared plausibility window rather than trusting Drive directly', () => {
+    expect(driveDocumentVintage(driveFile(GOOGLE_DOC, '1970-01-01T00:00:00.000Z'))).toEqual({});
+    expect(driveDocumentVintage(driveFile(GOOGLE_DOC, 'not-a-timestamp'))).toEqual({});
+  });
+
+  // The Editors gate reads EDITOR_EXPORTS with Object.hasOwn, so an inherited Object key must not
+  // read as an authored type and pick up a vintage it has no claim to.
+  it.each(['constructor', 'toString'])('refuses the inherited Object property %s as a mime type', mimeType => {
+    expect(driveDocumentVintage(driveFile(mimeType, '2019-03-04T09:15:00.000Z'))).toEqual({});
   });
 });

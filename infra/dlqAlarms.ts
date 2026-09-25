@@ -35,6 +35,7 @@ import {
   dataLakeTaxonomyQueueDLQ,
   dataLakeResearchQueueDLQ,
   lakeMemoryQueueDLQ,
+  lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
@@ -48,7 +49,7 @@ import {
   optihashiRunCompletionQueueDLQ,
   bobRunQueueDLQ,
 } from './queues';
-import { telemetryAlertRuleDLQ } from './eventBus';
+import { telemetryAlertRuleDLQ, sessionEnrichmentDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
@@ -315,6 +316,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: lakeMemoryQueueDLQ,
   },
   {
+    label: 'lake-inconsistency-model',
+    displayName: 'Lake Model Inconsistency Detection',
+    application: 'DataLakeManagement',
+    sourceQueue: 'lakeInconsistencyModelQueue',
+    queue: lakeInconsistencyModelQueueDLQ,
+  },
+  {
     label: 'drive-lake-ingest',
     displayName: 'Drive Lake Ingest',
     application: 'DataLakeManagement',
@@ -490,6 +498,15 @@ if (isMonitoredStage) {
     displayName: 'Telemetry Alert Rule',
     application: 'TelemetryAlerts',
     queue: telemetryAlertRuleDLQ,
+  });
+
+  // Session enrichment DLQ - alarm-only for the same reason: it backs the session.* rule
+  // targets and their Lambdas' async-invoke failures (see infra/eventBus.ts), not a queue consumer.
+  createDlqAlarms({
+    label: 'session-enrichment',
+    displayName: 'Session Enrichment',
+    application: 'SessionEnrichment',
+    queue: sessionEnrichmentDLQ,
   });
 }
 

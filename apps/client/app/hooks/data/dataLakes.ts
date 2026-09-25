@@ -13,12 +13,15 @@ import type {
   IDataLakeBatchSummary,
   IDataLakeFindingDocument,
   InconsistencyKind,
+  LakeInconsistencyScanSummary,
   LakeFindingStatus,
   IDataLakeSpendResponse,
   IFabFileDocument,
   DataLakePrincipalType,
   LakeAccessView,
   LakeOwnershipCandidateList,
+  LakeOwnershipOfferSummary,
+  LakePendingOwnershipOffer,
   LakeHealthApiResponse,
   LakeMemoryHealth,
   LakeConfigHistoryView,
@@ -46,6 +49,7 @@ import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 /**
  * The server's own refusal text, if it sent one. The body key is `error`, per
@@ -275,9 +279,90 @@ export function useLakeOwnershipCandidates(dataLakeId: string | null, enabled = 
     enabled: enabled && !!dataLakeId,
     retry: false,
     queryFn: async () => {
-      const response = await api.get<{ data: LakeOwnershipCandidateList }>(
-        `/api/data-lakes/${dataLakeId}/transfer-ownership`
-      );
+      const response = await api.get<{
+        data: LakeOwnershipCandidateList;
+        pendingOffer: LakePendingOwnershipOffer | null;
+      }>(`/api/data-lakes/${dataLakeId}/transfer-ownership`);
+      // The pending offer arrives beside the candidate list, not inside it (the server keeps them
+      // separate facts); merge it here so the dialog reads one object.
+      return { ...response.data.data, pendingOffer: response.data.pendingOffer ?? null };
+    },
+    staleTime: 1000 * 30,
+    refetchOnWindowFocus: false,
+  });
+}
+
+/**
+ * Offer a lake's ownership to another user. BREAKING: this no longer transfers anything - it opens a
+ * PENDING OFFER the recipient must accept, and ownership is unchanged until they do. The prior owner
+ * therefore keeps every owner power in the meantime.
+ *
+ * Invalidates the picker's own query (the pending offer is read from it) and the access view, so the
+ * dialog that just sent the offer re-renders in its "waiting on X" state.
+ */
+export function useTransferLakeOwnership() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id, newOwnerUserId }: { id: string; newOwnerUserId: string }) => {
+      const response = await api.post<{ offer: unknown }>(`/api/data-lakes/${id}/transfer-ownership`, {
+        newOwnerUserId,
+      });
+      return response.data;
+    },
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      toast.success('Ownership offer sent');
+    },
+    onError: (error: Error, { id }) => {
+      // A refusal can be the stale-state kind ("already has a pending offer", "the member list
+      // changed"): refetch so the dialog shows what the server sees instead of dead controls.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      // This endpoint's rejections are the actionable kind ("name another member", "must belong to
+      // the organization that owns this data lake").
+      const refusal = serverRefusalMessage(error);
+      toast.error(refusal || error.message || 'Failed to send the ownership offer');
+    },
+  });
+}
+
+/** Cancel a pending offer before the recipient answers. Nothing was transferred, so nothing unwinds. */
+export function useCancelLakeOwnershipOffer() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ id }: { id: string }) => {
+      const response = await api.delete<{ offer: unknown }>(`/api/data-lakes/${id}/transfer-ownership`);
+      return response.data;
+    },
+    onSuccess: (_data, { id }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      toast.success('Ownership offer cancelled');
+    },
+    onError: (error: Error, { id }) => {
+      // A cancel that loses a race (the recipient already accepted) 404s; refetch so a stale "Cancel
+      // offer" button that can never succeed is replaced by the real state.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
+      const refusal = serverRefusalMessage(error);
+      toast.error(refusal || error.message || 'Failed to cancel the ownership offer');
+    },
+  });
+}
+
+/**
+ * The caller's own pending ownership offers - the recipient's banner. No id to pass: the server scopes
+ * the query to the authenticated user.
+ */
+export function useOwnLakeOwnershipOffers(enabled = true) {
+  return useQuery({
+    queryKey: dataLakeKeys.ownershipOffers,
+    enabled,
+    retry: false,
+    queryFn: async () => {
+      const response = await api.get<{ data: LakeOwnershipOfferSummary[] }>('/api/data-lakes/ownership-offers');
       return response.data.data;
     },
     staleTime: 1000 * 30,
@@ -286,38 +371,61 @@ export function useLakeOwnershipCandidates(dataLakeId: string | null, enabled = 
 }
 
 /**
- * Hand a lake's ownership to another user. The prior owner is demoted to curator rather than removed,
- * so they keep management access and the transfer is reversible by the new owner.
- *
- * Invalidates the lake list as well as the access view: ownership decides `canManage`, so the panel's
- * own controls (Access included) may legitimately disappear for the actor once they are no longer the
- * owner - refetching is what keeps the UI honest about what the actor can still do. The config
- * history goes too: this door records a `transfer-ownership` event, and the History tab that renders
- * it sits in the same modal that submitted the transfer.
+ * Accept an offer and take ownership. Invalidate the lake list and the access view as well as the
+ * offers themselves: the accept changes what the caller can MANAGE, and records a config-change row,
+ * so the panel's own controls and the History tab must both refetch.
  */
-export function useTransferLakeOwnership() {
+export function useAcceptLakeOwnershipOffer() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ id, newOwnerUserId }: { id: string; newOwnerUserId: string }) => {
-      const response = await api.post<{ newOwnerUserId: string; demotedUserIds: string[] }>(
-        `/api/data-lakes/${id}/transfer-ownership`,
-        { newOwnerUserId }
+    mutationFn: async ({ offerId }: { offerId: string; dataLakeId: string }) => {
+      const response = await api.post<{ data: { newOwnerUserId: string; demotedUserIds: string[] } }>(
+        `/api/data-lakes/ownership-offers/${offerId}/accept`
       );
-      return response.data;
+      return response.data.data;
     },
-    onSuccess: (_data, { id }) => {
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(id) });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipCandidates(id) });
-      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+    onSuccess: (_data, { dataLakeId }) => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
       toast.success('Data lake ownership transferred');
     },
-    onError: (error: Error) => {
-      // This endpoint's rejections are the actionable kind ("name another member", "must belong to
-      // the organization that owns this data lake").
+    onError: (error: Error, { dataLakeId }) => {
+      // A failed accept (expired, stale, withdrawn) means the banner's list is out of date; refetch it
+      // and the lake so the recipient is not left staring at an offer the server has already closed.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.access(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(dataLakeId) });
       const refusal = serverRefusalMessage(error);
-      toast.error(refusal || error.message || 'Failed to transfer ownership');
+      toast.error(refusal || error.message || 'Failed to accept the ownership offer');
+    },
+  });
+}
+
+/** Decline an offer. Touches no grants, so only the offers list needs refreshing. */
+export function useDeclineLakeOwnershipOffer() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ offerId }: { offerId: string }) => {
+      const response = await api.post<{ data: { id: string; status: string } }>(
+        `/api/data-lakes/ownership-offers/${offerId}/decline`
+      );
+      return response.data.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
+      toast.success('Ownership offer declined');
+    },
+    onError: (error: Error) => {
+      // The offer may already be gone (cancelled, or accepted elsewhere); refresh the banner so it
+      // stops showing an offer the server will refuse.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.ownershipOffers });
+      const refusal = serverRefusalMessage(error);
+      toast.error(refusal || error.message || 'Failed to decline the ownership offer');
     },
   });
 }
@@ -653,6 +761,10 @@ function invalidateAfterLifecycle(queryClient: ReturnType<typeof useQueryClient>
   // `cleanup` never reaches this helper - the purge door builds its own onSuccess around the
   // pending-purge suppression, and invalidates this same key itself.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+  // The health report's serving verdict is derived from `lake.status` (computeLakeHealth), so
+  // every lifecycle move changes it - publish flips "Not serving: draft" to serving. The query
+  // neither polls nor refetches on focus, so without this the chip holds the pre-move verdict.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
 }
 
 function useLifecycleMutation(action: LifecycleAction, successMessage: string, errorMessage: string) {
@@ -1036,12 +1148,21 @@ export function useDataLakeFiles(dataLakeId: string | null, params?: { limit?: n
 /**
  * Hook: Re-run chunking + vectorization for a single fabFile in a data lake.
  * Useful for files that landed with 0 chunks (failed/partial extraction).
+ *
+ * Sends `dataLakeId` so a lake manager who is not the file's uploader is authorized on their manage
+ * rights over THIS lake rather than on ownership of the file (#3167). The route falls back to the
+ * caller's own rights when it is absent, so this is additive: it never narrows what an owner can do.
  */
 export function useReprocessFabFile(dataLakeId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (fabFileId: string) => {
-      const res = await api.post<{ messageId: string }>('/api/files/reprocess', { fabFileId });
+      const res = await api.post<{ messageId: string }>('/api/files/reprocess', {
+        fabFileId,
+        // Omitted rather than sent as null: the server reads its presence as "act under this lake's
+        // authority", and a null would have to be special-cased at every read of it.
+        ...(dataLakeId ? { dataLakeId } : {}),
+      });
       return res.data;
     },
     onSuccess: () => {
@@ -1347,7 +1468,7 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       // The document is gone globally, not just from this lake, so the Files list is stale too.
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
       if (dataLakeId) {
         // Purging an under-chunked document can move the purged lake's rebuild badge, and can
         // reach recomputeLakeStats' draft -> active flip, which writes a config-history row - same
@@ -1865,7 +1986,7 @@ export function useAddFilesToLake() {
     // after a partial failure, and the client's own non-member filter (Content.tsx) reads from
     // that same cache before the next attempt.
     onSettled: (_data, _error, { lake }) => {
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
       invalidateLakeFileMembershipQueries(queryClient, lake.id);
     },
   });
@@ -2240,6 +2361,42 @@ export function useDataLakeFindings(
     loadMore: query.fetchNextPage,
     isLoadingMore: query.isFetchingNextPage,
   };
+}
+
+/** The run summary POST /api/data-lakes/:id/inconsistencies answers with - the fields read here. */
+type LakeScanResult = Pick<LakeInconsistencyScanSummary, 'countsByKind' | 'memberCount'>;
+
+function describeScanResult({ countsByKind, memberCount }: LakeScanResult): string {
+  // Zero members read is "nothing to scan", never "clean" - the detector draws the same line.
+  if (memberCount === 0) return 'Scan complete. No document in this lake has text to compare yet.';
+  const total = Object.values(countsByKind).reduce((sum, count) => sum + count, 0);
+  return `Scan complete: ${total} finding(s) across ${memberCount} document(s).`;
+}
+
+/**
+ * Runs detection over one lake now, rather than waiting for the nightly `lakeInconsistencySweep`.
+ * The route records findings as rows and stores the run summary on the lake, so both the findings
+ * queue and the health badge (which renders that summary's counts) are re-read afterwards.
+ *
+ * Rate-limited per caller server-side; the 429's own text ("try again in N seconds") is what the
+ * error toast shows.
+ */
+export function useScanDataLakeFindings(dataLakeId: string) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.post<LakeScanResult | null>(`/api/data-lakes/${dataLakeId}/inconsistencies`);
+      return data;
+    },
+    onSuccess: result => {
+      if (result) toast.success(describeScanResult(result));
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.findingsOf(dataLakeId) });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(dataLakeId) });
+    },
+    onError: (error: Error) => {
+      toast.error(serverRefusalMessage(error) || 'Could not scan this lake. Try again shortly.');
+    },
+  });
 }
 
 /** How often the run list re-reads while a run is queued or running. */

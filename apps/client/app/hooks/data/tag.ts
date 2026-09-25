@@ -2,6 +2,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { IFabFileDocument, IFileTag, IFileTagWithFileCount, ITag } from '@bike4mind/common';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { getErrorMessage } from '@client/app/utils/error';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { toast } from 'sonner';
 import { useTranslation } from 'react-i18next';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
@@ -87,7 +88,7 @@ export const useUpdateFileTag = () => {
       // collided row entirely, which only a refetch of the list can reflect.
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       // A rename rewrites the tag names stored on the files, so cached file rows are stale too.
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
       toast.success('Tag updated successfully');
     },
     onError: error => {
@@ -106,7 +107,7 @@ export const useDeleteFileTag = () => {
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       // Deleting a tag now strips its name off the files too, so cached file rows carry tags the
       // server has already removed.
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
     },
     onError: () => {
       toast.error('Failed to delete tag');
@@ -143,7 +144,7 @@ export function useToggleTagToFiles() {
       if (joinedLakeCount > 0) {
         toast.info(t('file_actions.prefix_arm_join_notice', { count: data.length }), { duration: 8000 });
       }
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       if (joinedLakeCount > 0) queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
     },

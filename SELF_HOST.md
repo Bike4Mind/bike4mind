@@ -665,6 +665,12 @@ The `worker` is the only service that runs discovery on a schedule, even though 
 
 Discovery uses the provider keys already in `.env.selfhost` (or a user's own keys in Settings > API Keys) - there is nothing extra to configure. Everything else is tuned in the app under **Admin > Settings**, AI category, "Model Discovery" group: `modelDiscoveryMode` (`report` writes only a run report, `write` applies the diff to the catalog), `modelDiscoveryAutoEnable` (`priced` / `manual` / `all` - when a discovered model becomes usable), `modelDiscoveryPriceBandPct` (largest price move applied without review), and `modelDiscoveryAllowEgress` (off means no outbound request even with the flag on). **Admin > Model Lifecycle** shows the last run and what it found.
 
+### Abandoned agent execution recovery
+
+The worker runs the shared abandoned-execution sweep at startup and every hour. Executions in eligible active statuses with no update for more than six hours become `failed` with reason `abandoned`, and their unfinished quests are settled. Fresh executions and parents waiting in `awaiting_subagent` or `awaiting_dag_children` remain unchanged. This releases abandoned work; it does not retry the execution.
+
+The age comparison uses elapsed time, not a local-time calendar schedule. Restart runs one current-state sweep immediately; missed hourly slots coalesce into that scan, rather than replaying each missed slot. Startup and interval runs share the worker's in-flight guard, so a slow run skips overlapping ticks. Shutdown drains a running sweep within the existing worker grace period. Keep the documented single worker replica: this is an in-process guard, not a distributed lease. A quest whose settlement fails after its execution is marked abandoned is retried on later ticks until it succeeds; self-host uses local logs and does not send this sweep's CloudWatch metrics, so the hosted cron retains its metrics.
+
 ## Queue storage and container replacement
 
 ElasticMQ stores queue state, pending messages, and acknowledged deletions in the `sqs-data` named volume mounted at `/data`. Keep one `sqs` container as the sole writer to this H2 store. Do not scale it or mount the volume into another running broker. This is single-host persistence, not replication or protection against host/disk loss. Consumers must still tolerate duplicate deliveries.
@@ -694,7 +700,16 @@ The drill derives its broker image, configuration mount, and storage mounts from
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
 - **`Error ... address already in use` / `failed to bind host port`** - another process on your host already owns one of the published ports (a local `mongod` on 27017 is the common one; also 3000, 9000, 9001, 9324, 9325, 8025). Override just the host side with the matching `*_HOST_PORT` var in `.env.selfhost` (e.g. `MONGO_HOST_PORT=27018`) - the services still reach each other over the compose network on their fixed internal ports, so nothing else needs to change.
-- **MongoDB crashes on first boot with `WT_PANIC` / `Too many open files`** - WiredTiger opens a file per collection and index and needs a high open-files limit; Docker's default (1024) is far below MongoDB's documented minimum. The bundled `mongo` service raises `nofile` to 64000 via `ulimits`. If you've customized the compose file or run mongo outside it, set that limit yourself, then wipe the half-initialized volume and restart: `docker compose -f compose.selfhost.yaml --env-file .env.selfhost down -v && ... up -d`.
+- **MongoDB crashes on first boot with `WT_PANIC` / `Too many open files`** - WiredTiger opens a file per collection and index and needs a high open-files limit; Docker's default (1024) is far below MongoDB's documented minimum. The bundled `mongo` service raises `nofile` to 64000 via `ulimits`. If you've customized the compose file or run mongo outside it, set that limit yourself, then remove only the half-initialized Mongo volume and restart. Do not use `down -v`: it also deletes `sqs-data` and every pending queue message (see "Queue storage and container replacement"). Naming the service (`down -v mongo`) is not a safe shortcut either, because Compose releases before v2.29 still remove every volume in the project. The steps below read the volume name from the `mongo` container, so they follow whatever `-p` or `COMPOSE_PROJECT_NAME` the stack uses; pass the same one here. If the first command prints nothing, there is no `mongo` container to read from: create one with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up --no-start mongo` and run the steps again.
+
+  ```bash
+  MONGO_VOLUME=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data/db"}}{{.Name}}{{end}}{{end}}' "$(docker compose -f compose.selfhost.yaml --env-file .env.selfhost ps -aq mongo)")
+  echo "$MONGO_VOLUME"
+  # Remove the containers so nothing references the volume; named volumes, including sqs-data, are kept.
+  docker compose -f compose.selfhost.yaml --env-file .env.selfhost down
+  docker volume rm "$MONGO_VOLUME"
+  docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d
+  ```
 - **App can't reach Mongo / "no primary" errors** - MongoDB must run as a replica set (`--replSet rs0`) for transactions; the bundled `mongo` service is configured for this. Give it a few seconds to elect a primary on first boot.
 - **No sign-in email arrives** - check Mailpit at `http://localhost:8025`; if it's empty, check `docker compose -f compose.selfhost.yaml logs app` for mail errors and verify the `MAIL_*` values.
 - **Saving settings / generating an API key / uploading returns `403`, but reading works** - `APP_URL` does not match the origin in your browser's address bar. It is the CSRF origin allow-list and it fails closed, so only state-changing requests break; `GET` is exempt, which is why the app looks fine until you try to save something. Unset, the response is `CSRF: APP_URL is not configured on this deployment.`; set to an origin you do not browse from, it is `Invalid request origin. CSRF protection triggered (expected ...)`, which names the value it is comparing against. `APP_URL` was added to the template after the initial release, so an **upgraded install may be missing it entirely** - an existing `.env.selfhost` does not gain it. Add `APP_URL=<the origin you browse>` (scheme + host + optional port, no trailing slash) and recreate the `app` container. Reaching the stack over Tailscale or the Caddy proxy? It must be the tailnet or public origin, not `http://localhost:3000` - see "Share your instance with friends".
@@ -774,6 +789,26 @@ Whichever path you choose, do the checklist first.
 - [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
 - [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
 - [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It encrypts other secrets in the database and losing it makes that data unrecoverable. Rotation is not automated for self-host: if you ever change it, set `SECRET_ENCRYPTION_KEY_PREVIOUS` to the old key and keep it configured permanently so existing ciphertext still decrypts.
+
+### Read-only production configuration preflight
+
+Run the preflight with the same Compose files, merge order, interpolation env file, and profiles you plan to deploy. Python 3 and Docker Compose are required; the script only runs `docker compose config --format json`. It does not start containers, contact services, modify state, or print the resolved configuration or secrets.
+
+```bash
+python3 scripts/selfhost_production_preflight.py \
+  -f compose.selfhost.yaml -f compose.caddy.yaml \
+  --env-file .env.selfhost --profile proxy
+```
+
+The checks cover selected services: browser HTTPS/WSS URLs, missing/template secrets, encryption-key format, internal shared secrets, development mail catchers and SMTP settings, local Mongo auth flags and client credentials, local MinIO defaults, and non-loopback internal port publishes. External databases do not require a local Mongo service, but an active local Mongo is still checked. Non-root MinIO client accounts and SMTP relays without authentication are supported; their permissions and delivery are not tested. Custom Mongo entrypoints/config files and non-password local authentication require separate verification and fail this bounded check.
+
+The base stack and the Caddy override still fail these checks until their development settings are replaced. Caddy alone does not configure database authentication or mail. Exit codes are `0` for passed checks, `1` for configuration findings, and `2` when Compose configuration cannot be inspected. Success prints `preflight checks passed; live TLS/mail/auth/restore not proven`. This is not a production-readiness certification: independently test DNS/TLS, browser login and mail delivery, database/storage permissions, registration policy, backups and a restore, resource limits, and reachability from another machine. The script does not inspect proxy routing, mounted configuration contents, firewall rules, or live application settings.
+
+Run the checks' tests, including real Compose config/profile resolution against disposable example configuration, with:
+
+```bash
+B4M_PREFLIGHT_COMPOSE_TESTS=1 python3 -m unittest discover -s scripts -p test_selfhost_production_preflight.py
+```
 
 ### Path A: Tailscale tailnet (recommended for friends)
 
@@ -916,3 +951,28 @@ The worker runs its existing stuck-batch reconciliation once at startup and at 0
 Startup and scheduled reconciliation share one in-flight guard and shutdown drain budget. A scheduled slot that overlaps an active run is skipped, as is an immediate retry after failure. Clock checks occur at most 60 seconds apart: a delayed wake or forward clock jump coalesces missed slots into one run, with at most one scheduled invocation per UTC day in that process. A backward clock adjustment does not replay consumed days. The separate startup run can add one invocation. There is no persistent schedule history or coordination between multiple workers; run one worker for this schedule.
 
 This changes only when `runStuckBatchSweep` runs. Its existing database updates, taxonomy queue/status effects and CloudWatch metric attempts remain unchanged; it is not a Mongo-only maintenance job. It does not enable the full hosted reconciliation handler or other hosted daily maintenance jobs.
+
+### Agent execution service
+
+Optional and opt-in, behind the `agent-executor` profile - a fresh install that doesn't opt in gets the rest of the app (chat, notebooks, everything else) with agent execution simply unavailable. Build the app and executor from the same revision when adopting the container agent transport:
+
+```sh
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost build app agentexecutor
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile agent-executor up -d
+```
+
+Uncomment `AGENT_EXECUTOR_SERVICE=http://agentexecutor:8080` in `.env.selfhost` and generate an `AGENT_EXECUTOR_INTERNAL_SECRET` with `openssl rand -hex 32`. Both services load the same `.env.selfhost`. The executor also requires `MONGODB_URI`, `AGENT_CONTINUATION_QUEUE`, the SQS endpoint/credentials, and the same model and storage settings as the app. Its internal port is not published on the host. Hosted deployments continue using their linked Lambda function when `AGENT_EXECUTOR_SERVICE` is absent.
+
+**Upgrading an existing install:** `AGENT_EXECUTOR_SERVICE` and `AGENT_EXECUTOR_INTERNAL_SECRET` are new. An existing `.env.selfhost` predating this feature has neither set, and the `agentexecutor` container is behind the `agent-executor` profile, so `docker compose ... up -d` with your current command line brings the stack up exactly as before - the app is not gated on the executor's health. Skip the rest of this section and nothing changes. To adopt container agent execution, add the two variables above to your existing `.env.selfhost` and re-run `up -d` with `--profile agent-executor` as shown above.
+
+The executor validates its required configuration at startup. `/health` is ready only after Mongo and the configured queue are reachable. Check it inside the service:
+
+```sh
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost exec agentexecutor node -e 'fetch("http://localhost:8080/health").then(async r=>{console.log(r.status,await r.text());process.exit(r.ok?0:1)})'
+```
+
+HTTP acceptance means the invocation was handed to `agentContinuationQueue`; the same service consumes starts, permission/confidence resumes, continuations, and dispatched children. Queue persistence is required for broker recreation recovery. Each consumer takes one message, supplies a decreasing 13-minute execution budget, and leaves unsuccessful deliveries for redelivery after 16 minutes. `AGENT_EXECUTOR_CONCURRENCY` defaults to 8 (range 2-64), allowing child work alongside parents. Shutdown stops admission and waits up to 13.5 minutes; Compose allows 14 minutes.
+
+An explicit HTTP authentication or payload rejection restores a paused resume for retry. A network failure or server error is ambiguous: accepted work may still execute, so its execution ID and state remain intact. Check that ID before starting another run. Abandoned-execution reconciliation is a separate requirement for a dispatch that never reached the queue, and for a process killed after claiming work. A healthy service alone does not prove successful execution; verify the persisted execution reaches `completed` with the expected result.
+
+Rollback requires draining the executor first. Do not switch the app back to Lambda until queued `selfhost_invoke` messages have drained: that envelope belongs to the container transport.

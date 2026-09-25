@@ -5,7 +5,7 @@
  * public REST route (`pages/api/v1/agent-executions/index.ts`) both start a run, and
  * both must apply the SAME guards - session ownership, organization membership, the
  * stale-active sweep, the per-user concurrency cap - and create the SAME two documents
- * (AgentExecution + the dispatch-time prompt Quest) before invoking the executor Lambda.
+ * (AgentExecution + the dispatch-time prompt Quest) before dispatching the executor.
  * Duplicating that across two transports is how the two drift; it lives here instead.
  *
  * The function never throws for a rejected request and never speaks HTTP or WebSocket:
@@ -23,13 +23,14 @@ import {
 } from '@bike4mind/database';
 import type { GenerateImageToolCall, AudioGenerationToolCall, IChatHistoryItem } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
-import { LambdaClient, InvokeCommand } from '@aws-sdk/client-lambda';
 import { MAX_CONCURRENT_EXECUTIONS_PER_USER, STALE_ACTIVE_MS } from '@server/utils/executionLimits';
-import { resolveAgentExecutorFunctionName } from '@server/utils/agentExecutorFunctionName';
+import {
+  dispatchAgentExecution,
+  resolveAgentExecutorTarget,
+  AgentExecutorRejectedError,
+} from '@server/utils/dispatchAgentExecution';
 import { settleStrandedQuests } from '@server/utils/settleStrandedQuests';
 import { isHeadlessConnection } from '@server/utils/headlessConnection';
-
-const lambdaClient = new LambdaClient({});
 
 /**
  * Per-user, in-container memoization of the stale-active sweep. The sweep is an
@@ -238,8 +239,13 @@ export async function startAgentExecution(
   // and failing here leaves no orphan AgentExecution/Quest behind for a run that was
   // never going to start. The name comes from a different SST link depending on which
   // Lambda we are in - see resolveAgentExecutorFunctionName.
-  const executorFunctionName = resolveAgentExecutorFunctionName();
-  if (!executorFunctionName) {
+  let executorTarget;
+  try {
+    executorTarget = resolveAgentExecutorTarget();
+  } catch {
+    return { ok: false, reason: 'dispatch_failed', message: 'Agent execution is not configured correctly.' };
+  }
+  if (!executorTarget) {
     logger.error('[Start] Agent executor is not linked to this deployment - cannot dispatch', { userId });
     return {
       ok: false,
@@ -345,7 +351,7 @@ export async function startAgentExecution(
     });
   }
 
-  logger.info('[Start] Created execution, invoking Lambda', { executionId, persistedQuestId });
+  logger.info('[Start] Created execution, dispatching executor', { executionId, persistedQuestId });
 
   // Invoke the Agent Executor Lambda (async - don't wait for completion). If the
   // invoke throws (throttle, IAM, network), tear down the dispatch-time Quest so we
@@ -353,50 +359,53 @@ export async function startAgentExecution(
   // AgentExecution doc lingers as `pending`; the stale-active sweep above reaps it on
   // the next start by the same user.
   try {
-    await lambdaClient.send(
-      new InvokeCommand({
-        FunctionName: executorFunctionName,
-        InvocationType: 'Event',
-        Payload: Buffer.from(
-          JSON.stringify({
-            executionId,
-            userId,
-            sessionId: input.sessionId,
-            // Only the real Quest id, never a fallback: the WS caller's `questId` is
-            // the sessionId (a client-side back-ref) and would mis-key the optimistic
-            // bubble swap the executor drives off this field.
-            questId: persistedQuestId,
-            query: input.query,
-            model: input.model,
-            connectionId: input.connectionId,
-            organizationId: input.organizationId,
-            agentId: input.agentId,
-            enabledTools: input.enabledTools,
-            enabledToolsAreAmbient: input.enabledToolsAreAmbient,
-            maxIterations: input.maxIterations,
-            // Forwarded here *and* persisted on the doc (above), unlike
-            // `enableMementos` which is doc-only. The executor resolves
-            // `startPayload?.enableLattice ?? execution.enableLattice ?? false`, so
-            // this channel is defense-in-depth: the first iteration never depends on
-            // the doc write having landed first.
-            enableLattice: input.enableLattice,
-            // Same dual channel as `enableLattice`, and for the same reason: the executor
-            // resolves `startPayload?.enableArtifacts ?? execution.enableArtifacts`, so the
-            // first iteration never depends on the doc write having landed first.
-            enableArtifacts: input.enableArtifacts,
-          })
-        ),
-      })
+    await dispatchAgentExecution(
+      {
+        executionId,
+        userId,
+        sessionId: input.sessionId,
+        // Only the real Quest id, never a fallback: the WS caller's `questId` is
+        // the sessionId (a client-side back-ref) and would mis-key the optimistic
+        // bubble swap the executor drives off this field.
+        questId: persistedQuestId,
+        query: input.query,
+        model: input.model,
+        connectionId: input.connectionId,
+        organizationId: input.organizationId,
+        agentId: input.agentId,
+        enabledTools: input.enabledTools,
+        enabledToolsAreAmbient: input.enabledToolsAreAmbient,
+        maxIterations: input.maxIterations,
+        // Forwarded here *and* persisted on the doc (above), unlike
+        // `enableMementos` which is doc-only. The executor resolves
+        // `startPayload?.enableLattice ?? execution.enableLattice ?? false`, so
+        // this channel is defense-in-depth: the first iteration never depends on
+        // the doc write having landed first.
+        enableLattice: input.enableLattice,
+        // Same dual channel as `enableLattice`, and for the same reason: the executor
+        // resolves `startPayload?.enableArtifacts ?? execution.enableArtifacts`, so the
+        // first iteration never depends on the doc write having landed first.
+        enableArtifacts: input.enableArtifacts,
+      },
+      executorTarget
     );
   } catch (invokeErr) {
-    logger.error('[Start] Lambda invoke failed - cleaning up dispatch-time Quest', {
+    if (executorTarget.kind === 'http' && !(invokeErr instanceof AgentExecutorRejectedError)) {
+      return {
+        ok: false,
+        reason: 'dispatch_failed',
+        message: `Execution ${executionId} dispatch could not be confirmed. Check it before starting another run.`,
+        executionId,
+      };
+    }
+    logger.error('[Start] Executor rejected dispatch - cleaning up dispatch-time Quest', {
       executionId,
       persistedQuestId,
       error: invokeErr instanceof Error ? invokeErr.message : String(invokeErr),
     });
     if (persistedQuestId) {
       await Quest.deleteOne({ _id: persistedQuestId }).catch(deleteErr => {
-        logger.warn('[Start] Failed to clean up dispatch-time Quest after Lambda invoke failure', {
+        logger.warn('[Start] Failed to clean up dispatch-time Quest after executor rejection', {
           executionId,
           persistedQuestId,
           error: deleteErr instanceof Error ? deleteErr.message : String(deleteErr),
@@ -411,6 +420,6 @@ export async function startAgentExecution(
     };
   }
 
-  logger.info('[Start] Lambda invoked', { executionId });
+  logger.info('[Start] Executor dispatched', { executionId });
   return { ok: true, executionId, questId: persistedQuestId };
 }

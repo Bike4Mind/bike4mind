@@ -183,6 +183,31 @@ describe('GET /api/feedback', () => {
     expect(mockFind).not.toHaveBeenCalled();
   });
 
+  // FeedbackModel.organizationId is ObjectId-typed, so an unchecked value would reach the query and
+  // throw a CastError, which errorHandler leaves as a 500 at `error` (only an `_id` cast is a 404).
+  it('rejects a malformed organizationId with a 422 logged at warn, before any query runs', async () => {
+    const { req, res } = buildRequest({ organizationId: 'junk' }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(mockFind).not.toHaveBeenCalled();
+    expect(mockCountDocuments).not.toHaveBeenCalled();
+
+    const { logger } = req as unknown as { logger: Record<string, Mock> };
+    expect(logger.warn).toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
+  });
+
+  it('ANDs a valid organizationId into the filter', async () => {
+    const organizationId = '64b7f9c2a1e4d3b2c1a0f9e8';
+    const { req, res } = buildRequest({ organizationId }, adminAbility());
+    await runHandler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    const findFilter = mockFind.mock.calls[0][0] as { $and: unknown[] };
+    expect(findFilter.$and).toContainEqual({ organizationId });
+  });
+
   it('projects only the list allowlist, never promptMeta', async () => {
     const { req, res } = buildRequest({}, adminAbility());
     await runHandler(req, res);
