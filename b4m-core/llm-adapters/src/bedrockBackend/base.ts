@@ -489,8 +489,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             });
             emittedTextChars += streamedText.reduce((n, t) => n + (t?.length ?? 0), 0);
 
+            // Reasoning arrives on its own chunk, so the tag is frame-wide.
+            const channel = chunk?.choices.find(c => c.channel)?.channel;
+
             // Send streamed text from chunk text data
-            await callback(streamedText, buildCompletionInfo());
+            await callback(streamedText, { ...buildCompletionInfo(), ...(channel ? { channel } : {}) });
           }
         }
 
@@ -645,10 +648,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 let thisToolHadArtifact = false;
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(outcome.name, outcome.result, async results => {
+                await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
                   thisToolHadArtifact = true;
                   anyArtifactWasStreamed = true;
-                  await artifactCallback(results, buildCompletionInfo());
+                  await artifactCallback(results, { ...buildCompletionInfo(), ...artifactInfo });
                 });
 
                 // Strip artifact markup from every tool result, not only the ones that
@@ -806,10 +809,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
                 let thisToolHadArtifact = false;
 
                 // For tools that return artifacts (like recharts), stream the result directly
-                await handleToolResultStreaming(name, result, async results => {
+                await handleToolResultStreaming(name, result, async (results, artifactInfo) => {
                   thisToolHadArtifact = true;
                   anyArtifactWasStreamed = true;
-                  await artifactCallback(results, buildCompletionInfo());
+                  await artifactCallback(results, { ...buildCompletionInfo(), ...artifactInfo });
                 });
 
                 // Strip artifact markup from every tool result, not only the ones that

@@ -57,7 +57,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
     ) => {
       h.lastBackendTools = options.tools ?? [];
       if (!h.script) {
-        await onChunk(['', 'plain answer'], { inputTokens: 40, outputTokens: 10 });
+        await onChunk(['plain answer'], { inputTokens: 40, outputTokens: 10 });
         return;
       }
       const tool = (options.tools ?? []).find(t => t.toolSchema.name === h.script!.toolName);
@@ -74,7 +74,7 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
           : `TOOL_ERROR:${String((outcome as { error: unknown }).error)}`;
       }
       // Turn 2: answer quoting the tool result; terminal chunk carries the cumulative usage.
-      await onChunk(['', `ANSWER:: ${toolResult}`], { inputTokens: 120, outputTokens: 40 });
+      await onChunk([`ANSWER:: ${toolResult}`], { inputTokens: 120, outputTokens: 40 });
     },
   };
   return {
@@ -83,6 +83,8 @@ vi.mock('@bike4mind/llm-adapters', async importOriginal => {
       {
         id: 'test-model',
         backend: 'anthropic',
+        // Read by the embed reasoning gate; a real catalog row always carries one.
+        adapterFamily: 'anthropic-messages',
         type: 'text',
         pricing: { 200000: { input: 0.000003, output: 0.000015 } },
       },

@@ -849,11 +849,15 @@ export class GeminiBackend implements ICompletionBackend {
                 let thisToolHadArtifact = false;
 
                 // Stream tool results for artifact-generating tools (like recharts)
-                await handleToolResultStreaming(outcome.toolCall.name, outcome.result, async results => {
-                  thisToolHadArtifact = true;
-                  anyArtifactWasStreamed = true;
-                  await artifactCallback(results, { toolsUsed });
-                });
+                await handleToolResultStreaming(
+                  outcome.toolCall.name,
+                  outcome.result,
+                  async (results, artifactInfo) => {
+                    thisToolHadArtifact = true;
+                    anyArtifactWasStreamed = true;
+                    await artifactCallback(results, { toolsUsed, ...artifactInfo });
+                  }
+                );
 
                 // Strip artifact markup from every tool result, not only the ones that
                 // streamed, so the model never sees markup it could echo into its reply.
@@ -1115,10 +1119,10 @@ export class GeminiBackend implements ICompletionBackend {
             let thisToolHadArtifact = false;
 
             // Stream tool results for artifact-generating tools (like recharts)
-            await handleToolResultStreaming(outcome.toolCall.name, outcome.result, async results => {
+            await handleToolResultStreaming(outcome.toolCall.name, outcome.result, async (results, artifactInfo) => {
               thisToolHadArtifact = true;
               anyArtifactWasStreamed = true;
-              await artifactCallback(results, { toolsUsed });
+              await artifactCallback(results, { toolsUsed, ...artifactInfo });
             });
 
             // Strip artifact markup from every tool result, not only the ones that streamed,

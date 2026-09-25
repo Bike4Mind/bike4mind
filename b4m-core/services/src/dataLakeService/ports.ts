@@ -189,7 +189,7 @@ export async function bestEffortAdjustOwnerStorage(
     try {
       await users.incrementCurrentStorage(userId, deltaBytes);
     } catch (error) {
-      logger?.warn?.(`Failed to adjust storage for user ${userId} after a data lake lifecycle sweep:`, error);
+      logger?.warn?.(`Failed to adjust storage for user ${userId} after a file lifecycle change:`, error);
     }
   }
 }
