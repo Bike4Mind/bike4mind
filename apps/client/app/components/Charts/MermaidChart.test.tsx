@@ -302,6 +302,25 @@ describe('MermaidChart', () => {
         expect(errorDisplay.textContent).toContain('Syntax error');
       });
     });
+
+    // Mermaid's htmlLabels emit an unclosed <br> inside foreignObject content whenever a node
+    // label wraps a line. Strict image/svg+xml parsing rejects that as invalid XML, so this
+    // guards against a regression back to that parser.
+    it('should render a chart whose svg contains an unclosed <br> in a foreignObject label', async () => {
+      const mermaid = await import('mermaid');
+      vi.mocked(mermaid.default.render).mockResolvedValueOnce({
+        svg: '<svg width="100" height="100" viewBox="0 0 100 100"><foreignObject><div xmlns="http://www.w3.org/1999/xhtml"><span>a<br>b</span></div></foreignObject></svg>',
+      });
+
+      render(<MermaidChart chartDefinition="graph TD\n  A[a<br>b]" />);
+
+      await waitFor(() => {
+        const container = screen.getByTestId('mermaid-chart-container');
+        expect(container.querySelector('svg')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByTestId('mermaid-error-display')).not.toBeInTheDocument();
+    });
   });
 
   describe('Local Definition Updates', () => {
