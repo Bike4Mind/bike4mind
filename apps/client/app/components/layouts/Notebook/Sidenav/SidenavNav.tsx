@@ -15,7 +15,6 @@ import LocalFireDepartmentOutlinedIcon from '@mui/icons-material/LocalFireDepart
 import AccountTreeOutlinedIcon from '@mui/icons-material/AccountTreeOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
@@ -27,7 +26,6 @@ import { useOptiAccess } from '@client/app/hooks/data/opti';
 import { useMeetingsAccess } from '@client/app/hooks/data/meetings';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
-import { useHelpPanel, openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { useNotebookLayout } from '..';
 
 type NavItem = {
@@ -36,8 +34,8 @@ type NavItem = {
   icon: ReactNode;
   isActive: boolean;
   onClick: () => void;
-  // Renders a thin separator above this row - used to set utility items (Help)
-  // apart from the workspace destinations above them.
+  // Renders a thin separator above this row, to set a utility item apart from the
+  // workspace destinations above it.
   dividerAbove?: boolean;
 };
 
@@ -85,7 +83,6 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // still pays its one-time credit reward on first use, but discovery must not
   // depend on having already discovered it - Hearth was only reachable from the
   // Gears page, so its row could never appear on its own.
-  const helpOpen = useHelpPanel(s => s.open);
 
   const closeOnMobile = () => {
     if (isMobile) setOpenSideNav(false);
@@ -289,6 +286,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       : []),
     {
       // Permanent: the discovery surface for everything the rail hasn't earned yet.
+      // Also the only nav-level way into the Help Center, which it links out to -
+      // the rail no longer carries a row of its own.
       key: 'gears',
       label: t('sidenav.gears', 'Gears'),
       icon: iconSlot(<SettingsOutlinedIcon sx={{ fontSize: '18px' }} />),
@@ -296,17 +295,6 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       onClick: () => {
         closeOnMobile();
         navigate({ to: '/gears' });
-      },
-    },
-    {
-      key: 'help',
-      label: t('sidenav.help', 'Help Center'),
-      icon: iconSlot(<HelpCenterOutlinedIcon sx={{ fontSize: '18px' }} />),
-      // The help panel is an overlay, not a route - highlight while it's open.
-      isActive: helpOpen,
-      onClick: () => {
-        closeOnMobile();
-        openHelpPanel();
       },
     },
   ];
