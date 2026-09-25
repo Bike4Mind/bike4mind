@@ -75,6 +75,15 @@ describe('proxy CSP header', () => {
     expect(sources('connect-src')).toContain('https://www.facebook.com');
   });
 
+  // connect-src too: the service worker's image cache re-fetches tiles, and a worker fetch is
+  // checked against connect-src, so img-src alone leaves the map blank once the SW is active.
+  it.each(['img-src', 'connect-src'])('%s allows the OpenStreetMap tiles the inline location map loads', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toContain('https://tile.openstreetmap.org');
+  });
+
   it('frame-src allows only the -nocookie YouTube host', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';

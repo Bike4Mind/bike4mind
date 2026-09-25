@@ -1,4 +1,4 @@
-import { Box, IconButton, Typography, useTheme } from '@mui/joy';
+import { Box, Button, IconButton, Typography, useTheme } from '@mui/joy';
 import { keyframes } from '@mui/system';
 import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import WarningAmberRoundedIcon from '@mui/icons-material/WarningAmberRounded';
@@ -38,9 +38,12 @@ const iconPulse = keyframes`
 
 interface NoModelsWarningProps {
   show: boolean;
+  /** The model list failed to load - a transient fault, not a permissions problem. */
+  loadError?: boolean;
+  onRetry?: () => void;
 }
 
-export function NoModelsWarning({ show }: NoModelsWarningProps) {
+export function NoModelsWarning({ show, loadError = false, onRetry }: NoModelsWarningProps) {
   const theme = useTheme();
   const isDarkMode = theme.palette.mode === 'dark';
 
@@ -80,13 +83,20 @@ export function NoModelsWarning({ show }: NoModelsWarningProps) {
             fontWeight="bold"
             sx={{ color: isDarkMode ? 'danger.400' : 'danger.500' }}
           >
-            You don&apos;t have access to any AI models.
+            {loadError ? <>Couldn&apos;t load AI models.</> : <>You don&apos;t have access to any AI models.</>}
           </Typography>
           <Typography fontSize="10px" sx={{ color: 'text.secondary' }}>
-            Please contact your administrator to request the appropriate permissions.
+            {loadError
+              ? 'Check your connection and try again.'
+              : 'Please contact your administrator to request the appropriate permissions.'}
           </Typography>
         </Box>
       </Box>
+      {loadError && onRetry && (
+        <Button size="sm" variant="soft" color="danger" onClick={onRetry} data-testid="no-models-retry-btn">
+          Retry
+        </Button>
+      )}
     </Box>
   );
 }

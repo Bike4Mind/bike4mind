@@ -46,6 +46,7 @@ import { CorrectionComposer } from './CorrectionComposer';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { feedbackSessionQueryKey, useGetFeedbackBySessionId } from '@client/app/hooks/data/feedback';
 import { isOptimisticId, SendMessageOptions } from '@client/app/utils/llm';
 import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
@@ -432,7 +433,7 @@ const MessageContent: React.FC<ContentProps> = memo(
         if (msg.action !== 'image_moderation_status') return;
         if (!messageData.fabFileIds?.includes(msg.fabFileId)) return;
 
-        queryClient.invalidateQueries({ queryKey: ['fabFiles', 'quest', messageData.id] });
+        queryClient.invalidateQueries({ queryKey: fabFileKeys.quest(messageData.id!) });
       });
 
       return () => {
@@ -525,7 +526,11 @@ const MessageContent: React.FC<ContentProps> = memo(
     // Stripped here, at the read boundary, so every consumer below (Copy button, Download menu,
     // publish/share markdown) never sees raw b4m_cards fence JSON - only the reply renderer
     // (PromptReplies.tsx) intercepts the fence to render cards instead.
-    const extractedReplies = useMemo(() => extractReplies(messageData).map(stripSearchResultCardFences), [messageData]);
+    const extractedReplies = useMemo(
+      () =>
+        extractReplies(messageData).map(reply => stripSearchResultCardFences(reply, messageData.promptMeta?.citables)),
+      [messageData]
+    );
 
     // Publish-and-share: snapshot this reply to a public /p/r URL + social bar.
     const { publishAndShare: publishAndShareReply, modal: shareModal } = usePublishShare();

@@ -171,6 +171,28 @@ describe('organization detail page - ?tab= deep link', () => {
     expect(selectedTabName()).toBe('Settings');
   });
 
+  it('opens the Billing tab for the owner, the only caller its actions accept', () => {
+    searchParams.current = { tab: 'billing' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Billing');
+  });
+
+  // Same caller, same manage permissions, opposite answer to the Settings case above: Billing
+  // rides its own owner-only gate because Subscribe, Manage Seats and Billing Portal all reject a
+  // non-owner. Before the split this member got the whole tab and an error from every control.
+  it('refuses Billing for a member who may manage the org', () => {
+    searchParams.current = { tab: 'billing' };
+    user.current = { id: 'manager2' };
+
+    renderThroughLoad();
+
+    expect(selectedTabName()).toBe('Overview');
+    expect(screen.queryByRole('tab', { name: 'Billing' })).toBeNull();
+    expect(screen.getByRole('tab', { name: 'Settings' })).toBeTruthy();
+  });
+
   it('falls back to Overview for a non-member', () => {
     searchParams.current = { tab: 'settings' };
     user.current = { id: 'stranger9' };

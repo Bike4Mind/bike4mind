@@ -474,7 +474,10 @@ export const handler = withEventContext(async (event, logger) => {
   // The `text` field below (unlike `blocks`) is what Slack uses for push/desktop notifications,
   // so it must be stripped independently rather than relying on formatSimpleAgentResponse's own
   // stripping of its blocks output.
-  const aiResponse = stripSearchResultCardFences(quest.reply || quest.replies?.[0] || 'Processing complete.');
+  const aiResponse = stripSearchResultCardFences(
+    quest.reply || quest.replies?.[0] || 'Processing complete.',
+    quest.promptMeta?.citables
+  );
   let formatted = formatSimpleAgentResponse(aiResponse);
 
   let displayText = aiResponse;

@@ -832,9 +832,13 @@ export class GeminiBackend implements ICompletionBackend {
             for (const outcome of outcomes) {
               if (outcome.ok) {
                 // Stream tool results for artifact-generating tools (like recharts)
-                await handleToolResultStreaming(outcome.toolCall.name, outcome.result, async results => {
-                  await callback(results, { toolsUsed });
-                });
+                await handleToolResultStreaming(
+                  outcome.toolCall.name,
+                  outcome.result,
+                  async (results, artifactInfo) => {
+                    await callback(results, { toolsUsed, ...artifactInfo });
+                  }
+                );
 
                 const resultContent = JSON.stringify({ result: outcome.result });
                 recordToolResult(
@@ -1069,8 +1073,8 @@ export class GeminiBackend implements ICompletionBackend {
         for (const outcome of outcomes) {
           if (outcome.ok) {
             // Stream tool results for artifact-generating tools (like recharts)
-            await handleToolResultStreaming(outcome.toolCall.name, outcome.result, async results => {
-              await callback(results, { toolsUsed });
+            await handleToolResultStreaming(outcome.toolCall.name, outcome.result, async (results, artifactInfo) => {
+              await callback(results, { toolsUsed, ...artifactInfo });
             });
 
             const resultContent = JSON.stringify({ result: outcome.result });

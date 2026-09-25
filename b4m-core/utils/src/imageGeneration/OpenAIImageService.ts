@@ -532,12 +532,12 @@ export class OpenAIImageService extends AIImageService {
         Logger.globalInstance.debug(`[DEBUG] ⚠️ ${editModel} parameter adjustments:`, editWarnings);
       }
 
-      // Gates `size` on the GPT-Image arm of the request below, and only there: the dall-e-2
-      // arm still passes `size` straight through under a cast. A GPT-Image tier accepts only
-      // its own sizes - a dall-e-2 size (e.g. 256x256/512x512) or an out-of-range resolution
-      // is a 400 from OpenAI - while gpt-image-2 additionally takes any custom WIDTHxHEIGHT
-      // meeting its constraints, so this must not be a flat preset check. An unsupported or
-      // absent size is omitted so OpenAI's own default sizing applies, as it did before.
+      // Gates `size` on both arms of the request below, each against its own tier: a GPT-Image
+      // tier accepts only its own sizes - a dall-e-2 size (e.g. 256x256/512x512) or an
+      // out-of-range resolution is a 400 from OpenAI - while gpt-image-2 additionally takes any
+      // custom WIDTHxHEIGHT meeting its constraints, so this must not be a flat preset check.
+      // dall-e-2 accepts only 256x256/512x512/1024x1024. An unsupported or absent size is
+      // omitted so OpenAI's own default sizing applies rather than the request 400-ing.
       // The background/output_format alpha controls are resolved above via gptImageOutputOptions.
       const forwardSize = isSupportedImageSize(editModel, size);
       // Callers bill against the requested tier before getting here, so it has to reach
@@ -576,7 +576,9 @@ export class OpenAIImageService extends AIImageService {
               // Pinned, not forwarded from `n`: only data[0] is returned below, so asking
               // OpenAI for more renders images we pay for and then discard.
               n: 1,
-              size: size as '1024x1024' | '1024x1536' | '1536x1024' | '256x256' | '512x512' | 'auto' | undefined,
+              // forwardSize has already measured this against DALL_E_2.sizes, which is exactly
+              // the SDK's own union for this arm - so the cast narrows rather than widens.
+              ...(forwardSize ? { size: size as '256x256' | '512x512' | '1024x1024' } : {}),
               response_format,
               user,
             }

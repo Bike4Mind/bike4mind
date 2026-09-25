@@ -64,7 +64,7 @@ export function toExportableSession(session: ISessionDocument, chatHistory: ICha
         role: 'assistant',
         // Every downstream export format (CSV, XLSX, DOCX, ...) renders `content` as plain
         // text with no way to show cards, so strip the fence at this single read boundary.
-        content: stripSearchResultCardFences(reply),
+        content: stripSearchResultCardFences(reply, item.promptMeta?.citables),
         model: item.promptMeta?.model?.name,
         tokensUsed: item.promptMeta?.tokenUsage?.outputTokens,
         creditsUsed: item.creditsUsed,

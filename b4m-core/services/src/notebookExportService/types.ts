@@ -1,4 +1,4 @@
-import type { PromptMeta, KnowledgeType, ChatHistoryItemType } from '@bike4mind/common';
+import type { PromptMeta, KnowledgeType, ChatHistoryItemType, CitableSource } from '@bike4mind/common';
 
 // Notebook Export/Import Types
 // This defines the standardized format for exporting and importing notebooks/chat sessions
@@ -89,6 +89,8 @@ export interface ExportedChatMessage {
     /** Projected by the mapper: the full groups carry raw prompt text this export must not ship. */
     performance?: { totalResponseTime?: number };
     context?: { contextWindowUsage?: NonNullable<PromptMeta['context']>['contextWindowUsage'] };
+    /** Needed to resolve a `b4m_map` fence's place ids when the exporter strips card fences. */
+    citables?: CitableSource[];
   };
 
   // Status and interaction

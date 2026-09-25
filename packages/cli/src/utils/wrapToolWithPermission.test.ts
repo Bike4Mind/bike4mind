@@ -22,7 +22,7 @@ import { wrapToolWithPermission } from './toolsAdapter.js';
 import { PermissionManager } from './PermissionManager.js';
 import { useCliStore } from '../store/index.js';
 import { executeTool } from '../llm/ToolRouter';
-import { getCliOnlyTools } from '@bike4mind/services/llm/tools/cliTools';
+import { getCliOnlyTools, resolveEditLocalFile } from '@bike4mind/services/llm/tools/cliTools';
 
 function tool(name: string, fn?: (args: any) => Promise<string>): ICompletionOptionTools {
   return {
@@ -210,6 +210,35 @@ describe('wrapToolWithPermission: edit_local_file fuzzy force-prompt', () => {
 
     expect(prompt).toHaveBeenCalledTimes(1);
     expect(await fs.readFile(file, 'utf-8')).toBe('hi world\n');
+  });
+
+  it('strips an externally supplied gateSnapshot when the gate itself finds no match', async () => {
+    // A gateSnapshot present in the raw args must never survive to the write path
+    // when the gate's own resolveEditLocalFile() throws (editPlan stays null) -
+    // only a gate-computed gateSnapshot, bound to a real resolveEdit() match, may
+    // ever reach the write.
+    const { dir, file } = await fuzzyFile();
+    const pm = new PermissionManager([], undefined, []);
+    pm.trustToolForSession('edit_local_file');
+    const prompt = vi.fn().mockResolvedValue({ action: 'allow-once' });
+    const wrapped = wrapEdit(prompt, pm, [dir]);
+
+    const realPlan = await resolveEditLocalFile({ path: file, old_string: 'hello world', new_string: 'x' }, [dir]);
+
+    await expect(
+      wrapped.toolFn({
+        path: file,
+        old_string: 'this string does not exist in the file',
+        new_string: 'irrelevant',
+        gateSnapshot: {
+          contentHash: realPlan.contentHash,
+          resolvedEdit: { startIndex: 0, matchedText: 'hello world', replacement: 'unexpected replacement' },
+        },
+      })
+    ).rejects.toThrow(/not found/i);
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(await fs.readFile(file, 'utf-8')).toBe('hello world\n'); // untouched
   });
 
   it('never force-prompts (or writes) a fuzzy edit whose path is outside the allowed directories', async () => {

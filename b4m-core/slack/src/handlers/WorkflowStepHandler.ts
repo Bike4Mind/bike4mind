@@ -631,7 +631,7 @@ export class WorkflowStepHandler {
             questId,
             hasResponse: !!response,
           });
-          return response ? stripSearchResultCardFences(response) : response;
+          return response ? stripSearchResultCardFences(response, quest.promptMeta?.citables) : response;
         }
 
         if (quest?.status === 'stopped') {

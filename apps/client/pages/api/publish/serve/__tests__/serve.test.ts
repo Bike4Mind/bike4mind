@@ -513,6 +513,64 @@ describe('GET /api/publish/serve - reply/fabfile path is unchanged', () => {
   });
 });
 
+// b4m-bob#318: the sign-up prompt must never pretend to gate content that's already
+// delivered on the page - it's an invitation, offered only to an anonymous visitor at a
+// plain public link, never to a share-link holder or a signed-in viewer (both already have
+// full access to everything on the page).
+describe('GET /api/publish/serve - sign-up prompt honesty (#318)', () => {
+  const publicReplyFixture = (over: Record<string, unknown> = {}) => ({
+    publicId: 'r1',
+    title: 'A reply',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Hello world',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'x',
+    ...over,
+  });
+
+  it('shows no prompt and no header sign-up link to a share-link holder', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReplyFixture());
+    const { res, promise } = run(['a', 'tokreply']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).not.toContain('id="b4m-gate-panel"');
+    expect(data).not.toContain('>Sign up<');
+  });
+
+  it('shows no prompt and no header sign-up link to a signed-in viewer', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReplyFixture());
+    const { res, promise } = run(['r', 'r1'], { user: { id: 'u1' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).not.toContain('id="b4m-gate-panel"');
+    expect(data).not.toContain('>Sign up<');
+  });
+
+  it('shows an honest, non-modal prompt to an anonymous viewer of a plain public link', async () => {
+    mockArtifactFindOne.mockReturnValue(publicReplyFixture());
+    const { res, promise } = run(['r', 'r1']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('id="b4m-gate-panel"');
+    expect(data).toContain('>Sign up<');
+    // Honest and non-modal: no scroll lock, no blur/gradient overlay, not a dialog.
+    expect(data).not.toContain('overflow:hidden');
+    expect(data).not.toContain('b4m-gate-ol');
+    expect(data).not.toContain('role="dialog"');
+  });
+});
+
 describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
   const HTML_ARTIFACT =
     '<artifact identifier="tip" type="text/html" title="Tip Calculator">' +
@@ -1311,6 +1369,44 @@ describe('GET /api/publish/serve - ?format=raw plain-text alternate', () => {
     expect(body).toContain('# A reply');
     expect(body).toContain('# Hello world');
     expect(body).toContain('Body markdown.');
+  });
+
+  // The map fence refers to places by id only - the served artifact must carry its own
+  // citables snapshot to resolve them, since the source Quest may since have changed or
+  // been deleted (#3250 follow-up).
+  it('resolves a b4m_map fence using the artifact citables snapshot, dropping an unresolved id', async () => {
+    mockArtifactFindOne.mockReturnValue({
+      publicId: 'r2',
+      title: 'A map reply',
+      visibility: 'public',
+      ownerId: 'owner1',
+      source: { kind: 'reply' },
+      renderedBody:
+        'Here are some options.\n\n```b4m_map\n{"places":[{"id":"place-1","name":"Barr"},{"id":"invented","name":"Fake"}]}\n```\n',
+      citables: [
+        {
+          id: 'place:place-1',
+          type: 'web_url',
+          title: 'Barr',
+          metadata: { place: { id: 'place-1', name: 'Barr', lat: 55.67, lng: 12.57 } },
+        },
+      ],
+      storageKeyPrefix: '',
+      manifest: [],
+      tier: 'user',
+      scopeId: 's',
+      slug: 'y',
+    });
+
+    const { res, promise } = run(['r', 'r2'], { format: 'raw' });
+    await promise;
+
+    const body = res._getData() as string;
+    expect(body).toContain('Barr');
+    expect(body).toContain('Open in Google Maps');
+    expect(body).not.toContain('Fake');
+    expect(body).not.toContain('invented');
+    expect(body).not.toContain('b4m_map');
   });
 
   it('returns 404 for ?format=raw on a private bundle (never a raw leak of gated content)', async () => {

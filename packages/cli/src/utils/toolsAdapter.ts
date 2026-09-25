@@ -222,9 +222,15 @@ export function wrapToolWithPermission(
       }
 
       const effectiveArgs = isSandboxed ? sandboxedArgs : args;
-      // Args actually handed to execution. Defaults to effectiveArgs; the fuzzy-edit
-      // gate below rebinds it to carry the approved content-hash snapshot.
-      let execArgs: Record<string, unknown> = effectiveArgs;
+      // Args actually handed to execution. Defaults to effectiveArgs, minus any
+      // gateSnapshot present in the raw args - only the edit_local_file gate below
+      // (once it actually resolves) may set this field. Stripping it here
+      // unconditionally, rather than only when the gate resolves, closes the path
+      // where an externally supplied gateSnapshot would otherwise survive untouched
+      // whenever resolveEditLocalFile() throws (an ambiguous or no-match old_string,
+      // not just an auth/IO error) and let editLocalFile() trust an unverified span.
+      const { gateSnapshot: _modelSuppliedGateSnapshot, ...effectiveArgsSansGateSnapshot } = effectiveArgs ?? {};
+      let execArgs: Record<string, unknown> = effectiveArgsSansGateSnapshot;
       // Temp sandbox profile this wrapper created (Seatbelt writes a .sb file).
       // Cleaned once in the finally below: after the awaited command completes on
       // the success path, and on any early-return path (plan-mode block, permission
@@ -357,6 +363,18 @@ export function wrapToolWithPermission(
         // and need no binding.
         if (forcePromptForFuzzyEdit && editPlan) {
           execArgs = { ...effectiveArgs, confirmedFuzzyHash: editPlan.contentHash };
+        }
+
+        // Hand the write path the gate's already-resolved span, so it can skip its own
+        // resolveEdit() pass when the file still hashes to what the gate saw. The write
+        // path still always reads the file fresh - the read itself can't be skipped,
+        // since the file can change between the gate and the write with no permission
+        // prompt involved at all (another tool call, a formatter, a watcher).
+        if (toolName === 'edit_local_file' && editPlan) {
+          execArgs = {
+            ...execArgs,
+            gateSnapshot: { contentHash: editPlan.contentHash, resolvedEdit: editPlan.resolvedEdit },
+          };
         }
 
         // Host allowlist (claude --allowedTools): auto-approve tools matching an

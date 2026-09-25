@@ -25,6 +25,8 @@ import { resolve } from 'path';
  */
 describe('useSendMessage - rapidReply reset (regression)', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
+  // The cancel path was extracted from useSendMessage's handleStopMessage.
+  const stopSource = readFileSync(resolve(__dirname, 'stopChatCompletion.ts'), 'utf8');
 
   // The send-time reset only: the `if (!isRealSlashCommand)` block and nothing after it.
   const sendReset =
@@ -32,7 +34,7 @@ describe('useSendMessage - rapidReply reset (regression)', () => {
 
   // The post-cancel reset only, anchored on its own status message.
   const cancelReset =
-    source.match(/setChatCompletion\(prev => \(\{[^}]*?'Generation cancelled by user'[\s\S]*?\}\)\);/)?.[0] ?? '';
+    stopSource.match(/setChatCompletion\(prev => \(\{[^}]*?'Generation cancelled by user'[\s\S]*?\}\)\);/)?.[0] ?? '';
 
   it('scopes each assertion to a single reset', () => {
     expect(sendReset).not.toBe('');

@@ -15,6 +15,17 @@ import { useStreamingQueryUpdates } from './useStreamingQueryUpdates';
 import { useStreamingMetrics } from './useStreamingMetrics';
 import { useStreamingArtifactPersistence } from './useStreamingArtifactPersistence';
 import { dispatchUiSideEffects } from '../utils/uiSideEffectDispatcher';
+import { fabFileKeys } from './data/fabFileKeys';
+import useSessionLayout from './useSessionLayout';
+import {
+  IDLE_CHAT_COMPLETION,
+  isTerminalQuestStatus,
+  shouldAcceptStreamFrame,
+  shouldAcceptRapidReply,
+  blankRapidReplies,
+  shouldResetOnSessionChange,
+  terminalQuests,
+} from './chatCompletionState';
 
 export type IChatCompletion = {
   completed: boolean;
@@ -37,22 +48,15 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
   // Global streaming state for coordination with collection subscriptions
   const { startStreaming, receiveChunk, completeStreaming, errorStreaming } = useStreamingState();
 
-  const [chatCompletion, setChatCompletion] = useState<IChatCompletion>({
-    quest: undefined,
-    completed: true,
-    stopped: false,
-    statusMessage: undefined,
-    rapidReply: undefined,
-  });
+  const [chatCompletion, setChatCompletion] = useState<IChatCompletion>(IDLE_CHAT_COMPLETION);
 
   // Track pending session to handle race conditions during session creation
   const pendingSessionRef = useRef<string | null>(null);
 
-  // Last real (non-null, non-optimistic) sessionId this hook was subscribed to.
-  // Used below to detect a switch between two different real sessions (e.g.
-  // forking mid-stream) so a leftover "still streaming" state from the
-  // previous session doesn't lock the newly-viewed session's composer.
-  const prevRealSessionIdRef = useRef<string | null>(null);
+  // sessionId the subscription effect last ran for; undefined until the first run.
+  // Used below to detect a session switch so a leftover "still streaming" state
+  // from the previous session doesn't lock the newly-viewed session's composer.
+  const prevSessionIdRef = useRef<string | null | undefined>(undefined);
 
   // Store the last processed quest to avoid duplicate/outdated processing
   const lastProcessedQuestRef = useRef<any | null>(null);
@@ -70,6 +74,20 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
   const { updateStreamingQuest, cleanupStream } = useStreamingQueryUpdates({ chatCompletionRef, setChatCompletion });
   const metrics = useStreamingMetrics();
   const artifactPersistence = useStreamingArtifactPersistence();
+
+  // Everything the frame gates read besides the frame itself; read at frame time.
+  const streamGateContext = useCallback(() => {
+    const { pendingOptimisticId, pendingRealSessionId } = useSessionLayout.getState();
+    return {
+      sessionId,
+      pendingSessionId: pendingSessionRef.current,
+      current: chatCompletionRef.current,
+      // Both are written by this tab's own send. A null view counts too: the send sets
+      // pendingOptimisticId before its navigation to the tmpId has committed.
+      mintingOwnSession: !!pendingOptimisticId && (!sessionId || sessionId === pendingOptimisticId),
+      mintedSessionId: pendingRealSessionId,
+    };
+  }, [sessionId]);
 
   // PERFORMANCE FIX: Stable message handler that doesn't depend on state
   const handleStreamingMessage = useCallback(
@@ -117,6 +135,24 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
           );
 
           console.log('🚀 [useSubscribeChatCompletion] Rapid Reply stream message:', rapidReplyMessage);
+
+          // Acks fan out to every tab of the user, and the bubble renders under whichever quest
+          // holds this view's streaming slot, so another session's ack would read as ours.
+          // The schema marks both ids required, but a first send from /new posts neither.
+          const isOwnRapidReply = shouldAcceptRapidReply({
+            ...streamGateContext(),
+            frameSessionId: rapidReplyMessage.sessionId || undefined,
+            frameQuestId: rapidReplyMessage.questId || undefined,
+            claimBlank: () => blankRapidReplies.claim(),
+          });
+          if (!isOwnRapidReply) {
+            console.warn(`[QUEST-DROP] Wrong session for rapid reply - subscription ${metrics.subscriptionId}`, {
+              rapidReplySessionId: rapidReplyMessage.sessionId,
+              expectedSessionId: sessionId,
+              questId: rapidReplyMessage.questId,
+            });
+            return;
+          }
 
           // Update the rapid reply state
           setChatCompletion(prev => ({
@@ -167,18 +203,15 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
           metrics.handleQuestTransition(typedMsg.quest.id);
         }
 
-        // Allow messages for:
-        // 1. The current session
-        // 2. Any session when currentSessionId is null (new session being created)
-        // 3. A pending session that was just created
-        // 4. Any session while currentSessionId is still an optimistic tmp id
-        //    (the realId migration via session.created may not have completed
-        //    yet - chunks for the new session must not be silently dropped)
-        const isValidSession =
-          typedMsg.quest.sessionId === sessionId ||
-          (!sessionId && typedMsg.quest.sessionId) ||
-          typedMsg.quest.sessionId === pendingSessionRef.current ||
-          (isOptimisticId(sessionId) && !!typedMsg.quest.sessionId);
+        // While sessionId is still null/optimistic (the realId migration via
+        // session.created may not have completed yet) chunks for the new session
+        // must not be dropped - but neither may another session's stream be
+        // adopted, or its Stop button bleeds into this composer.
+        const isValidSession = shouldAcceptStreamFrame({
+          ...streamGateContext(),
+          frameSessionId: typedMsg.quest.sessionId,
+          frameQuestId: typedMsg.quest.id,
+        });
 
         if (!isValidSession) {
           console.warn(`[QUEST-DROP] Wrong session for streaming chunk - subscription ${metrics.subscriptionId}`, {
@@ -187,6 +220,16 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
             pendingSessionId: pendingSessionRef.current,
             questId: typedMsg.quest.id,
           });
+          return;
+        }
+
+        // A retried/reordered 'running' chunk landing after 'done'/'stopped' would
+        // otherwise flip the composer back to Stop for a quest that has ended.
+        if (
+          typedMsg.quest.id &&
+          terminalQuests.isStaleFrame(typedMsg.quest.id, typedMsg.quest.status, typedMsg.quest.updatedAt)
+        ) {
+          console.warn(`[QUEST-DROP] Ignoring non-terminal chunk for already-ended quest ${typedMsg.quest.id}`);
           return;
         }
 
@@ -221,7 +264,11 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
         metrics.recordFirstTokenIfNeeded(typedMsg.quest);
 
         // PERFORMANCE BOOST: Use stream React Query updates to prevent main thread blocking
-        const isComplete = typedMsg.quest.status === 'done';
+        const isComplete = isTerminalQuestStatus(typedMsg.quest.status);
+
+        if (isComplete && typedMsg.quest.id) {
+          terminalQuests.markTerminal(typedMsg.quest.id, typedMsg.quest.updatedAt);
+        }
 
         // Check if the incoming quest is outdated
         const lastProcessedQuest = lastProcessedQuestRef.current;
@@ -315,14 +362,18 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
               // Base without requiring a manual reload. The hook's 30-min staleTime
               // would otherwise hide them until navigation.
               queryClient.invalidateQueries({
-                queryKey: ['fabFiles', 'own', { sessionId: sessionIdToInvalidate }],
+                queryKey: fabFileKeys.ownBySession(sessionIdToInvalidate),
               });
             }, 2000);
           }
 
           // ARTIFACT PERSISTENCE: Extract and save artifacts from completed quest
           // (parsing, dedup, persistence, and id broadcast are owned by the hook)
-          artifactPersistence.persistArtifactsFromQuest(typedMsg.quest);
+          // 'done' only: a stopped reply is partial, and persisting it would also mark the
+          // quest as handled so a later retry's complete artifacts were skipped.
+          if (typedMsg.quest.status === 'done') {
+            artifactPersistence.persistArtifactsFromQuest(typedMsg.quest);
+          }
         }
       } catch (error) {
         perfLogger.error(`🚨 [STREAMING] Error in handleStreamingMessage:`, error);
@@ -336,6 +387,7 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
     },
     [
       sessionId,
+      streamGateContext,
       updateStreamingQuest,
       metrics,
       artifactPersistence,
@@ -353,26 +405,20 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
     artifactPersistence.reset();
     metrics.reset();
 
-    // Switching between two different real sessions (e.g. forking or navigating
-    // away while a completion is in-flight) must not carry over the previous
-    // session's "still streaming" state - otherwise the newly-viewed session's
-    // composer shows a spurious Stop button until the OTHER session's stream
-    // ends. Optimistic/null ids are skipped as endpoints of this comparison
-    // since they're transient placeholders during session creation, not a
-    // real session the user has switched away from or to.
-    const isRealSessionId = (id: string | null): id is string => !!id && !isOptimisticId(id);
-    if (isRealSessionId(sessionId)) {
-      if (isRealSessionId(prevRealSessionIdRef.current) && prevRealSessionIdRef.current !== sessionId) {
-        setChatCompletion({
-          quest: undefined,
-          completed: true,
-          stopped: false,
-          statusMessage: undefined,
-          rapidReply: undefined,
-        });
-      }
-      prevRealSessionIdRef.current = sessionId;
+    // Switching sessions (forking, navigating away mid-stream, or opening a new
+    // notebook) must not carry over the previous session's "still streaming"
+    // state - otherwise the newly-viewed composer shows a spurious Stop button
+    // until the OTHER session's stream ends. The tab's own send minting a new
+    // session (null/optimistic -> real) keeps it; see shouldResetOnSessionChange.
+    const prevSessionId = prevSessionIdRef.current;
+    if (prevSessionId !== undefined && prevSessionId !== sessionId) {
+      setChatCompletion(prev =>
+        shouldResetOnSessionChange(prevSessionId, sessionId, prev) ? IDLE_CHAT_COMPLETION : prev
+      );
+      // A pending id is only meaningful while this tab is minting that session.
+      if (!isOptimisticId(sessionId)) pendingSessionRef.current = null;
     }
+    prevSessionIdRef.current = sessionId;
 
     const unsubscribeChatCompletion = subscribeToAction('streamed_chat_completion', handleStreamingMessage);
     const unsubscribeRapidReply = subscribeToAction('streamed_rapid_reply', handleStreamingMessage);
