@@ -104,6 +104,18 @@ describe('normalizeResearchLevers', () => {
       ).toEqual(['spam.net', 'junk.org']);
     });
 
+    // Subdomains are already covered by the suffix match, so the prefix only ever narrowed the rule.
+    it('drops a leading www. so the bare domain is covered too', () => {
+      expect(
+        normalizeResearchLevers({ query: 'q', blockedDomains: ['www.pinterest.com', 'https://WWW.spam.net/x'] })
+          .blockedDomains
+      ).toEqual(['pinterest.com', 'spam.net']);
+    });
+
+    it('keeps www. when dropping it would leave a bare TLD that matches everything', () => {
+      expect(normalizeResearchLevers({ query: 'q', blockedDomains: ['www.com'] }).blockedDomains).toEqual(['www.com']);
+    });
+
     it('strips a pasted path, keeping the host a rule can be matched against', () => {
       expect(normalizeResearchLevers({ query: 'q', allowedDomains: ['example.com/docs/a'] }).allowedDomains).toEqual([
         'example.com',

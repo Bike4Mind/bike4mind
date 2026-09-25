@@ -60,20 +60,22 @@ export const backendLabel = (backend: ModelBackend): string => BACKEND_LABELS[ba
  * different credentials, and the picker rendered only the name, so an admin had no way to tell them
  * apart and a wrong pick billed the unintended account (#1596). A name used by more than one option
  * gets a `(Backend)` suffix on every twin; if the backend does not break the tie either, the model
- * id is appended so every option stays distinguishable.
+ * id is appended so every option stays distinguishable. Names are compared case-insensitively, since
+ * "O3" and "o3" read as the same model in a list.
  */
 export function agentOpsModelLabels(models: ModelInfo[]): Map<string, string> {
   const byName = new Map<string, ModelInfo[]>();
   for (const m of models) {
-    const group = byName.get(m.name);
+    const key = m.name.toLowerCase();
+    const group = byName.get(key);
     if (group) group.push(m);
-    else byName.set(m.name, [m]);
+    else byName.set(key, [m]);
   }
 
   const labels = new Map<string, string>();
-  for (const [name, group] of byName) {
+  for (const group of byName.values()) {
     if (group.length === 1) {
-      for (const m of group) labels.set(m.id, name);
+      for (const m of group) labels.set(m.id, m.name);
       continue;
     }
     const backendCounts = new Map<ModelBackend, number>();
@@ -81,7 +83,7 @@ export function agentOpsModelLabels(models: ModelInfo[]): Map<string, string> {
     for (const m of group) {
       const suffix =
         (backendCounts.get(m.backend) ?? 0) > 1 ? `${backendLabel(m.backend)}: ${m.id}` : backendLabel(m.backend);
-      labels.set(m.id, `${name} (${suffix})`);
+      labels.set(m.id, `${m.name} (${suffix})`);
     }
   }
   return labels;

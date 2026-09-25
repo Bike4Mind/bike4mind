@@ -1,5 +1,6 @@
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
+import { ChatModels } from '../../models';
 
 // -- Data Lake Research Runs -------------------------------------------------------------------
 //
@@ -73,6 +74,12 @@ export type ResearchRunStopReason = (typeof RESEARCH_RUN_STOP_REASONS)[number];
 
 export const RESEARCH_CONFIG_NAME_MAX_CHARS = 120;
 export const RESEARCH_CONFIG_QUERY_MAX_CHARS = 500;
+
+/**
+ * The relevance judge used when a config names no model, or names one this deployment no longer
+ * offers. Lives here rather than in the service so the config form can name it.
+ */
+export const RESEARCH_RELEVANCE_MODEL_DEFAULT: string = ChatModels.GPT4_1_MINI;
 
 /** How many search hits a run may ask its provider for. */
 export const RESEARCH_MAX_RESULTS_DEFAULT = 10;
