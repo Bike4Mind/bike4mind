@@ -93,7 +93,7 @@ vi.mock('@server/integrations/google/drive/common', () => ({
 }));
 
 import handler from '../lifecycle';
-import { fabFileChunkRepository } from '@bike4mind/database';
+import { fabFileChunkRepository, userRepository } from '@bike4mind/database';
 
 const makeRes = () => {
   const json = vi.fn();
@@ -349,5 +349,33 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     const port = call[portKey] as (args: { dataLakeId: string }) => Promise<void>;
     await port({ dataLakeId: 'lake1' });
     expect(h[portName]).toHaveBeenCalledWith('lake1');
+  });
+});
+
+describe('POST /api/data-lakes/[id]/lifecycle - db.users wiring (delete/restore/unarchive)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeWritable.mockReturnValue(undefined);
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
+    h.deleteDataLake.mockResolvedValue({ id: 'lake1', status: 'deleted' });
+    h.unarchiveDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+    h.restoreDeletedDataLake.mockResolvedValue({ restoredCount: 0, skippedDuplicates: 0 });
+  });
+
+  // Same identity pin as the db.fabFileChunks test: a stub wired into db.users would still pass a
+  // shape check while the owner's storage counter never moves. Archive doesn't touch storage.
+  it.each([
+    ['delete', 'deleteDataLake'],
+    ['restore', 'restoreDeletedDataLake'],
+    ['unarchive', 'unarchiveDataLake'],
+  ] as const)('%s wires the real userRepository into db.users', async (action, serviceName) => {
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
+
+    expect(h[serviceName]).toHaveBeenCalledWith(
+      expect.anything(),
+      'lake1',
+      expect.objectContaining({ db: expect.objectContaining({ users: userRepository }) })
+    );
   });
 });
