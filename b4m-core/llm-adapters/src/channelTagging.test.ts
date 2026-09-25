@@ -180,32 +180,26 @@ describe('AnthropicBedrockBackend tags reasoning frames', () => {
   });
 });
 
-describe('handleToolResultStreaming tags raw tool results', () => {
-  const ARTIFACT = '<artifact type="application/vnd.ant.react">export default () => null;</artifact>';
+// Which results stream at all is filterToolArtifactMarkup's job, covered in
+// toolStreamingHelper.test.ts. These pin only the tag on what it lets through.
+describe('handleToolResultStreaming tags the artifacts it streams', () => {
+  const MERMAID_ARTIFACT =
+    '<artifact identifier="flow" type="application/vnd.ant.mermaid" title="Flow">graph TD; A-->B</artifact>';
 
-  it('tags the artifact frame so a public stream drops it', async () => {
+  it('tags an emitting tool artifact so a public stream drops it', async () => {
     const { frames, cb } = captureCb();
 
-    await handleToolResultStreaming('web_fetch', ARTIFACT, cb);
+    await handleToolResultStreaming('mermaid_chart', MERMAID_ARTIFACT, cb);
 
     expect(frames).toHaveLength(1);
     expect(frames[0].info?.channel).toBe('tool-artifact');
     expect(publicStreamText(frames)).toBe('');
   });
 
-  it('tags a recharts result, which streams on the tool name alone', async () => {
+  it('streams nothing for a non-emitting tool, so there is no frame to tag', async () => {
     const { frames, cb } = captureCb();
 
-    await handleToolResultStreaming('recharts', '{"data":[]}', cb);
-
-    expect(frames).toHaveLength(1);
-    expect(frames[0].info?.channel).toBe('tool-artifact');
-  });
-
-  it('streams nothing for an ordinary tool result', async () => {
-    const { frames, cb } = captureCb();
-
-    await handleToolResultStreaming('get_weather', 'sunny, 24C', cb);
+    await handleToolResultStreaming('web_fetch', `Page says: ${MERMAID_ARTIFACT}`, cb);
 
     expect(frames).toHaveLength(0);
   });
