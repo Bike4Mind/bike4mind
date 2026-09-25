@@ -226,3 +226,39 @@ describe('POST /api/subscriptions/subscribe - callbackUrl origin guard', () => {
     expect(res.statusCode).toBe(200);
   });
 });
+
+describe('POST /api/subscriptions/subscribe - acquisition touches', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIsAllowedCallbackOrigin.mockReturnValue(true);
+    mockFindUserSubByPrice.mockResolvedValue(null);
+    mockCustomersRetrieve.mockResolvedValue({ id: 'cus_existing' });
+    mockPricesRetrieve.mockResolvedValue({ id: 'price_open', active: true });
+    mockSessionsCreate.mockResolvedValue({ url: 'https://checkout.stripe/session' });
+  });
+
+  it('carries the first and last campaign touch into the subscription metadata', async () => {
+    const { req, res } = makeReq('price_open');
+    const enc = (v: unknown) => encodeURIComponent(JSON.stringify(v));
+    req.headers.cookie = `b4m_app_first_touch=${enc({ source: 'widgets', medium: 'teaser' })}; b4m_last_touch=${enc({ source: 'email' })}`;
+
+    await (handler as HandlerFn)(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata).toEqual({
+      userId: 'user_1',
+      stage: expect.any(String),
+      ownerType: 'User',
+      acq_first_source: 'widgets',
+      acq_first_medium: 'teaser',
+      acq_last_source: 'email',
+    });
+  });
+
+  it('adds nothing when the browser carries no touch', async () => {
+    const { req, res } = makeReq('price_open');
+    await (handler as HandlerFn)(req, res);
+    expect(Object.keys(mockSessionsCreate.mock.calls[0][0].subscription_data.metadata).sort()).toEqual(['ownerType', 'stage', 'userId']);
+  });
+});
+
