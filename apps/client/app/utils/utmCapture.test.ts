@@ -13,7 +13,14 @@ function setSearch(search: string) {
 }
 
 function clearUtmCookie() {
-  document.cookie = 'b4m_utm=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT';
+  for (const name of ['b4m_utm', 'b4m_last_touch', 'b4m_app_first_touch']) {
+    document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
+  }
+}
+
+function readCookie(name: string): Record<string, string> | null {
+  const match = document.cookie.split('; ').find(c => c.startsWith(`${name}=`));
+  return match ? JSON.parse(decodeURIComponent(match.slice(name.length + 1))) : null;
 }
 
 describe('captureUtmParams', () => {
@@ -64,5 +71,23 @@ describe('captureUtmParams', () => {
     expect(written).toContain('path=/');
     expect(written).toContain('SameSite=Strict');
     expect(written).toContain('expires=');
+  });
+
+  describe('purchase-attribution touches', () => {
+    it('keeps the latest campaign as the last touch and the first one as the app first touch', () => {
+      setSearch('?utm_source=first&utm_medium=email');
+      captureUtmParams();
+      setSearch('?utm_source=second&utm_medium=social');
+      captureUtmParams();
+      expect(readCookie('b4m_last_touch')).toEqual({ source: 'second', medium: 'social' });
+      expect(readCookie('b4m_app_first_touch')).toEqual({ source: 'first', medium: 'email' });
+    });
+
+    it('writes neither without a utm_source', () => {
+      setSearch('?utm_medium=email');
+      captureUtmParams();
+      expect(readCookie('b4m_last_touch')).toBeNull();
+      expect(readCookie('b4m_app_first_touch')).toBeNull();
+    });
   });
 });

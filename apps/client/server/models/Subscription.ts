@@ -12,6 +12,17 @@ import BaseRepository from '@bike4mind/database';
 import { IMongoDocument } from '@bike4mind/common';
 import { executeFacetCompatible } from '@bike4mind/database';
 
+// One campaign touch (see SubscriptionAcquisition). Subdocument with no _id: it is a value.
+const TouchSchema = new mongoose.Schema(
+  {
+    source: { type: String, required: true },
+    medium: { type: String, required: false },
+    campaign: { type: String, required: false },
+    content: { type: String, required: false },
+  },
+  { _id: false }
+);
+
 const SubscriptionSchema = new mongoose.Schema<ISubscription>(
   {
     ownerType: {
@@ -73,6 +84,16 @@ const SubscriptionSchema = new mongoose.Schema<ISubscription>(
     },
     customCreditsPerCycle: {
       type: Number,
+      required: false,
+    },
+    acquisition: {
+      type: new mongoose.Schema(
+        {
+          firstTouch: { type: TouchSchema, required: false },
+          lastTouch: { type: TouchSchema, required: false },
+        },
+        { _id: false }
+      ),
       required: false,
     },
   },
