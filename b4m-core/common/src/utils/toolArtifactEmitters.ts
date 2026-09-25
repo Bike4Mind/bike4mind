@@ -94,16 +94,36 @@ export function stripToolArtifactMarkup(text: string, placeholder: string): stri
 }
 
 /**
- * Removes only COMPLETE, well-formed `<artifact ...>...</artifact>` blocks from `text`, leaving
- * a stray or unclosed opener - and everything after it - untouched. Unlike stripToolArtifactMarkup
- * (built for tool output, where an adversarial unclosed opener should nuke the rest), this is for
- * a model's own free-form reply text: prose that merely mentions "<artifact" (e.g. reasoning about
- * not repeating one) or a block truncated by a token ceiling must not cost the rest of a legitimate
- * reply. Used by the recursive-reply artifact backstop (createRecursiveArtifactGuard) only.
+ * Parses the `identifier` attribute out of every complete artifact tag opener in `markup`.
+ * `markup` here is always content this codebase generated itself (artifact text already
+ * streamed to the client), never adversarial input, so a plain global scan is safe.
  */
-export function stripCompleteArtifactBlocks(text: string): string {
+function extractArtifactIdentifiers(markup: string): Set<string> {
+  const ids = new Set<string>();
+  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'gi');
+  for (const match of markup.matchAll(openTag)) {
+    const identifier = parseToolArtifactAttributes(match[1]).identifier;
+    if (identifier !== undefined) ids.add(identifier);
+  }
+  return ids;
+}
+
+/**
+ * Removes only the artifact blocks in `text` whose `identifier` attribute matches one already
+ * delivered to the client this turn (present in `deliveredMarkup`, the exact markup already
+ * streamed) - leaving a stray/unclosed opener, and any OTHER complete block (a genuinely new
+ * artifact the model composes in its own reply, with a different identifier), untouched. Unlike
+ * stripToolArtifactMarkup (built for tool output, where an adversarial unclosed opener should
+ * nuke the rest), this is for a model's own free-form reply text: prose that merely mentions
+ * "<artifact" or a block truncated by a token ceiling must not cost the rest of a legitimate
+ * reply, and a distinct artifact the model deliberately authors must not be mistaken for an
+ * echo of one already delivered. Used by the recursive-reply artifact guard only.
+ */
+export function stripDeliveredArtifactBlocks(text: string, deliveredMarkup: string): string {
+  const deliveredIdentifiers = extractArtifactIdentifiers(deliveredMarkup);
+  if (deliveredIdentifiers.size === 0) return text;
   const opener = /<artifact\b/gi;
-  const openTag = new RegExp(`<artifact\\s(?:${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
+  const openTag = new RegExp(`<artifact\\s(${ARTIFACT_ATTRS_PATTERN})>`, 'iy');
   const closer = /<\/artifact>/gi;
   let out = '';
   let cursor = 0;
@@ -116,7 +136,8 @@ export function stripCompleteArtifactBlocks(text: string): string {
       continue;
     }
     openTag.lastIndex = open.index;
-    if (!openTag.exec(text)) {
+    const tag = openTag.exec(text);
+    if (!tag) {
       // The attrs-then-`>` scan ran all the way to the end of the string with no reachable,
       // unquoted `>` to close it. That means no tag can open successfully from here on: any
       // later position's remaining text is a subset of what this scan already exhausted, so a
@@ -126,12 +147,15 @@ export function stripCompleteArtifactBlocks(text: string): string {
       break;
     }
     closer.lastIndex = openTag.lastIndex;
-    if (!closer.exec(text)) {
+    const close = closer.exec(text);
+    if (!close) {
       // Same reasoning: an unclosed tag here means nothing closes anywhere later either
       // (closer is a plain substring search, not scoped to this tag).
       break;
     }
-    out += text.slice(cursor, open.index);
+    const identifier = parseToolArtifactAttributes(tag[1]).identifier;
+    const remove = identifier !== undefined && deliveredIdentifiers.has(identifier);
+    out += text.slice(cursor, open.index) + (remove ? '' : text.slice(open.index, closer.lastIndex));
     cursor = closer.lastIndex;
     opener.lastIndex = cursor;
   }
