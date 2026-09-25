@@ -13,6 +13,7 @@ import {
   type ICacheStrategy,
   type CacheUsageStats,
   type ResponseFormat,
+  type StreamChannel,
 } from '@bike4mind/common';
 import type { DegenerateStreamGuardOptions } from './degenerateStreamGuard';
 import type { RecordableToolUse } from './recordToolResult';
@@ -29,6 +30,8 @@ export enum ChoiceStatus {
 
 interface IChoiceBase {
   chunkText?: string | null;
+  /** Set when chunkText is reasoning rather than reply prose; see StreamChannel. */
+  channel?: StreamChannel;
   index: number;
   status: ChoiceStatus;
   statusEndReason?: ChoiceEndReason;
@@ -280,6 +283,13 @@ export interface ICompletionResponseChunk {
 
 export type CompletionCallback = (done: boolean, chunk?: ICompletionResponseChunk) => Promise<void>;
 export type CompletionInfo = {
+  /**
+   * Set when this chunk is NOT the assistant's prose reply - reasoning, or a raw tool
+   * artifact streamed for a renderer. Additive: emission is unchanged and first-party
+   * consumers ignore it. Public surfaces use it to drop non-reply text structurally,
+   * instead of scanning content for markers that are themselves model text.
+   */
+  channel?: StreamChannel;
   inputTokens?: number;
   outputTokens?: number;
   creditsUsed?: number;

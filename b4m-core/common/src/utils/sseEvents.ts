@@ -3,6 +3,7 @@
  * Shared between Next.js API route and Lambda function
  */
 import type { QuestErrorCode } from '../types/entities/SessionTypes';
+import type { StreamChannel } from './streamVisibility';
 
 export interface SSEContentEvent {
   type: 'content' | 'tool_use';
@@ -102,16 +103,25 @@ export interface CompletionInfo {
    * Mirrored onto SSEContentEvent.stopReason by buildSSEEvent.
    */
   stopReason?: string;
+  /**
+   * Set when this chunk is NOT the assistant's prose reply - reasoning, or a raw tool
+   * artifact. Public surfaces drop the text of such a frame; first-party surfaces ignore
+   * the field and keep receiving it. See {@link StreamChannel}.
+   */
+  channel?: StreamChannel;
 }
 
 /**
  * Build SSE event from LLM completion callback
- * @param text - Array of text chunks [thinking, response] (may contain null/undefined)
+ * @param text - Sparse array indexed by the provider's content-block/choice index (may
+ *   contain null/undefined/holes). NOT [thinking, response] - see
+ *   {@link resolveResponseText} for the real shape. This positional read is kept for
+ *   first-party surfaces that already depend on it; public callers use
+ *   {@link buildPublicSSEEvent}, which resolves the whole array.
  * @param info - Completion metadata (tools, usage)
  * @returns SSE event object
  */
 export function buildSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  // Get text content (text[0] = thinking, text[1] = response)
   const textContent = text[1] || text[0] || '';
 
   const event: SSEContentEvent = {
@@ -165,6 +175,30 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
 }
 
 /**
+ * Resolve the response text carried by ONE adapter callback.
+ *
+ * `text` is a SPARSE array indexed by the provider's content-block/choice index - never
+ * [thinking, response]. Every streaming backend declares its `streamedText` INSIDE the
+ * `for await` over provider events (anthropic, openai, gemini, kimi, deepseek, xai,
+ * bedrock), so one callback populates exactly the index the provider used - 2 or higher as
+ * soon as two blocks precede the text, which a fixed [1]/[0] read drops entirely. The lone
+ * dense shape is the non-streaming anthropic path, which pushes one entry per response text
+ * block.
+ *
+ * Rule: join every populated entry in index order. It drops nothing at any index, and it
+ * cannot merge channels - reasoning arrives on its own callback, tagged (see
+ * CompletionInfo.channel), and is never pushed at all in the non-streaming path (thinking
+ * blocks carry `.thinking`, not `.text`).
+ */
+function resolveResponseText(text: (string | null | undefined)[]): string {
+  let out = '';
+  for (const entry of text) {
+    if (entry) out += entry;
+  }
+  return out;
+}
+
+/**
  * Build an SSE event for an ANONYMOUS/public caller (e.g. the embed chat widget).
  * Allowlists only what such a caller may see - assistant text plus usage/credit
  * accounting - and drops server-internal reasoning metadata: tool calls
@@ -175,12 +209,20 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
  * only consumption signal forwarded. This is a redaction contract, so it
  * allowlists forward: any field later added to CompletionInfo stays hidden from
  * public surfaces until deliberately surfaced here.
+ *
+ * It does NOT scan the text. Non-reply frames are dropped on the adapter's channel tag, and
+ * families that cannot be separated that way are refused before the stream opens - see
+ * {@link inlinesReasoningIntoText}. Scanning for `<think>` here would be worse than
+ * useless: a model is free to write the token in its ANSWER (ask one to explain the tag),
+ * and escapeThinkMarkers defangs marker-shaped text inside REASONING only, so treating it
+ * as a marker truncates a legitimate paid reply. A new public caller must run the same
+ * family gate before it streams.
  */
 export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
-  // text[0] is the thinking channel, text[1] the response. Pass ONLY the response
-  // (never fall back to text[0]) so no reasoning content rides along. buildSSEEvent
-  // reads index [1], so put the response there with an empty thinking slot.
-  const responseOnly: (string | null | undefined)[] = ['', text[1] ?? ''];
+  // A tagged frame is reasoning or a raw tool artifact, never the reply. Its usage still
+  // counts, so the frame is kept and only its text is dropped. Structural, not a content
+  // scan: the adapter marked it at the emit site, where the two were still distinguishable.
+  const responseOnly: (string | null | undefined)[] = ['', info?.channel ? '' : resolveResponseText(text)];
   if (!info) return buildSSEEvent(responseOnly, undefined);
   // Allowlist forward (not denylist): explicitly name the fields a public caller may
   // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.
