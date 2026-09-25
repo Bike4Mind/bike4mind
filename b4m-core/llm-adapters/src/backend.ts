@@ -207,6 +207,17 @@ export interface ICompletionOptions {
      * case. Internal - do not set manually.
      */
     liveToolUseIds?: string[];
+    /**
+     * The real, top-level completion callback - never a recursive-turn buffering wrapper -
+     * threaded unchanged through every recursive complete() call so a tool that streams an
+     * artifact deep in a tool-chaining chain always reaches the client directly. Without this,
+     * a CHAINED artifact-emitting tool call (Anthropic/Gemini/Bedrock keep tools available on
+     * the recursive call to enable chaining) would stream into whatever buffering wrapper an
+     * earlier round's artifact-echo backstop installed, and get deleted along with the echo it
+     * was built to catch. Set once, at the first (non-recursive) call; every deeper call reuses
+     * it via `options._internal?.artifactCallback ?? cb`. Internal - do not set manually.
+     */
+    artifactCallback?: (text: (string | null | undefined)[], info: CompletionInfo) => Promise<void>;
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;
