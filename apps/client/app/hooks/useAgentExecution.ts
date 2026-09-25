@@ -39,6 +39,7 @@ import {
 import type { IAgentStep, GenerateImageToolCall, AudioGenerationToolCall } from '@bike4mind/common';
 import { appendReplyToLatestOptimisticBubble, swapOptimisticPromptBubbleId } from '@client/app/utils/llm';
 import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 // Mirror the shape the server validates in
 // `apps/client/server/websocket/agentExecute.ts`. Kept inline because the
@@ -59,6 +60,12 @@ interface AgentExecuteStart {
    */
   agentId?: string;
   enabledTools?: string[];
+  /**
+   * Marks `enabledTools` as the composer's ambient Smart Tools rather than a pinned selection,
+   * so the executor unions them onto the profile it resolves instead of replacing it. Set by
+   * `resolveDispatchTools` on the agentless path only.
+   */
+  enabledToolsAreAmbient?: boolean;
   maxIterations?: number;
   // Knowledge / file context forwarded for first-iteration materialization.
   messageFileIds?: string[];
@@ -118,6 +125,7 @@ interface AgentExecutePermissionResponse {
   command: 'permission_response';
   executionId: string;
   toolName: string;
+  toolCallId?: string;
   approved: boolean;
   rememberForSession?: boolean;
 }
@@ -336,7 +344,7 @@ export function useAgentExecutionSubscriptions(): void {
         // 30-min staleTime hides them until the user navigates away and back. The FabFiles are
         // written mid-run, so they're already committed by the time `completed` fires.
         if (sessionId) {
-          queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own', { sessionId }] });
+          queryClient.invalidateQueries({ queryKey: fabFileKeys.ownBySession(sessionId) });
         }
       })
     );
@@ -405,6 +413,7 @@ export function useAgentExecutionSubscriptions(): void {
           toolInput: msg.toolInput,
           iteration: msg.iteration,
           requestedAt: Date.now(),
+          toolCallId: msg.toolCallId,
         });
       })
     );
@@ -509,6 +518,7 @@ export function useAgentExecutionSubscriptions(): void {
                   msg.pendingPermission.requestedAt instanceof Date
                     ? msg.pendingPermission.requestedAt.getTime()
                     : new Date(msg.pendingPermission.requestedAt).getTime(),
+                toolCallId: msg.pendingPermission.toolCallId,
               }
             : undefined,
         });
@@ -728,12 +738,19 @@ export function useAgentExecutionDispatch() {
         sendJsonMessage({ action: 'agent_execute', command: 'abort', executionId } as unknown as Parameters<
           typeof sendJsonMessage
         >[0]),
-      respondToPermission: (executionId: string, toolName: string, approved: boolean, rememberForSession?: boolean) =>
+      respondToPermission: (
+        executionId: string,
+        toolName: string,
+        approved: boolean,
+        rememberForSession?: boolean,
+        toolCallId?: string
+      ) =>
         sendJsonMessage({
           action: 'agent_execute',
           command: 'permission_response',
           executionId,
           toolName,
+          toolCallId,
           approved,
           rememberForSession,
         } as unknown as Parameters<typeof sendJsonMessage>[0]),

@@ -2,6 +2,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import Prism from 'prismjs';
 import { escapeAttr as escapeHtml } from './htmlEscape';
+import { stripSearchResultCardFences, type CitableSource } from '@bike4mind/common';
 // Side-effect import: registers the repo's Prism language grammars on the shared
 // Prism singleton (HTML/JS/TS/python/bash/sql/...). This is the single source of
 // truth for which languages highlight; the in-app code highlighter
@@ -42,14 +43,22 @@ export interface StyledHtmlOptions {
   includeToc?: boolean;
   /** Best-effort fetch + base64-inline of remote images. Default true. */
   inlineImages?: boolean;
+  /** The reply's citables, so a `b4m_map` fence resolves to a place list instead of being dropped. */
+  citables?: CitableSource[];
 }
 
 const DEFAULT_TITLE = 'Export';
 
 export async function renderMarkdownToStyledHtml(markdown: string, options: StyledHtmlOptions = {}): Promise<string> {
-  const { title = DEFAULT_TITLE, branded = true, includeToc = false, inlineImages = true } = options;
+  const { title = DEFAULT_TITLE, branded = true, includeToc = false, inlineImages = true, citables } = options;
 
-  const bodyHtml = marked.parse(markdown ?? '', { gfm: true, breaks: true, async: false }) as string;
+  // No Prism/language mapping renders b4m_cards, so an un-stripped fence would fall through to a
+  // plain code block showing the raw model-authored card JSON.
+  const bodyHtml = marked.parse(stripSearchResultCardFences(markdown ?? '', citables), {
+    gfm: true,
+    breaks: true,
+    async: false,
+  }) as string;
 
   // Post-process in a detached document so we can highlight, inline assets, and
   // build the ToC against real DOM before serializing back to a string.

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { hasVisibleReplyText, visibleReplyText } from './streamVisibility';
+import {
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
+  hasVisibleReplyText,
+  visibleReplyText,
+} from './streamVisibility';
 
 describe('visibleReplyText', () => {
   it('treats an empty or whitespace-only slot as nothing visible', () => {
@@ -13,10 +18,10 @@ describe('visibleReplyText', () => {
     expect(visibleReplyText('Here is the answer.')).toBe('Here is the answer.');
   });
 
-  it('passes text through when an open marker appears mid-string with no close', () => {
-    // Deliberate: the transcript shows this, and modelVisibleSlots' startsWith strip relies
-    // on it. "Fixing" it to return '' would silently break the append-mode seed exclusion.
-    expect(visibleReplyText('preamble<think>reasoning')).toBe('preamble<think>reasoning');
+  it('keeps the text before a still-streaming block and hides the block itself', () => {
+    // The marker must never reach the transcript: before this, the raw '<think>' was shown
+    // for as long as the second block took to close.
+    expect(visibleReplyText('preamble<think>reasoning')).toBe('preamble');
   });
 
   it('hides a thinking block that has only opened', () => {
@@ -34,9 +39,139 @@ describe('visibleReplyText', () => {
     expect(visibleReplyText('<think>weighing the options</think>\n\n')).toBe('');
   });
 
-  it('takes the segment after the LAST close marker across multiple blocks', () => {
-    // A tool-using turn can think, call a tool, then think again before answering.
-    expect(visibleReplyText('<think>first</think>partial<think>second</think>final answer')).toBe('final answer');
+  it('keeps text that precedes a later thinking block', () => {
+    // A tool-using turn can think, call a tool, then think again before answering, and the
+    // partial answer has already been streamed to the user by then.
+    expect(visibleReplyText('<think>first</think>partial <think>second</think>final answer')).toBe(
+      'partial final answer'
+    );
+  });
+
+  it('removes each thinking span independently rather than spanning between blocks', () => {
+    expect(visibleReplyText('a<think>x</think>b<think>y</think>c')).toBe('abc');
+  });
+
+  it('keeps whitespace inside a slot, because callers concatenate slots with no separator', () => {
+    // Trimming here welds the next slot onto this one: 'Here is the table:| a | b |'.
+    expect(visibleReplyText('Here is the table:\n\n')).toBe('Here is the table:\n\n');
+  });
+
+  it('keeps a nested open hidden until its matching close, not the first close it sees', () => {
+    // Reasoning text is provider-authored and can itself contain marker-shaped substrings.
+    // A naive non-greedy pair match strips only "<think>outer<think>inner</think>" and lets
+    // "tail" leak into the transcript; depth tracking keeps it hidden until the outer block
+    // actually closes.
+    expect(visibleReplyText('<think>outer<think>inner</think>tail</think>answer')).toBe('answer');
+  });
+
+  it('does not let an inner close end the outer block early', () => {
+    expect(visibleReplyText('before<think>a<think>b</think>c</think>after')).toBe('beforeafter');
+  });
+
+  it('treats an unmatched trailing close as ordinary text rather than hiding a phantom block', () => {
+    expect(visibleReplyText('answer</think>more')).toBe('answer</think>more');
+  });
+
+  it('does not let an unescaped provider-authored close marker leak hidden reasoning', () => {
+    // Reported against the depth-tracking implementation: reasoning that itself contains a
+    // literal '</think>' closes the real block early, and the text between the fake close and
+    // the real one - genuinely still hidden reasoning - reads as ordinary text and leaks. This
+    // is only safe because adapters now call escapeThinkMarkers on the raw delta before
+    // wrapping it in the real markers (see the escapeThinkMarkers tests below); visibleReplyText
+    // itself cannot tell control markers from data once they share an unescaped string.
+    const leaked = visibleReplyText('<think>secret prefix </think>LEAKED SECRET</think>answer');
+    expect(leaked).toBe('LEAKED SECRET</think>answer');
+
+    const escapedInput = `<think>${escapeThinkMarkers('secret prefix </think>LEAKED SECRET')}</think>answer`;
+    expect(visibleReplyText(escapedInput)).toBe('answer');
+  });
+});
+
+describe('escapeThinkMarkers', () => {
+  it('passes text with no markers through untouched', () => {
+    expect(escapeThinkMarkers('plain reasoning')).toBe('plain reasoning');
+  });
+
+  it('returns empty/nullish input as-is', () => {
+    expect(escapeThinkMarkers('')).toBe('');
+  });
+
+  it('defangs a literal open marker so it no longer matches the control token', () => {
+    const escaped = escapeThinkMarkers('the model reasoned about <think>');
+    expect(escaped).not.toContain('<think>');
+    expect(escaped).toContain('think>');
+  });
+
+  it('defangs a literal close marker so it no longer matches the control token', () => {
+    const escaped = escapeThinkMarkers('a trailing </think> in the monologue');
+    expect(escaped).not.toContain('</think>');
+    expect(escaped).toContain('/think>');
+  });
+
+  it('escaping and rewrapping a marker-shaped delta round-trips through visibleReplyText untouched', () => {
+    const rawReasoning = 'outer <think>inner</think> tail </think> more';
+    const wrapped = `<think>${escapeThinkMarkers(rawReasoning)}</think>final`;
+    expect(visibleReplyText(wrapped)).toBe('final');
+  });
+});
+
+describe('createThinkMarkerEscaper', () => {
+  it('escapes a marker fully contained in one push', () => {
+    const escaper = createThinkMarkerEscaper();
+    const escaped = escaper.push('reasoned about <think> here') + escaper.flush();
+    expect(escaped).not.toContain('<think>');
+    expect(escaped).toContain('think>');
+  });
+
+  it('defangs an open marker split across two adjacent pushes', () => {
+    const escaper = createThinkMarkerEscaper();
+    let escaped = escaper.push('wrote <th');
+    escaped += escaper.push('ink> tag, more reasoning');
+    escaped += escaper.flush();
+    expect(escaped).not.toContain('<think>');
+
+    // Reassembling through the real accumulator/visibility pipeline must not
+    // hide anything: the same reproduction the reviewer ran against the scanner.
+    const wrapped = `<think>${escaped}</think>FINAL ANSWER the user should see`;
+    expect(visibleReplyText(wrapped)).toBe('FINAL ANSWER the user should see');
+  });
+
+  it('defangs a close marker split across two adjacent pushes', () => {
+    const escaper = createThinkMarkerEscaper();
+    let escaped = escaper.push('secret prefix </thi');
+    escaped += escaper.push('nk>LEAKED SECRET');
+    escaped += escaper.flush();
+
+    const wrapped = `<think>${escaped}</think>answer`;
+    expect(visibleReplyText(wrapped)).toBe('answer');
+  });
+
+  it('holds back a partial suffix across many single-character pushes', () => {
+    const escaper = createThinkMarkerEscaper();
+    const source = 'before </think> after';
+    let escaped = '';
+    for (const char of source) {
+      escaped += escaper.push(char);
+    }
+    escaped += escaper.flush();
+
+    const wrapped = `<think>${escaped}</think>final`;
+    expect(visibleReplyText(wrapped)).toBe('final');
+  });
+
+  it('flush is a no-op when nothing is pending', () => {
+    const escaper = createThinkMarkerEscaper();
+    escaper.push('plain text');
+    expect(escaper.flush()).toBe('');
+  });
+
+  it('handles empty pushes without disturbing pending state', () => {
+    const escaper = createThinkMarkerEscaper();
+    let escaped = escaper.push('wrote <th');
+    escaped += escaper.push('');
+    escaped += escaper.push('ink>tag');
+    escaped += escaper.flush();
+    expect(escaped).not.toContain('<think>');
   });
 });
 

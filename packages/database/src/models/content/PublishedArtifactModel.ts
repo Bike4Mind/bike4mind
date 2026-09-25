@@ -165,6 +165,10 @@ const PublishedArtifactSchema = new Schema(
 
     /** Body snapshot for reply/fabfile viewer pages (markdown/text). */
     renderedBody: { type: String },
+    /** Snapshot of the source reply's citables (reply source only) - see PublishedArtifactSchema
+     *  in @bike4mind/common for why this outlives the source Quest. Schemaless (Mixed): citables
+     *  carry provider-specific metadata shapes this model has no reason to constrain. */
+    citables: { type: [Schema.Types.Mixed], default: undefined },
 
     publishedAt: { type: Date, default: Date.now },
     previousVersionMeta: { type: VersionMetaSubSchema },

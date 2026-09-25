@@ -22,6 +22,8 @@ paths = [
   ".*\\.test\\.[tj]sx?$",
   ".*\\.spec\\.[tj]sx?$",
   ".*/__tests__/.*",
+  # Python unittest fixture: placeholder mongo URIs only, never a live credential
+  "scripts/test_selfhost_production_preflight\\.py$",
   # Documentation - placeholder strings are expected here
   ".*docs/.*",
   ".*docs-site/.*",

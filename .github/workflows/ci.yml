@@ -146,9 +146,12 @@ jobs:
       - name: Check workflows pass values through env, not run-body interpolation
         run: python3 scripts/check-no-run-interpolation.py
 
-
-
-
+      # ComposeIntegrationTests self-skips with a visible reason when docker is
+      # unavailable; the rest of the suite needs nothing but the stdlib.
+      - name: Run self-host production preflight tests
+        run: python3 -m unittest discover -s scripts -p 'test_selfhost_production_preflight.py' -v
+        env:
+          B4M_PREFLIGHT_COMPOSE_TESTS: '1'
 
       - name: Check for account-tied IDs in shippable code (open-core)
         run: bash scripts/check-no-account-ids.sh

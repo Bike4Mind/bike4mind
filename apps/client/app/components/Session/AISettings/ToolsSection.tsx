@@ -460,8 +460,8 @@ const ToolsSection = ({
 
   // Per-tool availability for the current mode. Fast mode uses no tools at all;
   // Smart mode allows everything. Agent mode is deliberately NOT a gate here: an
-  // agentless run carries the user's Smart Tools unioned with the agent-mode
-  // defaults (see `resolveDispatchTools`), so nothing below is ignored.
+  // agentless run ships these picks as ambient and the executor unions them onto the
+  // agent-mode defaults (`pickEffectiveEnabledTools`), so nothing below is ignored.
   const getToolGate = useCallback(
     (toolId: B4MLLMTools): { reason: string } | null => {
       // A missing API key is a hard, mode-independent blocker: without it the

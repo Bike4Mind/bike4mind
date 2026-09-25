@@ -1,4 +1,4 @@
-import { IChatHistoryItem } from '@bike4mind/common';
+import { IChatHistoryItem, type CitableSource } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { getSlackDeps, getSlackDb } from '../di/registry';
 import { CommandHandler } from '../CommandHandler';
@@ -102,7 +102,12 @@ export interface FormattedAgentResponse {
 
 // Helper function to format agent response with Slack Block Kit.
 // Converts Markdown tables into bullet lists via AST processing so Slack renders them cleanly.
-export function formatAgentResponse(agentName: string, response: string, toolsUsed?: string[]): FormattedAgentResponse {
+export function formatAgentResponse(
+  agentName: string,
+  response: string,
+  toolsUsed?: string[],
+  citables?: CitableSource[]
+): FormattedAgentResponse {
   const blocks: any[] = [];
 
   // Agent header with emoji based on agent type
@@ -125,7 +130,7 @@ export function formatAgentResponse(agentName: string, response: string, toolsUs
   });
 
   // Process Markdown: convert tables to bullet lists for Slack rendering
-  const { text } = processMarkdownForSlack(response);
+  const { text } = processMarkdownForSlack(response, citables);
 
   // Main response content - split across multiple markdown blocks for long responses.
   const { blocks: contentBlocks } = splitTextIntoBlocks(text);
@@ -165,7 +170,7 @@ export async function sendMessageToNotebookAndGetResponse(
   },
   returnEarly: boolean = false, // If true, don't wait for AI - Quest Processor will handle response
   additionalTools: string[] = [] // Extra tools to enable (e.g., confirm/cancel pending action)
-): Promise<string | null> {
+): Promise<{ text: string | null; citables?: CitableSource[] }> {
   // Update status: Saving to notebook
   if (statusCallback) await statusCallback(`${createLoadingBar(10)} Saving to notebook...`);
 
@@ -216,7 +221,7 @@ export async function sendMessageToNotebookAndGetResponse(
     logger.debug('🔔 [ASYNC-NOTIFY] AI triggered successfully, returning early', {
       questId: createdQuest.id,
     });
-    return null; // Return null to signal early return
+    return { text: null }; // Signal early return
   }
 
   // Legacy path: ChatCompletionInvoke -> EventBridge -> Quest Processor -> polling.
@@ -234,5 +239,12 @@ export async function sendMessageToNotebookAndGetResponse(
     true, // waitForCompletion
     additionalTools
   );
-  return aiResponse;
+
+  // The map fence (if any) refers to places by id only, resolved against the citables the
+  // turn's own quest stored - re-fetch it rather than trusting anything carried on `createdQuest`,
+  // which was read before the AI response (and its citables) existed.
+  const finishedQuest = await (Quest as any).findById(createdQuest.id).select('promptMeta.citables').lean();
+  const citables = finishedQuest?.promptMeta?.citables as CitableSource[] | undefined;
+
+  return { text: aiResponse, citables };
 }

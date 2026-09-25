@@ -343,4 +343,205 @@ describe('nextRouteForContract', () => {
       expect(seenParams).toBeUndefined();
     });
   });
+
+  describe('queryParams', () => {
+    // Real query-string fields also arrive on req.query, same as pathParams - see
+    // the pathParams describe block above for why node-mocks-http's `query` option
+    // stands in for both.
+    const QuerySchema = z.object({ limit: z.coerce.number().positive() });
+    const makeQueryContract = (over: Partial<Parameters<typeof defineEndpoint>[0]> = {}) =>
+      makeContract({ queryParams: QuerySchema, scopes: [], ...over });
+
+    it('exposes the parsed query param as req.validatedQuery, distinct from req.validated (body)', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenQuery: unknown;
+      let seenBody: unknown;
+      const route = nextRouteForContract(makeQueryContract()).post((req, res) => {
+        seenQuery = req.validatedQuery;
+        seenBody = req.validated;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({ apiKey: 'b4m_live_key', query: { limit: '5' }, body: { message: 'hi' } });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenQuery).toEqual({ limit: 5 });
+      expect(seenBody).toEqual({ message: 'hi', count: 1 });
+    });
+
+    it('422s when the query param fails validation, without reaching the handler', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      const handlerFn = vi.fn();
+      const route = nextRouteForContract(makeQueryContract()).post(handlerFn);
+      const { req, res } = fire({ apiKey: 'b4m_live_key', query: { limit: '-1' }, body: { message: 'hi' } });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(handlerFn).not.toHaveBeenCalled();
+    });
+
+    it('validates pathParams and queryParams independently out of the same req.query', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenParams: unknown;
+      let seenQuery: unknown;
+      const route = nextRouteForContract(makeQueryContract({ pathParams: z.object({ id: z.string() }) })).post(
+        (req, res) => {
+          seenParams = req.validatedParams;
+          seenQuery = req.validatedQuery;
+          res.status(200).json({ ok: true });
+        }
+      );
+      const { req, res } = fire({
+        apiKey: 'b4m_live_key',
+        query: { id: 'sess-1', limit: '5' },
+        body: { message: 'hi' },
+      });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenParams).toEqual({ id: 'sess-1' });
+      expect(seenQuery).toEqual({ limit: 5 });
+    });
+
+    it('leaves validatedQuery unset for a contract that declares no queryParams (no regression on the body-only path)', async () => {
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenQuery: unknown = 'not-yet-set';
+      const route = nextRouteForContract(makeContract()).post((req, res) => {
+        seenQuery = req.validatedQuery;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({ apiKey: 'b4m_live_key', body: { message: 'hi' } });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenQuery).toBeUndefined();
+    });
+
+    it('does not 422 a `.strict()` queryParams schema on account of a sibling pathParams key in the same req.query', async () => {
+      // Regression: only the sibling pathParams's OWN declared keys are excluded
+      // before parsing (see the asymmetric-scoping comment on nextRouteForContract),
+      // so a strict queryParams schema never sees the pathParams key and can't
+      // reject it as unrecognized.
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenQuery: unknown;
+      const route = nextRouteForContract(
+        makeContract({
+          queryParams: z.strictObject({ limit: z.coerce.number() }),
+          pathParams: z.object({ id: z.string() }),
+          scopes: [],
+        })
+      ).post((req, res) => {
+        seenQuery = req.validatedQuery;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({
+        apiKey: 'b4m_live_key',
+        query: { id: 'sess-1', limit: '5' },
+        body: { message: 'hi' },
+      });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenQuery).toEqual({ limit: 5 });
+    });
+
+    it('still 422s a `.strict()` queryParams schema on a genuinely unexpected query key, even alongside a path sibling', async () => {
+      // Regression: excluding only the sibling pathParams key from queryParams's
+      // input (queryParams is never picked down to its own keys) must not also
+      // swallow a real unknown key - a strict schema's whole point is to reject
+      // exactly this.
+      validKey([ApiKeyScope.AI_CHAT]);
+      const handlerFn = vi.fn();
+      const route = nextRouteForContract(
+        makeContract({
+          queryParams: z.strictObject({ limit: z.coerce.number() }),
+          pathParams: z.object({ id: z.string() }),
+          scopes: [],
+        })
+      ).post(handlerFn);
+      const { req, res } = fire({
+        apiKey: 'b4m_live_key',
+        query: { id: 'sess-1', limit: '5', extra: '1' },
+        body: { message: 'hi' },
+      });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(422);
+      expect(handlerFn).not.toHaveBeenCalled();
+    });
+
+    it('does not leak the pathParams value into a `.passthrough()` queryParams schema', async () => {
+      // Regression: only the sibling pathParams key is excluded before parsing, so
+      // a loose (passthrough) queryParams schema can't pick up the path's field.
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenQuery: unknown;
+      const route = nextRouteForContract(
+        makeContract({
+          queryParams: z.looseObject({ limit: z.coerce.number() }),
+          pathParams: z.object({ id: z.string() }),
+          scopes: [],
+        })
+      ).post((req, res) => {
+        seenQuery = req.validatedQuery;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({
+        apiKey: 'b4m_live_key',
+        query: { id: 'sess-1', limit: '5' },
+        body: { message: 'hi' },
+      });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenQuery).toEqual({ limit: 5 });
+    });
+
+    it('still passes a genuinely unexpected query key through a `.passthrough()` queryParams schema, even alongside a path sibling', async () => {
+      // Regression: excluding only the pathParams key must not also strip a real
+      // extra query key - passthrough's whole point is to preserve exactly this.
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenQuery: unknown;
+      const route = nextRouteForContract(
+        makeContract({
+          queryParams: z.looseObject({ limit: z.coerce.number() }),
+          pathParams: z.object({ id: z.string() }),
+          scopes: [],
+        })
+      ).post((req, res) => {
+        seenQuery = req.validatedQuery;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({
+        apiKey: 'b4m_live_key',
+        query: { id: 'sess-1', limit: '5', extra: '1' },
+        body: { message: 'hi' },
+      });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenQuery).toEqual({ limit: 5, extra: '1' });
+    });
+
+    it('does not 422 a `.strict()` pathParams schema on account of a genuinely unexpected query key alongside a `.passthrough()` queryParams schema', async () => {
+      // Regression: pathParams is picked down to its OWN declared keys, not
+      // scoped by omitting the sibling's keys - the opposite of queryParams. Doing
+      // it the queryParams way here would hand the path schema a real, unrelated
+      // query key it never declared and was never meant to see.
+      validKey([ApiKeyScope.AI_CHAT]);
+      let seenParams: unknown;
+      let seenQuery: unknown;
+      const route = nextRouteForContract(
+        makeContract({
+          pathParams: z.strictObject({ id: z.string() }),
+          queryParams: z.looseObject({ limit: z.coerce.number() }),
+          scopes: [],
+        })
+      ).post((req, res) => {
+        seenParams = req.validatedParams;
+        seenQuery = req.validatedQuery;
+        res.status(200).json({ ok: true });
+      });
+      const { req, res } = fire({
+        apiKey: 'b4m_live_key',
+        query: { id: 'sess-1', limit: '5', extra: '1' },
+        body: { message: 'hi' },
+      });
+      await route(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(seenParams).toEqual({ id: 'sess-1' });
+      expect(seenQuery).toEqual({ limit: 5, extra: '1' });
+    });
+  });
 });

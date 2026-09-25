@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectCorpusInconsistencies, type CorpusDocument } from './corpusInconsistency';
+import { detectCorpusInconsistencies, inconsistencyFindingKey, type CorpusDocument } from './corpusInconsistency';
 
 const doc = (fabFileId: string, text: string, fileName = `${fabFileId}.pdf`): CorpusDocument => ({
   fabFileId,
@@ -481,5 +481,55 @@ describe('report shape', () => {
     const excerpt = report.findings[0].evidence.find(e => e.fabFileId === 'a')?.excerpt ?? '';
     expect(excerpt.length).toBeLessThanOrEqual(240);
     expect(excerpt.endsWith('...')).toBe(true);
+  });
+});
+
+describe('dismissed findings (#3045)', () => {
+  const disagreeing = [doc('a', 'Uptime is 99.9%'), doc('b', 'Uptime is 99.5%')];
+
+  it('drops a finding whose key a curator has dismissed', () => {
+    const dismissed = new Set([inconsistencyFindingKey('metric-disagreement', 'uptime')]);
+
+    const report = detectCorpusInconsistencies(disagreeing, { nowYear: 2026, dismissed });
+
+    expect(report.findings).toEqual([]);
+  });
+
+  it('hands the dismissed finding back as suppressed, rather than discarding it', () => {
+    const dismissed = new Set([inconsistencyFindingKey('metric-disagreement', 'uptime')]);
+
+    const report = detectCorpusInconsistencies(disagreeing, { nowYear: 2026, dismissed });
+
+    // A caller still has to record it: a dismissal keys on kind and subject, so the evidence under
+    // one can change, and its persisted row is the only place that change can be seen.
+    expect(report.suppressed.map(f => f.subject)).toEqual(['uptime']);
+  });
+
+  it('subtracts it from countsByKind, which is what a health summary renders', () => {
+    const dismissed = new Set([inconsistencyFindingKey('metric-disagreement', 'uptime')]);
+
+    const report = detectCorpusInconsistencies(disagreeing, { nowYear: 2026, dismissed });
+
+    expect(report.countsByKind['metric-disagreement']).toBe(0);
+  });
+
+  it("hands the dismissed finding's share of the cap back to the ones still in play", () => {
+    // Dropping AFTER the cap would leave a report holding one finding where its budget was two, so
+    // a lake with many dismissals would show fewer live findings the more of them it had.
+    const documents = [doc('a', 'Uptime is 99.9%. Latency is 100ms.'), doc('b', 'Uptime is 99.5%. Latency is 250ms.')];
+    const dismissed = new Set([inconsistencyFindingKey('metric-disagreement', 'latency')]);
+
+    const report = detectCorpusInconsistencies(documents, { nowYear: 2026, maxFindings: 1, dismissed });
+
+    expect(report.findings.map(f => f.subject)).toEqual(['uptime']);
+    expect(report.truncated).toBe(false);
+  });
+
+  it("matches on kind as well as subject, so one kind's dismissal cannot silence another", () => {
+    const dismissed = new Set([inconsistencyFindingKey('superlative-conflict', 'uptime')]);
+
+    const report = detectCorpusInconsistencies(disagreeing, { nowYear: 2026, dismissed });
+
+    expect(report.findings.map(f => f.subject)).toEqual(['uptime']);
   });
 });

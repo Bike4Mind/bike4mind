@@ -5,7 +5,14 @@ import {
   EARLY_STOP_FINISH_REASONS,
   TRUNCATED_FINISH_REASON,
 } from '@bike4mind/common';
-import { buildEarlyStopStamp, DEGENERATE_WARNING, TRUNCATION_WARNING } from './earlyStopStamp';
+import {
+  buildEarlyStopStamp,
+  buildIncompleteAnswerNotice,
+  DEGENERATE_WARNING,
+  INCOMPLETE_ANSWER_NOTICE,
+  TRUNCATED_ANSWER_NOTICE,
+  TRUNCATION_WARNING,
+} from './earlyStopStamp';
 
 describe('buildEarlyStopStamp', () => {
   it('warns and keeps the billing row ok when the reply hit the output ceiling', () => {
@@ -46,5 +53,45 @@ describe('buildEarlyStopStamp', () => {
 
   it.each([undefined, null, '', 'some_future_reason'])('stamps nothing for %p', reason => {
     expect(buildEarlyStopStamp(reason)).toBeNull();
+  });
+});
+
+describe('buildIncompleteAnswerNotice', () => {
+  const unanswered = {
+    stopped: false,
+    toolCallCount: 2,
+    visibleCharsAfterLastToolCall: 0,
+    stopReason: 'end_turn',
+    producedNonTextDeliverable: false,
+  };
+
+  it('flags a tool-loop turn with no visible text after its last tool call', () => {
+    expect(buildIncompleteAnswerNotice(unanswered)).toBe(INCOMPLETE_ANSWER_NOTICE);
+  });
+
+  it('uses the truncation variant on max_tokens, with or without tool calls', () => {
+    expect(buildIncompleteAnswerNotice({ ...unanswered, stopReason: TRUNCATED_FINISH_REASON })).toBe(
+      TRUNCATED_ANSWER_NOTICE
+    );
+    expect(buildIncompleteAnswerNotice({ ...unanswered, toolCallCount: 0, stopReason: TRUNCATED_FINISH_REASON })).toBe(
+      TRUNCATED_ANSWER_NOTICE
+    );
+  });
+
+  it('stays silent when an answer was written, the turn was stopped, or no tool ran', () => {
+    expect(buildIncompleteAnswerNotice({ ...unanswered, visibleCharsAfterLastToolCall: 12 })).toBeNull();
+    expect(buildIncompleteAnswerNotice({ ...unanswered, stopped: true })).toBeNull();
+    expect(buildIncompleteAnswerNotice({ ...unanswered, toolCallCount: 0 })).toBeNull();
+  });
+
+  it('stays silent when a tool delivered an attachment, including on max_tokens', () => {
+    expect(buildIncompleteAnswerNotice({ ...unanswered, producedNonTextDeliverable: true })).toBeNull();
+    expect(
+      buildIncompleteAnswerNotice({
+        ...unanswered,
+        producedNonTextDeliverable: true,
+        stopReason: TRUNCATED_FINISH_REASON,
+      })
+    ).toBeNull();
   });
 });

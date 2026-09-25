@@ -237,6 +237,70 @@ describe('adminUpdateUser - signed creditDelta path', () => {
   });
 });
 
+describe('adminUpdateUser - lastCreditsPurchasedAt', () => {
+  const PRIOR_PURCHASE = new Date('2024-01-01T00:00:00.000Z');
+
+  beforeEach(() => vi.clearAllMocks());
+
+  it('omits lastCreditsPurchasedAt from the write when an admin deduction leaves a positive balance', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 9500 }, adapters);
+
+    // The new balance is positive and changed, but it decreased - a clawback is not a purchase.
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
+  it('omits lastCreditsPurchasedAt from the write for a negative creditDelta', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, creditDelta: -2500 }, adapters);
+
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
+  it('omits lastCreditsPurchasedAt from the write for an edit that touches no credits', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, tags: ['vip'] }, adapters);
+
+    // Carrying the snapshot value on an unrelated save would $set it back over a purchase
+    // stamp committed between this request's read and its write.
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+
+  it('stamps lastCreditsPurchasedAt when an admin grant increases the balance', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, currentCredits: 14500 }, adapters);
+
+    const stamped = update.mock.calls[0][0].lastCreditsPurchasedAt;
+    expect(stamped).toBeInstanceOf(Date);
+    expect(stamped.getTime()).toBeGreaterThan(PRIOR_PURCHASE.getTime());
+  });
+
+  it('drops a caller-supplied lastCreditsPurchasedAt on a non-grant save', async () => {
+    const { adapters, update, target } = makeAdapters(12000);
+    target.lastCreditsPurchasedAt = PRIOR_PURCHASE;
+
+    // Server-owned metadata: it is no longer in the schema, so secureParameters strips it
+    // regardless of what a caller sends - `as any` simulates a raw request body doing so.
+    await adminUpdateUser(
+      ADMIN_ID,
+      { id: TARGET_ID, tags: ['vip'], lastCreditsPurchasedAt: null } as unknown as Parameters<
+        typeof adminUpdateUser
+      >[1],
+      adapters
+    );
+
+    expect('lastCreditsPurchasedAt' in update.mock.calls[0][0]).toBe(false);
+  });
+});
+
 describe('adminUpdateUser - preferences merge', () => {
   beforeEach(() => vi.clearAllMocks());
 

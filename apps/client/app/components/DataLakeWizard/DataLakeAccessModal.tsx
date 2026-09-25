@@ -34,6 +34,7 @@ import type {
 import { describeLakeAccessChannel, lakeAccessChannelsComposeConjunctively } from '@bike4mind/common';
 import type { ColorPaletteProp } from '@mui/joy';
 import {
+  useCancelLakeOwnershipOffer,
   useGrantLakeAccess,
   useLakeAccessView,
   useLakeOwnershipCandidates,
@@ -225,26 +226,30 @@ function describeLakeGate(gate: LakeOwnershipCandidateList['gate']): string | nu
 }
 
 /**
- * Hand this lake to another member of its organization.
+ * Offer this lake to another member of its organization.
  *
- * Confirm-gated because the actor demotes THEMSELVES: the outgoing owner stays on as a curator, so
- * they keep routine management, but the owner-only powers (transferring again, and the visibility
- * expose gate) move to the recipient. That is reversible only by the new owner, which is exactly why
- * it is worth one deliberate click.
+ * Consent-gated since the transfer became a PENDING OFFER: confirming does NOT hand the lake over, it
+ * sends the recipient an invitation they must accept. Ownership is unchanged until then, so the
+ * actor keeps every owner power while waiting, and can withdraw the offer. That is why this dialog
+ * can be a plain click rather than a "this is irreversible" warning - and why the copy has to say so,
+ * or a manager would reasonably believe the lake already left.
  *
  * The options come from the server, resolved from the owning org's membership by the same rule the
- * transfer itself validates, so this can never offer a teammate the action would then reject. A
- * personal lake has no membership to enumerate, so it explains the path rather than showing an empty
- * picker (see `listLakeOwnershipCandidates`).
+ * offer itself validates, so this can never offer a teammate the action would then reject. A personal
+ * lake has no membership to enumerate, so it explains the path rather than showing an empty picker
+ * (see `listLakeOwnershipCandidates`). When an offer is already open the dialog shows it with a
+ * cancel, in place of the picker - a second offer would be refused by the server anyway.
  */
 function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose: () => void }) {
   const { data: candidateList, isLoading, isError } = useLakeOwnershipCandidates(lakeId);
   const transfer = useTransferLakeOwnership();
+  const cancelOffer = useCancelLakeOwnershipOffer();
   const [newOwnerUserId, setNewOwnerUserId] = useState<string | null>(null);
 
   const candidates = candidateList?.candidates ?? [];
   const orgName = candidateList?.organizationName;
   const gateDescription = describeLakeGate(candidateList?.gate);
+  const pendingOffer = candidateList?.pendingOffer;
 
   const handleConfirm = async () => {
     if (!newOwnerUserId) return;
@@ -254,6 +259,16 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
     } catch {
       // The mutation's onError already surfaced the server's refusal; keep the dialog open so the
       // manager can pick someone else rather than losing their place.
+    }
+  };
+
+  const handleCancelOffer = async () => {
+    try {
+      await cancelOffer.mutateAsync({ id: lakeId });
+      onClose();
+    } catch {
+      // Same: the mutation reported the refusal; the dialog stays so the pending offer is still
+      // visible rather than the manager being thrown back to a stale picker.
     }
   };
 
@@ -276,6 +291,15 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
               <Alert color="danger" variant="soft" data-testid="datalake-transfer-error">
                 Couldn&apos;t load the member list, so there is no one to choose from here. Close this and try again.
               </Alert>
+            ) : pendingOffer ? (
+              // One live offer per lake; a second would be refused. Show the open one instead of the
+              // picker, so "Send offer" can never be clicked on a lake that already has an answer
+              // pending - and so the offerer can take it back.
+              <Alert color="warning" variant="soft" data-testid="datalake-transfer-pending">
+                Waiting on {pendingOffer.recipientName ?? pendingOffer.recipientUserId} to accept. The offer expires{' '}
+                {fmtDate(pendingOffer.expiresAt)} - ownership does not change until they accept, and you can cancel it
+                before then.
+              </Alert>
             ) : candidateList?.scope === 'personal' ? (
               <Alert color="neutral" variant="soft" data-testid="datalake-transfer-personal">
                 This lake is personal, so there is no team to transfer it within. Move it into an organization first
@@ -290,8 +314,9 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
             ) : (
               <>
                 <Typography level="body-sm">
-                  The new owner takes over this lake. You stay on as a curator - you keep managing it, but only the
-                  owner can transfer it again or change how it is shared.
+                  The member you choose must accept within 7 days before anything changes. Until then you stay the
+                  owner; once they accept you stay on as a curator - you keep managing it, but only the new owner can
+                  transfer it again or change how it is shared.
                 </Typography>
                 {/* Ownership bypasses the lake's own content gate (the owner arm of the read decision
                     returns before the tag/entitlement arm runs), and the picker deliberately offers
@@ -326,15 +351,27 @@ function TransferOwnershipDialog({ lakeId, onClose }: { lakeId: string; onClose:
           </Stack>
         </DialogContent>
         <DialogActions>
-          <Button
-            color="primary"
-            disabled={!newOwnerUserId}
-            loading={transfer.isPending}
-            onClick={handleConfirm}
-            data-testid="datalake-transfer-confirm-btn"
-          >
-            Transfer
-          </Button>
+          {pendingOffer ? (
+            <Button
+              color="danger"
+              variant="soft"
+              loading={cancelOffer.isPending}
+              onClick={handleCancelOffer}
+              data-testid="datalake-transfer-cancel-offer-btn"
+            >
+              Cancel offer
+            </Button>
+          ) : (
+            <Button
+              color="primary"
+              disabled={!newOwnerUserId}
+              loading={transfer.isPending}
+              onClick={handleConfirm}
+              data-testid="datalake-transfer-confirm-btn"
+            >
+              Send offer
+            </Button>
+          )}
           <Button variant="plain" color="neutral" onClick={onClose} data-testid="datalake-transfer-cancel-btn">
             Cancel
           </Button>

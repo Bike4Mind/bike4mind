@@ -3,8 +3,7 @@ import type { ApiErrorCode } from '../apiErrorCodes';
 // Specific file, not the `../types` barrel: this module is imported by the
 // contracts, which the CI openapi job runs against an install-only tree (see the
 // note in tools.contract.ts).
-import { QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
-import type { IChatHistoryItem } from '../types/entities/SessionTypes';
+import { CHAT_HISTORY_ITEM_TYPES, QUEST_ERROR_CODES } from '../types/entities/SessionTypes';
 import { PROMPT_TEXT_MAX } from './briefcasePrompt';
 
 /**
@@ -135,8 +134,11 @@ export type SimplifiedChatRequest = z.infer<typeof SimplifiedChatRequestSchema>;
 
 /**
  * Async ACK returned on the default (wait:false) path of POST /api/chat. The
- * handler assembles this body inline (apps/client/pages/api/chat.ts), so this
- * schema MUST stay in sync with that `res.json({...})` shape.
+ * `type`/`errorCode` pair below is the same classifier the `wait: true` body and
+ * the polled quest (`GET /api/quests/{id}`) carry, so it is modelled once here -
+ * the rest of those two bodies is NOT described by this schema. The
+ * handler assembles the ack body inline (apps/client/pages/api/chat.ts), so
+ * this schema MUST stay in sync with that `res.json({...})` shape.
  */
 export const ChatAckSchema = z.object({
   id: z.string(),
@@ -145,6 +147,21 @@ export const ChatAckSchema = z.object({
   timestamp: z.string(),
   model: z.string(),
   message: z.string().optional(),
+  // Present unconditionally on the `wait: true` body, carrying the quest's own value -
+  // same as the polled quest (`GET /api/quests/{id}`). Absent only on the immediate async
+  // ack, where nothing has run yet. `type` (not `errorCode`) is what separates a
+  // failure from an answer: it is `'error'` for every failure class that sets it, coded
+  // or not.
+  type: z.enum(CHAT_HISTORY_ITEM_TYPES).optional(),
+  // Reason for a `type: 'error'` turn, when there is a machine-readable one. Only the
+  // billing failures set it, so a `type: 'error'` turn with no `errorCode` is still a
+  // failure - never read its absence as success. Same vocabulary as the
+  // tts/music/soundEffects `errorCode` (CONVENTIONS.md "One error-code vocabulary"),
+  // narrowed via QUEST_ERROR_CODES; `spend_cap_exceeded` belongs to that shared union but
+  // is not raised as a quest errorCode by any current throw site on this endpoint (its
+  // only throw site, the embed chat route's pre-flight 422, fires outside the process
+  // try/catch that would classify it onto the quest).
+  errorCode: z.enum(QUEST_ERROR_CODES).optional(),
   // The tool decision the API layer made for this turn, echoed back so a caller can see what was
   // offered and what was thrown away. Absent when the layer made no decision and had nothing to
   // report (the `enableTools`-only path, where the service layer resolves the set). Present on
@@ -205,9 +222,11 @@ export const ChatQuestPollResultSchema = z.object({
   status: z.enum(['stopped', 'running', 'done']).optional(),
   // A finished turn that FAILED is `type: 'error'` carrying the failure text in
   // `reply`; anything else is a real reply.
-  type: z
-    .enum(['message', 'oob', 'error', 'system', 'voice_transcript'] satisfies IChatHistoryItem['type'][])
-    .optional(),
+  // Derived from CHAT_HISTORY_ITEM_TYPES, like ChatAckSchema's twin above:
+  // a hand-written `satisfies` list only proves the members listed are valid, not that
+  // none is missing, so a new quest type would be accepted on the wait:true body and rejected
+  // here - the two surfaces must publish one vocabulary.
+  type: z.enum(CHAT_HISTORY_ITEM_TYPES).optional(),
   // Machine-readable classifier on a `type: 'error'` quest. Values derive from
   // QUEST_ERROR_CODES so this enum can't drift from the TS union - the same
   // vocabulary the WebSocket quest payload publishes (see schemas/actions.ts).

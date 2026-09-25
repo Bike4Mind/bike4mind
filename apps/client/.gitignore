@@ -115,3 +115,4 @@ server/premium-generated/
 
 # Tavern public assets — copied from packages/premium/tavern/public by postinstall.
 public/assets/tavern/
+e2e/.probe-manifest.json

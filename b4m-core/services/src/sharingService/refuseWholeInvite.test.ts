@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
-import { NotFoundError, UnauthorizedError, UnprocessableEntityError } from '@bike4mind/utils';
+import { ForbiddenError, NotFoundError, UnauthorizedError, UnprocessableEntityError } from '@bike4mind/utils';
 import { InviteType } from '@bike4mind/common';
 import { refuseWholeInvite } from './refuseWholeInvite';
 
@@ -171,6 +171,40 @@ describe('sharingService - refuseWholeInvite', () => {
   it('throws NotFoundError when the invite does not exist', async () => {
     db.invites.findById.mockResolvedValue(null);
     await expect(refuseWholeInvite(user, { id: 'missing' }, { db } as any)).rejects.toThrow(NotFoundError);
+  });
+
+  it('denies a plain org member from revoking an Org invite (non-recipient revoke path)', async () => {
+    const member = { id: 'member-1', email: 'member@example.com', isAdmin: false } as any;
+    const invite = {
+      id: '65a1f77bcf86cd7994390001',
+      type: InviteType.Organization,
+      documentId: 'org-1',
+      remaining: 1,
+      recipients: { pending: ['someone-else@example.com'], accepted: [], refused: [] },
+    };
+    db.invites.findById.mockResolvedValue(invite);
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'other', users: [{ userId: 'member-1', permissions: ['read'] }] });
+
+    await expect(refuseWholeInvite(member, { id: '65a1f77bcf86cd7994390001' }, { db } as any)).rejects.toThrow(ForbiddenError);
+    expect(db.invites.update).not.toHaveBeenCalled();
+  });
+
+  it('lets the billing owner revoke a Group invite (non-recipient revoke path)', async () => {
+    const owner = { id: 'owner-1', email: 'owner@example.com', isAdmin: false } as any;
+    const invite = {
+      id: '65a1f77bcf86cd7994390002',
+      type: InviteType.Group,
+      documentId: 'grp-1',
+      remaining: 1,
+      recipients: { pending: ['someone-else@example.com'], accepted: [], refused: [] },
+    };
+    db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
+    db.groups.findById.mockResolvedValue({ id: 'grp-1', organizationId: 'org-1' });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1', userId: 'owner-1', users: [] });
+
+    await refuseWholeInvite(owner, { id: '65a1f77bcf86cd7994390002' }, { db } as any);
+
+    expect(db.invites.update).toHaveBeenCalledWith(expect.objectContaining({ remaining: 0 }));
   });
 
   it('rejects an expired invite even for a named pending recipient', async () => {

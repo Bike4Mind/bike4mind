@@ -629,6 +629,16 @@ export class GitHubService {
   }
 
   /**
+   * Public read of the whitelist decision, for callers that must distinguish
+   * "not allowed" from "allowed but empty". Most list methods here return `[]`
+   * for a denied repo, which a caller cannot tell apart from a genuinely empty
+   * result; check this first when that difference matters.
+   */
+  isRepositoryAllowed(repo: string): boolean {
+    return this.isRepoAllowed(repo);
+  }
+
+  /**
    * Check if a repository is allowed by the whitelist.
    * Fail-closed: empty whitelist blocks all repos. Uses normalized comparison to prevent bypass attacks.
    */

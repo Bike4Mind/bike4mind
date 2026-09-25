@@ -16,9 +16,16 @@ import { sendToClient } from '@server/websocket/utils';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { filterReadableQuests } from '@server/utils/sessionAccess';
 import { apiKeyService } from '@bike4mind/services';
-import { ChatModels, isImageServeable, ORG_FEEDBACK_SUMMARY_JOB_TYPE } from '@bike4mind/common';
+import {
+  ChatModels,
+  isImageServeable,
+  ORG_FEEDBACK_SUMMARY_JOB_TYPE,
+  stripSearchResultCardFences,
+  type CitableSource,
+} from '@bike4mind/common';
 import { OrgFeedbackSummaryPayload, runOrgFeedbackSummary } from '@server/queueHandlers/orgFeedbackSummary';
 import { getSubQuestStatusIcon } from '@client/app/utils/subQuestStatusPresentation';
+import { extractReplies } from '@client/app/utils/replyUtils';
 import { z } from 'zod';
 import { Resource } from 'sst';
 import { createZipBuffer } from './createZipBuffer';
@@ -142,6 +149,24 @@ function getExtensionFromUrl(url: string): string {
     // ignore
   }
   return '.png';
+}
+
+/**
+ * The assistant text of a linked quest, as the chat transcript renders it.
+ *
+ * The streaming pipeline persists answers into `replies[]`; the scalar `reply` is the legacy/error
+ * field and is null on a normal successful turn, so reading it alone exported an empty body for
+ * every completed task. `extractReplies` is the same rule the transcript renders by, which also
+ * keeps hidden reasoning out of a customer-facing export.
+ *
+ * It yields nothing when `replies[]` is present but holds only thinking-only slots, and never
+ * consults `reply` in that case - so retry with the scalar, which is where an error message for
+ * exactly that kind of turn would have landed.
+ */
+function extractQuestReply(chatItem: Record<string, unknown>): string {
+  const reply = chatItem.reply as string | null | undefined;
+  const replies = chatItem.replies as string[] | undefined;
+  return extractReplies({ reply, replies })[0] ?? extractReplies({ reply })[0] ?? '';
 }
 
 function slugify(text: string): string {
@@ -426,8 +451,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
           if (!chatItem) {
             markdown += `_Response content unavailable._\n\n`;
           } else {
-            const reply = (chatItem.reply as string) || '';
-            markdown += `${reply}\n\n`;
+            const replyText = extractQuestReply(chatItem);
+            const citables = (chatItem.promptMeta as { citables?: CitableSource[] } | undefined)?.citables;
+            markdown += replyText
+              ? `${stripSearchResultCardFences(replyText, citables)}\n\n`
+              : `_No response content._\n\n`;
 
             // Collect images from this chat item
             const images = (chatItem.images as string[]) || [];

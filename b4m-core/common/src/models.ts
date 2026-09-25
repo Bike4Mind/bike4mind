@@ -88,6 +88,12 @@ export const IMAGE_SIZE_CONSTRAINTS = {
     /** Popular preset sizes shown in the UI. The API accepts any resolution meeting the constraints. */
     sizes: ['1024x1024', '1536x1024', '1024x1536', '2048x2048', '2048x1152', '3840x2160', '2160x3840'] as const,
     defaultSize: '1024x1024',
+    /**
+     * Accepted by the API, and what generate sends when no size is asked for, but it is not a
+     * resolution - so it is deliberately out of `sizes`, the preset list the size picker renders.
+     * The one spelling: schemas/openai.ts and utils/imageSizes.ts both read it from here.
+     */
+    autoSize: 'auto',
     /** Constraints for custom/flexible sizes */
     constraints: {
       maxEdge: 3840,
@@ -96,6 +102,21 @@ export const IMAGE_SIZE_CONSTRAINTS = {
       edgeMultiple: 16,
       maxAspectRatio: 3,
     },
+  },
+  /** Also the only sizes the variation endpoint accepts - variations are dall-e-2 only. */
+  DALL_E_2: {
+    sizes: ['256x256', '512x512', '1024x1024'] as const,
+    defaultSize: '1024x1024',
+  },
+  /**
+   * dall-e-3 is no longer in ImageModels, but the generate path still accepts its sizes
+   * for callers holding a persisted one. Listed separately to record what each tier really
+   * accepts; isSupportedImageSize currently measures both against the union of the two
+   * (OPENAI_LEGACY_IMAGE_SIZES), so the split is documentation rather than enforcement.
+   */
+  DALL_E_3: {
+    sizes: ['1024x1024', '1792x1024', '1024x1792'] as const,
+    defaultSize: '1024x1024',
   },
 } as const;
 
@@ -211,6 +232,7 @@ export enum ChatModels {
   CLAUDE_4_8_OPUS = 'claude-opus-4-8',
   CLAUDE_FABLE_5 = 'claude-fable-5',
   CLAUDE_5_OPUS = 'claude-opus-5',
+  CLAUDE_5_5_OPUS = 'claude-opus-5-5',
 
   JURASSIC2_ULTRA = 'ai21.j2-ultra-v1',
   JURASSIC2_MID = 'ai21.j2-mid-v1',
@@ -418,7 +440,7 @@ export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * The API will reject requests that include temperature for these models.
  */
 export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
-  // Opus 4.7+, Sonnet 5, Fable 5, and Opus 5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
+  // Opus 4.7+, Sonnet 5, Fable 5, and Opus 5/5.5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
   ChatModels.CLAUDE_4_7_OPUS,
   ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
   ChatModels.CLAUDE_4_8_OPUS,
@@ -427,6 +449,7 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
   ChatModels.CLAUDE_5_OPUS,
+  ChatModels.CLAUDE_5_5_OPUS,
   // Moonshot pins temperature and top_p on every current Kimi and documents them
   // as unmodifiable: the chat API reference states only the moonshot-v1 family
   // accepts them, and the thinking guide says outright that for kimi-k2.7-code

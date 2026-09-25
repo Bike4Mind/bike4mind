@@ -22,6 +22,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(result.executable).toBe('bwrap');
@@ -43,6 +44,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       const bindIdx = result.args.indexOf('/home/test/project');
@@ -62,6 +64,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [`${home}/.ssh`, `${home}/.aws`],
         },
+        networkEnabled: false,
       });
 
       // Denied paths should appear as --tmpfs
@@ -74,7 +77,7 @@ describe('BubblewrapRuntime', () => {
       expect(result.args[awsIdx - 1]).toBe('--tmpfs');
     });
 
-    it('includes namespace isolation flags', () => {
+    it('includes namespace isolation flags and denies net when network is disabled', () => {
       const result = runtime.wrapCommand({
         command: 'echo test',
         cwd: '/home/test/project',
@@ -83,11 +86,34 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(result.args).toContain('--unshare-all');
-      expect(result.args).toContain('--share-net');
+      expect(result.args).toContain('--unshare-net');
+      expect(result.args).not.toContain('--share-net');
       expect(result.args).toContain('--die-with-parent');
+      // Order matters: the net flag must follow --unshare-all, else --unshare-all
+      // would re-isolate the net namespace a later --share-net meant to keep.
+      expect(result.args.indexOf('--unshare-net')).toBeGreaterThan(result.args.indexOf('--unshare-all'));
+    });
+
+    it('shares the net namespace when network is enabled', () => {
+      const result = runtime.wrapCommand({
+        command: 'curl https://example.com',
+        cwd: '/home/test/project',
+        filesystemConfig: {
+          writeOnlyToWorkingDir: true,
+          allowedReadPaths: [],
+          deniedPaths: [],
+        },
+        networkEnabled: true,
+      });
+
+      expect(result.args).toContain('--share-net');
+      expect(result.args).not.toContain('--unshare-net');
+      // --share-net must follow --unshare-all to re-grant the net namespace.
+      expect(result.args.indexOf('--share-net')).toBeGreaterThan(result.args.indexOf('--unshare-all'));
     });
 
     it('sets the working directory', () => {
@@ -99,6 +125,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       const chdirIdx = result.args.indexOf('--chdir');
@@ -115,6 +142,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       const lastThree = result.args.slice(-3);
@@ -130,6 +158,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(result.commandString).toMatch(/^bwrap /);
@@ -145,6 +174,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(result.cleanupPaths).toBeUndefined();
@@ -159,6 +189,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
         seccompProfile: '/etc/seccomp/default.json',
       });
 
@@ -176,6 +207,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
       });
 
       expect(result.args).not.toContain('--seccomp');
@@ -190,6 +222,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
         env: { HTTP_PROXY: 'http://127.0.0.1:8080', HTTPS_PROXY: 'http://127.0.0.1:8080' },
       });
 
@@ -208,6 +241,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
         env: {},
       });
 
@@ -223,6 +257,7 @@ describe('BubblewrapRuntime', () => {
           allowedReadPaths: [],
           deniedPaths: [],
         },
+        networkEnabled: false,
         env: { FOO: 'bar' },
       });
 

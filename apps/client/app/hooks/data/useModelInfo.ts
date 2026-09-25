@@ -18,7 +18,8 @@ function catalogQuery(isFullyAuthenticated: boolean) {
     queryFn: getModelCatalog,
     staleTime: 60 * 60 * 1000, // 1 hour
     enabled: isFullyAuthenticated,
-    retry: false,
+    // One blip would otherwise leave the composer on "no models" for the whole session.
+    retry: 2,
   } as const;
 }
 

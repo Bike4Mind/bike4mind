@@ -145,6 +145,13 @@ const RetrievalSummary: FC<{ retrieval: NonNullable<ContextBreakdown['retrieval'
       </Chip>
     )}
     {retrieval.dataLakeTags?.length > 0 && <Chip size="sm">lakes: {retrieval.dataLakeTags.join(', ')}</Chip>}
+    {/* Count + reason only - never a lake name, since the caller may not be permitted to know an
+        excluded lake exists (#3055). */}
+    {retrieval.excludedLakes && retrieval.excludedLakes.count > 0 && (
+      <Chip size="sm" color="warning" data-testid="context-breakdown-excluded-lakes-chip">
+        excluded: {retrieval.excludedLakes.count} ({retrieval.excludedLakes.reason})
+      </Chip>
+    )}
   </Stack>
 );
 

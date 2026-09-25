@@ -597,6 +597,18 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(builtToolNames()).toEqual(['search_knowledge_base', 'retrieve_knowledge_content', 'web_search']);
   });
 
+  it('web_search is built with no image-signing secret, so an anonymous embed visitor is never sent raw card JSON', async () => {
+    // The embed widget has no card renderer and no JWT for the (jwtOnly) image proxy, so a real
+    // secret here would only make web_search pay for an image search whose fence prints verbatim
+    // to the visitor as plain text.
+    hydrateWith({ allowedTools: ['web_search'] });
+    await post(CHAT);
+    const opts = mockBuildSharedTools.mock.calls[0][2] as {
+      config?: { web_search?: { imageUrlSigningSecret?: string } };
+    };
+    expect(opts.config?.web_search?.imageUrlSigningSecret ?? '').toBe('');
+  });
+
   it("deniedTools ['*'] turns tools off entirely: no build, no serverTools param", async () => {
     hydrateWith({ deniedTools: ['*'] });
     const res = await post(CHAT);

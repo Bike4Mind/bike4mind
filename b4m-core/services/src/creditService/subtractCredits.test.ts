@@ -323,6 +323,30 @@ describe('creditService - subtractCredits', () => {
         })
       );
     });
+
+    it('should write the row with no model when the aggregate cannot name one', async () => {
+      // The row aggregates every charging tool call in a quest, so a quest that charged
+      // on two models omits the model rather than naming one of them (see
+      // resolveAggregateToolModel). An omitted model must not block the ledger write.
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const parameters: SubtractCreditsParameters = {
+        type: 'tool_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 20,
+        questId: 'quest999',
+        sessionId: 'session999',
+      };
+
+      await subtractCredits(parameters, mockAdapters);
+
+      expect(mockCreditHolderMethods.incrementCredits).toHaveBeenCalledWith('user1', -20);
+      expect(mockCreditTransactionRepo.createTransaction).toHaveBeenCalledWith(
+        'tool_usage',
+        expect.objectContaining({ credits: -20, model: undefined })
+      );
+    });
   });
 
   describe('realtime_voice_usage transactions', () => {

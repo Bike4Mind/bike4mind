@@ -26,6 +26,7 @@ const h = vi.hoisted(() => ({
   changeStorageSize: vi.fn(),
   userSave: vi.fn(),
   removeFileFromLake: vi.fn(),
+  recordLakeMembershipChange: vi.fn(),
   loadPrefixArmCandidateLakes: vi.fn(),
   findOtherLakeClaims: vi.fn(),
   recomputeLakeStats: vi.fn(),
@@ -51,6 +52,7 @@ const h = vi.hoisted(() => ({
   finalizeBatchIfComplete: vi.fn(),
   sendToQueue: vi.fn(),
   assertLakeAdmission: vi.fn(),
+  assertCanWriteDataLakeTags: vi.fn(),
   // Bypasses the real AdminSettingsCache singleton, which would otherwise persist whatever the
   // first call in this file resolved across every later test that shares the same test process.
   getSettingsMap: vi.fn(),
@@ -88,6 +90,8 @@ vi.mock('@bike4mind/database', () => ({
     markUploaded: h.markUploaded,
   },
   fabFileChunkRepository: {},
+  // The membership-audit repo the handler wires into every lake add/remove it drives.
+  lakeMembershipChangeEventRepository: { record: vi.fn().mockResolvedValue({}) },
   sessionRepository: { findAllWithKnowledgeId: h.sessionsWithKnowledgeId, update: h.sessionUpdate },
   userRepository: { findById: h.userRepoFindById },
   orgGoogleDriveConnectionRepository: {
@@ -113,6 +117,7 @@ vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
     createDataLakeFallbackTagger: () => async (tags: unknown) => tags,
     removeFileFromLake: h.removeFileFromLake,
+    recordLakeMembershipChange: h.recordLakeMembershipChange,
     loadPrefixArmCandidateLakes: h.loadPrefixArmCandidateLakes,
     // The gate itself is the seam these tests drive; its two-arm resolution is unit-tested beside
     // its source (prefixArmMembership.test.ts). `hasOtherLakeClaim` is the real one-liner.
@@ -121,6 +126,7 @@ vi.mock('@bike4mind/services', () => ({
       claims.metaTagNames.length > 0 || claims.prefixArmLakes.length > 0,
     recomputeLakeStats: h.recomputeLakeStats,
     assertLakeAdmission: h.assertLakeAdmission,
+    assertCanWriteDataLakeTags: h.assertCanWriteDataLakeTags,
   },
   fabFilesService: { deleteFabFile: h.deleteFabFile },
 }));
@@ -246,6 +252,7 @@ describe('driveLakeIngest consumer', () => {
     h.userRepoFindById.mockImplementation(async (id: string) => ({ id }));
     setExisting([]);
     h.removeFileFromLake.mockResolvedValue(undefined);
+    h.recordLakeMembershipChange.mockResolvedValue(undefined);
     h.lakeFind.mockResolvedValue([]);
     h.loadPrefixArmCandidateLakes.mockResolvedValue([]);
     // Default: no other lake holds the copy, so the retire is free to delete it outright.
@@ -288,6 +295,9 @@ describe('driveLakeIngest consumer', () => {
     // admission gate to its happy-path default so a later test's own rejection can't leak forward into
     // whichever test runs next in file order.
     h.assertLakeAdmission.mockResolvedValue(undefined);
+    // Same leak risk as assertLakeAdmission above: reset the origin gate to its happy-path default
+    // so one test's rejection cannot bleed into whichever test runs next in file order.
+    h.assertCanWriteDataLakeTags.mockResolvedValue(undefined);
     // Empty map -> MaxFileSize falls back to its coded default (30 MB), and a permissive user ->
     // checkStorageLimit falls back to its 1000 MB default too - both well above every fixture's
     // byte size below, so neither new gate fires unless a test overrides it.
@@ -356,6 +366,32 @@ describe('driveLakeIngest consumer', () => {
     // vectorize claims race an empty `files` array and the batch never finalizes.
     expect(h.order).toEqual(['append', 'upload', 'append', 'upload']);
     expect(h.batchCreate).toHaveBeenCalledWith(expect.objectContaining({ totalFiles: 2 }));
+  });
+
+  // The one membership write that does NOT go through addFileToLake: this door bakes the lake's
+  // meta-tag straight into createFabFile's initial tags, so there is no FabFile for that door to
+  // gate on and its event has to be recorded by hand here. Nothing else pins that wiring.
+  it('records an `added` event with connector origin for each newly ingested file', async () => {
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+      { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.recordLakeMembershipChange).toHaveBeenCalledTimes(2);
+    for (const fabFileId of ['ff1', 'ff2']) {
+      expect(h.recordLakeMembershipChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          lake: expect.objectContaining({ id: 'lake1' }),
+          fabFileId,
+          action: 'added',
+          origin: 'connector',
+        }),
+        expect.anything()
+      );
+    }
   });
 
   it('skips an oversized file before fetching it and counts it into skippedFiles', async () => {
@@ -554,7 +590,8 @@ describe('driveLakeIngest consumer', () => {
       expect.anything(),
       expect.anything(),
       'ff-old',
-      expect.anything()
+      expect.anything(),
+      { origin: 'connector' }
     );
     // The full delete reaps chunks / search index / session links / S3 / quota, unlike a soft-delete.
     expect(h.deleteFabFile).toHaveBeenCalledTimes(1);
@@ -628,7 +665,8 @@ describe('driveLakeIngest consumer', () => {
       expect.anything(),
       expect.anything(),
       'ff-old',
-      expect.anything()
+      expect.anything(),
+      { origin: 'connector' }
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
@@ -701,7 +739,8 @@ describe('driveLakeIngest consumer', () => {
       expect.anything(),
       expect.anything(),
       'ff-old',
-      expect.anything()
+      expect.anything(),
+      { origin: 'connector' }
     );
     expect(h.deleteFabFile).not.toHaveBeenCalled();
     expect(h.changeStorageSize).not.toHaveBeenCalled();
@@ -795,8 +834,12 @@ describe('driveLakeIngest consumer', () => {
 
     // Both vanished copies unpicked exactly once each, by the genuine-delete pass only.
     expect(h.removeFileFromLake).toHaveBeenCalledTimes(2);
-    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-a', expect.anything());
-    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-b', expect.anything());
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-a', expect.anything(), {
+      origin: 'connector',
+    });
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-b', expect.anything(), {
+      origin: 'connector',
+    });
     // A genuine delete is membership-only - the owner keeps their copy, nothing is deleted outright.
     expect(h.deleteFabFile).not.toHaveBeenCalled();
   });
@@ -869,7 +912,13 @@ describe('driveLakeIngest consumer', () => {
     await run();
 
     expect(h.removeFileFromLake).toHaveBeenCalledTimes(1);
-    expect(h.removeFileFromLake).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'ff-d2', expect.anything());
+    expect(h.removeFileFromLake).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      'ff-d2',
+      expect.anything(),
+      { origin: 'connector' }
+    );
     expect(h.recomputeLakeStats).toHaveBeenCalledTimes(1);
     expect(h.batchCreate).not.toHaveBeenCalled();
     expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', null);
@@ -1803,7 +1852,8 @@ describe('driveLakeIngest consumer', () => {
       expect.anything(),
       expect.anything(),
       'ff-old',
-      expect.anything()
+      expect.anything(),
+      { origin: 'connector' }
     );
     expect(h.upload).toHaveBeenCalledTimes(1);
   });
@@ -1977,6 +2027,62 @@ describe('driveLakeIngest consumer', () => {
     expect(h.batchCreate).not.toHaveBeenCalled();
   });
 
+  // The origin gate (unattended writes into a curated lake). Mirrors the three admission tests
+  // above exactly, because both sit in the same try/catch and must be handled identically.
+  it('gates the lake once per sync, against the connecting user as a synthetic admin actor', async () => {
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+      { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    // Once, not per candidate: the lake and the owner-to-be are the same for every file.
+    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledTimes(1);
+    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledWith(
+      { userId: 'user1', isAdmin: true },
+      ['lake-tag'],
+      expect.objectContaining({
+        db: expect.objectContaining({
+          dataLakes: expect.anything(),
+          adminSettings: expect.anything(),
+          scopedSettings: expect.anything(),
+        }),
+        unattended: true,
+      })
+    );
+  });
+
+  it('refuses the whole sync cleanly on an origin refusal - no batch, no retry spiral', async () => {
+    // A refusal is deterministic (same origin, same policy on every retry), so rethrowing it would
+    // spin this message to the DLQ. Recorded as guidance and returned, like the admission refusal.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.assertCanWriteDataLakeTags.mockRejectedValue(new BadRequestError('"Lake" is curated'));
+
+    await run();
+
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.fetchDriveFileContent).not.toHaveBeenCalled();
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', expect.stringContaining('is curated'));
+    // The try wraps both the admission and origin gates, so the reason must go on the log line
+    // too - without it, on-call cannot tell which gate refused without querying the connection.
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[driveLakeIngest] data lake refused this sync at admission or authorization',
+      expect.objectContaining({ reason: expect.stringContaining('is curated') })
+    );
+  });
+
+  it('lets a non-origin failure from the gate reach SQS for retry', async () => {
+    // Only a BadRequestError is a verdict; a settings-store outage is transient and must retry.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.assertCanWriteDataLakeTags.mockRejectedValue(new Error('settings store unreachable'));
+
+    await expect(run()).rejects.toThrow('settings store unreachable');
+    expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
   describe('incremental sync (#2396)', () => {
     const withCursor = (overrides: Record<string, unknown> = {}) =>
       h.connFindById.mockResolvedValue({
@@ -2099,7 +2205,8 @@ describe('driveLakeIngest consumer', () => {
         expect.anything(),
         expect.anything(),
         'ff-d1',
-        expect.anything()
+        expect.anything(),
+        { origin: 'connector' }
       );
       expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
         fullWalk: false,
@@ -2127,7 +2234,8 @@ describe('driveLakeIngest consumer', () => {
         expect.anything(),
         expect.anything(),
         'ff-d1',
-        expect.anything()
+        expect.anything(),
+        { origin: 'connector' }
       );
     });
 
@@ -2209,13 +2317,15 @@ describe('driveLakeIngest consumer', () => {
         expect.anything(),
         expect.anything(),
         'ff-older',
-        expect.anything()
+        expect.anything(),
+        { origin: 'connector' }
       );
       expect(h.removeFileFromLake).toHaveBeenCalledWith(
         expect.anything(),
         expect.anything(),
         'ff-newest',
-        expect.anything()
+        expect.anything(),
+        { origin: 'connector' }
       );
     });
 

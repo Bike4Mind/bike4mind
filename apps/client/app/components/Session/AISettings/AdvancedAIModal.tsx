@@ -51,8 +51,6 @@ import {
   OpenAIImageStyle,
   REASONING_SUPPORTED_MODELS,
   UserReasoningEffort,
-  isGPTImage2Model,
-  isGPTImageModel,
   isKontextModel as isKontextImageModel,
 } from '@bike4mind/common';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
@@ -100,7 +98,14 @@ import { brand, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/co
 
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { ContextHelpButton, FieldTooltip, FIELD_TOOLTIPS } from '@client/app/components/help';
-import { ignoresUpsamplingAndSeed, withInertNote } from './inertImageSettings';
+import {
+  ASPECT_RATIO_INERT_NOTE,
+  ignoresAspectRatio,
+  ignoresUpsamplingAndSeed,
+  withInertNote,
+} from './inertImageSettings';
+import { imageSizeUpdate } from './imageSizeUpdate';
+import { defaultImageSize, getAvailableImageSizes } from './imageSizeOptions';
 import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { TabIntro } from './TabIntro';
@@ -286,31 +291,13 @@ interface ImageSettingItem {
   type: 'select' | 'input';
   value: string | undefined;
   tooltip?: string;
+  testId?: string;
   options?: ImageSettingOption[];
   inputProps?: Record<string, unknown>;
   // Set when the selected model ignores the setting: the row stays visible but cannot be edited.
   disabled?: boolean;
   onChange(value: string | number | null | undefined): void;
 }
-
-const getAvailableSizes = (model: string) => {
-  if (isGPTImage2Model(model)) {
-    return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes;
-  } else if (isGPTImageModel(model)) {
-    return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
-  } else if (isBflImageModel(model)) {
-    if (isKontextImageModel(model)) return [];
-    return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
-  }
-  return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
-};
-
-const getModelConstraintKey = (model: string) => {
-  if (isGPTImage2Model(model)) return 'GPT_IMAGE_2';
-  if (isGPTImageModel(model)) return 'GPT_IMAGE_1';
-  if (isBflImageModel(model)) return 'BFL';
-  return 'GPT_IMAGE_1';
-};
 
 /**
  * Every value the BFL safety cap actually allows. Derived from the constant rather than hardcoded so
@@ -1233,6 +1220,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       indicator={<KeyboardArrowDownIcon />}
                       sx={settingsSelectSx(mode || 'light')}
                       slotProps={SETTINGS_SELECT_SLOT_PROPS}
+                      data-testid={setting.testId}
                     >
                       {setting.options?.map(option => (
                         <Option key={option.value} value={option.value}>
@@ -1727,10 +1715,13 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
             {
               label: 'Image Size',
               type: 'select' as const,
-              value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(shownModel)].defaultSize,
-              onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
-              options: getAvailableSizes(shownModel).map(s => ({ value: s, label: s })),
+              value: size || defaultImageSize(shownModel),
+              // `model`, not `shownModel`: the panel renders the previewed model's controls, but the
+              // dimensions written here are consumed by whichever model actually generates.
+              onChange: (value: OpenAIImageSize | null) => value && setLLM(imageSizeUpdate(model, value)),
+              options: getAvailableImageSizes(shownModel, size).map(s => ({ value: s, label: s })),
               tooltip: FIELD_TOOLTIPS.imageSize,
+              testId: 'model-details-size-select',
             },
           ]),
       {
@@ -1786,7 +1777,13 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               inputProps: {
                 type: 'number',
                 placeholder: 'Auto',
-                slotProps: { input: { min: 256, max: 4096, step: 8 } },
+                slotProps: {
+                  input: {
+                    min: IMAGE_SIZE_CONSTRAINTS.BFL.minWidth,
+                    max: IMAGE_SIZE_CONSTRAINTS.BFL.maxWidth,
+                    step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                  },
+                },
               },
             },
             {
@@ -1798,7 +1795,13 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               inputProps: {
                 type: 'number',
                 placeholder: 'Auto',
-                slotProps: { input: { min: 256, max: 4096, step: 8 } },
+                slotProps: {
+                  input: {
+                    min: IMAGE_SIZE_CONSTRAINTS.BFL.minHeight,
+                    max: IMAGE_SIZE_CONSTRAINTS.BFL.maxHeight,
+                    step: IMAGE_SIZE_CONSTRAINTS.BFL.stepSize,
+                  },
+                },
               },
             },
           ]
@@ -1808,7 +1811,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'select' as const,
         value: aspect_ratio?.toString() ?? '',
         onChange: (value: string | null) => setLLM({ aspect_ratio: value ? value : undefined }),
-        tooltip: FIELD_TOOLTIPS.aspectRatio,
+        tooltip: withInertNote(FIELD_TOOLTIPS.aspectRatio, ignoresAspectRatio(shownModel), ASPECT_RATIO_INERT_NOTE),
+        disabled: ignoresAspectRatio(shownModel),
         options: [
           { value: '', label: 'Auto' },
           { value: '16:9', label: '16:9' },
@@ -1829,7 +1833,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         ],
       },
     ],
-    [shownModel, isKontextModel, size, quality, style, seed, width, height, aspect_ratio, output_format, setLLM]
+    [shownModel, model, isKontextModel, size, quality, style, seed, width, height, aspect_ratio, output_format, setLLM]
   );
 
   const handleViewDetails = (model: ModelInfo) => {
