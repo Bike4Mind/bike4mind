@@ -82,6 +82,16 @@ function textTurn(text: string, usage: { input: number; output: number } = { inp
   };
 }
 
+function textAndToolUseTurn(text: string, id: string, name: string, input: Record<string, unknown>) {
+  return {
+    content: [
+      { type: 'text', text },
+      { type: 'tool_use', id, name, input },
+    ],
+    usage: { input_tokens: 10, output_tokens: 5 },
+  };
+}
+
 function streamingToolUseTurn(id: string, name: string, input: Record<string, unknown>) {
   return [
     { type: 'message_start', message: { usage: { input_tokens: 10, output_tokens: 0 } } },
@@ -236,6 +246,45 @@ describe('AnthropicBackend does not duplicate an echoed tool artifact card (#325
     const last = calls[calls.length - 1];
     expect(last.info?.inputTokens).toBeGreaterThanOrEqual(37);
     expect(last.info?.outputTokens).toBeGreaterThanOrEqual(11);
+  });
+
+  it('pin: a chained tool call artifact reaches the client AFTER the text that introduces it, not before', async () => {
+    // Regression: the chained artifact used to escape straight to the client via a root-pinned
+    // callback while the guard was still buffering the sentence meant to introduce it, reversing
+    // the order the model actually generated them in.
+    const { backend } = buildNonStreamingBackend([
+      toolUseTurn('call_1', 'mermaid_chart', { definition: 'graph TD;A-->B' }),
+      textAndToolUseTurn("Here's the second chart:", 'call_2', 'recharts', { definition: '{}' }),
+      textTurn('Done.'),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await runComplete(backend, { stream: false, tools: [mermaidTool, rechartsTool] }, cb);
+
+    const text = clientText(calls);
+    const introIndex = text.indexOf("Here's the second chart:");
+    const chartIndex = text.indexOf('identifier="chart-1"');
+    expect(introIndex).toBeGreaterThanOrEqual(0);
+    expect(chartIndex).toBeGreaterThan(introIndex);
+  });
+
+  it('pin: a genuinely NEW artifact the model composes in its own reply text is not mistaken for an echo', async () => {
+    // Regression: the echo backstop used to strip EVERY complete <artifact> block from the
+    // buffered reply, not just ones matching an artifact already delivered this turn - so a
+    // model-authored artifact with a different identifier was silently deleted.
+    const NEW_ARTIFACT =
+      '<artifact identifier="mermaid-2" type="application/vnd.ant.mermaid" title="Second">graph TD;C-->D</artifact>';
+    const { backend } = buildNonStreamingBackend([
+      toolUseTurn('call_1', 'mermaid_chart', { definition: 'graph TD;A-->B' }),
+      textTurn(`Here's another one I drew myself:\n\n${NEW_ARTIFACT}`),
+    ]);
+    const { calls, cb } = captureCb();
+
+    await runComplete(backend, { stream: false, tools: [mermaidTool] }, cb);
+
+    const text = clientText(calls);
+    expect(text).toContain('identifier="mermaid-1"');
+    expect(text).toContain('identifier="mermaid-2"');
   });
 
   it('does not truncate the rest of a legitimate reply that merely mentions a stray "<artifact"', async () => {
