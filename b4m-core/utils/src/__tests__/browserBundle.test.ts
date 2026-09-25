@@ -65,6 +65,14 @@ describe('esbuild bundles of utils', () => {
           if (typeof key === 'string') readKeys.push(key);
           return Reflect.get(target, key);
         },
+        has(target, key) {
+          if (typeof key === 'string') readKeys.push(key);
+          return Reflect.has(target, key);
+        },
+        ownKeys(target) {
+          readKeys.push('<enumerate>');
+          return Reflect.ownKeys(target);
+        },
       }
     );
     const mod = await import(/* @vite-ignore */ pathToFileURL(bundlePath).href);
