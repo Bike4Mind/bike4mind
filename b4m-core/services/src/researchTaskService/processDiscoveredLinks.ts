@@ -46,6 +46,9 @@ interface IResearchTaskProcessDiscoveredLinksAdapters {
 
 // TODO: move BATCH_SIZE / CONCURRENCY_LIMIT to admin settings so they're adjustable.
 const BATCH_SIZE = 50;
+
+// No whitespace consumers around the lazy body: the caller trims, and `\s*` there is quadratic on an unclosed fence.
+export const FENCED_JSON_REGEX = /```(?:json)?([\s\S]*?)```/;
 const CONCURRENCY_LIMIT = 3;
 
 export const processDiscoveredLinks = async (
@@ -252,7 +255,7 @@ export const processDiscoveredLinks = async (
                 logger?.info(`***TOTAL LINKS EXTRACTED: ${result.length}/${batch.length}***`);
               } catch {
                 try {
-                  const matches = extractedLinks.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+                  const matches = extractedLinks.match(FENCED_JSON_REGEX);
                   if (!matches?.[1]) throw new Error('No JSON content found in code block');
                   result = JSON.parse(matches[1].trim());
 
