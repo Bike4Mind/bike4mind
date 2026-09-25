@@ -324,11 +324,10 @@ describe('POST /api/data-lakes/[id]/lifecycle - retrievalIndex wiring (archive/d
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
 
-    expect(h[serviceName as keyof typeof h]).toHaveBeenCalledWith(
-      expect.anything(),
-      'lake1',
-      expect.objectContaining({ db: expect.objectContaining({ fabFileChunks: fabFileChunkRepository }) })
-    );
+    // toHaveBeenCalledWith(expect.objectContaining(...)) is a deep-equality check, not identity: a
+    // spread copy of fabFileChunkRepository would still pass. Pull the actual argument and use .toBe.
+    const call = h[serviceName as keyof typeof h].mock.calls[0][2] as Record<string, unknown>;
+    expect((call.db as Record<string, unknown>).fabFileChunks).toBe(fabFileChunkRepository);
   });
 
   // Unwired, an archived/deleted lake's Drive connection keeps polling forever - see
@@ -372,10 +371,9 @@ describe('POST /api/data-lakes/[id]/lifecycle - db.users wiring (delete/restore/
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action }), res);
 
-    expect(h[serviceName]).toHaveBeenCalledWith(
-      expect.anything(),
-      'lake1',
-      expect.objectContaining({ db: expect.objectContaining({ users: userRepository }) })
-    );
+    // toHaveBeenCalledWith(expect.objectContaining(...)) is a deep-equality check, not identity: a
+    // spread copy of userRepository would still pass. Pull the actual argument and use .toBe.
+    const call = h[serviceName].mock.calls[0][2] as Record<string, unknown>;
+    expect((call.db as Record<string, unknown>).users).toBe(userRepository);
   });
 });
