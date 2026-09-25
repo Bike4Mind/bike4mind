@@ -1,12 +1,44 @@
 import { TIMEOUTS } from './constants';
 import type { PromptScenario, PromptResult } from './ai-latency-helpers';
 
-// Pure helpers behind the ai-latency suite's time budgets and result bookkeeping. They live apart
-// from ai-latency-suite-factory.ts, which imports Playwright fixtures and so can only be loaded by
-// a Playwright runner: everything here is dependency-free on purpose, because `e2e` is excluded
-// from every vitest project (apps/client/vitest.config.mts, LANE_EXCLUDE) and a co-located test
-// would silently match nothing. packages/scripts/src/checkAiLatencyBudget.test.ts imports this
-// module directly and is where these rules are pinned.
+// The ai-latency suite's time budgets and result bookkeeping, plus the error type that decides
+// which failures count as a latency observation. Kept apart from ai-latency-suite-factory.ts and
+// pages/ChatPage.ts, both of which import Playwright and so load only under a Playwright runner:
+// this module imports nothing beyond ./constants and a type, which is what lets
+// packages/scripts/src/checkAiLatencyBudget.test.ts import it under vitest and pin these rules.
+// `e2e` is excluded from every vitest project (apps/client/vitest.config.mts, LANE_EXCLUDE), so a
+// co-located test here would match no project and never run.
+// Nothing enforces that restraint on its own - a `@playwright/test` import added here would still
+// typecheck and still resolve - so the guard asserts this file's import list directly.
+
+/**
+ * The streaming wait exhausted its budget: the reply was still unfinished when the cap expired.
+ *
+ * Thrown by ChatPage.waitForStreamingComplete and declared here, away from Playwright, so the
+ * suite's guard can be tested. A distinct type because only this failure is a latency measurement.
+ */
+export class StreamingTimeoutError extends Error {
+  constructor(
+    readonly timeoutMs: number,
+    stage: string
+  ) {
+    super(`Streaming did not complete within ${timeoutMs}ms - ${stage}`);
+    this.name = 'StreamingTimeoutError';
+  }
+}
+
+/**
+ * Whether a failure is something to record as a latency data point.
+ *
+ * Only a blown streaming budget is. The send path also does pre-stream setup - waiting for the send
+ * button to enable, gating on the response container mounting - and stamping one of those flakes
+ * `incomplete` would count it into the gated average, page the slow-responses channel and fail the
+ * nightly for something that is not AI slowness. Everything else must propagate untouched: the test
+ * still fails loudly, it just does not claim a timing it never took.
+ */
+export function isLatencyObservation(err: unknown): err is StreamingTimeoutError {
+  return err instanceof StreamingTimeoutError;
+}
 
 /** ms -> s at 1 ms granularity. One helper so every duration field rounds the same way. */
 export function msToSec(ms: number): number {
@@ -28,14 +60,32 @@ export function textStreamBudgetMs(thresholdSec: number, scenario: PromptScenari
   return Math.max(TIMEOUTS.AI_RESPONSE, (scenario.textStreamingBudgetSec ?? thresholdSec) * 1000);
 }
 
+/** Pre-rename spelling of textStreamingBudgetSec. */
+const LEGACY_BUDGET_KEY = 'streamingBudgetSec';
+
 /**
- * Rejects a budget that would never be read. Deliberately checked over the WHOLE prompt list at
- * suite construction rather than inside textStreamBudgetMs: that function is only reached on the
- * text branch, so an image/artifact prompt carrying a budget would never pass through it and the
- * misconfiguration would stay invisible. Runs over every configured prompt, not just the three the
- * daily seed picked, so a bad entry surfaces on the first run rather than on the day it is drawn.
+ * Rejects a budget that would never be read: the pre-rename key, and a budget on a prompt whose
+ * branch cannot reach it.
+ *
+ * Deliberately checked over the WHOLE prompt list at suite construction rather than inside
+ * textStreamBudgetMs: that function is only reached on the text branch, so an image/artifact prompt
+ * carrying a budget would never pass through it and the misconfiguration would stay invisible.
+ * Covers every configured prompt, not just the three the daily seed picked, so a bad entry surfaces
+ * on the first run rather than on the day it is drawn.
  */
 export function assertBudgetConfig(prompts: PromptScenario[]): void {
+  // The specs load their JSON config and cast it (`config.prompts as PromptScenario[]`), which
+  // turns off excess-property checking - so the pre-rename spelling would sit in a config file
+  // typechecking cleanly while nothing read it, silently dropping a hand-picked budget back to
+  // max(AI_RESPONSE, thresholdSec). That is the failure mode this whole module exists to catch.
+  const legacy = prompts.filter(p => LEGACY_BUDGET_KEY in p);
+  if (legacy.length > 0) {
+    throw new Error(
+      `${LEGACY_BUDGET_KEY} was renamed to textStreamingBudgetSec and is no longer read. ` +
+        `Rename it on: ${legacy.map(p => p.id).join(', ')}.`
+    );
+  }
+
   const misconfigured = prompts.filter(
     p => p.textStreamingBudgetSec !== undefined && (p.expectsImage || p.generatesArtifact)
   );
