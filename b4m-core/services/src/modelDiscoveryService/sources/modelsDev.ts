@@ -53,6 +53,7 @@ interface ModelsDevModel {
   modalities?: { input?: unknown; output?: unknown };
   limit?: { context?: unknown; output?: unknown };
   cost?: ModelsDevCost;
+  release_date?: unknown;
 }
 
 interface ModelsDevProvider {
@@ -90,6 +91,16 @@ export function indexModelsDev(document: unknown, backends: Iterable<string>): M
     }
   }
   return entries;
+}
+
+/**
+ * A real YYYY-MM-DD day, or undefined. models.dev publishes some dates as bare
+ * YYYY-MM, and the catalog's CALENDAR_DATE would reject the whole record over one.
+ */
+function calendarDate(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return undefined;
+  const parsed = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value ? value : undefined;
 }
 
 const rate = (value: unknown): number | undefined =>
@@ -159,6 +170,7 @@ function patchOf(model: ModelsDevModel): Partial<ModelRecord> {
     supportsTools: boolean(model.tool_call),
     supportsStructuredOutput: boolean(model.structured_output),
     lifecycle: status ? { status } : undefined,
+    releaseDate: calendarDate(model.release_date),
   });
 }
 

@@ -10,7 +10,8 @@
       "supportsVision": true,
       "supportsPdfInput": true,
       "supportsTools": true,
-      "supportsStructuredOutput": true
+      "supportsStructuredOutput": true,
+      "releaseDate": "2025-11-24"
     },
     "pricing": {
       "inputPerMTok": 5,
@@ -31,7 +32,8 @@
       "supportsVision": true,
       "supportsPdfInput": true,
       "supportsTools": true,
-      "supportsStructuredOutput": true
+      "supportsStructuredOutput": true,
+      "releaseDate": "2026-07-24"
     },
     "pricing": {
       "inputPerMTok": 5,
@@ -51,7 +53,8 @@
       "supportsVision": true,
       "supportsPdfInput": true,
       "supportsTools": true,
-      "supportsStructuredOutput": true
+      "supportsStructuredOutput": true,
+      "releaseDate": "2026-02-17"
     },
     "pricing": {
       "inputPerMTok": 3,
@@ -71,7 +74,8 @@
       "supportsVision": true,
       "supportsPdfInput": true,
       "supportsTools": true,
-      "supportsStructuredOutput": true
+      "supportsStructuredOutput": true,
+      "releaseDate": "2025-06-17"
     },
     "pricing": {
       "inputPerMTok": 1.25,
@@ -102,7 +106,8 @@
       "supportsStructuredOutput": true,
       "lifecycle": {
         "status": "deprecated"
-      }
+      },
+      "releaseDate": "2025-11-18"
     },
     "pricing": {
       "inputPerMTok": 2,
@@ -129,7 +134,8 @@
       "temperatureMode": "unsupported",
       "supportsVision": true,
       "supportsPdfInput": true,
-      "supportsTools": true
+      "supportsTools": true,
+      "releaseDate": "2026-05-28"
     },
     "pricing": {
       "inputPerMTok": 5,
@@ -149,7 +155,8 @@
       "supportsVision": true,
       "supportsPdfInput": true,
       "supportsTools": true,
-      "supportsStructuredOutput": true
+      "supportsStructuredOutput": true,
+      "releaseDate": "2025-04-14"
     },
     "pricing": {
       "inputPerMTok": 2,
@@ -169,7 +176,8 @@
       "supportsVision": true,
       "supportsPdfInput": false,
       "supportsTools": true,
-      "supportsStructuredOutput": true
+      "supportsStructuredOutput": true,
+      "releaseDate": "2025-08-07"
     },
     "pricing": {
       "inputPerMTok": 1.25,
@@ -188,7 +196,8 @@
       "supportsVision": true,
       "supportsPdfInput": true,
       "supportsTools": true,
-      "supportsStructuredOutput": true
+      "supportsStructuredOutput": true,
+      "releaseDate": "2026-07-08"
     },
     "pricing": {
       "inputPerMTok": 2,
@@ -220,7 +229,8 @@
       "supportsStructuredOutput": true,
       "lifecycle": {
         "status": "deprecated"
-      }
+      },
+      "releaseDate": "2025-04-16"
     },
     "pricing": {
       "inputPerMTok": 1.1,
@@ -242,7 +252,8 @@
       "supportsTools": true,
       "lifecycle": {
         "status": "deprecated"
-      }
+      },
+      "releaseDate": "2025-08-05"
     },
     "pricing": {
       "inputPerMTok": 15,
