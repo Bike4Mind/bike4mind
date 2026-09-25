@@ -10,6 +10,9 @@ import {
   MessageContentInlineImage,
   ModelBackend,
   PermissionDeniedError,
+  stripToolArtifactMarkup,
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
   type CacheUsageStats,
   type IMessage,
   type MessageContentObject,
@@ -21,7 +24,7 @@ import {
 import { stripToolDependentMessages } from './toolPairingUtils';
 import pick from 'lodash/pick.js';
 import { v4 as uuidv4 } from 'uuid';
-import { handleToolResultStreaming } from './toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { withAbortListener } from './withAbortListener';
@@ -828,19 +831,41 @@ export class GeminiBackend implements ICompletionBackend {
                 : { ok: false as const, toolCall: resolvedCalls[i].toolCall, error: outcome.error }
             );
 
+            // The single shared guard for this whole recursive chain - reused unchanged if an
+            // earlier level already created one, so a CHAINED tool call's artifact and any text
+            // buffered ahead of it stay in one true generation order. See anthropicBackend and
+            // createRecursiveArtifactGuard for the same pattern.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
+
+            // Track artifact streaming: the model can echo the tool's own <artifact> tag back
+            // in its final reply once it reads it from the tool_result JSON, and the reply
+            // parser would render that echo as a second, empty card - strip it from history
+            // (below) and, as a backstop, from the recursive completion's buffered text
+            // (after the loop). See anthropicBackend for the same pattern.
             // Inject results in original order (Gemini requires matching tool_use order)
             for (const outcome of outcomes) {
               if (outcome.ok) {
+                let thisToolHadArtifact = false;
+
                 // Stream tool results for artifact-generating tools (like recharts)
                 await handleToolResultStreaming(
                   outcome.toolCall.name,
                   outcome.result,
                   async (results, artifactInfo) => {
-                    await callback(results, { toolsUsed, ...artifactInfo });
+                    thisToolHadArtifact = true;
+                    if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                    await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
                   }
                 );
 
-                const resultContent = JSON.stringify({ result: outcome.result });
+                // Strip artifact markup from every tool result, not only the ones that
+                // streamed, so the model never sees markup it could echo into its reply.
+                const sanitizedResult = stripToolArtifactMarkup(
+                  outcome.result.toString(),
+                  thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+                );
+                const resultContent = JSON.stringify({ result: sanitizedResult });
                 recordToolResult(
                   toolsUsed,
                   { id: outcome.toolCall.id, name: outcome.toolCall.name },
@@ -863,8 +888,13 @@ export class GeminiBackend implements ICompletionBackend {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
 
                 this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+                // Strip too - matches the success path above (openaiBackend does the same for
+                // its error branch) so an error message can't carry echoable artifact markup.
                 const errorContent = JSON.stringify({
-                  error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                  error: stripToolArtifactMarkup(
+                    outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                    ARTIFACT_REMOVED_PLACEHOLDER
+                  ),
                 });
                 recordToolResult(
                   toolsUsed,
@@ -904,11 +934,15 @@ export class GeminiBackend implements ICompletionBackend {
                   accumInputTokens: accumInputTokens + turnInputTokens,
                   accumOutputTokens: accumOutputTokens + turnOutputTokens,
                   liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
+                  artifactGuard,
                 },
               },
-              callback,
+              artifactGuard?.callback ?? callback,
               toolsUsed
             );
+
+            // See anthropicBackend for why only a guard this level created is flushed.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
           } else {
             // New behavior: just pass tool calls through callback, don't execute.
             // The post-stream cb above already emitted accum+thisTurn tokens;
@@ -1069,15 +1103,29 @@ export class GeminiBackend implements ICompletionBackend {
             : { ok: false as const, toolCall: resolvedCalls[i].toolCall, error: outcome.error }
         );
 
+        // See the streaming branch above for why the shared artifactGuard exists.
+        const inheritedArtifactGuard = options._internal?.artifactGuard;
+        let artifactGuard = inheritedArtifactGuard;
+
         // Inject results in original order
         for (const outcome of outcomes) {
           if (outcome.ok) {
+            let thisToolHadArtifact = false;
+
             // Stream tool results for artifact-generating tools (like recharts)
             await handleToolResultStreaming(outcome.toolCall.name, outcome.result, async (results, artifactInfo) => {
-              await callback(results, { toolsUsed, ...artifactInfo });
+              thisToolHadArtifact = true;
+              if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+              await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
             });
 
-            const resultContent = JSON.stringify({ result: outcome.result });
+            // Strip artifact markup from every tool result, not only the ones that streamed,
+            // so the model never sees markup it could echo into its reply.
+            const sanitizedResult = stripToolArtifactMarkup(
+              outcome.result.toString(),
+              thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+            );
+            const resultContent = JSON.stringify({ result: sanitizedResult });
             recordToolResult(toolsUsed, { id: outcome.toolCall.id, name: outcome.toolCall.name }, resultContent, true);
 
             // Push tool result to conversation history
@@ -1094,8 +1142,13 @@ export class GeminiBackend implements ICompletionBackend {
           } else {
             if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
             this.logger.error(`[Gemini] Error executing tool ${outcome.toolCall.name}:`, outcome.error);
+            // Strip too - matches the success path above (openaiBackend does the same for its
+            // error branch) so an error message can't carry echoable artifact markup.
             const errorContent = JSON.stringify({
-              error: outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+              error: stripToolArtifactMarkup(
+                outcome.error instanceof Error ? outcome.error.message : 'Unknown error',
+                ARTIFACT_REMOVED_PLACEHOLDER
+              ),
             });
             recordToolResult(toolsUsed, { id: outcome.toolCall.id, name: outcome.toolCall.name }, errorContent, false);
             // Push error as tool result
@@ -1129,11 +1182,15 @@ export class GeminiBackend implements ICompletionBackend {
               accumInputTokens: accumInputTokens + turnInputTokens,
               accumOutputTokens: accumOutputTokens + turnOutputTokens,
               liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
+              artifactGuard,
             },
           },
-          callback,
+          artifactGuard?.callback ?? callback,
           toolsUsed
         );
+
+        // See anthropicBackend for why only a guard this level created is flushed.
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
       } else {
         // New behavior: just pass tool calls through callback, don't execute
         this.logger.debug('[Gemini] Gemini executeTools=false, passing tool calls to callback');
