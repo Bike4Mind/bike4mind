@@ -9,11 +9,15 @@ import type { EndpointContract } from '../api-contract';
 // thing on `registry` here - it never touches the real spec built in document.test.ts.
 const contract: EndpointContract = {
   method: 'get',
-  path: '/api/v1/fixture/{id}',
+  path: '/api/v1/fixture/{id}/{version}',
   operationId: 'getFixture',
   summary: 'Fixture endpoint for registerContract query-param emission',
   auth: 'public',
-  pathParams: z.object({ id: z.string() }),
+  // `version` is `z.coerce.number()`, not `z.string()`, so the pathParams branch of
+  // withAccurateCoercedParams is exercised too, not just queryParams: pre-fix, a
+  // coerced path param emitted `required: false`, which is invalid OpenAPI (`required`
+  // is mandatory for every `in: path` parameter).
+  pathParams: z.object({ id: z.string(), version: z.coerce.number() }),
   // `q` proves the plain required/optional case unambiguously. `limit` is
   // `z.coerce.number()`, not `z.number()`, because a real query value always
   // arrives as a string (see the queryParams doc comment in api-contract/types.ts) -
@@ -57,7 +61,7 @@ const doc = new OpenApiGeneratorV31(registry.definitions).generateDocument({
   openapi: '3.1.0',
   info: { title: 'fixture', version: '0.0.0' },
 });
-const operation = getOperation(doc, '/api/v1/fixture/{id}');
+const operation = getOperation(doc, '/api/v1/fixture/{id}/{version}');
 
 describe('registerContract - queryParams', () => {
   it('documents queryParams as `in: query`, distinct from pathParams as `in: path`', () => {
@@ -76,6 +80,15 @@ describe('registerContract - queryParams', () => {
     // never a literal `null`.
     const byName = Object.fromEntries((operation.parameters ?? []).map(p => [p.name, p]));
     expect(byName.limit).toMatchObject({ in: 'query', required: true, schema: { type: 'number' } });
+  });
+
+  it('documents a required z.coerce.number() path field as required (pathParams branch, not just queryParams)', () => {
+    // A path segment can never be omitted - `required: false` on an `in: path`
+    // parameter is invalid OpenAPI, not just imprecise like the query case. Pinned
+    // separately from `limit` so withAccurateCoercedParams's pathParams branch has its
+    // own coverage instead of relying solely on queryParams's.
+    const byName = Object.fromEntries((operation.parameters ?? []).map(p => [p.name, p]));
+    expect(byName.version).toMatchObject({ in: 'path', required: true, schema: { type: 'number' } });
   });
 
   it("keeps a bare z.coerce.* field's own .openapi() metadata after correcting its required/nullable reporting", () => {
