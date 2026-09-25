@@ -1,3 +1,5 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
+import { getEditorTokenSx, CODE_FONT_STACK } from '@client/app/components/Session/markdown/syntaxTheme';
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   Box,
@@ -5,8 +7,6 @@ import {
   Alert,
   CircularProgress,
   Tabs,
-  TabList,
-  Tab,
   TabPanel,
   Stack,
   Button,
@@ -17,10 +17,9 @@ import {
   useTheme,
 } from '@mui/joy';
 import { type ReactArtifact } from '@bike4mind/common';
+import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { validateArtifactContent } from '@client/app/utils/artifactParser';
 import { codeImportDependencies } from '@client/app/utils/importStatements';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-javascript';
@@ -28,8 +27,6 @@ import 'prismjs/components/prism-jsx';
 import 'prismjs/components/prism-typescript';
 import 'prismjs/components/prism-tsx';
 import {
-  PlayArrow as PreviewIcon,
-  Code as CodeIcon,
   Save as SaveIcon,
   Undo as UndoIcon,
   Lock as LockIcon,
@@ -496,32 +493,13 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
               flexShrink: 0,
             }}
           >
-            <TabList className="react-artifact-viewer-tab-list" sx={{ minHeight: 'auto' }}>
-              <Tab
-                className="react-artifact-viewer-tab-preview"
-                value={tabPanelValues.preview}
-                sx={{ py: 0.5, minHeight: 'auto' }}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  <PreviewIcon sx={{ fontSize: 18 }} />
-                  <Typography className="react-artifact-viewer-tab-label" level="body-sm">
-                    Preview
-                  </Typography>
-                </Stack>
-              </Tab>
-              <Tab
-                className="react-artifact-viewer-tab-code"
-                value={tabPanelValues.code}
-                sx={{ py: 0.5, minHeight: 'auto' }}
-              >
-                <Stack direction="row" spacing={0.5} alignItems="center">
-                  <CodeIcon sx={{ fontSize: 18 }} />
-                  <Typography className="react-artifact-viewer-tab-label" level="body-sm">
-                    Code
-                  </Typography>
-                </Stack>
-              </Tab>
-            </TabList>
+            <ArtifactModeTabs
+              className="react-artifact-viewer-tab-list"
+              previewValue={tabPanelValues.preview}
+              codeValue={tabPanelValues.code}
+              previewTestId="react-artifact-preview-tab"
+              codeTestId="react-artifact-code-tab"
+            />
 
             <Stack className="react-artifact-viewer-toolbar" direction="row" spacing={1} alignItems="center">
               {onSave && !isEditMode && (
@@ -722,76 +700,16 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
                   sx={{
                     width: '100%',
                     minHeight: '100%',
-                    backgroundColor: theme.palette.mode === 'dark' ? '#282c34' : '#fafafa',
+                    backgroundColor: 'var(--joy-palette-reading-surface)',
                     '& textarea': {
                       outline: 'none !important',
                     },
                     '& pre': {
                       margin: 0,
-                      fontFamily: 'monospace',
+                      fontFamily: CODE_FONT_STACK,
                     },
-                    // Prism syntax highlighting styles for dark mode (oneDark theme)
-                    ...(theme.palette.mode === 'dark' && {
-                      '& .token.comment, & .token.prolog, & .token.doctype, & .token.cdata': {
-                        color: '#5c6370',
-                      },
-                      '& .token.punctuation': {
-                        color: '#abb2bf',
-                      },
-                      '& .token.property, & .token.tag, & .token.constant, & .token.symbol, & .token.deleted': {
-                        color: '#e06c75',
-                      },
-                      '& .token.boolean, & .token.number': {
-                        color: '#d19a66',
-                      },
-                      '& .token.selector, & .token.attr-name, & .token.string, & .token.char, & .token.builtin, & .token.inserted':
-                        {
-                          color: '#98c379',
-                        },
-                      '& .token.operator, & .token.entity, & .token.url, & .language-css .token.string, & .style .token.string':
-                        {
-                          color: '#56b6c2',
-                        },
-                      '& .token.atrule, & .token.attr-value, & .token.keyword': {
-                        color: '#c678dd',
-                      },
-                      '& .token.function, & .token.class-name': {
-                        color: '#61afef',
-                      },
-                      '& .token.regex, & .token.important, & .token.variable': {
-                        color: '#e5c07b',
-                      },
-                    }),
-                    // Prism syntax highlighting styles for light mode
-                    ...(theme.palette.mode === 'light' && {
-                      '& .token.comment, & .token.prolog, & .token.doctype, & .token.cdata': {
-                        color: '#008000',
-                      },
-                      '& .token.punctuation': {
-                        color: '#393A34',
-                      },
-                      '& .token.property, & .token.tag, & .token.boolean, & .token.number, & .token.constant, & .token.symbol, & .token.deleted':
-                        {
-                          color: '#36acaa',
-                        },
-                      '& .token.selector, & .token.attr-name, & .token.string, & .token.char, & .token.builtin, & .token.inserted':
-                        {
-                          color: '#A31515',
-                        },
-                      '& .token.operator, & .token.entity, & .token.url, & .language-css .token.string, & .style .token.string':
-                        {
-                          color: '#393A34',
-                        },
-                      '& .token.atrule, & .token.attr-value, & .token.keyword': {
-                        color: '#0000FF',
-                      },
-                      '& .token.function, & .token.class-name': {
-                        color: '#795E26',
-                      },
-                      '& .token.regex, & .token.important, & .token.variable': {
-                        color: '#e90',
-                      },
-                    }),
+                    // One palette for every code surface in the app; see getEditorTokenSx.
+                    ...getEditorTokenSx(theme.palette.mode),
                   }}
                 >
                   <Editor
@@ -801,30 +719,22 @@ const ReactArtifactViewer: React.FC<ReactArtifactViewerProps> = ({ artifact, onE
                     padding={16}
                     placeholder="Enter your React component code here..."
                     style={{
-                      fontFamily: '"Fira Code", "Fira Mono", Consolas, Menlo, Courier, monospace',
+                      fontFamily: CODE_FONT_STACK,
                       fontSize: 14,
                       lineHeight: 1.5,
                       minHeight: '100%',
                       backgroundColor: 'transparent',
-                      color: theme.palette.mode === 'dark' ? '#abb2bf' : '#393A34',
+                      color: 'var(--joy-palette-reading-ink, inherit)',
                     }}
                   />
                 </Box>
               ) : (
-                <SyntaxHighlighter
+                <HighlightedCode
+                  code={editableCode}
                   language="typescript"
-                  style={oneDark}
-                  customStyle={{
-                    margin: 0,
-                    minHeight: '100%',
-                    fontSize: '14px',
-                    lineHeight: '1.5',
-                    padding: '16px',
-                  }}
+                  customStyle={{ minHeight: '100%' }}
                   showLineNumbers
-                >
-                  {editableCode}
-                </SyntaxHighlighter>
+                />
               )}
             </Box>
           </TabPanel>
