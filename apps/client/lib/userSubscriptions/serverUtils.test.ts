@@ -464,5 +464,22 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
     );
     expect(emitMetric).not.toHaveBeenCalled();
     expect(logger.error).not.toHaveBeenCalled();
+    // No touches recorded at checkout: no acquisition field at all.
+    expect((subscriptionRepository.create as any).mock.calls[0][0]).not.toHaveProperty('acquisition');
+  });
+
+  it('stores the campaign touches checkout recorded on the new subscription row', async () => {
+    const sub = {
+      ...buildUserSubscription('price_test_professional'),
+      metadata: { userId: 'u1', stage: 'test', ownerType: 'User', acq_first_source: 'widgets', acq_first_medium: 'teaser', acq_last_source: 'email' },
+    } as unknown as Stripe.Subscription;
+
+    await handleUserSubscriptionInvoice(buildInvoice(), sub, metadata, logger);
+
+    expect(subscriptionRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        acquisition: { firstTouch: { source: 'widgets', medium: 'teaser' }, lastTouch: { source: 'email' } },
+      })
+    );
   });
 });

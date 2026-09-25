@@ -10,6 +10,8 @@ import { Config } from '@server/utils/config';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { withEventContext } from '../utils';
 import { postNewSubscriptionToSlack } from '@server/integrations/slack/slack';
+import { acquisitionFromStripeMetadata } from '@server/analytics/acquisition';
+import { emitSubscribeForSourceProducts } from '@server/analytics/subscribeEvents';
 
 export const handler = withEventContext(async (event, logger) => {
   const { invoiceId, subscriptionId } = StripeEvents.InvoicePaymentSucceeded.schema.parse(event.properties);
@@ -88,5 +90,17 @@ export const handler = withEventContext(async (event, logger) => {
       email: invoice.customer_email ?? undefined,
       ownerType: metadata.ownerType,
     });
+
+    // Report the new subscription to the Overwatch product(s) the customer came through, from the
+    // campaign touches checkout recorded. User subscriptions only: org checkout records none.
+    // Never throws, and the eventId is stable per subscription, so a retry is de-duplicated.
+    if (metadata.ownerType !== SubscriptionOwnerType.Organization && metadata.userId) {
+      await emitSubscribeForSourceProducts({
+        userId: metadata.userId,
+        subscriptionId: subscription.id,
+        touches: acquisitionFromStripeMetadata(subscription.metadata),
+        priceId: subscription.items?.data?.[0]?.price?.id,
+      });
+    }
   }
 });

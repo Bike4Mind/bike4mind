@@ -8,6 +8,7 @@ import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@server/utils/config';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
 import { appendSuccessParams, isAllowedCallbackOrigin } from '@server/integrations/stripe/callbackUrl';
+import { acquisitionToStripeMetadata, readAcquisitionTouches } from '@server/analytics/acquisition';
 import { Request } from 'express';
 import Stripe from 'stripe';
 import { z } from 'zod';
@@ -106,6 +107,9 @@ const handler = baseApi()
           userId: req.user.id,
           stage: Config.STAGE,
           ownerType: 'User', // Identifies this as a user subscription (vs organization)
+          // Where the customer came from (first and last campaign touch), carried to the
+          // invoice webhook, which stores it on the subscription row. See acquisition.ts.
+          ...acquisitionToStripeMetadata(readAcquisitionTouches(req)),
         },
       },
     });

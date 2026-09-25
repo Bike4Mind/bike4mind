@@ -99,6 +99,20 @@ export const DELINQUENT_SUBSCRIPTION_STATUSES: ReadonlySet<Stripe.Subscription.S
 export const isDelinquentSubscriptionStatus = (status: Stripe.Subscription.Status): boolean =>
   DELINQUENT_SUBSCRIPTION_STATUSES.has(status);
 
+/** One campaign touch: the utm_* fields of a landing. `source` is always present. */
+export interface SubscriptionAcquisitionTouch {
+  source: string;
+  medium?: string;
+  campaign?: string;
+  content?: string;
+}
+
+/** Where a subscription's customer came from, recorded at checkout. */
+export interface SubscriptionAcquisition {
+  firstTouch?: SubscriptionAcquisitionTouch;
+  lastTouch?: SubscriptionAcquisitionTouch;
+}
+
 export interface ISubscription {
   ownerType: SubscriptionOwnerType;
   /** The document ID of the owner of the subscription */
@@ -122,6 +136,11 @@ export interface ISubscription {
   grantedBy?: string;
   /** Free-text reason the grant was issued (audit). */
   grantedReason?: string;
+  /**
+   * The first and last campaign touch before checkout, when the browser carried any. Absent on
+   * rows created before checkout recorded it, and on admin grants.
+   */
+  acquisition?: SubscriptionAcquisition;
   /**
    * This field is used to store the date when the subscription was canceled.
    */

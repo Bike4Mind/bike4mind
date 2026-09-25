@@ -6,6 +6,7 @@ import {
   handleOrganizationSubscriptionInvoice,
 } from '@client/lib/userSubscriptions/serverUtils';
 import { handler } from './invoicePaymentSucceeded';
+import { emitSubscribeForSourceProducts } from '@server/analytics/subscribeEvents';
 
 vi.mock('@server/integrations/stripe/stripe', () => ({
   stripe: {
@@ -37,6 +38,15 @@ vi.mock('@server/utils/config', () => ({
 
 vi.mock('../utils', () => ({
   withEventContext: (h: any) => h,
+}));
+
+vi.mock('@server/integrations/slack/slack', () => ({
+  postNewSubscriptionToSlack: vi.fn().mockResolvedValue(undefined),
+}));
+
+// The Stripe-metadata parsing (acquisition.ts) stays real; only the network send is stubbed.
+vi.mock('@server/analytics/subscribeEvents', () => ({
+  emitSubscribeForSourceProducts: vi.fn().mockResolvedValue([]),
 }));
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
@@ -95,5 +105,46 @@ describe('invoicePaymentSucceeded — stage guard', () => {
     await run();
 
     expect(handleUserSubscriptionInvoice).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('invoicePaymentSucceeded - source-product subscribe events', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('reports a first charge to the products the checkout touches name', async () => {
+    (stripe.invoices.retrieve as any).mockResolvedValue({ id: 'in_1', billing_reason: 'subscription_create' });
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      buildSub({
+        userId: 'u1',
+        stage: 'test',
+        ownerType: 'User',
+        acq_first_source: 'widgets',
+        acq_first_medium: 'teaser',
+        acq_last_source: 'newsletter',
+      })
+    );
+
+    await run();
+
+    expect(emitSubscribeForSourceProducts).toHaveBeenCalledWith({
+      userId: 'u1',
+      subscriptionId: 'sub_inv_u',
+      touches: { firstTouch: { source: 'widgets', medium: 'teaser' }, lastTouch: { source: 'newsletter' } },
+      priceId: 'price_pro',
+    });
+  });
+
+  it('sends nothing for a renewal or an organization subscription', async () => {
+    (stripe.invoices.retrieve as any).mockResolvedValue({ id: 'in_1', billing_reason: 'subscription_cycle' });
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(buildSub({ userId: 'u1', stage: 'test', ownerType: 'User' }));
+    await run();
+
+    (stripe.invoices.retrieve as any).mockResolvedValue({ id: 'in_1', billing_reason: 'subscription_create' });
+    (stripe.subscriptions.retrieve as any).mockResolvedValue(
+      buildSub({ userId: 'u1', stage: 'test', ownerType: 'Organization', organizationId: 'o1' })
+    );
+    await run();
+
+    expect(emitSubscribeForSourceProducts).not.toHaveBeenCalled();
   });
 });
