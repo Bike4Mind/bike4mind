@@ -760,6 +760,10 @@ function invalidateAfterLifecycle(queryClient: ReturnType<typeof useQueryClient>
   // `cleanup` never reaches this helper - the purge door builds its own onSuccess around the
   // pending-purge suppression, and invalidates this same key itself.
   queryClient.invalidateQueries({ queryKey: dataLakeKeys.configHistoryOf(id) });
+  // The health report's serving verdict is derived from `lake.status` (computeLakeHealth), so
+  // every lifecycle move changes it - publish flips "Not serving: draft" to serving. The query
+  // neither polls nor refetches on focus, so without this the chip holds the pre-move verdict.
+  queryClient.invalidateQueries({ queryKey: dataLakeKeys.health(id) });
 }
 
 function useLifecycleMutation(action: LifecycleAction, successMessage: string, errorMessage: string) {
