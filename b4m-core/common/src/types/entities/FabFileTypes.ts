@@ -1938,4 +1938,15 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   hardDeleteOneById(fabFileId: string): Promise<boolean>;
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  /**
+   * Every stored object key of each row - the current `filePath` and each prior version's - with
+   * soft-deleted rows INCLUDED. The phase-2 lake purge needs this because every id it sweeps was
+   * already soft-deleted, and `findById` hides those rows behind the soft-delete plugin.
+   *
+   * Optional for the same source-compatibility reason as `setLakeSupersession` above; the purge
+   * requires it locally.
+   */
+  findStorageKeysByIds?(
+    fabFileIds: string[]
+  ): Promise<Array<{ id: string; filePath?: string; versions?: Array<Pick<IFabFileVersion, 'filePath'>> }>>;
 }
