@@ -338,6 +338,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
 
       expect(mockDeactivateAll).toHaveBeenCalledTimes(1);
       expect(mockDeactivateAll).toHaveBeenCalledWith('user123');
+      expect(mockPostMessageToSlack).toHaveBeenCalledWith(expect.stringContaining('API keys deactivated'));
       expect(mockDeactivateAll.mock.invocationCallOrder[0]).toBeLessThan(mockUserUpdate.mock.invocationCallOrder[0]);
     });
 
@@ -349,6 +350,7 @@ describe('Stripe webhook — new fraud prevention handlers', () => {
       await invokeWebhookWithEvent(disputeEvent);
 
       expect(mockDeactivateAll).not.toHaveBeenCalled();
+      expect(mockPostMessageToSlack).not.toHaveBeenCalledWith(expect.stringContaining('API keys deactivated'));
     });
 
     it('still deactivates keys on a retry whose clawback is a duplicate (code 11000)', async () => {
