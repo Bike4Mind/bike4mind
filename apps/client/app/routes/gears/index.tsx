@@ -1,8 +1,8 @@
-import { Box, Card, Chip, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
+import { Box, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import CheckIcon from '@mui/icons-material/Check';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
@@ -45,6 +45,7 @@ import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import PageFrame from '@client/app/components/common/PageFrame';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
+import { gray, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 
@@ -229,6 +230,15 @@ const GearsPage = () => {
             sx={theme => ({
               display: 'flex',
               flexDirection: 'column',
+              // Joy paints both a Card and PageFrame's Sheet with background.surface,
+              // so without this the card would sit on its own colour in light mode and
+              // read as a 1px outline on a flat sheet. White is a step past the theme's
+              // body grey, to lift the card off the frame rather than just clear it.
+              backgroundColor: theme.palette.mode === 'dark' ? theme.palette.background.body : gray[0],
+              // The softest step of the border scale, as on TutorialCard: `divider`
+              // is the app's full-strength rule and reads as drawn lines across a
+              // grid of thirty cards.
+              borderColor: theme.palette.border.soft,
               // Spacing is per-child rather than a single column gap: the steps down
               // the card differ, so each margin is the gap above that element.
               gap: 0,
@@ -271,7 +281,7 @@ const GearsPage = () => {
                       data-testid={`gear-pending-${gear.key}`}
                       // Joy sets gap as a plain declaration per size (3px on sm), not
                       // as a variable, so it is overridden directly.
-                      sx={{ gap: '6px' }}
+                      sx={{ gap: '6px', '--Chip-minHeight': '24px' }}
                     >
                       {gear.credits.toLocaleString()}
                     </Chip>
@@ -281,7 +291,42 @@ const GearsPage = () => {
                   // payout rather than the unlock - and it is the only trace of the
                   // amount, the chip that carried the number being gone by then.
                   <Tooltip title={`Reward claimed - ${creditText(gear)}`}>
-                    <CheckCircleIcon color="success" fontSize="small" data-testid={`gear-unlocked-${gear.key}`} />
+                    <Chip
+                      size="sm"
+                      variant="soft"
+                      color="neutral"
+                      data-testid={`gear-unlocked-${gear.key}`}
+                      // The credit chip's frame on the neutral scale: a claimed gear
+                      // holds the same shape as an unclaimed one, and only the colour
+                      // and the glyph say which it is.
+                      sx={theme => ({
+                        '--Chip-minHeight': '24px',
+                        // Joy sizes a Chip from its content plus padding-inline and
+                        // caps it at `max-content`, so a circle needs the padding
+                        // cancelled, the cap lifted and the width pinned - otherwise
+                        // the 16px glyph plus the border wins at 18px.
+                        '--Chip-paddingInline': '0px',
+                        width: '24px',
+                        minWidth: '24px',
+                        maxWidth: '24px',
+                        borderRadius: '50%',
+                        justifyContent: 'center',
+                        backgroundColor: grayAlpha[150][10],
+                        border: `1px solid ${theme.palette.border.muted}`,
+                        color: theme.palette.text.tertiary,
+                        // Joy's label slot is an inline-block that grows to fill the
+                        // chip, so the glyph inside it sits on the text baseline
+                        // rather than in the middle of the circle.
+                        [`& .${chipClasses.label}`]: {
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          lineHeight: 1,
+                        },
+                      })}
+                    >
+                      <CheckIcon sx={{ fontSize: '16px', display: 'block' }} />
+                    </Chip>
                   </Tooltip>
                 )
               ) : (
@@ -292,7 +337,23 @@ const GearsPage = () => {
                       variant="soft"
                       color="success"
                       startDecorator={<Bike4MindIcon size="12" />}
-                      sx={{ gap: '6px' }}
+                      sx={theme => {
+                        // green[800] carries the dark surface at about 6:1, but the
+                        // light one is near white and drops it to 2.4:1 - the darker
+                        // step of the same green clears AA there. The 10% fill is an
+                        // alpha, so it needs no such split.
+                        const ink = theme.palette.mode === 'dark' ? green[800] : green[950];
+                        return {
+                          gap: '6px',
+                          '--Chip-minHeight': '24px',
+                          backgroundColor: greenAlpha[800][10],
+                          border: `1px solid ${ink}`,
+                          color: ink,
+                          // Bike4MindIcon fills with var(--Icon-color), which Joy's
+                          // variant would otherwise set from the success palette.
+                          '--Icon-color': ink,
+                        };
+                      }}
                     >
                       {gear.credits.toLocaleString()}
                     </Chip>
