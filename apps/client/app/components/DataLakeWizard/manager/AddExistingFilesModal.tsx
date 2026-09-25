@@ -4,9 +4,10 @@ import AddIcon from '@mui/icons-material/Add';
 import { debounce } from 'lodash';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
+import { useIsMutating } from '@tanstack/react-query';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { useGetFabFiles } from '@client/app/hooks/data/fabFiles';
-import { useAddFilesToLake } from '@client/app/hooks/data/dataLakes';
+import { addFilesToLakeMutationKey, useAddFilesToLake } from '@client/app/hooks/data/dataLakes';
 import { GetFileIcon } from '@client/app/utils/fabFileUtils';
 import GenericAddItemsModal from '@client/app/components/Project/GenericAddItemsModal';
 import type { ManagerLake } from './shared';
@@ -58,8 +59,15 @@ export default function AddExistingFilesModal({ lake, open, onClose }: AddExisti
   // search that produced it (GenericAddItemsModal keeps selectedIds across searches), so at submit
   // the current page cannot resolve it. A bare id would be silently unresolvable there.
   const [selectedFiles, setSelectedFiles] = useState<Map<string, IFabFileDocument>>(() => new Map());
-  const { data: filesData, fetchNextPage, hasNextPage, isFetchingNextPage } = useGetFabFiles(search);
+  const { data: filesData, fetchNextPage, hasNextPage, isFetchingNextPage, isFetching } = useGetFabFiles(search);
   const { mutate: addFilesToLake, isPending } = useAddFilesToLake();
+  // A close-then-reopen can remount before the just-settled add's invalidation lands, so the
+  // reopened list serves the stale (pre-add) cache page until the refetch resolves - and if the
+  // POST itself has not settled yet, nothing has even been invalidated. Either window makes the
+  // just-added file look unselected, so it can be picked and re-toggled out of the lake. Gate
+  // Add on `isFetching` (closes the stale-page window) and `addInFlight` (closes the in-flight
+  // POST window, which survives this modal's own unmount since it is a `useMutation` option).
+  const addInFlight = useIsMutating({ mutationKey: addFilesToLakeMutationKey }) > 0;
   const debouncedSearch = useMemo(() => debounce(setSearch, 300), []);
 
   const files = useMemo(() => filesData?.pages?.map(page => page.data).flat() ?? [], [filesData]);
@@ -195,7 +203,7 @@ export default function AddExistingFilesModal({ lake, open, onClose }: AddExisti
       onSearch={term => debouncedSearch(term)}
       searchPlaceholder={t('file_browser.add_existing_search_placeholder', 'Search your files')}
       onAdd={handleAdd}
-      isPending={isPending}
+      isPending={isPending || isFetching || addInFlight}
       renderItem={renderFileItem}
       onScroll={handleScroll}
       isLoadingMore={isFetchingNextPage}
