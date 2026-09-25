@@ -19,7 +19,14 @@ const contract: EndpointContract = {
   // arrives as a string (see the queryParams doc comment in api-contract/types.ts) -
   // kept as its own field because zod-to-openapi documents it surprisingly (see
   // the test below).
-  queryParams: z.object({ q: z.string(), limit: z.coerce.number(), cursor: z.string().optional() }),
+  queryParams: z.object({
+    q: z.string(),
+    limit: z.coerce.number(),
+    cursor: z.string().optional(),
+    // Exercises undoCoercionForOpenApi's metadata carry-forward: a bare coerce field can
+    // still carry its own `.openapi()` call, and rebuilding it from its def must not drop it.
+    pageSize: z.coerce.number().openapi({ description: 'Results per page' }),
+  }),
   responses: { 200: { description: 'ok', schema: z.object({ ok: z.boolean() }) } },
 };
 
@@ -30,7 +37,7 @@ const contract: EndpointContract = {
  * undeclared dependency for a type only these tests need.
  */
 type FixtureOperation = {
-  parameters?: { name: string; in: string; required?: boolean; schema?: { type?: unknown } }[];
+  parameters?: { name: string; in: string; required?: boolean; description?: string; schema?: { type?: unknown } }[];
   responses?: Record<string, unknown>;
 };
 
@@ -60,15 +67,27 @@ describe('registerContract - queryParams', () => {
     expect(byName.cursor).toMatchObject({ in: 'query', required: false });
   });
 
-  it('documents a required z.coerce.number() query field as optional/nullable (zod-to-openapi limitation, not a bug in registerContract)', () => {
+  it('documents a required z.coerce.number() query field as required and non-nullable', () => {
     // Verified at runtime: z.coerce.number().safeParse(undefined) FAILS (Number(undefined)
-    // is NaN), so `limit` is genuinely required. zod-to-openapi's requiredness/nullability
-    // check instead inspects the coercion's pre-parse input type, which accepts `null`
-    // (Number(null) === 0) - so the generated spec undersells the real runtime guarantee.
-    // Pinned here so a zod-to-openapi upgrade that fixes this is noticed, not silently
-    // relied on.
+    // is NaN), so `limit` is genuinely required. zod-to-openapi's own requiredness check
+    // inspects the coercion's pre-parse input type, which accepts `null` (Number(null) ===
+    // 0) - registerContract corrects this before the field reaches zod-to-openapi (see
+    // undoCoercionForOpenApi), since an HTTP query value is always a string or absent,
+    // never a literal `null`.
     const byName = Object.fromEntries((operation.parameters ?? []).map(p => [p.name, p]));
-    expect(byName.limit).toMatchObject({ in: 'query', required: false, schema: { type: ['number', 'null'] } });
+    expect(byName.limit).toMatchObject({ in: 'query', required: true, schema: { type: 'number' } });
+  });
+
+  it("keeps a bare z.coerce.* field's own .openapi() metadata after correcting its required/nullable reporting", () => {
+    // `.openapi()` metadata is registered against the schema object, not its def - a naive
+    // rebuild from the def alone would silently drop it (see undoCoercionForOpenApi).
+    const byName = Object.fromEntries((operation.parameters ?? []).map(p => [p.name, p]));
+    expect(byName.pageSize).toMatchObject({
+      in: 'query',
+      required: true,
+      description: 'Results per page',
+      schema: { type: 'number', description: 'Results per page' },
+    });
   });
 
   it('auto-documents a 422 for a contract with only queryParams (no request body or pathParams)', () => {
