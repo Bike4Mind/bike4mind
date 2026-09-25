@@ -1997,7 +1997,7 @@ export function parseToolArgsLenient(
  */
 function stripCodeFence(input: string): string {
   const trimmed = input.trim();
-  const fenceMatch = trimmed.match(/^```(?:json|JSON)?\s*\n?([\s\S]*?)\n?```$/);
+  const fenceMatch = trimmed.match(/^```(?:json|JSON)?([\s\S]*?)```$/);
   return fenceMatch ? fenceMatch[1].trim() : input;
 }
 

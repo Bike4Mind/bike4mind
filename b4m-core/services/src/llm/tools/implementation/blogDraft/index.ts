@@ -140,7 +140,8 @@ function parseTransformationResult(llmResponse: string): TransformResult {
   // responses - in those cases the paired regex fails and the raw "```json..."
   // string would reach JSON.parse. Fall back to stripping a leading opener
   // fence and a trailing closer fence independently.
-  const jsonMatch = llmResponse.match(/```json\s*\n([\s\S]*?)\n```/) || llmResponse.match(/```\s*\n([\s\S]*?)\n```/);
+  const jsonMatch =
+    llmResponse.match(/```json[^\S\n]*\n([\s\S]*?)\n```/) || llmResponse.match(/```[^\S\n]*\n([\s\S]*?)\n```/);
 
   let jsonStr = jsonMatch ? jsonMatch[1] : stripCodeFences(llmResponse);
   jsonStr = jsonStr.trim();

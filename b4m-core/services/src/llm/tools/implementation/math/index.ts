@@ -89,7 +89,7 @@ async function evaluateMath(params: MathParams): Promise<string> {
       Logger.globalInstance.log('🔢 Math Tool: Detected equation, processing...');
 
       // Extract equation from various solve() formats
-      const solveMatch = expression.match(/solve\s*\(\s*([^,=]+)\s*=\s*([^,)]+)\s*(?:,\s*([a-zA-Z]\w*))?\s*\)/);
+      const solveMatch = expression.match(SOLVE_CALL_REGEX);
       if (solveMatch) {
         const [, leftSide, rightSide] = solveMatch;
         expression = `${leftSide.trim()} = ${rightSide.trim()}`;
@@ -268,6 +268,10 @@ function solveQuadratic(equation: string, variable: string): string | null {
     return null;
   }
 }
+
+// Captures are trimmed by the caller, so no `\s*` sits beside a capture class that already matches
+// whitespace; that overlap made the old pattern cubic on an unclosed solve( call.
+export const SOLVE_CALL_REGEX = /solve\s*\(([^,=]+)=([^,)]+)(?:,\s*([a-zA-Z]\w*)\s*)?\)/;
 
 export const mathTool: ToolDefinition = {
   name: 'math_evaluate',

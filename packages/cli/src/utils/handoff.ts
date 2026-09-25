@@ -237,7 +237,7 @@ function extractJsonObject(text: string): string | null {
   const trimmed = text.trim();
   if (!trimmed) return null;
 
-  const fenced = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  const fenced = trimmed.match(/```(?:json)?([\s\S]*?)```/i);
   const candidate = fenced ? fenced[1].trim() : trimmed;
 
   const start = candidate.indexOf('{');
