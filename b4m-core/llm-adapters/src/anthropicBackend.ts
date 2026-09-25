@@ -30,7 +30,7 @@ import {
   getLatestToolCallIdCanonical,
 } from './backend';
 import { Logger } from '@bike4mind/observability';
-import { handleToolResultStreaming } from './toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
 import {
   ensureToolPairingIntegrity,
   normalizeToolUseInputs,
@@ -40,7 +40,14 @@ import {
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
 import { toAnthropicContent } from './anthropicContent';
-import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
+import {
+  withRetry,
+  isUserInitiatedAbort,
+  isRetryableError,
+  stripToolArtifactMarkup,
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
+} from '@bike4mind/common';
 import {
   buildThinkingParams,
   resolveOutputMaxTokens,
@@ -1906,6 +1913,17 @@ export class AnthropicBackend implements ICompletionBackend {
                   }
             );
 
+            // The single shared guard for this whole recursive chain - reused unchanged if an
+            // earlier level already created one, so a CHAINED tool's artifact and any text
+            // buffered ahead of it (at any depth) stay in one true generation order. See
+            // createRecursiveArtifactGuard.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
+
+            // Track artifact streaming: Anthropic tends to echo raw <artifact> markup back in
+            // its final reply after seeing it in the tool result, and the reply parser would
+            // render that echo as a second, empty card - strip it from history (below) and,
+            // as a backstop, from the recursive completion's buffered text (after the loop).
             // Inject results in original order (required by Anthropic API)
             for (const outcome of outcomes) {
               // Anthropic API requires a tool_use_id; generate a fallback if the model omitted one.
@@ -1923,19 +1941,38 @@ export class AnthropicBackend implements ICompletionBackend {
                   resultPreview: resultStr.substring(0, 100) + (resultStr.length > 100 ? '...' : ''),
                 });
 
+                // Track per-outcome whether this specific tool produced artifacts, so the
+                // history-side strip below picks the right placeholder for THIS result.
+                let thisToolHadArtifact = false;
+
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-                  await cb(results, { inputTokens: 0, outputTokens: 0, toolsUsed, ...artifactInfo });
+                  thisToolHadArtifact = true;
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(cb);
+                  await artifactGuard.emitArtifact(results, {
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    toolsUsed,
+                    ...artifactInfo,
+                  });
                 });
+
+                // Strip artifact markup from every tool result, not only the ones that streamed,
+                // so the model never sees the markup it could echo into its final reply.
+                const sanitizedResult = stripToolArtifactMarkup(
+                  resultStr,
+                  thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+                );
 
                 // outcome.id (not toolId, which falls back to a fresh randomUUID) is what
                 // toolsUsed was pushed with, so it's what correlates back to that entry.
-                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+                // Record the sanitized string, not resultStr - that's what the model actually saw.
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  resultStr
+                  sanitizedResult
                 );
               } else {
                 // Re-throw permission denials; inject error result for all others
@@ -1948,7 +1985,12 @@ export class AnthropicBackend implements ICompletionBackend {
                   error: errorMessage,
                 });
 
-                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                // Strip too - matches the success path above (openaiBackend does the same for
+                // its error branch) so an error message can't carry echoable artifact markup.
+                const observation = stripToolArtifactMarkup(
+                  `Error processing ${outcome.name} tool: ${errorMessage}`,
+                  ARTIFACT_REMOVED_PLACEHOLDER
+                );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
@@ -1990,11 +2032,17 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens || 0),
+                  artifactGuard,
                 },
               },
-              cb,
+              artifactGuard?.callback ?? cb,
               toolsUsed
             );
+
+            // Only the level that created the guard (none inherited on entry) flushes it -
+            // an inherited guard belongs to an ancestor, which flushes it after this whole
+            // subtree (including this call) has fully resolved.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             // Include thinking blocks for Anthropic extended thinking
@@ -2269,6 +2317,10 @@ export class AnthropicBackend implements ICompletionBackend {
                   }
             );
 
+            // See the streaming branch above for why the shared artifactGuard exists.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
+
             // Inject results in original order (required by Anthropic API)
             for (const outcome of outcomesNS) {
               // Anthropic API requires a tool_use_id; generate a fallback if the model omitted one.
@@ -2286,17 +2338,28 @@ export class AnthropicBackend implements ICompletionBackend {
                   resultPreview: resultStr.substring(0, 100) + (resultStr.length > 100 ? '...' : ''),
                 });
 
+                let thisToolHadArtifact = false;
+
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
-                  await cb(results, { toolsUsed, ...artifactInfo });
+                  thisToolHadArtifact = true;
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(cb);
+                  await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
                 });
 
-                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+                // Strip artifact markup from every tool result, not only the ones that streamed,
+                // so the model never sees the markup it could echo into its final reply.
+                const sanitizedResult = stripToolArtifactMarkup(
+                  resultStr,
+                  thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+                );
+
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  resultStr
+                  sanitizedResult
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -2308,7 +2371,12 @@ export class AnthropicBackend implements ICompletionBackend {
                   error: errorMessage,
                 });
 
-                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                // Strip too - matches the success path above (openaiBackend does the same for
+                // its error branch) so an error message can't carry echoable artifact markup.
+                const observation = stripToolArtifactMarkup(
+                  `Error processing ${outcome.name} tool: ${errorMessage}`,
+                  ARTIFACT_REMOVED_PLACEHOLDER
+                );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
@@ -2349,11 +2417,15 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (usageWithCacheNS?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (usageWithCacheNS?.cache_creation_input_tokens || 0),
+                  artifactGuard,
                 },
               },
-              cb,
+              artifactGuard?.callback ?? cb,
               toolsUsed
             );
+
+            // See the streaming branch above for why only a guard this level created is flushed.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             // Include thinking blocks for Anthropic extended thinking
