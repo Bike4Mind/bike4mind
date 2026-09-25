@@ -458,7 +458,7 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
         },
       },
       // Resolver injected by ChatCompletionProcess; no entitlements in these citation tests.
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -692,7 +692,7 @@ describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -776,10 +776,13 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
       dataLakes: {
         findActiveByUserTags: vi.fn().mockResolvedValue([]),
         findActiveByUserTagsAndEntitlements: vi.fn().mockResolvedValue([]),
+        // Also required rather than decorative: this site vouches for its entitlement keys, so the
+        // exclusion count actually runs and an absent method would throw into its swallowing catch.
+        countGateExcludedLakes: vi.fn().mockResolvedValue(0),
         findById,
       },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
   });
 
   /**
@@ -811,6 +814,48 @@ describe('KnowledgeRetrievalFeature preauthorizedLakeIds (5th ctor arg)', () => 
       expect.stringContaining('access-grant lookup failed'),
       expect.any(Error)
     );
+  });
+
+  /**
+   * A degraded key list can drop an entitlement-gated lake out of the resolved set, so a thrown
+   * entitlement lookup has to travel with the keys and land as `lakeViewComplete: false`. Without
+   * this the signal could be dropped at this call site and the suite would stay green.
+   */
+  it('reports an incomplete lake view when the entitlement lookup degraded the keys', async () => {
+    const ctx = makeCtx(vi.fn().mockResolvedValue(MANAGED_LAKE));
+    ctx.resolveEntitlementKeys = vi.fn().mockResolvedValue({ keys: [], resolved: false });
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    expect(access.lakeViewComplete).toBe(false);
+  });
+
+  it('leaves the lake view complete when the entitlement lookup succeeded', async () => {
+    const ctx = makeCtx(vi.fn().mockResolvedValue(MANAGED_LAKE));
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named'
+    );
+
+    const access = await (
+      feature as unknown as {
+        resolveDataLakeAccess: () => Promise<{ lakeViewComplete?: boolean }>;
+      }
+    ).resolveDataLakeAccess();
+
+    // toBe(true), not `.not.toBe(false)`: the looser form also passes when the field is dropped
+    // entirely, which is the exact mistake this pair of cases exists to catch.
+    expect(access.lakeViewComplete).toBe(true);
   });
 
   const MANAGED_LAKE = {
@@ -944,7 +989,7 @@ describe('KnowledgeRetrievalFeature bounded scan + coverage reporting', () => {
           ),
         },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
       embeddingBinding: opts.embeddingBinding,
     };
@@ -1537,7 +1582,7 @@ describe('KnowledgeRetrievalFeature abstention when nothing is retrieved', () =>
       fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds: vi.fn().mockResolvedValue([]) },
       adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
   });
 
@@ -1647,7 +1692,7 @@ describe('KnowledgeRetrievalFeature same-width model mismatch', () => {
       },
       adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
   });
 
@@ -1772,7 +1817,7 @@ describe('KnowledgeRetrievalFeature supersession collapse (forced path)', () => 
           ),
         },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -1975,7 +2020,7 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
             }
           : {}),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2037,7 +2082,10 @@ describe('KnowledgeRetrievalFeature scoped lake-prompt injection (#1108)', () =>
     // that resolver instead: resolveEntitlementKeys resolves once (for retrieval) then rejects (for
     // the injection call), so only the wrapper's catch can save the turn.
     const ctx = makeCtx([lakeFile('fA', 'datalake:x')], [makeLake()]);
-    ctx.resolveEntitlementKeys = vi.fn().mockResolvedValueOnce([]).mockRejectedValue(new Error('boom'));
+    ctx.resolveEntitlementKeys = vi
+      .fn()
+      .mockResolvedValueOnce({ keys: [], resolved: true })
+      .mockRejectedValue(new Error('boom'));
     const contents = await run(ctx);
     expect(contents).toHaveLength(1);
     expect(contents[0]).toContain('[Knowledge Base');
@@ -2281,7 +2329,7 @@ describe('KnowledgeRetrievalFeature untrusted-content delimiter (#1659)', () => 
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2447,7 +2495,7 @@ describe('KnowledgeRetrievalFeature configurable char budget (#1831)', () => {
         },
         ...(opts.scoped ? { scopedSettings } : {}),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2642,7 +2690,7 @@ describe('KnowledgeRetrievalFeature relative relevance floor (#2497)', () => {
         },
         ...(opts.withScopedOverlay === false ? {} : { scopedSettings: makeScopedSettings(opts.orgOverride) }),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -2981,7 +3029,7 @@ describe('KnowledgeRetrievalFeature access-event audit', () => {
         organizations: { findMembershipOrgIds: vi.fn().mockResolvedValue([]) },
         lakeAccessEvents: { record },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3191,7 +3239,7 @@ describe('KnowledgeRetrievalFeature access-event audit: supersession count + zer
         },
         lakeAccessEvents: { record },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3341,7 +3389,7 @@ describe('KnowledgeRetrievalFeature personal-corpus skip', () => {
     personalCorpusOnly,
     // Present so a NON-skipping run gets far enough to prove it did not return early.
     db: { fabfiles: undefined, fabfilechunks: undefined },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
   });
 
@@ -3421,7 +3469,7 @@ describe('KnowledgeRetrievalFeature lake-scoped forced retrieval (#2243)', () =>
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -3562,7 +3610,7 @@ describe('LakeMemoryFeature personal-corpus skip', () => {
       user: { id: 'u1', tags: [], groups: [] },
       personalCorpusOnly: true,
       db: {},
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
       recallLakeMemory: vi.fn(),
     };
@@ -3608,7 +3656,7 @@ describe('LakeMemoryFeature belief budget (lakeMemoryRecallK)', () => {
         ),
       },
     },
-    resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+    resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
     sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     recallLakeMemory: vi.fn().mockResolvedValue([{ fact: 'Acme ships on Fridays', relevance: 0.9, sources: ['f1'] }]),
   });
@@ -3836,7 +3884,7 @@ describe('KnowledgeRetrievalFeature per-turn retrieval summary', () => {
             }
           : {}),
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
@@ -4183,7 +4231,7 @@ describe('KnowledgeRetrievalFeature chunk-cursor stall coverage', () => {
         fabfilechunks: { findByFabFileId: vi.fn(), findVectorsByFabFileIds },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -4234,7 +4282,7 @@ describe('KnowledgeRetrievalFeature cross-document conflict note', () => {
         },
         adminSettings: { getSettingsValue: vi.fn().mockResolvedValue(undefined) },
       },
-      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      resolveEntitlementKeys: vi.fn().mockResolvedValue({ keys: [], resolved: true }),
       sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
     };
   };
