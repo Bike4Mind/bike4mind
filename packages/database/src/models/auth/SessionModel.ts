@@ -619,20 +619,11 @@ SessionSchema.index({ deletedAt: 1, 'tags.name': 1, userId: 1 });
 // Optimized index for searchCollections query - sessionmodels collection
 SessionSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
 
-// Optimize Slack thread-based notebook lookups.
-// unique: true prevents duplicate notebooks for the same thread (race condition fix);
-// partialFilterExpression only indexes docs with Slack thread metadata, preserving
-// backward compatibility for notebooks without slackMetadata.
-SessionSchema.index(
-  { userId: 1, 'slackMetadata.channelId': 1, 'slackMetadata.threadTs': 1 },
-  {
-    unique: true,
-    // partial index: only index docs where slackMetadata exists
-    partialFilterExpression: {
-      slackMetadata: { $exists: true, $ne: null },
-    },
-  }
-);
+// No unique index on (userId, slackMetadata.channelId, slackMetadata.threadTs), deliberately:
+// softDeletePlugin hides deleted notebooks from findOne, so the Slack find-or-create in
+// b4m-core/slack/src/handlers/notebook-manager.ts would collide with the deleted row on every
+// retry and the thread could never get a notebook again. A partial filter cannot exclude
+// soft-deleted rows. Migration 20251126202452 drops the index where an old build left it.
 
 // Index for admin/cleanup queries on conversation context by user.
 // Feature queries use findById(sessionId), which hits the default _id index;
