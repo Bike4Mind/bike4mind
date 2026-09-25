@@ -65,8 +65,9 @@ export function createRecursiveArtifactGuard<Cb extends LooseCompletionCallback>
     }
     // Last write wins: the terminal call in the chain is always the last one to fire, and it
     // carries the complete accumulated totals - an earlier partial call must never overwrite it.
-    // A call with no info at all (Bedrock's signature allows it) leaves the last real one intact.
-    if (info) meta = { ...info };
+    // Gated on actual token presence (not just truthy info) so a call carrying no tokens (e.g. a
+    // bare { toolsUsed: [] }) can never clobber a previously-captured terminal total.
+    if (info?.inputTokens || info?.outputTokens) meta = { ...info };
   }) as Cb;
   const flush = async () => {
     const cleaned = stripCompleteArtifactBlocks(buffer).trim();
