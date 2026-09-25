@@ -164,10 +164,114 @@ describe('DataLakeProposalsPanel', () => {
     expect(screen.getByTestId('datalake-proposal-previously-approved')).toHaveTextContent('Previously approved');
   });
 
-  it('shows confidence as context only', () => {
+  it('labels the score as relevance and shows the reason behind it', () => {
+    renderPanel({ proposals: [proposal({ confidence: 0.62, rationale: 'covers the Q3 filings' })] });
+
+    expect(screen.getByTestId('datalake-proposal-confidence')).toHaveTextContent('Relevance 62%');
+    expect(screen.getByTestId('datalake-proposal-rationale')).toHaveTextContent('covers the Q3 filings');
+  });
+
+  it('omits the reason when the producer gave none', () => {
     renderPanel({ proposals: [proposal({ confidence: 0.62 })] });
 
-    expect(screen.getByTestId('datalake-proposal-confidence')).toHaveTextContent('Confidence 62%');
+    expect(screen.queryByTestId('datalake-proposal-rationale')).not.toBeInTheDocument();
+  });
+
+  it('says the proposed tags are suggestions that approval does not apply', () => {
+    renderPanel();
+
+    expect(screen.getByTestId('datalake-proposal-tags')).toHaveTextContent(/not applied/);
+    expect(screen.getByTestId('datalake-proposals-help')).toHaveTextContent(/suggested tags are not applied/);
+  });
+
+  it('collapses a long excerpt until the reviewer asks for the rest', () => {
+    const long = `${'a'.repeat(300)}END`;
+    renderPanel({ proposals: [proposal({ excerpt: long })] });
+
+    expect(screen.getByTestId('datalake-proposal-excerpt-text').textContent).not.toContain('END');
+    fireEvent.click(screen.getByTestId('datalake-proposal-excerpt-toggle'));
+    expect(screen.getByTestId('datalake-proposal-excerpt-text')).toHaveTextContent(long);
+    expect(screen.getByTestId('datalake-proposal-excerpt-toggle')).toHaveTextContent('Show less');
+  });
+
+  it('shows a short excerpt whole, with no toggle', () => {
+    renderPanel();
+
+    expect(screen.queryByTestId('datalake-proposal-excerpt-toggle')).not.toBeInTheDocument();
+  });
+
+  it('orders by relevance by default, unscored last, and can switch to newest first', () => {
+    renderPanel({
+      proposals: [
+        proposal({ id: 'new-unscored', title: 'Unscored' }),
+        proposal({ id: 'mid', title: 'Mid', confidence: 0.5 }),
+        proposal({ id: 'top', title: 'Top', confidence: 0.9 }),
+      ],
+    });
+    const titles = () => screen.getAllByTestId('datalake-proposal-title').map(t => t.textContent);
+
+    expect(titles()).toEqual(['Top', 'Mid', 'Unscored']);
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Sort proposals' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Newest first' }));
+    expect(titles()).toEqual(['Unscored', 'Mid', 'Top']);
+  });
+
+  it('switches between the pending queue and declined proposals', () => {
+    const onViewChange = vi.fn();
+    renderPanel({ onViewChange });
+
+    fireEvent.click(screen.getByTestId('datalake-proposals-view-declined'));
+
+    expect(onViewChange).toHaveBeenCalledWith('declined');
+  });
+
+  it('shows a declined proposal with its reason and restores it', () => {
+    const onRestore = vi.fn();
+    renderPanel({
+      view: 'declined',
+      onViewChange: vi.fn(),
+      onRestore,
+      proposals: [
+        proposal({
+          status: 'declined',
+          excerpt: null,
+          declineReason: 'paywalled',
+          reviewedAt: new Date('2026-09-01'),
+        }),
+      ],
+    });
+
+    expect(screen.getByTestId('datalake-proposal-decline-record')).toHaveTextContent('paywalled');
+    expect(screen.queryByTestId('datalake-proposal-approve-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-proposals-sort')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId('datalake-proposal-restore-btn'));
+
+    expect(onRestore).toHaveBeenCalledWith('prop-1');
+  });
+
+  it('disables restore on an older tombstone a later decline of the same source superseded', () => {
+    renderPanel({
+      view: 'declined',
+      onRestore: vi.fn(),
+      proposals: [
+        proposal({ id: 'newer', status: 'declined', excerpt: null }),
+        proposal({ id: 'older', status: 'declined', excerpt: null }),
+      ],
+    });
+
+    const [newer, older] = screen.getAllByTestId('datalake-proposal-restore-btn');
+    expect(newer).not.toBeDisabled();
+    expect(older).toBeDisabled();
+    expect(screen.getAllByTestId('datalake-proposal-superseded')).toHaveLength(1);
+  });
+
+  it('reads as empty, not caught up, when nothing has been declined', () => {
+    renderPanel({ view: 'declined', onViewChange: vi.fn(), proposals: [] });
+
+    expect(screen.getByTestId('datalake-proposals-empty')).toHaveTextContent(/Nothing has been declined/);
+    // The toggle survives an empty view, so the reviewer can get back.
+    expect(screen.getByTestId('datalake-proposals-view-pending')).toBeInTheDocument();
   });
 
   it('omits confidence entirely when the producer supplied none', () => {

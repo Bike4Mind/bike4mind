@@ -5,6 +5,7 @@ import type {
   DataLakeProposalStatus,
   IDataLakeProposalDocument,
   IDataLakeProposalRepository,
+  RestoreDataLakeProposalResult,
   ReviewDataLakeProposalInput,
 } from '@bike4mind/common';
 import { DATA_LAKE_PROPOSAL_STATUSES } from '@bike4mind/common';
@@ -31,6 +32,7 @@ const DataLakeProposalSchema = new Schema<IDataLakeProposalDocument>(
     textHash: { type: String, default: null },
     proposedTags: { type: [String], default: [] },
     confidence: { type: Number, default: null },
+    rationale: { type: String, default: null },
     provenance: {
       producer: { type: String, required: true },
       runId: { type: String },
@@ -146,12 +148,40 @@ class DataLakeProposalRepository
           // A decline keeps the source identity, the reason and the reviewer, and drops the
           // candidate material itself. `textHash` survives on purpose - it is the signal that
           // detects this source coming back materially changed, and a hash is not the material.
-          ...(status === 'declined' ? { excerpt: null } : {}),
+          ...(status === 'declined' ? { excerpt: null, rationale: null } : {}),
         },
       },
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeProposalDocument) ?? null;
+  }
+
+  async restoreDeclined(id: string): Promise<RestoreDataLakeProposalResult> {
+    try {
+      const doc = await this.proposalModel.findOneAndUpdate(
+        { _id: id, status: 'declined' },
+        // Pipeline form so an existing priorDisposition (e.g. 'approved' on a re-proposal) is kept
+        // rather than overwritten - it is the older, rarer history.
+        [
+          {
+            $set: {
+              status: 'pending',
+              priorDisposition: { $ifNull: ['$priorDisposition', 'declined'] },
+              reviewedByUserId: null,
+              reviewedAt: null,
+              declineReason: null,
+            },
+          },
+        ],
+        { new: true }
+      );
+      if (!doc) return { restored: false, reason: 'not_declined' };
+      return { restored: true, proposal: doc.toJSON() as IDataLakeProposalDocument };
+    } catch (error) {
+      // The pending-uniqueness index: this source already has an open proposal.
+      if ((error as { code?: number }).code !== 11000) throw error;
+      return { restored: false, reason: 'pending_exists' };
+    }
   }
 
   async recordAdmission(id: string, fabFileId: string): Promise<void> {

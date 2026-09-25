@@ -54,7 +54,7 @@ import type { DataLakeGroundingMode } from '@bike4mind/common';
 import { useStartChatWithLakes } from '@client/app/hooks/useStartChatWithLake';
 import { DataLakeSpendPanel } from './DataLakeSpendPanel';
 import { LakeConfigHistorySection } from './LakeConfigHistorySection';
-import { DataLakeProposalsPanel } from './DataLakeProposalsPanel';
+import { DataLakeProposalsPanel, type ProposalsView } from './DataLakeProposalsPanel';
 import { DataLakeResearchPanel } from './DataLakeResearchPanel';
 import { TestLakeScopeDialog } from './TestLakeScopeDialog';
 
@@ -150,10 +150,21 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   // lake list already carries): there is no precomputed "has proposals" signal, and a queue tab
   // that only appears after you click it would never be found. One small read per modal open.
   const proposals = useDataLakeProposals(lake?.id ?? null, 'pending', { enabled: !!lake?.canManage });
+  // Also fetched on open: a lake whose every proposal was declined still needs the tab, or its
+  // tombstones could never be seen or restored.
+  const declinedProposals = useDataLakeProposals(lake?.id ?? null, 'declined', { enabled: !!lake?.canManage });
+  // Keyed by lake like queueSeenFor, so switching lakes lands on the pending queue again.
+  const [proposalsViewFor, setProposalsViewFor] = useState<{ lakeId: string; view: ProposalsView } | null>(null);
+  const proposalsView: ProposalsView =
+    proposalsViewFor && proposalsViewFor.lakeId === lake?.id ? proposalsViewFor.view : 'pending';
+  const shownProposals = proposalsView === 'declined' ? declinedProposals : proposals;
   const reviewProposal = useReviewDataLakeProposal(lake?.id ?? '');
   // Hidden while the queue is empty rather than shown with an empty state: until a producer runs
   // there is nothing to review, and a permanently-empty tab reads as a broken feature.
-  const queueHasItems = !!lake?.canManage && !proposals.isForbidden && (proposals.data?.length ?? 0) > 0;
+  const queueHasItems =
+    !!lake?.canManage &&
+    !proposals.isForbidden &&
+    ((proposals.data?.length ?? 0) > 0 || (declinedProposals.data?.length ?? 0) > 0);
   // STICKY for as long as the modal is open. Deriving visibility purely from the current count meant
   // ruling on the last proposal made the tab vanish under the reviewer mid-action, silently
   // relocating them to the Settings form - which reads as the app losing their place, and hid the
@@ -675,9 +686,13 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                 </TabPanel>
                 <TabPanel value="proposals" sx={{ p: 0 }}>
                   <DataLakeProposalsPanel
-                    proposals={proposals.data}
-                    isLoading={proposals.isLoading}
-                    error={proposals.isForbidden ? null : proposals.error}
+                    view={proposalsView}
+                    onViewChange={view => {
+                      if (lake?.id) setProposalsViewFor({ lakeId: lake.id, view });
+                    }}
+                    proposals={shownProposals.data}
+                    isLoading={shownProposals.isLoading}
+                    error={shownProposals.isForbidden ? null : shownProposals.error}
                     pendingProposalId={reviewProposal.isPending ? reviewProposal.variables?.proposalId : undefined}
                     // Survives the toast: which source failed, and why, stays on its own card until
                     // the next attempt on it.
@@ -693,6 +708,7 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
                     onDecline={(proposalId, reason) =>
                       reviewProposal.mutate({ proposalId, decision: 'decline', reason })
                     }
+                    onRestore={proposalId => reviewProposal.mutate({ proposalId, decision: 'restore' })}
                   />
                 </TabPanel>
                 <TabPanel value="research" sx={{ p: 0 }}>
