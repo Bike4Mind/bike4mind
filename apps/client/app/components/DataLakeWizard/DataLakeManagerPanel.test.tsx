@@ -49,6 +49,9 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
+    // LakeInfoPanel's "Add existing files" picker submits through this door. Stubbed so mounting
+    // it (the affordance test below) needs no QueryClientProvider.
+    useAddFilesToLake: mutation,
     // The recipient's pending-offer banner renders at the top of the panel. Default: no offers, so
     // it renders nothing; a test that wants one overrides these.
     useOwnLakeOwnershipOffers: () => ({ data: [] }),
@@ -113,6 +116,17 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     downloadLakeAccessCsv: vi.fn(),
   };
 });
+
+// The existing-files picker's list query reaches react-query; stub it so clicking the entry point
+// mounts the real dialog without a QueryClientProvider.
+vi.mock('@client/app/hooks/data/fabFiles', () => ({
+  useGetFabFiles: () => ({
+    data: { pages: [{ data: [] }] },
+    fetchNextPage: vi.fn(),
+    hasNextPage: false,
+    isFetchingNextPage: false,
+  }),
+}));
 
 // TaxonomyReviewPanel has its own suite; here we only assert the manager opens it with the
 // right batch (asserted via a data attribute mirroring the real component's props).
@@ -628,6 +642,18 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-archive-btn-mine')).toBeInTheDocument();
     expect(screen.getByTestId('datalake-delete-active-btn-mine')).toBeInTheDocument();
+  });
+
+  it('opens the existing-files picker from the Add existing files button', async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    expect(screen.queryByTestId('generic-add-items-modal')).toBeNull();
+
+    await user.click(screen.getByTestId('datalake-addexisting-btn-mine'));
+
+    expect(screen.getByTestId('generic-add-items-modal')).toBeInTheDocument();
   });
 
   it("hides all four on a lake the caller cannot manage (someone else's public lake)", async () => {

@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from 'react';
 import AddIcon from '@mui/icons-material/Add';
 import { debounce } from 'lodash';
 import { useTranslation } from 'react-i18next';
+import { toast } from 'sonner';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { useGetFabFiles } from '@client/app/hooks/data/fabFiles';
 import { useAddFilesToLake } from '@client/app/hooks/data/dataLakes';
@@ -18,8 +19,10 @@ export const isLakeMember = (file: IFabFileDocument, datalakeTag: string) =>
 /**
  * Split the picked ids into the ones safe to send and the ones already members. The toggle door
  * REMOVES a file that already carries the lake tag (and its content-prefix tags with it), so a
- * member must never be forwarded - see useAddFilesToLake's docblock. Ids with no loaded file are
- * dropped, matching the Files browser's unresolved-selection guard.
+ * member must never be forwarded - see useAddFilesToLake's docblock. `files` is whatever resolved
+ * documents the caller has, not necessarily the current search page: a selection outlives the
+ * search that produced it, so the two are not the same set. Ids absent from `files` are omitted
+ * from both lists - the caller must refuse in that case rather than post a partial batch.
  */
 export function partitionLakeAddCandidates(
   files: IFabFileDocument[],
@@ -51,12 +54,16 @@ interface AddExistingFilesModalProps {
 export default function AddExistingFilesModal({ lake, open, onClose }: AddExistingFilesModalProps) {
   const { t } = useTranslation();
   const [search, setSearch] = useState('');
-  const [selectedFileIds, setSelectedFileIds] = useState<string[]>([]);
+  // Selection is the documents themselves, keyed by id, not bare ids: a selection outlives the
+  // search that produced it (GenericAddItemsModal keeps selectedIds across searches), so at submit
+  // the current page cannot resolve it. A bare id would be silently unresolvable there.
+  const [selectedFiles, setSelectedFiles] = useState<Map<string, IFabFileDocument>>(() => new Map());
   const { data: filesData, fetchNextPage, hasNextPage, isFetchingNextPage } = useGetFabFiles(search);
-  const { mutateAsync: addFilesToLake, isPending } = useAddFilesToLake();
+  const { mutate: addFilesToLake, isPending } = useAddFilesToLake();
   const debouncedSearch = useMemo(() => debounce(setSearch, 300), []);
 
   const files = useMemo(() => filesData?.pages?.map(page => page.data).flat() ?? [], [filesData]);
+  const selectedFileIds = useMemo(() => [...selectedFiles.keys()], [selectedFiles]);
   // Members are shown but never selectable: the row's click still reaches GenericAddItemsModal's
   // toggle, so the filter has to live on the way in, not only in the row's disabled checkbox.
   const memberIds = useMemo(
@@ -65,8 +72,18 @@ export default function AddExistingFilesModal({ lake, open, onClose }: AddExisti
   );
 
   const handleSelectIds = useCallback(
-    (ids: string[]) => setSelectedFileIds(ids.filter(id => !memberIds.has(id))),
-    [memberIds]
+    (ids: string[]) => {
+      setSelectedFiles(prev => {
+        const next = new Map<string, IFabFileDocument>();
+        for (const id of ids) {
+          if (memberIds.has(id)) continue;
+          const file = prev.get(id) ?? files.find(candidate => candidate.id === id);
+          if (file) next.set(id, file);
+        }
+        return next;
+      });
+    },
+    [files, memberIds]
   );
 
   const handleScroll = useCallback(
@@ -81,23 +98,39 @@ export default function AddExistingFilesModal({ lake, open, onClose }: AddExisti
 
   const handleClose = useCallback(() => {
     setSearch('');
-    setSelectedFileIds([]);
+    setSelectedFiles(new Map());
     onClose();
   }, [onClose]);
 
   const handleAdd = useCallback(
     (ids: string[]) => {
-      // Second pass at submit: the list can have changed since a row was rendered, and this is the
-      // last point before the destructive toggle. Closing/reset is GenericAddItemsModal's job.
-      const { addIds, memberIds: skippedIds } = partitionLakeAddCandidates(files, ids, lake.datalakeTag);
-      if (addIds.length === 0) return;
-      void addFilesToLake({
+      // Resolve each selected id against the current page first, then the documents carried from
+      // the search that produced the selection: a selection outlives its search, and partitioning
+      // against the current page alone was dropping the off-page ids. Latest wins, so a refetch
+      // that made a selected file a member is seen here.
+      const currentById = new Map(files.map(file => [file.id, file]));
+      const selectedDocs = ids
+        .map(id => currentById.get(id) ?? selectedFiles.get(id))
+        .filter((file): file is IFabFileDocument => Boolean(file));
+      if (selectedDocs.length !== ids.length) {
+        toast.error(t('file_browser.selection_not_resolved'));
+        return false;
+      }
+      // Last point before the destructive toggle: re-check membership so a stale selection can
+      // never remove a file that became a member since it was ticked.
+      const { addIds, memberIds: skippedIds } = partitionLakeAddCandidates(selectedDocs, ids, lake.datalakeTag);
+      if (addIds.length === 0) {
+        toast.info(t('file_browser.already_lake_members'));
+        return false;
+      }
+      addFilesToLake({
         fileIds: addIds,
         lake: { id: lake.id, datalakeTag: lake.datalakeTag },
         skippedCount: skippedIds.length,
       });
+      return true;
     },
-    [files, lake.id, lake.datalakeTag, addFilesToLake]
+    [files, selectedFiles, lake.id, lake.datalakeTag, addFilesToLake, t]
   );
 
   const renderFileItem = useCallback(
@@ -138,10 +171,6 @@ export default function AddExistingFilesModal({ lake, open, onClose }: AddExisti
   );
 
   const isDraft = !lake.status || lake.status === 'draft';
-  const subtitle = t(
-    'file_browser.add_existing_subtitle',
-    "Pick files you already have. Files already in this lake are shown but can't be added again."
-  );
 
   return (
     <GenericAddItemsModal
@@ -150,11 +179,13 @@ export default function AddExistingFilesModal({ lake, open, onClose }: AddExisti
         if (!next) handleClose();
       }}
       title={t('file_browser.add_existing_title', 'Add existing files')}
-      subtitle={
+      // The draft variant is its own key so a generated locale can reorder the two sentences.
+      subtitle={t(
+        isDraft ? 'file_browser.add_existing_subtitle_draft' : 'file_browser.add_existing_subtitle',
         isDraft
-          ? `${subtitle} ${t('file_browser.add_existing_draft_notice', "This lake is a draft - added files won't ground answers until it is published.")}`
-          : subtitle
-      }
+          ? "Pick files you already have. Files already in this lake are shown but can't be added again. This lake is a draft - added files won't ground answers until it is published."
+          : "Pick files you already have. Files already in this lake are shown but can't be added again."
+      )}
       buttonLabel={t('file_browser.add_existing_title', 'Add existing files')}
       buttonIcon={<AddIcon />}
       items={files}
