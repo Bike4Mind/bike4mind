@@ -172,6 +172,9 @@ export const SessionEvents = {
     z.object({
       sessionId: z.string(),
       userId: z.string().optional(),
+      // Who asked, when not the owner: the handler's writes re-check this user's update access.
+      // Distinct from `userId`, which picks the billed user.
+      requesterId: z.string().optional(),
     })
   ),
   ContextSummarize: event(

@@ -8,9 +8,6 @@ import remarkGfm from 'remark-gfm';
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
 import { createCodeComponent, ReplyCompleteContext } from './PromptReplies';
-import { getMarkdownSyntaxTheme } from './markdown/syntaxTheme';
-
-const defaultSyntaxTheme = getMarkdownSyntaxTheme('dark');
 
 // Tiles are fetched through the authenticated API client and rendered as blob: URLs - a bare
 // <img src="/api/search-image?..."> would 401, since the bearer JWT only rides on axios.
@@ -229,7 +226,7 @@ describe('the markdown fence seam', () => {
     render(
       <CssVarsProvider theme={appTheme}>
         <ReplyCompleteContext.Provider value={replyComplete}>
-          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: createCodeComponent(defaultSyntaxTheme) }}>
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ code: createCodeComponent() }}>
             {markdown}
           </ReactMarkdown>
         </ReplyCompleteContext.Provider>

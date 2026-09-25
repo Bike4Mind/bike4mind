@@ -150,6 +150,7 @@ export async function executeResearchRun(
       // Advisory display only. Recorded because a reviewer weighing an unfamiliar source has
       // nothing else to weigh; nothing in the system gates on it - see IDataLakeProposal.confidence.
       confidence: judgement.relevance,
+      rationale: judgement.rationale,
       provenance: {
         producer: RESEARCH_RUN_PRODUCER,
         runId,

@@ -389,7 +389,11 @@ function ArticlePanel({
             {title}
           </Typography>
           {/* Re-process and Remove mutate lake content, so they are owner-or-admin only
-              (the backend enforces the same). Hidden when viewing a read-only lake. */}
+              (the backend enforces the same). Hidden when viewing a read-only lake.
+              No canRebuild split here, unlike the standalone DataLakeArticlePanel: this pane's one
+              render site (DataLakeDiscoverPanel) hardcodes canManage to false for a read-only
+              preview, so there is no caller for the wider gate to admit. If this ever gains a
+              managing caller, port that split rather than reinventing it. */}
           {canManage && (
             <>
               <Tooltip title="Re-run chunking + vectorization" size="sm">

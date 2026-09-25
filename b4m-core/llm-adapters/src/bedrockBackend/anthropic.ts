@@ -1156,6 +1156,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           // thinking_delta / signature_delta accumulate into this block for the replay.
           this.assistantReasoningBlocks[chunk.index] = { ...contentBlock, thinking: contentBlock.thinking ?? '' };
           choice.chunkText = '<think>';
+          choice.channel = 'reasoning';
         } else if (isRedactedThinkingContentBlock(contentBlock)) {
           // Arrives whole and carries no readable text, so it opens no <think> markers -
           // but it still has to be replayed alongside its turn's tool_use block.
@@ -1178,6 +1179,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           // Escaped for the transcript; the replay copy in assistantReasoningBlocks stays
           // raw since it is resent to the API verbatim in tool-use loops.
           choice.chunkText = this.reasoningEscaper.push(delta.thinking);
+          choice.channel = 'reasoning';
           const block = this.assistantReasoningBlocks[chunk.index];
           if (block?.type === 'thinking') block.thinking += delta.thinking;
         } else if (isSignatureDelta(delta)) {
@@ -1192,6 +1194,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           status: ChoiceStatus.STREAM,
           index: chunk.index,
           chunkText: this.isInThinkingBlock ? this.reasoningEscaper.flush() + '</think>' : '',
+          ...(this.isInThinkingBlock ? { channel: 'reasoning' as const } : {}),
         } as IChoice;
 
         // Reset thinking block state

@@ -1,3 +1,4 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Box,
@@ -39,9 +40,8 @@ import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';
 import { type ArtifactWithContent, type ArtifactMutationResponse } from './types';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import Editor from 'react-simple-code-editor';
+import { getEditorTokenSx, CODE_FONT_STACK } from '@client/app/components/Session/markdown/syntaxTheme';
 import Prism from 'prismjs';
 import 'prismjs/components/prism-javascript';
 import 'prismjs/components/prism-jsx';
@@ -582,7 +582,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
                     borderColor: errors.content ? 'danger.outlinedBorder' : 'neutral.outlinedBorder',
                     borderRadius: 'sm',
                     overflow: 'auto',
-                    backgroundColor: theme.palette.mode === 'dark' ? '#282c34' : '#fafafa',
+                    backgroundColor: 'var(--joy-palette-reading-surface)',
                     '&:focus-within': {
                       borderColor: errors.content ? 'danger.outlinedBorder' : 'primary.outlinedBorder',
                     },
@@ -591,70 +591,10 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
                     },
                     '& pre': {
                       margin: 0,
-                      fontFamily: 'monospace',
+                      fontFamily: CODE_FONT_STACK,
                     },
-                    // Prism syntax highlighting styles for dark mode (oneDark theme)
-                    ...(theme.palette.mode === 'dark' && {
-                      '& .token.comment, & .token.prolog, & .token.doctype, & .token.cdata': {
-                        color: '#5c6370',
-                      },
-                      '& .token.punctuation': {
-                        color: '#abb2bf',
-                      },
-                      '& .token.property, & .token.tag, & .token.constant, & .token.symbol, & .token.deleted': {
-                        color: '#e06c75',
-                      },
-                      '& .token.boolean, & .token.number': {
-                        color: '#d19a66',
-                      },
-                      '& .token.selector, & .token.attr-name, & .token.string, & .token.char, & .token.builtin, & .token.inserted':
-                        {
-                          color: '#98c379',
-                        },
-                      '& .token.operator, & .token.entity, & .token.url, & .language-css .token.string, & .style .token.string':
-                        {
-                          color: '#56b6c2',
-                        },
-                      '& .token.atrule, & .token.attr-value, & .token.keyword': {
-                        color: '#c678dd',
-                      },
-                      '& .token.function, & .token.class-name': {
-                        color: '#61afef',
-                      },
-                      '& .token.regex, & .token.important, & .token.variable': {
-                        color: '#e5c07b',
-                      },
-                    }),
-                    // Prism syntax highlighting styles for light mode
-                    ...(theme.palette.mode === 'light' && {
-                      '& .token.comment, & .token.prolog, & .token.doctype, & .token.cdata': {
-                        color: '#008000',
-                      },
-                      '& .token.punctuation': {
-                        color: '#393A34',
-                      },
-                      '& .token.property, & .token.tag, & .token.boolean, & .token.number, & .token.constant, & .token.symbol, & .token.deleted':
-                        {
-                          color: '#36acaa',
-                        },
-                      '& .token.selector, & .token.attr-name, & .token.string, & .token.char, & .token.builtin, & .token.inserted':
-                        {
-                          color: '#A31515',
-                        },
-                      '& .token.operator, & .token.entity, & .token.url, & .language-css .token.string, & .style .token.string':
-                        {
-                          color: '#393A34',
-                        },
-                      '& .token.atrule, & .token.attr-value, & .token.keyword': {
-                        color: '#0000FF',
-                      },
-                      '& .token.function, & .token.class-name': {
-                        color: '#795E26',
-                      },
-                      '& .token.regex, & .token.important, & .token.variable': {
-                        color: '#e90',
-                      },
-                    }),
+                    // One palette for every code surface in the app; see getEditorTokenSx.
+                    ...getEditorTokenSx(theme.palette.mode),
                   }}
                 >
                   <Editor
@@ -664,11 +604,11 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
                     padding={12}
                     placeholder={`Enter your ${artifact.type} content...`}
                     style={{
-                      fontFamily: '"Fira Code", "Fira Mono", Consolas, Menlo, Courier, monospace',
+                      fontFamily: CODE_FONT_STACK,
                       fontSize: 14,
                       minHeight: '400px',
                       backgroundColor: 'transparent',
-                      color: theme.palette.mode === 'dark' ? '#abb2bf' : '#393A34',
+                      color: 'var(--joy-palette-reading-ink, inherit)',
                     }}
                     textareaClassName="editor-textarea"
                     preClassName="editor-pre"
@@ -692,18 +632,7 @@ export const ArtifactEditor: React.FC<ArtifactEditorProps> = ({ artifact, onClos
 
               {formData.content ? (
                 <Box sx={{ flex: 1, overflow: 'auto' }}>
-                  <SyntaxHighlighter
-                    language={getLanguage}
-                    style={oneDark}
-                    customStyle={{
-                      margin: 0,
-                      borderRadius: '8px',
-                      fontSize: '14px',
-                      minHeight: '100%',
-                    }}
-                  >
-                    {formData.content}
-                  </SyntaxHighlighter>
+                  <HighlightedCode code={formData.content} language={getLanguage} customStyle={{ minHeight: '100%' }} />
                 </Box>
               ) : (
                 <Alert color="neutral">

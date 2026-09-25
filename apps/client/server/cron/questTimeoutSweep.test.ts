@@ -2,9 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockFindStaleRunning = vi.fn();
 const mockSettleIfUnfinished = vi.fn();
+const mockConnectDB = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
-  connectDB: vi.fn().mockResolvedValue(undefined),
+  connectDB: (...args: unknown[]) => mockConnectDB(...args),
   questRepository: {
     findStaleRunning: (...args: unknown[]) => mockFindStaleRunning(...args),
     settleIfUnfinished: (...args: unknown[]) => mockSettleIfUnfinished(...args),
@@ -41,7 +42,7 @@ vi.mock('@aws-sdk/client-cloudwatch', () => ({
   StandardUnit: { Count: 'Count' },
 }));
 
-import { handler } from './questTimeoutSweep';
+import { handler, runQuestTimeoutSweep } from './questTimeoutSweep';
 import { QUEST_TIMEOUT_THRESHOLD_MS } from '@server/chatCompletion/questTimeoutRecovery';
 
 const staleQuest = (overrides: Record<string, unknown> = {}) => ({
@@ -62,6 +63,7 @@ describe('questTimeoutSweep cron', () => {
     vi.clearAllMocks();
     mockFindStaleRunning.mockResolvedValue([]);
     mockSettleIfUnfinished.mockResolvedValue(true);
+    mockConnectDB.mockResolvedValue(undefined);
   });
 
   it('returns zero recovered when no stuck quests exist', async () => {
@@ -175,5 +177,25 @@ describe('questTimeoutSweep cron', () => {
     // Ordered ahead of the query so a totally broken sweep is distinguishable from one that
     // was never scheduled.
     expect(metricValue('TimeoutSweepRuns')).toBe(1);
+  });
+
+  it('emits the run metric even when the database connection fails', async () => {
+    mockConnectDB.mockRejectedValue(new Error('connection refused'));
+
+    await expect(handler()).rejects.toThrow('connection refused');
+
+    expect(metricValue('TimeoutSweepRuns')).toBe(1);
+    expect(mockFindStaleRunning).not.toHaveBeenCalled();
+  });
+
+  it('settles stuck quests without emitting any metric when metrics are off (self-host)', async () => {
+    mockFindStaleRunning.mockResolvedValue([staleQuest()]);
+
+    const result = await runQuestTimeoutSweep({ emitMetrics: false });
+
+    expect(result).toEqual({ status: 'OK', recovered: 1 });
+    expect(mockSettleIfUnfinished).toHaveBeenCalledWith('q-1', expect.objectContaining({ status: 'done' }));
+    expect(mockConnectDB).not.toHaveBeenCalled();
+    expect(mockEmitMetric).not.toHaveBeenCalled();
   });
 });

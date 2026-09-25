@@ -107,6 +107,8 @@ export interface SemanticChunkResult {
   fileId: string;
   fileName: string;
   fileTags: string[];
+  /** The source document's own vintage (#3048), for the passage header. Null when it has none. */
+  documentDate: Date | null;
   chunkText: string;
   score: number;
 }
@@ -441,6 +443,18 @@ interface RankableFile {
    * below must carry it.
    */
   createdAt?: Date | string | null;
+  /**
+   * The document's OWN vintage (#3048) - the one date that IS surfaced to the model, unlike
+   * `createdAt` above. Carried purely so the passage header can show it: supersession ranking
+   * still keys on `createdAt`, because which COPY we ingested last is a different question from
+   * when the document was written.
+   *
+   * REQUIRED, unlike its neighbours here: this is the only field on this shape that the model
+   * actually reads, and omitting it is invisible - the passage simply renders undated, which is
+   * also the legitimate output for a file that has no vintage. A builder must say `null` and mean
+   * it rather than reach that state by forgetting the field.
+   */
+  documentDate: Date | null;
   /**
    * The only record of which embedding space a file's chunks live in - chunks carry no model of
    * their own. Width alone cannot separate ada-002 from text-embedding-3-small (both 1536), so
@@ -787,6 +801,11 @@ async function scanAndRank(args: {
           fileId: chunk.fabFileId,
           fileName: file.fileName,
           fileTags: file.fileTags,
+          // `?? null` despite the field now being required above: the type stops a TYPED builder
+          // from dropping it, this stops an undefined reaching the row from a structurally-typed
+          // caller. SemanticChunkResult's contract is null-for-undated, and the render channels key
+          // on it. Same defence as annVectorSearch.ts's identical coalesce.
+          documentDate: file.documentDate ?? null,
           chunkText: chunk.text ?? '',
           score,
         });
@@ -1658,6 +1677,7 @@ async function lakeScopedSearch(
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
         createdAt: f.createdAt,
+        documentDate: f.documentDate ?? null,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,
@@ -1790,6 +1810,7 @@ async function fileScopedSearch(
         fileName: f.fileName,
         fileTags: f.tags?.map(t => t.name) ?? [],
         createdAt: f.createdAt,
+        documentDate: f.documentDate ?? null,
         embeddingModel: f.embeddingModel,
         vectorizedChunkCount: f.vectorizedChunkCount,
         chunkEmbeddingModelStampedAt: f.chunkEmbeddingModelStampedAt,

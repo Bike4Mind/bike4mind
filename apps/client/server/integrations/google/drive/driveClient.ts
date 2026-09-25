@@ -7,6 +7,12 @@ export type DriveFile = {
   mimeType: string;
   /** RFC-3339 last-modified time - change detection on re-sync. */
   modifiedTime?: string;
+  /**
+   * RFC-3339 time the file was created IN DRIVE. Only a document vintage for a Google Editors
+   * file, which was authored in Drive at that moment; for an uploaded binary it is the upload
+   * time. See isDriveAuthoredMimeType, which is what decides that.
+   */
+  createdTime?: string;
   /** md5 of the content (native binaries only; absent for Google Editors files). */
   md5Checksum?: string;
   /** Size in bytes (native binaries only; absent for Google Editors files). */
@@ -261,7 +267,7 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
     const res = await withDriveRetry('files.list', () =>
       drive.files.list({
         q: `'${folderId}' in parents and trashed = false`,
-        fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, md5Checksum, size)',
+        fields: 'nextPageToken, files(id, name, mimeType, modifiedTime, createdTime, md5Checksum, size)',
         pageSize: 1000,
         supportsAllDrives: true,
         includeItemsFromAllDrives: true,
@@ -285,6 +291,7 @@ export async function listFolderChildren(drive: drive_v3.Drive, folderId: string
       }
       const file: DriveFile = { id: f.id, name: f.name, mimeType: f.mimeType };
       if (f.modifiedTime) file.modifiedTime = f.modifiedTime;
+      if (f.createdTime) file.createdTime = f.createdTime;
       if (f.md5Checksum) file.md5Checksum = f.md5Checksum;
       if (f.size != null) file.size = Number(f.size);
       files.push(file);
@@ -317,7 +324,7 @@ export type DriveChange = {
 };
 
 const CHANGES_FIELDS =
-  'nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, mimeType, modifiedTime, md5Checksum, size, parents, trashed))';
+  'nextPageToken, newStartPageToken, changes(fileId, removed, file(id, name, mimeType, modifiedTime, createdTime, md5Checksum, size, parents, trashed))';
 
 /**
  * Establish the baseline cursor for incremental sync: the pageToken meaning "now". Call once right
@@ -385,6 +392,7 @@ export async function listChanges(
               name: f.name ?? '',
               mimeType: f.mimeType ?? '',
               ...(f.modifiedTime && { modifiedTime: f.modifiedTime }),
+              ...(f.createdTime && { createdTime: f.createdTime }),
               ...(f.md5Checksum && { md5Checksum: f.md5Checksum }),
               ...(f.size != null && { size: Number(f.size) }),
               ...(f.parents && { parents: f.parents }),

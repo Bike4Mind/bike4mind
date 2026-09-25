@@ -104,6 +104,7 @@ export function DataLakeSpendPanel({
           variant="plain"
           onClick={onRefetch}
           loading={isFetching}
+          aria-label="Refresh spend"
           data-testid="datalake-spend-refresh-btn"
         >
           <RefreshIcon fontSize="small" />

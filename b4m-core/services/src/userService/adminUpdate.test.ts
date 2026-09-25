@@ -41,11 +41,19 @@ function makeAdapters(startingCredits: number, { withCreditTransactions = true }
     },
     organizations: { findById: vi.fn(), update: vi.fn() },
     friendship: {},
+    userApiKeys: { deactivateAllByUserId: vi.fn().mockResolvedValue(undefined) },
   };
   if (withCreditTransactions) {
     db.creditTransactions = { createTransaction };
   }
-  return { adapters: { db }, createTransaction, incrementCredits, update, target };
+  return {
+    adapters: { db },
+    createTransaction,
+    incrementCredits,
+    update,
+    target,
+    deactivateAllByUserId: db.userApiKeys.deactivateAllByUserId,
+  };
 }
 
 describe('adminUpdateUser — audited credit adjustments', () => {
@@ -315,5 +323,56 @@ describe('adminUpdateUser - preferences merge', () => {
       showDebug: false,
       experimentalFeatures: { agentMode: true },
     });
+  });
+});
+
+describe('adminUpdateUser - API key deactivation on entering a blocked state', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it.each([
+    ['ban', {}, { isBanned: true }],
+    ['dispute', {}, { disputePending: true }],
+    ['suspension', { moderation: { status: 'active' } }, { moderationStatus: 'suspended' as const }],
+    ['ban and suspension in one save', {}, { isBanned: true, moderationStatus: 'suspended' as const }],
+  ])('deactivates once on %s', async (_label, seed, patch) => {
+    const { adapters, target, deactivateAllByUserId } = makeAdapters(100);
+    Object.assign(target, seed);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
+
+    expect(deactivateAllByUserId).toHaveBeenCalledTimes(1);
+    expect(deactivateAllByUserId).toHaveBeenCalledWith(TARGET_ID);
+  });
+
+  it.each([
+    ['an unrelated update', {}, { name: 'New Name' }],
+    ['re-banning a banned user', { isBanned: true }, { isBanned: true }],
+    ['re-flagging a disputed user', { disputePending: true }, { disputePending: true }],
+    [
+      're-suspending a suspended user',
+      { moderation: { status: 'suspended' } },
+      { moderationStatus: 'suspended' as const },
+    ],
+    ['suspend_pending', {}, { moderationStatus: 'suspend_pending' as const }],
+    ['throttled', {}, { moderationStatus: 'throttled' as const }],
+    ['active', { moderation: { status: 'suspended' } }, { moderationStatus: 'active' as const }],
+    ['unban', { isBanned: true }, { isBanned: false }],
+  ])('does not touch keys on %s', async (_label, seed, patch) => {
+    const { adapters, target, deactivateAllByUserId } = makeAdapters(100);
+    Object.assign(target, seed);
+
+    await adminUpdateUser(ADMIN_ID, { id: TARGET_ID, ...patch }, adapters);
+
+    expect(deactivateAllByUserId).not.toHaveBeenCalled();
+  });
+
+  it('does not deactivate when the user write fails', async () => {
+    const { adapters, update, deactivateAllByUserId } = makeAdapters(100);
+    update.mockRejectedValueOnce(new Error('write failed'));
+
+    await expect(adminUpdateUser(ADMIN_ID, { id: TARGET_ID, isBanned: true }, adapters)).rejects.toThrow(
+      'write failed'
+    );
+    expect(deactivateAllByUserId).not.toHaveBeenCalled();
   });
 });

@@ -57,6 +57,14 @@ export interface ReviewAdapters {
 
 type ReviewableAdapters = Omit<ReviewAdapters, 'admitSource'>;
 
+interface ResolveReviewableAdapters {
+  db: {
+    dataLakeProposals: Pick<IDataLakeProposalRepository, 'findById'>;
+    dataLakes: Pick<IDataLakeRepository, 'findById'>;
+    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+  };
+}
+
 /**
  * Resolve the proposal and its lake, and assert the caller may rule on it. Not-found for a missing
  * proposal or a vanished lake; manage-denied for a caller without write authority over the lake,
@@ -66,7 +74,7 @@ type ReviewableAdapters = Omit<ReviewAdapters, 'admitSource'>;
 async function resolveReviewable(
   proposalId: string,
   actor: AccessContext,
-  { db }: ReviewableAdapters
+  { db }: ResolveReviewableAdapters
 ): Promise<{ proposal: IDataLakeProposalDocument; lake: IDataLakeDocument }> {
   const proposal = await db.dataLakeProposals.findById(proposalId);
   if (!proposal) throw new NotFoundError('Proposal not found');
@@ -209,4 +217,41 @@ export async function declineDataLakeProposal(
   });
   if (!declined) throw new BadRequestError('This proposal has already been reviewed');
   return declined;
+}
+
+export interface RestoreAdapters {
+  db: Omit<ResolveReviewableAdapters['db'], 'dataLakeProposals'> & {
+    dataLakeProposals: Pick<IDataLakeProposalRepository, 'findById' | 'findLatestBySourceKey' | 'restoreDeclined'>;
+  };
+}
+
+/**
+ * Undo a decline: put the tombstone back in the pending queue for a fresh decision. Only the LATEST
+ * row for its source can be restored - an older declined row sits behind a later ruling (the source
+ * came back changed and was approved or declined again), and reopening it would ask a question the
+ * lake has already answered, or admit the source twice.
+ */
+export async function restoreDataLakeProposal(
+  proposalId: string,
+  actor: AccessContext,
+  adapters: RestoreAdapters
+): Promise<IDataLakeProposalDocument> {
+  const { db } = adapters;
+  const { proposal } = await resolveReviewable(proposalId, actor, { db });
+  if (proposal.status !== 'declined') throw new BadRequestError('Only a declined proposal can be restored');
+
+  const latest = await db.dataLakeProposals.findLatestBySourceKey(proposal.dataLakeId, proposal.canonicalSourceKey);
+  if (latest && latest.id !== proposal.id) {
+    throw new BadRequestError('This source has been proposed again since it was declined, so it cannot be restored');
+  }
+
+  const result = await db.dataLakeProposals.restoreDeclined(proposalId);
+  if (!result.restored) {
+    throw new BadRequestError(
+      result.reason === 'pending_exists'
+        ? 'This source is already waiting for review'
+        : 'This proposal is no longer declined'
+    );
+  }
+  return result.proposal;
 }

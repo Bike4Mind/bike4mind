@@ -39,7 +39,9 @@ export interface GenericAddItemsModalProps<T> {
   searchPlaceholder?: string;
 
   // Actions
-  onAdd: (ids: string[]) => void;
+  /** Return `false` to veto the close - e.g. the caller refused the add and wants the selection
+   *  kept. `void` (every other caller) closes as before. */
+  onAdd: (ids: string[]) => void | boolean;
   isPending?: boolean;
 
   // Optional left grid content
@@ -59,6 +61,11 @@ export interface GenericAddItemsModalProps<T> {
   emptyResultMessage?: string;
   triggerTestId?: string;
   searchMinLength?: number;
+
+  // Controlled mode: when `open` is supplied the parent owns open/close and the built-in trigger
+  // is not rendered, so a caller can pair its own button with this dialog.
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }
 
 function GenericAddItemsModal<T>({
@@ -99,9 +106,20 @@ function GenericAddItemsModal<T>({
   showButtonBadge = true,
   triggerTestId,
   searchMinLength,
+  open: controlledOpen,
+  onOpenChange,
 }: GenericAddItemsModalProps<T>) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : uncontrolledOpen;
+  const setOpen = useCallback(
+    (next: boolean) => {
+      if (isControlled) onOpenChange?.(next);
+      else setUncontrolledOpen(next);
+    },
+    [isControlled, onOpenChange]
+  );
   const [searchTerm, setSearchTerm] = useState('');
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
@@ -110,7 +128,7 @@ function GenericAddItemsModal<T>({
   const handleClose = useCallback(() => {
     setOpen(false);
     if (onSearch) onSearch('');
-  }, [onSearch]);
+  }, [onSearch, setOpen]);
 
   const handleSelectAll = useCallback(() => {
     if (selectedIds.length === items.length || selectedIds.length > 0) {
@@ -134,10 +152,12 @@ function GenericAddItemsModal<T>({
   );
 
   const handleAddItems = useCallback(() => {
-    onAdd(selectedIds);
+    // A caller that returns false refused the add, so the dialog stays open with the selection and
+    // the search intact. Every other caller returns void and closes as before.
+    if (onAdd(selectedIds) === false) return;
     setOpen(false);
     if (onSearch) onSearch('');
-  }, [onAdd, selectedIds, onSearch]);
+  }, [onAdd, selectedIds, onSearch, setOpen]);
 
   const handleSearch = useCallback(
     (searchTerm: string) => {
@@ -157,22 +177,24 @@ function GenericAddItemsModal<T>({
 
   return (
     <>
-      <Button
-        className="generic-add-items-modal-trigger"
-        data-testid={triggerTestId}
-        sx={{
-          fontWeight: 500,
-          fontSize: '14px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          borderRadius: '8px',
-          minWidth: '160px',
-        }}
-        onClick={() => setOpen(true)}
-      >
-        {buttonIcon} {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
-      </Button>
+      {!isControlled && (
+        <Button
+          className="generic-add-items-modal-trigger"
+          data-testid={triggerTestId}
+          sx={{
+            fontWeight: 500,
+            fontSize: '14px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            borderRadius: '8px',
+            minWidth: '160px',
+          }}
+          onClick={() => setOpen(true)}
+        >
+          {buttonIcon} {buttonLabel} {showButtonBadge && value?.length ? `(${value.length})` : ''}
+        </Button>
+      )}
       <Modal
         className="generic-add-items-modal"
         open={open}

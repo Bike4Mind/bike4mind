@@ -1147,6 +1147,22 @@ describe('retrieve_knowledge_content untrusted-content delimiter (#1659)', () =>
     expect(noUploadTime).toContain(`### Handbook.pdf (ID: ${FILE_ID})\nTags:`);
   });
 
+  /**
+   * Regression guard for #3047/#3113: a previous attempt at dated headers silently dropped the
+   * date on this exact channel. `documentDate` (#3048) is distinct from `createdAt` above - it is
+   * the document's own authored vintage, not upload time - and must reach the header when present.
+   */
+  it('appends the document date clause when the file carries a documentDate (#3048)', async () => {
+    const out = await runById(retrievableCtx('body', { documentDate: new Date('2019-03-04T00:00:00.000Z') }));
+    expect(out).toContain(`### Handbook.pdf (ID: ${FILE_ID}) - dated 2019-03-04\n`);
+  });
+
+  it('heads the document undated when documentDate is explicitly null', async () => {
+    const out = await runById(retrievableCtx('body', { documentDate: null }));
+    expect(out).toContain(`### Handbook.pdf (ID: ${FILE_ID})\nTags:`);
+    expect(out).not.toContain('dated');
+  });
+
   it('leaves the retrieved-count line outside the block', async () => {
     const out = await runById(retrievableCtx('body'));
     expect(out.indexOf('Retrieved content from 1 of 1 document(s)')).toBeLessThan(out.indexOf(BEGIN));

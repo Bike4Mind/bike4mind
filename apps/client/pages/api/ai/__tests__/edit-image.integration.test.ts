@@ -13,12 +13,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockUserFindById, mockRateLimit, mockInvoke } = vi.hoisted(() => ({
-  mockValidate: vi.fn(),
-  mockUserFindById: vi.fn(),
-  mockRateLimit: vi.fn(),
-  mockInvoke: vi.fn(),
-}));
+const { mockValidate, mockUserFindById, mockRateLimit, mockInvoke, mockGetOrCreateSession, mockResolveBillingOrgId } =
+  vi.hoisted(() => ({
+    mockValidate: vi.fn(),
+    mockUserFindById: vi.fn(),
+    mockRateLimit: vi.fn(),
+    mockInvoke: vi.fn(),
+    mockGetOrCreateSession: vi.fn(),
+    mockResolveBillingOrgId: vi.fn(),
+  }));
 
 const RATE_LIMIT_HEADERS = {
   'X-RateLimit-Limit-Minute': '60',
@@ -58,6 +61,14 @@ vi.mock('@bike4mind/database', async orig => {
   };
 });
 
+vi.mock('@server/managers/sessionManager', () => ({
+  getOrCreateSession: (...a: unknown[]) => mockGetOrCreateSession(...a),
+}));
+vi.mock('@server/utils/orgAccess', async orig => ({
+  ...(await orig<Record<string, unknown>>()),
+  resolveBillingOrgId: (...a: unknown[]) => mockResolveBillingOrgId(...a),
+}));
+
 vi.mock('@server/queueHandlers/imageEdit', () => ({
   getImageEdit: () => ({ invoke: (...a: unknown[]) => mockInvoke(...a) }),
 }));
@@ -76,16 +87,19 @@ vi.mock('@server/auth/auth', async orig => {
 });
 
 import handler from '../edit-image';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, NotFoundError } from '@bike4mind/common';
 
 const VALID_KEY = 'sk-test-valid-key';
 
-function fire({ apiKey = VALID_KEY as string | null }: { apiKey?: string | null } = {}) {
+function fire({
+  apiKey = VALID_KEY as string | null,
+  body = {},
+}: { apiKey?: string | null; body?: Record<string, unknown> } = {}) {
   const { req, res } = createMocks(
     {
       method: 'POST',
       url: '/api/ai/edit-image',
-      body: { prompt: 'make the sky bluer' },
+      body: { prompt: 'make the sky bluer', ...body },
       headers: { ...(apiKey ? { 'x-api-key': apiKey } : {}) },
     },
     { eventEmitter: EventEmitter }
@@ -110,6 +124,8 @@ describe('POST /api/ai/edit-image (integration - ai:generate scope enforcement)'
     mockUserFindById.mockResolvedValue({ id: 'user-1', _id: 'user-1', isBanned: false, disputePending: false });
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
     mockInvoke.mockResolvedValue({ id: 'quest-1', status: 'pending' });
+    mockGetOrCreateSession.mockResolvedValue({ session: { id: 's1' }, sessionId: 's1', asyncPromises: [] });
+    mockResolveBillingOrgId.mockImplementation(async (_req: unknown, id: string | null | undefined) => id ?? null);
   });
 
   it('rejects a key lacking ai:generate (403) before enqueuing the edit', async () => {
@@ -136,5 +152,36 @@ describe('POST /api/ai/edit-image (integration - ai:generate scope enforcement)'
     expect(res._getStatusCode()).toBe(200);
     expect(mockValidate).not.toHaveBeenCalled();
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  describe('caller scoping', () => {
+    it('rejects an organizationId the caller is not a member of (404) before enqueuing', async () => {
+      mockResolveBillingOrgId.mockRejectedValue(new NotFoundError('Organization not found'));
+      const { req, res } = fire({ apiKey: null, body: { organizationId: 'foreign-org' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(mockResolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), 'foreign-org');
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('rejects a sessionId the caller cannot write to (404) before enqueuing', async () => {
+      mockGetOrCreateSession.mockRejectedValue(new NotFoundError('Session not found'));
+      const { req, res } = fire({ apiKey: null, body: { sessionId: 'foreign' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(404);
+      expect(mockGetOrCreateSession).toHaveBeenCalledWith(expect.objectContaining({ sessionId: 'foreign' }));
+      expect(mockInvoke).not.toHaveBeenCalled();
+    });
+
+    it('passes an omitted organizationId to the resolver as undefined and forwards its result', async () => {
+      mockResolveBillingOrgId.mockResolvedValueOnce('own-org');
+      const { req, res } = fire({ apiKey: null, body: { sessionId: 's1' } });
+      await handler(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(mockResolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), undefined);
+      expect(mockInvoke).toHaveBeenCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ organizationId: 'own-org' }) })
+      );
+    });
   });
 });

@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   assertLakeAccess: vi.fn(),
   approveDataLakeProposal: vi.fn(),
   declineDataLakeProposal: vi.fn(),
+  restoreDataLakeProposal: vi.fn(),
   findById: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'creator-1', isAdmin: false })),
   admitProposedSource: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('@bike4mind/services', () => ({
     assertLakeAccess: h.assertLakeAccess,
     approveDataLakeProposal: h.approveDataLakeProposal,
     declineDataLakeProposal: h.declineDataLakeProposal,
+    restoreDataLakeProposal: h.restoreDataLakeProposal,
   },
 }));
 vi.mock('@bike4mind/database', () => ({
@@ -61,6 +63,7 @@ beforeEach(() => {
     fabFile: { id: 'file-9', fileName: 'Report' },
   });
   h.declineDataLakeProposal.mockResolvedValue({ id: 'prop-1', status: 'declined' });
+  h.restoreDataLakeProposal.mockResolvedValue({ id: 'prop-1', status: 'pending' });
 });
 
 describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
@@ -93,6 +96,20 @@ describe('POST /api/data-lakes/:id/proposals/:proposalId', () => {
     );
     expect(h.approveDataLakeProposal).not.toHaveBeenCalled();
     expect(json).toHaveBeenCalledWith({ data: { id: 'prop-1', status: 'declined' } });
+  });
+
+  it('restores a declined proposal through the service and admits nothing', async () => {
+    const { res, json } = makeRes();
+
+    await handler(makeReq({ decision: 'restore' }) as never, res);
+
+    expect(h.restoreDataLakeProposal).toHaveBeenCalledWith(
+      'prop-1',
+      expect.objectContaining({ userId: 'creator-1' }),
+      expect.anything()
+    );
+    expect(h.approveDataLakeProposal).not.toHaveBeenCalled();
+    expect(json).toHaveBeenCalledWith({ data: { id: 'prop-1', status: 'pending' } });
   });
 
   it('404s a proposal that belongs to another lake, so managing one lake cannot rule on another', async () => {

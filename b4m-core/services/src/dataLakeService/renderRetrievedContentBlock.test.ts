@@ -177,9 +177,9 @@ describe('formatDocumentDate', () => {
 });
 
 /**
- * No caller today - the three retrieval channels all render undated, because the only timestamp a
- * FabFile carries is its upload time and the seam exists to forbid exactly that input. Kept under
- * test so the formatting contract is already pinned when a real authored date does arrive.
+ * All three retrieval channels now feed this a real authored date (#3048), captured at ingest and
+ * carried on the FabFile. The clause still has to render nothing for a file that has none, which is
+ * the normal case for most documents - so both halves of that contract are pinned here.
  */
 describe('documentDateClause', () => {
   it('renders the clause a retrieval channel would append', () => {

@@ -1,4 +1,4 @@
-import { IMAGE_SIZE_CONSTRAINTS } from '../models';
+import { IMAGE_SIZE_CONSTRAINTS, ImageModels, LEGACY_DALL_E_3_MODEL_ID } from '../models';
 import { isGPTImage2Model, isGPTImageModel } from './modelHelpers';
 
 /**
@@ -53,9 +53,10 @@ export function satisfiesGptImage2Constraints({ width, height }: { width: number
 }
 
 /**
- * Sizes the legacy (pre-GPT-Image) OpenAI generate endpoint accepts. The two tiers
- * overlap on 1024x1024; the repeated entry is harmless because this list is only ever
- * tested for membership.
+ * Every size some legacy (pre-GPT-Image) OpenAI tier accepts. No single model accepts all
+ * of them - dall-e-2 and dall-e-3 each get measured against their own list - so this is
+ * only the fallback for a legacy id we cannot place in a tier. The two tiers overlap on
+ * 1024x1024; the repeated entry is harmless because this list is only tested for membership.
  */
 export const OPENAI_LEGACY_IMAGE_SIZES = [
   ...IMAGE_SIZE_CONSTRAINTS.DALL_E_2.sizes,
@@ -70,7 +71,12 @@ export const OPENAI_LEGACY_IMAGE_SIZES = [
  *
  * gpt-image-2 takes 'auto', its presets, or any custom WIDTHxHEIGHT meeting
  * satisfiesGptImage2Constraints. The gpt-image-1 family is limited to its three fixed
- * sizes. Anything else is treated as legacy dall-e.
+ * sizes. dall-e-2 and dall-e-3 are each measured against their own tier - they share only
+ * 1024x1024, so a dall-e-3 size such as 1792x1024 is correctly rejected for dall-e-2.
+ *
+ * A legacy id matching neither dall-e tier falls back to the union of both. That is looser
+ * than any real tier, deliberately: we cannot name such a model's sizes, so we leave
+ * OpenAI to reject it rather than coercing against a tier it may not belong to.
  *
  * OpenAI image models only: BFL, Gemini and xAI sizes are validated by their own adapters,
  * and passing one of those models here would measure it against the wrong list.
@@ -96,6 +102,14 @@ export function isSupportedImageSize(model?: string | null, size?: string | null
     return (IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes as readonly string[]).includes(size);
   }
 
+  if (model === ImageModels.DALL_E_2) {
+    return (IMAGE_SIZE_CONSTRAINTS.DALL_E_2.sizes as readonly string[]).includes(size);
+  }
+
+  if (model === LEGACY_DALL_E_3_MODEL_ID) {
+    return (IMAGE_SIZE_CONSTRAINTS.DALL_E_3.sizes as readonly string[]).includes(size);
+  }
+
   return (OPENAI_LEGACY_IMAGE_SIZES as readonly string[]).includes(size);
 }
 
@@ -109,6 +123,9 @@ export function fallbackImageSize(model?: string | null): string {
   }
   if (isGPTImageModel(model)) {
     return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.defaultSize;
+  }
+  if (model === LEGACY_DALL_E_3_MODEL_ID) {
+    return IMAGE_SIZE_CONSTRAINTS.DALL_E_3.defaultSize;
   }
   return IMAGE_SIZE_CONSTRAINTS.DALL_E_2.defaultSize;
 }
