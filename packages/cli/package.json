@@ -127,6 +127,7 @@
   },
   "devDependencies": {
     "@bike4mind/agents": "workspace:*",
+    "@bike4mind/client-auth": "workspace:*",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/hearth": "workspace:*",
