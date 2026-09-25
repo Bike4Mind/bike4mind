@@ -109,9 +109,12 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
 
         elementRef.current.innerHTML = '';
 
-        const parser = new DOMParser();
-        const svgDoc = parser.parseFromString(svg, 'image/svg+xml');
-        const svgElement = svgDoc.documentElement;
+        // Mermaid's htmlLabels put unclosed HTML <br> inside foreignObject content whenever a
+        // node label wraps a line. Strict image/svg+xml parsing rejects that as invalid XML
+        // and silently hands back an html/parsererror document instead of throwing, so parse
+        // as HTML and pull the <svg> out of it.
+        const svgElement = new DOMParser().parseFromString(svg, 'text/html').body.querySelector('svg');
+        if (!svgElement) throw new Error('SVG element not found');
 
         const originalWidth = svgElement.getAttribute('width');
         const originalHeight = svgElement.getAttribute('height');
