@@ -279,23 +279,42 @@ export function useGetUserOrganizations(userId: string | undefined | null) {
   });
 }
 
+function keptSharesMessage(kept: number): string {
+  const isSingle = kept === 1;
+  return `Member removed. ${kept} share${isSingle ? '' : 's'} on personal data lakes ${isSingle ? 'was' : 'were'} kept; the lake owners are being notified.`;
+}
+
 export function useRemoveMemberFromOrganization() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async ({ organizationId, userId }: { organizationId: string; userId: string }) => {
-      const organization = await api.delete(`/api/organizations/${organizationId}/members/${userId}`);
+      const response = await api.delete<WithId<IOrganizationDocument> & { personalLakeSharesKept?: number | null }>(
+        `/api/organizations/${organizationId}/members/${userId}`
+      );
+      const { personalLakeSharesKept, ...organization } = response.data;
 
-      updateAllQueryData(queryClient, 'organizations', 'write', organization.data);
+      updateAllQueryData(queryClient, 'organizations', 'write', organization);
 
-      return organization;
+      return personalLakeSharesKept;
     },
-    onSuccess: (_data, variables) => {
+    onSuccess: (kept, variables) => {
       queryClient.invalidateQueries({ queryKey: ['users', 'organization', variables.organizationId] });
       queryClient.invalidateQueries({ queryKey: ['organizations'] });
       // Removing a member may hand their lakes to a successor, changing ownership-derived flags.
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
-      toast.success('Member removed successfully');
+      // Notification is best-effort and already attempted server-side before this response arrives
+      // (the route awaits it ahead of res.json), so the client still cannot claim delivery - only
+      // that it was kept and owners are being told. `null` means the post-departure read itself
+      // failed, so no owner was notified either; an ABSENT field is an API response from before the
+      // count existed, which must keep the plain message.
+      toast.success(
+        kept === null
+          ? 'Member removed. Personal data lake shares could not be checked, so the lake owners were not notified.'
+          : kept
+            ? keptSharesMessage(kept)
+            : 'Member removed successfully'
+      );
     },
     onError: (error: unknown) => {
       console.error('Failed to remove member:', error);

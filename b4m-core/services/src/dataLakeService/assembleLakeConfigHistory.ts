@@ -52,6 +52,8 @@ const isObjectIdShaped = (id: string): boolean => /^[0-9a-fA-F]{24}$/.test(id);
  * lake accumulates principals across tenants, so surfacing an address as a "name" would disclose an
  * identity the manager reading this was never meant to see. An unresolved user renders as its
  * opaque id.
+ *
+ * Duplicate of the exported `userDisplayName` in `assembleLakeAccessView.ts`.
  */
 const userDisplayName = (u: { name?: string; username?: string } | undefined): string | undefined =>
   u ? u.name || u.username || undefined : undefined;
