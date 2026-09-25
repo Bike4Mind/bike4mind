@@ -20,6 +20,7 @@ import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import { shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
 import { releaseDriveConnectionForLake } from '@server/integrations/google/drive/common';
 import { createKeyProvider } from '@server/memory/factCipher';
+import { getFilesStorage } from '@server/utils/storage';
 import { BadRequestError } from '@bike4mind/utils';
 import { z, ZodError } from 'zod';
 
@@ -64,6 +65,9 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         fabFiles: fabFileRepository,
         fabFileChunks: fabFileChunkRepository,
       },
+      // Deletes each purged file's stored object(s) before its row. Needs `fabFileBucket` linked on
+      // this subscriber (infra/queues.ts); unlinked, this throws and every purge lands in the DLQ.
+      storage: getFilesStorage(),
       // Undefined everywhere except self-host OpenSearch - Atlas's vector index lives on the
       // FabFileChunk collection itself, so the chunk-sweep two steps below already removes it.
       retrievalIndex: selfHostOpenSearchEnabled()

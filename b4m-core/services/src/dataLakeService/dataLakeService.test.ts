@@ -4557,6 +4557,7 @@ describe('cleanupDeletedDataLake - phase 2 sweep', () => {
         hardDeleteOneById: vi.fn().mockResolvedValue(true),
         findById: vi.fn().mockResolvedValue(null),
         pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
+        findStorageKeysByIds: vi.fn().mockResolvedValue([]),
       },
       fabFileChunks: {
         deleteManyByFabFileId: vi.fn().mockResolvedValue(undefined),
