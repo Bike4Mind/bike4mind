@@ -2,6 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
 
 /**
  * Regression coverage for the batch upload orchestration: the offline fail-fast +
@@ -390,6 +391,29 @@ describe('useBatchUpload onError', () => {
     await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/batches', expect.anything()));
     const batchCall = apiPost.mock.calls.find(([url]) => url === '/api/data-lakes/batches');
     expect((batchCall?.[1] as { wantsTaxonomy: boolean }).wantsTaxonomy).toBe(true);
+  });
+
+  it('invalidates the active-batches list as soon as the batch record exists, not after the whole upload finishes', async () => {
+    // onUploadComplete only fires once every file has uploaded, well past the idle poll's 60s.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/files/generate-presigned-urls-batch') return Promise.resolve({ data: { files: [] } });
+      return Promise.resolve({ data: { id: 'id-1' } });
+    });
+    seedWizardFile();
+
+    const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries').mockResolvedValue(undefined);
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    const invalidatedKeys = () =>
+      invalidateSpy.mock.calls.map(([arg]) => JSON.stringify((arg as { queryKey?: unknown })?.queryKey));
+    const activeBatchesKey = JSON.stringify(dataLakeKeys.activeBatches);
+
+    await waitFor(() => expect(invalidatedKeys().filter(k => k === activeBatchesKey)).toHaveLength(1));
+
+    invalidateSpy.mockRestore();
   });
 
   it('retrying via the toast action re-invokes the upload', async () => {

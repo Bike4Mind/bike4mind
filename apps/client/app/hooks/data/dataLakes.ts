@@ -31,7 +31,14 @@ import type {
 } from '@bike4mind/common';
 import { isAxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
-import { DATA_LAKES, isResearchRunInFlight, normalizeTagPrefix, tagPrefixesOverlap } from '@bike4mind/common';
+import {
+  BATCH_NON_TERMINAL_STATUSES,
+  DATA_LAKES,
+  isResearchRunInFlight,
+  normalizeTagPrefix,
+  tagPrefixesOverlap,
+  TAXONOMY_NON_TERMINAL_STATUSES,
+} from '@bike4mind/common';
 import type {
   CreateDataLakeRequestInputType,
   DuplicateBucket,
@@ -980,9 +987,23 @@ export function useGetDeletedDataLakes(enabled = true) {
 
 // ── Batch progress / background AI tagging ──────────────────────────────────
 
-/** Polling cadence for the list's ingest/AI-tagging badges - no per-batch WebSocket wiring
- * needed for a list view; a short poll is simple and good enough for background progress. */
-const ACTIVE_BATCHES_POLL_MS = 10_000;
+/** Fast cadence while a batch in the list is still moving; see activeBatchesPollInterval. */
+export const ACTIVE_BATCHES_POLL_MS = 10_000;
+
+/** Never false: a batch can start outside this tab (Slack, Drive, research, another tab), and the
+ * GET drives server-side stuck-batch reconciliation. */
+export const IDLE_BATCHES_POLL_MS = 60_000;
+
+/**
+ * Fast only while ingest or AI-tagging is non-terminal; a batch waiting on review or failed can
+ * sit for days, so it must not hold the fast cadence.
+ */
+export function activeBatchesPollInterval(batches: IDataLakeBatchSummary[] | undefined): number {
+  const isMoving = (b: IDataLakeBatchSummary) =>
+    BATCH_NON_TERMINAL_STATUSES.includes(b.status) ||
+    (!!b.taxonomyStatus && TAXONOMY_NON_TERMINAL_STATUSES.includes(b.taxonomyStatus));
+  return batches?.some(isMoving) ? ACTIVE_BATCHES_POLL_MS : IDLE_BATCHES_POLL_MS;
+}
 
 /**
  * Batches the Data Lakes list needs to show a badge for: still uploading/chunking/
@@ -998,7 +1019,7 @@ export function useActiveDataLakeBatches(enabled = true) {
       const response = await api.get<{ data: IDataLakeBatchSummary[] }>('/api/data-lakes/batches');
       return response.data.data;
     },
-    refetchInterval: enabled ? ACTIVE_BATCHES_POLL_MS : false,
+    refetchInterval: query => (enabled ? activeBatchesPollInterval(query.state.data) : false),
     refetchOnWindowFocus: false,
   });
 }

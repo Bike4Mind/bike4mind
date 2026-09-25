@@ -2,7 +2,7 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, waitFor, act } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import type { BrowsePublicDataLakesResult, PublicDataLakeSummary } from '@bike4mind/common';
+import type { BrowsePublicDataLakesResult, IDataLakeBatchSummary, PublicDataLakeSummary } from '@bike4mind/common';
 import { RESEARCH_RUN_STALE_AFTER_MS } from '@bike4mind/common';
 // Mocked below (vi.mock is hoisted); imported so the refusal-toast assertion can read the spy.
 import { toast } from 'sonner';
@@ -60,6 +60,9 @@ import {
   rebuildBacklog,
   lakeMemoryPollInterval,
   LAKE_MEMORY_POLL_MS,
+  activeBatchesPollInterval,
+  ACTIVE_BATCHES_POLL_MS,
+  IDLE_BATCHES_POLL_MS,
   useBrowsePublicDataLakes,
   useCleanupDataLake,
   useDataLakeResearchRuns,
@@ -933,6 +936,54 @@ describe('lakeMemoryPollInterval', () => {
   it('does not poll a settled or absent payload', () => {
     expect(lakeMemoryPollInterval({ running: false, state: 'current' })).toBe(false);
     expect(lakeMemoryPollInterval(undefined)).toBe(false);
+  });
+});
+
+/**
+ * Active-batches list poll cadence. Nothing else executes the `refetchInterval` closure, so a
+ * wrong cadence ships green here or nowhere.
+ */
+describe('activeBatchesPollInterval', () => {
+  /** Only the two fields the predicate reads; the summary type is far wider than this. */
+  const batch = (overrides: Partial<IDataLakeBatchSummary>): IDataLakeBatchSummary =>
+    ({ status: 'completed', ...overrides }) as IDataLakeBatchSummary;
+
+  it('idles on no data and on an empty list', () => {
+    expect(activeBatchesPollInterval(undefined)).toBe(IDLE_BATCHES_POLL_MS);
+    expect(activeBatchesPollInterval([])).toBe(IDLE_BATCHES_POLL_MS);
+  });
+
+  // Literal on purpose, not sourced from the shared constants: a status dropped from
+  // BATCH_NON_TERMINAL_STATUSES/TAXONOMY_NON_TERMINAL_STATUSES/BATCH_TERMINAL_STATUSES must fail here.
+  it.each(['preparing', 'uploading', 'processing'] as const)('stays fast while batch status is %s', status => {
+    expect(activeBatchesPollInterval([batch({ status })])).toBe(ACTIVE_BATCHES_POLL_MS);
+  });
+
+  it.each(['queued', 'analyzing', 'applying'] as const)('stays fast while taxonomyStatus is %s', taxonomyStatus => {
+    expect(activeBatchesPollInterval([batch({ status: 'completed', taxonomyStatus })])).toBe(ACTIVE_BATCHES_POLL_MS);
+  });
+
+  it.each(['completed', 'completed_with_errors', 'failed', 'cancelled'] as const)(
+    'idles when batch status is %s',
+    status => {
+      expect(activeBatchesPollInterval([batch({ status })])).toBe(IDLE_BATCHES_POLL_MS);
+    }
+  );
+
+  it.each(['none', 'ready', 'applied', 'failed', 'dismissed'] as const)(
+    'idles when taxonomyStatus is %s',
+    taxonomyStatus => {
+      expect(activeBatchesPollInterval([batch({ status: 'completed', taxonomyStatus })])).toBe(IDLE_BATCHES_POLL_MS);
+    }
+  );
+
+  it('goes fast if ANY batch in a mixed list is still moving', () => {
+    expect(
+      activeBatchesPollInterval([
+        batch({ status: 'completed', taxonomyStatus: 'ready' }),
+        batch({ status: 'uploading' }),
+      ])
+    ).toBe(ACTIVE_BATCHES_POLL_MS);
   });
 });
 
