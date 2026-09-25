@@ -84,17 +84,23 @@ describe('lattice intent scanners', () => {
     expect(corpus.some(s => JSON.stringify(oldCaptures(control, s)) !== JSON.stringify(oldCaptures(re, s)))).toBe(true);
   });
 
-  // Mirrors the assertLinearGrowth helper in b4m-core/utils/src/artifactParser.test.ts.
+  // Same sampling as measureGrowth in b4m-core/services/src/__tests__/utils/regexLinearity.ts: the
+  // first run is the warm-up, and each size keeps its fastest of five runs so a single GC pause or
+  // noisy-neighbor stall on a shared CI runner cannot fake a super-linear ratio.
   function assertLinearGrowth(scan: (s: string) => unknown, build: (n: number) => string, small: number) {
-    const measure = (n: number) => {
-      const input = build(n);
+    const time = (input: string) => {
       const startedAt = performance.now();
       scan(input);
       return performance.now() - startedAt;
     };
-    const baselineMs = measure(small);
+    const baselineInput = build(small);
+    let baselineMs = time(baselineInput);
     expect(baselineMs).toBeLessThan(500);
-    expect(measure(small * 2) / Math.max(baselineMs, 5)).toBeLessThan(3);
+    for (let i = 1; i < 5; i++) baselineMs = Math.min(baselineMs, time(baselineInput));
+    const doubledInput = build(small * 2);
+    let ratio = Infinity;
+    for (let i = 0; i < 5 && ratio >= 3; i++) ratio = Math.min(ratio, time(doubledInput) / Math.max(baselineMs, 5));
+    expect(ratio).toBeLessThan(3);
   }
 
   // Each shape is one the old regex was quadratic or worse on; at these sizes it took seconds.

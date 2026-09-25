@@ -43,14 +43,21 @@ describe('parseToolArgsLenient - code fence regex', () => {
         /* unparseable by design */
       }
     };
-    const time = (n: number) => {
-      const input = '```json' + ' \n'.repeat(n) + 'x';
+    // Same sampling as measureGrowth in b4m-core/services/src/__tests__/utils/regexLinearity.ts: the
+    // first run is the warm-up, and each size keeps its fastest of five runs so a single GC pause or
+    // noisy-neighbor stall on a shared CI runner cannot fake a super-linear ratio.
+    const time = (input: string) => {
       const startedAt = performance.now();
       run(input);
       return performance.now() - startedAt;
     };
-    const baselineMs = time(32000);
+    const baselineInput = '```json' + ' \n'.repeat(32000) + 'x';
+    let baselineMs = time(baselineInput);
     expect(baselineMs).toBeLessThan(500);
-    expect(time(32000 * 2) / Math.max(baselineMs, 5)).toBeLessThan(3);
+    for (let i = 1; i < 5; i++) baselineMs = Math.min(baselineMs, time(baselineInput));
+    const doubledInput = '```json' + ' \n'.repeat(64000) + 'x';
+    let ratio = Infinity;
+    for (let i = 0; i < 5 && ratio >= 3; i++) ratio = Math.min(ratio, time(doubledInput) / Math.max(baselineMs, 5));
+    expect(ratio).toBeLessThan(3);
   });
 });

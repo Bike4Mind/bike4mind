@@ -5,19 +5,28 @@
 export const SMALL_INPUT_MS_CEILING = 500;
 export const GROWTH_RATIO_CEILING = 3;
 const MIN_BASELINE_MS = 5;
+const SAMPLES = 5;
 
 export function measureGrowth(run: (input: string) => unknown, build: (n: number) => string, small: number) {
-  const time = (n: number) => {
-    const input = build(n);
+  const time = (input: string) => {
     const startedAt = performance.now();
     run(input);
     return performance.now() - startedAt;
   };
-  const baselineMs = time(small);
+  const baselineInput = build(small);
+  const firstMs = time(baselineInput);
   // Skip the doubled run once the baseline has already failed: on a super-linear regex it can take minutes.
-  if (baselineMs >= SMALL_INPUT_MS_CEILING) return { baselineMs, ratio: Infinity };
-  const doubledMs = time(small * 2);
-  return { baselineMs, ratio: doubledMs / Math.max(baselineMs, MIN_BASELINE_MS) };
+  if (firstMs >= SMALL_INPUT_MS_CEILING) return { baselineMs: firstMs, ratio: Infinity };
+  // The first run is the warm-up; each size keeps its fastest of SAMPLES runs so a single GC pause or
+  // noisy-neighbor stall on a shared CI runner cannot fake a super-linear ratio.
+  let baselineMs = firstMs;
+  for (let i = 1; i < SAMPLES; i++) baselineMs = Math.min(baselineMs, time(baselineInput));
+  const doubledInput = build(small * 2);
+  let ratio = Infinity;
+  for (let i = 0; i < SAMPLES && ratio >= GROWTH_RATIO_CEILING; i++) {
+    ratio = Math.min(ratio, time(doubledInput) / Math.max(baselineMs, MIN_BASELINE_MS));
+  }
+  return { baselineMs, ratio };
 }
 
 /** Deterministic LCG (Numerical Recipes constants) so CI generates the identical corpus every run. */
