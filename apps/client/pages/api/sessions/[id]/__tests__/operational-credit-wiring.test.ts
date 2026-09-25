@@ -97,6 +97,12 @@ describe('session operational credit pre-flight wiring', () => {
       expect(mockPublishTag).not.toHaveBeenCalled();
     });
 
+    it('names the requester on the queued job so the write re-checks their access', async () => {
+      await run(tagHandler);
+
+      expect(mockPublishTag).toHaveBeenCalledWith({ sessionId: SESSION_ID, requesterId: REQUESTER_ID });
+    });
+
     it('checks credits before publishing, not after', async () => {
       await run(tagHandler);
 

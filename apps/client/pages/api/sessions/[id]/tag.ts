@@ -30,7 +30,7 @@ const handler = baseApi().post(
       logger: req.logger,
     });
 
-    const requestId = await SessionEvents.Tag.publish({ sessionId: session.id });
+    const requestId = await SessionEvents.Tag.publish({ sessionId: session.id, requesterId: req.user?.id });
 
     return res.json({ message: 'Tagging job queued', requestId });
   })
