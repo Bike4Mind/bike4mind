@@ -42,6 +42,7 @@ import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import PageFrame from '@client/app/components/common/PageFrame';
+import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
 import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 
 /**
@@ -267,12 +268,26 @@ const GearsPage = () => {
   return (
     <PageFrame testId="gears-page">
       <Box data-testid="gears-page-body">
-        <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
-          Gears
-        </Typography>
-        <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', color: 'text.tertiary' }}>
-          A tour of what Bike4Mind can do. The first time you use one of these, it pays a one-time credit bonus.
-        </Typography>
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'flex-start',
+            justifyContent: 'space-between',
+            gap: '16px',
+            flexWrap: 'wrap',
+          }}
+        >
+          <Box>
+            <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
+              Gears
+            </Typography>
+            <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', color: 'text.tertiary' }}>
+              A tour of what Bike4Mind can do. The first time you use one of these, it pays a one-time credit bonus.
+            </Typography>
+          </Box>
+
+          <HelpCenterButton testId="gears-helpcenter-btn" />
+        </Box>
 
         {/* The tabs are static, so they render before the status lands - only the
             grid inside a panel waits. */}
