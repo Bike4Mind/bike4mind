@@ -3,7 +3,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseReminderExpression } from './reminder-parser';
+import {
+  matchQuotedText,
+  matchRemindMeIn,
+  matchRemindMeTo,
+  matchTrailingTime,
+  parseReminderExpression,
+} from './reminder-parser';
 
 describe('reminder-parser', () => {
   const timezone = 'America/Los_Angeles';
@@ -237,5 +243,132 @@ describe('reminder-parser', () => {
         expect(result.parsed.time.formatted.length).toBeGreaterThan(0);
       }
     });
+  });
+});
+
+describe('reminder pattern scanners', () => {
+  const TRAILING = ['tomorrow', 'today', 'tonight', 'next week', 'next monday', 'next tuesday', 'next wednesday']
+    .concat(['next thursday', 'next friday', 'next saturday', 'next sunday', 'in \\d+', 'at \\d+', 'on \\w+'])
+    .join('|');
+  // The regexes the scanners replaced, kept as the differential oracle.
+  const SITES: Array<[string, RegExp, (s: string) => string[] | null]> = [
+    ['quoted', /^["'](.+?)["']\s+(.+)$/, matchQuotedText],
+    ['remind-to', /^(?:remind\s+me\s+)?to\s+(.+?)\s+(in|at|on|tomorrow|next|tonight|today)\s*(.*)$/i, matchRemindMeTo],
+    ['remind-in', /^(?:remind\s+me\s+)?(in|at|on|tomorrow|next|tonight|today)\s+(.+?)\s+to\s+(.+)$/i, matchRemindMeIn],
+    ['trailing', new RegExp(`(.+?)\\s+((?:${TRAILING}).*)$`, 'i'), matchTrailingTime],
+  ];
+  const oldCaptures = (re: RegExp, s: string) => re.exec(s)?.slice(1) ?? null;
+
+  function mulberry32(seed: number) {
+    return () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  const ch = (code: number) => String.fromCharCode(code);
+  const LEADS = ['', 'to ', 'remind me to ', 'in ', 'remind me in ', 'Remind  me\nTO ', '"', "'", 'remind '];
+  const TOKENS = [
+    'remind',
+    'me',
+    'to',
+    'TO',
+    'in',
+    'In',
+    'at',
+    'on',
+    'tomorrow',
+    'next',
+    'week',
+    'monday',
+    'tonight',
+  ].concat([
+    'today',
+    '5',
+    '12',
+    'x',
+    'call',
+    '"',
+    "'",
+    ' ',
+    ' ',
+    ' ',
+    '\n',
+    '\r',
+    '\t',
+    ch(0xa0),
+    ch(0x2028),
+    ch(0xfeff),
+  ]);
+  const corpus = (() => {
+    const rand = mulberry32(2998);
+    const pick = <T>(xs: T[]) => xs[Math.floor(rand() * xs.length)];
+    const cases = [
+      'to   in 5 minutes',
+      'in   to call mom',
+      'remind me to buy milk\nin 5 minutes',
+      '"a" \n5 pm',
+      "'a'  ",
+    ];
+    for (let i = 0; i < 3000; i++) {
+      let s = pick(LEADS);
+      const len = 1 + Math.floor(rand() * 24);
+      for (let j = 0; j < len; j++) s += pick(TOKENS);
+      cases.push(s, s.trim());
+    }
+    return cases;
+  })();
+
+  it.each(SITES)('%s: yields exactly what the old regex captured across a seeded corpus', (_name, re, scan) => {
+    let matched = 0;
+    for (const input of corpus) {
+      const expected = oldCaptures(re, input);
+      if (expected) matched++;
+      expect(scan(input), JSON.stringify(input)).toEqual(expected);
+    }
+    expect(matched).toBeGreaterThan(20);
+  });
+
+  it.each(SITES)('%s: control, a greedy near-miss of the regex diverges on the corpus', (_name, re) => {
+    const control = new RegExp(re.source.replace('(.+?)', '(.+)'), re.flags);
+    expect(corpus.some(s => JSON.stringify(oldCaptures(control, s)) !== JSON.stringify(oldCaptures(re, s)))).toBe(true);
+  });
+
+  it('keeps the whitespace-only task the old pattern captured, so it still errors as a missing task', () => {
+    expect(matchRemindMeTo('to   in 5 minutes')).toEqual([' ', 'in', '5 minutes']);
+    expect(parseReminderExpression('to   in 5 minutes', 'UTC')).toEqual({
+      success: false,
+      error: 'Please include what you want to be reminded about.',
+    });
+  });
+
+  // Mirrors the assertLinearGrowth helper in b4m-core/utils/src/artifactParser.test.ts.
+  function assertLinearGrowth(scan: (s: string) => unknown, build: (n: number) => string, small: number) {
+    const measure = (n: number) => {
+      const input = build(n);
+      const startedAt = performance.now();
+      scan(input);
+      return performance.now() - startedAt;
+    };
+    const baselineMs = measure(small);
+    expect(baselineMs).toBeLessThan(500);
+    expect(measure(small * 2) / Math.max(baselineMs, 5)).toBeLessThan(3);
+  }
+
+  // Each shape is one the old regex was quadratic or worse on; at these sizes it took seconds.
+  const SHAPES: Array<[string, (s: string) => unknown, (n: number) => string]> = [
+    ['quoted, quote-space run', matchQuotedText, n => '"a' + '" '.repeat(n) + '\nx'],
+    ['remind-to, keyword run', matchRemindMeTo, n => 'to a' + ' in'.repeat(n) + '\nx'],
+    ['remind-to, spaces', matchRemindMeTo, n => 'to a' + ' '.repeat(n) + 'x'],
+    ['remind-in, to run', matchRemindMeIn, n => 'in a' + ' to'.repeat(n) + '\nx'],
+    ['remind-in, spaces', matchRemindMeIn, n => 'in a' + ' '.repeat(n) + 'x'],
+    ['trailing, spaces', matchTrailingTime, n => 'a' + ' '.repeat(n) + 'x'],
+    ['trailing, keyword run', matchTrailingTime, n => 'a' + ' in 5'.repeat(n) + '\nx'],
+    ['trailing, space-newlines', matchTrailingTime, n => 'a' + ' \n'.repeat(n) + 'x'],
+  ];
+  it.each(SHAPES)('stays linear: %s', (_name, scan, build) => {
+    assertLinearGrowth(scan, build, 20_000);
   });
 });
