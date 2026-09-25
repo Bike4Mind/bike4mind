@@ -163,6 +163,7 @@
       "@swc/core",
       "@vscode/ripgrep",
       "better-sqlite3",
+      "electron",
       "esbuild",
       "isolated-vm",
       "protobufjs",
