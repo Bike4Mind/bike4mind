@@ -137,6 +137,9 @@ import EnsureDataLakeCorpusActionIndexes from './20260921100000_ensure-data-lake
 // BackfillOAuthClientTokenEndpointAuthMethod's - that migration's own test asserts it has the
 // highest id on disk, since its fail-closed throw must not block anything queued after it.
 import EnsureDataLakeInconsistencyScanIndex from './20260921120000_ensure-data-lake-inconsistency-scan-index';
+// Id backdated below BackfillOAuthClientTokenEndpointAuthMethod's for the same reason as
+// EnsureDataLakeInconsistencyScanIndex above - see that migration's docstring.
+import BackfillShareTokens from './20260921130000_backfill-share-tokens';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -256,6 +259,7 @@ const coreMigrations: MigrationFile[] = [
   BackfillDataLakeOrigin,
   EnsureDataLakeCorpusActionIndexes,
   EnsureDataLakeInconsistencyScanIndex,
+  BackfillShareTokens,
   EnsureOAuthGrantClientUserIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,
