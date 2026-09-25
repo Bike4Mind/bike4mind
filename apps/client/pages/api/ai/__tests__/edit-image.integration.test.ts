@@ -173,13 +173,14 @@ describe('POST /api/ai/edit-image (integration - ai:generate scope enforcement)'
       expect(mockInvoke).not.toHaveBeenCalled();
     });
 
-    it('passes the resolved org to the service and falls back to undefined when omitted', async () => {
+    it('passes an omitted organizationId to the resolver as undefined and forwards its result', async () => {
+      mockResolveBillingOrgId.mockResolvedValueOnce('own-org');
       const { req, res } = fire({ apiKey: null, body: { sessionId: 's1' } });
       await handler(req, res);
       expect(res._getStatusCode()).toBe(200);
       expect(mockResolveBillingOrgId).toHaveBeenCalledWith(expect.anything(), undefined);
       expect(mockInvoke).toHaveBeenCalledWith(
-        expect.objectContaining({ body: expect.objectContaining({ organizationId: null }) })
+        expect.objectContaining({ body: expect.objectContaining({ organizationId: 'own-org' }) })
       );
     });
   });
