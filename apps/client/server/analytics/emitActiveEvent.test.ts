@@ -332,3 +332,13 @@ describe('emitProductEvent', () => {
     expect(headerKey()).toBe(CONFIGURED.OVERWATCH_INGEST_KEY);
   });
 });
+
+describe('ingestKeyFor', () => {
+  it('returns the host key for the host product and the mapped key for another, else undefined', async () => {
+    const { ingestKeyFor } = await import('./emitActiveEvent');
+    resetConfig();
+    expect(ingestKeyFor('bike4mind')).toBe(CONFIGURED.OVERWATCH_INGEST_KEY);
+    expect(ingestKeyFor('widgets')).toBe(WIDGETS_KEY);
+    expect(ingestKeyFor('unregistered')).toBeUndefined();
+  });
+});
