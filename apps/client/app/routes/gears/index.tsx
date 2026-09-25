@@ -1,4 +1,4 @@
-import { Box, Button, Card, Chip, LinearProgress, Stack, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
+import { Box, Card, Chip, Stack, TabList, TabPanel, Tabs, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -47,7 +47,7 @@ import { PageTab, pageTabListSx } from '@client/app/components/common/pageTabs';
 /**
  * Gears - the earned-nav progression page.
  *
- * Presentation (title/tagline/intro/CTA) is SERVER truth: the status endpoint
+ * Presentation (title/intro/CTA) is SERVER truth: the status endpoint
  * serves the code defaults merged with any Manage Gears admin overrides, so a
  * live copy or reward change needs no deploy. This page contributes only the
  * icons and the ctaAction interpreter.
@@ -116,7 +116,6 @@ const GearsPage = () => {
   const gears = (data?.gears ?? []).filter(g => gearVisible(g.key));
   const destinations = gears.filter(g => g.kind === 'destination');
   const skills = gears.filter(g => g.kind === 'skill');
-  const unlockedCount = gears.filter(g => g.unlocked).length;
 
   // Surface fresh unlock rewards the moment the status lands.
   useEffect(() => {
@@ -162,63 +161,108 @@ const GearsPage = () => {
     }
   };
 
-  const renderCards = (cards: GearStatus[]) => (
-    <Box
-      sx={{
-        display: 'grid',
-        gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' },
-        gap: 2,
-      }}
-    >
-      {cards.map(gear => (
-        // Every card looks the same whether or not its gear is earned: the page is
-        // a place to read about features, and a checkmark grid turns it into a
-        // score. The unlock still happens and still pays - it just is not what
-        // this surface is for.
-        <Card
-          key={gear.key}
-          variant="outlined"
-          data-testid={`gear-card-${gear.key}`}
-          sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}
-        >
-          <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
-            <Stack direction="row" alignItems="center" gap={1}>
-              {GEAR_ICONS[gear.key] ?? <SettingsOutlinedIcon />}
-              <Typography level="title-md">{gear.title}</Typography>
-            </Stack>
-            {/* The ONLY thing on the card that knows whether the gear is earned.
+  const renderCards = (cards: GearStatus[]) =>
+    isPending ? (
+      <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="gears-loading">
+        Checking the grid...
+      </Typography>
+    ) : (
+      <Box
+        sx={{
+          display: 'grid',
+          gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' },
+          gap: 2,
+        }}
+      >
+        {cards.map(gear => (
+          // Every card looks the same whether or not its gear is earned: the page is
+          // a place to read about features, and a checkmark grid turns it into a
+          // score. The unlock still happens and still pays - it just is not what
+          // this surface is for.
+          // The whole card is the control, as in Tutorials: a solid Button per card
+          // painted a grid of twenty-odd primary rectangles, which reads as twenty
+          // equally urgent calls to action rather than a list to browse.
+          <Card
+            key={gear.key}
+            variant="outlined"
+            data-testid={`gear-card-${gear.key}`}
+            role="button"
+            tabIndex={0}
+            onClick={() => onCta(gear)}
+            onKeyDown={event => {
+              if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                onCta(gear);
+              }
+            }}
+            sx={theme => ({
+              display: 'flex',
+              flexDirection: 'column',
+              // Spacing is per-child rather than a single column gap: the steps down
+              // the card differ, so each margin is the gap above that element.
+              gap: 0,
+              cursor: 'pointer',
+              transition:
+                'background-color 0.18s ease-out, border-color 0.18s ease-out, transform 0.22s cubic-bezier(0.2, 0.8, 0.3, 1)',
+              '&:hover': {
+                backgroundColor: theme.palette.loginRegister.termsAndPrivacy.hoverBg,
+                borderColor: theme.palette.border.light,
+                transform: 'translateY(-2px)',
+              },
+              '@media (prefers-reduced-motion: reduce)': {
+                transition: 'background-color 0.18s ease-out, border-color 0.18s ease-out',
+                '&:hover': { transform: 'none' },
+              },
+              '&:focus-visible': {
+                outline: `2px solid ${theme.palette.primary[500]}`,
+                outlineOffset: '2px',
+              },
+            })}
+          >
+            <Stack direction="row" alignItems="center" justifyContent="space-between" gap={1}>
+              {/* GEAR_ICONS holds bare elements, so the icon size is set once here
+                rather than repeated on every entry in the map. */}
+              <Stack direction="row" alignItems="center" gap={1} sx={{ '& > svg': { fontSize: '20px' } }}>
+                {GEAR_ICONS[gear.key] ?? <SettingsOutlinedIcon />}
+                <Typography level="title-md">{gear.title}</Typography>
+              </Stack>
+              {/* The ONLY thing on the card that knows whether the gear is earned.
                 The card itself stays identical either way - greying the whole
                 card out said "this is spent", when what is spent is the reward. */}
-            {gear.unlocked ? (
-              <Stack direction="row" alignItems="center" gap={0.75}>
-                {gear.rewardPending && (
-                  <Chip size="sm" variant="soft" color="warning" data-testid={`gear-pending-${gear.key}`}>
-                    +{gear.credits} on first visitor
+              {gear.unlocked ? (
+                <Stack direction="row" alignItems="center" gap={0.75}>
+                  {gear.rewardPending && (
+                    <Chip size="sm" variant="soft" color="warning" data-testid={`gear-pending-${gear.key}`}>
+                      +{gear.credits} on first visitor
+                    </Chip>
+                  )}
+                  <CheckCircleIcon color="success" fontSize="small" data-testid={`gear-unlocked-${gear.key}`} />
+                </Stack>
+              ) : (
+                gear.credits > 0 && (
+                  <Chip size="sm" variant="soft" color="success">
+                    +{gear.credits}
                   </Chip>
-                )}
-                <CheckCircleIcon color="success" fontSize="small" data-testid={`gear-unlocked-${gear.key}`} />
-              </Stack>
-            ) : (
-              gear.credits > 0 && (
-                <Chip size="sm" variant="soft" color="success">
-                  +{gear.credits}
-                </Chip>
-              )
-            )}
-          </Stack>
-          <Typography level="body-xs" sx={{ textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7 }}>
-            {gear.tagline}
-          </Typography>
-          <Typography level="body-sm" sx={{ flex: 1, opacity: 0.85 }}>
-            {gear.intro}
-          </Typography>
-          <Button size="sm" variant="solid" onClick={() => onCta(gear)} data-testid={`gear-cta-${gear.key}`}>
-            {gear.cta}
-          </Button>
-        </Card>
-      ))}
-    </Box>
-  );
+                )
+              )}
+            </Stack>
+            <Typography level="body-sm" sx={{ opacity: 0.85, mt: '16px' }}>
+              {gear.intro}
+            </Typography>
+            {/* Pinned to the bottom so the CTAs line up across a row of uneven cards. */}
+            <Typography
+              level="body-sm"
+              data-testid={`gear-cta-${gear.key}`}
+              sx={{ mt: 'auto', pt: '20px', color: 'text.primary' }}
+            >
+              {/* An HTML entity rather than the arrow character, so this file stays
+                ASCII: Prettier rewrites a unicode escape back into the character. */}
+              {gear.cta} &rarr;
+            </Typography>
+          </Card>
+        ))}
+      </Box>
+    );
 
   return (
     <PageFrame testId="gears-page">
@@ -227,45 +271,35 @@ const GearsPage = () => {
           Gears
         </Typography>
         <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', color: 'text.tertiary' }}>
-          Every feature you use for the first time earns a checkmark and a credit bonus.
+          A tour of what Bike4Mind can do. The first time you use one of these, it pays a one-time credit bonus.
         </Typography>
-        <Stack direction="row" alignItems="center" gap={1.5} sx={{ mt: '20px', mb: 3 }}>
-          <LinearProgress
-            determinate={!isPending}
-            value={gears.length ? (unlockedCount / gears.length) * 100 : 0}
-            sx={{ flex: 1, maxWidth: 320 }}
-          />
-          <Typography level="body-sm" sx={{ whiteSpace: 'nowrap', opacity: 0.8 }} data-testid="gears-progress">
-            {isPending ? 'Checking the grid...' : `${unlockedCount} / ${gears.length} unlocked`}
-          </Typography>
-        </Stack>
 
-        {!isPending && (
-          <Tabs
-            value={tab}
-            onChange={(_, value) => setTab(value as GearsTabKey)}
-            sx={{ mt: '32px' }}
-            aria-label="Gear categories"
-          >
-            <TabList data-testid="gears-tablist" sx={pageTabListSx}>
-              {TABS.map(({ key, label }) => (
-                <PageTab key={key} value={key} data-testid={`gears-tab-${key}`}>
-                  {/* Colour set here, as on /profile: the opacity step in PageTab is what
-                      separates active from inactive, so the label itself stays primary ink. */}
-                  <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
-                </PageTab>
-              ))}
-            </TabList>
+        {/* The tabs are static, so they render before the status lands - only the
+            grid inside a panel waits. */}
+        <Tabs
+          value={tab}
+          onChange={(_, value) => setTab(value as GearsTabKey)}
+          sx={{ mt: '32px' }}
+          aria-label="Gear categories"
+        >
+          <TabList data-testid="gears-tablist" sx={pageTabListSx}>
+            {TABS.map(({ key, label }) => (
+              <PageTab key={key} value={key} data-testid={`gears-tab-${key}`}>
+                {/* Colour set here, as on /profile: the opacity step in PageTab is what
+                    separates active from inactive, so the label itself stays primary ink. */}
+                <Typography sx={{ color: 'text.primary' }}>{label}</Typography>
+              </PageTab>
+            ))}
+          </TabList>
 
-            <TabPanel value="destinations" sx={{ px: 0, pt: '24px', pb: 0 }}>
-              {renderCards(destinations)}
-            </TabPanel>
+          <TabPanel value="destinations" sx={{ px: 0, pt: '24px', pb: 0 }}>
+            {renderCards(destinations)}
+          </TabPanel>
 
-            <TabPanel value="features" sx={{ px: 0, pt: '24px', pb: 0 }}>
-              {renderCards(skills)}
-            </TabPanel>
-          </Tabs>
-        )}
+          <TabPanel value="features" sx={{ px: 0, pt: '24px', pb: 0 }}>
+            {renderCards(skills)}
+          </TabPanel>
+        </Tabs>
       </Box>
     </PageFrame>
   );
