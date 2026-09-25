@@ -40,6 +40,13 @@ export const DISCOVERY_CONTRIBUTOR = 'discovery';
 const FEED_FORBIDDEN_GROUPS: readonly FieldGroup[] = ['dispatch', 'presentation'];
 
 /**
+ * The exceptions: a published fact, not copy. Claimed only for a model no seed row,
+ * operator row or adapter literal presents (planOne), and seed outranks discovery
+ * for that group at merge time (PRESENTATION_PRECEDENCE in llm-adapters mergeCatalog.ts).
+ */
+const FEED_CLAIMABLE_FIELDS: ReadonlySet<string> = new Set(['releaseDate']);
+
+/**
  * Statuses a model is on its way out in, and therefore not promotable. MUST STAY
  * IN SYNC WITH SUNSET_STATUSES in lifecyclePlan.ts, which decides what counts as
  * a transition; importing it would make the two modules circular.
@@ -106,6 +113,8 @@ export interface CatalogWriteInput {
   /** Contributors on that same superseded row, so a re-claim keeps its provenance. */
   priorContributors?: ReadonlyMap<string, readonly ICatalogContributor[]>;
   operatorOwnedModelIds: ReadonlySet<string>;
+  /** Models a seed row, operator row or adapter literal presents; discovery leaves those alone. */
+  presentationOwnedElsewhere?: ReadonlySet<string>;
   credentials: DiscoveryCredentials;
   policy: DiscoveryAutoEnablePolicy;
   knownPricedModelIds?: ReadonlySet<string>;
@@ -265,7 +274,7 @@ function usableFields(
       dropped.push({ source: sourceName, modelId, reason: `unknown field "${key}"` });
       continue;
     }
-    if (FEED_FORBIDDEN_GROUPS.includes(group)) {
+    if (FEED_FORBIDDEN_GROUPS.includes(group) && !FEED_CLAIMABLE_FIELDS.has(key)) {
       dropped.push({ source: sourceName, modelId, reason: `field "${key}" is seed- or operator-owned` });
       continue;
     }
@@ -353,7 +362,13 @@ function planOne(
   dropped: DroppedSourceRecord[]
 ): PlanOneResult {
   const base = existing?.record ?? {};
-  const contributed = contributedFields(candidate, base, existing !== undefined, input.coveredBackends, dropped);
+  const contributed = new Map(
+    contributedFields(candidate, base, existing !== undefined, input.coveredBackends, dropped)
+  );
+  const presentationElsewhere = input.presentationOwnedElsewhere?.has(candidate.modelId) === true;
+  if (presentationElsewhere) {
+    for (const key of FEED_CLAIMABLE_FIELDS) contributed.delete(key);
+  }
   const draft: Record<string, unknown> = { ...base };
   for (const [key, value] of contributed) draft[key] = value;
 
@@ -544,7 +559,9 @@ function planOne(
 
   if (ownedGroups.size === 0) return { unchanged: true };
 
-  const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId));
+  const owned = claimedGroups(record, ownedGroups, input.priorDiscoveryGroups?.get(candidate.modelId)).filter(
+    group => !(presentationElsewhere && group === 'presentation')
+  );
   const changedKeys = changedWithinGroups(base, record, owned);
   if (existing && changedKeys.length === 0) return { unchanged: true };
 

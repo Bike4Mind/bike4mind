@@ -15,7 +15,12 @@ import {
   type IModelPrice,
   type IModelPriceInput,
 } from '@bike4mind/common';
-import { adapterPriceTiers, resolveCatalogRecords, type ResolvedCatalogRecord } from '@bike4mind/llm-adapters';
+import {
+  adapterModelIds,
+  adapterPriceTiers,
+  resolveCatalogRecords,
+  type ResolvedCatalogRecord,
+} from '@bike4mind/llm-adapters';
 import { applyAbsence, planAbsence, type AbsencePlan } from './absence';
 import { limitConcurrency } from './concurrency';
 import { planCatalogWrites, summarizeDiff, type CatalogWritePlan } from './catalogWrite';
@@ -748,6 +753,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
   // have to read what an operator decided (sec 8 auto-remap).
   const resolvedInForce = resolveCatalogRecords(inForce);
   const operatorOwnedModelIds = new Set(inForce.filter(row => row.source === 'operator').map(row => row.modelId));
+  const presentationOwnedElsewhere = presentationOwnedOutsideDiscovery(inForce, await adapterModelIds());
   const priorDiscoveryGroups = discoveryGroupsInForce(inForce);
   const priorContributors = discoveryContributorsInForce(inForce);
 
@@ -781,6 +787,7 @@ async function planPass(input: PassInput): Promise<PassPlan> {
     priorDiscoveryGroups,
     priorContributors,
     operatorOwnedModelIds,
+    presentationOwnedElsewhere,
     credentials,
     policy: ctx.autoEnable,
     knownPricedModelIds,
@@ -1107,6 +1114,21 @@ function discoveryGroupsInForce(rows: readonly IModelCatalogRow[]): Map<string, 
     groups.set(row.modelId, row.ownedGroups.filter(isFieldGroup));
   }
   return groups;
+}
+
+/**
+ * Models whose presentation group a seed or operator row, or an adapter literal,
+ * already supplies; planCatalogWrites leaves their feed-claimable fields alone.
+ */
+export function presentationOwnedOutsideDiscovery(
+  rows: readonly IModelCatalogRow[],
+  adapterIds: ReadonlySet<string>
+): Set<string> {
+  const owned = new Set(adapterIds);
+  for (const row of rows) {
+    if (row.source !== 'discovery' && row.ownedGroups.includes('presentation')) owned.add(row.modelId);
+  }
+  return owned;
 }
 
 /** Contributors on that same superseded row, so a re-claimed group keeps its provenance. */
