@@ -14,10 +14,11 @@ import {
   OFFLINE_MESSAGE,
   classifyUploadError,
   runBatchUpload,
-  createWizardLake,
+  resolveCreateModeLake,
   connectPendingDriveFolder,
   zeroProgressCounts,
 } from '@client/app/hooks/data/dataLakeUploadPipeline';
+import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 
 // Re-exported for DataLakeWizardModal's pre-flight check, which imports it from this path.
 export { OFFLINE_MESSAGE };
@@ -128,6 +129,7 @@ export function useCheckDuplicates() {
 export function useBatchUpload() {
   const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
   const setStep = useDataLakeWizardStore(s => s.setStep);
+  const setRecoverableLake = useDataLakeWizardStore(s => s.setRecoverableLake);
   const queryClient = useQueryClient();
   // Lets onError's toast retry action call back into the mutation it belongs to,
   // without a circular reference to the useMutation() result being built below.
@@ -146,6 +148,7 @@ export function useBatchUpload() {
       return runBatchUpload({
         updateUploadProgress,
         setStep,
+        setRecoverableLake,
         onUploadComplete: () => {
           queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
           // First lake unlocks the 'datalakes' nav slot; first file unlocks 'files'.
@@ -212,6 +215,7 @@ export function useBatchUpload() {
 export function useCreateLakeFromDrive() {
   const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
   const setStep = useDataLakeWizardStore(s => s.setStep);
+  const setRecoverableLake = useDataLakeWizardStore(s => s.setRecoverableLake);
   const queryClient = useQueryClient();
   // Same indirection as useBatchUpload: lets onError's retry action call the mutation it belongs to.
   const retryRef = useRef<() => void>(() => {});
@@ -224,13 +228,16 @@ export function useCreateLakeFromDrive() {
       }
 
       // Read at mutation time to avoid a stale closure, as everywhere else in this module.
-      const { config, pendingDriveFolder, targetLake } = useDataLakeWizardStore.getState();
+      const { config, pendingDriveFolder, targetLake, recoverableLake } = useDataLakeWizardStore.getState();
       if (!pendingDriveFolder) throw new Error('No Google Drive folder selected');
       // Append mode never reaches here - it has a lake, so DriveConnectAction connects directly.
       if (targetLake) throw new Error('This data lake already exists - connect Drive from its header instead');
 
       const tagPrefix = submittedTagPrefix(config.tagPrefix);
-      const dataLakeId = await createWizardLake(config, tagPrefix);
+      // Same reuse rule as the upload path: this path archives its own lake on a failed connect
+      // (below), and an archived lake keeps its prefix claim - so a retry on the same prefix has
+      // to restore that lake rather than create a second one the claim would refuse.
+      const dataLakeId = await resolveCreateModeLake(config, tagPrefix, recoverableLake, setRecoverableLake);
 
       setStep('upload');
       updateUploadProgress({
@@ -255,10 +262,19 @@ export function useCreateLakeFromDrive() {
           .delete(`/api/data-lakes/${dataLakeId}`)
           .then(() => 'archived' as const)
           .catch(() => 'failed' as const);
+        // Only once the archive took: a lake left live in some other state must not be restored
+        // by the next retry. Mirrors the upload path's rollback.
+        setRecoverableLake(
+          driveRollback === 'archived' ? { id: dataLakeId, tagPrefix, organizationId: activeOrgId() } : null
+        );
         updateUploadProgress({ driveRollback });
         throw err;
       }
 
+      // The commit landed in this lake, so it is no longer a candidate to restore-and-reuse.
+      // Keyed on the id for the same reason as the upload path: a retry that changed the prefix
+      // commits into a different lake, and the remembered one is still archived holding the old one.
+      if (recoverableLake?.id === dataLakeId) setRecoverableLake(null);
       updateUploadProgress({ status: 'complete' });
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       // First lake unlocks the 'datalakes' nav slot; no files yet, so 'files' stays locked (#833).
@@ -305,7 +321,6 @@ export function useBatchProgressListener() {
   // cause re-render then unsubscribe/resubscribe on every progress tick
   const batchId = useDataLakeWizardStore(s => s.uploadProgress.currentBatchId);
   const updateUploadProgress = useDataLakeWizardStore(s => s.updateUploadProgress);
-  const queryClient = useQueryClient();
 
   useEffect(() => {
     if (!batchId) return;
@@ -329,29 +344,10 @@ export function useBatchProgressListener() {
         updates.processingFailedFiles = message.processingFailedFiles;
       }
       if (message.status === 'completed' || message.status === 'completed_with_errors') {
+        // Cache invalidation for a completed batch lives in useDataLakeBatchCompletionSync below,
+        // not here - this listener unsubscribes as soon as resetWizard (Done) clears currentBatchId,
+        // which happens the moment browser uploads finish, before chunk/vectorize ever completes.
         updates.status = 'complete';
-        // Ingest just finished, so a lake's derived health has changed (pending "indexing" members are
-        // now measured). The message carries no lake id, so refresh every mounted health badge; only
-        // the active lake-detail view mounts one, so this is a single cheap refetch at most. Without
-        // it the badge keeps its pending chip until staleTime (2 min) or a remount. (#1666)
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
-        // Same reason, different surface: `fileCount`/`totalSizeBytes` are cached rollups on the lake
-        // DOCUMENT, and `finalizeBatchIfComplete` calls recomputeLakeStats BEFORE emitting this
-        // message - so the server value is already fresh here and only the client cache is stale.
-        // The batch upload door invalidates `list` at SUBMIT time (see useBatchUpload), which is too
-        // early: ingestion has not run yet, so that refetch returns the pre-upload count.
-        //
-        // PARTIAL BY CONSTRUCTION - this only fires while the wizard is open. This listener is
-        // mounted solely by UploadStep, and DataLakeWizardModal renders <Modal> without
-        // `keepMounted`, so both exits ("Close and continue in background", "Done") tear the
-        // subscription down. Worse, `status: 'complete'` is set the moment browser uploads finish -
-        // before chunk/vectorize - so the Complete screen invites the user to leave BEFORE this
-        // message ever arrives. A user who takes either exit still sees the stale count until a
-        // refresh, exactly as before; nothing regresses, but this is not a whole-product fix.
-        // Making it unconditional means hosting the listener somewhere always-mounted (e.g.
-        // DataLakeUploadIndicator in the Notebook layout) - a separate change, and one that needs
-        // the double-subscribe interaction checked rather than assumed.
-        queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
       }
       if (message.taxonomyStatus !== undefined) {
         updates.taxonomyStatus = message.taxonomyStatus;
@@ -363,5 +359,49 @@ export function useBatchProgressListener() {
     });
 
     return unsubscribe;
-  }, [batchId, subscribeToAction, updateUploadProgress, queryClient]);
+  }, [batchId, subscribeToAction, updateUploadProgress]);
+}
+
+/**
+ * Hook: keep the lake list, health-badge, browse-tree tag-count, and article/file caches in sync
+ * with ANY batch's completion - independent of the wizard's own currentBatchId, unlike
+ * useBatchProgressListener above. Done (resetWizard) clears currentBatchId the moment the user
+ * leaves the Complete screen - which itself appears as soon as browser uploads finish, before
+ * chunk/vectorize ever does - so a listener keyed on that id unsubscribes before a still-ingesting
+ * batch's `completed` message can arrive. This hook reads nothing from the wizard store, so it
+ * survives Done/Close and reopening the wizard for a second lake. Mount at the ProviderBundle
+ * boundary (not DataLakeUploadIndicator/Notebook layout, and not UploadStep) - ProviderBundle is
+ * the one ancestor every route that carries the upload wizard actually renders, including
+ * standalone premium routes that render it without NotebookLayout (#3238 review).
+ * (#1666, #3234)
+ */
+export function useDataLakeBatchCompletionSync() {
+  const { subscribeToAction } = useWebsocket();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    const unsubscribe = subscribeToAction('data_lake_batch_progress', async (message: IMessageDataToClient) => {
+      if (message.action !== 'data_lake_batch_progress') return;
+      if (message.status !== 'completed' && message.status !== 'completed_with_errors') return;
+
+      // The message carries no lake id, so refresh every mounted health badge; only the active
+      // lake-detail view mounts one, so this is a single cheap refetch at most.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.healthRoot });
+      // `fileCount`/`totalSizeBytes` are cached rollups on the lake document. The batch-upload door
+      // invalidates `list` at SUBMIT time (see useBatchUpload), which is too early - ingestion
+      // hasn't run yet - so this is the first point the server value is actually fresh.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
+      // Browse-tree counts (and an emptied lake's very presence in the tree) are stale until
+      // ingestion tags the files - this is that point.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.tagCountsRoot });
+      // The tree's COUNT refreshing is not enough - an already-open category/Uncategorized
+      // view queries articles/files independently (useGetDataLakeArticles / dataLakeFiles),
+      // and those sit on a 5-minute staleTime with focus refetch off, so a file uploaded into
+      // a folder the user already has open stays invisible there until this fires too.
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
+      queryClient.invalidateQueries({ queryKey: dataLakeKeys.filesRoot });
+    });
+
+    return unsubscribe;
+  }, [subscribeToAction, queryClient]);
 }

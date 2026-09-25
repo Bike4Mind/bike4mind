@@ -47,6 +47,17 @@ export interface EntitlementUser {
   emailVerified?: boolean | null;
 }
 
+/** Projects an authenticated `IUserDocument` onto the fields `getUserEntitlements` reads. */
+export function toEntitlementUser(user: IUserDocument): EntitlementUser {
+  return {
+    id: user.id,
+    tags: user.tags,
+    isAdmin: user.isAdmin,
+    email: user.email,
+    emailVerified: user.emailVerified,
+  };
+}
+
 /**
  * All entitlement keys the user currently holds (subscription- and
  * tag-derived). Does NOT apply the admin bypass - that is a gate concern
@@ -57,10 +68,19 @@ export interface EntitlementUser {
  * memoize per request (`req.entitlements`, following the `req.ability`
  * pattern) at the call site.
  */
-export async function getUserEntitlements(user: EntitlementUser): Promise<EntitlementKey[]> {
+export async function getUserEntitlements(
+  user: EntitlementUser,
+  /**
+   * The user's active subscriptions, when the caller has already loaded them - it
+   * is the same query this function would run. `/api/v1/me` passes them so `tier`
+   * and `entitlements` in one response are derived from one read, and therefore
+   * are derived from one snapshot read, not two reads that could race apart.
+   */
+  preloadedActiveSubscriptions?: readonly { priceId: string }[]
+): Promise<EntitlementKey[]> {
   // Both reads are independent - run them together to avoid serializing two round-trips.
   const [activeSubscriptions, partnerKeys] = await Promise.all([
-    subscriptionRepository.findActiveUserSubscriptions(user.id),
+    preloadedActiveSubscriptions ?? subscriptionRepository.findActiveUserSubscriptions(user.id),
     partnerEntitlementsForEmail(user.email, user.emailVerified),
   ]);
   // DB-backed partner rules (issue #293) union with the pure registry grants

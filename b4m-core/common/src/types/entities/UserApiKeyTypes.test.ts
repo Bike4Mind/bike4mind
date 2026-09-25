@@ -23,6 +23,7 @@ const EXPECTED_NOT_CONFINED: ReadonlySet<ApiKeyScope> = new Set([
   ApiKeyScope.AI_CHAT,
   ApiKeyScope.READ_PROJECTS,
   ApiKeyScope.WRITE_PROJECTS,
+  ApiKeyScope.ME_READ,
   ApiKeyScope.ADMIN,
   ApiKeyScope.MARKETING_REPORTS_READ,
   ApiKeyScope.MARKETING_REPORTS_WRITE,

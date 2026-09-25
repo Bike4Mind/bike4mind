@@ -65,6 +65,38 @@ describe('AnswerDiagnosisPanel', () => {
     expect(screen.getByTestId('answer-diagnosis-check-retrieval').getAttribute('data-status')).toBe('unknown');
   });
 
+  it('does not credit forced retrieval with passages lake memory supplied', () => {
+    renderPanel({
+      ...healthy,
+      retrieval: {
+        ...healthy.retrieval!,
+        surfaces: ['lake-memory', 'forced-retrieval'],
+        injected: { chunks: 6, chars: 1029, preRelativeFloorCandidates: 0, postRelativeFloorCandidates: 0 },
+      },
+    });
+
+    const retrieval = screen.getByTestId('answer-diagnosis-check-retrieval');
+    expect(retrieval.getAttribute('data-status')).toBe('ok');
+    expect(retrieval.textContent).toContain('6 passages reached the model.');
+    expect(retrieval.textContent).toContain('None came from forced retrieval');
+    expect(retrieval.textContent).toContain('Other surfaces that ran this turn: lake memory.');
+  });
+
+  it('names a mixed-surface total as a sum rather than a forced-retrieval count', () => {
+    renderPanel({
+      ...healthy,
+      retrieval: {
+        ...healthy.retrieval!,
+        surfaces: ['lake-memory', 'forced-retrieval'],
+        injected: { chunks: 6, chars: 1029, preRelativeFloorCandidates: 4, postRelativeFloorCandidates: 3 },
+      },
+    });
+
+    const text = screen.getByTestId('answer-diagnosis-check-retrieval').textContent;
+    expect(text).toContain('That total sums every surface that ran this turn (lake memory and forced retrieval)');
+    expect(text).not.toContain('None came from forced retrieval');
+  });
+
   it('flags the corpus itself when the documents in scope carry no index', () => {
     renderPanel({ ...healthy, retrieval: { ...healthy.retrieval!, outcome: 'not_indexed', injected: undefined } });
 

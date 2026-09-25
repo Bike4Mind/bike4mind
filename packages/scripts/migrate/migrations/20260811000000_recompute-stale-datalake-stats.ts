@@ -13,11 +13,10 @@ import { type MigrationFile } from './index';
  *
  * Recomputes every lake unconditionally rather than trying to detect which ones are stale -
  * there is no persisted signal for "this lake lost a prefix-arm member before the gate closed,"
- * so the honest fix is to true up the whole collection once. `recomputeLakeStats` is cheap per
- * lake (one aggregate + one write), but NOT a plain no-op on an already-correct lake: it also
- * flips a draft lake to active (`activateIfDraft`) whenever the recomputed fileCount is nonzero,
- * a one-way publication change - logged separately below, since the stats-delta check alone
- * would miss a lake whose counts were already right but whose activation had been skipped.
+ * so the honest fix is to true up the whole collection once. `recomputeLakeStats` is a pure stats
+ * write: it never moves a lake's status. (It used to flip a draft lake to active whenever the
+ * recomputed fileCount was nonzero; publishing is now the explicit `promoteDataLake` door, so a
+ * draft lake trued up here stays draft.)
  *
  * Excludes 'deleting'/'deleted' lakes: `deleteDataLake`'s phase 1 deliberately leaves their stats
  * untouched (unlike archive, which recomputes to 0 itself) so a recoverable deleted lake still
@@ -33,7 +32,7 @@ const migration: MigrationFile = {
   up: async () => {
     let scanned = 0;
     let corrected = 0;
-    let activated = 0;
+    let draftWithFiles = 0;
     const failed: string[] = [];
 
     // A cursor rather than `.find()` materializing the whole result: this scans every lake ever
@@ -57,11 +56,12 @@ const migration: MigrationFile = {
               `totalSizeBytes ${before.totalSizeBytes} -> ${after.totalSizeBytes}`
           );
         }
-        // Reported independently of the stats delta above: a lake whose counts were already
-        // correct but whose activation had been skipped shows no delta there at all.
+        // Reported independently of the stats delta above, as an operator hint only: these are
+        // the lakes holding content that nobody has published yet, and nothing here publishes
+        // them - `promoteDataLake` is the only door that does.
         if (wasDraft && after.fileCount > 0) {
-          activated++;
-          console.log(`${LOG} activated "${lake.name}" (${after.fileCount} file(s))`);
+          draftWithFiles++;
+          console.log(`${LOG} "${lake.name}" holds ${after.fileCount} file(s) but is unpublished (draft)`);
         }
       } catch (error) {
         // Per lake: one unreadable lake must not strand the rest, and a migration that threw here
@@ -76,7 +76,7 @@ const migration: MigrationFile = {
     }
 
     console.log(
-      `${LOG} corrected ${corrected} lake(s), activated ${activated} lake(s); ` +
+      `${LOG} corrected ${corrected} lake(s); ${draftWithFiles} unpublished draft lake(s) hold files; ` +
         `${failed.length} failed, ${scanned} scanned`
     );
     if (failed.length > 0) {

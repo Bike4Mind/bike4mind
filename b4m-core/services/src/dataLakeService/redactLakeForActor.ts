@@ -35,6 +35,7 @@ export const READER_LAKE_FIELDS = [
   'auditQueryTextEnabled',
   'lakeMemoryEnabled',
   'status',
+  'origin',
   'fileCount',
   'totalSizeBytes',
   'totalChunkedChars',
@@ -96,6 +97,10 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   totalSizeBytes: 'reader',
   totalChunkedChars: 'reader',
   lastSyncAt: 'reader',
+  // Whether a connector fills this lake is a property of the corpus a reader is searching, so it
+  // reads like status rather than like owner telemetry. It does disclose that a connector is
+  // attached; that is the intended trade for letting a reader judge what they are searching.
+  origin: 'reader',
   // Cost-governance meter: the lake's spend against its embedding budget is the owner's
   // financial telemetry, not something a reader needs to search the lake.
   embeddingSpendMicroUsd: 'withheld',
@@ -119,6 +124,10 @@ export const LAKE_FIELD_VISIBILITY: Record<keyof IDataLake, 'reader' | 'withheld
   // for whoever curates the lake, not information a consumer of it acts on.
   inconsistencyReport: 'withheld',
   inconsistencyComputedAt: 'withheld',
+  // Health-sweep bookkeeping (see IDataLake.lastHealthCheckedAt), same class as the lake-memory
+  // lease above: internal to the sweep's own scan ordering, not a property a reader needs.
+  lastHealthCheckedAt: 'withheld',
+  lastInconsistencyScanAt: 'withheld',
 };
 
 /**

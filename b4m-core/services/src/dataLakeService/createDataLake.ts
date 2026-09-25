@@ -177,6 +177,9 @@ export const createDataLake = async (
       datalakeTag,
       requiredUserTag: params.requiredUserTag,
       requiredEntitlement: params.requiredEntitlement ? normalizeEntitlementKey(params.requiredEntitlement) : undefined,
+      // Undefined falls through to the Mongoose schema default ('curated'); see the schema comment
+      // on CreateDataLakeRequestInput for why only the caller's own request may set this here.
+      origin: params.origin,
       createdByUserId: userId,
       organizationId,
       status: 'draft',

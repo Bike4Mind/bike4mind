@@ -304,6 +304,25 @@ export interface AgentRunOptions {
 }
 
 /**
+ * Options for `runIteration()` only. `toolGate` lives here rather than on
+ * `AgentRunOptions` because `run()` has its own tool-execution loop and never
+ * consults it - `run()` throws on a `toolGate` at the JS-caller boundary (see
+ * `ReActAgent.run`), but keeping it off `AgentRunOptions` means that guard is
+ * unreachable for a TypeScript caller: the type itself says `run()` cannot
+ * take one.
+ */
+export interface RunIterationOptions extends AgentRunOptions {
+  /**
+   * Pre-execution permission gate, consulted for every tool call BEFORE it runs.
+   * Returning true withholds the call: the tool function is never invoked, so no
+   * provider is billed and no side effect occurs. The call is reported on
+   * `IterationResult.gatedToolCalls` for the host to approve and replay via
+   * `executeGatedToolCall`. Without this callback every tool runs (prior behavior).
+   */
+  toolGate?: (call: GatedToolCall) => boolean;
+}
+
+/**
  * Serialized snapshot of a ReActAgent's execution state.
  *
  * Used to persist agent progress between Lambda invocations in serverless
@@ -375,7 +394,35 @@ export interface IterationResult {
   reachedMaxIterations: boolean;
   /** Whether the cumulative token ceiling was reached (only true when isComplete is also true) */
   reachedMaxTotalTokens?: boolean;
+  /**
+   * Tool calls `RunIterationOptions.toolGate` withheld this iteration, in call order.
+   * Their providers were never invoked; the host approves and replays them with
+   * `ReActAgent.executeGatedToolCall`, or abandons the run.
+   */
+  gatedToolCalls?: GatedToolCall[];
 }
+
+/**
+ * A tool call withheld from execution by `RunIterationOptions.toolGate`.
+ *
+ * `id` is the provider's tool_use id, which is what pairs the withheld call with
+ * the placeholder tool_result in the conversation - `executeGatedToolCall` needs
+ * it to swap the placeholder for the real observation on resume.
+ */
+export interface GatedToolCall {
+  id: string;
+  name: string;
+  /** Raw tool arguments, matching `AgentStep.metadata.toolInput` for an action step. */
+  input: unknown;
+}
+
+/**
+ * Placeholder tool_result written for a withheld call. Providers reject an
+ * unpaired tool_use, so the slot is filled even though nothing ran; it is
+ * replaced by the real observation once the host approves the call.
+ */
+export const GATED_TOOL_OBSERVATION =
+  'This tool call is awaiting user approval and has NOT run yet. No side effect has occurred.';
 
 /**
  * Thoroughness level for subagent execution

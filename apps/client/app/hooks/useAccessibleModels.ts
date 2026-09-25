@@ -15,8 +15,16 @@ import { isModelAccessible, isModelDeprecated } from '@bike4mind/common';
  */
 export function useAccessibleModels() {
   const currentUser = useUser(s => s.currentUser);
-  const { data: modelInfos } = useModelInfo();
-  const { data: modelConfigs, isLoading: isConfigsLoading } = useLLMModelConfigurationsWithDefaults(modelInfos);
+  const {
+    data: modelInfos,
+    isPending: isModelInfosPending,
+    isError: isModelsError,
+    refetch: refetchModelInfos,
+  } = useModelInfo();
+  const { data: modelConfigs, isLoading: isConfigsLoading } = useLLMModelConfigurationsWithDefaults(
+    modelInfos,
+    isModelInfosPending
+  );
   // Resolved entitlement keys (subscription- + tag-derived). Gates
   // entitlement-scoped models so a tag-less subscriber still gets accessible
   // models (and an enabled send button). A failed/empty fetch yields [] and
@@ -74,6 +82,9 @@ export function useAccessibleModels() {
     // on "Loading AI models..." forever. Once `currentUser` is set we resolve;
     // while it's still null (not yet hydrated) we keep loading.
     isLoading: isConfigsLoading || !currentUser,
+    // Distinguishes a failed /api/models fetch (retryable) from a user with no model access.
+    isModelsError,
+    refetchModels: refetchModelInfos,
     userTags,
     isAdmin,
     isModelAccessible: useCallback(

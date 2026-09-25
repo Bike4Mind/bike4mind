@@ -506,6 +506,15 @@ function detectCsv(ctx: DetectionContext): FormatDetectionResult | null {
   };
 }
 
+/**
+ * detectMarkdown's bullet-list probe. The leading run excludes line terminators: /m already
+ * re-anchors ^ after each one, so a run that crossed one only re-reached a position ^ matches
+ * anyway, while including them made a blank-line-heavy reply rescan to the end of input from
+ * every line start (quadratic). Exported so fileFormatUtils.test.ts differentials the shipped
+ * pattern rather than a copy of it.
+ */
+export const MARKDOWN_BULLET_PROBE = /^[^\S\n\r\u2028\u2029]*[-*+]\s/m;
+
 function detectMarkdown(ctx: DetectionContext): FormatDetectionResult | null {
   // Quick checks for common markdown patterns
   const hasHeaders = ctx.trimmed.includes('#');
@@ -521,7 +530,7 @@ function detectMarkdown(ctx: DetectionContext): FormatDetectionResult | null {
   if (/^#{1,6}\s/m.test(ctx.trimmed)) confidence += 0.3;
   if (/\*\*.*\*\*/m.test(ctx.trimmed)) confidence += 0.2;
   if (/\[.*\]\(.*\)/m.test(ctx.trimmed)) confidence += 0.2;
-  if (/^\s*[-*+]\s/m.test(ctx.trimmed)) confidence += 0.2;
+  if (MARKDOWN_BULLET_PROBE.test(ctx.trimmed)) confidence += 0.2;
   if (/```/m.test(ctx.trimmed)) confidence += 0.3;
   if (/`[^`]+`/m.test(ctx.trimmed)) confidence += 0.1;
 

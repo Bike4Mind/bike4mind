@@ -11,6 +11,7 @@ import {
   User,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import { Logger } from '@bike4mind/observability';
 import isSameOrBefore from 'dayjs/plugin/isSameOrBefore';
 import { counterService } from '@bike4mind/services';
@@ -168,12 +169,26 @@ interface WeeklyReportData {
   usageBySource?: Array<{ source: CompletionSource; count: number }>;
 }
 
+const ONE_MINUTE_MS = 60 * 1000;
+// Higher than the 20/min on the admin help-analytics dashboard because admin actions burst
+// against this one route rather than making a single request. Measured against the real callers,
+// all of which go through fetchCounterLogs: the CSV export walks MAX_EXPORT_ROWS/EXPORT_PAGE_SIZE
+// = 10 pages back to back (app/components/admin/Analytics/exportUserActivity.ts), the
+// weekly-report picker issues one request per selected week and WeekPicker caps that at
+// maxWeeks = 4, the daily report is a single request for the whole range, and the grid is one
+// request per distinct filter behind a 5-minute staleTime. A session doing all of that in one
+// minute lands near 40, so 60 leaves headroom; no caller refetches on a timer.
+export const COUNTER_LOGS_RATE_LIMIT = 60;
+
 // requiredScopes: an API key reaching this route gets its CASL ability rebuilt from `user.isAdmin`
 // (server/middlewares/apiKeyAuth.ts), so the `Permission.read` check below passes for any
 // admin-owned key regardless of the scopes it was issued with. The scope gate is what makes a
 // narrow key stay narrow; it only runs for API-key callers, so browser/JWT admins are unaffected.
-const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get<Request<{}, {}, {}, Record<string, string>>>(
-  async (req, res) => {
+// `rateLimit` is what bounds them instead, chained after baseApi's auth so it keys on `req.user.id`
+// rather than the client IP.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] })
+  .use(rateLimit({ limit: COUNTER_LOGS_RATE_LIMIT, windowMs: ONE_MINUTE_MS, bucket: 'users-counter-logs' }))
+  .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
     if (!req.ability?.can(Permission.read, CounterLog)) {
       throw new ForbiddenError('Unauthorized');
     }
@@ -333,8 +348,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.ADMIN] }).get<Request<{},
       }
       throw error;
     }
-  }
-);
+  });
 
 const generateWeeklyReportResponse = async (
   startDate: string,

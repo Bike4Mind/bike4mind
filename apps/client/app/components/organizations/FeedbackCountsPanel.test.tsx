@@ -111,4 +111,21 @@ describe('FeedbackCountsPanel drill-down', () => {
     expect(screen.queryByTestId('org-analysis-by-status-row-New')).toBeNull();
     expect(screen.queryByTestId('org-analysis-by-type-row-Bug')).toBeNull();
   });
+
+  it('says nothing about the tag ceiling while the whole key space fits', () => {
+    renderPanel();
+
+    expect(screen.queryByTestId('org-analysis-by-tag-caption')).toBeNull();
+  });
+
+  it('captions the tag table when the report says the key space was cut', () => {
+    useOrgFeedbackReport.mockReturnValue({
+      ...idle,
+      data: { ...REPORT, byTag: [{ key: 'billing', count: 3 }], byTagTruncated: true },
+    });
+
+    renderPanel();
+
+    expect(screen.getByTestId('org-analysis-by-tag-caption').textContent).toContain('narrow the window');
+  });
 });

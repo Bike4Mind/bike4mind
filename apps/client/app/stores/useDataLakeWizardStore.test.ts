@@ -50,6 +50,16 @@ describe('useDataLakeWizardStore - open starts a clean session', () => {
     expect(s.optionalSteps).toEqual({ preview: false, taxonomy: false });
   });
 
+  // A lake remembered from an earlier, unrelated failed session must never be offered
+  // for reuse to a brand new one.
+  it('openWizard clears a recoverableLake left over from a prior failed session', () => {
+    useDataLakeWizardStore.getState().setRecoverableLake({ id: 'lake1', tagPrefix: 'old:' });
+
+    useDataLakeWizardStore.getState().openWizard();
+
+    expect(useDataLakeWizardStore.getState().recoverableLake).toBeNull();
+  });
+
   it('openWizardForLake clears a prior session and preseeds config from the lake only', () => {
     seedStaleSession();
 
@@ -176,6 +186,18 @@ describe('useDataLakeWizardStore - deriveTagPrefixFromName', () => {
     useDataLakeWizardStore.getState().deriveTagPrefixFromName();
 
     expect(useDataLakeWizardStore.getState().config.tagPrefix).toBe('datalake-archive:');
+  });
+});
+
+describe('useDataLakeWizardStore - setRecoverableLake', () => {
+  afterEach(() => useDataLakeWizardStore.getState().resetWizard());
+
+  it('sets and clears the remembered lake', () => {
+    useDataLakeWizardStore.getState().setRecoverableLake({ id: 'lake1', tagPrefix: 'legal:' });
+    expect(useDataLakeWizardStore.getState().recoverableLake).toEqual({ id: 'lake1', tagPrefix: 'legal:' });
+
+    useDataLakeWizardStore.getState().setRecoverableLake(null);
+    expect(useDataLakeWizardStore.getState().recoverableLake).toBeNull();
   });
 });
 

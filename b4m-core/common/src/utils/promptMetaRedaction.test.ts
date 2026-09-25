@@ -76,8 +76,106 @@ describe('redactPromptMetaForViewer', () => {
     expect(redactPromptMetaForViewer(noCalls, false)).toBe(noCalls);
   });
 
+  it('returns the SAME reference when citables is explicitly null', () => {
+    // `citables: null` is a real shape off Mongo. A falsy-but-not-undefined citables must not read
+    // as "changed" and force a copy on a promptMeta that lost nothing.
+    const nullCitables = { model: { name: 'gpt-4' }, citables: null };
+    expect(redactPromptMetaForViewer(nullCitables, false)).toBe(nullCitables);
+  });
+
+  it('returns the SAME reference when citables is present but carries nothing owner-only', () => {
+    const fileLevel = { model: { name: 'gpt-4' }, citables: [{ id: 'f1', metadata: { chunkId: 'c1' } }] };
+    expect(redactPromptMetaForViewer(fileLevel, false)).toBe(fileLevel);
+  });
+
   it('passes null/undefined through unchanged regardless of isOwner', () => {
     expect(redactPromptMetaForViewer(null, false)).toBeNull();
     expect(redactPromptMetaForViewer(undefined, false)).toBeUndefined();
+  });
+});
+
+/**
+ * Citation chips carry the retrieved passage verbatim since #3038, which is the same class of
+ * owner-only content `functionCalls[].returnValue` is: a slice of a document the OWNER's retrieval
+ * read. Without this, a session share, subscription, clone or bug-report egress would hand a
+ * non-owner readable text out of the owner's corpus.
+ */
+describe('redactPromptMetaForViewer: citable passage text', () => {
+  const withCitable = () => ({
+    model: { name: 'gpt-4' },
+    citables: [
+      {
+        id: 'file-1',
+        title: 'Leave policy.md',
+        metadata: { sourceSystem: 'knowledge_base', chunkId: 'c1', fullContext: 'SECRET PASSAGE', tags: ['hr'] },
+      },
+    ],
+  });
+
+  it('strips fullContext from a citable for a non-owner', () => {
+    const out = redactPromptMetaForViewer(withCitable(), false);
+    expect(JSON.stringify(out)).not.toContain('SECRET PASSAGE');
+  });
+
+  it('keeps the rest of the chip so the citation still renders and still deep-links', () => {
+    // chunkId survives on purpose: an opaque id is not content, and the file id beside it was
+    // never redacted. Stripping it would break the chip for no privacy gain.
+    const out = redactPromptMetaForViewer(withCitable(), false);
+    expect(out?.citables?.[0]?.metadata).toEqual({
+      sourceSystem: 'knowledge_base',
+      chunkId: 'c1',
+      tags: ['hr'],
+    });
+    expect(out?.model).toEqual({ name: 'gpt-4' });
+  });
+
+  it('leaves the owner their own passage text', () => {
+    const owned = withCitable();
+    expect(redactPromptMetaForViewer(owned, true)).toBe(owned);
+  });
+
+  it('does not mutate the input, which read paths share with an owner-scoped consumer', () => {
+    const input = withCitable();
+    redactPromptMetaForViewer(input, false);
+    expect(input.citables[0].metadata.fullContext).toBe('SECRET PASSAGE');
+  });
+
+  it('returns the SAME reference when no citable carries passage text', () => {
+    const fileLevel = {
+      model: { name: 'gpt-4' },
+      citables: [{ id: 'file-1', metadata: { sourceSystem: 'knowledge_base', relevanceScore: 0.9 } }],
+    };
+    // The whole promptMeta, not just the chip: the documented contract is that a viewer read with
+    // nothing to redact costs no copy at all.
+    expect(redactPromptMetaForViewer(fileLevel, false)).toBe(fileLevel);
+  });
+
+  it('keeps conflict marks for a non-owner, which are ids rather than corpus content (#3041)', () => {
+    // A deliberate classification, pinned so it cannot be flipped by reflex alongside fullContext:
+    // `conflictsWith` holds fabFileIds that `citables[].id` already carries unredacted, so stripping
+    // it would cost a sharee the disagreement warning without withholding anything they cannot
+    // already see. If this field ever carries the conflicting SENTENCES, it changes class and this
+    // test should be the thing that fails.
+    const shared = {
+      model: { name: 'gpt-4' },
+      citables: [
+        {
+          id: 'file-1',
+          metadata: { sourceSystem: 'knowledge_base', fullContext: 'SECRET PASSAGE', conflictsWith: ['file-2'] },
+        },
+      ],
+    };
+
+    const out = redactPromptMetaForViewer(shared, false);
+
+    expect(out?.citables?.[0]?.metadata?.fullContext).toBeUndefined();
+    expect(out?.citables?.[0]?.metadata?.conflictsWith).toEqual(['file-2']);
+  });
+
+  it('redacts citables even when the turn made no function calls', () => {
+    // The early return used to bail on `!functionCalls`, which would have skipped citables
+    // entirely on a forced-retrieval turn - the one that ALWAYS emits them.
+    const out = redactPromptMetaForViewer(withCitable(), false);
+    expect(out?.citables?.[0]?.metadata?.fullContext).toBeUndefined();
   });
 });

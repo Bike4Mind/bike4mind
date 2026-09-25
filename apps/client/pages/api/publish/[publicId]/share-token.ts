@@ -18,7 +18,10 @@ const shareTokenBodySchema = z.object({
  *   POST   { regenerate?: boolean } - mint the token if absent (idempotent);
  *          `regenerate: true` rotates it, which instantly revokes every
  *          outstanding `/a` link WITHOUT touching the artifact or its `/p/*` URL.
- *   DELETE - revoke: drop the token so all `/a` links 404 immediately.
+ *   DELETE - revoke: drop the token so all `/a` links 404 immediately. Refused while
+ *          a non-public artifact carries an access gate, because the token is then the
+ *          gate's only enforcing surface (see GATE_REQUIRES_ENFORCING_SURFACE in
+ *          `artifacts/[id].ts` - these two must stay in sync).
  *
  * Share links are served `no-store`, so no CDN invalidation is needed on rotate/
  * revoke. The token value is never logged.
@@ -29,6 +32,8 @@ interface ShareTokenArtifactLean {
   ownerId: string;
   shareToken?: string;
   shareTokenUpdatedAt?: Date | null;
+  visibility?: string;
+  accessGate?: unknown;
 }
 
 async function loadOwnedArtifact(req: Request, res: Response): Promise<ShareTokenArtifactLean | null> {
@@ -116,6 +121,18 @@ const handler = baseApi()
   .delete(async (req: Request, res: Response) => {
     const artifact = await loadOwnedArtifact(req, res);
     if (!artifact) return;
+
+    // A gate on a non-public artifact is enforced ONLY through `/a/<token>`
+    // (checkShareGrant). Revoking the token here would leave a stored gate that nothing
+    // can honor - the exact state the PATCH handler refuses to create. Fail loud and let
+    // the owner decide, rather than silently dropping a gate they set.
+    if (artifact.shareToken && artifact.accessGate && artifact.visibility !== 'public') {
+      return res.status(400).json({
+        error:
+          'This share link is the only thing enforcing the artifact\'s access gate - clear the gate or set visibility to public before revoking the link',
+        code: 'REVOKE_WOULD_ORPHAN_GATE',
+      });
+    }
 
     if (artifact.shareToken) {
       await PublishedArtifact.updateOne(

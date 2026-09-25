@@ -3,6 +3,47 @@ import mongoose from 'mongoose';
 import { convertId } from '../utils/mongo';
 
 /**
+ * Reserved key in the `options` bag of `update`/`updateGuarded`: `{ unset: ['errorCode'] }` REMOVES
+ * those fields from the stored document. Consumed here, never forwarded to Mongoose (it is not a
+ * `findOneAndUpdate` option).
+ *
+ * `update(Partial<T>)` cannot otherwise express a removal. A doc read through `findById`/`findOne`
+ * is a plain object, so `doc.field = undefined` leaves the KEY present with an `undefined` value,
+ * and an `undefined` in `$set` is an absence to the driver rather than an instruction - the stored
+ * value survives the write. Making `undefined` mean "remove" instead would change the meaning of
+ * every partial write in the codebase, so removal is opt-in per call.
+ *
+ * Handled in both `_plainUpdate` and `_versionedUpdate`, so the guarded variant and the repos that
+ * override with a non-`_id` identity filter (e.g. ArtifactModel) all honour it identically - a
+ * caller must not be able to discover that one of them silently ignored it.
+ */
+const UNSET_OPTION = 'unset';
+
+/**
+ * Split the caller's options bag into the reserved `unset` field list and the genuine Mongoose
+ * query options, and drop the unset keys from the `$set` document: Mongo refuses a write that
+ * touches one path under both operators ("Updating the path 'x' would create a conflict at 'x'").
+ *
+ * Non-string and empty entries are ignored - `$unset` with a junk path is a silent no-op on the
+ * server, and a caller passing one has a bug worth not amplifying into a write.
+ */
+const splitUnsetOption = (data: Record<string, unknown>, options?: Record<string, unknown>) => {
+  const { [UNSET_OPTION]: unset, ...queryOptions } = (options ?? {}) as Record<string, unknown>;
+  const fields = (Array.isArray(unset) ? unset : []).filter((f): f is string => typeof f === 'string' && f.length > 0);
+
+  if (fields.length === 0) {
+    return { setData: data, unsetOperand: null, queryOptions };
+  }
+
+  const setData = Object.fromEntries(Object.entries(data).filter(([key]) => !fields.includes(key)));
+  return {
+    setData,
+    unsetOperand: Object.fromEntries(fields.map(field => [field, ''])),
+    queryOptions,
+  };
+};
+
+/**
  * A MongoDB-based base abstract repository
  */
 abstract class BaseRepository<T extends IMongoDocument> implements IBaseRepository<T> {
@@ -60,6 +101,9 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
    * so a concurrent write to a different field is silently overwritten. For lost-update-sensitive
    * writes use `updateGuarded`, which conditions the write on the read-time `__v` and throws
    * ConcurrencyConflictError instead of clobbering a racing writer.
+   *
+   * `options` is forwarded to `findOneAndUpdate` except for the reserved `unset` key; see
+   * UNSET_OPTION for why clearing a field needs it.
    */
   async update(data: Partial<T>, options?: Record<string, unknown>): Promise<T | null> {
     if (!data.id) {
@@ -103,11 +147,12 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     // conditions on (findOneAndUpdate never auto-bumps `__v`) - a single plain write on the
     // collection would silently disarm every guarded writer on it. Plain `update` has no business
     // writing the version key: leave it untouched, neither writing nor bumping it.
-    const { __v: _ignoredVersion, ...setData } = data as { __v?: unknown } & Record<string, unknown>;
+    const { __v: _ignoredVersion, ...writable } = data as { __v?: unknown } & Record<string, unknown>;
+    const { setData, unsetOperand, queryOptions } = splitUnsetOption(writable, options);
     const query = this.model.findOneAndUpdate(
       idFilter as mongoose.FilterQuery<T>,
-      { $set: setData } as mongoose.UpdateQuery<T>,
-      { new: true, ...options }
+      (unsetOperand ? { $set: setData, $unset: unsetOperand } : { $set: setData }) as mongoose.UpdateQuery<T>,
+      { new: true, ...queryOptions }
     );
     // Only attach an explicit session when one is set. Passing `.session(null)` tells Mongoose "no
     // session", which overrides the global `transactionAsyncLocalStorage` propagation and silently
@@ -130,13 +175,18 @@ abstract class BaseRepository<T extends IMongoDocument> implements IBaseReposito
     data: Record<string, unknown>,
     options?: Record<string, unknown>
   ): Promise<D | null> {
-    const { __v, ...setData } = data as { __v?: unknown } & Record<string, unknown>;
+    const { __v, ...writable } = data as { __v?: unknown } & Record<string, unknown>;
     const versioned = typeof __v === 'number';
+    const { setData, unsetOperand, queryOptions } = splitUnsetOption(writable, options);
 
     const filter = (versioned ? { ...idFilter, __v } : { ...idFilter }) as mongoose.FilterQuery<T>;
-    const update = (versioned ? { $set: setData, $inc: { __v: 1 } } : { $set: setData }) as mongoose.UpdateQuery<T>;
+    const update = {
+      $set: setData,
+      ...(unsetOperand ? { $unset: unsetOperand } : {}),
+      ...(versioned ? { $inc: { __v: 1 } } : {}),
+    } as mongoose.UpdateQuery<T>;
 
-    const query = this.model.findOneAndUpdate(filter, update, { new: true, ...options });
+    const query = this.model.findOneAndUpdate(filter, update, { new: true, ...queryOptions });
     // Only attach an explicit session when one is set; .session(null) overrides
     // transactionAsyncLocalStorage propagation and silently breaks atomicity (see `_plainUpdate`).
     if (this._txn) {

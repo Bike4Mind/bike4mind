@@ -11,15 +11,38 @@ export class ProxyManager {
   private proxy: HttpConnectProxy | null = null;
   private networkConfig: NetworkConfig;
   private eventHandlers = new Set<(event: ProxyEvent) => void>();
+  private startPromise: Promise<void> | null = null;
 
   constructor(networkConfig: NetworkConfig) {
     this.networkConfig = { ...networkConfig, allowedDomains: [...networkConfig.allowedDomains] };
   }
 
-  async start(): Promise<void> {
-    if (!this.networkConfig.enabled) return;
-    if (this.proxy?.isRunning()) return; // idempotent
+  /**
+   * Update the live enabled flag so a runtime toggle takes effect on the next
+   * start()/stop(). Without this, start() would early-return on the enabled value
+   * snapshotted at construction and grant egress with no proxy actually running.
+   */
+  setEnabled(enabled: boolean): void {
+    this.networkConfig.enabled = enabled;
+  }
 
+  // Not async on purpose: an async method wraps its return value in a fresh
+  // promise, so concurrent callers could never share ONE in-flight start. Returning
+  // the stored promise directly is what lets the guard below dedupe overlapping
+  // starts - isRunning() alone does not (both see it false before either server
+  // binds), which would leak an orphaned listening proxy.
+  start(): Promise<void> {
+    if (!this.networkConfig.enabled) return Promise.resolve();
+    if (this.proxy?.isRunning()) return Promise.resolve(); // idempotent
+    if (this.startPromise) return this.startPromise;
+
+    this.startPromise = this.doStart().finally(() => {
+      this.startPromise = null;
+    });
+    return this.startPromise;
+  }
+
+  private async doStart(): Promise<void> {
     this.proxy = new HttpConnectProxy({
       allowedDomains: this.networkConfig.allowedDomains,
     });
@@ -35,6 +58,11 @@ export class ProxyManager {
   }
 
   async stop(): Promise<void> {
+    // Join any in-flight start() first: otherwise we could null `this.proxy` out
+    // from under doStart()'s own `await this.proxy.start()` (throws), or orphan a
+    // listener a concurrent start bound just after our check. A start's own failure
+    // is irrelevant to a stop, so swallow it.
+    if (this.startPromise) await this.startPromise.catch(() => {});
     if (!this.proxy) return;
     await this.proxy.stop();
     this.proxy = null;

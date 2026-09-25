@@ -24,6 +24,13 @@ const makeDb = (fileIds: string[] = ['f1', 'f2']) => ({
     listByLake: vi.fn(async () => [] as never),
     removeAllForLake: vi.fn(async () => {}),
   },
+  dataLakeFindings: {
+    deleteForLake: vi.fn(async () => 0),
+    deleteForPurgedDocuments: vi.fn(async () => 0),
+  },
+  dataLakeCorpusActions: {
+    deleteForLake: vi.fn(async () => 0),
+  },
   batches: {
     find: vi.fn(async () => [] as never),
     delete: vi.fn(async () => {}),
@@ -148,5 +155,153 @@ describe('cleanupDeletedDataLake', () => {
     ).rejects.toThrow('index down');
     expect(db.fabFileChunks.clearRetrievalIndexConfirmedByFabFileIds).toHaveBeenCalledWith(['f1', 'f2']);
     expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+  });
+  it('cascade-drops the lake findings, whose excerpts would otherwise outlive their corpus', async () => {
+    const db = makeDb();
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    // Not just tidiness: a finding stores excerpts of the documents this sweep just hard-deleted,
+    // so leaving the rows behind would keep quoting a corpus that no longer exists.
+    expect(db.dataLakeFindings.deleteForLake).toHaveBeenCalledWith('lake-1');
+  });
+
+  it("cascade-drops the lake's curator corpus-action trail (#3046), before the lake record itself", async () => {
+    const db = makeDb();
+    const order: string[] = [];
+    db.dataLakeCorpusActions.deleteForLake = vi.fn(async () => {
+      order.push('corpusActions');
+      return 0;
+    });
+    db.dataLakes.delete = vi.fn(async () => {
+      order.push('lake');
+    });
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(db.dataLakeCorpusActions.deleteForLake).toHaveBeenCalledWith('lake-1');
+    expect(order).toEqual(['corpusActions', 'lake']);
+  });
+
+  it("sweeps each destroyed document's findings GLOBALLY, so a co-tagged lake keeps no excerpt of it", async () => {
+    const db = makeDb(['f1', 'f2']);
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    // `deleteForLake('lake-1')` above cannot reach this case. A file can carry two lakes' meta-tags
+    // - `addFileToLake` has no exclusivity check - and step 2 hard-deletes the FabFile GLOBALLY.
+    // Lake B's finding would otherwise survive quoting a 240-char excerpt of a document that no
+    // longer exists anywhere, unresolvable by anyone and never re-detectable to be rewritten.
+    // One `$in` for the slice, not one round trip per file: the fan-out is already chunked for the
+    // Lambda budget, and the sweep is idempotent and independent of whether the row still exists.
+    expect(db.dataLakeFindings.deleteForPurgedDocuments).toHaveBeenCalledWith(['f1', 'f2']);
+    expect(db.dataLakeFindings.deleteForPurgedDocuments).toHaveBeenCalledTimes(1);
+  });
+
+  it('batches the sweep PER SLICE, so a large lake does not pay a round trip per file', async () => {
+    // chunkSize:2 over three files gives two slices. Asserting the slices rather than the call
+    // count is what catches a regression back to per-id: that shape would call this three times
+    // with single-element arrays and still satisfy a naive "was it called" assertion.
+    const db = makeDb(['f1', 'f2', 'f3']);
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db, chunkSize: 2 });
+
+    expect(db.dataLakeFindings.deleteForPurgedDocuments.mock.calls).toEqual([[['f1', 'f2']], [['f3']]]);
+  });
+
+  it("sweeps a slice's findings BEFORE any of its rows, so an interruption cannot strand them", async () => {
+    // Once a row is gone its id is no longer resolvable by `findIdsByDataLakeTag`, so a DLQ retry
+    // could never name it again - the findings would be stranded permanently. This order fails the
+    // recoverable way instead: findings lost early are still re-detectable from documents that
+    // still exist. Two files in ONE slice, so the assertion is that the batch precedes BOTH rows,
+    // not merely that it precedes the row it happens to be paired with.
+    const db = makeDb(['f1', 'f2']);
+    const order: string[] = [];
+    db.dataLakeFindings.deleteForPurgedDocuments = vi.fn(async (ids: string[]) => {
+      order.push(`findings:${ids.join('+')}`);
+      return 0;
+    });
+    db.fabFiles.hardDeleteOneById = vi.fn(async (id: string) => {
+      order.push(`row:${id}`);
+      return true;
+    });
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db });
+
+    expect(order).toEqual(['findings:f1+f2', 'row:f1', 'row:f2']);
+  });
+
+  it('aborts before deleting the lake record when the LAKE-SCOPED findings sweep rejects', async () => {
+    // Ordering is the retry door. The lake record is what a DLQ replay re-reads to re-enter the
+    // sweep, so deleting it after a failed sweep would strand the rows permanently - nothing left
+    // would name the lake. Failing with the lake still present is the recoverable direction.
+    const db = makeDb();
+    db.dataLakeFindings.deleteForLake = vi.fn(async () => {
+      throw new Error('findings sweep failed');
+    });
+
+    await expect(cleanupDeletedDataLake(ADMIN, 'lake-1', { db })).rejects.toThrow('findings sweep failed');
+    expect(db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('aborts the slice when the PER-DOCUMENT findings sweep rejects, leaving every id resolvable', async () => {
+    // This is the entire reason `deleteForPurgedDocuments` runs BEFORE the slice's rows, and the
+    // case the `deleteForLake` test above does NOT cover. Swallow-and-continue here - the natural
+    // "don't fail a whole teardown over a findings sweep" reflex - destroys the FabFiles with
+    // their findings unswept, and a co-tagged sibling lake is then left quoting a 240-char excerpt
+    // of a document that no longer exists, unresolvable and never re-detectable. Rejecting leaves
+    // every row in the slice present, so the replay's `findIdsByDataLakeTag` still names them all.
+    const db = makeDb(['f1', 'f2']);
+    db.dataLakeFindings.deleteForPurgedDocuments = vi.fn(async () => {
+      throw new Error('per-document findings sweep failed');
+    });
+
+    await expect(cleanupDeletedDataLake(ADMIN, 'lake-1', { db })).rejects.toThrow('per-document findings sweep failed');
+    expect(db.fabFiles.hardDeleteOneById).not.toHaveBeenCalled();
+    expect(db.fabFileChunks.deleteManyByFabFileId).not.toHaveBeenCalled();
+    expect(db.dataLakes.delete).not.toHaveBeenCalled();
+  });
+
+  it('still hard-deletes the files when no findings repo is wired, but says so once', async () => {
+    // The port is optional (a host that never ran detection has no rows), and reaching it through
+    // `?.` must not make the file sweep itself conditional on it. It must not be SILENT either:
+    // without the warning an unwired host destroys documents with no sweep and no symptom, which
+    // is indistinguishable from a lake that genuinely carried no findings.
+    const db = makeDb(['f1', 'f2']);
+    const { dataLakeFindings: _unwired, ...dbWithoutFindings } = db;
+    const warn = vi.fn();
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db: dbWithoutFindings, logger: { warn } });
+
+    expect(db.fabFiles.hardDeleteOneById).toHaveBeenCalledWith('f1');
+    // Once for the teardown, NOT once per destroyed document - a large lake would otherwise emit
+    // thousands of lines for a single wiring fact.
+    const unwiredWarnings = warn.mock.calls.filter(([msg]) => String(msg).includes('no findings repo wired'));
+    expect(unwiredWarnings).toHaveLength(1);
+  });
+
+  it('stays quiet about the unwired port when the lake had no files to destroy', async () => {
+    // Nothing was destroyed, so nothing went unswept. Warning here would train the reader to
+    // ignore the line that matters.
+    const db = makeDb([]);
+    const { dataLakeFindings: _unwired, ...dbWithoutFindings } = db;
+    const warn = vi.fn();
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db: dbWithoutFindings, logger: { warn } });
+
+    expect(warn.mock.calls.filter(([msg]) => String(msg).includes('no findings repo wired'))).toHaveLength(0);
+  });
+
+  // Regression guard for the invariant the docblock states: every file this sweep destroys was
+  // already debited at soft-delete time, so this door must never touch storage a second time.
+  // `users` isn't part of `CleanupDeletedDataLakeAdapters` at all - the cast below is what a future
+  // change would need to bypass to wire it in, and this test exists so that change trips here.
+  it('never adjusts owner storage, even if a future change wires a users adapter in', async () => {
+    const incrementCurrentStorage = vi.fn();
+    const db = { ...makeDb(), users: { incrementCurrentStorage } };
+
+    await cleanupDeletedDataLake(ADMIN, 'lake-1', { db } as never);
+
+    expect(incrementCurrentStorage).not.toHaveBeenCalled();
   });
 });

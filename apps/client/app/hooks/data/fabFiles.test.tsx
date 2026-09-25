@@ -6,6 +6,7 @@ import type { IFabFileDocument } from '@bike4mind/common';
 import {
   useBulkDeleteFiles,
   useDeleteAllFiles,
+  useGetFabFileContent,
   useGetFabFilesBySessionId,
   useGetFabFilesByQuestId,
   useUpdateFabFile,
@@ -36,6 +37,15 @@ vi.mock('@client/app/contexts/ApiContext', () => ({
 const updateFabFileOnServer = vi.fn();
 vi.mock('@client/app/utils/filesAPICalls', () => ({
   updateFabFileOnServer: (...args: unknown[]) => updateFabFileOnServer(...args),
+}));
+
+// The S3 read `getContentFromFabfile` (via fabFileUtils) makes directly - mocked at this boundary,
+// rather than the whole fabFileUtils module, so `useGetFabFileContent`'s strict/lenient branching
+// runs for real against a real network failure instead of a hand-picked isError value the
+// production hook could never actually reach.
+const axiosGet = vi.fn();
+vi.mock('axios', () => ({
+  default: { get: (...args: unknown[]) => axiosGet(...args) },
 }));
 
 const makeWrapper = () => {
@@ -254,5 +264,50 @@ describe('useUpdateFabFile', () => {
 
     const keys = invalidate.mock.calls.map(call => JSON.stringify((call[0] as { queryKey: unknown[] })?.queryKey));
     expect(keys).toContain(JSON.stringify(['file-tags']));
+  });
+});
+
+describe('useGetFabFileContent', () => {
+  const file = (over: Partial<IFabFileDocument> = {}): IFabFileDocument =>
+    ({
+      id: 'file-a',
+      fileName: 'a.md',
+      mimeType: 'text/markdown',
+      fileUrl: 'https://example.com/a.md',
+      ...over,
+    }) as IFabFileDocument;
+
+  const arrayBufferOf = (text: string) => new TextEncoder().encode(text).buffer;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    apiGet.mockResolvedValue({ data: [] });
+  });
+
+  it('strict: surfaces a failed S3 read as isError rather than an empty document', async () => {
+    axiosGet.mockRejectedValue(new Error('expired presigned URL'));
+
+    const { result } = renderHook(() => useGetFabFileContent(file(), { strict: true }), { wrapper: makeWrapper() });
+
+    await waitFor(() => expect(result.current.isError).toBe(true));
+    expect(result.current.data).toBeUndefined();
+  });
+
+  it('strict: still resolves a successfully-read empty document to "" rather than an error', async () => {
+    axiosGet.mockResolvedValue({ data: arrayBufferOf('') });
+
+    const { result } = renderHook(() => useGetFabFileContent(file(), { strict: true }), { wrapper: makeWrapper() });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBe('');
+  });
+
+  it('lenient (default): a failed S3 read resolves to "" rather than isError, unchanged from before', async () => {
+    axiosGet.mockRejectedValue(new Error('expired presigned URL'));
+
+    const { result } = renderHook(() => useGetFabFileContent(file()), { wrapper: makeWrapper() });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toBe('');
   });
 });

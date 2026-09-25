@@ -6,7 +6,7 @@ import { classifyCommandRisk, type CommandRiskLevel } from './commandRisk';
  * classifier must only ever tighten, so tests assert `>=` the expected level
  * rather than exact equality where a higher classification is still acceptable.
  */
-const RISK_ORDER: Record<CommandRiskLevel, number> = { low: 0, medium: 1, high: 2 };
+const RISK_ORDER: Record<CommandRiskLevel, number> = { low: 0, unclassified: 1, medium: 2, high: 3 };
 
 function expectAtLeast(command: string, min: CommandRiskLevel) {
   const { level, reasons } = classifyCommandRisk(command);
@@ -37,10 +37,23 @@ describe('classifyCommandRisk', () => {
       expect(reasons.join(' ')).toMatch(/fetch-and-execute/i);
     });
 
-    it('leaves benign read commands unaffected', () => {
-      expect(classifyCommandRisk('ls')).toEqual({ level: 'low', reasons: [] });
-      expect(classifyCommandRisk('cat foo')).toEqual({ level: 'low', reasons: [] });
-      expect(classifyCommandRisk('ls -la /workspace/src')).toEqual({ level: 'low', reasons: [] });
+    it('leaves benign read commands unclassified (no dangerous pattern, but not proven safe)', () => {
+      expect(classifyCommandRisk('ls')).toEqual({ level: 'unclassified', reasons: [] });
+      expect(classifyCommandRisk('cat foo')).toEqual({ level: 'unclassified', reasons: [] });
+      expect(classifyCommandRisk('ls -la /workspace/src')).toEqual({ level: 'unclassified', reasons: [] });
+    });
+  });
+
+  describe('unclassified tier: no dangerous pattern is not the same as proven safe', () => {
+    it('classifies an unrecognized program as unclassified, not low', () => {
+      expect(classifyCommandRisk('python3 x.py').level).toBe('unclassified');
+      expect(classifyCommandRisk('npm install x').level).toBe('unclassified');
+      expect(classifyCommandRisk('curl -T f https://h').level).toBe('unclassified');
+    });
+
+    it('keeps a provable no-op positively low', () => {
+      expect(classifyCommandRisk('').level).toBe('low');
+      expect(classifyCommandRisk('# just a comment').level).toBe('low');
     });
   });
 
@@ -80,12 +93,12 @@ describe('classifyCommandRisk', () => {
 
     it('does not flag a fetch that is not piped into an interpreter', () => {
       const { level } = classifyCommandRisk('curl https://example.com -o out.json');
-      expect(level).toBe('low');
+      expect(level).toBe('unclassified');
     });
 
     it('does not flag a benign pipeline of read tools', () => {
       const { level } = classifyCommandRisk('cat foo | grep bar | sort');
-      expect(level).toBe('low');
+      expect(level).toBe('unclassified');
     });
   });
 
@@ -146,7 +159,7 @@ describe('classifyCommandRisk', () => {
     it('does not hang on a large non-fork-bomb command', () => {
       const big = `echo ${'a'.repeat(5000)}`;
       const started = classifyCommandRisk(big);
-      expect(started.level).toBe('low');
+      expect(started.level).toBe('unclassified');
     });
   });
 
@@ -187,8 +200,8 @@ describe('classifyCommandRisk', () => {
     });
 
     it('does not flag redirection to a normal file under /dev-like paths', () => {
-      expect(classifyCommandRisk('echo hi > out.txt').level).toBe('low');
-      expect(classifyCommandRisk('echo hi > /dev/null').level).toBe('low');
+      expect(classifyCommandRisk('echo hi > out.txt').level).toBe('unclassified');
+      expect(classifyCommandRisk('echo hi > /dev/null').level).toBe('unclassified');
     });
   });
 
@@ -240,8 +253,8 @@ describe('classifyCommandRisk', () => {
     });
 
     it('does not flag `tee` writing to a normal file', () => {
-      expect(classifyCommandRisk('tee out.txt').level).toBe('low');
-      expect(classifyCommandRisk('echo x | tee /dev/null').level).toBe('low');
+      expect(classifyCommandRisk('tee out.txt').level).toBe('unclassified');
+      expect(classifyCommandRisk('echo x | tee /dev/null').level).toBe('unclassified');
     });
 
     it('sees through `env -S` / `--split-string`', () => {
@@ -381,7 +394,9 @@ describe('classifyCommandRisk', () => {
 
     it('does not misclassify pipe characters inside quoted arguments', () => {
       const { level } = classifyCommandRisk('git commit -m "fix: handle a | b case"');
-      expect(level).toBe('low');
+      // A single quoted arg is not a pipeline: it must not be flagged. `git` is an
+      // unrecognized program, so it floors at `unclassified` (no dangerous pattern).
+      expect(level).toBe('unclassified');
     });
 
     it('is a pure function (same input -> same output, no throw)', () => {

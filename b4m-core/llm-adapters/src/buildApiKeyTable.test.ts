@@ -1,6 +1,6 @@
 import { ModelBackend } from '@bike4mind/common';
 import { describe, expect, it } from 'vitest';
-import { buildApiKeyTable, isBackendUsable, resolveListingKey } from './backendGate';
+import { apiKeyTableForBackend, buildApiKeyTable, isBackendUsable, resolveListingKey } from './backendGate';
 import { getAvailableModels } from './index';
 
 /**
@@ -77,14 +77,35 @@ describe('buildApiKeyTable', () => {
     expect(isBackendUsable(ModelBackend.Kimi, without)).toBe(false);
   });
 
-  it('gates DeepSeek on its own key, which KEYED_LISTING_BACKENDS has to name', () => {
-    // Omission from KEYED_LISTING_BACKENDS fails closed and silently: a valid key
+  it('gates DeepSeek on its own key, which LISTING_KIND has to name', () => {
+    // Marked anything but 'keyed' in LISTING_KIND, DeepSeek fails closed and silently: a valid key
     // and a working adapter still list nothing.
     const ctx = { apiKeys: buildApiKeyTable(ALL_KEYS), isSelfHost: false };
     expect(isBackendUsable(ModelBackend.DeepSeek, ctx)).toBe(true);
 
     const without = { apiKeys: buildApiKeyTable({ ...ALL_KEYS, deepseek: null }), isSelfHost: false };
     expect(isBackendUsable(ModelBackend.DeepSeek, without)).toBe(false);
+  });
+});
+
+describe('apiKeyTableForBackend', () => {
+  it('files the key under the stated backend, whatever the id would suggest', () => {
+    // The ids that used to be sniffed onto the wrong key: an Ollama deepseek pull
+    // resolved to the DeepSeek-direct key, so Ollama was never listed.
+    expect(apiKeyTableForBackend(ModelBackend.Ollama, 'http://localhost:11434')).toEqual({
+      [ModelBackend.Ollama]: 'http://localhost:11434',
+    });
+    for (const backend of Object.values(ModelBackend)) {
+      if (KEYLESS.has(backend)) continue;
+      expect(apiKeyTableForBackend(backend, 'k')).toEqual({ [backend]: 'k' });
+    }
+  });
+
+  it('passes no key for the AWS-IAM backends', () => {
+    // Bedrock-served deepseek.* and moonshot.* ids used to resolve to the
+    // DeepSeek and Moonshot direct keys.
+    expect(apiKeyTableForBackend(ModelBackend.Bedrock, 'k')).toEqual({});
+    expect(apiKeyTableForBackend(ModelBackend.AWS, 'k')).toEqual({});
   });
 });
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { FabFile, fabFileRepository } from '../models/content/FabFileModel';
 import { setupMongoTest } from '../__test__/utils';
 import { KnowledgeType } from '@bike4mind/common';
@@ -100,13 +100,25 @@ describe('FabFileRepository.pullTagsByFabFileId', () => {
     expect((await FabFile.findById(id))?.updatedAt).toEqual(before?.updatedAt);
   });
 
-  // Pins the documented contract: timestamps mean a modification is reported for a write that
-  // removed nothing, so no caller may read the return as "a tag was removed".
-  it('reports a modification even when no named tag was present', async () => {
+  // Pins the documented contract the lake membership audit trail depends on: an unmatched pull
+  // reports NO modification, so a caller can read the count as "a tag was removed" rather than
+  // as "timestamps moved".
+  it('reports no modification when no named tag was present', async () => {
+    const id = await seed();
+    const before = await FabFile.findById(id);
+
+    expect(await fabFileRepository.pullTagsByFabFileId(id, ['not-on-this-file'])).toBe(0);
+    expect(await tagsOf(id)).toHaveLength(SEED_TAGS.length);
+    expect((await FabFile.findById(id))?.updatedAt).toEqual(before?.updatedAt);
+  });
+
+  // The concurrency shape the count exists for: two removals of the same tag race, the first
+  // wins, and the loser must be able to tell it removed nothing.
+  it('reports a modification for the first removal only when the same pull is repeated', async () => {
     const id = await seed();
 
-    expect(await fabFileRepository.pullTagsByFabFileId(id, ['not-on-this-file'])).toBe(1);
-    expect(await tagsOf(id)).toHaveLength(SEED_TAGS.length);
+    expect(await fabFileRepository.pullTagsByFabFileId(id, ['datalake:org:mylake'])).toBe(1);
+    expect(await fabFileRepository.pullTagsByFabFileId(id, ['datalake:org:mylake'])).toBe(0);
   });
 
   it('is idempotent - a second identical call removes nothing more', async () => {
@@ -133,6 +145,29 @@ describe('FabFileRepository.pullTagsByFabFileId', () => {
     await fabFileRepository.pullTagsByFabFileId(id, ['datalake:org:mylake', 'mylake:invoices']);
 
     expect((await FabFile.findById(id))?.primaryTag).toBe('user-tag');
+  });
+
+  it('still reports the tag removal when the primaryTag cleanup write rejects', async () => {
+    const id = await seed({ primaryTag: 'mylake:invoices' });
+
+    // The $pull (first call) must land for real; only the second, primaryTag $unset call fails.
+    const realUpdateOne = FabFile.updateOne.bind(FabFile);
+    let call = 0;
+    vi.spyOn(FabFile, 'updateOne').mockImplementation((...args: Parameters<typeof FabFile.updateOne>) => {
+      call += 1;
+      if (call === 2) return Promise.reject(new Error('primaryTag write boom')) as any;
+      return realUpdateOne(...args);
+    });
+
+    await expect(fabFileRepository.pullTagsByFabFileId(id, ['datalake:org:mylake', 'mylake:invoices'])).resolves.toBe(
+      1
+    );
+
+    vi.restoreAllMocks();
+    expect((await tagsOf(id)).map(t => t.name)).not.toContain('mylake:invoices');
+    // The committed $pull is not undone by the rejected second write; the stale primaryTag is
+    // left in place rather than the whole removal being thrown away.
+    expect((await FabFile.findById(id))?.primaryTag).toBe('mylake:invoices');
   });
 
   it('does not throw for an id that matches no document', async () => {

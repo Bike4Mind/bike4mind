@@ -8,6 +8,7 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
+import { PERSISTED_SESSION_SUMMARY_TRIGGERS } from '@bike4mind/common';
 
 const h = vi.hoisted(() => ({
   fabFileStore: [] as Record<string, unknown>[],
@@ -408,5 +409,50 @@ describe('sessionSummarization operational cascade', () => {
     // One settled call and no cascade, so a plain Summarize is worth exactly one operation.
     expect(h.recordSessionOperationalUsage).toHaveBeenCalledTimes(1);
     expect(h.publishTag).not.toHaveBeenCalled();
+  });
+});
+
+// `summaryAt` records WHEN a summary was made; `summaryTrigger` records WHY, and it is the only
+// thing separating a summarization the engine decided to run from one a user asked for - the
+// question apps/client/pages/api/admin/sessions/[id]/index.ts exists to answer when someone
+// queries summarization spend. The handler assigns it to the in-memory document and there is no
+// `.save()` on this path, so unless the repository update names it the field is never stored.
+describe('sessionSummarization provenance', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    h.assertLakeAdmission.mockReset();
+    h.fabFileStore.length = 0;
+    h.session = { id: SESSION_ID, _id: SESSION_ID, userId: OWNER, name: 'Notebook', tags: [] };
+    h.findOne.mockResolvedValue(null);
+    h.createFabFile.mockResolvedValue({ filePath: 'summary.txt', mimeType: 'text/plain' });
+  });
+
+  // Derived from the persisted list, so a new reason-it-happened picks up handler coverage for free
+  // and a decision-only reason like 'throttling' is excluded by construction rather than by a filter
+  // this test has to remember to keep.
+  it.each([...PERSISTED_SESSION_SUMMARY_TRIGGERS])('writes the %s trigger alongside the summary', async trigger => {
+    await run({ trigger });
+
+    expect(h.sessionUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: SESSION_ID,
+        summary: 'A summary of the session.',
+        summaryAt: expect.any(Date),
+        summaryTrigger: trigger,
+      })
+    );
+  });
+
+  // The event schema makes `trigger` optional, and Mongoose strips an undefined value out of the
+  // `$set` rather than clearing the path - so a re-summarization published without one would
+  // leave the PREVIOUS trigger next to a fresh `summaryAt`. No in-repo publisher omits it
+  // (summary.ts sends 'manual', spider 'spider', projects 'project', persistRunAsQuest 'earlyMilestone',
+  // and the completion + image paths only publish when shouldSummarizeSession returned one).
+  it('sends the key as undefined rather than inventing a trigger when the event omits it', async () => {
+    await run({ trigger: undefined });
+
+    const [update] = h.sessionUpdate.mock.calls[0] as [Record<string, unknown>];
+    expect(update).toHaveProperty('summaryTrigger');
+    expect(update.summaryTrigger).toBeUndefined();
   });
 });

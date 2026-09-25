@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CONFINED_API_KEY_SCOPES } from '@bike4mind/common';
 import {
   USER_API_KEY_SCOPES,
   GENERIC_MODAL_API_KEY_SCOPES,
@@ -89,5 +89,58 @@ describe('apiKeyScopes catalog', () => {
     expect(ApiKeyScope.OVERWATCH_READ).not.toBe(ApiKeyScope.OVERWATCH_INGEST_WRITE);
     expect(genericValues).not.toContain(ApiKeyScope.OVERWATCH_INGEST_WRITE);
     expect(ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value)).toContain(ApiKeyScope.OVERWATCH_INGEST_WRITE);
+  });
+});
+
+/**
+ * The client catalogs and the shared confined list (@bike4mind/common) are read by
+ * different halves of the system - these surfaces decide what a user may ask for, the
+ * shared constant decides what the mint service and the runtime gate will accept - so
+ * they can only stay honest if something asserts the overlap. DEDICATED_FLOW_SCOPES is
+ * now derived from it; these tests pin the invariants that derivation buys and the ones
+ * it cannot enforce on its own.
+ */
+describe('apiKeyScopes vs the shared CONFINED_API_KEY_SCOPES', () => {
+  const genericValues = GENERIC_MODAL_API_KEY_SCOPES.map(s => s.value);
+
+  it('never offers a confined scope in the generic New-Key modals', () => {
+    // The invariant that actually protects a user: `createUserApiKey` refuses a key that
+    // mixes a confined scope with any other, and the modals are multi-select - so a
+    // confined scope on that list is a selection the mint route rejects. The derivation
+    // makes this hold by construction today; the test is what notices if someone unpicks
+    // it - re-hand-lists DEDICATED_FLOW_SCOPES, or builds the modal list from some other
+    // filter.
+    for (const scope of CONFINED_API_KEY_SCOPES) {
+      expect(genericValues, `${scope} is confined and must not be offered in the generic modals`).not.toContain(scope);
+    }
+  });
+
+  it('derives DEDICATED_FLOW_SCOPES as exactly the confined scopes documented for users', () => {
+    const documentedConfined = USER_API_KEY_SCOPES.map(s => s.value).filter(v => CONFINED_API_KEY_SCOPES.includes(v));
+    expect([...DEDICATED_FLOW_SCOPES].sort()).toEqual([...documentedConfined].sort());
+  });
+
+  it('gives every confined scope a home in exactly one client catalog', () => {
+    // Where the derivation stops: a confined scope kept out of the user catalog still has
+    // to be registered as admin-only or non-mintable by hand, or it is a scope no surface
+    // here can mint. Same failure mode the coverage test above guards, narrowed to the
+    // scopes whose handling the shared constant already has an opinion about.
+    const adminValues = ADMIN_ONLY_API_KEY_SCOPES.map(s => s.value);
+    for (const scope of CONFINED_API_KEY_SCOPES) {
+      const homes = [
+        DEDICATED_FLOW_SCOPES.has(scope) && 'dedicated-flow',
+        adminValues.includes(scope) && 'admin-only',
+        NON_MINTABLE_API_KEY_SCOPES.has(scope) && 'non-mintable',
+      ].filter(Boolean);
+      expect(homes, `confined scope ${scope} must be registered in exactly one client catalog`).toHaveLength(1);
+    }
+  });
+
+  it('keeps admin:* out of the confined list and inside the non-mintable one', () => {
+    // The pair that shows confinement and mintability are different questions, and why
+    // NON_MINTABLE_API_KEY_SCOPES cannot simply be derived: `admin:*` is broad by design
+    // (never confined) yet may never be minted from any surface here.
+    expect(CONFINED_API_KEY_SCOPES).not.toContain(ApiKeyScope.ADMIN);
+    expect(NON_MINTABLE_API_KEY_SCOPES.has(ApiKeyScope.ADMIN)).toBe(true);
   });
 });

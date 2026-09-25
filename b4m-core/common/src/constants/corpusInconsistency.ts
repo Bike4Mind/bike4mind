@@ -115,7 +115,10 @@ const EXCERPT_MAX = 240;
  * report is stored on the lake document, so the ceiling is a real failure mode rather than a
  * theoretical one, and `documentCount` keeps the truncation from costing the reader the number.
  */
-const EVIDENCE_MAX = 20;
+// Exported so `LAKE_FINDING_SOURCE_MAX` can be pinned against it by test rather than by comment.
+// They stay two constants deliberately: this one bounds a REPORT stored on the lake document, the
+// other bounds a persisted finding ROW written by producers that never build a report at all.
+export const EVIDENCE_MAX = 20;
 
 /**
  * Sentence-ish split. Deliberately crude: a full NLP splitter buys nothing here, because every rule
@@ -465,13 +468,28 @@ function detectExpiredClaims(documents: CorpusDocument[], nowYear: number): Inco
   return findings;
 }
 
+/**
+ * The identity of a finding within one corpus: its rule plus what it is about. Both halves are
+ * already normalized (`subject` is a grouping key rather than prose), so this is stable across runs
+ * and is what a caller keys a human's ruling on. NUL-joined because neither half can contain one,
+ * which a separator like ':' could not promise - `subject` keeps '.' and '-'.
+ *
+ * Deliberately excludes the detector. It is part of a persisted row's key (#3039) but not of a
+ * report's, because one report is the output of exactly one detector.
+ */
+export const inconsistencyFindingKey = (kind: InconsistencyKind, subject: string): string => `${kind}\u0000${subject}`;
+
 export interface CorpusInconsistencyReport {
   /**
    * Bounded by `maxFindings`, allocated per kind - see `capPerKind`. Read `countsByKind` for the
    * exact totals and `truncated` for whether anything was dropped.
    */
   findings: InconsistencyFinding[];
-  /** Exact, always over ALL findings - never affected by `maxFindings`. */
+  /**
+   * Exact over every finding this run REPORTS - never affected by `maxFindings`, but the `dismissed`
+   * option subtracts from it, because a count that still carried a dismissal would resurrect it in
+   * every summary rendered from these numbers.
+   */
   countsByKind: Record<InconsistencyKind, number>;
   /**
    * True when the pass did not read every chunk of every member, so counts are a LOWER BOUND.
@@ -486,6 +504,25 @@ export interface CorpusInconsistencyReport {
   sampled: boolean;
   /** True when `maxFindings` dropped findings. `sampled` cannot serve this - it is about members. */
   truncated: boolean;
+}
+
+/**
+ * What `detectCorpusInconsistencies` returns: the report, plus the findings `dismissed` removed
+ * from it.
+ *
+ * Two types rather than one field on the report because `CorpusInconsistencyReport` is the STORED
+ * shape - `LakeInconsistencyReport` extends it and goes onto the lake document - and `suppressed`
+ * must never be stored. It carries excerpts of documents a curator has already ruled on, which is
+ * the retention obligation the finding rows exist to hold instead.
+ */
+export interface CorpusInconsistencyResult extends CorpusInconsistencyReport {
+  /**
+   * Findings this run still saw but did not report, because a curator dismissed them. Handed back so
+   * a caller can keep their persisted rows current: a dismissal is content-blind (it keys on kind and
+   * subject, not on the passages), so the evidence behind one can change into a far worse
+   * contradiction, and a row frozen at the original excerpts would be the only trace left anywhere.
+   */
+  suppressed: InconsistencyFinding[];
 }
 
 /**
@@ -505,6 +542,27 @@ export interface LakeInconsistencyReport extends CorpusInconsistencyReport {
 }
 
 /**
+ * What the LAKE DOCUMENT stores about a detection run: everything the run reported about ITSELF,
+ * and none of what it found.
+ *
+ * The findings are rows now (`DataLakeFindingTypes`), so storing them here as well would be a
+ * second copy with no identity - the exact overwritable blob the findings model replaced. It would
+ * also keep a retention obligation on the lake: a finding carries a 240-char `excerpt` of each
+ * source, and the purge-time sweeps reach rows only, so a blob quoting a destroyed document had
+ * nothing to clean it up.
+ *
+ * The run-level flags stay here rather than moving onto every row, because they describe the PASS
+ * and not any one problem: `sampled` and `memberCount` are properties of what was read, and
+ * `countsByKind` is the EXACT per-kind total, which the capped row set cannot reconstruct. That is
+ * what `computeLakeHealth` renders as its counts-only, read-gated view.
+ */
+export type LakeInconsistencyScanSummary = Omit<LakeInconsistencyReport, 'findings'>;
+
+/** Drop a run's findings, keeping only what the run reports about itself. */
+export const toScanSummary = ({ findings, ...summary }: LakeInconsistencyReport): LakeInconsistencyScanSummary =>
+  summary;
+
+/**
  * Run every rule over a corpus.
  *
  * `nowYear` is injected rather than read from the clock so a report is reproducible - a test, and a
@@ -512,14 +570,32 @@ export interface LakeInconsistencyReport extends CorpusInconsistencyReport {
  */
 export function detectCorpusInconsistencies(
   documents: CorpusDocument[],
-  options: { nowYear: number; sampled?: boolean; maxFindings?: number; metricUnitRequired?: boolean }
-): CorpusInconsistencyReport {
-  const findings = [
+  options: {
+    nowYear: number;
+    sampled?: boolean;
+    maxFindings?: number;
+    metricUnitRequired?: boolean;
+    /**
+     * Keys (`inconsistencyFindingKey`) a human has already ruled on as not-a-problem. Dropped
+     * BEFORE `countsByKind` and `maxFindings`, so a dismissal removes the finding from every number
+     * this report carries and hands its share of the cap back to the findings still in play.
+     */
+    dismissed?: ReadonlySet<string>;
+  }
+): CorpusInconsistencyResult {
+  const detected = [
     ...detectSuperlativeConflicts(documents),
     ...detectMetricDisagreements(documents, options.metricUnitRequired),
     ...detectRelationshipConflicts(documents),
     ...detectExpiredClaims(documents, options.nowYear),
   ];
+  const dismissed = options.dismissed;
+  const findings: InconsistencyFinding[] = [];
+  const suppressed: InconsistencyFinding[] = [];
+  for (const finding of detected) {
+    if (dismissed?.has(inconsistencyFindingKey(finding.kind, finding.subject))) suppressed.push(finding);
+    else findings.push(finding);
+  }
 
   const countsByKind: Record<InconsistencyKind, number> = {
     'superlative-conflict': 0,
@@ -539,6 +615,7 @@ export function detectCorpusInconsistencies(
     countsByKind,
     sampled: options.sampled ?? false,
     truncated: kept.length < findings.length,
+    suppressed,
   };
 }
 

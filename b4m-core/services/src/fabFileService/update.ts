@@ -17,6 +17,7 @@ import mime from 'mime-types';
 import { v4 as uuidv4 } from 'uuid';
 import { reconcileLakeTags } from './reconcileLakeTags';
 import type { LakeConfigAuditAdapters } from '../dataLakeService/recordLakeConfigChange';
+import type { LakeMembershipAuditAdapters } from '../dataLakeService/recordLakeMembershipChange';
 
 import { z } from 'zod';
 
@@ -46,20 +47,21 @@ const EXPIRE_IN_SECONDS = 3600;
 
 type UpdateFabFileParameters = z.infer<typeof updateFabFileSchema>;
 
-interface UpdateFabFileAdapters extends LakeConfigAuditAdapters {
-  db: LakeConfigAuditAdapters['db'] & {
-    fabFiles: Pick<
-      IFabFileRepository,
-      'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
-    >;
-    dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
-    // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
-    dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
-    // Forwarded to reconcileLakeTags for the admission contract's lever (#1680). Required for the
-    // same reason it is there: a door that could omit it would silently skip the contract.
-    adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
-    scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
-  };
+interface UpdateFabFileAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
+  db: LakeConfigAuditAdapters['db'] &
+    LakeMembershipAuditAdapters['db'] & {
+      fabFiles: Pick<
+        IFabFileRepository,
+        'shareable' | 'update' | 'findById' | 'pullTagsByFabFileId' | 'computeDataLakeStats'
+      >;
+      dataLakes: Pick<IDataLakeRepository, 'findByDatalakeTag' | 'setStats' | 'activateIfDraft' | 'find'>;
+      // Optional: forwarded to reconcileLakeTags; absent -> createdByUserId + org-rung fallback there.
+      dataLakeAccessGrants?: Pick<IDataLakeAccessGrantRepository, 'listByLake' | 'listActiveByLakes'>;
+      // Forwarded to reconcileLakeTags for the admission contract's lever (#1680). Required for the
+      // same reason it is there: a door that could omit it would silently skip the contract.
+      adminSettings: Pick<IAdminSettingsRepository, 'findAll' | 'findBySettingNames'>;
+      scopedSettings?: Pick<IScopedSettingsRepository, 'findOverrides'>;
+    };
   /** Forwarded to `reconcileLakeTags`; see its own adapter for what this is for. */
   logger?: { warn?: (msg: string, ...args: unknown[]) => void };
   storage: {

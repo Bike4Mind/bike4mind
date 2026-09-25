@@ -22,12 +22,16 @@ import {
   ImageModerationIncident as ImageModerationIncidentInput,
   insufficientCreditsError,
   ImageOutputFormatSchema,
+  AttachmentLakeAccess,
+  IFabFileDocument,
 } from '@bike4mind/common';
 import {
   isImageServeable,
   isBflImageModel,
   isGeminiImageModel,
   isGPTImage2Model,
+  isGPTImageModel,
+  MAX_REFERENCE_IMAGES,
   supportsImageEdit,
   EDIT_SUPPORTED_IMAGE_MODELS,
   IMAGES_PER_EDIT_REQUEST,
@@ -50,13 +54,13 @@ import {
   BFLImageService,
   GeminiImageService,
   OpenAIImageService,
+  downloadImageAsBuffer,
 } from '@bike4mind/utils';
 import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { truncateImagePrompt } from './imagePromptTruncation';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
-import axios from 'axios';
 import { fileTypeFromBuffer } from 'file-type';
 import mongoose from 'mongoose';
 import { v4 as uuidv4 } from 'uuid';
@@ -89,6 +93,9 @@ export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   aspect_ratio: z.string().optional(),
   size: z.string().optional(),
   fabFileIds: z.array(z.string()).optional(),
+  // Declared here as well as on EditImageRequestBodySchema: invoke() parses the queue payload
+  // through this schema, and an undeclared key is stripped before it reaches process().
+  referenceImageFabFileIds: z.array(z.string()).max(MAX_REFERENCE_IMAGES).optional(),
   image: z.string(),
   // `n` is inherited from OpenAIImageGenerationInput (1-10, the range generation honors) and
   // deliberately left alone: editing renders IMAGES_PER_EDIT_REQUEST whatever it says, so it is
@@ -127,16 +134,16 @@ interface IImageEditServiceOptions {
   imageProcessorLambdaName?: string;
   /** Checks an edited image for explicit content before it's stored. Optional so existing callers/tests keep compiling; the moderation hook is a no-op when absent. */
   imageModerationService?: ImageModerationService;
+  /** Mirrors ImageGenerationService: scopes fabFile lookups so a lake-only image still resolves. */
+  resolveLakeAccess?: (user: IUserDocument, logger: Logger) => Promise<AttachmentLakeAccess>;
 }
 
-async function downloadImage(url: string) {
-  const response = await axios.get(url, { responseType: 'arraybuffer' });
-  return response.data;
-}
-
-async function imageUrlToBase64(imageUrl: string): Promise<string> {
-  const data = await downloadImage(imageUrl);
-  const buffer = Buffer.from(data, 'binary');
+async function imageUrlToBase64(imageUrl: string, trustConfiguredStorageOrigin = false): Promise<string> {
+  // MUST stay on `downloadImageAsBuffer`: the edit-image request body accepts `image` as a bare
+  // string, so this URL is caller-controlled and a direct axios.get here is an SSRF primitive.
+  // `trustConfiguredStorageOrigin` must only be set true by a caller passing a URL it just got
+  // back from `getSignedUrl` - never for `imageUrl`/`sourceImageUrl`, which came from the request.
+  const buffer = await downloadImageAsBuffer(imageUrl, { trustConfiguredStorageOrigin });
   return buffer.toString('base64');
 }
 
@@ -152,6 +159,7 @@ export class ImageEditService {
   private tokenizer: TiktokenTokenizer;
   private imageProcessorLambdaName?: string;
   private imageModerationService?: ImageModerationService;
+  private resolveLakeAccess?: IImageEditServiceOptions['resolveLakeAccess'];
 
   constructor(options: IImageEditServiceOptions) {
     this.db = options.db;
@@ -163,6 +171,7 @@ export class ImageEditService {
     this.abilityGetter = options.abilityGetter;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
     this.imageModerationService = options.imageModerationService;
+    this.resolveLakeAccess = options.resolveLakeAccess;
     this.deleteFabFile = options.deleteFabFile;
     this.tokenizer = new TiktokenTokenizer({ logger: Logger.globalInstance });
   }
@@ -294,6 +303,78 @@ export class ImageEditService {
     return result;
   }
 
+  /**
+   * Resolves explicit gpt-image style anchors for the edit path, in the caller's order.
+   *
+   * Access-scoped via findAccessibleInIds, as the mask lookup in `process` now is too. A
+   * reference the caller named but we cannot serve is an error rather than a silent drop
+   * (where an unreachable mask is only dropped): these ids were asked for by name,
+   * and quietly rendering fewer anchors bills for an image the user did not describe.
+   * Mirrors ImageGenerationService.resolveReferenceImages - keep the two in step.
+   */
+  private async resolveReferenceImages({
+    referenceImageFabFileIds,
+    userId,
+    userGroups,
+    lakeAccess,
+    model,
+    logger,
+  }: {
+    referenceImageFabFileIds?: string[];
+    userId: string;
+    userGroups?: string[];
+    lakeAccess?: AttachmentLakeAccess;
+    model: string;
+    logger: Logger;
+  }): Promise<IFabFileDocument[]> {
+    if (!referenceImageFabFileIds?.length) {
+      return [];
+    }
+
+    if (!isGPTImageModel(model)) {
+      logger.debug('Dropping reference images for a model that cannot carry them', {
+        model,
+        requested: referenceImageFabFileIds.length,
+      });
+      return [];
+    }
+
+    // A repeated id would occupy an anchor slot and pay OpenAI's per-image input cost twice
+    // for bytes the model has already seen. First occurrence wins, so the caller's ordering
+    // survives de-duplication. Counted after de-duplication, because the cap exists to bound
+    // how many images we actually pay to send.
+    const uniqueIds = [...new Set(referenceImageFabFileIds)];
+    if (uniqueIds.length > MAX_REFERENCE_IMAGES) {
+      throw new BadRequestError(`At most ${MAX_REFERENCE_IMAGES} reference images may be supplied`);
+    }
+
+    const files = await this.db.fabFiles.findAccessibleInIds(uniqueIds, { userId, userGroups }, lakeAccess);
+    const byId = new Map(files.filter(file => !!file.id).map(file => [file.id as string, file]));
+
+    return uniqueIds.map(id => {
+      const file = byId.get(id);
+      if (!file) {
+        // Same distinction the mask guard in `process` makes: when lake resolution failed, a miss
+        // is "we could not check", not "you may not have this". Reporting it as a 400 would blame
+        // the caller for our outage and send them off verifying a share that is fine.
+        if (lakeAccess?.resolutionFailed) {
+          throw new InternalServerError(
+            `Could not verify access to reference image ${id} because the data-lake lookup failed. Please try again.`
+          );
+        }
+        throw new BadRequestError(`Reference image ${id} was not found or is not accessible`);
+      }
+      if (!file.mimeType.startsWith('image')) throw new BadRequestError(`Reference image ${id} is not an image`);
+      if (!isImageServeable(file)) {
+        throw new BadRequestError(`Reference image ${id} is not available (moderation pending or blocked)`);
+      }
+      // Without a storage path there is nothing to presign. An error rather than a skip, so a
+      // half-rendered set can never reach the provider through this path either.
+      if (!file.filePath) throw new BadRequestError(`Reference image ${id} has no stored file`);
+      return file;
+    });
+  }
+
   public async process({ body, logger }: { body: z.infer<typeof ImageEditBodySchema>; logger: Logger }) {
     const {
       sessionId,
@@ -308,6 +389,7 @@ export class ImageEditService {
       background,
       aspect_ratio,
       fabFileIds,
+      referenceImageFabFileIds,
       size,
       quality,
       image: sourceImageUrl,
@@ -351,7 +433,9 @@ export class ImageEditService {
 
     const clientMessageSender = new ClientMessageSender(this.db, logger);
     const wsEndpoint = this.wsHttpsUrl;
-    const fabFiles = await this.db.fabFiles.findAllInIds(fabFileIds || []);
+    // Assigned inside the try so a failed lookup lands on the quest as an error rather than
+    // escaping this method; the finally's mask cleanup reads it either way.
+    let fabFiles: IFabFileDocument[] = [];
 
     // Persist status='running' + heartbeat updatedAt so a hung/killed edit is recoverable by the
     // check-timeout endpoint. Disposer is cleared in the finally below. See startQuestHeartbeat.
@@ -359,6 +443,67 @@ export class ImageEditService {
 
     try {
       stopHeartbeat = await startQuestHeartbeat(this.db, quest, logger, 'image-edit-heartbeat');
+
+      // Owner-wide lake access for scoping every fabFile lookup on this path - the mask below and
+      // the anchors further down. Resolved unconditionally, mirroring ImageGenerationService: the
+      // mask lookup runs on every edit, so there is no anchor-free mainline left to spare the
+      // roundtrip.
+      //
+      // Covers PUBLISHED lakes only. The resolver behind this is active-only while the browse door
+      // that admits a file to the workbench also serves draft lakes, so a file in an unpublished
+      // lake is attachable and then dropped here. Pre-existing and shared with generation and the
+      // chat tool, not introduced by the scoping - see findAccessibleInIds' docblock.
+      //
+      // A rejection is caught rather than propagated, but NOT flattened into "no lake arms": that
+      // would report an outage as a clean deny. It is recorded as `resolutionFailed` and acted on
+      // at the guard below, so a transient lake failure still lets an edit whose inputs all resolve
+      // by ownership run normally.
+      const lakeAccess = this.resolveLakeAccess
+        ? await this.resolveLakeAccess(user, logger).catch(error => {
+            logger.warn('[ImageEdit] Lake access resolution failed; falling back to ownership-only', {
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return { resolutionFailed: true } as AttachmentLakeAccess;
+          })
+        : undefined;
+
+      // Access-scoped: a caller-supplied mask id the caller cannot reach is never presigned and
+      // never fed to a provider as an alpha channel.
+      const requestedFabFileIds = [...new Set(fabFileIds ?? [])];
+      fabFiles = await this.db.fabFiles.findAccessibleInIds(
+        requestedFabFileIds,
+        { userId, userGroups: user.groups ?? undefined },
+        lakeAccess
+      );
+
+      // STRICT, like the anchor lookup below and unlike ImageGenerationService.selectInputImage:
+      // an id that does not resolve fails the edit rather than being dropped.
+      //
+      // Dropping is not neutral here, because the mask slot is positional - `fabFiles.find(first
+      // image)` further down. Losing the caller's first image silently promotes the next one, so
+      // the edit runs on an input they never chose, renders a different picture, and bills for it.
+      // Generation can afford leniency because its dropped candidates are guesses (carry-forward,
+      // a stray attachment); every id here was put in the request by the client on the caller's
+      // behalf, and a draft-lake file the workbench itself admitted is exactly the case that
+      // reaches this (#3279).
+      //
+      // The `finally` cleanup reads the same list, so an unresolved id also stops reaching
+      // deleteFabFile - which already refused it.
+      const resolvedIds = new Set(fabFiles.map(file => file.id));
+      const unresolvedIds = requestedFabFileIds.filter(id => !resolvedIds.has(id));
+      if (unresolvedIds.length > 0) {
+        // Separated because the remedies differ: a deny is the caller's to clear, an outage is
+        // ours and is worth retrying. Flattening them would send someone off auditing a share
+        // that is fine.
+        if (lakeAccess?.resolutionFailed) {
+          throw new InternalServerError(
+            'Could not verify access to the attached files because the data-lake lookup failed. The edit was not run - please try again.'
+          );
+        }
+        throw new BadRequestError(
+          `Attached file ${unresolvedIds.join(', ')} was not found or is not accessible. Remove it from the workbench and try again.`
+        );
+      }
 
       const apiKeyTable = await getEffectiveLLMApiKeys(userId, { db: this.db, getSettingsByNames });
 
@@ -463,12 +608,26 @@ export class ImageEditService {
       if (!sourceBase64Image) throw new NotFoundError('Source image not found');
 
       const signedUrl = fileImage?.filePath ? await this.fabFileStorage.getSignedUrl(fileImage.filePath) : undefined;
-      const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl) : undefined;
+      // `signedUrl` was just minted above from `fabFileStorage.getSignedUrl` - trusted provenance.
+      const maskBase64Image = signedUrl ? await imageUrlToBase64(signedUrl, true) : undefined;
+
+      const referenceImages = await this.resolveReferenceImages({
+        referenceImageFabFileIds,
+        userId,
+        userGroups: user.groups ?? undefined,
+        lakeAccess,
+        model,
+        logger,
+      });
+      const referenceImageUrls = await Promise.all(
+        referenceImages.map(reference => this.fabFileStorage.getSignedUrl(reference.filePath as string))
+      );
 
       Logger.globalInstance.debug(`[DEBUG] Processing ${provider} image edit:`, {
         model,
         aspect_ratio,
         hasMask: !!maskBase64Image,
+        referenceImageCount: referenceImageUrls.length,
       });
 
       let editResponse: ImageEditResponse;
@@ -502,6 +661,11 @@ export class ImageEditService {
           user: userId,
           background,
           output_format,
+          // Trail the edit source; OpenAI binds the mask to the first entry, which must stay
+          // `sourceBase64Image` or an inpainting request would mask an anchor instead.
+          referenceImages: referenceImageUrls,
+          // `referenceImageUrls` are all freshly minted `fabFileStorage.getSignedUrl` calls above.
+          trustConfiguredStorageOrigin: true,
         });
       }
 
@@ -533,7 +697,7 @@ export class ImageEditService {
         model,
       });
 
-      const buffer = await downloadImage(result);
+      const buffer = await downloadImageAsBuffer(result);
       const fileType = await fileTypeFromBuffer(buffer);
       const filename = `${uuidv4()}.${fileType?.ext}`;
 

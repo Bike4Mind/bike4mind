@@ -5,6 +5,7 @@ import { pushChatMessage, updateSessionToServer } from '@client/app/utils/sessio
 import { getOrFetchSession } from '@client/app/hooks/data/sessions';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
+import { visibleReplyForExport } from '@client/app/utils/replyUtils';
 import { toast } from 'sonner';
 import { IFabFileDocument, ISessionDocument, IChatHistoryItem, IAgent } from '@bike4mind/common';
 import React, {
@@ -492,9 +493,10 @@ export const SessionsProvider: FC<SessionsProviderProps> = ({ children }) => {
     let dataString = title + '\n\n';
     quests.forEach((quest: IChatHistoryItem) => {
       dataString += 'User:' + quest.prompt + '\n';
-      (quest.replies || []).forEach(reply => {
+      const reply = visibleReplyForExport(quest);
+      if (reply) {
         dataString += 'AI:' + reply + '\n';
-      });
+      }
       dataString += '\n';
     });
     const blob = new Blob([dataString], { type: 'text/plain;charset=utf-8' });

@@ -1,5 +1,7 @@
 import {
   ChatModels,
+  createThinkMarkerEscaper,
+  escapeThinkMarkers,
   ImageModels,
   IMessage,
   ModelBackend,
@@ -399,7 +401,7 @@ export class XAIBackend implements ICompletionBackend {
         // Handle reasoning content for thinking models (only if thinking is enabled)
         if (thinkingEnabled && (c.message as any).reasoning_content) {
           const reasoningContent = (c.message as any).reasoning_content;
-          streamedText[c.index] = `<think>${reasoningContent}</think>${c.message.content || ''}`;
+          streamedText[c.index] = `<think>${escapeThinkMarkers(reasoningContent)}</think>${c.message.content || ''}`;
           continue;
         }
 
@@ -573,6 +575,7 @@ export class XAIBackend implements ICompletionBackend {
 
     const func: { name?: string; id?: string; parameters?: string }[] = [];
     let isInThinkingBlock = false;
+    const reasoningEscaper = createThinkMarkerEscaper();
     let cachedTokensFromStream = 0; // Track cached tokens from streaming chunks
     // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
     // capture) - the terminal chunk of a round carries it, earlier chunks don't.
@@ -597,11 +600,12 @@ export class XAIBackend implements ICompletionBackend {
 
         // Handle reasoning content for thinking models (only if thinking is enabled)
         if (thinkingEnabled && (c.delta as any).reasoning_content) {
+          const escapedReasoning = reasoningEscaper.push((c.delta as any).reasoning_content);
           if (!isInThinkingBlock) {
             isInThinkingBlock = true;
-            streamedText[c.index] = '<think>' + (c.delta as any).reasoning_content;
+            streamedText[c.index] = '<think>' + escapedReasoning;
           } else {
-            streamedText[c.index] = (c.delta as any).reasoning_content;
+            streamedText[c.index] = escapedReasoning;
           }
           return;
         }
@@ -609,7 +613,7 @@ export class XAIBackend implements ICompletionBackend {
         // Handle end of reasoning content
         if (isInThinkingBlock && c.delta.content && !(c.delta as any).reasoning_content) {
           isInThinkingBlock = false;
-          streamedText[c.index] = '</think>' + (c.delta.content || '');
+          streamedText[c.index] = reasoningEscaper.flush() + '</think>' + (c.delta.content || '');
           return;
         }
 
@@ -635,6 +639,18 @@ export class XAIBackend implements ICompletionBackend {
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
+    }
+
+    // Close a <think> block left open because the stream ended on reasoning with no
+    // following prose - a reasoning-to-tool turn. Without this the escaper's held-back
+    // partial marker is lost when the tool recursion creates a fresh reasoningEscaper.
+    if (isInThinkingBlock) {
+      await callback([reasoningEscaper.flush() + '</think>'], {
+        inputTokens: accumInputTokens + inputTokens,
+        outputTokens: accumOutputTokens + outputTokens,
+        toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+      });
+      isInThinkingBlock = false;
     }
 
     // Extract cache stats after streaming completes (xAI caching is automatic)

@@ -1,4 +1,9 @@
-import { IFabFileRepository, IProjectRepository, ISessionRepository } from '@bike4mind/common';
+import {
+  IFabFileRepository,
+  IProjectRepository,
+  ISessionRepository,
+  ISessionAgentConfigRepository,
+} from '@bike4mind/common';
 import { NotFoundError } from '@bike4mind/utils';
 import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
@@ -14,6 +19,10 @@ interface DeleteSessionAdapters {
     sessions: ISessionRepository;
     projects: IProjectRepository;
     fabFiles: IFabFileRepository;
+    // Optional: this is a published, patch-released signature (re-exported from
+    // @bike4mind/services), so an existing caller built against the pre-cleanup shape must keep
+    // compiling and running without it - the cleanup below is then just skipped for that caller.
+    sessionAgentConfigs?: ISessionAgentConfigRepository;
   };
 }
 
@@ -81,6 +90,12 @@ export const deleteSession = async (
   await db.projects.removeSession(session.id);
 
   await db.fabFiles.deleteManyInIds(ownedFiles.map(f => f.id));
+
+  // Otherwise an enabled row lingers forever: the proactive-messaging worker's own
+  // session.deletedAt guard stops it firing, but the cron's eligibility scan only skips a
+  // stale row on session-not-found/deleted, it never deletes it (see getEligibleConfigs.ts).
+  // Optional so a caller on the pre-cleanup adapter shape still compiles and runs.
+  await db.sessionAgentConfigs?.deleteBySessionId(session.id);
 
   const mostRecent = await db.sessions.findRecentlyUpdatedByUserId(userId);
 

@@ -393,6 +393,11 @@ export const web = new sst.aws.Nextjs(
       // default) enforces every declared gate. Declared here so the lever is
       // greppable from infra; see docs/architecture/api-key-scope-rollout.md.
       API_KEY_SCOPE_STAGING: process.env.API_KEY_SCOPE_STAGING || '',
+      // Grant-enforcement lever for the federated AI-token exchange (apps/client/pages/api/oauth/
+      // ai-token.ts). Empty (default) leaves the exchange in grace mode (logs a would-reject when a
+      // (user,client) grant is missing); 'true' enforces (403s it). Declared here so the lever is
+      // greppable from infra and can be flipped per stage, mirroring API_KEY_SCOPE_STAGING.
+      OAUTH_AI_TOKEN_ENFORCE_GRANT: process.env.OAUTH_AI_TOKEN_ENFORCE_GRANT || '',
       APP_URL: $dev ? 'http://localhost:3000' : appUrlForLambdaEnv(),
       // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
       // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the
@@ -441,6 +446,13 @@ export const web = new sst.aws.Nextjs(
       // conversion event live in apps/client/app/utils/redditPixel.ts / signupConversion.ts.
       ...($app.stage === 'production' && process.env.REDDIT_PIXEL_ID
         ? { NEXT_PUBLIC_REDDIT_PIXEL_ID: process.env.REDDIT_PIXEL_ID }
+        : {}),
+      // Meta ads pixel: same production-only, account-tied, no-fallback rule as Reddit above.
+      // Consent-deferred loading lives in apps/client/app/utils/metaPixel.ts, and the CSP hosts
+      // it needs are allow-listed in apps/client/proxy.ts - a pixel id set without those is
+      // blocked silently.
+      ...($app.stage === 'production' && process.env.META_PIXEL_ID
+        ? { NEXT_PUBLIC_META_PIXEL_ID: process.env.META_PIXEL_ID }
         : {}),
       // Apex the GA cookie is pinned to, so the marketing site and this app resolve
       // to ONE visitor across the subdomain hop. Env-only with no brand fallback

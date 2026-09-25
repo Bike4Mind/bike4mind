@@ -155,6 +155,51 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
     await promise;
     expect(res._getStatusCode()).toBe(403);
   });
+
+  // On a NON-public artifact the token is the gate's only enforcing surface: revoking it
+  // would strand a gate nothing honors - the same state PATCH refuses to create.
+  it('refuses to revoke while a gate on a private artifact has no other enforcing surface', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      visibility: 'private',
+      accessGate: { kind: 'passphrase', passphraseHash: 'x' },
+    });
+    const { res, promise } = run({ method: 'DELETE' });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().code).toBe('REVOKE_WOULD_ORPHAN_GATE');
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('allows the revoke when the artifact is public - visibility still enforces the gate', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      visibility: 'public',
+      accessGate: { kind: 'passphrase', passphraseHash: 'x' },
+    });
+    const { res, promise } = run({ method: 'DELETE' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateOne).toHaveBeenCalled();
+  });
+
+  it('allows the revoke on an ungated private artifact', async () => {
+    mockLoad.mockResolvedValue({
+      publicId: 'pub1',
+      ownerId: 'owner1',
+      shareToken: 'EXISTING',
+      visibility: 'private',
+      accessGate: null,
+    });
+    const { res, promise } = run({ method: 'DELETE' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockUpdateOne).toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/publish/[publicId]/share-token', () => {

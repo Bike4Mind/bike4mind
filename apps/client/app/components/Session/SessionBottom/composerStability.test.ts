@@ -85,7 +85,7 @@ describe('chat composer - prop identity stability (regression)', () => {
     expect(catchBody).not.toBeNull();
     const body = catchBody?.[0] ?? '';
 
-    const rollbackIdx = body.indexOf('setChatCompletion(prev =>');
+    const rollbackIdx = body.indexOf('setChatCompletion(rollbackOptimisticGenerating)');
     const submittingIdx = body.indexOf('setSubmitting(false)');
     const workBenchIdx = body.indexOf('setWorkBenchAgents([])');
 

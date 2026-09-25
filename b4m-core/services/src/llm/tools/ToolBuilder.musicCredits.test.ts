@@ -27,6 +27,7 @@ const makeBuilder = ({
   hasCreditStore = true,
 }: { credits?: number; hasCreditStore?: boolean } = {}) => {
   const toolCreditsMap = new Map<string, number[]>();
+  const toolCreditModels = new Set<string>();
   const record = vi.fn().mockResolvedValue(undefined);
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), updateMetadata: vi.fn() };
   const deps = {
@@ -37,8 +38,9 @@ const makeBuilder = ({
       usageEvents: { record },
     },
     toolCreditsMap,
+    toolCreditModels,
   } as unknown as ToolBuilderConfig;
-  return { builder: new ToolBuilder(deps), toolCreditsMap, record };
+  return { builder: new ToolBuilder(deps), toolCreditsMap, toolCreditModels, record };
 };
 
 const quest = () => ({ id: 'q1', sessionId: 's1', creditsUsed: 0, images: [] as string[] }) as never;
@@ -176,5 +178,19 @@ describe('ToolBuilder image credit reservation', () => {
       MODELS
     );
     expect(toolCreditsMap.has('image_generation')).toBe(false);
+  });
+});
+
+describe('ToolBuilder music ledger model attribution', () => {
+  it('records the music model that charged, not the quest chat model', () => {
+    const { builder, toolCreditModels } = makeBuilder();
+    builder.settleMusicCredits(quest(), finishData(SHORT, 'a.mp3'), true);
+    expect(Array.from(toolCreditModels)).toEqual(['eleven_music_v1']);
+  });
+
+  it('records no charging model when enforcement is off', () => {
+    const { builder, toolCreditModels } = makeBuilder();
+    builder.settleMusicCredits(quest(), finishData(SHORT, 'a.mp3'), false);
+    expect(toolCreditModels.size).toBe(0);
   });
 });

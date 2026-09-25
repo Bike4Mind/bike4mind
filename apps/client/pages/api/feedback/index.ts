@@ -8,7 +8,7 @@ import {
   FeedbackStatus,
   Permission,
   PromptMetaZodSchema,
-  redactFunctionCallsForViewer,
+  redactPromptMetaForViewer,
   truncateFeedbackContent,
 } from '@bike4mind/common';
 import type {
@@ -411,14 +411,15 @@ const handler = baseApi()
     }
 
     // A bug report leaves the product entirely (third-party Slack workspace, unencrypted email
-    // to a static recipient list). functionCalls[].returnValue can hold verbatim tool output -
-    // private corpus chunks, file contents - that the reporter never chose to disclose to those
-    // destinations just by clicking "report a bug". Redact only for these two egress points; the
-    // FeedbackModel record saved above keeps the full promptMeta, gated by the existing
-    // admin-only read check on this same route.
-    const promptMetaForExternalEgress = promptMeta
-      ? { ...promptMeta, functionCalls: redactFunctionCallsForViewer(promptMeta.functionCalls) }
-      : promptMeta;
+    // to a static recipient list). promptMeta can hold verbatim owner-corpus text - tool output in
+    // functionCalls[].returnValue, and the retrieved passage in citables[].metadata.fullContext -
+    // that the reporter never chose to disclose to those destinations just by clicking "report a
+    // bug". This goes through redactPromptMetaForViewer rather than redacting one field itself, so
+    // a new owner-only promptMeta field is covered here the moment it is added to that list; a
+    // per-field call here was how fullContext reached the email body. Redact only for these two
+    // egress points; the FeedbackModel record saved above keeps the full promptMeta, gated by the
+    // existing admin-only read check on this same route.
+    const promptMetaForExternalEgress = redactPromptMetaForViewer(promptMeta, false);
 
     // Built once for both channels so a link in Slack and the same link in the email can never
     // disagree. Null on a deploy with no APP_URL: both channels then render no link section

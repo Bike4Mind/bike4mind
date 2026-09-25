@@ -5,6 +5,7 @@ import {
 } from '@bike4mind/utils/retrievalExclusion';
 import {
   DATA_LAKE_GROUNDING_MODES,
+  PERSISTED_SESSION_SUMMARY_TRIGGERS,
   IAgentRepository,
   IFabFileRepository,
   IProjectRepository,
@@ -56,6 +57,16 @@ const createSessionParametersSchema = z.object({
   tags: z.array(z.object({ name: z.string(), strength: z.number() })).optional(),
   summary: z.string().optional(),
   summaryAt: z.date().optional(),
+  // Provenance of the summary above, carried by clone/fork/snip so a copy does not land with
+  // summary text and a real summaryAt but blank WHY. Declared here because secureParameters strips
+  // unknown keys, and validated here because the Mongoose write runs no validators - this schema is
+  // the only check between a caller and a stored value. NOTE: declaring it makes it reachable from
+  // the create route's raw body, which is why that route deletes it (see the strip there); this
+  // schema is the copy paths' channel, not a client input.
+  // Persisted list, not the full union - a decision-only reason names no run to have provenance for.
+  // Copy paths pass their source value through toPersistedSummaryTrigger, so a document that somehow
+  // holds one loses the provenance instead of failing the copy.
+  summaryTrigger: z.enum(PERSISTED_SESSION_SUMMARY_TRIGGERS).optional(),
   // Companion of `tags` the way `summaryAt` is of `summary`, so clone/fork must carry it or the
   // spider gate at apps/client/server/events/spider.ts pays to re-tag every copy; snip deliberately
   // does not. Declared here because secureParameters strips unknown keys; still not a client input,

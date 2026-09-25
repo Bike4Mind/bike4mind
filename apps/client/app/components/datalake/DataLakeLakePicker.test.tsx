@@ -27,8 +27,8 @@ const baseProps = {
   isLoading: false,
   isError: false,
   onRetry: vi.fn(),
-  selectedLakeId: null as string | null,
-  onSelect: vi.fn(),
+  selectedLakeIds: [] as string[],
+  onChange: vi.fn(),
   lakeFileCounts: {} as Record<string, number>,
   totalFileCount: 0,
 };
@@ -44,6 +44,35 @@ const renderPicker = (props: Partial<React.ComponentProps<typeof DataLakeLakePic
 
 /** The list lives behind the trigger, so every list assertion opens the menu first. */
 const openMenu = () => fireEvent.click(screen.getByTestId('datalake-lake-picker-btn'));
+
+describe('DataLakeLakePicker - the no-lake scope', () => {
+  const lakes = [lake({ id: 'a', name: 'Research Corpus' }), lake({ id: 'b', name: 'Design Docs' })];
+
+  it('names the empty-but-deliberate scope as its own state, never as all lakes', () => {
+    // These two are opposites - ground on everything vs ground on nothing - and both arrive here
+    // as an empty selection. Showing the second as the first tells a user their chat is reading
+    // the whole corpus when it is reading none of it.
+    renderPicker({ lakes, selectedLakeIds: [], noLakeScope: true, totalFileCount: 170 });
+
+    expect(screen.getByTestId('datalake-lake-picker-label')).toHaveTextContent('No data lakes');
+    expect(screen.getByTestId('datalake-lake-picker-label')).not.toHaveTextContent('All data lakes');
+  });
+
+  it('prints no file count for it, since every lake file is out of scope', () => {
+    // totalFileCount is the all-lakes figure; borrowing it here would put "170" beside a scope
+    // that reaches nothing.
+    renderPicker({ lakes, selectedLakeIds: [], noLakeScope: true, totalFileCount: 170 });
+
+    expect(screen.queryByTestId('datalake-lake-picker-count')).not.toBeInTheDocument();
+  });
+
+  it('leaves the all-lakes row unselected, so the menu agrees with the trigger', () => {
+    renderPicker({ lakes, selectedLakeIds: [], noLakeScope: true });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-all')).not.toHaveClass(menuItemClasses.selected);
+  });
+});
 
 describe('DataLakeLakePicker', () => {
   it('lists the caller lakes with an honest count, so the surface can answer "do I have any?"', () => {
@@ -61,22 +90,109 @@ describe('DataLakeLakePicker', () => {
   });
 
   it('selects a lake, and clears the scope from the all-lakes row', () => {
-    const onSelect = vi.fn();
-    renderPicker({ onSelect, lakes: [lake({ id: 'a', name: 'Research Corpus' })] });
+    const onChange = vi.fn();
+    renderPicker({ onChange, lakes: [lake({ id: 'a', name: 'Research Corpus' })] });
 
     openMenu();
     fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-a'));
-    expect(onSelect).toHaveBeenCalledWith('a');
+    expect(onChange).toHaveBeenCalledWith(['a']);
+
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-all'));
+    // The empty set is the explicit all-lakes scope, not an absence of choice.
+    expect(onChange).toHaveBeenLastCalledWith([]);
+  });
+
+  it('adds to the selection rather than replacing it, so a second lake joins the first', () => {
+    const onChange = vi.fn();
+    renderPicker({
+      onChange,
+      selectedLakeIds: ['a'],
+      lakes: [lake({ id: 'a', name: 'Research Corpus' }), lake({ id: 'b', name: 'Design Docs' })],
+    });
 
     openMenu();
-    fireEvent.click(screen.getByTestId('datalake-lake-picker-all'));
-    // null is the explicit all-lakes scope, not an absence of choice.
-    expect(onSelect).toHaveBeenLastCalledWith(null);
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-b'));
+    expect(onChange).toHaveBeenCalledWith(['a', 'b']);
+  });
+
+  it('untoggles an already-selected lake, leaving the rest of the set intact', () => {
+    const onChange = vi.fn();
+    renderPicker({
+      onChange,
+      selectedLakeIds: ['a', 'b'],
+      lakes: [lake({ id: 'a', name: 'Research Corpus' }), lake({ id: 'b', name: 'Design Docs' })],
+    });
+
+    openMenu();
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-a'));
+    expect(onChange).toHaveBeenCalledWith(['b']);
+  });
+
+  // Without the defaultMuiPrevented opt-out, MUI's useMenuItem dispatches `close` after the
+  // row's own handler, so picking a second lake would mean reopening the menu for every one.
+  // This is the test that fails if a Joy upgrade changes that opt-out.
+  it('stays open while lakes are ticked, so a set can be built in one visit', () => {
+    const onChange = vi.fn();
+    renderPicker({
+      onChange,
+      lakes: [lake({ id: 'a', name: 'Research Corpus' }), lake({ id: 'b', name: 'Design Docs' })],
+    });
+
+    openMenu();
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-a'));
+
+    expect(screen.getByTestId('datalake-lake-picker-menu')).toBeInTheDocument();
+    // Reachable without reopening - the row the user would tick next.
+    fireEvent.click(screen.getByTestId('datalake-lake-picker-lake-b'));
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it('checks the rows in the active set and only those', () => {
+    renderPicker({
+      selectedLakeIds: ['a'],
+      lakes: [lake({ id: 'a', name: 'Research Corpus' }), lake({ id: 'b', name: 'Design Docs' })],
+    });
+    openMenu();
+
+    expect(screen.getByTestId('datalake-lake-picker-check-a')).toBeChecked();
+    expect(screen.getByTestId('datalake-lake-picker-check-b')).not.toBeChecked();
+  });
+
+  it('counts the lakes on the trigger past one, and withholds the file count it cannot source', () => {
+    renderPicker({
+      selectedLakeIds: ['a', 'b'],
+      lakes: [lake({ id: 'a', name: 'Research Corpus' }), lake({ id: 'b', name: 'Design Docs' })],
+      lakeFileCounts: { 'datalake:a': 128, 'datalake:b': 40 },
+      totalFileCount: 170,
+    });
+
+    expect(screen.getByTestId('datalake-lake-picker-label')).toHaveTextContent('2 lakes');
+    // NOT 168: summing per-lake counts double-counts a file that sits in both, and the all-lakes
+    // total (170) describes a wider scope than the one selected. Neither is the answer, so the
+    // control naming the scope prints no number at all.
+    expect(screen.queryByTestId('datalake-lake-picker-count')).not.toBeInTheDocument();
+  });
+
+  it('still names the single lake rather than counting it, since the name is the useful fact', () => {
+    renderPicker({
+      selectedLakeIds: ['a'],
+      lakes: [lake({ id: 'a', name: 'Research Corpus' }), lake({ id: 'b', name: 'Design Docs' })],
+    });
+
+    expect(screen.getByTestId('datalake-lake-picker-label')).toHaveTextContent('Research Corpus');
+  });
+
+  it('ignores a selected id whose lake the caller can no longer reach', () => {
+    // An archived or revoked lake drops out of the list; honouring its id would leave the trigger
+    // claiming a scope retrieval has already filtered away (see tagsForLakeIds).
+    renderPicker({ selectedLakeIds: ['a', 'gone'], lakes: [lake({ id: 'a', name: 'Research Corpus' })] });
+
+    expect(screen.getByTestId('datalake-lake-picker-label')).toHaveTextContent('Research Corpus');
   });
 
   it('names the scoped lake on the trigger, so the current scope reads without opening the menu', () => {
     renderPicker({
-      selectedLakeId: 'a',
+      selectedLakeIds: ['a'],
       lakes: [lake({ id: 'a', name: 'Research Corpus' })],
       lakeFileCounts: { 'datalake:a': 128 },
       totalFileCount: 170,
@@ -185,7 +301,7 @@ describe('DataLakeLakePicker', () => {
   it('renders its rows as menuitems, the hook the shared row recipe styles them through', () => {
     renderPicker({
       lakes: [lake({ id: 'a', name: 'Research Corpus' }), lake({ id: 'b', name: 'Design Docs' })],
-      selectedLakeId: 'a',
+      selectedLakeIds: ['a'],
     });
     openMenu();
 
@@ -210,7 +326,7 @@ describe('DataLakeLakePicker', () => {
   });
 
   it('lets the trigger label inherit the button color, which the themed body-sm default does not', () => {
-    renderPicker({ lakes: [lake({ id: 'a', name: 'Research Corpus' })], selectedLakeId: 'a' });
+    renderPicker({ lakes: [lake({ id: 'a', name: 'Research Corpus' })], selectedLakeIds: ['a'] });
 
     // text.tertiary is the brand hue at 50% alpha in this theme - around 2.2:1 on the light
     // surface, which is not a contrast the primary scope label can afford.

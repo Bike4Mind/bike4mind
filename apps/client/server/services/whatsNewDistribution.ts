@@ -7,6 +7,7 @@ import { Resource } from 'sst';
 import { z } from 'zod';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { emitModalGenerationMetrics } from '@server/utils/cloudwatch';
+import { WHATS_NEW_DEFAULT_REPOSITORY } from '@bike4mind/common';
 
 // Configuration constants
 const CACHE_CONTROL_HEADER = 'max-age=300, must-revalidate'; // 5 minute cache
@@ -638,7 +639,7 @@ export class WhatsNewDistributionService {
         metadata: {
           modelUsed: 'none',
           correlationId: 'deleted',
-          repositoryUrl: 'https://github.com/MillionOnMars/lumina5',
+          repositoryUrl: `https://github.com/${WHATS_NEW_DEFAULT_REPOSITORY}`,
         },
         _deleted: true, // Flag indicating no active modal
       };

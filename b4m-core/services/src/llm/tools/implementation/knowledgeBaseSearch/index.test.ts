@@ -53,11 +53,27 @@ vi.mock('../../../../apiKeyService', () => ({
 import { invalidateSettingsCache } from '@bike4mind/utils';
 import { RETRIEVED_CONTENT_BEGIN } from '../../../../dataLakeService/renderRetrievedContentBlock';
 import { knowledgeBaseSearchTool, KB_SEARCH_MAX_RESULTS } from './index';
-import { CHUNK_STALL_NOTICES, KB_SEARCH_DEFAULT_RESULTS_DEFAULT, NO_EXTRACTABLE_TEXT_NOTICE } from '@bike4mind/common';
+import {
+  CHUNK_STALL_NOTICES,
+  KB_SEARCH_DEFAULT_RESULTS_DEFAULT,
+  NO_EXTRACTABLE_TEXT_NOTICE,
+  deriveServeCharBudget,
+  type CitableSource,
+} from '@bike4mind/common';
 import { emptyEmbeddingMismatchReport } from '../../../../dataLakeService/embeddingMismatch';
 import type { ToolContext } from '../../base/types';
 
 const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as never;
+
+/** The citables from the one statusUpdate write that carries them (the hits write). */
+function emittedCitables(context: ToolContext): CitableSource[] {
+  const statusUpdate = context.statusUpdate as ReturnType<typeof vi.fn>;
+  const call = statusUpdate.mock.calls.find(
+    ([payload]) => (payload as { promptMeta?: { citables?: unknown[] } }).promptMeta?.citables
+  );
+  return ((call?.[0] as { promptMeta?: { citables?: CitableSource[] } })?.promptMeta?.citables ??
+    []) as CitableSource[];
+}
 
 function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
   return {
@@ -579,7 +595,7 @@ describe('search_knowledge_base partial-corpus disclosure', () => {
 
       const out = await run(contextWithFlag(true));
 
-      expect(out).toContain('older file version(s) were not ranked');
+      expect(out).toContain('were not ranked because this data lake holds a version');
       expect(out).toContain('old-id');
       expect(out).toContain('new-id');
       expect(out).toContain('fileName');
@@ -1171,25 +1187,20 @@ describe('search_knowledge_base untrusted-content delimiter (#1659)', () => {
   });
 
   /**
-   * #2236. The date rides after the existing parenthetical, so the header's leading `<n>. **`
-   * shape - what defangRetrievedContent matches and the forged-header test above counts - is
-   * unchanged by its presence.
+   * Passage headers carry no date. `SemanticChunkResult` no longer has a field to put one in, so
+   * the compiler is the real guard here; this pins the rendered shape so a re-added date would have
+   * to break a visible assertion rather than slip in after the parenthetical.
    */
-  it('heads a passage with its document date, and omits the clause when the document has none', async () => {
+  it('heads every passage undated', async () => {
     semanticDataLakeSearchMock.mockResolvedValue({
-      results: [
-        { ...hitOf('dated passage'), fileCreatedAt: new Date('2026-08-14T09:30:00.000Z') },
-        { ...hitOf('undated passage', 'Undated.pdf'), chunkId: 'c2', fileId: 'f2' },
-      ],
+      results: [hitOf('first passage'), { ...hitOf('second passage', 'Other.pdf'), chunkId: 'c2', fileId: 'f2' }],
       scan: { ...scan, filesMatching: 2, filesScoped: 2, filesScanned: 2, chunksScanned: 2 },
     });
     const out = await run(delimiterCtx());
-    expect(out).toContain('1. **Handbook** (ID: f1, relevance 0.81) - dated 2026-08-14');
-    // No createdAt: the clause is absent entirely, not empty and not stringified.
-    expect(out).toContain('2. **Undated** (ID: f2, relevance 0.81)\n');
-    expect(out).not.toContain('dated undefined');
-    expect(out).not.toContain('dated null');
-    // Still exactly two real headers: the added suffix must not create or defang one.
+    expect(out).toContain('1. **Handbook** (ID: f1, relevance 0.81)\n');
+    expect(out).toContain('2. **Other** (ID: f2, relevance 0.81)\n');
+    expect(out).not.toMatch(/dated/);
+    // Still exactly two real headers.
     expect(out.match(/^\d+\. \*\*/gm)).toHaveLength(2);
   });
 
@@ -2181,7 +2192,6 @@ describe('search_knowledge_base injected volume', () => {
     fileTags: [],
     chunkText: 'pto accrues monthly',
     score: 0.81,
-    fileCreatedAt: null,
     ...over,
   });
 
@@ -3345,6 +3355,80 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       const citables = (citablesCall?.[0] as { promptMeta: { citables: unknown[] } }).promptMeta.citables;
       expect(citables.length).toBe(3);
     });
+
+    it('anchors each citable at the cited chunk, carrying the SERVED passage text (#3038)', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: hits(2),
+        totalChunksSearched: 2,
+        filesInScope: 2,
+        scan,
+      });
+      const context = semanticContext();
+      await runWith({}, context);
+      const citables = emittedCitables(context);
+      expect(citables).toHaveLength(2);
+      expect(citables.map(c => c.metadata?.chunkId)).toEqual(['c0', 'c1']);
+      expect(citables[0]?.metadata?.fullContext).toBe('passage body 0');
+    });
+
+    it('anchors the file at its BEST chunk when several chunks of one file match (#3038)', async () => {
+      // `ranked` is score-descending and citables dedup per file, so the surviving anchor must be
+      // the top hit. Asserting the id alone would pass on either chunk if the dedup ever kept the
+      // LAST one, so the passage text is asserted with it.
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [
+          { ...hits(1)[0], chunkId: 'best', chunkText: 'the cited passage', score: 0.9 },
+          { ...hits(1)[0], chunkId: 'worse', chunkText: 'a weaker passage', score: 0.4 },
+        ],
+        totalChunksSearched: 2,
+        filesInScope: 1,
+        scan,
+      });
+      const context = semanticContext();
+      await runWith({}, context);
+      const citables = emittedCitables(context);
+      expect(citables).toHaveLength(1);
+      expect(citables[0]?.metadata?.chunkId).toBe('best');
+      expect(citables[0]?.metadata?.fullContext).toBe('the cited passage');
+    });
+
+    it('carries the CLIPPED passage as fullContext, not the stored chunk (#3038)', async () => {
+      // Derived, not hardcoded: this context resolves no settings, so the serve budget is whatever
+      // the chunk policy's own default derivation yields. Pinning a literal here would turn a
+      // policy change into a failure in the anchor tests rather than in the policy's own.
+      const { maxChunkChars } = deriveServeCharBudget(undefined);
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [{ ...hits(1)[0], chunkText: 'x'.repeat(maxChunkChars + 500) }],
+        totalChunksSearched: 1,
+        filesInScope: 1,
+        scan,
+      });
+      const context = semanticContext();
+      await runWith({}, context);
+      // The reader must be shown what grounded the claim. Serving the whole stored chunk would
+      // deep-link to text the model never saw, which is the failure the anchor exists to prevent.
+      expect(emittedCitables(context)[0]?.metadata?.fullContext).toBe(`${'x'.repeat(maxChunkChars)}\u2026`);
+    });
+  });
+});
+
+/**
+ * The keyword arm ranks whole documents by a metadata proxy, so it has no cited passage. The
+ * assertion is `toBeUndefined` on the chunk fields specifically, not "the arm emits no metadata":
+ * a present-but-guessed anchor here would scroll the reader to an arbitrary paragraph, which reads
+ * as a citation bug rather than as the honest whole-document landing (#3038).
+ */
+describe('search_knowledge_base keyword fallback: no chunk anchor (#3038)', () => {
+  it('leaves the keyword arm file-level', async () => {
+    const context = makeContext({ retrievalFilter: undefined });
+    await run(context);
+    const citables = emittedCitables(context);
+    expect(citables.length).toBeGreaterThan(0);
+    for (const c of citables) {
+      expect(c.metadata?.sourceSystem).toBe('knowledge_base');
+      expect(c.metadata?.chunkId).toBeUndefined();
+      expect(c.metadata?.fullContext).toBeUndefined();
+    }
   });
 });
 

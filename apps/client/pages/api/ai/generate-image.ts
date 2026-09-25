@@ -28,6 +28,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
     aspectRatio: req.body.aspect_ratio,
     sessionId: req.body.sessionId,
     questId: req.body.questId,
+    referenceImageCount: req.body.referenceImageFabFileIds?.length ?? 0,
     n: req.body.n,
     quality: req.body.quality,
     style: req.body.style,

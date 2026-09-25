@@ -69,8 +69,8 @@ export const RETRIEVED_CONTENT_FOOTER = [
  *           Forgeable into "this search covered everything", or into a conflict that is not there.
  * The last two are the per-item headers, one per channel, and both attribute text to a named file -
  * forge one and the model credits a passage to a document the reader trusts more:
- *   `### `        the retrieve channel's `### <name> (ID: ...) - dated <date>`.
- *   `<n>. **`     the search channel's `<n>. **<name>** (ID: ..., relevance X) - dated <date>`.
+ *   `### `        the retrieve channel's `### <name> (ID: ...)`.
+ *   `<n>. **`     the search channel's `<n>. **<name>** (ID: ..., relevance X)`.
  * Both are matched with their trailing shape (a space, an opening `**`) rather than the bare token,
  * so an ordinary `## Heading` or numbered list in a document is left alone.
  *
@@ -91,20 +91,26 @@ export const defangRetrievedContent = (value: string): string =>
 export { toSingleLine as toContentLabel };
 
 /**
- * The document's own date, for the passage headers both retrieval channels compose.
+ * The document's own date - when its CONTENT was authored or published - for the passage headers
+ * the retrieval channels compose.
  *
- * `createdAt`, never `updatedAt`: `FabFileSchema` sets `timestamps: true`, and the `updateOne`
- * calls on vectorization progress, tag writes and convergence all rewrite `updatedAt` - so it
- * tracks index lifecycle rather than content revision. Measured on an affected lake, ordering on
- * `updatedAt` put 34 older rows above 14 newer ones. `createdAt` is upload time, not authorship
- * time: a good default, not a law.
+ * NOT an ingestion or index timestamp. `createdAt` is when the file was uploaded and `updatedAt`
+ * moves on vectorization progress, tag writes and convergence; feeding either one here tells the
+ * model a document written years ago is from the day it was loaded, which is worse than telling it
+ * nothing. Both were tried and both are wrong for the same reason: they date the row, not the
+ * document. `updatedAt` is the worse of the two and was measured so - on an affected lake, ordering
+ * on it put 34 older rows above 14 newer ones, because every vectorization and tag write rewrites
+ * it. `createdAt` at least holds still, but it is upload time, not authorship.
  *
- * Formatted here rather than by each caller so the two channels cannot drift, and emitted as a UTC
- * `YYYY-MM-DD`. Digits and separators only is the point: unlike the file name beside it, the result
- * cannot carry a newline or forge one of the markers `defangRetrievedContent` guards, which is why
- * callers pass it through untouched instead of wrapping it in `toContentLabel`. A caller that ever
- * sources a date from document CONTENT or from a free-text metadata field does NOT get that
- * guarantee and must label it like any other content-derived part.
+ * No field captures a real authored date yet, so nothing currently calls this. It is kept as the
+ * single formatting seam the channels share, so that whatever captures that date wires it in one
+ * place rather than three, and so the rule above sits where the next caller will read it.
+ *
+ * Emitted as a UTC `YYYY-MM-DD`. Digits and separators only is the point: unlike the file name
+ * beside it, the result cannot carry a newline or forge one of the markers `defangRetrievedContent`
+ * guards, which is why callers pass it through untouched instead of wrapping it in
+ * `toContentLabel`. A caller that ever sources a date from document CONTENT or from a free-text
+ * metadata field does NOT get that guarantee and must label it like any other content-derived part.
  *
  * Returns null for an absent or unparseable value - callers omit the clause entirely rather than
  * emit an empty one. Unparseable has to be handled here: `new Date('nonsense').toISOString()`
@@ -120,10 +126,11 @@ export function formatDocumentDate(value: Date | string | null | undefined): str
 /**
  * The date clause as it appears in a passage header, or '' when there is no usable date.
  *
- * All three channels that head retrieved content for the model append this - the search tool, the
- * retrieve tool, and forced retrieval - so the separator and wording live here rather than being
- * written out three times. Same reason `defangRetrievedContent` is shared: three copies of a
- * literal is three chances to drift.
+ * Shares `formatDocumentDate`'s contract and its current caller count of zero: the three channels
+ * that head retrieved content for the model - the search tool, the retrieve tool and forced
+ * retrieval - all render undated until a real authored date exists to pass. When one does, they
+ * append this rather than writing the separator and wording out three times, for the same reason
+ * `defangRetrievedContent` is shared: three copies of a literal is three chances to drift.
  *
  * Appended AFTER each channel's existing parenthetical, never folded into it. Both header shapes
  * are load-bearing: `defangRetrievedContent` matches on their leading tokens, and the forced arm's

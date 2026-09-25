@@ -51,6 +51,9 @@ export const DEFAULT_TOOL_CATEGORIES: Record<string, ToolCategory> = {
   kill_background_shell: 'prompt_always',
   git_commit: 'prompt_always',
   git_push: 'prompt_always',
+  // Invokes a model-/repo-authored skill body (can fork subagents, expand @file
+  // refs, run lifecycle-hook shells): always prompt, never silently trusted.
+  skill: 'prompt_always',
 
   // Prompt-default: read-only; prompts by default but can be trusted
   web_search: 'prompt_default',
@@ -75,6 +78,15 @@ export const DEFAULT_TOOL_CATEGORIES: Record<string, ToolCategory> = {
  * Returns 'prompt_default' if tool is not in the default categories
  */
 export function getToolCategory(toolName: string, customCategories?: Record<string, ToolCategory>): ToolCategory {
+  // Hook shells (agent_hook:*, skill_hook:*) are never trustable: their command
+  // runs per-invocation and must be classified/prompted every time. Trusting a
+  // project folder loads the hook definitions but does not pre-authorize their
+  // shells, so this namespace check runs BEFORE custom/default categories - a
+  // repo-contributed category (or trustedTools entry) can never downgrade it.
+  if (toolName.startsWith('agent_hook:') || toolName.startsWith('skill_hook:')) {
+    return 'prompt_always';
+  }
+
   // Check custom categories first
   if (customCategories && toolName in customCategories) {
     return customCategories[toolName];
@@ -83,6 +95,15 @@ export function getToolCategory(toolName: string, customCategories?: Record<stri
   // Fall back to default categories
   if (toolName in DEFAULT_TOOL_CATEGORIES) {
     return DEFAULT_TOOL_CATEGORIES[toolName];
+  }
+
+  // MCP tools (mcp__<server>__<tool>) are third-party and opaque: their power is
+  // unknown, so default to always-prompt (blocked in plan mode, denied by a
+  // deny-default headless policy). Runs AFTER custom categories so an operator
+  // can still relax a specific trusted server. The host allowlist short-circuit
+  // (e.g. mcp__manifold__*) still auto-approves in the permission wrapper.
+  if (toolName.startsWith('mcp__')) {
+    return 'prompt_always';
   }
 
   // Unknown tools default to requiring permission

@@ -6,9 +6,10 @@ import { getThemeConfig } from '@client/app/utils/themes';
 import { CHUNK_STALL_NOTICES, NO_EXTRACTABLE_TEXT_NOTICE, type IFabFileDocument } from '@bike4mind/common';
 import DataLakeArticlePanel from './DataLakeArticlePanel';
 
-const { removeFileMutate, currentUserId } = vi.hoisted(() => ({
+const { removeFileMutate, currentUserId, citedAnchor } = vi.hoisted(() => ({
   removeFileMutate: vi.fn(),
   currentUserId: { value: 'owner-1' },
+  citedAnchor: { value: null as null | { fileId: string; chunkId: string; passage: string } },
 }));
 
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
@@ -24,8 +25,22 @@ vi.mock('@client/app/contexts/UserContext', () => ({
     selector ? selector({ currentUser: { id: currentUserId.value } }) : { currentUser: { id: currentUserId.value } },
 }));
 
+// Renders citedPassage as well as content: a mock that drops the prop cannot tell a working
+// passthrough from a panel that never forwards the anchor at all.
 vi.mock('@client/app/components/Knowledge/MarkdownViewer', () => ({
-  default: ({ content }: { content?: string }) => <div data-testid="mock-markdown">{content}</div>,
+  default: ({ content, citedPassage }: { content?: string; citedPassage?: string }) => (
+    <div data-testid="mock-markdown" data-cited-passage={citedPassage ?? ''}>
+      {content}
+    </div>
+  ),
+  UnmarkedCitedPassage: ({ passage }: { passage: string }) => (
+    <div data-testid="markdown-cited-passage-fallback">{passage}</div>
+  ),
+}));
+
+vi.mock('@client/app/hooks/useSessionLayout', () => ({
+  default: (selector?: (s: { citedPassage: unknown }) => unknown) =>
+    selector ? selector({ citedPassage: citedAnchor.value }) : { citedPassage: citedAnchor.value },
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -173,5 +188,47 @@ describe('DataLakeArticlePanel - remove-from-lake copy', () => {
       </TestWrapper>
     );
     expect(screen.getByTestId('datalake-purgefile-btn-f1')).toBeInTheDocument();
+  });
+});
+
+describe('DataLakeArticlePanel cited passage passthrough', () => {
+  beforeEach(() => {
+    citedAnchor.value = null;
+  });
+
+  const anchor = { fileId: 'f1', chunkId: 'chunk-1', passage: 'Holidays accrue monthly.' };
+
+  it('forwards the passage to MarkdownViewer when the anchor is for the open file', () => {
+    citedAnchor.value = anchor;
+
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('mock-markdown')).toHaveAttribute('data-cited-passage', 'Holidays accrue monthly.');
+  });
+
+  it('forwards nothing when the anchor points at a DIFFERENT file', () => {
+    citedAnchor.value = { ...anchor, fileId: 'some-other-file' };
+
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('mock-markdown')).toHaveAttribute('data-cited-passage', '');
+  });
+
+  it('forwards nothing when no citation anchor is set', () => {
+    render(
+      <TestWrapper>
+        <DataLakeArticlePanel file={file()} dataLakeId="lake1" lakeName="Lake" canManage />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('mock-markdown')).toHaveAttribute('data-cited-passage', '');
   });
 });

@@ -1,4 +1,5 @@
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { isPathAllowed } from '@bike4mind/services/llm/tools/cliTools';
 import { existsSync, promises as fs, statSync } from 'fs';
 import path from 'path';
 import { formatStructureOutput } from './formatter';
@@ -9,18 +10,21 @@ interface GetFileStructureParams {
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
-export function createGetFileStructureTool(): ICompletionOptionTools {
+export function createGetFileStructureTool(allowedDirectories?: string[]): ICompletionOptionTools {
   return {
     toolFn: async value => {
       const params = value as GetFileStructureParams;
 
       try {
-        const cwd = process.cwd();
-        const resolvedPath = path.resolve(cwd, params.path);
-
-        if (!resolvedPath.startsWith(cwd)) {
-          return 'Error: Access denied - cannot read files outside of current working directory';
+        // Confine through the shared realpath validator (resolves symlinks, honors
+        // the live allow-list) rather than a lexical startsWith check. The wording
+        // matches the permission wrapper's path-denial detector so a blocked read
+        // can offer the runtime directory grant.
+        const validation = isPathAllowed(params.path, allowedDirectories);
+        if (!validation.allowed) {
+          return 'Access denied: Cannot read files outside allowed directories.';
         }
+        const resolvedPath = validation.resolvedPath;
 
         if (!existsSync(resolvedPath)) {
           return `Error: File not found: ${params.path}`;
