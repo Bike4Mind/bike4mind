@@ -1,22 +1,21 @@
-import React, { useEffect, useState } from 'react';
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
   OpenInFullOutlined as ExpandIcon,
   ContentCopyOutlined as CopyIcon,
   SaveOutlined as SaveIcon,
-  ExpandMoreOutlined as ExpandMoreIcon,
-  ExpandLessOutlined as ExpandLessIcon,
 } from '@mui/icons-material';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
-import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
-import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { toast } from 'sonner';
 import { brand } from '@client/app/utils/themes/colors';
-import { actionButtonSx } from './ArtifactPreviewCard';
+import ShowMoreButton from '@client/app/components/common/ShowMoreButton';
+import { actionButtonSx } from '@client/app/components/common/actionButtonSx';
 
 interface CodeArtifactData {
   title: string;
@@ -33,12 +32,24 @@ interface CodeArtifactPreviewCardProps {
 }
 
 const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data, artifactId, onExpand }) => {
-  const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
   const { currentSession, setCurrentSession, currentSessionId } = useSessions();
   const workBenchFiles = useWorkBenchFiles(currentSessionId);
   const { setWorkBenchFiles } = useWorkBenchActions();
 
-  const [isExpanded, setIsExpanded] = useState(false);
+  // Reveals the rest of a truncated body in place. There is no card-level fold: bounding
+  // the body is the truncation's job, and Show less puts it back.
+  const [showFullBody, setShowFullBody] = useState(false);
+
+  // Same contract as the reply-level Show More (useContentTruncation): cut on a line
+  // boundary at the user's own `maxVisibleLines`, and honour their auto-collapse switch
+  // rather than inventing a second, private rule for artifacts.
+  const { settings } = useUserSettings();
+  const codeLines = useMemo(() => data.code.split('\n'), [data.code]);
+  const needsTruncation = settings.autoCollapseContent && codeLines.length > settings.maxVisibleLines;
+  const visibleCode = useMemo(
+    () => (needsTruncation && !showFullBody ? codeLines.slice(0, settings.maxVisibleLines).join('\n') : data.code),
+    [needsTruncation, showFullBody, codeLines, settings.maxVisibleLines, data.code]
+  );
 
   // Lazy loading for large code blocks to prevent UI freeze
   const isLargeCodeBlock = data.lineCount > 300 || data.code.length > 30000;
@@ -59,12 +70,6 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       }
     }
   }, [isLargeCodeBlock, isContentReady]);
-
-  // Toggle inline code preview (card click behavior)
-  const handleToggleExpand = (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    setIsExpanded(!isExpanded);
-  };
 
   // Open in full viewer panel (dedicated button)
   const handleOpenInViewer = (e?: React.MouseEvent) => {
@@ -133,24 +138,24 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
     <Card
       className="code-artifact-preview-card"
       variant="outlined"
-      sx={{
+      sx={theme => ({
         // Matches ArtifactPreviewCard: the sidebar/header surface, not Joy's undefined
         // background.level1 default.
-        backgroundColor: 'background.surface2',
+        backgroundColor: theme.palette.reading.cardBase,
+        // The same veil ArtifactPreviewCard and a fenced code block carry, so a code
+        // card sits in the same family as every other artifact rather than reading as
+        // a flat panel. backgroundImage, not a background shorthand, so the fill above
+        // still resolves per color scheme.
+        backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
         borderRadius: '8px',
         position: 'relative',
         overflow: 'visible',
         borderWidth: 1,
-        borderColor: isSelected ? 'primary.500' : 'neutral.outlinedBorder',
-        transition: 'all 0.2s ease-in-out',
-        cursor: 'pointer',
-        '&:hover': {
-          transform: 'translateY(-2px)',
-          boxShadow: 'sm',
-          cursor: 'pointer',
-        },
-      }}
-      onClick={handleToggleExpand}
+        borderColor: theme.palette.reading.cardLine,
+        // No hover lift, unlike the other artifact cards: this one has no card-level
+        // onClick, so the lift promised something to click that was not there. The
+        // trailing icon buttons are the interactive parts and carry their own hover.
+      })}
     >
       {/* Type badge: the language in a pill overhanging the card corner. Matches
           ArtifactPreviewCard's badge - keep the two in sync. */}
@@ -161,7 +166,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
         sx={theme => ({
           position: 'absolute',
           top: '-8px',
-          left: '-8px',
+          left: '16px',
           zIndex: 1,
           backgroundColor: brand[800],
           color: 'text.primary',
@@ -178,17 +183,16 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       {/* Main Content */}
       {/* No padding here: the Card already provides it. */}
       <Box className="code-artifact-content">
-        {/* Title leads the row so the stats line below aligns flush with it; the chevron
-            follows immediately. Matches ArtifactPreviewCard - keep the two in sync. */}
+        {/* Title and line count are one block, so the trailing controls centre against the
+            pair rather than against the title alone. Every control sits at that trailing
+            edge. Matches ArtifactPreviewCard - keep the two in sync. */}
         <Stack className="code-artifact-header" direction="row" spacing={1} alignItems="center">
-          <Stack direction="row" alignItems="center" sx={{ minWidth: 0, gap: '4px' }}>
+          <Stack sx={{ minWidth: 0 }}>
             <Typography
               className="code-artifact-title"
-              level="title-sm"
+              level="title-md"
               sx={{
                 color: 'text.primary',
-                // Shrink (and ellipsize) but never grow, so the chevron stays next to the text.
-                flex: '0 1 auto',
                 minWidth: 0,
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -197,69 +201,48 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             >
               {data.title}
             </Typography>
-
-            <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                // Joy icons read --Icon-fontSize / --Icon-color; plain `fontSize`/`color`
-                // on the button is outranked by the theme's own icon styles.
-                sx={theme => ({
-                  flexShrink: 0,
-                  marginLeft: 0,
-                  // Joy sizes IconButton from --IconButton-size; `width`/`height` alone
-                  // lose to its minWidth/minHeight defaults.
-                  '--IconButton-size': '24px',
-                  minWidth: '24px',
-                  minHeight: '24px',
-                  '--Icon-fontSize': '16px',
-                  '--Icon-color': theme.vars.palette.text.tertiary,
-                  '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
-                })}
-                onClick={handleToggleExpand}
-                data-testid="code-artifact-toggle-btn"
-              >
-                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-              </IconButton>
-            </Tooltip>
+            {/* Part of what identifies the card at a glance, so it sits with the title
+                rather than down in the body. */}
+            <Typography className="code-artifact-stats" level="body-xs" sx={{ color: 'text.tertiary' }}>
+              {data.lineCount} lines of code
+            </Typography>
           </Stack>
 
           <Box sx={{ flex: 1 }} />
 
-          <Tooltip title="Copy code to clipboard" placement="top">
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
-              onClick={handleCopy}
-            >
-              <CopyIcon />
-            </IconButton>
-          </Tooltip>
+          {/* One block so the controls space and shrink together. Matches
+              ArtifactPreviewCard - keep the two in sync. */}
+          <Box
+            className="code-artifact-actions"
+            sx={{ display: 'flex', alignItems: 'center', gap: '12px', flexShrink: 0 }}
+          >
+            <Tooltip title="Copy code to clipboard" placement="top">
+              <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleCopy}>
+                <CopyIcon />
+              </IconButton>
+            </Tooltip>
 
-          <Tooltip title="Save as file to workbench" placement="top">
-            <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleSaveAsFile}>
-              <SaveIcon />
-            </IconButton>
-          </Tooltip>
+            <Tooltip title="Save as file to workbench" placement="top">
+              <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleSaveAsFile}>
+                <SaveIcon />
+              </IconButton>
+            </Tooltip>
 
-          <Tooltip title="Open in full viewer" placement="top">
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              sx={actionButtonSx}
-              onClick={handleOpenInViewer}
-              data-testid="code-artifact-expand-btn"
-            >
-              <ExpandIcon />
-            </IconButton>
-          </Tooltip>
+            <Tooltip title="Open in full viewer" placement="top">
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                sx={actionButtonSx}
+                onClick={handleOpenInViewer}
+                data-testid="code-artifact-expand-btn"
+              >
+                <ExpandIcon />
+              </IconButton>
+            </Tooltip>
+          </Box>
         </Stack>
 
-        {/* Loading skeleton for large code blocks */}
         {!isContentReady ? (
           <Box sx={{ mt: 2 }}>
             <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
@@ -281,41 +264,47 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
           </Box>
         ) : (
           <>
-            {/* Code Stats */}
-            <Typography
-              className="code-artifact-stats"
-              level="body-xs"
-              sx={{
-                color: 'text.tertiary',
-              }}
-            >
-              {data.lineCount} lines of code
-            </Typography>
-
-            {/* Code Preview (expandable) */}
+            {/* Code body. No inner scroller: a second scrolling surface inside the
+                transcript traps the wheel as the pointer crosses it, and a fixed 400px
+                window made every card claim the same height whatever it held. The page
+                is the only scroller; length is bounded by truncation instead. */}
             <Box
               sx={{
                 mt: 2,
                 borderRadius: 'sm',
-                overflow: 'auto',
-                maxHeight: isExpanded ? '400px' : '60px',
-                transition: 'max-height 0.3s ease',
-                '& pre': { margin: '0 !important', borderRadius: '4px' },
+                position: 'relative',
+                '& pre': { margin: '0 !important' },
               }}
             >
-              <SyntaxHighlighter
-                style={oneDark}
-                language={data.language || 'text'}
-                customStyle={{ margin: 0, fontSize: '14px', lineHeight: 1.4, padding: '8px' }}
-                wrapLongLines
-              >
-                {isExpanded
-                  ? data.code
-                  : `${data.code.split('\n').slice(0, 3).join('\n').substring(0, 120)}${
-                      data.code.length > 120 ? '...' : ''
-                    }`}
-              </SyntaxHighlighter>
+              <HighlightedCode code={visibleCode} language={data.language || 'text'} wrapLongLines />
+              {/* Fade over the last rows, so the cut reads as "continues" rather than
+                  as the end of the file. Non-interactive so it can't eat a text selection. */}
+              {needsTruncation && !showFullBody && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    height: '48px',
+                    pointerEvents: 'none',
+                    borderRadius: '0 0 6px 6px',
+                    // Fades to the surface the code actually sits on, so the cut is
+                    // invisible; it used to fade to oneDark's fill and left a seam.
+                    background: 'linear-gradient(180deg, transparent, var(--joy-palette-reading-surface, #13181C))',
+                  }}
+                />
+              )}
             </Box>
+
+            {needsTruncation && (
+              <ShowMoreButton
+                expanded={showFullBody}
+                onToggle={() => setShowFullBody(v => !v)}
+                collapsedLabel={`Show ${codeLines.length - settings.maxVisibleLines} more lines`}
+                testId="code-artifact-show-more-btn"
+              />
+            )}
           </>
         )}
       </Box>

@@ -60,18 +60,20 @@ export const AutoRouteBadge: FC<{ source?: AutoRouteSource }> = ({ source = 'cla
       <Stack
         direction="row"
         alignItems="center"
-        spacing={1}
-        sx={{
-          px: 1.25,
-          py: 0.75,
-          borderRadius: 'md',
-          bgcolor: 'background.level1',
+        spacing={1.5}
+        sx={theme => ({
+          p: '16px',
+          // The shared card frame. It filled with background.level1, a token this theme never
+          // defines, and outlined itself in primary - the only blue-edged frame in a reply.
+          borderRadius: '8px',
+          backgroundColor: theme.palette.reading.cardBase,
+          backgroundImage: `linear-gradient(180deg, ${theme.palette.reading.cardTintTop}, ${theme.palette.reading.cardTintBottom})`,
           border: '1px solid',
-          borderColor: 'primary.outlinedBorder',
-        }}
+          borderColor: theme.palette.reading.cardLine,
+        })}
       >
-        <AutoAwesomeIcon sx={{ fontSize: 16, color: 'primary.plainColor' }} />
-        <Typography level="body-sm" sx={{ flex: 1 }}>
+        <AutoAwesomeIcon sx={{ fontSize: '1.25rem', color: 'text.tertiary', flexShrink: 0 }} />
+        <Typography level="body-sm" sx={{ flex: 1, color: 'text.primary' }}>
           {MESSAGE_BY_SOURCE[source]}
         </Typography>
         <Button
@@ -80,6 +82,17 @@ export const AutoRouteBadge: FC<{ source?: AutoRouteSource }> = ({ source = 'cla
           variant="plain"
           color="neutral"
           onClick={() => setLLM({ disableAutoRouteForThisSession: true })}
+          // Text, not a button shape. Joy's plain variant still paints a hover background and
+          // carries button padding, which put a second frame inside the badge's own. The
+          // underline is the whole hover cue, as on the show more/less control.
+          sx={{
+            p: 0,
+            minHeight: 0,
+            fontWeight: 400,
+            '--variant-plainHoverBg': 'transparent',
+            '--variant-plainActiveBg': 'transparent',
+            '&:hover': { textDecoration: 'underline' },
+          }}
         >
           Dismiss
         </Button>

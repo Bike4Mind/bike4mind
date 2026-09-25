@@ -66,6 +66,7 @@ declare module '@mui/joy/styles' {
     reading: {
       surface: string;
       surface2: string;
+      cardBase: string;
       cardTintTop: string;
       cardTintBottom: string;
       cardLine: string;
