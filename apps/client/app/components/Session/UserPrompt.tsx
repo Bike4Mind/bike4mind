@@ -1,9 +1,8 @@
 import { UserPromptProps } from './types/UserPromptTypes';
-import { CopyCodeButton } from './CopyCodeButton';
+import CodeBlockHeader from './CodeBlockHeader';
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import { Box, IconButton, Typography, Tooltip } from '@mui/joy';
 import ReactMarkdown, { ExtraProps } from 'react-markdown';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import ErrorBoundary from '../common/ErrorBoundary';
 import ImageContainer from './ImageContainer';
 import { GetFileIcon } from '@client/app/utils/fabFileUtils';
@@ -153,12 +152,9 @@ const PromptContent: FC<{
         node?.position?.start.column !== node?.position?.end.column;
 
       return !inline ? (
-        <Box sx={{ position: 'relative' }}>
-          <CopyCodeButton code={children!.toString()} language={language} />
-          <SyntaxHighlighter style={oneDark} customStyle={{ paddingTop: '32px' }} language={language} PreTag="div">
-            {String(children).replace(/\n$/, '')}
-          </SyntaxHighlighter>
-        </Box>
+        <CodeBlockHeader code={children!.toString()} language={language}>
+          <HighlightedCode code={String(children).replace(/\n$/, '')} language={language} />
+        </CodeBlockHeader>
       ) : (
         <Box
           component="code"
@@ -177,9 +173,9 @@ const PromptContent: FC<{
   };
 
   return isCode ? (
-    <SyntaxHighlighter style={oneDark} language={language}>
-      {content}
-    </SyntaxHighlighter>
+    <CodeBlockHeader code={content} language={language}>
+      <HighlightedCode code={content} language={language} />
+    </CodeBlockHeader>
   ) : (
     <ReactMarkdown
       remarkPlugins={[remarkBreaks, [remarkMath, { singleDollarTextMath: false }]]}

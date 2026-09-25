@@ -193,6 +193,8 @@ export async function postFeedbackToSlack(input: PostFeedbackToSlackInput): Prom
   }
 }
 
+export const EMAIL_MIRROR_TIMEOUT_MS = 5_000;
+
 /**
  * Mirror a copy of an outbound email to the email-audit Slack channel for
  * real-time visibility into what the platform is sending - broken links, wrong
@@ -218,7 +220,9 @@ export async function postEmailMirrorToSlack(payload: EmailMirrorPayload): Promi
     await axios.post(
       slackWebhookUrl,
       { text: buildEmailMirrorMessage(payload) },
-      { headers: { 'Content-Type': 'application/json' } }
+      // Bounded because MailService.sendEmail awaits this inside a request that has already done
+      // its real work; a hung webhook must not push the route past the Lambda timeout.
+      { headers: { 'Content-Type': 'application/json' }, timeout: EMAIL_MIRROR_TIMEOUT_MS }
     );
   } catch (error) {
     Logger.error('Error mirroring outbound email to Slack:', error);

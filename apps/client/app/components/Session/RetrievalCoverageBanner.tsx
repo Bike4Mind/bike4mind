@@ -1,4 +1,4 @@
-import { Alert, Typography } from '@mui/joy';
+import { Alert, Box, Typography } from '@mui/joy';
 import { COVERAGE_BANNER_TITLE, COVERAGE_BANNER_BODY, COVERAGE_BANNER_DETAILS_LABEL } from '@bike4mind/common';
 
 /**
@@ -13,8 +13,9 @@ import { COVERAGE_BANNER_TITLE, COVERAGE_BANNER_BODY, COVERAGE_BANNER_DETAILS_LA
  * ~1900 lines and a harness for it would be out of proportion to pinning a testid and the copy.
  *
  * Stated as a fact, not hedged - unlike elision, this is not a heuristic. The server knows it hit a
- * cap. `reasons` renders behind a disclosure because it is diagnostic prose written for an operator
- * ("the 4000-chunk per-turn scan budget was reached"), and only some of it is actionable.
+ * cap. `reasons` is shown outright rather than behind a disclosure: it is the evidence for the claim
+ * above it, and a reader who has to open something to find out WHY a scan was partial has already
+ * been given a warning they cannot act on.
  *
  * Unlike the truncation banners beside it, this one carries no `completed` gate, because it cannot
  * reach a streaming reply in the first place: StatusManager rebuilds promptMeta down to just
@@ -28,31 +29,35 @@ export function RetrievalCoverageBanner({ reasons }: { reasons?: string[] }) {
       data-testid="retrieval-coverage-warning"
       color="warning"
       variant="soft"
-      sx={{ my: 1, flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
+      sx={{ my: 1, p: '16px', flexDirection: 'column', alignItems: 'flex-start', gap: 0.5 }}
     >
-      <Typography level="title-sm">⚠️ {COVERAGE_BANNER_TITLE}</Typography>
-      {/* textColor inherit: body-sm defaults to text.tertiary at 50% alpha, which drops below
-          contrast minimums inside a soft Alert. */}
-      <Typography level="body-sm" textColor="inherit">
+      {/* Inherits the Alert's warning ink, so the title carries the colour and the body can
+          sit back in the app's own recessive text token. */}
+      <Typography level="title-sm" textColor="inherit">
+        {COVERAGE_BANNER_TITLE}
+      </Typography>
+      <Typography level="body-sm" textColor="text.secondary">
         {COVERAGE_BANNER_BODY}
       </Typography>
+      {/* Still conditional: an empty list would leave a heading standing over nothing. */}
       {!!reasons?.length && (
-        <details data-testid="retrieval-coverage-reasons">
-          <summary>
-            <Typography level="body-xs" textColor="inherit" component="span">
-              {COVERAGE_BANNER_DETAILS_LABEL}
-            </Typography>
-          </summary>
-          <ul style={{ margin: '4px 0 0', paddingInlineStart: '1.25rem' }}>
+        <Box data-testid="retrieval-coverage-reasons" sx={{ mt: 0.5 }}>
+          <Typography level="title-sm" textColor="inherit">
+            {COVERAGE_BANNER_DETAILS_LABEL}
+          </Typography>
+          <Box
+            component="ul"
+            sx={{ m: 0, mt: 0.5, pl: '1.25rem', display: 'flex', flexDirection: 'column', gap: 0.25 }}
+          >
             {reasons.map(reason => (
               <li key={reason}>
-                <Typography level="body-xs" textColor="inherit">
+                <Typography level="body-sm" textColor="text.secondary">
                   {reason}
                 </Typography>
               </li>
             ))}
-          </ul>
-        </details>
+          </Box>
+        </Box>
       )}
     </Alert>
   );

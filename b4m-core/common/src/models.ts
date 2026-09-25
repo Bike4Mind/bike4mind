@@ -110,15 +110,21 @@ export const IMAGE_SIZE_CONSTRAINTS = {
   },
   /**
    * dall-e-3 is no longer in ImageModels, but the generate path still accepts its sizes
-   * for callers holding a persisted one. Listed separately to record what each tier really
-   * accepts; isSupportedImageSize currently measures both against the union of the two
-   * (OPENAI_LEGACY_IMAGE_SIZES), so the split is documentation rather than enforcement.
+   * for callers holding a persisted one. Reached by LEGACY_DALL_E_3_MODEL_ID rather than an
+   * enum member; isSupportedImageSize measures each dall-e tier against its own list.
    */
   DALL_E_3: {
     sizes: ['1024x1024', '1792x1024', '1024x1792'] as const,
     defaultSize: '1024x1024',
   },
 } as const;
+
+/**
+ * dall-e-3's model id. Deliberately not an ImageModels member - the model is not selectable
+ * and must not appear in IMAGE_MODELS - but still named here so isSupportedImageSize can
+ * measure a persisted dall-e-3 size against DALL_E_3.sizes instead of a wider union.
+ */
+export const LEGACY_DALL_E_3_MODEL_ID = 'dall-e-3';
 
 export type GPTImage1Size = (typeof IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes)[number];
 export type GPTImage2Size = (typeof IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes)[number] | `${number}x${number}`;

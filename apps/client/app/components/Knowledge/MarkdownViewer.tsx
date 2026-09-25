@@ -1,3 +1,4 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
@@ -5,8 +6,6 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Box, Typography, IconButton, Tooltip } from '@mui/joy';
 import { ContentCopy, Check } from '@mui/icons-material';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import MermaidChart from '../Charts/MermaidChart';
 import { locateCitedPassage, blockIntersectsPassage, type PassageRange } from './citedPassage';
 
@@ -244,20 +243,11 @@ const MarkdownViewer: React.FC<Props> = ({ content, citedPassage }) => {
                 {...citedBlockProps(node, citedRange)}
               >
                 <CopyButton text={String(children).replace(/\n$/, '')} />
-                <SyntaxHighlighter
-                  {...props}
-                  style={oneDark}
+                <HighlightedCode
+                  code={String(children).replace(/\n$/, '')}
                   language={language}
-                  PreTag="div"
-                  customStyle={{
-                    maxWidth: '100%',
-                    overflowX: 'auto',
-                    whiteSpace: 'pre-wrap',
-                    wordBreak: 'break-word',
-                  }}
-                >
-                  {String(children).replace(/\n$/, '')}
-                </SyntaxHighlighter>
+                  customStyle={{ maxWidth: '100%', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}
+                />
               </Box>
             ) : (
               <code

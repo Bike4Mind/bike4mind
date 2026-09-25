@@ -70,8 +70,13 @@ describe('createAttachmentLakeAccess', () => {
 
     const access = await createAttachmentLakeAccess(USER, logger as never)();
 
-    // {} means "no lake arms" downstream - byte-identical to the pre-#1576 ownership-only query.
-    expect(access).toEqual({});
+    // No lake arms downstream - byte-identical to the pre-#1576 ownership-only query - but
+    // flagged, so a consumer that would otherwise substitute a different file can fail closed
+    // instead of reading the outage as a clean deny.
+    expect(access).toEqual({ resolutionFailed: true });
+    expect(access.lakeMemberships).toBeUndefined();
+    expect(access.dataLakeTags).toBeUndefined();
+    expect(access.dataLakeTagPrefixes).toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(
       '[AttachmentLakeAccess] Resolution failed; falling back to ownership-only',
       expect.objectContaining({ error: 'lake read failed' })
@@ -82,8 +87,8 @@ describe('createAttachmentLakeAccess', () => {
     resolveRetrievalLakeScopeForUser.mockRejectedValue(new Error('lake read failed'));
     const thunk = createAttachmentLakeAccess(USER, makeLogger() as never);
 
-    await expect(thunk()).resolves.toEqual({});
-    await expect(thunk()).resolves.toEqual({});
+    await expect(thunk()).resolves.toEqual({ resolutionFailed: true });
+    await expect(thunk()).resolves.toEqual({ resolutionFailed: true });
   });
 
   it('memoizes: the resolver runs once however many times the thunk is called', async () => {

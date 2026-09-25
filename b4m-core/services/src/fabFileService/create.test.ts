@@ -561,6 +561,28 @@ describe('createFabFile - lake fallback-tag stamp at create time (#2397)', () =>
     ]);
   });
 
+  // The upload and Slack doors record no membership event, so diffLakeMembership reads the join
+  // time off this stamp; a create that inherited an older time would count as having sat through.
+  it('stamps createdAt at the moment of a lake create', async () => {
+    vi.useFakeTimers({ now: new Date('2026-06-10T12:00:00Z'), toFake: ['Date'] });
+    try {
+      const result = await createFabFile(
+        'u1',
+        {
+          ...base,
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          tags: [{ name: 'datalake:project-docs', strength: 1 }],
+        },
+        mockAdapters()
+      );
+
+      expect(result.createdAt).toEqual(new Date('2026-06-10T12:00:00Z'));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('leaves a create with no tags at all untouched (no dataLakes round trip)', async () => {
     const adapters = mockAdapters();
     const result = await createFabFile('u1', { ...base, fileName: 'notes.txt', mimeType: 'text/plain' }, adapters);

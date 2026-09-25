@@ -33,6 +33,13 @@ export const readingTheme = {
     /** Inline chips and table row hover: the veil baked flat, too small to grade. */
     surface2: '#141B23',
     /**
+     * The fill a card's veil sits on. Same value as `surface` here, but its own
+     * token because the two answer different questions: this one is "what colour is
+     * a card", `surface` is "what colour is a code panel". Light needs them to
+     * differ and dark does not, so they can only share a name by accident.
+     */
+    cardBase: gray[850],
+    /**
      * The veil, top and bottom of a card, as a gradient over `surface`. Brand
      * blue at 5% and 2% - a 3% flat veil already lands on Erik's card
      * relationship (dE 6.2 from the page against his 6.1), so anything past
@@ -67,20 +74,47 @@ export const readingTheme = {
   },
   light: {
     /**
-     * Same story as dark: the card base is the fill the prompt bubble already
-     * uses in this scheme (gray[50] is background.surface2 here), and the veil
-     * over it is what makes a framed block a card.
+     * The code surface. White, so code sits on paper: the card around it carries the
+     * blue veil and the code panel carries none, which is the reverse of dark, where
+     * the panel is the darker well and the card the lifted thing.
+     *
+     * Deliberately NOT mirroring dark's recess here. A light code panel has nothing
+     * to gain from being duller than the card it sits in - grey under grey was what
+     * read as dirty - and white buys the best contrast the syntax palette can get:
+     * the weakest ink clears AA at 4.99 against 4.54 on gray[8].
      */
-    surface: gray[50],
+    surface: gray[0],
     /** Inline chips and table row hover: the veil baked flat. */
     surface2: '#EEF3F9',
-    // The same 5% -> 2% fall as dark, which lands the card dE 5.3 from the light
-    // page against dark's 6.2 - the two schemes are tinted to the same degree.
-    cardTintTop: alpha(brand[500], 0.05),
-    cardTintBottom: alpha(brand[500], 0.02),
+    /**
+     * White, so the veil over it is a clean tint rather than a mix. Every grey in
+     * this ramp is faintly blue (gray[50] is C 1.46 at hue 244), and a blue veil on
+     * an already-blue grey compounds into something muddy - which is what the card
+     * used to look like. gray[0] is C 0.01, so the only colour on the card is the
+     * one the veil puts there.
+     *
+     * A light card cannot copy dark's other trick. Dark lifts its card +4.64 L*
+     * ABOVE the page; here the page is already L 98.9, so there is nowhere to lift
+     * to. The card reads instead through its tint and its edge.
+     */
+    cardBase: gray[0],
+    // Graded from the top, the same arrangement as dark: the blue gathers at the
+    // head of the card and falls away. Over the old grey base that fall read as a
+    // smudge, because a blue veil DARKENS a near-white fill; over white the same
+    // stops read as a tint, which is what makes the direction work here at all.
+    //
+    // brand[800] rather than the brand[500] dark uses, so the veil and cardLine
+    // below are one blue rather than two.
+    //
+    // The floor is 5%, not 2%: over white, 2% lands dE 0.36 from the page, which is
+    // the page. The card used to fade out rather than grade, and that missing lower
+    // end is what made the top look abrupt - the fall between the stops is the same
+    // 1.5 L* either way.
+    cardTintTop: brandAlpha[800][8],
+    cardTintBottom: brandAlpha[800][5],
     // brand[800] rather than brand[500]: the mid blue is too pale to read as an
     // edge on a near-white card. 20% matches dark's edge-to-card separation.
-    cardLine: alpha(brand[800], 0.2),
+    cardLine: brandAlpha[800][20],
     line: 'rgba(16, 38, 56, 0.11)',
     line2: 'rgba(16, 38, 56, 0.22)',
     // Same construction as dark - one ink at three opacities - but tinted from a

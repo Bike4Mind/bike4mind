@@ -38,6 +38,8 @@ export interface LakeGrantWriteInput {
  * this relation exists for ("someone who is neither the creator nor a member of its organization"),
  * and `LakeAccessGrantView` already withholds email because a grant holder may be an arbitrary
  * cross-tenant principal. Only the ORG arm is contained.
+ *
+ * Same concern elsewhere: `assembleLakeAccessView.ts`'s `userDisplayName`, `keptPersonalLakeSharesNotifier.ts`.
  */
 export function refuseGrantWrite(
   lake: Pick<IDataLakeDocument, 'organizationId'>,

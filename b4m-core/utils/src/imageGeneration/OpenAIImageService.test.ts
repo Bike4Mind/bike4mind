@@ -350,6 +350,24 @@ describe('OpenAIImageService.edit', () => {
     expect(params.response_format).toBe('url');
     expect(params.user).toBe('user-1');
   });
+
+  it.each(['1792x1024', '1024x1792'])(
+    'omits the dall-e-3 size %s on the dall-e-2 edit arm, which OpenAI would reject',
+    async size => {
+      // The size gate used to be computed and then ignored on this arm, so a size dall-e-2
+      // does not accept reached OpenAI and 400-ed the whole edit. Dropping it lets OpenAI
+      // apply its own default instead, which is what the gpt-image arm has always done.
+      const params = await editParams({ model: ImageModels.DALL_E_2, size });
+
+      expect(params).not.toHaveProperty('size');
+    }
+  );
+
+  it.each(['256x256', '512x512', '1024x1024'])('forwards the dall-e-2 size %s, which its tier accepts', async size => {
+    const params = await editParams({ model: ImageModels.DALL_E_2, size });
+
+    expect(params.size).toBe(size);
+  });
 });
 
 describe('OpenAIImageService.generate gpt-image-2 sizing', () => {
@@ -387,6 +405,36 @@ describe('OpenAIImageService.generate gpt-image-2 sizing', () => {
 
     expect(params.size).toBe('auto');
   });
+});
+
+describe('OpenAIImageService.generate legacy dall-e sizing', () => {
+  beforeEach(() => {
+    imagesGenerate.mockReset();
+  });
+
+  /** Runs generate() against the mocked SDK and returns the params it sent. */
+  async function generateParams(options: Record<string, unknown>): Promise<Record<string, unknown>> {
+    imagesGenerate.mockResolvedValue({ data: [{ url: 'https://example.test/i.png' }] });
+    await makeService().generate('a bicycle', options);
+    return imagesGenerate.mock.calls[0][0] as Record<string, unknown>;
+  }
+
+  it.each(['256x256', '512x512', '1024x1024'])('keeps the dall-e-2 size %s', async size => {
+    const params = await generateParams({ model: ImageModels.DALL_E_2, size });
+
+    expect(params.size).toBe(size);
+  });
+
+  it.each(['1792x1024', '1024x1792'])(
+    'coerces the dall-e-3 size %s to the dall-e-2 default rather than sending it',
+    async size => {
+      // The legacy branch measured every dall-e model against the union of both tiers, so
+      // these survived and 400-ed at OpenAI. Each tier is now measured against its own list.
+      const params = await generateParams({ model: ImageModels.DALL_E_2, size });
+
+      expect(params.size).toBe('1024x1024');
+    }
+  );
 });
 
 describe('OpenAIImageService.generate gpt-image quality forwarding (#2742)', () => {

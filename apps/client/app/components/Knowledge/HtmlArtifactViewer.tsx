@@ -1,5 +1,7 @@
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { Box, Typography, Alert, CircularProgress, Stack } from '@mui/joy';
+import { Box, Typography, Alert, CircularProgress, Stack, Tabs, TabPanel } from '@mui/joy';
+import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { type HtmlArtifact } from '@bike4mind/common';
 import { validateArtifactContent } from '@client/app/utils/artifactParser';
 import { sanitizeHtmlForIframe, absolutizeBlessedScripts } from '@client/app/utils/htmlSanitizer';
@@ -151,48 +153,75 @@ const HtmlArtifactViewer: React.FC<HtmlArtifactViewerProps> = ({ artifact, onErr
         </Alert>
       )}
 
-      <Box sx={{ flex: 1, position: 'relative', minHeight: 0 }}>
-        {isLoading && (
-          <Box
-            sx={{
-              position: 'absolute',
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              backgroundColor: whiteAlpha[0][80],
-              zIndex: 1,
-            }}
-          >
-            <CircularProgress size="sm" />
-          </Box>
-        )}
-
-        {loadCount > 0 && (
-          <iframe
-            key={loadCount}
-            ref={iframeRef}
-            src="/api/artifact-sandbox"
-            title={artifact.title}
-            // Web Audio (AudioContext) is gated by the autoplay Permissions Policy,
-            // which defaults to self-only and denies this opaque-origin sandbox iframe.
-            // Without this grant, an interactive artifact's "play" button resumes a
-            // context that never produces sound.
-            allow="autoplay"
-            onError={handleError}
-            style={{
-              width: '100%',
-              height: '100%',
-              border: 'none',
-              borderRadius: '4px',
-            }}
-            sandbox="allow-scripts"
+      {/* Preview/Code, the same strip React and Mermaid carry - until this existed, an
+          HTML artifact's source could not be read anywhere in the app. */}
+      <Tabs
+        defaultValue="preview"
+        sx={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, bgcolor: 'transparent' }}
+      >
+        <Box sx={{ borderBottom: '1px solid', borderColor: 'divider', px: 2, py: 1, flexShrink: 0 }}>
+          <ArtifactModeTabs
+            previewValue="preview"
+            codeValue="code"
+            previewTestId="html-artifact-preview-tab"
+            codeTestId="html-artifact-code-tab"
           />
-        )}
-      </Box>
+        </Box>
+
+        <TabPanel value="preview" sx={{ flex: 1, minHeight: 0, p: 0 }}>
+          {/* White for the same reason the inline preview is: the iframe is transparent
+              unless the artifact sets its own background, so this Box is the page the
+              artifact renders on. */}
+          <Box sx={{ width: '100%', height: '100%', position: 'relative', minHeight: 0, bgcolor: '#FFFFFF' }}>
+            {isLoading && (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: whiteAlpha[0][80],
+                  zIndex: 1,
+                }}
+              >
+                <CircularProgress size="sm" />
+              </Box>
+            )}
+
+            {loadCount > 0 && (
+              <iframe
+                key={loadCount}
+                ref={iframeRef}
+                src="/api/artifact-sandbox"
+                title={artifact.title}
+                // Web Audio (AudioContext) is gated by the autoplay Permissions Policy,
+                // which defaults to self-only and denies this opaque-origin sandbox iframe.
+                // Without this grant, an interactive artifact's "play" button resumes a
+                // context that never produces sound.
+                allow="autoplay"
+                onError={handleError}
+                style={{
+                  width: '100%',
+                  height: '100%',
+                  border: 'none',
+                  borderRadius: '4px',
+                }}
+                sandbox="allow-scripts"
+              />
+            )}
+          </Box>
+        </TabPanel>
+
+        <TabPanel value="code" sx={{ flex: 1, minHeight: 0, p: 0, overflow: 'auto' }}>
+          {/* The artifact's own markup, not the sanitized copy the iframe runs: the reader
+              wants what the model wrote, not what the sandbox allowed through. */}
+          <HighlightedCode code={artifact.content} language="html" customStyle={{ minHeight: '100%' }} wrapLongLines />
+        </TabPanel>
+      </Tabs>
     </Box>
   );
 };

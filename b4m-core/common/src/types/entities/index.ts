@@ -97,6 +97,7 @@ export * from './DataLakeOwnershipOfferTypes';
 export * from './LakeAccessEventTypes';
 export * from './LakeConfigChangeEventTypes';
 export * from './LakeMembershipChangeEventTypes';
+export * from './LakeMembershipDiffTypes';
 export * from './LakeConfigHistoryTypes';
 export * from './DataLakeSpendNotificationTypes';
 export * from './LakeAccessViewTypes';

@@ -38,7 +38,11 @@ const DARK: Palette = {
   // are the same values, and are what render before hydration or in a test that
   // mounts without the app theme.
   bg: 'var(--joy-palette-reading-surface, #13181C)',
-  fg: '#A6B5C1',
+  // Plain, uncoloured code - base text, variables, properties - reads in the app's own
+  // text.primary, so a snippet is set in the same ink as the prose around it. Only tokens
+  // that mean something (keyword, string, number, comment) get a colour of their own. The
+  // fallback is text.primary's literal value for renders with no theme attached.
+  fg: 'var(--joy-palette-text-primary, #D1E4F4)',
   ink: '#E8EDF2',
   ink3: '#8090A0',
   keyword: '#8FC1F0',
@@ -50,8 +54,8 @@ const DARK: Palette = {
 };
 
 const LIGHT: Palette = {
-  bg: 'var(--joy-palette-reading-surface, #F4F7F9)',
-  fg: '#425663',
+  bg: 'var(--joy-palette-reading-surface, #FFFFFF)',
+  fg: 'var(--joy-palette-text-primary, #335F70)',
   ink: '#141F28',
   ink3: '#5B6C7A',
   keyword: '#2364A8',
@@ -66,7 +70,7 @@ const LIGHT: Palette = {
 // code around it resolve to the same mono. The fallback belongs INSIDE var():
 // an undefined custom property invalidates the whole font-family at
 // computed-value time, so a trailing comma-list would never be reached.
-const FONT_STACK =
+export const CODE_FONT_STACK =
   "var(--font-reading-mono, 'JetBrains Mono'), var(--joy-fontFamily-code, ui-monospace), 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace";
 
 /**
@@ -76,7 +80,7 @@ const build = (p: Palette): PrismStyle => {
   const base: CSSProperties = {
     background: p.bg,
     color: p.fg,
-    fontFamily: FONT_STACK,
+    fontFamily: CODE_FONT_STACK,
     direction: 'ltr',
     textAlign: 'left',
     whiteSpace: 'pre',
@@ -190,3 +194,24 @@ export const observatoryLight: PrismStyle = build(LIGHT);
  */
 export const getMarkdownSyntaxTheme = (mode: 'light' | 'dark' | undefined): PrismStyle =>
   mode === 'dark' ? observatoryDark : observatoryLight;
+
+/**
+ * The same palette as an sx block, for the editable code surfaces.
+ *
+ * `react-simple-code-editor` runs Prism itself and emits bare `.token.*` spans rather than
+ * going through react-syntax-highlighter, so it cannot take a PrismStyle map. Deriving the
+ * selectors from that map anyway is what stops an editor drifting: all three editors used
+ * to carry their own hand-written hex tables (an oneDark transcription plus a separate
+ * light one), which is four palettes for one language.
+ *
+ * Only the bare token keys apply - the `code[...]`/`pre[...]`/selection entries describe
+ * the panel, which the editor's own container draws.
+ */
+export const getEditorTokenSx = (mode: 'light' | 'dark' | undefined): Record<string, CSSProperties> => {
+  const theme = getMarkdownSyntaxTheme(mode);
+  const sx: Record<string, CSSProperties> = {};
+  for (const [token, style] of Object.entries(theme)) {
+    if (/^[a-z][a-z-]*$/.test(token)) sx[`& .token.${token}`] = style;
+  }
+  return sx;
+};

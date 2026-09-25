@@ -43,6 +43,8 @@ import {
   dataLakeResearchQueueDLQ,
   lakeMemoryQueue,
   lakeMemoryQueueDLQ,
+  lakeInconsistencyModelQueue,
+  lakeInconsistencyModelQueueDLQ,
   driveLakeIngestQueue,
   driveLakeIngestQueueDLQ,
   whatsNewGenerationQueue,
@@ -131,6 +133,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'data-lake-taxonomy': dataLakeTaxonomyQueueDLQ.url,
     'data-lake-research': dataLakeResearchQueueDLQ.url,
     'lake-memory': lakeMemoryQueueDLQ.url,
+    'lake-inconsistency-model': lakeInconsistencyModelQueueDLQ.url,
     'drive-lake-ingest': driveLakeIngestQueueDLQ.url,
   },
 });
@@ -187,6 +190,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     dataLakeTaxonomyQueue: dataLakeTaxonomyQueue.url,
     dataLakeResearchQueue: dataLakeResearchQueue.url,
     lakeMemoryQueue: lakeMemoryQueue.url,
+    lakeInconsistencyModelQueue: lakeInconsistencyModelQueue.url,
     driveLakeIngestQueue: driveLakeIngestQueue.url,
   },
 });

@@ -4,6 +4,7 @@ and AI-reply artifacts (QuestMaster quest chains, Mermaid, Recharts, React/HTML/
 chess, lattice, Python). Each type has a dedicated viewer.
 */
 
+import HighlightedCode from '@client/app/components/common/HighlightedCode';
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { downloadData } from '@client/app/utils/download';
 import {
@@ -58,8 +59,6 @@ import {
 } from '@client/app/hooks/useSessionLayout';
 import { getContentFromFabfile } from '@client/app/utils/fabFileUtils';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { CodeArtifactData } from '@client/app/hooks/useSessionLayout';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import EditFileDialog, { EditOptions } from './EditFileDialog';
@@ -2167,18 +2166,12 @@ const KnowledgeContent: React.FC<{
 
       return (
         <Box sx={{ width: '100%', height: '100%', overflow: 'auto' }}>
-          <SyntaxHighlighter
+          <HighlightedCode
+            code={codeData.code}
             language={codeData.language || 'typescript'}
-            style={oneDark}
             showLineNumbers={showLineNumbers}
-            customStyle={{
-              margin: 0,
-              borderRadius: '4px',
-              minHeight: '100%',
-            }}
-          >
-            {codeData.code}
-          </SyntaxHighlighter>
+            customStyle={{ minHeight: '100%' }}
+          />
         </Box>
       );
     }
@@ -2689,20 +2682,12 @@ export const FileContent = ({
       }
       return (
         <Box sx={{ width: '100%', height: '100%', overflow: 'auto' }}>
-          <SyntaxHighlighter
+          <HighlightedCode
+            code={content}
             language={getLanguageFromFileName(file.fileName)}
-            style={oneDark}
             showLineNumbers={showLineNumbers}
-            customStyle={{
-              margin: 0,
-              borderRadius: '4px',
-              minHeight: '100%',
-              fontSize: '14px',
-              lineHeight: '1.5',
-            }}
-          >
-            {content}
-          </SyntaxHighlighter>
+            customStyle={{ minHeight: '100%' }}
+          />
         </Box>
       );
     default:

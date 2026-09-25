@@ -89,6 +89,10 @@ function bootSandbox(opts: { factoryBlock?: string; mainBlock?: string; countOps
   };
   const context = vm.createContext({
     window,
+    // The emitted script schedules its height reporter with setTimeout. A no-op keeps the
+    // reporter from running: firing it would post a height message into `posted`, which the
+    // assertions below count. This suite is about the import scanner, not the reporter.
+    setTimeout: () => 0,
     document: {
       getElementById: el,
       createElement: el,

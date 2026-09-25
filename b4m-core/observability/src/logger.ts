@@ -13,7 +13,13 @@ export interface ILogger {
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export class Logger implements ILogger {
-  static globalInstance = new Logger();
+  private static _globalInstance: Logger | undefined;
+
+  // Built on first access, not at import, so importing this module reads no process.env.
+  static get globalInstance(): Logger {
+    return (Logger._globalInstance ??= new Logger());
+  }
+
   protected metadata: Record<string, unknown> = {};
   protected logInJson: boolean;
   protected prettyPrint: boolean;
