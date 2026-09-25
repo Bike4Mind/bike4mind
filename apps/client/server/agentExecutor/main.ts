@@ -3,6 +3,7 @@ import {
   SendMessageCommand,
   ReceiveMessageCommand,
   DeleteMessageCommand,
+  ChangeMessageVisibilityCommand,
   GetQueueAttributesCommand,
 } from '@aws-sdk/client-sqs';
 import { connectDB, mongoose } from '@bike4mind/database';
@@ -10,6 +11,8 @@ import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { handler } from '@server/queueHandlers/agentExecutor';
 import { createExecutorApp, runQueueMessage, VISIBILITY_SECONDS, EXECUTION_BUDGET_MS } from './server';
+import { handleQueueMessage, type QueueMessageDeps } from './queueMessage';
+import { settleDroppedExecution } from './droppedExecution';
 
 const logger = new Logger({ metadata: { service: 'agentExecutor' } });
 const sqs = new SQSClient({});
@@ -43,6 +46,25 @@ async function main() {
   });
   const server = app.listen(Number(process.env.PORT ?? 8080));
 
+  const queueMessageDeps: QueueMessageDeps = {
+    run: message => runQueueMessage(message, handler),
+    deleteMessage: async message => {
+      await sqs.send(new DeleteMessageCommand({ QueueUrl: configuredQueueUrl, ReceiptHandle: message.ReceiptHandle }));
+    },
+    extendVisibility: async (message, seconds) => {
+      await sqs.send(
+        new ChangeMessageVisibilityCommand({
+          QueueUrl: configuredQueueUrl,
+          ReceiptHandle: message.ReceiptHandle,
+          VisibilityTimeout: seconds,
+        })
+      );
+    },
+    settleDropped: target => settleDroppedExecution(target, logger),
+    logger,
+    visibilitySeconds: VISIBILITY_SECONDS,
+  };
+
   async function consume(): Promise<void> {
     while (running) {
       try {
@@ -57,16 +79,7 @@ async function main() {
           })
         );
         if (!running) break;
-        for (const message of response.Messages ?? []) {
-          try {
-            await runQueueMessage(message, handler);
-            await sqs.send(
-              new DeleteMessageCommand({ QueueUrl: configuredQueueUrl, ReceiptHandle: message.ReceiptHandle })
-            );
-          } catch {
-            logger.warn('Agent queue delivery failed; retaining for redelivery', { messageId: message.MessageId });
-          }
-        }
+        for (const message of response.Messages ?? []) await handleQueueMessage(message, queueMessageDeps);
       } catch {
         queueReady = false;
         if (running) await new Promise(resolve => setTimeout(resolve, 1000));

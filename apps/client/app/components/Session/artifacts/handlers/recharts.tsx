@@ -76,7 +76,7 @@ const RechartsPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifac
         // user asked for -- so no copy/save/code-view, and the body is the chart alone.
         stats={
           <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            {description || `Interactive chart with ${dataPoints} data points`}
+            {description || `${dataPoints} data points`}
           </Typography>
         }
         renderPreview={() => (

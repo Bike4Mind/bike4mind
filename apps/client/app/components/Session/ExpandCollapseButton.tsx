@@ -7,9 +7,18 @@ interface ExpandCollapseButtonProps {
   needsTruncation: boolean;
   isExpanded: boolean;
   onToggle: () => void;
+  /** Shown when collapsed; defaults to "Show More". A count reads better where we have one. */
+  collapsedLabel?: string;
+  testId?: string;
 }
 
-export const ExpandCollapseButton: FC<ExpandCollapseButtonProps> = ({ needsTruncation, isExpanded, onToggle }) => {
+export const ExpandCollapseButton: FC<ExpandCollapseButtonProps> = ({
+  needsTruncation,
+  isExpanded,
+  onToggle,
+  collapsedLabel = 'Show More',
+  testId,
+}) => {
   if (!needsTruncation) {
     return null;
   }
@@ -38,6 +47,8 @@ export const ExpandCollapseButton: FC<ExpandCollapseButtonProps> = ({ needsTrunc
         size="sm"
         endDecorator={isExpanded ? <ExpandLess /> : <ExpandMore />}
         onClick={onToggle}
+        aria-expanded={isExpanded}
+        data-testid={testId}
         sx={{
           backgroundColor: 'background.body',
           borderColor: theme => (theme.palette.mode === 'dark' ? 'neutral.700' : 'neutral.300'),
@@ -63,7 +74,7 @@ export const ExpandCollapseButton: FC<ExpandCollapseButtonProps> = ({ needsTrunc
           },
         }}
       >
-        {isExpanded ? 'Show Less' : 'Show More'}
+        {isExpanded ? 'Show Less' : collapsedLabel}
       </Button>
     </Box>
   );

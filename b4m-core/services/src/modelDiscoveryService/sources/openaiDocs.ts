@@ -207,13 +207,16 @@ function ratesAt(
  * output for the full request." The same sentence appears in a longer form on the
  * older families ("For models with a 1.05M context window (GPT-5.4 and GPT-5.4
  * Pro), prompts with >272K input tokens are ..."), so the match anchors on the
- * clause rather than on the line.
+ * clause rather than on the line. GPT-6 pages spell the comparison out: "Prompts
+ * with more than 272K input tokens".
  *
  * Undefined means the page does not state one, which is a model this source may
  * not price at all - see openai.ts.
  */
 export function parseOpenAiLongContextBreakpoint(markdown: string): number | undefined {
-  const match = /prompts with\s*>\s*([\d.,]+\s*[km]?)\s*input tokens/i.exec(markdown);
+  const match = /prompts with\s*(?:>=?|more than|over|above|exceeding)\s*([\d.,]+\s*[km]?)\s*input tokens/i.exec(
+    markdown
+  );
   return match ? parseTokenCount(match[1] ?? '') : undefined;
 }
 
