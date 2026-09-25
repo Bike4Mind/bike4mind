@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/database';
 
 import { SubscriptionMetadata, SubscriptionOwnerType, SubscriptionSource } from '@client/lib/subscriptions/types';
+import { acquisitionFromStripeMetadata } from '@server/analytics/acquisition';
 
 import { Logger } from '@bike4mind/observability';
 import Stripe from 'stripe';
@@ -498,6 +499,7 @@ export const handleUserSubscriptionInvoice = async (
   await withTransaction(async () => {
     switch (invoice.billing_reason) {
       case 'subscription_create': {
+        const acquisition = acquisitionFromStripeMetadata(subscription.metadata);
         // Do not create a new subscription record if it already exists
         const existingSubscription = await subscriptionRepository.findByStripeSubscriptionId(subscription.id);
         if (existingSubscription) {
@@ -516,6 +518,9 @@ export const handleUserSubscriptionInvoice = async (
           periodEndsAt: dayjs.unix(item.current_period_end).toDate(),
           canceledAt: null,
           quantity: 1, // Always 1 for user subscriptions
+          // Recorded at checkout (pages/api/subscriptions/subscribe.ts); absent when the browser
+          // carried no campaign touch.
+          ...(acquisition && { acquisition }),
         });
 
         // Cooldown: prevent credit farming via cancel + re-subscribe within 72h

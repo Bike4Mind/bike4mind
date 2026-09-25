@@ -2,6 +2,23 @@ const UTM_COOKIE_NAME = 'b4m_utm';
 // 30-minute window: long enough for a landing session, short enough to not persist stale campaigns.
 const TTL_SECONDS = 30 * 60;
 
+// Purchase attribution needs a longer memory than a session. A visitor who lands from a campaign
+// and subscribes a week later has lost `b4m_utm` by checkout, so the same capture also keeps:
+// - the last campaign landing, overwritten on each one, for 30 days
+// - the first campaign landing this app saw, written once, for 90 days - a fallback for the
+//   marketing site's parent-domain `b4m-first-touch`, which only visitors who came through the
+//   marketing site carry. It has its own name so the two can never be confused or overwrite
+//   each other; the server prefers the marketing site's when both exist.
+// Both are read server-side at checkout (server/analytics/acquisition.ts).
+export const LAST_TOUCH_COOKIE_NAME = 'b4m_last_touch';
+export const APP_FIRST_TOUCH_COOKIE_NAME = 'b4m_app_first_touch';
+const LAST_TOUCH_TTL_SECONDS = 30 * 24 * 60 * 60;
+const APP_FIRST_TOUCH_TTL_SECONDS = 90 * 24 * 60 * 60;
+
+function hasCookie(name: string): boolean {
+  return document.cookie.split('; ').some(c => c.startsWith(`${name}=`));
+}
+
 /**
  * Capture utm_* params from the current URL into a first-party cookie that the server-side
  * analytics emitter reads on the first authenticated request of the day.
@@ -30,6 +47,11 @@ export function captureUtmParams(): void {
   const content = params.get('utm_content');
   if (content) utm.content = content;
 
-  const expires = new Date(Date.now() + TTL_SECONDS * 1000).toUTCString();
-  document.cookie = `${UTM_COOKIE_NAME}=${encodeURIComponent(JSON.stringify(utm))}; path=/; SameSite=Strict; expires=${expires}`;
+  const value = encodeURIComponent(JSON.stringify(utm));
+  const expiresIn = (seconds: number) => new Date(Date.now() + seconds * 1000).toUTCString();
+  document.cookie = `${UTM_COOKIE_NAME}=${value}; path=/; SameSite=Strict; expires=${expiresIn(TTL_SECONDS)}`;
+  document.cookie = `${LAST_TOUCH_COOKIE_NAME}=${value}; path=/; SameSite=Strict; expires=${expiresIn(LAST_TOUCH_TTL_SECONDS)}`;
+  if (!hasCookie(APP_FIRST_TOUCH_COOKIE_NAME)) {
+    document.cookie = `${APP_FIRST_TOUCH_COOKIE_NAME}=${value}; path=/; SameSite=Strict; expires=${expiresIn(APP_FIRST_TOUCH_TTL_SECONDS)}`;
+  }
 }
