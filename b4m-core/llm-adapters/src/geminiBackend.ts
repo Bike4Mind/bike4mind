@@ -831,18 +831,18 @@ export class GeminiBackend implements ICompletionBackend {
                 : { ok: false as const, toolCall: resolvedCalls[i].toolCall, error: outcome.error }
             );
 
-            // The real, top-level callback - pinned through every recursion level via
-            // _internal.artifactCallback - so a CHAINED tool call's artifact always reaches
-            // the client directly instead of the (possibly buffering) recursive guard below.
-            // See anthropicBackend for the same pattern.
-            const artifactCallback = options._internal?.artifactCallback ?? callback;
+            // The single shared guard for this whole recursive chain - reused unchanged if an
+            // earlier level already created one, so a CHAINED tool call's artifact and any text
+            // buffered ahead of it stay in one true generation order. See anthropicBackend and
+            // createRecursiveArtifactGuard for the same pattern.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
 
             // Track artifact streaming: the model can echo the tool's own <artifact> tag back
             // in its final reply once it reads it from the tool_result JSON, and the reply
             // parser would render that echo as a second, empty card - strip it from history
             // (below) and, as a backstop, from the recursive completion's buffered text
             // (after the loop). See anthropicBackend for the same pattern.
-            let anyArtifactWasStreamed = false;
             // Inject results in original order (Gemini requires matching tool_use order)
             for (const outcome of outcomes) {
               if (outcome.ok) {
@@ -854,8 +854,8 @@ export class GeminiBackend implements ICompletionBackend {
                   outcome.result,
                   async (results, artifactInfo) => {
                     thisToolHadArtifact = true;
-                    anyArtifactWasStreamed = true;
-                    await artifactCallback(results, { toolsUsed, ...artifactInfo });
+                    if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+                    await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
                   }
                 );
 
@@ -919,12 +919,6 @@ export class GeminiBackend implements ICompletionBackend {
             // Add newline separator before recursive call to ensure proper markdown rendering
             await callback(['\n\n'], { toolsUsed });
 
-            // If any artifact was already streamed, buffer the recursive response and strip
-            // any duplicate artifact markup the model echoes back in it before it reaches the
-            // client - see anthropicBackend for the same pattern. A genuinely NEW artifact from
-            // a chained tool call bypasses this guard entirely via artifactCallback above.
-            const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(callback) : undefined;
-
             // Recursively call complete to get the final response with tool results
             // This ensures the answer appears in the same stream.
             // Carry this turn's tokens forward so the terminal recursive call
@@ -940,14 +934,15 @@ export class GeminiBackend implements ICompletionBackend {
                   accumInputTokens: accumInputTokens + turnInputTokens,
                   accumOutputTokens: accumOutputTokens + turnOutputTokens,
                   liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
-                  artifactCallback,
+                  artifactGuard,
                 },
               },
-              guard?.callback ?? callback,
+              artifactGuard?.callback ?? callback,
               toolsUsed
             );
 
-            if (guard) await guard.flush();
+            // See anthropicBackend for why only a guard this level created is flushed.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
           } else {
             // New behavior: just pass tool calls through callback, don't execute.
             // The post-stream cb above already emitted accum+thisTurn tokens;
@@ -1108,11 +1103,10 @@ export class GeminiBackend implements ICompletionBackend {
             : { ok: false as const, toolCall: resolvedCalls[i].toolCall, error: outcome.error }
         );
 
-        // See the streaming branch above for why artifactCallback exists.
-        const artifactCallback = options._internal?.artifactCallback ?? callback;
+        // See the streaming branch above for why the shared artifactGuard exists.
+        const inheritedArtifactGuard = options._internal?.artifactGuard;
+        let artifactGuard = inheritedArtifactGuard;
 
-        // See the streaming branch above for why anyArtifactWasStreamed exists.
-        let anyArtifactWasStreamed = false;
         // Inject results in original order
         for (const outcome of outcomes) {
           if (outcome.ok) {
@@ -1121,8 +1115,8 @@ export class GeminiBackend implements ICompletionBackend {
             // Stream tool results for artifact-generating tools (like recharts)
             await handleToolResultStreaming(outcome.toolCall.name, outcome.result, async (results, artifactInfo) => {
               thisToolHadArtifact = true;
-              anyArtifactWasStreamed = true;
-              await artifactCallback(results, { toolsUsed, ...artifactInfo });
+              if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+              await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
             });
 
             // Strip artifact markup from every tool result, not only the ones that streamed,
@@ -1174,10 +1168,6 @@ export class GeminiBackend implements ICompletionBackend {
         // Add newline separator before recursive call to ensure proper markdown rendering
         await callback(['\n\n'], { toolsUsed });
 
-        // See the streaming branch above for why this buffers and strips instead of
-        // passing callback straight through.
-        const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(callback) : undefined;
-
         // Recursively call complete to get the final response with tool results.
         // Carry this turn's tokens forward so the terminal recursive call
         // emits the full multi-turn billable total to cb.
@@ -1192,14 +1182,15 @@ export class GeminiBackend implements ICompletionBackend {
               accumInputTokens: accumInputTokens + turnInputTokens,
               accumOutputTokens: accumOutputTokens + turnOutputTokens,
               liveToolUseIds: [...liveToolUseIds, ...toolCalls.map(tc => tc.id)],
-              artifactCallback,
+              artifactGuard,
             },
           },
-          guard?.callback ?? callback,
+          artifactGuard?.callback ?? callback,
           toolsUsed
         );
 
-        if (guard) await guard.flush();
+        // See anthropicBackend for why only a guard this level created is flushed.
+        if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
       } else {
         // New behavior: just pass tool calls through callback, don't execute
         this.logger.debug('[Gemini] Gemini executeTools=false, passing tool calls to callback');
