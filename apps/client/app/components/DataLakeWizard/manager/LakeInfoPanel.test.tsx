@@ -79,6 +79,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // Same for LakeFindingsChip: it renders a neutral chip either way, so no findings just means
     // no open-count badge.
     useDataLakeFindings: () => ({ data: undefined, isLoading: false, error: null, isForbidden: false }),
+    useScanDataLakeFindings: mutation,
     useGetLakeMemoryHealth: (...args: unknown[]) => useGetLakeMemoryHealth(...(args as [])),
     useBuildLakeMemory: (id: string | null) => {
       buildHookSpy(id);
