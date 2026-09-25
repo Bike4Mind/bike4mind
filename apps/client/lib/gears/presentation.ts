@@ -159,6 +159,20 @@ export const GEAR_PRESENTATION: Record<string, GearPresentation> = {
     cta: 'Generate a video',
     ctaAction: 'navigate:/new',
   },
+  music: {
+    title: 'Music Generation',
+    tagline: 'Prompt to melody',
+    intro: 'Ask a chat for a track and it composes one - background music, a jingle, a mood piece.',
+    cta: 'Generate a track',
+    ctaAction: 'navigate:/new',
+  },
+  sound: {
+    title: 'Sound Effects',
+    tagline: 'Describe it, hear it',
+    intro: 'Describe a sound in words and get it made - rain on a tin roof, a door creak, a whoosh.',
+    cta: 'Generate a sound',
+    ctaAction: 'navigate:/new',
+  },
   research: {
     title: 'Research Engine',
     tagline: 'Deep dives, cited',

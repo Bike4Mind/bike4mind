@@ -80,6 +80,8 @@ export type GearKey =
   | 'questmaster'
   | 'mementos'
   | 'video'
+  | 'music'
+  | 'sound'
   | 'mcp'
   | 'mfa'
   | 'slack'
@@ -243,6 +245,20 @@ const GEARS: GearDef[] = [
     credits: 250,
     kind: 'skill',
     check: ({ usageFeatures }) => usageFeatures.has('video_generation'),
+  },
+  {
+    key: 'music',
+    credits: 250,
+    kind: 'skill',
+    check: ({ usageFeatures }) => usageFeatures.has('music_generation'),
+  },
+  {
+    // Only the sound-effect half of audio_generation: text-to-speech reads text
+    // that already exists, which is a different act from generating media.
+    key: 'sound',
+    credits: 250,
+    kind: 'skill',
+    check: ({ usageFeatures }) => usageFeatures.has('sound_effects'),
   },
   {
     key: 'mcp',

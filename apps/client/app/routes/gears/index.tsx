@@ -21,6 +21,8 @@ import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
 import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
+import MusicNoteOutlinedIcon from '@mui/icons-material/MusicNoteOutlined';
+import GraphicEqOutlinedIcon from '@mui/icons-material/GraphicEqOutlined';
 import CableOutlinedIcon from '@mui/icons-material/CableOutlined';
 import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
 import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
@@ -75,6 +77,8 @@ const GEAR_ICONS: Partial<Record<GearKey, React.ReactNode>> = {
   questmaster: <AutoAwesomeOutlinedIcon />,
   mementos: <PsychologyOutlinedIcon />,
   video: <MovieOutlinedIcon />,
+  music: <MusicNoteOutlinedIcon />,
+  sound: <GraphicEqOutlinedIcon />,
   mcp: <CableOutlinedIcon />,
   mfa: <SecurityOutlinedIcon />,
   slack: <ForumOutlinedIcon />,
@@ -93,15 +97,32 @@ const GEAR_ICONS: Partial<Record<GearKey, React.ReactNode>> = {
 /** The reward as prose, for the tooltips: the chip shows the bare number. */
 const creditText = (gear: GearStatus) => `${gear.credits.toLocaleString()} credit${gear.credits === 1 ? '' : 's'}`;
 
-type GearsTabKey = 'destinations' | 'features';
+type GearsTabKey = 'getting-started' | 'features' | 'generators' | 'integrations';
 
 const TABS: { key: GearsTabKey; label: string }[] = [
-  { key: 'destinations', label: 'Destinations' },
+  { key: 'getting-started', label: 'Getting Started' },
   { key: 'features', label: 'Explore Features' },
+  { key: 'generators', label: 'Generators' },
+  { key: 'integrations', label: 'Integrations' },
 ];
 
+/** Skills that turn a prompt into a media file. Grouped here rather than by
+ *  `kind`, which the endpoint owns and which only separates the gears that earn
+ *  a sidenav row from everything else. */
+const GENERATOR_KEYS: GearKey[] = ['image', 'video', 'music', 'sound'];
+
+/** Leads the first tab despite being a skill: running one question past many
+ *  models is the story the product turns on, so it should not be buried among
+ *  thirty siblings. Placement only - the endpoint still calls it a skill,
+ *  because it earns no sidenav row. */
+const LEAD_KEY: GearKey = 'models';
+
+/** Skills that connect Bike4Mind to something outside it. Slack is the only
+ *  one broken out so far; MCP and the chat imports are the obvious next. */
+const INTEGRATION_KEYS: GearKey[] = ['slack'];
+
 const GearsPage = () => {
-  const [tab, setTab] = useState<GearsTabKey>('destinations');
+  const [tab, setTab] = useState<GearsTabKey>('getting-started');
   const navigate = useNavigate();
   const { data, isPending, refetch } = useGearsStatus();
   const { isFeatureEnabled } = useFeatureEnabled();
@@ -119,8 +140,13 @@ const GearsPage = () => {
     return true;
   };
   const gears = (data?.gears ?? []).filter(g => gearVisible(g.key));
-  const destinations = gears.filter(g => g.kind === 'destination');
-  const skills = gears.filter(g => g.kind === 'skill');
+  const gettingStarted = [...gears.filter(g => g.key === LEAD_KEY), ...gears.filter(g => g.kind === 'destination')];
+  const generators = gears.filter(g => GENERATOR_KEYS.includes(g.key));
+  const integrations = gears.filter(g => INTEGRATION_KEYS.includes(g.key));
+  const skills = gears.filter(
+    g =>
+      g.kind === 'skill' && g.key !== LEAD_KEY && !GENERATOR_KEYS.includes(g.key) && !INTEGRATION_KEYS.includes(g.key)
+  );
 
   // Surface fresh unlock rewards the moment the status lands.
   useEffect(() => {
@@ -322,8 +348,16 @@ const GearsPage = () => {
             <Typography level="h2" sx={{ fontWeight: 500, fontSize: '20px' }}>
               Gears
             </Typography>
-            <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '500px', fontSize: '14px', color: 'text.tertiary' }}>
-              A tour of what Bike4Mind can do. The first time you use one of these, it pays a one-time credit bonus.
+            <Typography level="body-sm" sx={{ mt: '6px', maxWidth: '600px', fontSize: '14px', color: 'text.tertiary' }}>
+              A tour of what Bike4Mind can do - the models you can put a question to, the places your work lives, the
+              media you can generate, and what it all connects to.
+            </Typography>
+            <Typography
+              level="body-sm"
+              data-testid="gears-reward-notice"
+              sx={{ mt: '6px', maxWidth: '600px', fontSize: '14px', fontWeight: 500, color: 'primary.500' }}
+            >
+              Every gear here pays a one-time credit bonus the first time you use it.
             </Typography>
           </Box>
 
@@ -348,12 +382,20 @@ const GearsPage = () => {
             ))}
           </TabList>
 
-          <TabPanel value="destinations" sx={{ px: 0, pt: '24px', pb: 0 }}>
-            {renderCards(destinations)}
+          <TabPanel value="getting-started" sx={{ px: 0, pt: '24px', pb: 0 }}>
+            {renderCards(gettingStarted)}
           </TabPanel>
 
           <TabPanel value="features" sx={{ px: 0, pt: '24px', pb: 0 }}>
             {renderCards(skills)}
+          </TabPanel>
+
+          <TabPanel value="generators" sx={{ px: 0, pt: '24px', pb: 0 }}>
+            {renderCards(generators)}
+          </TabPanel>
+
+          <TabPanel value="integrations" sx={{ px: 0, pt: '24px', pb: 0 }}>
+            {renderCards(integrations)}
           </TabPanel>
         </Tabs>
       </Box>

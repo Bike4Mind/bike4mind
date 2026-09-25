@@ -31,6 +31,8 @@ const ADVANCED_KEYS = [
   'models',
   'image',
   'video',
+  'music',
+  'sound',
   'voice',
   'research',
   'websearch',

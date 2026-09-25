@@ -29,6 +29,8 @@ export type GearKey =
   | 'questmaster'
   | 'mementos'
   | 'video'
+  | 'music'
+  | 'sound'
   | 'mcp'
   | 'mfa'
   | 'slack'

@@ -75,7 +75,7 @@ vi.mock('@bike4mind/common', () => ({
   CreditHolderType: { User: 'User' },
 }));
 
-import handler from '../status';
+import handler, { GEAR_DEFAULTS } from '../status';
 
 const run = (user?: { id: string }) => {
   const { req, res } = createMocks({ method: 'GET' });
@@ -124,7 +124,7 @@ describe('GET /api/gears/status', () => {
 
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData() as { gears: Array<{ unlocked: boolean }>; totalUnlocked: number };
-    expect(body.gears).toHaveLength(32);
+    expect(body.gears).toHaveLength(GEAR_DEFAULTS.length);
     expect(body.gears.every(g => !g.unlocked)).toBe(true);
     expect(body.totalUnlocked).toBe(0);
     expect(mocks.addCredits).not.toHaveBeenCalled();
@@ -321,7 +321,7 @@ describe('GET /api/gears/status - Manage Gears admin overrides', () => {
 
     const body = res._getJSONData() as { gears: Array<{ key: string }> };
     expect(body.gears.some(g => g.key === 'image')).toBe(false);
-    expect(body.gears).toHaveLength(31);
+    expect(body.gears).toHaveLength(GEAR_DEFAULTS.length - 1);
   });
 
   it('credits and copy overrides are ABSOLUTE and ride the response', async () => {
