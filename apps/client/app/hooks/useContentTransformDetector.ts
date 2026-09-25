@@ -82,10 +82,11 @@ export const useContentTransformDetector = (sessionId: string | null) => {
  * Full markdown content here...
  * ```
  */
-function parseContentTransformResponse(response: string): TransformedContent | null {
+export function parseContentTransformResponse(response: string): TransformedContent | null {
   try {
     // Try to extract JSON from code blocks first (in case tool response format changes)
-    const jsonMatch = response.match(/```json\s*\n([\s\S]*?)\n```/) || response.match(/```\s*\n([\s\S]*?)\n```/);
+    const jsonMatch =
+      response.match(/```json[^\S\n]*\n([\s\S]*?)\n```/) || response.match(/```[^\S\n]*\n([\s\S]*?)\n```/);
 
     if (jsonMatch) {
       const jsonStr = jsonMatch[1].trim();
@@ -98,13 +99,16 @@ function parseContentTransformResponse(response: string): TransformedContent | n
       };
     }
 
-    // Fallback: Parse the formatted text response
-    const titleMatch = response.match(/\*\*Title:\*\*\s*(.+?)(?:\n|$)/);
-    const summaryMatch = response.match(/\*\*Summary:\*\*\s*(.+?)(?:\n|$)/);
-    const tagsMatch = response.match(/\*\*Suggested Tags:\*\*\s*(.+?)(?:\n|$)/);
+    // Fallback: Parse the formatted text response. (?=(\s*))\1 is an atomic \s*: a backtracking one
+    // is quadratic on spaces that end in \r or U+2028, which `.` cannot match. Value is group 2.
+    const titleMatch = response.match(/\*\*Title:\*\*(?=(\s*))\1(.+?)(?:\n|$)/);
+    const summaryMatch = response.match(/\*\*Summary:\*\*(?=(\s*))\1(.+?)(?:\n|$)/);
+    const tagsMatch = response.match(/\*\*Suggested Tags:\*\*(?=(\s*))\1(.+?)(?:\n|$)/);
 
     // Extract content - everything after "Content Preview" or the full content section
-    let contentMatch = response.match(/\*\*Content Preview[^:]*:\*\*\s*\n([\s\S]+?)(?:\n---|\n\*\*Next Steps|\n$)/);
+    let contentMatch = response.match(
+      /\*\*Content Preview[^:]*:\*\*[^\S\n]*\n([\s\S]+?)(?:\n---|\n\*\*Next Steps|\n$)/
+    );
 
     // If no content preview found, try to find the actual full content from the tool's internal result
     // This is a bit hacky but works for the current tool implementation
@@ -120,16 +124,16 @@ function parseContentTransformResponse(response: string): TransformedContent | n
     }
 
     const tags = tagsMatch
-      ? tagsMatch[1]
+      ? tagsMatch[2]
           .split(',')
           .map(tag => tag.trim())
           .filter(Boolean)
       : [];
 
     return {
-      title: titleMatch[1].trim(),
+      title: titleMatch[2].trim(),
       content: contentMatch[1].trim(),
-      summary: summaryMatch ? summaryMatch[1].trim() : '',
+      summary: summaryMatch ? summaryMatch[2].trim() : '',
       suggestedTags: tags,
     };
   } catch (error) {
