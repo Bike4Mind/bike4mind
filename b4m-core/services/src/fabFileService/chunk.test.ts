@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, Mock } from 'vitest';
 import { chunkFabfile, commitFabFileChunks, prepareFabFileChunks } from './chunk';
-import { CHUNK_STALL_REASONS, ChunkClaimLostError } from '@bike4mind/common';
+import { CHUNK_STALL_REASONS, ChunkClaimLostError, DocumentDateSource, FabFileSourceType } from '@bike4mind/common';
 import { computeServerTextHash } from '../dataLakeService/admissionContract';
 import type { IUserDocument } from '@bike4mind/common';
 
@@ -46,6 +46,7 @@ describe('chunkFabfile', () => {
       return {
         chunkFile: vi.fn().mockResolvedValue([{ text: 'chunk one', tokenCount: 2 }]),
         getExtractedText: vi.fn().mockReturnValue('chunk one'),
+        getDocumentDate: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -143,6 +144,7 @@ describe('chunkFabfile', () => {
           { text: 'four\u{1F600}', tokenCount: 2 }, // 5 code points, 6 UTF-16 units
         ]),
         getExtractedText: vi.fn().mockReturnValue('chunk one four\u{1F600}'),
+        getDocumentDate: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -242,6 +244,7 @@ describe('chunkFabfile', () => {
           { text: 'brown fox jumps', tokenCount: 3 },
         ]),
         getExtractedText: vi.fn().mockReturnValue('the quick brown fox jumps'),
+        getDocumentDate: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -262,6 +265,7 @@ describe('chunkFabfile', () => {
       return {
         chunkFile: vi.fn().mockResolvedValue([]),
         getExtractedText: vi.fn().mockReturnValue(undefined),
+        getDocumentDate: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -292,6 +296,7 @@ describe('chunkFabfile', () => {
       return {
         chunkFile: vi.fn().mockResolvedValue([]),
         getExtractedText: vi.fn().mockReturnValue(undefined),
+        getDocumentDate: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
@@ -366,6 +371,189 @@ describe('chunkFabfile', () => {
       expect(updatedFile.chunkRebuildRequestedAt).toBeNull();
     }
   });
+
+  // #3048. The pair is written on every pass, so these cover both directions of that: a found
+  // vintage lands, and a vanished one clears - except where this pass was never able to see it.
+  describe('documentDate capture', () => {
+    const withChunkerDate = (documentDate: { date: Date; source: DocumentDateSource } | undefined) => {
+      (SmartChunker as unknown as Mock).mockImplementation(function MockSmartChunker(this: unknown) {
+        return {
+          chunkFile: vi.fn().mockResolvedValue([{ text: 'chunk one', tokenCount: 2 }]),
+          getExtractedText: vi.fn().mockReturnValue('chunk one'),
+          getDocumentDate: vi.fn().mockReturnValue(documentDate),
+          freeEncoder: vi.fn(),
+        };
+      });
+    };
+
+    const persisted = () =>
+      mockAdapter.db.fabFiles.update.mock.calls[0][0] as {
+        documentDate?: Date | null;
+        documentDateSource?: DocumentDateSource | null;
+      };
+
+    const run = () =>
+      chunkFabfile(mockUser, { fabFileId: 'file-1', embeddingModel: 'text-embedding-ada-002' }, mockAdapter as never);
+
+    it('persists a vintage the extraction pass found, with its provenance', async () => {
+      withChunkerDate({ date: new Date('2019-03-04T00:00:00.000Z'), source: DocumentDateSource.PDF_METADATA });
+
+      await run();
+
+      expect(persisted().documentDate).toEqual(new Date('2019-03-04T00:00:00.000Z'));
+      expect(persisted().documentDateSource).toBe(DocumentDateSource.PDF_METADATA);
+    });
+
+    it('writes the pair as null when no source offered a vintage', async () => {
+      withChunkerDate(undefined);
+
+      await run();
+
+      expect(persisted().documentDate).toBeNull();
+      expect(persisted().documentDateSource).toBeNull();
+    });
+
+    it('clears a stale content-derived vintage when a re-chunk finds none', async () => {
+      // Same shape as the serverTextHash case above: the document was replaced or its metadata
+      // stripped, so the old date no longer describes what is stored.
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        documentDate: new Date('2010-05-05T00:00:00.000Z'),
+        documentDateSource: DocumentDateSource.PDF_METADATA,
+      });
+      withChunkerDate(undefined);
+
+      await run();
+
+      expect(persisted().documentDate).toBeNull();
+      expect(persisted().documentDateSource).toBeNull();
+    });
+
+    it('keeps a Drive-authored vintage that this pass had no way to see', async () => {
+      // A Google Doc is ingested as exported plain text, which carries no embedded metadata at
+      // all. Treating "found nothing" as "no longer dated" would erase the Drive createdTime on
+      // the first re-chunk, and nothing downstream could recover it.
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        documentDate: new Date('2019-03-04T00:00:00.000Z'),
+        documentDateSource: DocumentDateSource.DRIVE_CREATED,
+      });
+      withChunkerDate(undefined);
+
+      await run();
+
+      expect(persisted().documentDate).toEqual(new Date('2019-03-04T00:00:00.000Z'));
+      expect(persisted().documentDateSource).toBe(DocumentDateSource.DRIVE_CREATED);
+    });
+
+    it("refuses to let an exported rendition's own metadata displace a Drive-authored vintage", async () => {
+      // The reason DRIVE_CREATED wins outright rather than only on a miss. A Google Sheet is
+      // ingested as an .xlsx that Drive GENERATED at fetch time, and an OOXML writer stamps
+      // docProps/core.xml as it writes - so the "document properties" date here is the export
+      // moment, not the document's. Letting it win would reintroduce ingestion time as the
+      // document date for every Editors file, one re-chunk after ingest.
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        documentDate: new Date('2019-03-04T00:00:00.000Z'),
+        documentDateSource: DocumentDateSource.DRIVE_CREATED,
+      });
+      withChunkerDate({ date: new Date(), source: DocumentDateSource.DOCUMENT_PROPERTIES });
+
+      await run();
+
+      expect(persisted().documentDate).toEqual(new Date('2019-03-04T00:00:00.000Z'));
+      expect(persisted().documentDateSource).toBe(DocumentDateSource.DRIVE_CREATED);
+    });
+
+    // The pair is an all-or-nothing unit: acceptDocumentDate only ever yields date AND source
+    // together, and this branch is the one place that could have re-emitted a source on its own.
+    it('does not preserve a Drive source that has no date behind it', async () => {
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        documentDate: null,
+        documentDateSource: DocumentDateSource.DRIVE_CREATED,
+      });
+      withChunkerDate({ date: new Date('2020-05-06T00:00:00.000Z'), source: DocumentDateSource.DOCUMENT_PROPERTIES });
+
+      await run();
+
+      expect(persisted().documentDate).toEqual(new Date('2020-05-06T00:00:00.000Z'));
+      expect(persisted().documentDateSource).toBe(DocumentDateSource.DOCUMENT_PROPERTIES);
+    });
+
+    it('clears an unattributable Drive source when this pass finds no vintage either', async () => {
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        documentDate: null,
+        documentDateSource: DocumentDateSource.DRIVE_CREATED,
+      });
+      withChunkerDate(undefined);
+
+      await run();
+
+      expect(persisted().documentDate).toBeNull();
+      expect(persisted().documentDateSource).toBeNull();
+    });
+
+    it('refuses to take an export rendition date for an un-pinned Drive Editors row', async () => {
+      // A legacy Slides row ingested before this PR, or one whose createdTime this pass couldn't
+      // read: no stored DRIVE_CREATED pin, and no driveMd5Checksum because Editors files never
+      // have one. The chunker still reads the stored .pptx export's docProps/core.xml - that date
+      // is the export moment, not the document's, so it must not become the vintage just because
+      // no pin was ever stored.
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        sourceType: FabFileSourceType.GOOGLE_DRIVE,
+        documentDate: null,
+        documentDateSource: null,
+      });
+      withChunkerDate({ date: new Date('2026-09-23T00:00:00.000Z'), source: DocumentDateSource.DOCUMENT_PROPERTIES });
+
+      await run();
+
+      expect(persisted().documentDate).toBeNull();
+      expect(persisted().documentDateSource).toBeNull();
+    });
+
+    it('still accepts an extracted date for a native Drive upload with an md5 checksum', async () => {
+      // The provenance check must not blanket-refuse every GOOGLE_DRIVE row - a native binary
+      // (e.g. an uploaded PDF) synced through Drive has real bytes of its own and a stored md5, so
+      // its own embedded metadata is exactly as trustworthy as any other native upload's.
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        sourceType: FabFileSourceType.GOOGLE_DRIVE,
+        driveMd5Checksum: 'abc123',
+        documentDate: null,
+        documentDateSource: null,
+      });
+      withChunkerDate({ date: new Date('2019-03-04T00:00:00.000Z'), source: DocumentDateSource.PDF_METADATA });
+
+      await run();
+
+      expect(persisted().documentDate).toEqual(new Date('2019-03-04T00:00:00.000Z'));
+      expect(persisted().documentDateSource).toBe(DocumentDateSource.PDF_METADATA);
+    });
+
+    it('lets a content-derived vintage replace a content-derived one', async () => {
+      // Precedence among sources that did read the document's own bytes: the latest pass wins,
+      // for the same reason serverTextHash is rewritten - the stored value describes bytes that
+      // may since have been replaced.
+      mockAdapter.db.fabFiles.shareable.findAccessibleById.mockResolvedValue({
+        ...mockFabFile,
+        documentDate: new Date('2019-03-04T00:00:00.000Z'),
+        documentDateSource: DocumentDateSource.FRONTMATTER,
+      });
+      withChunkerDate({
+        date: new Date('2015-01-01T00:00:00.000Z'),
+        source: DocumentDateSource.DOCUMENT_PROPERTIES,
+      });
+
+      await run();
+
+      expect(persisted().documentDate).toEqual(new Date('2015-01-01T00:00:00.000Z'));
+      expect(persisted().documentDateSource).toBe(DocumentDateSource.DOCUMENT_PROPERTIES);
+    });
+  });
 });
 
 // #1681 constraint 3: the phase split is only worth anything if `prepareFabFileChunks` really is
@@ -401,6 +589,7 @@ describe('prepareFabFileChunks / commitFabFileChunks (#1681)', () => {
       return {
         chunkFile: vi.fn().mockResolvedValue([{ text: 'chunk one', tokenCount: 2 }]),
         getExtractedText: vi.fn().mockReturnValue('chunk one'),
+        getDocumentDate: vi.fn().mockReturnValue(undefined),
         freeEncoder: vi.fn(),
       };
     });
