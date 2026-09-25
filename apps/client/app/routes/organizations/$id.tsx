@@ -46,7 +46,12 @@ import GitHubIcon from '@mui/icons-material/GitHub';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import RateReviewOutlinedIcon from '@mui/icons-material/RateReviewOutlined';
-import { canViewOrgUsage, OrganizationTabs, resolveAccessibleTab } from '@client/app/routes/organizations/orgTabAccess';
+import {
+  canViewOrgBilling,
+  canViewOrgUsage,
+  OrganizationTabs,
+  resolveAccessibleTab,
+} from '@client/app/routes/organizations/orgTabAccess';
 import { useNavigate, useParams, useSearch } from '@tanstack/react-router';
 import { FC, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -108,6 +113,10 @@ const OrganizationPage: FC = () => {
     );
   }, [currentUser, organization]);
 
+  // Billing is owner-only, narrower than canManageOrg - see canViewOrgBilling for why, and for
+  // why a platform admin is not admitted here either.
+  const canViewBilling = useMemo(() => canViewOrgBilling(currentUser, organization), [currentUser, organization]);
+
   // Only the billing owner or a platform admin may appoint org admins (admins route authz).
   const canSetAdmins = useMemo(() => {
     if (!currentUser || !organization) return false;
@@ -121,7 +130,12 @@ const OrganizationPage: FC = () => {
   // The answer is deliberately not written back to the URL - rewriting ?tab=usage to ?tab=overview
   // would break the link for this caller the day they are granted access, and make one shared URL
   // mean different things to different people.
-  const selectedTab = resolveAccessibleTab(requestedTab, { canManageOrg, canViewUsage, canManageGroups });
+  const selectedTab = resolveAccessibleTab(requestedTab, {
+    canManageOrg,
+    canViewUsage,
+    canManageGroups,
+    canViewBilling,
+  });
 
   useDocumentTitle(organization?.name, ' | Organization');
 
@@ -215,12 +229,14 @@ const OrganizationPage: FC = () => {
                 </Tab>
               </>
             )}
+            {canViewBilling && (
+              <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <CreditCardOutlinedIcon sx={{ fontSize: 16 }} />
+                Billing
+              </Tab>
+            )}
             {canManageOrg && (
               <>
-                <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <CreditCardOutlinedIcon sx={{ fontSize: 16 }} />
-                  Billing
-                </Tab>
                 <Tab value={OrganizationTabs.Integrations} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <ExtensionOutlinedIcon sx={{ fontSize: 16 }} />
                   Integrations
@@ -275,14 +291,16 @@ const OrganizationPage: FC = () => {
                 </TabPanel>
               </>
             )}
+            {canViewBilling && (
+              <TabPanel value={OrganizationTabs.Billing}>
+                <Typography level="title-lg" startDecorator={<CreditCardOutlinedIcon />} sx={{ mb: 3 }}>
+                  Billing & Subscription
+                </Typography>
+                <OrganizationBillingSection organization={organization} />
+              </TabPanel>
+            )}
             {canManageOrg && (
               <>
-                <TabPanel value={OrganizationTabs.Billing}>
-                  <Typography level="title-lg" startDecorator={<CreditCardOutlinedIcon />} sx={{ mb: 3 }}>
-                    Billing & Subscription
-                  </Typography>
-                  <OrganizationBillingSection organization={organization} />
-                </TabPanel>
                 <TabPanel value={OrganizationTabs.Integrations}>
                   <Typography level="title-lg" startDecorator={<ExtensionOutlinedIcon />} sx={{ mb: 3 }}>
                     Integrations

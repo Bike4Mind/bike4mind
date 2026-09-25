@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Permission } from '@bike4mind/common';
-import { canViewOrgUsage, OrganizationTabs, resolveAccessibleTab } from '../orgTabAccess';
+import { canViewOrgBilling, canViewOrgUsage, OrganizationTabs, resolveAccessibleTab } from '../orgTabAccess';
 
 /**
  * Tests the organization permission logic from /routes/organizations/$id.tsx.
@@ -163,6 +163,44 @@ describe('Organization Permissions', () => {
     });
   });
 
+  describe('canViewOrgBilling', () => {
+    // The predicate $id.tsx runs, imported rather than re-declared. Gates the Billing tab, and must
+    // match the three routes behind it - subscribe.ts, update-seats.ts and stripe/portal.ts - all
+    // of which are owner-only.
+    const org = { userId: 'owner123', managerId: 'manager456' };
+
+    it('allows the billing owner', () => {
+      expect(canViewOrgBilling({ id: 'owner123' }, org)).toBe(true);
+    });
+
+    // The case this gate exists for: member456 holds read+update, so canManageOrg is true for them,
+    // and until the split they saw Subscribe, Manage Seats and Billing Portal - each of which the
+    // server rejects.
+    it('denies a member with manage permissions who is not the owner', () => {
+      expect(canViewOrgBilling({ id: 'member456' }, org)).toBe(false);
+    });
+
+    it('denies the team manager, who may view usage but not buy or change seats', () => {
+      expect(canViewOrgBilling({ id: 'manager456' }, org)).toBe(false);
+    });
+
+    // Narrower than canViewOrgUsage on purpose: portal.ts has no admin bypass, so an admin who is
+    // not the owner would get a Billing Portal button that rejects them. Admin -> Organizations is
+    // where a platform admin acts on an org's billing.
+    it('denies a platform admin who is not the owner', () => {
+      expect(canViewOrgBilling({ id: 'someoneelse', isAdmin: true }, org)).toBe(false);
+    });
+
+    it('denies a stranger', () => {
+      expect(canViewOrgBilling({ id: 'stranger999' }, org)).toBe(false);
+    });
+
+    it('returns false when user or organization is missing', () => {
+      expect(canViewOrgBilling(null, org)).toBe(false);
+      expect(canViewOrgBilling({ id: 'owner123' }, null)).toBe(false);
+    });
+  });
+
   describe('canManageGroups Helper', () => {
     // Mirrors the canManageGroups memo in $id.tsx, which must match
     // assertCanManageOrgGroups (organizationService/groupMembership.ts) so the Groups tab never
@@ -265,7 +303,7 @@ describe('Organization Permissions', () => {
 describe('resolveAccessibleTab', () => {
   // The redirect the org page runs on every render. A ?tab= deep link is the only path that can
   // select a tab the TabList never rendered, so these cases are the gate, not a formality.
-  const all = { canManageOrg: true, canViewUsage: true, canManageGroups: true };
+  const all = { canManageOrg: true, canViewUsage: true, canManageGroups: true, canViewBilling: true };
 
   it('leaves a tab the caller may see alone', () => {
     expect(resolveAccessibleTab(OrganizationTabs.Analysis, all)).toBe(OrganizationTabs.Analysis);
@@ -290,6 +328,20 @@ describe('resolveAccessibleTab', () => {
     );
   });
 
+  // canManageOrg is deliberately NOT enough for Billing: a member holding share/update satisfies it
+  // while every action on the tab is owner-only.
+  it('bounces Billing for a caller who may manage the org but is not its owner', () => {
+    expect(resolveAccessibleTab(OrganizationTabs.Billing, { ...all, canViewBilling: false })).toBe(
+      OrganizationTabs.Overview
+    );
+  });
+
+  it('keeps the other manage-pinned tabs reachable for that same caller', () => {
+    const managing = { ...all, canViewBilling: false };
+    expect(resolveAccessibleTab(OrganizationTabs.Settings, managing)).toBe(OrganizationTabs.Settings);
+    expect(resolveAccessibleTab(OrganizationTabs.Integrations, managing)).toBe(OrganizationTabs.Integrations);
+  });
+
   it('still bounces the manage-pinned tabs and Groups', () => {
     expect(resolveAccessibleTab(OrganizationTabs.Settings, { ...all, canManageOrg: false })).toBe(
       OrganizationTabs.Overview
@@ -300,7 +352,7 @@ describe('resolveAccessibleTab', () => {
   });
 
   it('never bounces the tabs every member may see', () => {
-    const none = { canManageOrg: false, canViewUsage: false, canManageGroups: false };
+    const none = { canManageOrg: false, canViewUsage: false, canManageGroups: false, canViewBilling: false };
     expect(resolveAccessibleTab(OrganizationTabs.Overview, none)).toBe(OrganizationTabs.Overview);
     expect(resolveAccessibleTab(OrganizationTabs.Members, none)).toBe(OrganizationTabs.Members);
   });
