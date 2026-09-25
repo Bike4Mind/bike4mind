@@ -319,16 +319,20 @@ type ChipDisplay = {
 /**
  * What the chip says about the last detection run when there is no open work. An empty open query
  * alone cannot tell "never scanned" from "scanned and clean", so the run's own stamp
- * (`inconsistency` on GET /health) is what separates them. `undefined` means health has not
- * answered yet (or failed), and the chip stays on its bare label rather than guessing.
+ * (`inconsistency` on GET /health) is what separates them. Either query not having answered yet
+ * (or having failed) leaves the chip on its bare label rather than guessing: `openFindingsUnresolved`
+ * covers the open-findings query (loading, or errored under `retry: false`), and
+ * `inconsistency === undefined` covers health.
  */
 export function findingsChipDisplay({
   openCount,
   hasMore,
+  openFindingsUnresolved,
   inconsistency,
 }: {
   openCount: number;
   hasMore: boolean;
+  openFindingsUnresolved: boolean;
   inconsistency: LakeHealthApiResponse['inconsistency'] | undefined;
 }): ChipDisplay {
   if (openCount > 0) {
@@ -339,7 +343,7 @@ export function findingsChipDisplay({
       color: 'warning',
     };
   }
-  if (inconsistency === undefined) {
+  if (openFindingsUnresolved || inconsistency === undefined) {
     return {
       label: 'Findings',
       tooltip: "Review this lake's detected findings, including past ones.",
@@ -403,6 +407,7 @@ export default function LakeFindingsChip({
   const display = findingsChipDisplay({
     openCount: findings?.length ?? 0,
     hasMore,
+    openFindingsUnresolved: findings === undefined,
     inconsistency: health?.inconsistency,
   });
 

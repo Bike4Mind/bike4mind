@@ -317,6 +317,18 @@ describe('LakeFindingsChip', () => {
     expect(chip).not.toHaveTextContent('No open findings');
   });
 
+  // The open-findings query resolving to undefined (loading, or errored under `retry: false`) must
+  // not read as an empty list - that would claim a lake with unknown open work is clean.
+  it('stays on the bare label while the open-findings query has not resolved', () => {
+    h.findings.mockReturnValue(listing(undefined as unknown as IDataLakeFindingDocument[]));
+    h.health.mockReturnValue(scanned());
+    renderChip();
+
+    const chip = screen.getByTestId('datalake-findings-chip-lake-1');
+    expect(chip).toHaveTextContent('Findings');
+    expect(chip).not.toHaveTextContent('No open findings');
+  });
+
   it('lets open findings outrank the last run state', () => {
     h.health.mockReturnValue(scanned());
     renderChip();
