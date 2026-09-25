@@ -122,8 +122,15 @@ import {
   sanitizeErrorMessage,
   checkLLMMatchedClosedIssueRegression,
   REQUIRED_GITHUB_LABELS,
+  extractTriageJson,
 } from './liveopsTriageService';
 import { GitHubService } from './githubService';
+import {
+  GROWTH_RATIO_CEILING,
+  SMALL_INPUT_MS_CEILING,
+  measureGrowth,
+  seededCorpus,
+} from '@client/__tests__/utils/regexLinearity';
 import { Logger } from '@bike4mind/observability';
 
 describe('LiveopsTriageService', () => {
@@ -1062,5 +1069,46 @@ describe('checkLLMMatchedClosedIssueRegression', () => {
         expect(label.description).toBeTruthy();
       }
     });
+  });
+});
+
+describe('extractTriageJson', () => {
+  const START = '<<<B4M_JSON_START>>>';
+  const END = '<<<B4M_JSON_END>>>';
+
+  function oldExtract(responseText: string): string {
+    const unique = responseText.match(/<<<B4M_JSON_START>>>\s*([\s\S]*?)\s*<<<B4M_JSON_END>>>/);
+    if (unique) return unique[1].trim();
+    const fence = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+    return fence ? fence[1].trim() : responseText;
+  }
+
+  it('prefers the unique delimiters, then a code fence, then the raw text', () => {
+    expect(extractTriageJson(`x ${START}\n {"a":1} \n${END} \`\`\`{"b":2}\`\`\``)).toBe('{"a":1}');
+    expect(extractTriageJson('```json\n{"b":2}\n```')).toBe('{"b":2}');
+    expect(extractTriageJson(`${START} {"c":3}`)).toBe(`${START} {"c":3}`);
+  });
+
+  // The old delimiter regex took 0.5s to several seconds at these sizes; the fence regex about 1-2s at 16000.
+  it.each([
+    ['newlines after an unclosed start marker', (n: number) => START + '\n'.repeat(n) + 'x', 1200],
+    ['space-newline pairs after an unclosed start marker', (n: number) => START + ' \n'.repeat(n) + 'x', 600],
+    ['repeated unclosed start markers', (n: number) => START.repeat(n), 4000],
+    ['newlines after an unclosed fence', (n: number) => '```json' + '\n'.repeat(n) + 'x', 16000],
+    ['space-newline pairs after an unclosed fence', (n: number) => '```json' + ' \n'.repeat(n) + 'x', 16000],
+  ])('stays linear on %s', (_label, build, small) => {
+    const { baselineMs, ratio } = measureGrowth(extractTriageJson, build, small);
+    expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+    expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+  });
+
+  it('returns what the old regexes returned on every seeded input', () => {
+    const pieces = [START, END, '```', '```json', 'json', ' ', '\n', '\t', '\r', '{"a":1}', 'x', '`'];
+    const corpus = seededCorpus(2998, 3000, pieces);
+    expect(corpus.filter(s => s.includes(START) && s.indexOf(END) > s.indexOf(START)).length).toBeGreaterThan(200);
+    expect(corpus.filter(s => extractTriageJson(s) !== oldExtract(s))).toEqual([]);
+    // Control: skipping the delimiter step diverges, so this differential can fail.
+    const fenceOnly = (s: string) => s.match(/```(?:json)?([\s\S]*?)```/)?.[1].trim() ?? s;
+    expect(corpus.filter(s => fenceOnly(s) !== oldExtract(s)).length).toBeGreaterThan(0);
   });
 });

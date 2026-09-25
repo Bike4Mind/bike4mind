@@ -86,7 +86,7 @@ function resultMarkdown(result: string): string {
  */
 export function extractResultDigest(result: string): string | null {
   const winner = resultMarkdown(result)
-    .match(/Winner:\s*([^\n#]+?)\s*(?:###|\n|$)/i)?.[1]
+    .match(/Winner:\s*([^\s#][^\n#]*?)(?:###|\n|$)/i)?.[1]
     ?.trim();
   return winner || null;
 }

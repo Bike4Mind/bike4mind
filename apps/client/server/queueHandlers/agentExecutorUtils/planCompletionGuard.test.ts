@@ -9,6 +9,12 @@ import {
   buildPlanCompleteMsg,
   type PlanProgressState,
 } from './planCompletionGuard';
+import {
+  GROWTH_RATIO_CEILING,
+  SMALL_INPUT_MS_CEILING,
+  measureGrowth,
+  seededCorpus,
+} from '@client/__tests__/utils/regexLinearity';
 
 const planResult = (families: string[]) =>
   JSON.stringify({
@@ -215,5 +221,38 @@ describe('guardPlanCompletion', () => {
     const map = { web_search: other };
     const g = guardPlanCompletion(map, emptyState());
     expect(g).toBe(map);
+  });
+});
+
+describe('extractResultDigest - winner regex', () => {
+  const oldDigest = (md: string) => md.match(/Winner:\s*([^\n#]+?)\s*(?:###|\n|$)/i)?.[1]?.trim() || null;
+
+  it('reads the winner line', () => {
+    expect(extractResultDigest('### Winner: cp-sat (makespan: 42)\nrest')).toBe('cp-sat (makespan: 42)');
+    expect(extractResultDigest('### Winner:   \n')).toBeNull();
+  });
+
+  // The old regex is cubic on a run of spaces that never reaches a line end: about 1s at 500.
+  it.each([['spaces before a lone #', (n: number) => 'Winner:' + ' '.repeat(n) + '#', 500]])(
+    'stays linear on %s',
+    (_label, build, small) => {
+      const { baselineMs, ratio } = measureGrowth(extractResultDigest, build, small);
+      expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+      expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+    }
+  );
+
+  it('agrees with the old regex except where a blank winner precedes a later one', () => {
+    const pieces = ['Winner:', 'winner:', '###', '#', ' ', '\t', '\n', '\r', 'cp-sat', '(obj: 1)', 'x'];
+    const corpus = seededCorpus(2998, 3000, pieces);
+    expect(corpus.filter(s => extractResultDigest(s) !== null).length).toBeGreaterThan(300);
+    const diverged = corpus.filter(s => extractResultDigest(s) !== oldDigest(s));
+    // Old stopped at the first whitespace-only winner and returned null; new skips it and reads a
+    // later winner line. Pinned so any other kind of divergence fails.
+    expect(diverged.length).toBeGreaterThan(0);
+    for (const s of diverged) {
+      expect(oldDigest(s)).toBeNull();
+      expect(s.match(/winner:/gi)!.length).toBeGreaterThan(1);
+    }
   });
 });
