@@ -107,18 +107,19 @@ describe('getDiscoveryCredentials', () => {
     expect(fresh.resolveLLMKeys.mock.calls[0][2]).toEqual({ skipCache: true });
   });
 
-  it('pins which providers read a discovery env secret', () => {
-    // Pinned rather than derived: a keyed provider left off DISCOVERY_ENV_KEYS
-    // silently falls back to the demo-key tier on hosted, so a new one should fail
-    // here until someone decides. BFL has a keyed source but no env secret today.
-    expect(Object.keys(DISCOVERY_ENV_KEYS).sort()).toEqual([
-      'anthropic',
-      'deepseek',
-      'gemini',
-      'kimi',
-      'openai',
-      'xai',
-    ]);
+  it('pins each discovery provider to its env secret name', () => {
+    // Literal names, so a renamed or typo'd secret fails here instead of silently
+    // dropping that provider to the demo-key tier on hosted. Changing a name or
+    // adding a provider means editing this list. BFL has a keyed source but no
+    // hosted discovery env secret.
+    expect(DISCOVERY_ENV_KEYS).toEqual({
+      openai: 'OPENAI_API_KEY',
+      anthropic: 'ANTHROPIC_API_KEY',
+      gemini: 'GEMINI_API_KEY',
+      xai: 'XAI_API_KEY',
+      kimi: 'MOONSHOT_API_KEY',
+      deepseek: 'DEEPSEEK_API_KEY',
+    });
   });
 
   it.each(Object.entries(DISCOVERY_ENV_KEYS))('prefers %s from its env secret %s', async (provider, envVar) => {
@@ -134,9 +135,9 @@ describe('getDiscoveryCredentials', () => {
     const creds = await getDiscoveryCredentials(adapters(keys(allUnset)), {});
 
     // Every credential field, so a provider added to DiscoveryCredentials is
-    // covered without editing this list.
-    const { awsIam: _awsIam, isSelfHost: _isSelfHost, ...credentialFields } = creds;
-    for (const [field, value] of Object.entries(credentialFields)) {
+    // covered without editing this list. Boolean fields are flags, not credentials.
+    for (const [field, value] of Object.entries(creds)) {
+      if (typeof value === 'boolean') continue;
       expect(value, `${field} resolved a credential from nothing`).toBeNull();
     }
   });
