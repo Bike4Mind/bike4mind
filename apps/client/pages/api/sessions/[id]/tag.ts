@@ -30,7 +30,10 @@ const handler = baseApi().post(
       logger: req.logger,
     });
 
-    const requestId = await SessionEvents.Tag.publish({ sessionId: session.id, requesterId: req.user?.id });
+    // An admin reaches this via CASL's admin-wide Session update, which the handler's share-arm
+    // re-check can't express, so their job re-checks as the owner instead (still not-deleted).
+    const requesterId = req.user?.isAdmin ? undefined : req.user?.id;
+    const requestId = await SessionEvents.Tag.publish({ sessionId: session.id, requesterId });
 
     return res.json({ message: 'Tagging job queued', requestId });
   })

@@ -105,6 +105,8 @@ export const handler = withEventContext(async (event, logger) => {
     logger.warn(`Requester ${requesterId} not found, skipping tagging for session ${sessionId}`);
     return;
   }
+  // tag.ts authorizes the requester with CASL, which grants update on a global-write session.
+  const writeOpts = requesterId ? { includeGlobalWrite: true } : undefined;
 
   logger.info(`Handling tagging job for session ${sessionId} (as user ${user.id})`);
 
@@ -207,12 +209,16 @@ export const handler = withEventContext(async (event, logger) => {
     // by nulling `taggedAt`, and a stale stamp would then hold the re-tag off for a whole backoff.
     // The write re-checks update access and not-deleted, so a revocation or delete during the
     // completion drops the result instead of landing it.
-    const written = await sessionRepository.updateWithUpdateAccess(writer, {
-      id: session.id,
-      tags: session.tags,
-      taggedAt: session.taggedAt,
-      tagLastAttemptAt: null,
-    });
+    const written = await sessionRepository.updateWithUpdateAccess(
+      writer,
+      {
+        id: session.id,
+        tags: session.tags,
+        taggedAt: session.taggedAt,
+        tagLastAttemptAt: null,
+      },
+      writeOpts
+    );
     if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping tag write`);
   } else {
     // Records that a completion was spent and yielded nothing - NOT that the notebook is tagged.
@@ -222,10 +228,14 @@ export const handler = withEventContext(async (event, logger) => {
     // wipe would destroy tags a clone or an import carried in. The backoff bounds the spend and
     // still reopens, so nothing is abandoned (see TAG_RETRY_BACKOFF_MS).
     session.tagLastAttemptAt = new Date();
-    const written = await sessionRepository.updateWithUpdateAccess(writer, {
-      id: session.id,
-      tagLastAttemptAt: session.tagLastAttemptAt,
-    });
+    const written = await sessionRepository.updateWithUpdateAccess(
+      writer,
+      {
+        id: session.id,
+        tagLastAttemptAt: session.tagLastAttemptAt,
+      },
+      writeOpts
+    );
     if (!written) logger.warn(`Session ${sessionId} no longer writable by ${writer.id}, skipping attempt stamp`);
     logger.warn(`Failed to parse tags from LLM response for session ${sessionId}`);
     logger.debug(`Raw LLM response: ${tagsText?.substring(0, 500)}${(tagsText?.length || 0) > 500 ? '...' : ''}`);

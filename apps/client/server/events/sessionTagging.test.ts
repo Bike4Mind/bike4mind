@@ -133,6 +133,7 @@ describe('sessionTagging', () => {
 
       expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
       expect(h.sessionUpdate.mock.calls[0][0]).toMatchObject({ id: OWNER });
+      expect(h.sessionUpdate.mock.calls[0][2]).toBeUndefined();
     });
 
     it('re-checks the requester, not the billed owner, for a sharee-triggered job', async () => {
@@ -142,6 +143,8 @@ describe('sessionTagging', () => {
 
       expect(h.userFindById).toHaveBeenCalledWith(SHAREE);
       expect(h.sessionUpdate.mock.calls[0][0]).toMatchObject({ id: SHAREE });
+      // tag.ts admits a global-write sharee via CASL, so the re-check must too.
+      expect(h.sessionUpdate.mock.calls[0][2]).toEqual({ includeGlobalWrite: true });
       // Billing stays on the owner.
       expect(h.recordUsage).toHaveBeenCalledWith(
         expect.objectContaining({ user: expect.objectContaining({ id: OWNER }) })
@@ -156,6 +159,7 @@ describe('sessionTagging', () => {
       expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
       expect(h.sessionUpdate.mock.calls[0][0]).toMatchObject({ id: SHAREE });
       expect(h.sessionUpdate.mock.calls[0][1]).toHaveProperty('tagLastAttemptAt');
+      expect(h.sessionUpdate.mock.calls[0][2]).toEqual({ includeGlobalWrite: true });
     });
 
     it('drops the job before any spend when the requester no longer exists', async () => {
