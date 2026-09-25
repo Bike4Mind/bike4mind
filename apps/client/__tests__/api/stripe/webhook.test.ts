@@ -57,7 +57,11 @@ vi.mock('@bike4mind/database/auth', () => ({
   },
 }));
 
-vi.mock('@bike4mind/services', () => ({
+vi.mock('@bike4mind/services', async importOriginal => ({
+  // The real barrel loads here: its transitive stripe/db imports are mocked above. Spreading it
+  // keeps `userService.flagDisputePending` the shipped implementation, so the deactivation-order
+  // assertions below run against real logic rather than a mirror of it.
+  ...(await importOriginal<typeof import('@bike4mind/services')>()),
   creditService: {
     addCredits: (...args: unknown[]) => mockAddCredits(...args),
     subtractCredits: (...args: unknown[]) => mockSubtractCredits(...args),
