@@ -81,6 +81,20 @@ export const resolveFileTagDocs = <T extends { name: string }>(
 };
 
 /**
+ * One colon-separated tag segment as a reader sees it: leading capital, hyphens as spaces.
+ *
+ * Shared so the data lake's browse tree and its citation chips cannot drift into naming the same
+ * category two ways. `treeChrome.humanizeSegment` layers its curated PREFIX_LABELS/CATEGORY_LABELS
+ * over this for the top two depths and falls through to it otherwise; `DataLakeViewer` uses it
+ * directly. Deliberately NOT applied by the generic Files tag browser, which shows raw user tags.
+ *
+ * Only the first character is cased - a segment is a slug, not a sentence, and title-casing every
+ * word would mangle an acronym the author capitalized on purpose.
+ */
+export const humanizeTagSegment = (segment: string): string =>
+  segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
+
+/**
  * The tag labels a citation chip shows under a source's filename.
  *
  * A data lake member file carries two kinds of machine-authored tag beside the user's own: the
@@ -89,9 +103,11 @@ export const resolveFileTagDocs = <T extends { name: string }>(
  * stamps on any member no other prefix tag covers). Both are internal addressing, so a chip that
  * joined raw tag names showed the reader a lake tag path - #3291.
  *
- * Namespaced names are reduced to their LAST segment, the same label the browse tree draws for
- * that node (buildTagTree in Files/Browser/TagView/parseTagNamespace), so the two surfaces name a
- * category identically. Dropped entirely:
+ * Namespaced names are reduced to their LAST segment and humanized through `humanizeTagSegment`,
+ * which is what the DATA LAKE browse surfaces render for that same node (DataLakeViewer and
+ * treeChrome's fallback arm both call it), so a category reads identically in the tree and on the
+ * chip. Note the generic Files tag browser (TagCard) renders `node.segment` raw and is NOT part of
+ * that guarantee - it browses arbitrary user tags, not a lake's prefix arm. Dropped entirely:
  *  - meta-tags, folding case as isDataLakeTagName does;
  *  - `UNCATEGORIZED_TAG_SUFFIX`, a membership placeholder rather than a topic - the same exclusion
  *    the database topic-ranking aggregate makes, for the same reason;
@@ -112,7 +128,7 @@ export const citationTagLabels = (tagNames: readonly unknown[]): string[] => {
     if (isDataLakeTagName(raw)) continue;
     const segment = normalizeTagName(raw).split(':').pop()?.trim() ?? '';
     if (!segment || segment.toLowerCase() === UNCATEGORIZED_TAG_SUFFIX) continue;
-    const label = segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
+    const label = humanizeTagSegment(segment);
     const folded = label.toLowerCase();
     if (seen.has(folded)) continue;
     seen.add(folded);
