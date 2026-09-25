@@ -1,4 +1,4 @@
-import { Box, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Card, Chip, chipClasses, Stack, TabList, TabPanel, Tabs, Tooltip, Typography } from '@mui/joy';
 import { useNavigate } from '@tanstack/react-router';
 import { cloneElement, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -44,6 +44,7 @@ import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { openInNewTab } from '@client/app/utils/externalLinks';
 import PageFrame from '@client/app/components/common/PageFrame';
+import FeatureDetailView from '@client/app/components/common/FeatureDetailView';
 import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { gray, grayAlpha, green, greenAlpha } from '@client/app/utils/themes/colors';
 import HelpCenterButton from '@client/app/components/common/HelpCenterButton';
@@ -142,6 +143,11 @@ const GLYPH_VIEWBOX: Partial<Record<GearKey, string>> = {
 
 type GearsTabKey = 'getting-started' | 'features' | 'generators' | 'integrations';
 
+/** Tabs whose cards open the long-form view instead of acting at once. Getting
+ *  Started is the exception: those features have a sidenav row to go to, so an
+ *  explanation would sit between the user and the thing itself. */
+const TABS_WITH_DETAIL: readonly GearsTabKey[] = ['features', 'generators', 'integrations'];
+
 const TABS: { key: GearsTabKey; label: string }[] = [
   { key: 'getting-started', label: 'Getting Started' },
   { key: 'features', label: 'Explore Features' },
@@ -166,6 +172,9 @@ const INTEGRATION_KEYS: GearKey[] = ['slack'];
 
 const GearsPage = () => {
   const [tab, setTab] = useState<GearsTabKey>('getting-started');
+  // Which card is expanded, per tab. Cleared on tab change so switching away and
+  // back lands on the list rather than reopening whatever was last read.
+  const [openKey, setOpenKey] = useState<GearKey | null>(null);
   const navigate = useNavigate();
   const { data, isPending, refetch } = useGearsStatus();
   const { isFeatureEnabled } = useFeatureEnabled();
@@ -235,8 +244,9 @@ const GearsPage = () => {
     }
   };
 
-  const renderCards = (cards: GearStatus[]) =>
-    isPending ? (
+  const renderCards = (cards: GearStatus[], opensDetail: boolean) => {
+    const act = (gear: GearStatus) => (opensDetail ? setOpenKey(gear.key) : onCta(gear));
+    return isPending ? (
       <Typography level="body-sm" sx={{ opacity: 0.7 }} data-testid="gears-loading">
         Checking the grid...
       </Typography>
@@ -262,11 +272,11 @@ const GearsPage = () => {
             data-testid={`gear-card-${gear.key}`}
             role="button"
             tabIndex={0}
-            onClick={() => onCta(gear)}
+            onClick={() => act(gear)}
             onKeyDown={event => {
               if (event.key === 'Enter' || event.key === ' ') {
                 event.preventDefault();
-                onCta(gear);
+                act(gear);
               }
             }}
             sx={theme => ({
@@ -448,14 +458,48 @@ const GearsPage = () => {
               data-testid={`gear-cta-${gear.key}`}
               sx={{ mt: 'auto', pt: '20px', color: 'text.primary' }}
             >
+              {opensDetail ? 'Learn more' : gear.cta}
               {/* An HTML entity rather than the arrow character, so this file stays
                 ASCII: Prettier rewrites a unicode escape back into the character. */}
-              {gear.cta} &rarr;
+              <Box component="span" sx={{ ml: '6px' }}>
+                &rarr;
+              </Box>
             </Typography>
           </Card>
         ))}
       </Box>
     );
+  };
+
+  /** A tab's body: the card grid, or the long-form view of whichever card is open. */
+  const renderPanel = (cards: GearStatus[], tabKey: GearsTabKey) => {
+    const opensDetail = TABS_WITH_DETAIL.includes(tabKey);
+    const open = opensDetail && openKey ? cards.find(g => g.key === openKey) : undefined;
+    if (!open) return renderCards(cards, opensDetail);
+
+    return (
+      <FeatureDetailView
+        item={open}
+        onBack={() => setOpenKey(null)}
+        testIdPrefix="gear-detail"
+        // A real control, unlike the Tutorials copy: the gear's ctaAction is
+        // interpreted here, so the button goes where it says it does.
+        cta={
+          <Button
+            size="sm"
+            variant="solid"
+            onClick={() => onCta(open)}
+            data-testid={`gear-detail-cta-${open.key}`}
+            // Joy sizes a Button from this variable, so a plain `height` would be
+            // fought by its own min-height.
+            sx={{ '--Button-minHeight': '32px' }}
+          >
+            {open.cta}
+          </Button>
+        }
+      />
+    );
+  };
 
   return (
     <PageFrame testId="gears-page">
@@ -493,7 +537,10 @@ const GearsPage = () => {
             grid inside a panel waits. */}
         <Tabs
           value={tab}
-          onChange={(_, value) => setTab(value as GearsTabKey)}
+          onChange={(_, value) => {
+            setTab(value as GearsTabKey);
+            setOpenKey(null);
+          }}
           sx={{ mt: '32px' }}
           aria-label="Gear categories"
         >
@@ -508,19 +555,19 @@ const GearsPage = () => {
           </TabList>
 
           <TabPanel value="getting-started" sx={{ px: 0, pt: '24px', pb: 0 }}>
-            {renderCards(gettingStarted)}
+            {renderPanel(gettingStarted, 'getting-started')}
           </TabPanel>
 
           <TabPanel value="features" sx={{ px: 0, pt: '24px', pb: 0 }}>
-            {renderCards(skills)}
+            {renderPanel(skills, 'features')}
           </TabPanel>
 
           <TabPanel value="generators" sx={{ px: 0, pt: '24px', pb: 0 }}>
-            {renderCards(generators)}
+            {renderPanel(generators, 'generators')}
           </TabPanel>
 
           <TabPanel value="integrations" sx={{ px: 0, pt: '24px', pb: 0 }}>
-            {renderCards(integrations)}
+            {renderPanel(integrations, 'integrations')}
           </TabPanel>
         </Tabs>
       </Box>

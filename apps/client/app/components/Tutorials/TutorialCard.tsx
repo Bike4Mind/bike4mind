@@ -1,4 +1,4 @@
-import { Sheet, Typography } from '@mui/joy';
+import { Box, Sheet, Typography } from '@mui/joy';
 import type { TutorialItem } from './tutorialCatalog';
 
 /**
@@ -84,9 +84,12 @@ const TutorialCard = ({ item, onOpen }: { item: TutorialItem; onOpen?: () => voi
         data-testid={`tutorial-card-cta-${item.key}`}
         sx={{ mt: 'auto', pt: '20px', fontSize: '14px', color: 'text.primary' }}
       >
+        {interactive ? 'Learn more' : item.cta}
         {/* An HTML entity rather than the arrow character, so this file stays
             ASCII: Prettier rewrites a unicode escape back into the character. */}
-        {interactive ? 'Learn more' : item.cta} &rarr;
+        <Box component="span" sx={{ ml: '6px' }}>
+          &rarr;
+        </Box>
       </Typography>
     </Sheet>
   );

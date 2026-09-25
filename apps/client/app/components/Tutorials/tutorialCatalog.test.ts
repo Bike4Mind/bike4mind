@@ -52,24 +52,26 @@ describe('tutorialCatalog', () => {
   });
 
   describe('tutorialDetailFor', () => {
-    it('falls back to placeholder sections for a feature with no copy yet', () => {
+    it('gives a feature with no copy yet its intro and nothing invented', () => {
       const item = tutorialItemsFor('developers').find(i => i.key === 'apikey')!;
       const detail = tutorialDetailFor(item);
 
-      // Every section is filled, so the layout is never half-empty while the real
-      // copy is being written.
-      expect(detail.whatItDoes).toContain(item.intro);
-      expect(detail.whyItWorks).toBeTruthy();
-      expect(detail.whenToUse).toBeTruthy();
-      expect(detail.gotchas).toBeTruthy();
+      // `authored` is what the view keys its "still being written" notice on, so a
+      // feature that quietly reported true would show an empty page instead.
+      expect(detail.authored).toBe(false);
+      expect(detail.whatItDoes).toBe(item.intro);
+      expect(detail.whyItWorks).toBeUndefined();
+      expect(detail.whenToUse).toBeUndefined();
+      expect(detail.gotchas).toBeUndefined();
     });
 
     it('prefers the authored copy where it exists', () => {
       const item = tutorialItemsFor('advanced').find(i => i.key === 'mementos')!;
       const detail = tutorialDetailFor(item);
 
+      expect(detail.authored).toBe(true);
       expect(detail.whatItDoes).toContain('Mementos are short facts');
-      expect(detail.ctaHelper).toBe('Opens your account settings');
+      expect(detail.gotchas).toBeTruthy();
     });
   });
 });
