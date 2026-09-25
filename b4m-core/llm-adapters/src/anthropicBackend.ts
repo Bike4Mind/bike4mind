@@ -30,7 +30,7 @@ import {
   getLatestToolCallIdCanonical,
 } from './backend';
 import { Logger } from '@bike4mind/observability';
-import { handleToolResultStreaming } from './toolStreamingHelper';
+import { handleToolResultStreaming, createRecursiveArtifactGuard } from './toolStreamingHelper';
 import {
   ensureToolPairingIntegrity,
   normalizeToolUseInputs,
@@ -40,7 +40,14 @@ import {
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { systemContentToText } from './systemContent';
 import { toAnthropicContent } from './anthropicContent';
-import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
+import {
+  withRetry,
+  isUserInitiatedAbort,
+  isRetryableError,
+  stripToolArtifactMarkup,
+  ARTIFACT_DELIVERED_PLACEHOLDER,
+  ARTIFACT_REMOVED_PLACEHOLDER,
+} from '@bike4mind/common';
 import {
   buildThinkingParams,
   resolveOutputMaxTokens,
@@ -1903,6 +1910,17 @@ export class AnthropicBackend implements ICompletionBackend {
                   }
             );
 
+            // The real, top-level callback - pinned through every recursion level via
+            // _internal.artifactCallback, never the recursive-buffer guard below - so a tool
+            // streamed from a CHAINED call deeper in this turn always reaches the client
+            // directly instead of landing in a buffer built to catch a DIFFERENT round's echo.
+            const artifactCallback = options._internal?.artifactCallback ?? cb;
+
+            // Track artifact streaming: Anthropic tends to echo raw <artifact> markup back in
+            // its final reply after seeing it in the tool result, and the reply parser would
+            // render that echo as a second, empty card - strip it from history (below) and,
+            // as a backstop, from the recursive completion's buffered text (after the loop).
+            let anyArtifactWasStreamed = false;
             // Inject results in original order (required by Anthropic API)
             for (const outcome of outcomes) {
               // Anthropic API requires a tool_use_id; generate a fallback if the model omitted one.
@@ -1920,19 +1938,33 @@ export class AnthropicBackend implements ICompletionBackend {
                   resultPreview: resultStr.substring(0, 100) + (resultStr.length > 100 ? '...' : ''),
                 });
 
+                // Track per-outcome whether this specific tool produced artifacts, so the
+                // history-side strip below picks the right placeholder for THIS result.
+                let thisToolHadArtifact = false;
+
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(outcome.name, outcome.result, async results => {
-                  await cb(results, { inputTokens: 0, outputTokens: 0, toolsUsed });
+                  thisToolHadArtifact = true;
+                  anyArtifactWasStreamed = true;
+                  await artifactCallback(results, { inputTokens: 0, outputTokens: 0, toolsUsed });
                 });
+
+                // Strip artifact markup from every tool result, not only the ones that streamed,
+                // so the model never sees the markup it could echo into its final reply.
+                const sanitizedResult = stripToolArtifactMarkup(
+                  resultStr,
+                  thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+                );
 
                 // outcome.id (not toolId, which falls back to a fresh randomUUID) is what
                 // toolsUsed was pushed with, so it's what correlates back to that entry.
-                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+                // Record the sanitized string, not resultStr - that's what the model actually saw.
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  resultStr
+                  sanitizedResult
                 );
               } else {
                 // Re-throw permission denials; inject error result for all others
@@ -1945,7 +1977,12 @@ export class AnthropicBackend implements ICompletionBackend {
                   error: errorMessage,
                 });
 
-                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                // Strip too - matches the success path above (openaiBackend does the same for
+                // its error branch) so an error message can't carry echoable artifact markup.
+                const observation = stripToolArtifactMarkup(
+                  `Error processing ${outcome.name} tool: ${errorMessage}`,
+                  ARTIFACT_REMOVED_PLACEHOLDER
+                );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
@@ -1967,6 +2004,13 @@ export class AnthropicBackend implements ICompletionBackend {
               totalToolsUsed: toolsUsed.length,
             });
 
+            // If any artifact was already streamed, buffer the recursive response and strip
+            // any duplicate artifact markup the model echoes back in it before ever reaching
+            // the client. A genuinely NEW artifact from a chained tool call in this same
+            // recursive turn bypasses this guard entirely via artifactCallback above, so it
+            // is never at risk of being deleted alongside the echo this guard exists to catch.
+            const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(cb) : undefined;
+
             // Keep tools available for all tool types to enable chaining
             // (e.g., web_search -> web_search, web_search -> web_fetch)
             // The MAX_TOOL_CALLS limit prevents infinite loops
@@ -1987,11 +2031,16 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens || 0),
+                  artifactCallback,
                 },
               },
-              cb,
+              guard?.callback ?? cb,
               toolsUsed
             );
+
+            if (guard) await guard.flush();
+
+            return;
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             // Include thinking blocks for Anthropic extended thinking
@@ -2266,6 +2315,11 @@ export class AnthropicBackend implements ICompletionBackend {
                   }
             );
 
+            // See the streaming branch above for why artifactCallback exists.
+            const artifactCallback = options._internal?.artifactCallback ?? cb;
+
+            // See the streaming branch above for why anyArtifactWasStreamed exists.
+            let anyArtifactWasStreamed = false;
             // Inject results in original order (required by Anthropic API)
             for (const outcome of outcomesNS) {
               // Anthropic API requires a tool_use_id; generate a fallback if the model omitted one.
@@ -2283,17 +2337,28 @@ export class AnthropicBackend implements ICompletionBackend {
                   resultPreview: resultStr.substring(0, 100) + (resultStr.length > 100 ? '...' : ''),
                 });
 
+                let thisToolHadArtifact = false;
+
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(outcome.name, outcome.result, async results => {
-                  await cb(results, { toolsUsed });
+                  thisToolHadArtifact = true;
+                  anyArtifactWasStreamed = true;
+                  await artifactCallback(results, { toolsUsed });
                 });
 
-                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, resultStr, true);
+                // Strip artifact markup from every tool result, not only the ones that streamed,
+                // so the model never sees the markup it could echo into its final reply.
+                const sanitizedResult = stripToolArtifactMarkup(
+                  resultStr,
+                  thisToolHadArtifact ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
+                );
+
+                recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, sanitizedResult, true);
 
                 this.pushToolMessages(
                   messages,
                   { id: toolId, name: outcome.name, parameters: outcome.parameters },
-                  resultStr
+                  sanitizedResult
                 );
               } else {
                 if (outcome.error instanceof PermissionDeniedError) throw outcome.error;
@@ -2305,7 +2370,12 @@ export class AnthropicBackend implements ICompletionBackend {
                   error: errorMessage,
                 });
 
-                const observation = `Error processing ${outcome.name} tool: ${errorMessage}`;
+                // Strip too - matches the success path above (openaiBackend does the same for
+                // its error branch) so an error message can't carry echoable artifact markup.
+                const observation = stripToolArtifactMarkup(
+                  `Error processing ${outcome.name} tool: ${errorMessage}`,
+                  ARTIFACT_REMOVED_PLACEHOLDER
+                );
                 recordToolResult(toolsUsed, { id: outcome.id, name: outcome.name }, observation, false);
                 this.pushToolMessages(
                   messages,
@@ -2327,6 +2397,10 @@ export class AnthropicBackend implements ICompletionBackend {
             // Add newline separator before recursive call to ensure proper markdown rendering
             await cb(['\n\n'], { toolsUsed });
 
+            // See the streaming branch above for why this buffers and strips instead of
+            // passing cb straight through.
+            const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(cb) : undefined;
+
             // Keep tools available for all tool types to enable chaining
             // The MAX_TOOL_CALLS limit prevents infinite loops
             // Carry this turn's tokens forward so the terminal recursive call
@@ -2346,11 +2420,16 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (usageWithCacheNS?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (usageWithCacheNS?.cache_creation_input_tokens || 0),
+                  artifactCallback,
                 },
               },
-              cb,
+              guard?.callback ?? cb,
               toolsUsed
             );
+
+            if (guard) await guard.flush();
+
+            return;
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             // Include thinking blocks for Anthropic extended thinking
