@@ -16,6 +16,7 @@ import {
   IFabFileVersion,
   type LakeMembershipMemberRow,
   type LakeSupersession,
+  DocumentDateSource,
   FabFileSourceType,
   KnowledgeType,
   normalizeTagPrefix,
@@ -3484,6 +3485,10 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     // per-source origin (for Slack: channel + message ts) that makes an ingested file auditable.
     sourceType: { type: String, enum: Object.values(FabFileSourceType), required: false },
     sourceMetadata: { type: Schema.Types.Mixed, required: false },
+    // The document's own vintage plus where it came from (#3048) - see IFabFile's field docs. Both
+    // stay unset unless a source actually offered one; there is deliberately no createdAt fallback.
+    documentDate: { type: Date },
+    documentDateSource: { type: String, enum: Object.values(DocumentDateSource), required: false },
     // Google Drive ingest provenance (#1589). Populated when sourceType === GOOGLE_DRIVE.
     driveFileId: { type: String },
     driveModifiedTime: { type: Date },

@@ -414,13 +414,25 @@ describe('shouldSummarizeSession', () => {
 describe('KnowledgeRetrievalFeature citation styles', () => {
   // Two source documents; file A contributes two chunks (both ranked above file B's)
   // so the indexed style must give both A-sections the SAME number and B the next.
-  const makeRetrievalContext = (overrides: { chunkText?: Record<string, string>; charBudget?: number } = {}) => {
+  const makeRetrievalContext = (
+    overrides: {
+      chunkText?: Record<string, string>;
+      charBudget?: number;
+      /** Per-file `documentDate` (#3048) override, keyed by file id - absent files stay undated. */
+      documentDates?: Record<string, Date | null>;
+    } = {}
+  ) => {
     // fileA deliberately carries a `createdAt` (its upload time) and fileB does not, so the
     // undated-heading test below proves the heading ignores it rather than merely lacking one.
-    const files = [
+    const baseFiles = [
       { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [], createdAt: new Date('2026-08-14T09:30:00.000Z') },
       { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [] },
     ];
+    const files = baseFiles.map(file =>
+      overrides.documentDates && file.id in overrides.documentDates
+        ? { ...file, documentDate: overrides.documentDates[file.id] }
+        : file
+    );
     const textOf = (chunkId: string, fallback: string) => overrides.chunkText?.[chunkId] ?? fallback;
     const chunksByFile: Record<string, unknown[]> = {
       fileA: [
@@ -456,8 +468,11 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     getDefaultEmbeddingModel: () => 'text-embedding-ada-002',
   };
 
-  const runRetrieval = async (citationStyle?: 'named' | 'indexed') => {
-    const ctx = makeRetrievalContext();
+  const runRetrieval = async (
+    citationStyle?: 'named' | 'indexed',
+    contextOverrides?: Parameters<typeof makeRetrievalContext>[0]
+  ) => {
+    const ctx = makeRetrievalContext(contextOverrides);
     const feature = new KnowledgeRetrievalFeature(
       ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
       undefined,
@@ -498,6 +513,28 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
     const { content } = await runRetrieval();
     expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
     expect(content).not.toMatch(/dated|2026-08-14/);
+  });
+
+  /**
+   * Regression guard for #3047/#3113: a previous attempt at dated headers silently dropped the
+   * date on this exact (always-on) surface. `documentDate` (#3048) is the document's own authored
+   * vintage, not `createdAt` above - both citation styles must carry it identically.
+   */
+  it('appends the document date clause to both citation styles when the file carries a documentDate (#3048)', async () => {
+    const documentDates = { fileA: new Date('2019-03-04T00:00:00.000Z') };
+    const indexed = await runRetrieval('indexed', { documentDates });
+    expect(indexed.content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2019-03-04\n');
+    // fileB carries no override, so it stays undated - the clause is per-file, not per-turn.
+    expect(indexed.content).toContain('### [2] Cortes NEJM 2024.pdf (ID: fileB)\n');
+
+    const named = await runRetrieval('named', { documentDates });
+    expect(named.content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA) - dated 2019-03-04\n');
+  });
+
+  it('omits the date clause when documentDate is explicitly null', async () => {
+    const { content } = await runRetrieval('indexed', { documentDates: { fileA: null } });
+    expect(content).toContain('### [1] NCCN NSCLC v3.2026.pdf (ID: fileA)\n');
+    expect(content).not.toContain('dated');
   });
 
   it('both styles carry the anti-invention rule so a grounded turn cannot volunteer an unsourced customer/deal/figure', async () => {
