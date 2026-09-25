@@ -97,8 +97,8 @@ export function LakeInfoPanel({
   const demoteLake = useDemoteDataLake();
   const startChatWithLake = useStartChatWithLake();
   const [startingChat, setStartingChat] = useState(false);
-  // Opens the existing-files picker. Mounted only while open so the picker's file query does not
-  // fire (and page through the caller's whole knowledge base) until it is actually needed.
+  // Mounted only while open so the picker's file query does not fire (and page through the
+  // caller's whole knowledge base) until it is actually needed.
   const [addExistingOpen, setAddExistingOpen] = useState(false);
   const visibility = lakeVisibilityLabel(lake);
   // "Rebuild passages": gated on canRebuild, NOT canManage - a fallback (built-in) lake has no

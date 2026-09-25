@@ -39,7 +39,9 @@ export interface GenericAddItemsModalProps<T> {
   searchPlaceholder?: string;
 
   // Actions
-  onAdd: (ids: string[]) => void;
+  /** Return `false` to veto the close - e.g. the caller refused the add and wants the selection
+   *  kept. `void` (every other caller) closes as before. */
+  onAdd: (ids: string[]) => void | boolean;
   isPending?: boolean;
 
   // Optional left grid content
@@ -150,7 +152,9 @@ function GenericAddItemsModal<T>({
   );
 
   const handleAddItems = useCallback(() => {
-    onAdd(selectedIds);
+    // A caller that returns false refused the add, so the dialog stays open with the selection and
+    // the search intact. Every other caller returns void and closes as before.
+    if (onAdd(selectedIds) === false) return;
     setOpen(false);
     if (onSearch) onSearch('');
   }, [onAdd, selectedIds, onSearch, setOpen]);
