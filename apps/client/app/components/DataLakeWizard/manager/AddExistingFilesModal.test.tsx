@@ -13,16 +13,25 @@ import type { ManagerLake } from './shared';
 const h = vi.hoisted(() => ({
   addFilesToLake: vi.fn(),
   files: vi.fn(),
+  isMutating: vi.fn(),
   toastInfo: vi.fn(),
   toastError: vi.fn(),
 }));
 
 vi.mock('@client/app/hooks/data/dataLakes', () => ({
   useAddFilesToLake: () => ({ mutate: h.addFilesToLake, isPending: false }),
+  addFilesToLakeMutationKey: ['addFilesToLake'],
 }));
 
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   useGetFabFiles: (...args: unknown[]) => h.files(...args),
+}));
+
+// Real useIsMutating needs a QueryClientProvider this suite does not set up (every other
+// react-query-backed hook here is mocked too); stub it so addInFlight is test-controlled.
+vi.mock('@tanstack/react-query', async importOriginal => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
+  useIsMutating: (...args: unknown[]) => h.isMutating(...args),
 }));
 
 vi.mock('sonner', () => ({
@@ -73,7 +82,10 @@ beforeEach(() => {
     fetchNextPage: vi.fn(),
     hasNextPage: false,
     isFetchingNextPage: false,
+    isFetching: false,
   });
+  h.isMutating.mockReset();
+  h.isMutating.mockReturnValue(0);
 });
 
 describe('partitionLakeAddCandidates', () => {
@@ -137,6 +149,7 @@ describe('AddExistingFilesModal', () => {
       fetchNextPage: vi.fn(),
       hasNextPage: false,
       isFetchingNextPage: false,
+      isFetching: false,
     }));
     renderModal();
 
@@ -172,6 +185,7 @@ describe('AddExistingFilesModal', () => {
       fetchNextPage: vi.fn(),
       hasNextPage: false,
       isFetchingNextPage: false,
+      isFetching: false,
     });
     rerender(
       <Wrapper>
@@ -231,6 +245,33 @@ describe('AddExistingFilesModal', () => {
   it('shows the draft notice when the status is absent', () => {
     renderModal({ status: undefined });
     expect(screen.getByText(/This lake is a draft/)).toBeInTheDocument();
+  });
+
+  it('disables submit while the file list is refetching, closing the stale-cache reopen window', async () => {
+    const user = userEvent.setup();
+    h.files.mockReturnValue({
+      data: { pages: [{ data: [memberFile, nonMemberFile] }] },
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false,
+      isFetching: true,
+    });
+    renderModal();
+
+    await user.click(screen.getByTestId('datalake-addexisting-item-f-new'));
+
+    expect(screen.getByTestId('generic-add-items-submit-btn')).toBeDisabled();
+  });
+
+  it('disables submit while an add for this lake is still in flight elsewhere, closing the reopen-during-POST window', async () => {
+    const user = userEvent.setup();
+    h.isMutating.mockReturnValue(1);
+    renderModal();
+
+    await user.click(screen.getByTestId('datalake-addexisting-item-f-new'));
+
+    expect(screen.getByTestId('generic-add-items-submit-btn')).toBeDisabled();
+    expect(h.isMutating).toHaveBeenCalledWith({ mutationKey: ['addFilesToLake'] });
   });
 
   it('hides the draft notice on an active lake', () => {

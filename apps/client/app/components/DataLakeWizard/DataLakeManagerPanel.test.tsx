@@ -52,6 +52,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // LakeInfoPanel's "Add existing files" picker submits through this door. Stubbed so mounting
     // it (the affordance test below) needs no QueryClientProvider.
     useAddFilesToLake: mutation,
+    // The picker also imports this key directly to gate on useIsMutating - keep it in the mock or
+    // the import resolves to undefined and every render throws (see the missing-export trap above).
+    addFilesToLakeMutationKey: ['addFilesToLake'],
     // The recipient's pending-offer banner renders at the top of the panel. Default: no offers, so
     // it renders nothing; a test that wants one overrides these.
     useOwnLakeOwnershipOffers: () => ({ data: [] }),
@@ -125,7 +128,15 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
     fetchNextPage: vi.fn(),
     hasNextPage: false,
     isFetchingNextPage: false,
+    isFetching: false,
   }),
+}));
+
+// The picker also calls useIsMutating directly, which needs a QueryClientProvider this suite
+// does not set up (every other react-query-backed hook here is mocked too).
+vi.mock('@tanstack/react-query', async importOriginal => ({
+  ...(await importOriginal<typeof import('@tanstack/react-query')>()),
+  useIsMutating: () => 0,
 }));
 
 // TaxonomyReviewPanel has its own suite; here we only assert the manager opens it with the
