@@ -88,6 +88,7 @@ import {
   useGrantLakeAccess,
   useRevokeLakeAccess,
   useReprocessFabFile,
+  useScanDataLakeFindings,
   useUnderChunkedCount,
 } from './dataLakes';
 
@@ -2076,5 +2077,59 @@ describe('useReprocessFabFile request body', () => {
     });
 
     expect(apiPost).toHaveBeenCalledWith('/api/files/reprocess', { fabFileId: 'file1' });
+  });
+});
+
+describe('useScanDataLakeFindings', () => {
+  const mount = () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries');
+    const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
+      React.createElement(QueryClientProvider, { client: queryClient }, children);
+    const { result } = renderHook(() => useScanDataLakeFindings('lake1'), { wrapper });
+    return { result, invalidate };
+  };
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    (toast.success as ReturnType<typeof vi.fn>).mockReset();
+    (toast.error as ReturnType<typeof vi.fn>).mockReset();
+  });
+
+  it('runs detection on the lake and re-reads every findings filter plus the health badge', async () => {
+    apiPost.mockResolvedValueOnce({
+      data: { countsByKind: { 'metric-disagreement': 2, 'date-disagreement': 1 }, memberCount: 4 },
+    });
+    const { result, invalidate } = mount();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(apiPost).toHaveBeenCalledWith('/api/data-lakes/lake1/inconsistencies');
+    const keys = invalidate.mock.calls.map(call => JSON.stringify(call[0]?.queryKey));
+    // The bare prefix, so the dialog's filtered list and the chip's open-only count both refresh.
+    expect(keys).toContain(JSON.stringify(['dataLakeFindings', 'lake1']));
+    expect(keys).toContain(JSON.stringify(['dataLakeHealth', 'lake1']));
+    expect(toast.success).toHaveBeenCalledWith('Scan complete: 3 finding(s) across 4 document(s).');
+  });
+
+  it('says nothing was read rather than calling an empty lake clean', async () => {
+    apiPost.mockResolvedValueOnce({ data: { countsByKind: {}, memberCount: 0 } });
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync();
+    });
+
+    expect(toast.success).toHaveBeenCalledWith(expect.stringMatching(/no document in this lake has text/i));
+  });
+
+  it("surfaces the rate limit's own retry hint, not axios' status line", async () => {
+    apiPost.mockRejectedValueOnce(axiosRefusal(429, 'Rate limit exceeded. Try again in 120 seconds.'));
+    const { result } = mount();
+    await act(async () => {
+      await result.current.mutateAsync().catch(() => {});
+    });
+
+    expect(toast.error).toHaveBeenCalledWith('Rate limit exceeded. Try again in 120 seconds.');
   });
 });
