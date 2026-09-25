@@ -31,6 +31,7 @@ if (spawnSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).status !== 0)
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const WORKFLOW = path.join(REPO_ROOT, '.github', 'workflows', 'e2e-ai-latency.yml');
 const yaml = fs.readFileSync(WORKFLOW, 'utf8');
+const GATE_STEP = '- name: Fail the run on a latency breach';
 
 /** The ABANDONED assignment, lifted verbatim so the test runs the shipped selector. */
 function liftAbandonedSelector(): string {
@@ -103,19 +104,38 @@ describe('gate wiring', () => {
     // Both the Slack page and the run gate must read the same output; a second copy of
     // "exceeded && not skipped" is what drifts.
     expect(yaml).toContain('echo "latency_breach=$LATENCY_BREACH" >> $GITHUB_OUTPUT');
-    expect(yaml).toContain('LATENCY_BREACH=true');
     const consumers = yaml.match(/steps\.aggregate\.outputs\.latency_breach == 'true'/g) ?? [];
     expect(consumers.length).toBeGreaterThanOrEqual(2);
   });
 
+  it('sets the breach only inside the skip guard', () => {
+    // Placement, not presence: hoisting LATENCY_BREACH=true one line out of this block reds a run
+    // that skipped for a missing repo secret - a cell that produced no latency data at all.
+    const guard = 'if [ "$EXCEEDED" = "true" ] && [ "${PREVIEW_SKIPPED:-}" != "true" ]; then';
+    expect(yaml).toContain(guard);
+    const block = yaml.slice(yaml.indexOf(guard), yaml.indexOf('\n          fi', yaml.indexOf(guard)));
+    expect(block).toContain('LATENCY_BREACH=true');
+    // Initialised false outside the guard, so the output is always defined.
+    expect(yaml.slice(0, yaml.indexOf(guard))).toMatch(/\n\s+LATENCY_BREACH=false\n/);
+    expect(yaml.match(/LATENCY_BREACH=true/g) ?? []).toHaveLength(1);
+  });
+
   it('fails the run on a breach', () => {
-    const step = yaml.slice(yaml.indexOf('- name: Fail the run when a latency threshold was exceeded'));
+    const step = yaml.slice(yaml.indexOf(GATE_STEP));
     expect(step).toContain("if: ${{ always() && steps.aggregate.outputs.latency_breach == 'true' }}");
     expect(step).toMatch(/\n\s+exit 1\b/);
   });
 
+  it('names both breach causes in the error it prints', () => {
+    // latency_breach also fires on the abandoned arm with the average under threshold, so an
+    // "average exceeded" message alone would send triage after the wrong number.
+    const message = yaml.slice(yaml.indexOf(GATE_STEP)).match(/echo "::error::([^"]+)"/)?.[1] ?? '';
+    expect(message).toMatch(/threshold/i);
+    expect(message).toMatch(/abandon|never finished|streaming cap/i);
+  });
+
   it('keeps the gate after the Slack steps so a red run is still announced', () => {
-    const gate = yaml.indexOf('- name: Fail the run when a latency threshold was exceeded');
+    const gate = yaml.indexOf(GATE_STEP);
     expect(gate).toBeGreaterThan(yaml.indexOf('- name: Send Slack notification'));
     expect(gate).toBeGreaterThan(yaml.indexOf('- name: Send Slack alert for latency threshold breach'));
   });
