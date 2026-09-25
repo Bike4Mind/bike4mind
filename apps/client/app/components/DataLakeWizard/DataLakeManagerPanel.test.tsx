@@ -79,6 +79,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // Same for LakeFindingsChip: it renders a neutral chip either way, so no findings just means
     // no open-count badge.
     useDataLakeFindings: () => ({ data: undefined, isLoading: false, error: null, isForbidden: false }),
+    useScanDataLakeFindings: mutation,
     // Default: no rebuild backlog, so the "Rebuild passages" button/chips stay hidden. A test that
     // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [string, boolean])),
