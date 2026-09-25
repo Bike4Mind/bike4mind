@@ -559,6 +559,20 @@ export interface IDataLake {
    * wizard does when a Drive folder was already picked.
    */
   origin: DataLakeOrigin;
+  /**
+   * Model-driven inconsistency detection (#3057) bookkeeping - server-managed, never client input.
+   *
+   * A concurrency LEASE with exactly the semantics of `lakeMemoryExtractionAt`, and held for the same
+   * reason: the run behind it reads the lake's documents through an LLM, so a second concurrent run
+   * is billed real money to rediscover what the first is already finding. A lease rather than a
+   * boolean so a crashed run frees itself once the stamp ages past the lease window. Absent/null = no
+   * run holds it.
+   *
+   * NOT a completion stamp. A finding's own `lastSeenAt` on its `DataLakeFinding` row is the only
+   * record of when detection last produced anything, and `GET /findings?detector=model` is how it is
+   * read - the same distinction `lakeMemoryExtractionAt` draws against the memory ledger.
+   */
+  modelInconsistencyRunAt?: Date | null;
 }
 
 export interface IDataLakeDocument extends IDataLake, IMongoDocument {}
@@ -909,6 +923,17 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * the lease a newer run has since claimed.
    */
   releaseLakeMemoryExtraction(id: string, claimedAt: Date): Promise<void>;
+  /**
+   * Per-lake concurrency claim for the model inconsistency pass (#3057) - the same guarded-in-query
+   * claim as `claimLakeMemoryExtraction`, on its own field so the two passes never block each other.
+   * Returns whether THIS caller won the claim.
+   */
+  claimModelInconsistencyRun(id: string, at: Date, staleBefore: Date): Promise<boolean>;
+  /**
+   * Release the model inconsistency lease, but only if THIS run still holds it (the stamp still
+   * equals `claimedAt`), so a late finish cannot clear a lease a stale takeover has since claimed.
+   */
+  releaseModelInconsistencyRun(id: string, claimedAt: Date): Promise<void>;
   /**
    * Persist (with a doc id) or clear (with null) the bounded-continuation cursor - the id of the last
    * document the current scan attempted. Null marks the scan complete, so the next finalize re-scans the

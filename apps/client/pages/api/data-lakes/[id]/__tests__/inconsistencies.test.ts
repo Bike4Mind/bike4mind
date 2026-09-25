@@ -10,11 +10,18 @@ const h = vi.hoisted(() => ({
   loggerWarn: vi.fn(),
   loggerError: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false })),
+  sendToQueue: vi.fn(),
+  getSourceQueueUrl: vi.fn(() => 'https://sqs.test/lakeInconsistencyModelQueue'),
   // The rate limiter is a middleware, so it is only reachable if the mocked chain below actually
-  // RUNS what the route hands to `.use` - see that mock.
+  // RUNS what the route hands to `.use` - see that mock. Model detection uses its own bucket, so
+  // calls are recorded per-bucket rather than in one shared counter.
   rateLimit: vi.fn(),
-  rateLimitOptions: undefined as Record<string, unknown> | undefined,
+  rateLimitCallsByBucket: {} as Record<string, number>,
+  rateLimitOptionsByBucket: {} as Record<string, Record<string, unknown>>,
   isDevelopment: vi.fn(() => false),
+  // Configurable per test: settings this set blocks with a 403, matching requireFeatureEnabled's
+  // real shape - lets the model-only gate be exercised without disabling EnableDataLakes too.
+  blockedFeatureKeys: new Set<string>(),
 }));
 
 vi.mock('@server/middlewares/baseApi', () => ({
@@ -46,15 +53,23 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({
   rateLimit: (options: Record<string, unknown>) => {
-    h.rateLimitOptions = options;
-    return (req: unknown, res: unknown, next: () => unknown) => (h.rateLimit(), next());
+    const bucket = options.bucket as string;
+    h.rateLimitOptionsByBucket[bucket] = options;
+    return (req: unknown, res: unknown, next: () => unknown) => (
+      (h.rateLimitCallsByBucket[bucket] = (h.rateLimitCallsByBucket[bucket] ?? 0) + 1),
+      h.rateLimit(),
+      next()
+    );
   },
 }));
 vi.mock('@server/utils/config', () => ({ isDevelopment: h.isDevelopment }));
-// Must call `next()` now that the chain above actually runs its middlewares - a no-op stub would
-// short-circuit every request before the verb handler.
+// Configurable so the model-only feature gate (EnableLakeModelInconsistencyDetection) can be tested
+// without also disabling EnableDataLakes, which every request passes through first.
 vi.mock('@server/middlewares/featureFlag', () => ({
-  requireFeatureEnabled: () => (_req: unknown, _res: unknown, next: () => unknown) => next(),
+  requireFeatureEnabled:
+    (key: string) =>
+    (_req: unknown, res: { status: (n: number) => { json: (b: unknown) => unknown } }, next: () => unknown) =>
+      h.blockedFeatureKeys.has(key) ? res.status(403).json({ error: 'forbidden' }) : next(),
 }));
 vi.mock('@bike4mind/services', () => ({
   dataLakeService: {
@@ -73,7 +88,10 @@ vi.mock('@bike4mind/database', () => ({
   fabFileChunkRepository: {},
 }));
 vi.mock('@server/dataLakes/toAccessContext', () => ({ toAccessContext: h.toAccessContext }));
+vi.mock('@server/utils/sqs', () => ({ sendToQueue: h.sendToQueue }));
+vi.mock('@server/utils/dlqRegistry', () => ({ getSourceQueueUrl: h.getSourceQueueUrl }));
 
+import { MODEL_INCONSISTENCY_RUN_LEASE_MS } from '@bike4mind/common';
 import handler from '../inconsistencies';
 
 const lake = { id: 'lakeDoc1', datalakeTag: 'datalake:acme' };
@@ -81,14 +99,15 @@ const makeRes = () => {
   const json = vi.fn();
   return { res: { json, status: vi.fn(() => ({ json })) }, json };
 };
-const invoke = (body: Record<string, unknown> = {}, method = 'POST') => {
+const invoke = (body: Record<string, unknown> = {}, method = 'POST', query: Record<string, unknown> = {}) => {
   const { res, json } = makeRes();
   return {
     json,
+    res,
     done: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(
       {
         method,
-        query: { id: 'lake1' },
+        query: { id: 'lake1', ...query },
         body,
         user: { id: 'u1' },
         logger: { warn: h.loggerWarn, error: h.loggerError },
@@ -116,8 +135,13 @@ const report = (over: Record<string, unknown> = {}) => ({
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Plain objects/Sets, not vi.fn() - clearAllMocks does not touch these, so each test starts clean.
+  h.rateLimitCallsByBucket = {};
+  h.blockedFeatureKeys = new Set();
   h.assertLakeWriteAccess.mockResolvedValue(lake);
   h.detectLakeInconsistencies.mockResolvedValue(result());
+  h.sendToQueue.mockResolvedValue(undefined);
+  h.getSourceQueueUrl.mockReturnValue('https://sqs.test/lakeInconsistencyModelQueue');
   h.update.mockResolvedValue(lake);
   h.recordLakeFindings.mockResolvedValue({ recorded: 0, failed: 0 });
   h.listByLake.mockResolvedValue([]);
@@ -377,19 +401,20 @@ describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {
     // The load-bearing detail, and the reason the bucket is explicit. Without it the middleware keys
     // on `req.url`, which carries the lake id - so the cap would be per lake per caller and "loop
     // over every lake I own" would stay unbounded, the amplification converge already closed.
-    expect(h.rateLimitOptions?.bucket).toBe('data-lakes/inconsistencies');
+    expect(h.rateLimitOptionsByBucket['data-lakes/inconsistencies']?.bucket).toBe('data-lakes/inconsistencies');
   });
 
   it('caps detection at 20 runs an hour outside development', () => {
-    const limit = h.rateLimitOptions?.limit as () => number;
+    const options = h.rateLimitOptionsByBucket['data-lakes/inconsistencies'];
+    const limit = options?.limit as () => number;
 
-    expect(h.rateLimitOptions?.windowMs).toBe(60 * 60 * 1000);
+    expect(options?.windowMs).toBe(60 * 60 * 1000);
     expect(limit()).toBe(20);
   });
 
   it('lifts the cap in development', () => {
     h.isDevelopment.mockReturnValueOnce(true);
-    const limit = h.rateLimitOptions?.limit as () => number;
+    const limit = h.rateLimitOptionsByBucket['data-lakes/inconsistencies']?.limit as () => number;
 
     expect(limit()).toBe(Infinity);
   });
@@ -398,7 +423,7 @@ describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {
     const { done } = invoke({});
     await done;
 
-    expect(h.rateLimit).toHaveBeenCalledTimes(1);
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies']).toBe(1);
   });
 
   it('leaves GET outside the cap, so looking at a report is never throttled', async () => {
@@ -410,6 +435,130 @@ describe('POST /api/data-lakes/:id/inconsistencies rate limit', () => {
     await done;
 
     expect(h.rateLimit).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/data-lakes/[id]/inconsistencies?detector=model (#3057)', () => {
+  it('is gated behind EnableLakeModelInconsistencyDetection, unlike the lexical branch', async () => {
+    h.blockedFeatureKeys.add('EnableLakeModelInconsistencyDetection');
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+    // The feature gate sits AHEAD of the rate limiter, so a disabled-feature caller never burns its
+    // (far lower) hourly budget on a request that was always going to 403.
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model']).toBeUndefined();
+  });
+
+  it('does not gate the lexical branch behind the model-only flag', async () => {
+    h.blockedFeatureKeys.add('EnableLakeModelInconsistencyDetection');
+
+    const { done } = invoke({});
+    await done;
+
+    expect(h.detectLakeInconsistencies).toHaveBeenCalledTimes(1);
+  });
+
+  it('buckets rate limiting separately from the lexical run, at its own lower cap', async () => {
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model']).toBe(1);
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies']).toBeUndefined();
+    const options = h.rateLimitOptionsByBucket['data-lakes/inconsistencies/model'];
+    const limit = options?.limit as () => number;
+    expect(limit()).toBe(3);
+  });
+
+  it('also bounds spend per LAKE, which the per-caller cap cannot do', async () => {
+    // The caller cap stops one person spending without limit, but the cost lands on the lake: N
+    // curators with manage rights each get their own allowance, so the caller cap alone lets one lake
+    // be billed N x 3 full LLM passes an hour. The lease serializes those runs, it does not limit them.
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model/lake']).toBe(1);
+    const options = h.rateLimitOptionsByBucket['data-lakes/inconsistencies/model/lake'];
+    expect((options?.limit as () => number)()).toBe(6);
+    // Keyed on the lake, not the caller - that IS the fix.
+    const subject = options?.subject as (req: unknown) => string | undefined;
+    expect(subject({ query: { id: 'lake1' } })).toBe('lake:lake1');
+    // A malformed id falls back to the default subject, which can only ever be stricter.
+    expect(subject({ query: {} })).toBeUndefined();
+  });
+
+  it('leaves the per-lake bucket untouched on a lexical run', async () => {
+    const { done } = invoke({}, 'POST');
+    await done;
+
+    expect(h.rateLimitCallsByBucket['data-lakes/inconsistencies/model/lake']).toBeUndefined();
+  });
+
+  it('enqueues the run and returns 202 rather than doing the LLM work in the request', async () => {
+    // The whole point of the queue: several sequential LLM calls cannot fit the 60s frontend Lambda, and
+    // run inline a timeout billed every call while persisting nothing. The route must now do no
+    // detection and no findings write of its own.
+    const { res, done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+    expect(h.recordLakeFindings).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(202);
+  });
+
+  it('sends the resolved lake document id and the calling user, not the route id', async () => {
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    const [url, message] = h.sendToQueue.mock.calls[0];
+    expect(url).toBe('https://sqs.test/lakeInconsistencyModelQueue');
+    expect(message).toEqual({ dataLakeId: 'lakeDoc1', userId: 'u1' });
+  });
+
+  it('leaves the lexical blob and the lexical detector untouched', async () => {
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.detectLakeInconsistencies).not.toHaveBeenCalled();
+    expect(h.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses with a 409 while a run already holds the lease, so two clicks cannot double-spend', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({ ...lake, modelInconsistencyRunAt: new Date() });
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+
+    // The STATUS, not just the message. Matching on text alone leaves the guard untested: swapping
+    // ConflictError for a plain Error turns a double click into a 500 with this test still green.
+    await expect(done).rejects.toMatchObject({
+      statusCode: 409,
+      message: expect.stringMatching(/already in progress/i),
+    });
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
+  it('treats a lease older than the window as free, so a crashed run does not wedge the lake', async () => {
+    h.assertLakeWriteAccess.mockResolvedValue({
+      ...lake,
+      modelInconsistencyRunAt: new Date(Date.now() - (MODEL_INCONSISTENCY_RUN_LEASE_MS + 60_000)),
+    });
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+    await done;
+
+    expect(h.sendToQueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses before enqueuing when the queue url is unconfigured', async () => {
+    // A deployment misconfiguration throws on every attempt, so the caller must not be told the run
+    // was accepted by a door that queued nothing.
+    h.getSourceQueueUrl.mockReturnValue(undefined);
+
+    const { done } = invoke({}, 'POST', { detector: 'model' });
+
+    await expect(done).rejects.toThrow(/queue url not found/i);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
   });
 });
 
