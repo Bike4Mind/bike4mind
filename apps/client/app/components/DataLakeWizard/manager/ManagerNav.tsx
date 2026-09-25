@@ -528,6 +528,21 @@ export default function ManagerNav({
                                   {count}
                                 </Chip>
                               )}
+                              {/* Connector-fed lakes only: a curated lake is the norm, so badging
+                                  every one of them would be noise. */}
+                              {lake.origin === 'connector-fed' && (
+                                <Tooltip title="A connector adds content to this lake" size="sm">
+                                  <Chip
+                                    size="sm"
+                                    variant="soft"
+                                    color="neutral"
+                                    sx={COUNT_CHIP_SX}
+                                    data-testid={`datalake-manager-origin-${lake.id}`}
+                                  >
+                                    Connector-fed
+                                  </Chip>
+                                </Tooltip>
+                              )}
                             </ListItemButton>
                           </ListItem>
                         );

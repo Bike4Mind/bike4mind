@@ -55,6 +55,35 @@ describe('proxy CSP header', () => {
     expect(csp).toContain('https://assets.mailerlite.com');
   });
 
+  it('allow-lists every host the ad pixels need, in each directive that governs them', () => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const sources = (name: string) => (csp.match(new RegExp(`${name} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+
+    // A pixel blocked by CSP fails silently - no event, no error anyone sees -
+    // so the hosts are asserted rather than left to a live smoke test.
+    expect(sources('script-src')).toContain('https://www.redditstatic.com');
+    expect(sources('img-src')).toContain('https://alb.reddit.com');
+    expect(sources('connect-src')).toEqual(
+      expect.arrayContaining(['https://pixel-config.reddit.com', 'https://alb.reddit.com'])
+    );
+
+    // fbevents.js chooses an image or sendBeacon transport at runtime, so
+    // www.facebook.com has to be on both img-src and connect-src.
+    expect(sources('script-src')).toContain('https://connect.facebook.net');
+    expect(sources('img-src')).toContain('https://www.facebook.com');
+    expect(sources('connect-src')).toContain('https://www.facebook.com');
+  });
+
+  // connect-src too: the service worker's image cache re-fetches tiles, and a worker fetch is
+  // checked against connect-src, so img-src alone leaves the map blank once the SW is active.
+  it.each(['img-src', 'connect-src'])('%s allows the OpenStreetMap tiles the inline location map loads', directive => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
+    const csp = response.headers.get('Content-Security-Policy') ?? '';
+    const values = (csp.match(new RegExp(`${directive} ([^;]*)`))?.[1] ?? '').split(/\s+/);
+    expect(values).toContain('https://tile.openstreetmap.org');
+  });
+
   it('frame-src allows only the -nocookie YouTube host', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/dashboard'));
     const csp = response.headers.get('Content-Security-Policy') ?? '';

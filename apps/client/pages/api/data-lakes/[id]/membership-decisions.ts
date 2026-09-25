@@ -15,6 +15,7 @@ import { Request } from 'express';
 import { z } from 'zod';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { lakeConfigAuditDb } from '@server/dataLakes/lakeConfigAuditDb';
+import { lakeMembershipAuditDb } from '@server/dataLakes/lakeMembershipAuditDb';
 import { lakeConfigAuditPrincipal } from '@server/dataLakes/lakeConfigAuditPrincipal';
 
 /**
@@ -98,6 +99,7 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_WRITE_SCOPES })
           // replacement silently does nothing.
           lakeMembershipRemovals: lakeMembershipRemovalRepository,
           ...lakeConfigAuditDb,
+          ...lakeMembershipAuditDb,
         },
         logger: req.logger,
       }

@@ -1,9 +1,12 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import {
   buildReactArtifactBundle,
   transpileReactSource,
   rewriteImportsToRequire,
   stripTypeOnlyImports,
+  unwrapDefaultExport,
+  assertPublishableDependencies,
+  findRelativeImport,
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
@@ -453,6 +456,20 @@ describe('rewriteImportsToRequire', () => {
     expect(out).toContain('debounce: db');
     expect(out).not.toContain('debounce as db');
   });
+
+  it('still resolves a default import whose `from` clause is on a later line', () => {
+    const out = rewriteImportsToRequire(`import Thing\n  from 'react';`);
+    expect(out).toContain('react is a runtime global');
+  });
+
+  it('still resolves a large multi-line named-import block (e.g. many lucide-react icons)', () => {
+    const iconNames = Array.from({ length: 50 }, (_, i) => `Icon${i}`);
+    const src = `import {\n  ${iconNames.join(',\n  ')},\n} from 'lucide-react';`;
+    const out = rewriteImportsToRequire(src);
+    expect(out).toContain(`require('lucide-react')`);
+    expect(out).toContain('Icon0');
+    expect(out).toContain('Icon49');
+  });
 });
 
 describe('LUCIDE_WRAPPER_FN single-source identity', () => {
@@ -466,5 +483,832 @@ describe('LUCIDE_WRAPPER_FN single-source identity', () => {
     expect(LUCIDE_WRAPPER_FN).not.toContain('`');
     expect(LUCIDE_WRAPPER_FN.includes('</scr' + 'ipt')).toBe(false);
     expect(LUCIDE_WRAPPER_FN).not.toContain('\\'); // no regex backslash -> no escape-doubling in the sandbox template
+  });
+});
+
+describe('extractImportedModules import-clause scan (perf and correctness)', () => {
+  // Same near-linear-scaling guard as b4m-core/utils/src/artifactParser.test.ts's
+  // assertLinearGrowth. A `from`-less `import` is the pathological input for the bounded clause
+  // scan (it burns its full length budget at every position without ever matching). Sized at
+  // 10000/20000 rather than a smaller pair: this scan also runs after stripTypeOnlyImports (same
+  // bounded-clause shape), and below this size the two measurements sit close enough together
+  // that this suite's own timing jitter can swamp the signal.
+  const MIN_BASELINE_MS = 25;
+  const GROWTH_RATIO_CEILING = 3;
+  const SMALL_INPUT_MS_CEILING = 800;
+
+  const measureMs = (n: number): number => {
+    const input = 'import x\n'.repeat(n); // no `from` clause: worst case for the bounded scan
+    const startedAt = performance.now();
+    assertPublishableDependencies(input); // exercises extractImportedModules; no deps -> no throw
+    return performance.now() - startedAt;
+  };
+
+  it('scans a from-less import list in near-linear time (regression guard for the unbounded scan)', () => {
+    const baselineMs = measureMs(10000);
+    expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+
+    const doubledMs = measureMs(20000);
+    const ratio = doubledMs / Math.max(baselineMs, MIN_BASELINE_MS);
+    expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+  });
+
+  it('still finds a default import whose from clause is on a later line than import', () => {
+    expect(() => assertPublishableDependencies(`import Thing\n  from 'unsupported-pkg';`)).toThrow(
+      UnsupportedReactDependencyError
+    );
+  });
+
+  it('still finds every module in a large multi-line named-import block (2000-char bound has headroom)', () => {
+    const iconNames = Array.from({ length: 80 }, (_, i) => `Icon${i}`);
+    const src = `import {\n  ${iconNames.join(',\n  ')},\n} from 'lucide-react';`;
+    expect(() => assertPublishableDependencies(src)).not.toThrow();
+  });
+
+  it('still flags a module whose import clause runs to thousands of characters', () => {
+    const hugeNamedClause = Array.from({ length: 400 }, (_, i) => `Icon${i}`).join(', ');
+    const src = `import { ${hugeNamedClause} } from 'unsupported-pkg';`;
+    expect(() => assertPublishableDependencies(src)).toThrow(UnsupportedReactDependencyError);
+  });
+});
+
+describe('one-specifier-per-line lucide-react imports of any size', () => {
+  const iconImport = (count: number) =>
+    `import {\n${Array.from({ length: count }, (_, i) => `  Icon${i},`).join('\n')}\n} from 'lucide-react';\n` +
+    `export default function App() {\n  return <div><Icon0 /></div>;\n}\n`;
+
+  // 200 icons is the regression guard: that clause is just over 2000 characters, the length at
+  // which a bounded clause scan stops matching and leaves a bare ESM import in the bundle, which
+  // then dies at load with "Cannot use import statement outside a module".
+  for (const count of [150, 200]) {
+    it(`rewrites a ${count}-icon import and emits no bare import`, async () => {
+      const source = iconImport(count);
+      const clauseLength = source.indexOf('} from') + 1 - source.indexOf('{');
+      expect(clauseLength).toBeGreaterThan(count === 200 ? 2000 : 1500);
+
+      expect(rewriteImportsToRequire(source)).toContain(`require('lucide-react')`);
+
+      const transpiled = await transpileReactSource(source);
+      expect(transpiled).toContain(`require('lucide-react')`);
+      expect(transpiled).not.toMatch(/(^|[^\w$.])import\s/);
+      expect(() => new Function(transpiled)).not.toThrow();
+
+      const { indexHtml } = await buildReactArtifactBundle({ source, title: 'Icons' });
+      expect(indexHtml).toContain(PUBLISH_REACT_DEP_SCRIPTS['lucide-react'].path);
+    });
+  }
+});
+
+describe('rewriteImportsToRequire ESM survivor backstop', () => {
+  afterEach(() => {
+    vi.doUnmock('@client/app/utils/importStatements');
+    vi.resetModules();
+  });
+
+  it('stays quiet on rewritable shapes and on the near-misses that fail one of its guards', () => {
+    const quiet = [
+      `import React from 'react';`,
+      `import { useLayoutEffect } from 'react';`,
+      `import { useState } from 'react';`,
+      `import * as d3 from 'd3';`,
+      `import LineChart, { BarChart } from 'recharts';`,
+      `import { debounce as db, throttle } from 'lodash';`,
+      `import {\n  A,\n  B,\n} from 'lucide-react';`,
+      `import Chart from 'chartjs'\nimport Grid from 'gridjs';`,
+      `import type { Foo } from 'react';\nimport { useRef } from 'react';`,
+      `import A\r\nfrom 'lodash';`,
+      // Not rewritable and not scanner matches either, so the backstop must let each through:
+      // no `from` before the quote, a one-space clause gap, no whitespace before `from`, empty spec.
+      `import 'x';`,
+      `import from 'x';`,
+      `import {a}from 'm';`,
+      `import a from '';`,
+    ];
+    for (const source of quiet) expect(() => rewriteImportsToRequire(source)).not.toThrow();
+  });
+
+  it('throws when a rewritable import survives, which only a gap in the scanner can produce', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    const call = () => mod.rewriteImportsToRequire(`import { useState } from 'react';`);
+    expect(call).toThrow(mod.ReactArtifactTranspileError);
+    expect(call).toThrow(/Could not rewrite an ESM import/);
+  });
+
+  it('catches a survivor indented with whitespace that is neither a space nor a tab', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    // NBSP and form feed: whitespace that a [ \t] leading class would walk straight past,
+    // leaving the survivor unreported. The side-effect-import guard admits both.
+    for (const indent of [String.fromCharCode(0x00a0), String.fromCharCode(0x0c)]) {
+      const call = () => mod.rewriteImportsToRequire(`${indent}import { useState } from 'react';`);
+      expect(call).toThrow(mod.ReactArtifactTranspileError);
+      expect(call).toThrow(/Could not rewrite an ESM import/);
+    }
+  });
+
+  it('reports the surviving statement, not just the first line of the file', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    expect(() =>
+      mod.rewriteImportsToRequire(`const a = 1;\nimport Chart from 'chartjs'\nimport Grid from 'gridjs';`)
+    ).toThrow(/import Chart from 'chartjs'/);
+  });
+
+  it('is blind to a non-line-initial survivor - a documented, narrow gap', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    const call = () => mod.rewriteImportsToRequire(`const a = 1; import { useState } from 'react';`);
+    expect(call).not.toThrow();
+  });
+});
+
+/** Verbatim origin/main implementation: the oracle for the two brace regexes `braceSpan` replaced. */
+function originalStripTypeOnlyImports(source: string): string {
+  return source
+    .replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*;?/g, '')
+    .replace(/import\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]\s*;?/g, (stmt: string, clause: string) => {
+      const braceMatch = clause.match(/\{([\s\S]*?)\}/);
+      if (!braceMatch) return stmt;
+      const kept = braceMatch[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .filter(spec => !/^type\s+(?!as\b)\w/.test(spec));
+      const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
+      if (!kept.length && !beforeBrace) return '';
+      return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
+    });
+}
+
+describe('stripTypeOnlyImports differential vs the original brace regexes', () => {
+  const CASES: readonly string[] = [
+    `import type { Foo } from 'react';`,
+    `import type Foo from 'react';`,
+    `import type from 'react';`,
+    `import { type Foo } from 'react';`,
+    `import { type as T } from 'react';`,
+    `import { type Foo, bar } from 'react';`,
+    `import { type Foo, type Bar } from 'react';`,
+    `import Default, { type Foo } from 'react';`,
+    `import Default, { type Foo, bar } from 'react';`,
+    `import * as ns from 'd3';`,
+    `import {} from 'react';`,
+    `import { } from 'react';`,
+    `import {\n  type Foo,\n  bar,\n} from 'react';`,
+    `import { a }, { b } from 'm';`,
+    // Two brace groups where the FIRST is entirely type-only: a last-brace span would splice the
+    // groups together and keep `bar`, where the original drops the whole statement.
+    `import { type Foo }, { bar } from 'm';`,
+    `import { type Foo }, { type Bar } from 'm';`,
+    `import { a } from 'm'; import { b } from 'n';`,
+    `import { a from 'm';`,
+    `import a } from 'm';`,
+    `import { a, b } from 'm'\nimport { c } from 'n'`,
+    `import type { A } from 'm'\nimport { B } from 'n';`,
+    `const s = { a: 1 };\nimport { b } from 'm';`,
+    `import { a } from 'm'   ;`,
+    `import { a } from 'm'`,
+    `import 'side-effect';`,
+    `import  from 'm';`,
+    `import from 'm';`,
+    `import {a}from 'm';`,
+    `import { a as b, type C as D } from 'm';`,
+    `import React, {\n  useState,\n  type FC,\n} from 'react';\nexport default () => null;`,
+  ];
+
+  it('produces the identical output on every shape', () => {
+    const diffs = CASES.filter(src => stripTypeOnlyImports(src) !== originalStripTypeOnlyImports(src));
+    expect(diffs).toEqual([]);
+  });
+
+  it('is not vacuous: the pass actually rewrites most of these', () => {
+    expect(CASES.filter(src => stripTypeOnlyImports(src) !== src).length).toBeGreaterThan(10);
+  });
+
+  it('mutation control: dropping the `(?!as\\b)` guard from the type-only filter disagrees with the original', () => {
+    const mutated = (source: string): string =>
+      source
+        .replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*;?/g, '')
+        .replace(/import\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]\s*;?/g, (stmt: string, clause: string) => {
+          const braceMatch = clause.match(/\{([\s\S]*?)\}/);
+          if (!braceMatch) return stmt;
+          const kept = braceMatch[1]
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean)
+            // BUG: no `(?!as\b)` guard, so `type as T` (a specifier named `type`) reads as type-only.
+            .filter(spec => !/^type\s+\w/.test(spec));
+          const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
+          if (!kept.length && !beforeBrace) return '';
+          return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
+        });
+    const diffs = CASES.filter(src => mutated(src) !== originalStripTypeOnlyImports(src));
+    expect(diffs.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Verbatim origin/main implementation: the oracle for the three relative-import patterns the
+ * scanner replaced. Pattern [0] rescanned the rest of the file from every `import`/`export`
+ * (quadratic: ~0.8s at 16k keywords, ~3.1s at 32k); [1] and [2] are still regexes in the source
+ * and are here so the differential pins the whole match set, not just the rewritten third of it.
+ */
+const originalRelativePatterns = (): readonly RegExp[] => [
+  /(?:import|export)\b[^;'"]*\bfrom\s*['"](\.\.?\/[^'"]+)['"]/,
+  /\bimport\s*['"](\.\.?\/[^'"]+)['"]/,
+  /\brequire\(\s*['"](\.\.?\/[^'"]+)['"]\s*\)/,
+];
+
+/** First pattern to match wins and yields its specifier - the order `findRelativeImport` keeps. */
+function findWith(patterns: readonly RegExp[], source: string): string | null {
+  for (const pattern of patterns) {
+    const m = source.match(pattern);
+    if (m) return m[m.length - 1];
+  }
+  return null;
+}
+
+/** Deterministic LCG (Numerical Recipes constants) so CI generates the identical corpus every run. */
+function lcg(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s = (Math.imul(s, 1664525) + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+}
+
+const REL_CORPUS: readonly string[] = (() => {
+  // Heads/mids include the near misses that decide the match: a keyword inside an identifier (no
+  // `\b` before `import` in pattern [0], one in [1]/[2]), `from` glued to a word or a brace, a `;`
+  // that closes the clause early, and `\u00a0` as the whitespace before `from`.
+  const HEADS = [
+    'import',
+    'export',
+    'require(',
+    'aimport',
+    'importx',
+    'exportz',
+    'my_require(',
+    'from',
+    'xfrom',
+    'reexport',
+  ];
+  const MIDS = [
+    '',
+    ' ',
+    '  ',
+    '\n',
+    '\t',
+    ' a ',
+    ' Foo, { bar } ',
+    ' * as ns ',
+    ';',
+    ' ; ',
+    ' from',
+    'from',
+    ' from ',
+    '  from  ',
+    'nsfrom ',
+    '}from',
+    ' from\n',
+    '\u00a0from\u00a0',
+    'a from ',
+    ' from;',
+    '{a}from',
+  ];
+  const QUOTES = ["'", '"'];
+  const SPECS = ['./a', '../b/c', './', '.', '..', './x.js', 'react', '/abs', './a b', '.././', './..', ''];
+  const TAILS = [';', '', ')', ' )', '\n', ' ;', '  )', '\t)', ')\n', '"'];
+  const NOISE = [
+    '',
+    'const a = 1;\n',
+    'var x = "y";\n',
+    '// c\n',
+    '\n\n',
+    'require(',
+    'from ',
+    "'",
+    '"',
+    ';',
+    'import ',
+    'export ',
+  ];
+  const rand = lcg(0x5eed1234);
+  const pick = (arr: readonly string[]): string => arr[Math.floor(rand() * arr.length)];
+  const cases: string[] = [];
+  for (let i = 0; i < 12000; i++) {
+    let text = pick(NOISE);
+    const n = 1 + Math.floor(rand() * 3);
+    for (let j = 0; j < n; j++) {
+      text += pick(HEADS) + pick(MIDS) + pick(QUOTES) + pick(SPECS) + pick(QUOTES) + pick(TAILS) + pick(NOISE);
+    }
+    cases.push(text);
+  }
+  return cases;
+})();
+
+describe('findRelativeImport differential vs the original relative-import regexes', () => {
+  it('returns what the original patterns returned on every case, in both directions', () => {
+    const missed: string[] = []; // oracle found a reference the scanner does not report
+    const invented: string[] = []; // scanner reports one the oracle does not have
+    const differed: string[] = []; // both found one, but not the same specifier
+    for (const source of REL_CORPUS) {
+      const expected = findWith(originalRelativePatterns(), source);
+      const actual = findRelativeImport(source);
+      if (expected === actual) continue;
+      const bucket = expected === null ? invented : actual === null ? missed : differed;
+      if (bucket.length < 5) bucket.push(`${JSON.stringify(source)} oracle=${expected} scanner=${actual}`);
+      else bucket.push('');
+    }
+    expect({ missed: missed.length, invented: invented.length, differed: differed.length }).toEqual({
+      missed: 0,
+      invented: 0,
+      differed: 0,
+    });
+    expect([...missed, ...invented, ...differed].slice(0, 5)).toEqual([]);
+  });
+
+  it('is not vacuous: every one of the three patterns fires somewhere in the corpus', () => {
+    const perPattern = [0, 0, 0];
+    for (const source of REL_CORPUS) {
+      const patterns = originalRelativePatterns();
+      for (let i = 0; i < patterns.length; i++) {
+        if (patterns[i].test(source)) {
+          perPattern[i]++;
+          break;
+        }
+      }
+    }
+    expect(perPattern[0]).toBeGreaterThan(500);
+    expect(perPattern[1]).toBeGreaterThan(50);
+    expect(perPattern[2]).toBeGreaterThan(50);
+    expect(REL_CORPUS.filter(s => findRelativeImport(s) !== null).length).toBeGreaterThan(1000);
+  });
+
+  it('mutation control: the differential fails on a near-miss change to any of the three patterns', () => {
+    const base = originalRelativePatterns();
+    const MUTANTS: readonly [string, readonly RegExp[]][] = [
+      [
+        'import-from: no \\b before `from`',
+        [/(?:import|export)\b[^;'"]*from\s*['"](\.\.?\/[^'"]+)['"]/, base[1], base[2]],
+      ],
+      [
+        'import-from: quote kinds must match',
+        [/(?:import|export)\b[^;'"]*\bfrom\s*(['"])(\.\.?\/[^'"]+)\1/, base[1], base[2]],
+      ],
+      [
+        'import-from: clause may cross a quote or `;`',
+        [/(?:import|export)\b[\s\S]*?\bfrom\s*['"](\.\.?\/[^'"]+)['"]/, base[1], base[2]],
+      ],
+      ['side-effect: no \\b before `import`', [base[0], /import\s*['"](\.\.?\/[^'"]+)['"]/, base[2]]],
+      ['require: no whitespace after `(`', [base[0], base[1], /\brequire\(['"](\.\.?\/[^'"]+)['"]\s*\)/]],
+    ];
+    const caught = MUTANTS.map(([label, patterns]) => {
+      const disagreements = REL_CORPUS.filter(s => findWith(patterns, s) !== findRelativeImport(s)).length;
+      return `${label}: ${disagreements > 0 ? 'caught' : 'MISSED'}`;
+    });
+    expect(caught).toEqual(MUTANTS.map(([label]) => `${label}: caught`));
+  });
+});
+
+// Ceiling-first near-linear-scaling guard, as in b4m-core/utils/src/artifactParser.test.ts: a
+// fixed budget only fails after the synchronous scan returns, so a quadratic regression would
+// wedge the CI shard for minutes instead of failing. Every `small` below is chosen so the
+// pre-change implementation blows the ceiling on the FIRST measurement.
+const MIN_BASELINE_MS = 25;
+const GROWTH_RATIO_CEILING = 3;
+const SMALL_INPUT_MS_CEILING = 250;
+
+function assertLinearGrowth(build: (n: number) => string, small: number, run: (input: string) => unknown): void {
+  // Best of three: a GC pause in one window is worth more than the whole budget here, while a
+  // genuinely super-linear scan is slow on every attempt.
+  const measure = (n: number): number => {
+    const input = build(n);
+    let bestMs = Infinity;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const startedAt = performance.now();
+      run(input);
+      bestMs = Math.min(bestMs, performance.now() - startedAt);
+    }
+    return bestMs;
+  };
+  const baselineMs = measure(small);
+  expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+  const doubledMs = measure(small * 2);
+  expect(doubledMs / Math.max(baselineMs, MIN_BASELINE_MS)).toBeLessThan(GROWTH_RATIO_CEILING);
+}
+
+describe('findRelativeImport scales linearly on the shapes the regexes rescanned', () => {
+  // A keyword run with no `;` and no quote is the worst case: the greedy `[^;'"]*` ran to the end
+  // of the file from every keyword. 16000 keywords cost the original 0.79s, past the ceiling.
+  it('scans a bare import keyword run in near-linear time', () => {
+    assertLinearGrowth(n => 'import '.repeat(n), 16000, findRelativeImport);
+  });
+
+  it('scans a bare export keyword run in near-linear time', () => {
+    assertLinearGrowth(n => 'export '.repeat(n), 16000, findRelativeImport);
+  });
+
+  // Every shape here blows the ceiling on the original: 0.80s, 1.85s and 1.01s at 16000 keywords.
+  // The side-effect and require patterns get no guard of their own - a start position there can
+  // only reach the quote adjacent to it, so they measured 0.10ms and 0.45ms on the original and a
+  // growth assertion over them can never fail.
+  it('scans keyword runs that do reach a quote in near-linear time', () => {
+    assertLinearGrowth(n => 'import '.repeat(n) + '"', 16000, findRelativeImport);
+    assertLinearGrowth(n => 'import from '.repeat(n) + '"', 16000, findRelativeImport);
+    assertLinearGrowth(n => 'import ./'.repeat(n) + '"', 16000, findRelativeImport);
+  });
+});
+
+/**
+ * The side-effect-import guard's leading run. `/m` re-anchors `^` after every line terminator, so
+ * excluding the terminators from the run cannot change the predicate - which is what the oracle
+ * below pins - but it is what stops a file of bare terminators from rescanning to the end at each
+ * one. That exclusion is therefore only observable in the growth guards, and the original was
+ * quadratic on all four axes (`\n`, `\r`, `\u2028`, `\u2029`), not just the first.
+ */
+const ORIGINAL_SIDE_EFFECT_IMPORT = /^\s*import\s+['"]/m;
+
+function sideEffectGuardFires(source: string): boolean {
+  try {
+    assertPublishableDependencies(source);
+    return false;
+  } catch (e) {
+    // The guard runs before the dependency scan, so any other rejection means it did not fire.
+    return e instanceof ReactArtifactTranspileError && /Side-effect imports/.test(e.message);
+  }
+}
+
+describe('side-effect import guard leading-whitespace run', () => {
+  // Every `\s` character that is not a line terminator has to stay in the match set: `[ \t]*`
+  // would silently drop these and let the bare ESM import through into the bundle.
+  const INDENTS: readonly [string, string][] = [
+    ['space', ' '],
+    ['tab', '\t'],
+    ['form feed', '\f'],
+    ['vertical tab', '\v'],
+    ['no-break space', '\u00a0'],
+    ['byte order mark', '\ufeff'],
+    ['ideographic space', '\u3000'],
+  ];
+  for (const [label, ws] of INDENTS) {
+    it(`fires for an import indented with ${label}`, () => {
+      expect(sideEffectGuardFires(`${ws}${ws}import './side-effect';`)).toBe(true);
+      expect(() => assertPublishableDependencies(`${ws}import 'polyfill';`)).toThrow(/Side-effect imports/);
+    });
+  }
+
+  const TERMINATORS: readonly [string, string][] = [
+    ['LF', '\n'],
+    ['CR', '\r'],
+    ['CRLF', '\r\n'],
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ];
+  for (const [label, term] of TERMINATORS) {
+    it(`fires on the line after a ${label}, and does not read the ${label} as leading whitespace`, () => {
+      expect(sideEffectGuardFires(`const a = 1;${term}import 'polyfill';`)).toBe(true);
+      // Same shape with non-whitespace before the import: the run cannot bridge the terminator to
+      // reach it, and neither could `\s*`, because `^` never anchors mid-line.
+      expect(sideEffectGuardFires(`const a = 1;${term}const b = 2; import 'polyfill';`)).toBe(false);
+      expect(sideEffectGuardFires(`x${term}${term}y import 'polyfill';`)).toBe(false);
+    });
+  }
+
+  const WS_CORPUS: readonly string[] = (() => {
+    const WS_CHARS = [' ', '  ', '\t', '\f', '\v', '\u00a0', '\ufeff', '\u3000', '\u2000', '\u205f', '', ' \t'];
+    const TERMS = ['\n', '\r', '\r\n', '\u2028', '\u2029'];
+    const HEADS = ['import', 'import ', 'import\t', 'importx', 'xximport', 'export', 'export '];
+    const BODIES = ["'./a';", '"pkg";', "'react'", 'X from "react";', '{ a } from "m";', "x from './a'", ';', ''];
+    const rand = lcg(0x1eaf00d);
+    const pick = (arr: readonly string[]): string => arr[Math.floor(rand() * arr.length)];
+    const cases: string[] = [];
+    for (let i = 0; i < 4000; i++) {
+      const lines: string[] = [];
+      const n = 1 + Math.floor(rand() * 4);
+      for (let j = 0; j < n; j++) lines.push(pick(WS_CHARS) + pick(HEADS) + pick(BODIES));
+      let text = lines[0];
+      for (let j = 1; j < lines.length; j++) text += pick(TERMS) + lines[j];
+      cases.push(text);
+    }
+    return cases;
+  })();
+
+  it('agrees with the original /^\\s*import\\s+/m guard on every whitespace and terminator shape', () => {
+    const disagreements = WS_CORPUS.filter(s => sideEffectGuardFires(s) !== ORIGINAL_SIDE_EFFECT_IMPORT.test(s));
+    expect({ count: disagreements.length, examples: disagreements.slice(0, 5).map(s => JSON.stringify(s)) }).toEqual({
+      count: 0,
+      examples: [],
+    });
+  });
+
+  it('is not vacuous: the corpus fires the guard and also leaves plenty of cases unflagged', () => {
+    const fired = WS_CORPUS.filter(sideEffectGuardFires).length;
+    expect(fired).toBeGreaterThan(200);
+    expect(WS_CORPUS.length - fired).toBeGreaterThan(200);
+  });
+
+  it('mutation control: the equivalence above fails for a run that drops non-terminator whitespace', () => {
+    const narrowed = /^[ \t]*import\s+['"]/m; // the tempting fix; drops \f, \v, \u00a0 and friends
+    const disagreements = WS_CORPUS.filter(s => narrowed.test(s) !== ORIGINAL_SIDE_EFFECT_IMPORT.test(s));
+    expect(disagreements.length).toBeGreaterThan(0);
+  });
+
+  // The original guard was quadratic on each of these: `\s*` swallowed the terminators, so every
+  // line start rescanned the rest of the file. 32768 terminators cost it 0.44s (LF/CR) to 0.72s
+  // (U+2028/U+2029), past the ceiling; the current guard stays under a tenth of a millisecond.
+  for (const [label, term] of TERMINATORS) {
+    if (term === '\r\n') continue; // half as many line starts per char; the single-char axes cover it
+    it(`scales linearly on a file of bare ${label} line terminators`, () => {
+      assertLinearGrowth(n => term.repeat(n), 32768, assertPublishableDependencies);
+    });
+  }
+});
+
+/** Verbatim pre-change unwrap: the oracle for the two anchored default-export rewrites. */
+function originalUnwrapDefaultExport(transformed: string): string {
+  return transformed
+    .replace(/^(\s*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
+    .replace(/^\s*export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm, 'const __DEFAULT_EXPORT__ = $1;');
+}
+
+describe('unwrapDefaultExport differential vs the original anchored export regexes', () => {
+  const UNWRAP_TERMINATORS: readonly [string, string][] = [
+    ['LF', '\n'],
+    ['CR', '\r'],
+    ['U+2028', '\u2028'],
+    ['U+2029', '\u2029'],
+  ];
+
+  const UNWRAP_CORPUS: readonly string[] = (() => {
+    const LEAD = ['', ' ', '  ', '\t', '\f', '\v', '\u00a0', ' \t', '\ufeff'];
+    const TERMS = ['\n', '\r', '\r\n', '\u2028', '\u2029'];
+    const BODIES = [
+      'export default Counter;',
+      'export default function App() { return null; }',
+      'export  default\tCounter;',
+      'export { Counter as default };',
+      'export {Counter as default}',
+      'export { Counter as  default } ;',
+      'export { Counter as notdefault };',
+      'export { default as Counter };',
+      'export default;',
+      'exportdefault X;',
+      'const s = "export default X";',
+      'var x = 1;',
+      '};',
+      '',
+    ];
+    const rand = lcg(0x0defa17);
+    const pick = (a: readonly string[]): string => a[Math.floor(rand() * a.length)];
+    const cases: string[] = [];
+    for (let i = 0; i < 6000; i++) {
+      const n = 1 + Math.floor(rand() * 5);
+      let text = pick(LEAD) + pick(BODIES);
+      for (let j = 1; j < n; j++) text += pick(TERMS) + pick(LEAD) + pick(BODIES);
+      cases.push(text);
+    }
+    return cases;
+  })();
+
+  // The one thing the narrowed run changes: the original let `\s*` bridge line terminators, so a
+  // rewritten `export { X as default }` swallowed the whitespace above it. Dropping the run
+  // directly before each rewritten statement is what that difference is confined to; equality
+  // after this normalization means nothing else moved by a byte.
+  const normalizeUnwrapLead = (out: string): string => out.replace(/\s*(?=const __DEFAULT_EXPORT__ )/g, '');
+
+  it('rewrites the same statements, byte for byte outside the leading run', () => {
+    const diffs = UNWRAP_CORPUS.filter(
+      src => normalizeUnwrapLead(unwrapDefaultExport(src)) !== normalizeUnwrapLead(originalUnwrapDefaultExport(src))
+    );
+    expect({ count: diffs.length, examples: diffs.slice(0, 5).map(s => JSON.stringify(s)) }).toEqual({
+      count: 0,
+      examples: [],
+    });
+  });
+
+  it('is byte-identical on the `export default` form, and differs only by retained whitespace on the other', () => {
+    const byteDiffs = UNWRAP_CORPUS.filter(src => unwrapDefaultExport(src) !== originalUnwrapDefaultExport(src));
+    expect(byteDiffs.every(src => /export\s*\{/.test(src))).toBe(true);
+    // Non-vacuous: the corpus does reach the documented difference, and reaches it on both forms.
+    expect(byteDiffs.length).toBeGreaterThan(50);
+    expect(UNWRAP_CORPUS.filter(src => unwrapDefaultExport(src) !== src).length).toBeGreaterThan(1000);
+  });
+
+  it('pins the retained whitespace: the blank line above the export survives the rewrite', () => {
+    const src = 'function App() {}\n\n  export { App as default };';
+    expect(originalUnwrapDefaultExport(src)).toBe('function App() {}\nconst __DEFAULT_EXPORT__ = App;');
+    expect(unwrapDefaultExport(src)).toBe('function App() {}\n\n  const __DEFAULT_EXPORT__ = App;');
+    // Indentation already survived on the `export default` form and still does.
+    expect(unwrapDefaultExport('  export default App;')).toBe('  const __DEFAULT_EXPORT__ = App;');
+  });
+
+  it('mutation control: narrowing the run to [ \\t] disagrees with the original', () => {
+    const narrowed = (t: string): string =>
+      t
+        .replace(/^([ \t]*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
+        .replace(
+          /^([ \t]*)export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm,
+          '$1const __DEFAULT_EXPORT__ = $2;'
+        );
+    const diffs = UNWRAP_CORPUS.filter(
+      src => normalizeUnwrapLead(narrowed(src)) !== normalizeUnwrapLead(originalUnwrapDefaultExport(src))
+    );
+    expect(diffs.length).toBeGreaterThan(0);
+  });
+
+  // The original was quadratic on every terminator axis: `\s*` swallowed them, so each line start
+  // rescanned to the end of input. 32768 bare terminators cost it ~0.45s, past the ceiling.
+  for (const [label, term] of UNWRAP_TERMINATORS) {
+    it(`scales linearly on a file of bare ${label} line terminators`, () => {
+      assertLinearGrowth(n => term.repeat(n), 32768, unwrapDefaultExport);
+    });
+  }
+});
+
+describe('findSurvivingEsmImport resumes past the clause terminator, not past the quote scan', () => {
+  afterEach(() => {
+    vi.doUnmock('@client/app/utils/importStatements');
+    vi.resetModules();
+  });
+
+  // An unterminated quote on the first import line makes the quote scan cross into the next line.
+  // Resuming at that scan's end stepped over the line-initial survivor below it.
+  const CROSSING: readonly string[] = [
+    `import "\nimport Foo from 'm';`,
+    `import 'a\nimport Foo from "m";`,
+    `import '\r\nimport { useState } from 'react';`,
+  ];
+
+  it('reports the survivor on the line after an unterminated quote', async () => {
+    vi.resetModules();
+    vi.doMock('@client/app/utils/importStatements', async () => ({
+      ...(await vi.importActual<typeof import('@client/app/utils/importStatements')>(
+        '@client/app/utils/importStatements'
+      )),
+      scanImportStatements: () => [],
+    }));
+    const mod = await import('./transpileReactArtifact');
+    for (const src of CROSSING) {
+      expect(() => mod.rewriteImportsToRequire(src)).toThrow(/Could not rewrite an ESM import/);
+    }
+  });
+
+  // Local copies of the scan, differing only in where the cursor resumes. `max` is the variant this
+  // suite replaced; the assertions below are the mutation control for the resume rule.
+  const scanWithResume = (code: string, resume: 'max' | 'terminator'): string | null => {
+    const lineInitialImport = /^[^\S\n\r\u2028\u2029]*import\s/gm;
+    let m: RegExpExecArray | null;
+    while ((m = lineInitialImport.exec(code)) !== null) {
+      const importEnd = m.index + m[0].length - 1;
+      let p = importEnd;
+      while (p < code.length && code[p] !== ';' && code[p] !== "'" && code[p] !== '"') p++;
+      let r = p + 1;
+      if (p < code.length && code[p] !== ';') {
+        while (r < code.length && code[r] !== "'" && code[r] !== '"') r++;
+        let q = p;
+        while (q > importEnd && /\s/.test(code[q - 1])) q--;
+        const quoted = r > p + 1 && r < code.length;
+        if (quoted && q < p && code.slice(q - 4, q) === 'from' && q - 4 - importEnd >= 2 && /\s/.test(code[q - 5])) {
+          return code.slice(m.index, r + 1);
+        }
+      }
+      lineInitialImport.lastIndex = resume === 'max' ? Math.max(p + 1, r) : p + 1;
+    }
+    return null;
+  };
+
+  /** Every line start tried independently: the most a line-anchored scan could ever catch. */
+  const exhaustive = (code: string): string | null => {
+    const starts = [0];
+    for (let i = 0; i < code.length; i++) if (/[\n\r\u2028\u2029]/.test(code[i])) starts.push(i + 1);
+    const lead = /^[^\S\n\r\u2028\u2029]*import\s/;
+    for (const s of starts) {
+      const head = lead.exec(code.slice(s));
+      if (!head) continue;
+      const importEnd = s + head[0].length - 1;
+      let p = importEnd;
+      while (p < code.length && code[p] !== ';' && code[p] !== "'" && code[p] !== '"') p++;
+      if (p >= code.length || code[p] === ';') continue;
+      let r = p + 1;
+      while (r < code.length && code[r] !== "'" && code[r] !== '"') r++;
+      let q = p;
+      while (q > importEnd && /\s/.test(code[q - 1])) q--;
+      const quoted = r > p + 1 && r < code.length;
+      if (quoted && q < p && code.slice(q - 4, q) === 'from' && q - 4 - importEnd >= 2 && /\s/.test(code[q - 5])) {
+        return code.slice(s, r + 1);
+      }
+    }
+    return null;
+  };
+
+  it('mutation control: the old resume misses these, the new one catches them', () => {
+    for (const src of CROSSING) {
+      expect(scanWithResume(src, 'max')).toBeNull();
+      expect(scanWithResume(src, 'terminator')).not.toBeNull();
+    }
+  });
+
+  const RESUME_CORPUS: readonly string[] = (() => {
+    const PIECES = [
+      'import',
+      'import ',
+      '\nimport ',
+      '\nimport Foo from ',
+      '\nimport{Foo}from',
+      'import x from',
+      "import 'x';",
+      '\r\nimport ',
+      '\u2028import ',
+      '\u2028',
+      '\u2029',
+      '\r',
+      '\n',
+      '\r\n',
+      ' ',
+      '  ',
+      '\t',
+      '\f',
+      '\v',
+      '\u00a0',
+      'from',
+      ' from ',
+      "'",
+      '"',
+      ';',
+      '{',
+      '}',
+      'x',
+      'Foo',
+      './a',
+      'react',
+      "'react'",
+      '"m"',
+      'as',
+      'default',
+      '//c',
+    ];
+    const rand = lcg(0x5ca17e);
+    const cases: string[] = [];
+    for (let i = 0; i < 40000; i++) {
+      const k = 2 + Math.floor(rand() * 9);
+      let text = '';
+      for (let j = 0; j < k; j++) text += PIECES[Math.floor(rand() * PIECES.length)];
+      cases.push(text);
+    }
+    return cases;
+  })();
+
+  it('catches a strict superset of what the old resume caught, and misses nothing a line start could reach', () => {
+    let lost = 0;
+    let gained = 0;
+    let missedVsExhaustive = 0;
+    const examples: string[] = [];
+    for (const src of RESUME_CORPUS) {
+      const oldHit = scanWithResume(src, 'max');
+      const newHit = scanWithResume(src, 'terminator');
+      if (oldHit && !newHit) {
+        lost++;
+        if (examples.length < 5) examples.push(JSON.stringify(src));
+      }
+      if (newHit && !oldHit) gained++;
+      if (exhaustive(src) && !newHit) {
+        missedVsExhaustive++;
+        if (examples.length < 5) examples.push(JSON.stringify(src));
+      }
+    }
+    expect({ lost, missedVsExhaustive, examples }).toEqual({ lost: 0, missedVsExhaustive: 0, examples: [] });
+    expect(gained).toBeGreaterThan(0);
+  });
+
+  // Resuming earlier must not reopen the quadratic: the next start is still past this statement's
+  // first `;`/quote, so the clause scans stay disjoint.
+  it('stays near-linear on an input of unterminated import quotes', () => {
+    assertLinearGrowth(n => 'import "a\n'.repeat(n), 16384, rewriteImportsToRequire);
   });
 });

@@ -95,6 +95,7 @@ describe('QuestModel.findUnfinishedByAgentExecutionIds', () => {
 
     const [found] = await questRepository.findUnfinishedByAgentExecutionIds(['exec-1']);
 
+    expect(found.agentExecutionId).toBe('exec-1');
     expect(found.reply).toBe('partial');
     expect(found.replies).toEqual(['a']);
     expect(found.images).toEqual(['i.png']);

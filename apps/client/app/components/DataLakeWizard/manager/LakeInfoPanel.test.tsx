@@ -19,6 +19,8 @@ vi.mock('@client/app/hooks/useStartChatWithLake', () => ({
   default: () => vi.fn(),
 }));
 
+const promoteMutate = vi.fn();
+const demoteMutate = vi.fn();
 const buildMutate = vi.fn();
 const purgeMutate = vi.fn((_?: undefined, opts?: { onSuccess?: () => void }) => opts?.onSuccess?.());
 const buildPending = vi.fn(() => false);
@@ -63,6 +65,8 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
   return {
     useArchiveDataLake: mutation,
     usePermanentDeleteDataLake: mutation,
+    usePromoteDataLake: () => ({ mutate: promoteMutate, isPending: false }),
+    useDemoteDataLake: () => ({ mutate: demoteMutate, isPending: false }),
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [])),
     useRechunkDataLake: () => ({ mutate: rechunkMutate, isPending: false }),
     useLakeConvergencePlan: () => ({ data: undefined }),
@@ -72,6 +76,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // replaces the whole module, so an unlisted export is `undefined` and every render here throws.
     // Undefined data leaves the chip with no open groups, so it renders null and stays out of the way.
     useGetLakeMembershipDuplicates: () => ({ data: undefined, isLoading: false }),
+    // Same for LakeFindingsChip: it renders a neutral chip either way, so no findings just means
+    // no open-count badge.
+    useDataLakeFindings: () => ({ data: undefined, isLoading: false, error: null, isForbidden: false }),
     useGetLakeMemoryHealth: (...args: unknown[]) => useGetLakeMemoryHealth(...(args as [])),
     useBuildLakeMemory: (id: string | null) => {
       buildHookSpy(id);
@@ -129,6 +136,8 @@ beforeEach(() => {
   useUnderChunkedCount.mockReset();
   useUnderChunkedCount.mockReturnValue({ data: undefined });
   rechunkMutate.mockClear();
+  promoteMutate.mockClear();
+  demoteMutate.mockClear();
   buildMutate.mockClear();
   purgeMutate.mockClear();
   buildPending.mockReset();
@@ -436,5 +445,61 @@ describe('LakeInfoPanel - unresolvable embedding space', () => {
     });
     renderPanel({ ...baseLake, canRebuild: false });
     expect(screen.queryByTestId(CHIP)).not.toBeInTheDocument();
+  });
+});
+
+describe('LakeInfoPanel - publish/draft', () => {
+  it('offers Publish for a draft lake, and calls the promote mutation on click', async () => {
+    const user = userEvent.setup();
+    renderPanel({ ...baseLake, status: 'draft' } as ManagerLake);
+
+    expect(screen.queryByTestId('datalake-demote-btn-lake-1')).not.toBeInTheDocument();
+    const btn = screen.getByTestId('datalake-promote-btn-lake-1');
+    await user.click(btn);
+    expect(promoteMutate).toHaveBeenCalledWith('lake-1');
+  });
+
+  it('offers Move to draft for an active lake, and calls the demote mutation on click', async () => {
+    const user = userEvent.setup();
+    renderPanel({ ...baseLake, status: 'active' } as ManagerLake);
+
+    expect(screen.queryByTestId('datalake-promote-btn-lake-1')).not.toBeInTheDocument();
+    const btn = screen.getByTestId('datalake-demote-btn-lake-1');
+    await user.click(btn);
+    expect(demoteMutate).toHaveBeenCalledWith('lake-1');
+  });
+
+  // A lake written before `status` existed carries none, and retrieval's `status: 'active'`
+  // pre-filter excludes it exactly like a draft. promoteDataLake accepts it (activateIfDraft
+  // matches `$in: ['draft', null]`), so the panel has to offer the door or that lake can never
+  // be published from the UI at all.
+  it('offers Publish for a legacy lake that carries no status', async () => {
+    const user = userEvent.setup();
+    renderPanel({ ...baseLake, status: undefined } as ManagerLake);
+
+    expect(screen.queryByTestId('datalake-demote-btn-lake-1')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('datalake-promote-btn-lake-1'));
+    expect(promoteMutate).toHaveBeenCalledWith('lake-1');
+  });
+
+  it('offers neither button for a lake in a lifecycle state other than draft/active', () => {
+    renderPanel({ ...baseLake, status: 'archived' } as ManagerLake);
+
+    expect(screen.queryByTestId('datalake-promote-btn-lake-1')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-demote-btn-lake-1')).not.toBeInTheDocument();
+  });
+});
+
+describe('LakeInfoPanel - origin chip', () => {
+  it('shows the Connector-fed chip for a connector-fed lake', () => {
+    renderPanel({ ...baseLake, origin: 'connector-fed' } as ManagerLake);
+
+    expect(screen.getByTestId('datalake-origin-chip-lake-1')).toHaveTextContent('Connector-fed');
+  });
+
+  it('shows no origin chip for a curated lake', () => {
+    renderPanel({ ...baseLake, origin: 'curated' } as ManagerLake);
+
+    expect(screen.queryByTestId('datalake-origin-chip-lake-1')).not.toBeInTheDocument();
   });
 });

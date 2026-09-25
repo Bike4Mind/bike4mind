@@ -1,5 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { getModel, updateModel, deleteModel, addEntity, setValue, addRule, hydrateModel } from './latticeModelService';
+import { Types } from 'mongoose';
+import {
+  buildNewModel,
+  canReadModel,
+  getModel,
+  listModels,
+  updateModel,
+  deleteModel,
+  addEntity,
+  setValue,
+  addRule,
+  hydrateModel,
+} from './latticeModelService';
 import type { LatticeModelServiceDeps, LatticeModelUser } from './latticeModelService';
 
 /**
@@ -134,5 +146,129 @@ describe('latticeModelService write authority', () => {
     (deps.db.latticeModels.findById as ReturnType<typeof vi.fn>).mockResolvedValue(null);
     await expect(updateModel(owner, 'missing', { name: 'x' }, deps)).resolves.toBeNull();
     await expect(deleteModel(owner, 'missing', deps)).resolves.toBe(false);
+  });
+});
+
+/**
+ * The org arm of the read gate never fired: `LatticeModel.organizationId` is a String schema path
+ * while `req.user.organizationId` is an ObjectId on the hydrated user document, so the comparison
+ * was String vs ObjectId and always false. The suite above uses plain strings on both sides, which
+ * is exactly why it could not catch this - these pin the real runtime shapes.
+ */
+describe('latticeModelService org-shared read access across id types', () => {
+  const orgObjectId = new Types.ObjectId();
+  const otherOrgObjectId = new Types.ObjectId();
+
+  // What the routes actually pass: `{ id: user.id, organizationId: user.organizationId }` off a
+  // hydrated Mongoose user, so the org id is an ObjectId, not a string.
+  const colleague: LatticeModelUser = { id: 'colleague-id', organizationId: orgObjectId };
+  const outsider: LatticeModelUser = { id: 'outsider-id', organizationId: otherOrgObjectId };
+  const orgless: LatticeModelUser = { id: 'orgless-id' };
+
+  // What the collection actually stores: the String cast of that same ObjectId.
+  const model = {
+    id: 'model-1',
+    name: 'Org Model',
+    userId: 'owner-id',
+    organizationId: orgObjectId.toHexString(),
+    settings: {},
+    data: { entities: [], relationships: [] },
+    rules: { rules: [], rulesets: [] },
+    views: [],
+    scenarios: [],
+    operations: [],
+    operationIndex: -1,
+  };
+
+  let deps: LatticeModelServiceDeps;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    deps = {
+      db: {
+        latticeModels: {
+          findById: vi.fn().mockResolvedValue({ ...model }),
+          findBySessionId: vi.fn().mockResolvedValue([{ ...model }]),
+          findByProjectId: vi.fn().mockResolvedValue([{ ...model }]),
+          update: vi.fn().mockImplementation(async (u: unknown) => u),
+        },
+      },
+    } as unknown as LatticeModelServiceDeps;
+  });
+
+  it('lets a same-org non-owner read a model whose org id is stored as a string', async () => {
+    await expect(getModel(colleague, 'model-1', deps)).resolves.toMatchObject({ id: 'model-1' });
+  });
+
+  it('lists an org-shared model to a same-org non-owner on the session branch', async () => {
+    const result = await listModels(colleague, { sessionId: 'session-1' }, deps);
+    expect(result.models).toHaveLength(1);
+    expect(result.total).toBe(1);
+  });
+
+  it('lists an org-shared model to a same-org non-owner on the project branch', async () => {
+    const result = await listModels(colleague, { projectId: 'project-1' }, deps);
+    expect(result.models).toHaveLength(1);
+  });
+
+  it('still hides the model from a user in a different organization', async () => {
+    await expect(getModel(outsider, 'model-1', deps)).resolves.toBeNull();
+    await expect(listModels(outsider, { sessionId: 'session-1' }, deps)).resolves.toMatchObject({ models: [] });
+  });
+
+  it('still hides the model from a user with no organization', async () => {
+    await expect(getModel(orgless, 'model-1', deps)).resolves.toBeNull();
+  });
+
+  // Two org-less principals must not match each other through a pair of undefined ids.
+  it('does not treat two org-less users as sharing an organization', async () => {
+    (deps.db.latticeModels.findById as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...model,
+      organizationId: undefined,
+    });
+    await expect(getModel(orgless, 'model-1', deps)).resolves.toBeNull();
+  });
+
+  // Reads widening must not widen writes: this is the gate #2783 installed.
+  it('still refuses a write from the same-org non-owner it now admits for reads', async () => {
+    await expect(updateModel(colleague, 'model-1', { name: 'Hijacked' }, deps)).resolves.toBeNull();
+    expect(deps.db.latticeModels.update).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `buildNewModel` is the single scaffold behind both create paths - the HTTP route via
+ * `createModel`, and `lattice_create_model`, which inserts entities and rules in the same write
+ * and so cannot call `createModel`. These pin the fields whose absence silently un-shares a model.
+ */
+describe('buildNewModel', () => {
+  it('normalizes an ObjectId organizationId to the string the schema path stores', () => {
+    const orgId = new Types.ObjectId();
+    const built = buildNewModel({ id: 'owner-id', organizationId: orgId }, { name: 'Org Share Test' });
+    expect(built.organizationId).toBe(orgId.toHexString());
+  });
+
+  it('carries session and project scoping through', () => {
+    const built = buildNewModel(
+      { id: 'owner-id', organizationId: 'org-1' },
+      { name: 'Scoped', sessionId: 'session-1', projectId: 'project-1' }
+    );
+    expect(built).toMatchObject({ sessionId: 'session-1', projectId: 'project-1' });
+  });
+
+  it('leaves an org-less creator org-less rather than stamping an empty id', () => {
+    const built = buildNewModel({ id: 'owner-id' }, { name: 'Private' });
+    expect(built.organizationId).toBeUndefined();
+    // And the read gate must not let another org-less user in through that pair of undefineds.
+    expect(canReadModel(built as { userId: string; organizationId?: string }, { id: 'stranger' })).toBe(false);
+  });
+
+  it('builds a model its creator can read', () => {
+    const orgId = new Types.ObjectId();
+    const built = buildNewModel({ id: 'owner-id', organizationId: orgId }, { name: 'Org Share Test' });
+    expect(canReadModel(built as { userId: string; organizationId?: string }, { id: 'owner-id' })).toBe(true);
+    expect(
+      canReadModel(built as { userId: string; organizationId?: string }, { id: 'colleague-id', organizationId: orgId })
+    ).toBe(true);
   });
 });

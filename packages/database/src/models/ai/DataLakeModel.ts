@@ -29,6 +29,7 @@ import {
   normalizeEntitlementKey,
   DATA_LAKE_GROUNDING_MODES,
   DATA_LAKE_STATUSES,
+  DATA_LAKE_ORIGINS,
   DEFAULT_DATA_LAKE_GROUNDING_MODE,
 } from '@bike4mind/common';
 
@@ -113,12 +114,20 @@ const DataLakeSchema = new mongoose.Schema(
     // dedicated index - same rationale as isPublic/requiredEntitlement (tiny collection).
     auditQueryTextEnabled: { type: Boolean, default: false },
     status: { type: String, enum: [...DATA_LAKE_STATUSES], default: 'draft' },
+    origin: { type: String, enum: [...DATA_LAKE_ORIGINS], default: 'curated', required: true },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
     totalChunkedChars: { type: Number, default: 0 },
     // Lifetime embedding spend, integer micro-USD - see IDataLake.embeddingSpendMicroUsd.
     embeddingSpendMicroUsd: { type: Number, default: 0 },
     lastSyncAt: { type: Date },
+    // Lake health sweep's staleness-ordering key - see IDataLake.lastHealthCheckedAt. Default null
+    // so a never-checked lake sorts first (see the compound index below), same convention as
+    // lastPolledAt on OrgGoogleDriveConnectionModel.
+    lastHealthCheckedAt: { type: Date, default: null },
+    // Detection sweep's staleness-ordering key - see IDataLake.lastInconsistencyScanAt. Null
+    // default so a never-scanned lake sorts first, same convention as lastHealthCheckedAt above.
+    lastInconsistencyScanAt: { type: Date, default: null },
     // Teardown batch key (see IDataLake.filesDeletedAt): the exact stamp phase-1 delete wrote on
     // the lake's member files, matched by equality on restore. Set only through
     // claimFilesDeletedAt, never a plain update - a stamp written past the claim can name a batch
@@ -169,6 +178,15 @@ DataLakeSchema.index({ organizationId: 1, slug: 1 }, { unique: true });
 // and fail to build. Org-scope collisions stay app-level only: tagPrefixCollision.ts's
 // creator-OR-org scope rule is an OR, which no single Mongo unique index key can express.
 DataLakeSchema.index({ createdByUserId: 1, fileTagPrefix: 1 }, { unique: true });
+// Serves the lake health sweep's staleness-ordered scan (status: 'active', sorted oldest-checked
+// first). `_id` is a key rather than just the query's tiebreak: the scan pages by (staleness, _id),
+// and an index ending at lastHealthCheckedAt cannot satisfy that sort, so the planner would fall
+// back to a blocking top-k sort over every active lake on every page of a fleet-wide scan.
+DataLakeSchema.index({ status: 1, lastHealthCheckedAt: 1, _id: 1 });
+// Serves the detection sweep's staleness-ordered scan, and `_id` is a key here for the same reason
+// it is above: the scan pages by (staleness, _id) and an index ending at the date cannot satisfy
+// that sort.
+DataLakeSchema.index({ status: 1, lastInconsistencyScanAt: 1, _id: 1 });
 
 export const DataLakeModel =
   (mongoose.models['DataLake'] as unknown as mongoose.Model<IDataLakeDocument>) ||
@@ -325,6 +343,65 @@ const orgGrantArms = (orgGrantedLakes?: Record<string, string[]>): Record<string
 
 const LIST_PROJECTION = '-inconsistencyReport';
 const LIST_PROJECTION_FIELDS = { inconsistencyReport: 0 } as const;
+
+/** Keyset position in a staleness-ordered health-check scan: the sort key, then the `_id` tiebreak. */
+export type HealthCheckScanCursor = { lastHealthCheckedAt: Date | null; id: string };
+
+type DueForHealthCheckParams = {
+  cursor: HealthCheckScanCursor | null;
+  limit: number;
+  /** Stamp the calling run writes as it grades, so its own writes stay out of the candidate set. */
+  excludeCheckedAt: Date;
+  projection: Record<string, 0 | 1>;
+};
+
+/** Keyset position in a staleness-ordered scan: the sort key's value, then the `_id` tiebreak. */
+export type InconsistencyScanCursor = { lastInconsistencyScanAt: Date | null; id: string };
+
+type DueForInconsistencyScanParams = {
+  cursor: InconsistencyScanCursor | null;
+  limit: number;
+  /** Stamp the calling run writes as it scans, so its own writes stay out of the candidate set. */
+  excludeScannedAt: Date;
+  projection: Record<string, 0 | 1>;
+};
+
+/** Matches the { status, <stampField>, _id } index, so no page pays a blocking sort. */
+const stalenessScanSort = (stampField: string) => ({ [stampField]: 1, _id: 1 }) as const;
+
+/**
+ * Candidate filter for one page of a sweep's staleness-ordered scan over active lakes, shared by
+ * the health sweep and the detection sweep - two sweeps, two stamp fields, one predicate, because
+ * both of the subtleties below were live bugs in the first one and neither is visible from a call
+ * site.
+ *
+ * Two things a textbook keyset predicate gets wrong here, both of them because the scan's sort key
+ * is the very field the caller stamps while the scan is still in flight:
+ *
+ * 1. A lake this run already handled carries `<stampField> = excludeStampedAt`, which is newer than
+ *    any cursor built from an older page, so it re-enters the candidate set and is handled a second
+ *    time. The `$ne` drops exactly this run's own writes; it still admits null and missing, so
+ *    never-stamped lakes qualify.
+ * 2. Mongo's comparison operators are type-bracketed: `$gt: null` matches NOTHING, not every dated
+ *    document. A cursor sitting on a never-stamped lake therefore needs an explicit "leave the null
+ *    group" arm, or the scan ends the moment the nulls run out and every dated lake is skipped.
+ */
+function buildStalenessScanFilter(
+  stampField: string,
+  cursor: { stampedAt: Date | null; id: string } | null,
+  excludeStampedAt: Date
+): Record<string, unknown> {
+  const filter: Record<string, unknown> = {
+    status: 'active',
+    [stampField]: { $ne: excludeStampedAt },
+  };
+  if (!cursor) return filter;
+  filter.$or =
+    cursor.stampedAt === null
+      ? [{ [stampField]: null, _id: { $gt: cursor.id } }, { [stampField]: { $ne: null } }]
+      : [{ [stampField]: { $gt: cursor.stampedAt } }, { [stampField]: cursor.stampedAt, _id: { $gt: cursor.id } }];
+  return filter;
+}
 
 /**
  * The pure filter build behind `findAccessible` - see that method's docblock for what the arms
@@ -658,6 +735,74 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
   }
 
   /**
+   * Count-only companion to {@link findActiveByUserTagsAndEntitlements} above (#3055) - see the
+   * interface doc for the contract. `$nor: [requirementConstraint(...)]` is the complement of
+   * that helper's own `$or` (gateless OR held tag OR held entitlement): a lake matching NONE of
+   * those arms has a gate the caller does not hold, which is exactly the population this counts.
+   *
+   * Visibility is org membership OR public - deliberately narrower than `findActiveByUserTagsAndEntitlements`'s
+   * own arms (no owner bypass, no grant arm): those two arms are exactly what make a lake NOT
+   * excluded regardless of its gate, so they are subtracted here instead of counted as visible.
+   * The user-grant arm is an unconditional `_id: $nin` (a user-principal grant crosses orgs by
+   * design). The org-grant arm reuses `orgGrantArms` under `$nor`, one arm per granting org,
+   * for the same reason `findActiveByUserTagsAndEntitlements` does: flattening every org's
+   * granted ids into one list loses which org issued which grant, so a lake in org B granted by
+   * org A would wrongly exempt a caller who belongs to both but was never granted that lake by
+   * ITS org - undercounting a real exclusion.
+   *
+   * `restrictToTags`, when given, further limits the count to lakes whose `datalakeTag` is in the
+   * list - the per-turn-scoped sibling question "of exactly these lakes, how many are excluded",
+   * for a caller that named specific lakes by identity rather than asking about the whole account.
+   *
+   * The owner-bypass exemption (#3055): a lake is withheld from the count for its CREATOR
+   * only when ownership has not since moved off them - `createdByUserId` is immutable, so without
+   * `supersededOwnLakeIds` a transferred-away creator would still report a false zero for a lake
+   * they can no longer reach via the owner bypass. Mirrors `findActiveByUserTagsAndEntitlements`'s
+   * own creator arm: `$or` rather than a single `$ne`, because "exempt from the count" is now two
+   * cases (not mine at all, OR mine but superseded) that a single field comparison cannot express.
+   */
+  async countGateExcludedLakes(
+    userTags: string[],
+    entitlementKeys: string[],
+    organizationIds: string[] | undefined,
+    userId: string | undefined,
+    opts?: {
+      grantedLakeIds?: string[];
+      orgGrantedLakes?: Record<string, string[]>;
+      supersededOwnLakeIds?: string[];
+      restrictToTags?: string[];
+    }
+  ): Promise<number> {
+    const memberOrgIds = organizationIds ?? [];
+    const visibilityArms: Record<string, unknown>[] = [{ isPublic: true }];
+    if (memberOrgIds.length > 0) visibilityArms.push({ organizationId: { $in: memberOrgIds } });
+
+    const grantedLakeIds = usableObjectIds(opts?.grantedLakeIds, 'DataLakeModel.countGateExcludedLakes');
+    const orgGrantExemptionArms = orgGrantArms(opts?.orgGrantedLakes);
+    const supersededOwnLakeIds = usableObjectIds(opts?.supersededOwnLakeIds, 'DataLakeModel.countGateExcludedLakes');
+
+    const ownerExemptionArms: Record<string, unknown>[] = [{ createdByUserId: { $ne: userId } }];
+    if (supersededOwnLakeIds.length > 0) {
+      ownerExemptionArms.push({ createdByUserId: userId, _id: { $in: supersededOwnLakeIds } });
+    }
+
+    const filter: Record<string, unknown> = {
+      status: 'active',
+      $and: [
+        { $or: visibilityArms },
+        { $nor: [requirementConstraint(userTags, entitlementKeys)] },
+        ...(userId ? [{ $or: ownerExemptionArms }] : []),
+        ...(grantedLakeIds.length > 0 ? [{ _id: { $nin: grantedLakeIds } }] : []),
+        ...(orgGrantExemptionArms.length > 0 ? [{ $nor: orgGrantExemptionArms }] : []),
+        ...(opts?.restrictToTags && opts.restrictToTags.length > 0
+          ? [{ datalakeTag: { $in: opts.restrictToTags } }]
+          : []),
+      ],
+    };
+    return this.dataLakeModel.countDocuments(filter);
+  }
+
+  /**
    * Ids of every lake this user CREATED, in any status - the candidate set for resolving which of
    * them their ownership has since moved off (see `supersededOwnLakeIdsFor`). Creator provenance is
    * immutable, so this is a stable, cheap anchor; it deliberately answers nothing about ownership by
@@ -962,15 +1107,26 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return res.matchedCount === 1;
   }
 
-  async activateIfDraft(id: string): Promise<boolean> {
-    // The status guard lives in the FILTER, not in a prior read: the membership doors that call
-    // this hand over a lake document they fetched before their own status writes, so testing the
-    // caller's copy could flip a lake that is already archiving. `null` also matches a missing
-    // field - lakes written before `status` existed have none, and they are just as invisible to
-    // the catalog as a draft.
+  async activateIfDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {
+    // The status guard lives in the FILTER, not in a prior read: `promoteDataLake` hands over a
+    // lake document it fetched a round trip earlier (the grant load runs in between), so testing
+    // its copy could flip a lake that moved to 'archiving' in the gap. `null` also matches a
+    // missing field - lakes written before `status` existed have none, and they are just as
+    // invisible to the catalog as a draft.
     const res = await this.dataLakeModel.updateOne(
       { _id: id, status: { $in: ['draft', null] } },
-      { $set: { status: 'active' } }
+      { $set: { status: 'active', ...extra } }
+    );
+    return res.modifiedCount === 1;
+  }
+
+  async demoteToDraft(id: string, extra: Pick<LakeSettleFields, 'lastUpdatedByUserId'> = {}): Promise<boolean> {
+    // Mirror of activateIfDraft: guarded in the filter against the SAME caller-holds-a-stale-copy
+    // race, and admits only 'active' as a source - a lake mid-archive, mid-delete or already
+    // 'draft' is not this call's to move.
+    const res = await this.dataLakeModel.updateOne(
+      { _id: id, status: 'active' },
+      { $set: { status: 'draft', ...extra } }
     );
     return res.modifiedCount === 1;
   }
@@ -1067,6 +1223,81 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       lakeMemoryPurgedAt?: Date | null;
     } | null;
     return { exists: !!doc, purgedAt: doc?.lakeMemoryPurgedAt ?? null };
+  }
+
+  async markHealthChecked(id: string, at: Date): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $set: { lastHealthCheckedAt: at } });
+  }
+
+  async findDueForHealthCheck(params: DueForHealthCheckParams): Promise<IDataLakeDocument[]> {
+    const { cursor, limit, excludeCheckedAt, projection } = params;
+    const docs = await this.dataLakeModel
+      .find(
+        buildStalenessScanFilter(
+          'lastHealthCheckedAt',
+          cursor && { stampedAt: cursor.lastHealthCheckedAt, id: cursor.id },
+          excludeCheckedAt
+        ),
+        projection
+      )
+      .sort(stalenessScanSort('lastHealthCheckedAt'))
+      .limit(limit);
+    return docs.map(d => d.toJSON() as IDataLakeDocument);
+  }
+
+  /** Whether any candidate remains behind `cursor` - distinguishes a real remainder from a run
+   * whose last page happened to land exactly on the cap. */
+  async hasMoreDueForHealthCheck(cursor: HealthCheckScanCursor | null, excludeCheckedAt: Date): Promise<boolean> {
+    const doc = await this.dataLakeModel
+      .findOne(
+        buildStalenessScanFilter(
+          'lastHealthCheckedAt',
+          cursor && { stampedAt: cursor.lastHealthCheckedAt, id: cursor.id },
+          excludeCheckedAt
+        ),
+        { _id: 1 }
+      )
+      .sort(stalenessScanSort('lastHealthCheckedAt'));
+    return !!doc;
+  }
+
+  async markInconsistencyScanned(id: string, at: Date): Promise<void> {
+    await this.dataLakeModel.updateOne({ _id: id }, { $set: { lastInconsistencyScanAt: at } });
+  }
+
+  async findDueForInconsistencyScan(params: DueForInconsistencyScanParams): Promise<IDataLakeDocument[]> {
+    const { cursor, limit, excludeScannedAt, projection } = params;
+    const docs = await this.dataLakeModel
+      .find(
+        buildStalenessScanFilter(
+          'lastInconsistencyScanAt',
+          cursor && { stampedAt: cursor.lastInconsistencyScanAt, id: cursor.id },
+          excludeScannedAt
+        ),
+        projection
+      )
+      .sort(stalenessScanSort('lastInconsistencyScanAt'))
+      .limit(limit);
+    return docs.map(d => d.toJSON() as IDataLakeDocument);
+  }
+
+  /** Whether any candidate remains behind `cursor` - distinguishes a real remainder from a run
+   * whose last page happened to land exactly on the cap. */
+  async hasMoreDueForInconsistencyScan(
+    cursor: InconsistencyScanCursor | null,
+    excludeScannedAt: Date
+  ): Promise<boolean> {
+    const doc = await this.dataLakeModel
+      .findOne(
+        buildStalenessScanFilter(
+          'lastInconsistencyScanAt',
+          cursor && { stampedAt: cursor.lastInconsistencyScanAt, id: cursor.id },
+          excludeScannedAt
+        ),
+        { _id: 1 }
+      )
+      .sort(stalenessScanSort('lastInconsistencyScanAt'));
+    return !!doc;
   }
 }
 

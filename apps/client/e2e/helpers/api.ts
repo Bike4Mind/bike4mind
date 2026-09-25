@@ -1,6 +1,7 @@
 import { type APIRequestContext } from '@playwright/test';
 import { Resource } from 'sst';
 import crypto from 'crypto';
+import type { DataLakeOrigin } from '@bike4mind/common';
 
 interface LoginResponse {
   accessToken: string;
@@ -522,7 +523,13 @@ export async function apiUpdateDataLake(
   request: APIRequestContext,
   token: string,
   dataLakeId: string,
-  fields: { name?: string; description?: string; requiredUserTag?: string; requiredEntitlement?: string }
+  fields: {
+    name?: string;
+    description?: string;
+    requiredUserTag?: string;
+    requiredEntitlement?: string;
+    origin?: DataLakeOrigin;
+  }
 ): Promise<number> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const response = await request.put(`${baseURL}/api/data-lakes/${dataLakeId}`, {

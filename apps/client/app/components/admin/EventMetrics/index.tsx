@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Box, Typography, LinearProgress, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
+import { Box, Typography, LinearProgress, Tabs, TabList, Tab, TabPanel, Alert, Button } from '@mui/joy';
+import { Warning } from '@mui/icons-material';
 
 import { useEventMetrics } from './hooks/useEventMetrics';
 import { useEventMetricsState } from './hooks/useEventMetricsState';
@@ -19,7 +20,7 @@ const EventMetricsTab: React.FC = () => {
     eventCategoryFilter?: string;
   }>({});
 
-  const { data: metrics = [], isLoading, forceRefresh } = useEventMetrics(appliedFilters);
+  const { data: metrics = [], isLoading, isFetching, isError, error, forceRefresh } = useEventMetrics(appliedFilters);
 
   const {
     // Filter states
@@ -66,6 +67,26 @@ const EventMetricsTab: React.FC = () => {
 
   return (
     <Box sx={{ p: { xs: 1.5, sm: 3 } }}>
+      {/* Error State */}
+      {isError && (
+        <Alert
+          color="danger"
+          variant="soft"
+          startDecorator={<Warning />}
+          endDecorator={
+            <Button variant="soft" color="danger" size="sm" onClick={handleRefresh}>
+              Retry
+            </Button>
+          }
+          sx={{ mb: 2 }}
+        >
+          <Box>
+            <Typography level="title-sm">Failed to load metrics</Typography>
+            <Typography level="body-sm">{error instanceof Error ? error.message : 'Unknown error'}</Typography>
+          </Box>
+        </Alert>
+      )}
+
       {/* Loading indicator */}
       {isLoading && (
         <Box sx={{ mb: 2 }}>
@@ -94,7 +115,7 @@ const EventMetricsTab: React.FC = () => {
         onClearFilters={handleClearFilters}
         onSetDateRange={setDateRange}
         onApplyFilters={handleApplyFilters}
-        isLoading={isLoading}
+        isFetching={isFetching}
       />
 
       {/* Tabs Section */}

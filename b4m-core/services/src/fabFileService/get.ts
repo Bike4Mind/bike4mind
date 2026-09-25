@@ -80,7 +80,16 @@ export const getFabFile = async (
   return generateSignedUrl(fabFile, { db, storage });
 };
 
-export const generateSignedUrl = async (fabFile: IFabFileDocument, { db, storage }: GetFabFileAdapter) => {
+export const generateSignedUrl = async (fabFileIn: IFabFileDocument, { db, storage }: GetFabFileAdapter) => {
+  // Curator ruling metadata (who ruled, when, which lake) is `select: false` on the schema (see
+  // FabFileModel.ts), so it is normally already absent here. This strip is a second, defensive
+  // layer for a caller that explicitly opted back in upstream (the curator-supersession collapse's
+  // own reads) and then handed the same document down this path - it must never reach a response
+  // body. A shallow copy, not a mutation: this is the one function every outward-facing file read
+  // (get/list/search, byIds, the shared-lake fallback) passes a FabFile through, and some of those
+  // callers still hold and use their own reference to the same object afterward.
+  const fabFile = { ...fabFileIn, supersededInLakes: undefined };
+
   // Never hand out a URL for an image that's still held (pending scan) or was
   // quarantined (blocked) by upload moderation, before any URL work. We withhold the
   // URL but return the record (with moderationStatus/fileName/id intact) so the client can

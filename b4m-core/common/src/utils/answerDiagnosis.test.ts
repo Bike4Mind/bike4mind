@@ -110,6 +110,85 @@ describe('retrieval check', () => {
     };
     expect(detailOf(withDocs, 'retrieval')).toBe('4 passages from 2 documents reached the model.');
   });
+
+  // The shape of a real lake-memory turn under a floor that starved forced retrieval: without the
+  // attribution the panel reads "6 passages" against a floor that admitted none of them.
+  it('says forced retrieval contributed nothing when its candidate pool was empty', () => {
+    const meta: PromptMeta = {
+      retrieval: {
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['lake-memory', 'forced-retrieval'],
+        dataLakeTags: ['handbook'],
+        dataLakeTagsWithCandidates: [],
+        injected: {
+          chunks: 6,
+          chars: 1029,
+          topScore: 0.7197,
+          preRelativeFloorCandidates: 0,
+          postRelativeFloorCandidates: 0,
+          postSpreadFloorCandidates: 0,
+        },
+      },
+    };
+    expect(detailOf(meta, 'retrieval')).toBe(
+      '6 passages reached the model. None came from forced retrieval, which admitted no passage past its similarity floors. Other surfaces that ran this turn: lake memory.'
+    );
+  });
+
+  it('treats an empty spread-floor pool as an empty forced contribution even when earlier stages had candidates', () => {
+    const meta: PromptMeta = {
+      retrieval: {
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['forced-retrieval', 'lake-memory', 'knowledgeBaseSearch'],
+        dataLakeTags: [],
+        injected: {
+          chunks: 3,
+          chars: 900,
+          preRelativeFloorCandidates: 5,
+          postRelativeFloorCandidates: 2,
+          postSpreadFloorCandidates: 0,
+        },
+      },
+    };
+    expect(detailOf(meta, 'retrieval')).toContain(
+      'Other surfaces that ran this turn: lake memory and the knowledge base search tool.'
+    );
+  });
+
+  it('names a mixed total as mixed when forced retrieval may have contributed', () => {
+    const meta: PromptMeta = {
+      retrieval: {
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['forced-retrieval', 'lake-memory'],
+        dataLakeTags: [],
+        injected: { chunks: 6, chars: 1029, preRelativeFloorCandidates: 4, postRelativeFloorCandidates: 3 },
+      },
+    };
+    expect(detailOf(meta, 'retrieval')).toBe(
+      '6 passages reached the model. That total sums every surface that ran this turn (forced retrieval and lake memory), not only forced retrieval.'
+    );
+  });
+
+  it('does not throw on a stored turn that carries no surfaces', () => {
+    const legacy = { retrieval: { attempted: true, outcome: 'ok', injected: { chunks: 2, chars: 400 } } };
+    expect(detailOf(legacy as unknown as PromptMeta, 'retrieval')).toBe('2 passages reached the model.');
+  });
+
+  it('does not attribute a forced-only turn, whose pool bounds its own total', () => {
+    const meta: PromptMeta = {
+      retrieval: {
+        attempted: true,
+        outcome: 'ok',
+        surfaces: ['forced-retrieval'],
+        dataLakeTags: [],
+        injected: { chunks: 2, chars: 400, preRelativeFloorCandidates: 2, postRelativeFloorCandidates: 2 },
+      },
+    };
+    expect(detailOf(meta, 'retrieval')).toBe('2 passages reached the model.');
+  });
 });
 
 describe('corpus check', () => {

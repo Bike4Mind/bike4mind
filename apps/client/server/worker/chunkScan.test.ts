@@ -349,8 +349,9 @@ describe('buildFabFileChunkScanFilter - convergence-paused exclusion (#2120/#215
       // The regression this conditionality prevents. This sweep is the only AUTOMATIC exit a stalled
       // file has - every other recovery path needs a human to start it: the two lake-scoped ones
       // (findConvergencePausedFilesByScope, and convergence's own paused-member arm) plus the
-      // per-file POST /api/files/reprocess, which is NOT lake-scoped and does reach a file outside
-      // every lake. None of them fires on its own, which is the property that matters here.
+      // per-file POST /api/files/reprocess, whose owner arm needs no lake at all and so does reach
+      // a file outside every lake. None of them fires on its own, which is the property that
+      // matters here.
       // Excluding unconditionally would break the stall notice's user-visible promise that passages
       // are "rebuilt when convergence resumes".
       expect(matches(stalled(reason), filter())).toBe(true);

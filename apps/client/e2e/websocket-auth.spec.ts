@@ -65,15 +65,38 @@ async function apiForceLogout(request: APIRequestContext, adminToken: string, us
 }
 
 /**
+ * Mint a single-use `?ticket=` for one `$connect`. The web WS path no longer accepts a JWT
+ * in the URL, so the browser authenticates with a ticket instead (POST /api/websocket/ticket,
+ * jwtOnly). A revoked or non-JWT token cannot mint one, so a mint failure IS a connect failure -
+ * the callers below rely on that to assert revocation without reaching the handshake.
+ */
+async function mintConnectTicket(request: APIRequestContext, token: string): Promise<string> {
+  const response = await request.post(`${baseURL()}/api/websocket/ticket`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok()) throw new Error(`ticket mint failed: ${response.status()}`);
+  const { ticket } = await response.json();
+  if (!ticket) throw new Error('ticket mint returned no ticket');
+  return ticket as string;
+}
+
+/**
  * Open a socket in the page context (the browser's WebSocket is the only WS client available
  * to Playwright) and report whether the handshake completed. API Gateway rejects a failed
- * $connect at the handshake, which surfaces as an error/close rather than an open.
+ * $connect at the handshake, which surfaces as an error/close rather than an open. A token that
+ * cannot mint a connect ticket (revoked, or not a JWT) reports false without reaching the socket.
  */
-async function tryWsConnect(page: Page, wsUrl: string, token: string): Promise<boolean> {
+async function tryWsConnect(page: Page, request: APIRequestContext, wsUrl: string, token: string): Promise<boolean> {
+  let ticket: string;
+  try {
+    ticket = await mintConnectTicket(request, token);
+  } catch {
+    return false;
+  }
   return page.evaluate(
-    ([url, accessToken, timeoutMs]) =>
+    ([url, connectTicket, timeoutMs]) =>
       new Promise<boolean>(resolve => {
-        const socket = new WebSocket(`${url}?token=${encodeURIComponent(accessToken as string)}`);
+        const socket = new WebSocket(`${url}?ticket=${encodeURIComponent(connectTicket as string)}`);
         const finish = (opened: boolean) => {
           clearTimeout(timer);
           try {
@@ -88,7 +111,7 @@ async function tryWsConnect(page: Page, wsUrl: string, token: string): Promise<b
         socket.onerror = () => finish(false);
         socket.onclose = () => finish(false);
       }),
-    [wsUrl, token, TIMEOUTS.ELEMENT_STATE] as const
+    [wsUrl, ticket, TIMEOUTS.ELEMENT_STATE] as const
   );
 }
 
@@ -99,15 +122,18 @@ async function tryWsConnect(page: Page, wsUrl: string, token: string): Promise<b
  */
 async function subscribeRoundTrip(
   page: Page,
+  request: APIRequestContext,
   wsUrl: string,
   token: string,
   userId: string
 ): Promise<{ receivedUpdate: boolean; openAfterUnsubscribe: boolean }> {
+  // Connect with a ticket; the per-message subscribe/unsubscribe still authenticate with the JWT.
+  const ticket = await mintConnectTicket(request, token);
   return page.evaluate(
-    ([url, accessToken, id, timeoutMs]) =>
+    ([url, connectTicket, accessToken, id, timeoutMs]) =>
       new Promise<{ receivedUpdate: boolean; openAfterUnsubscribe: boolean }>(resolve => {
         const subscriptionId = `e2e-ws-auth-${id}`;
-        const socket = new WebSocket(`${url}?token=${encodeURIComponent(accessToken as string)}`);
+        const socket = new WebSocket(`${url}?ticket=${encodeURIComponent(connectTicket as string)}`);
         let receivedUpdate = false;
         const finish = () => {
           clearTimeout(timer);
@@ -153,7 +179,7 @@ async function subscribeRoundTrip(
         };
         socket.onerror = finish;
       }),
-    [wsUrl, token, userId, TIMEOUTS.ACTION] as const
+    [wsUrl, ticket, token, userId, TIMEOUTS.ACTION] as const
   );
 }
 
@@ -163,10 +189,11 @@ test.describe('WebSocket token enforcement', () => {
     const wsUrl = await getWebsocketUrl(request, user.accessToken);
     await page.goto('/login');
 
-    expect(await tryWsConnect(page, wsUrl, user.accessToken)).toBe(true);
+    expect(await tryWsConnect(page, request, wsUrl, user.accessToken)).toBe(true);
 
     const { receivedUpdate, openAfterUnsubscribe } = await subscribeRoundTrip(
       page,
+      request,
       wsUrl,
       user.accessToken,
       user.userId
@@ -175,7 +202,7 @@ test.describe('WebSocket token enforcement', () => {
     expect(openAfterUnsubscribe).toBe(true);
   });
 
-  test('a token revoked server-side (force-logout) is refused at connect', async ({ page, request }) => {
+  test('a token revoked server-side (force-logout) can no longer mint a connect ticket', async ({ page, request }) => {
     // Admin so the user can pull the tokenVersion kill switch on itself; see apiForceLogout.
     const user = await createWsUser(request, 'revoked', { isAdmin: true });
     const wsUrl = await getWebsocketUrl(request, user.accessToken);
@@ -183,11 +210,14 @@ test.describe('WebSocket token enforcement', () => {
 
     // Positive control first: the same token must work before the revoke, so a failure below
     // is the kill switch firing and not a broken deploy or a bad URL.
-    expect(await tryWsConnect(page, wsUrl, user.accessToken)).toBe(true);
+    expect(await tryWsConnect(page, request, wsUrl, user.accessToken)).toBe(true);
 
     await apiForceLogout(request, user.accessToken, user.userId);
 
-    expect(await tryWsConnect(page, wsUrl, user.accessToken)).toBe(false);
+    // After the bump the token can no longer mint a connect ticket, so tryWsConnect returns false
+    // before ever opening a socket. The connect-time isTokenVersionCurrent gate is unit-covered in
+    // server/websocket/__tests__/connect.test.ts; this asserts the mint-side half of revocation.
+    expect(await tryWsConnect(page, request, wsUrl, user.accessToken)).toBe(false);
   });
 
   test('a refresh token is refused at connect', async ({ page, request }) => {
@@ -195,10 +225,10 @@ test.describe('WebSocket token enforcement', () => {
     const wsUrl = await getWebsocketUrl(request, user.accessToken);
     await page.goto('/login');
 
-    // Session-store refresh tokens are the opaque `<sid>.<secret>` form, so this is refused
-    // before the `typ` gate is even reached. The gate itself is unit-tested against a
-    // same-secret JWT refresh token (verifyWsAccessToken.test.ts, connect.test.ts), which is
-    // the case this cannot construct from the browser - it has no signing secret.
-    expect(await tryWsConnect(page, wsUrl, user.refreshToken)).toBe(false);
+    // Session-store refresh tokens are the opaque `<sid>.<secret>` form, so the ticket mint
+    // (jwtOnly) refuses it before a socket is ever opened. The `typ` gate itself is unit-tested
+    // against a same-secret JWT refresh token (verifyWsAccessToken.test.ts, connect.test.ts),
+    // which is the case this cannot construct from the browser - it has no signing secret.
+    expect(await tryWsConnect(page, request, wsUrl, user.refreshToken)).toBe(false);
   });
 });

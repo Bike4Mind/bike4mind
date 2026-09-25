@@ -45,8 +45,14 @@ export const OrgSubscriptionSubscribeSchema = z
 
     /**
      * The organization that is subscribing. If not provided, a new organization will be created.
+     *
+     * `min(1)` is load-bearing, not cosmetic: the refine below only asks that the key be present,
+     * so `""` used to satisfy it, then read as falsy in the handler - skipping BOTH the owner gate
+     * and the duplicate-subscription guard, and creating a Stripe customer plus a checkout session
+     * carrying `metadata.organizationId === ''`. Reject it here instead. A well-formed-looking but
+     * non-ObjectId value still reaches the gate, which answers 400.
      */
-    organizationId: z.string().optional(),
+    organizationId: z.string().min(1).optional(),
 
     /**
      * The URL to redirect to after the subscription is created. Must be a real URL -

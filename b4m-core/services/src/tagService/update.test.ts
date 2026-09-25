@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, Mock, vi } from 'vitest';
 import { update } from './update';
 import {
+  DATA_LAKES,
   IDataLakeDocument,
   IDataLakeRepository,
   IFabFileRepository,
@@ -12,7 +13,10 @@ describe('tagService - update', () => {
   const userId = 'test-user-123';
   const existingTagId = 'existing-tag-123';
   type TagRepo = Pick<ITagRepository, 'update' | 'findByIdAndUserId' | 'findAllByUserId' | 'delete'>;
-  type FabFileRepo = Pick<IFabFileRepository, 'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats'>;
+  type FabFileRepo = Pick<
+    IFabFileRepository,
+    'updateTagsByUserId' | 'dedupeTagByUserId' | 'computeDataLakeStats' | 'claimTagRewriteByUserId'
+  >;
   type DataLakeRepo = Pick<IDataLakeRepository, 'find' | 'setStats' | 'activateIfDraft'>;
   type UserRepo = { findById: (id: string) => Promise<Pick<IUserDocument, 'isAdmin'> | null> };
   let mockTagRepo: TagRepo;
@@ -56,6 +60,7 @@ describe('tagService - update', () => {
     mockFabFileRepo = {
       updateTagsByUserId: vi.fn().mockResolvedValue(0),
       dedupeTagByUserId: vi.fn().mockResolvedValue(0),
+      claimTagRewriteByUserId: vi.fn().mockResolvedValue(null),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 0, totalSizeBytes: 0, totalChunkedChars: 0 }),
     };
     mockDataLakeRepo = {
@@ -569,57 +574,176 @@ describe('tagService - update', () => {
   });
 
   /**
-   * The audit principal on the auto-activate row a prefix-arm rename can emit. Sibling of #1964's
-   * tag-toggle door: this path built its actor with no `auditPrincipal`, so a key-driven rename
-   * that published a draft lake recorded the human instead of the key. Removing `auditPrincipal`
-   * from the actor at update.ts's recompute call turns the key case red.
+   * The bulk door's own membership log - see tagService/remove.test.ts for why the stats recompute
+   * is not a substitute. A rename moves files in BOTH directions: into a lake's prefix is a join,
+   * out of it a leave, so the direction comes out of the diff rather than being assumed.
    */
-  describe('auto-activate audit principal', () => {
-    const auditSpy = () => {
+  describe('membership change log', () => {
+    const membershipSpy = () => {
       const record = vi.fn().mockResolvedValue({});
-      return { db: { lakeConfigChangeEvents: { record } }, record };
+      return { db: { lakeMembershipChangeEvents: { record } }, record };
     };
 
-    const drivingActivation = (audit: ReturnType<typeof auditSpy>) => {
+    const fileDoc = (id: string, tagNames: string[]) => ({
+      id,
+      userId,
+      tags: tagNames.map(name => ({ name, strength: 0.5 })),
+    });
+
+    /** See tagService/remove.test.ts: each claimed pre-image is a file this request itself rewrote. */
+    const claimQueue = (files: unknown[]) => {
+      const pending = [...files];
+      return vi.fn(async () => pending.shift() ?? null);
+    };
+
+    const renaming = (audit: ReturnType<typeof membershipSpy>, oldName: string, files: unknown[], lakes = [lake()]) => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: oldName }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce(lakes);
+      mockFabFileRepo.claimTagRewriteByUserId = claimQueue(files);
+      return { db: { ...adapters.db, fabFiles: mockFabFileRepo, ...audit.db } };
+    };
+
+    it('records an addition when a rename moves a file INTO a lake prefix', async () => {
+      const audit = membershipSpy();
+      const withAudit = renaming(audit, 'archived', [fileDoc('file1', ['archived'])]);
+
+      await update(userId, { id: existingTagId, name: 'lk:invoices' }, withAudit);
+
+      expect(mockFabFileRepo.claimTagRewriteByUserId).toHaveBeenCalledWith(userId, 'archived', 'lk:invoices', []);
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'file1', action: 'added', origin: 'person' })
+      );
+    });
+
+    it('records a removal when a rename moves a file OUT of a lake prefix', async () => {
+      const audit = membershipSpy();
+      const withAudit = renaming(audit, 'lk:invoices', [fileDoc('file1', ['lk:invoices'])]);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({ fabFileId: 'file1', action: 'removed' }));
+    });
+
+    // The meta-tag arm still holds the file after the prefix tag is renamed away, so nothing moved.
+    it('records nothing for a file that also carries the lake meta-tag', async () => {
+      const audit = membershipSpy();
+      const withAudit = renaming(audit, 'lk:invoices', [fileDoc('file1', ['lk:invoices', 'datalake:lake'])]);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    it('records one event per lake for a file two candidate lakes hold by the same tag', async () => {
+      const audit = membershipSpy();
+      const lakes = [lake(), lake({ id: 'lake2', datalakeTag: 'datalake:lake2' })];
+      const withAudit = renaming(audit, 'lk:invoices', [fileDoc('file1', ['lk:invoices'])], lakes);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      expect(audit.record.mock.calls.map(([event]) => event.dataLakeId)).toEqual(['lake1', 'lake2']);
+    });
+
+    // The rewrite has already landed on the first file when the second claim is attempted, so a
+    // transition buffered until the loop returns is lost - and unreconstructable, the old name is
+    // gone off the file that did move.
+    it('records the first claim even when the next claim throws', async () => {
+      const audit = membershipSpy();
       (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
-      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake({ status: 'draft' })]);
-      // fileCount > 0 is what makes the flip eligible (see recomputeLakeStats).
-      (mockFabFileRepo.computeDataLakeStats as Mock).mockResolvedValue({
-        fileCount: 1,
-        totalSizeBytes: 10,
-        totalChunkedChars: 0,
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      let call = 0;
+      mockFabFileRepo.claimTagRewriteByUserId = vi.fn(async () => {
+        call += 1;
+        if (call === 1) return fileDoc('file1', ['lk:invoices']);
+        throw new Error('mongo down');
       });
-      (mockDataLakeRepo.activateIfDraft as Mock).mockResolvedValue(true);
-      return { db: { ...adapters.db, ...audit.db } };
-    };
 
-    it('names the API key, not the human, when a key-driven rename publishes a draft lake', async () => {
-      const audit = auditSpy();
-      const withAudit = {
-        ...drivingActivation(audit),
-        auditPrincipal: { principalKind: 'apiKey' as const, principalId: 'key-abc', onBehalfOfUserId: userId },
-      };
+      await expect(
+        update(
+          userId,
+          { id: existingTagId, name: 'archived' },
+          { db: { ...adapters.db, fabFiles: mockFabFileRepo, ...audit.db } }
+        )
+      ).rejects.toThrow('mongo down');
+
+      expect(audit.record).toHaveBeenCalledTimes(1);
+      expect(audit.record).toHaveBeenCalledWith(
+        expect.objectContaining({ dataLakeId: 'lake1', fabFileId: 'file1', action: 'removed' })
+      );
+    });
+
+    // Claimed after the bulk rewrite, the old name is gone and the moved files are unrecoverable.
+    it('claims the affected files BEFORE the bulk rename rewrite runs', async () => {
+      const audit = membershipSpy();
+      const withAudit = renaming(audit, 'lk:invoices', [fileDoc('file1', ['lk:invoices'])]);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      const claimOrder = (mockFabFileRepo.claimTagRewriteByUserId as Mock).mock.invocationCallOrder[0];
+      const renameOrder = (mockFabFileRepo.updateTagsByUserId as Mock).mock.invocationCallOrder[0];
+      expect(claimOrder).toBeLessThan(renameOrder);
+    });
+
+    it('excludes what it has already claimed, so the loop terminates on a case-only rename', async () => {
+      const audit = membershipSpy();
+      // `LK:` still matches the claim's case-insensitive filter after the rewrite, so without the
+      // exclusion the same file would be claimed forever.
+      const withAudit = renaming(audit, 'lk:invoices', [fileDoc('file1', ['lk:invoices'])]);
+
+      await update(userId, { id: existingTagId, name: 'LK:invoices' }, withAudit);
+
+      const calls = (mockFabFileRepo.claimTagRewriteByUserId as Mock).mock.calls.map(([, , , exclude]) => exclude);
+      expect(calls).toEqual([[], ['file1']]);
+    });
+
+    // The whole point of claiming rather than snapshotting: the request that loses the race wins
+    // no files, so it appends nothing and the history holds one transition per file, not two.
+    it('records nothing for the losing half of two concurrent renames', async () => {
+      const audit = membershipSpy();
+      const withAudit = renaming(audit, 'lk:invoices', []);
+
+      await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
+
+      expect(mockFabFileRepo.claimTagRewriteByUserId).toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
+    });
+
+    // A registry lake has no document, so the owner-anchored candidate query cannot reach it -
+    // but renaming a tag out of its open prefix arm is a real leave.
+    it('records a leave from a static registry lake the candidate query cannot return', async () => {
+      const audit = membershipSpy();
+      const registryTag = `${DATA_LAKES[0].fileTagPrefix}handbook`;
+      const withAudit = renaming(audit, registryTag, [fileDoc('file1', [registryTag])], []);
 
       await update(userId, { id: existingTagId, name: 'archived' }, withAudit);
 
       expect(audit.record).toHaveBeenCalledWith(
-        expect.objectContaining({
-          action: 'auto-activate',
-          principalKind: 'apiKey',
-          principalId: 'key-abc',
-          onBehalfOfUserId: userId,
-        })
+        expect.objectContaining({ dataLakeId: DATA_LAKES[0].id, fabFileId: 'file1', action: 'removed' })
       );
     });
 
-    it('still names the tag owner when no key is involved', async () => {
-      const audit = auditSpy();
+    it('is a silent no-op when no audit repository is wired', async () => {
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'lk:invoices' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+      mockFabFileRepo.claimTagRewriteByUserId = claimQueue([fileDoc('file1', ['lk:invoices'])]);
 
-      await update(userId, { id: existingTagId, name: 'archived' }, drivingActivation(audit));
+      await expect(
+        update(userId, { id: existingTagId, name: 'archived' }, { db: { ...adapters.db, fabFiles: mockFabFileRepo } })
+      ).resolves.toBeDefined();
+    });
 
-      expect(audit.record).toHaveBeenCalledWith(
-        expect.objectContaining({ action: 'auto-activate', principalKind: 'user', principalId: userId })
-      );
+    // Neither side can reach a prefix arm, so the rename cannot move anything and must not pay for
+    // the extra writes.
+    it('claims nothing when neither name matches any lake prefix', async () => {
+      const audit = membershipSpy();
+      (mockTagRepo.findByIdAndUserId as Mock).mockResolvedValueOnce(tagDoc({ name: 'foo' }));
+      (mockDataLakeRepo.find as Mock).mockResolvedValueOnce([lake()]);
+
+      await update(userId, { id: existingTagId, name: 'bar' }, { db: { ...adapters.db, ...audit.db } });
+
+      expect(mockFabFileRepo.claimTagRewriteByUserId).not.toHaveBeenCalled();
+      expect(audit.record).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,5 +1,32 @@
 import { BulkExportData } from '../../bulkNotebookExport';
 
+/**
+ * The slot shape appendStreamedChunk leaves behind for a tool-using turn: a closed thinking
+ * block spills into its own slot, and the next block reopens inside the slot that already
+ * holds the partial answer.
+ */
+export const toolLoopNotebookData = (): BulkExportData => ({
+  exportVersion: '1.0',
+  exportedAt: '2024-01-15T12:00:00Z',
+  notebooks: [
+    {
+      id: 'notebook-tool-loop',
+      name: 'Tool Loop Session',
+      firstCreated: '2024-01-10T09:00:00Z',
+      lastUpdated: '2024-01-10T09:10:00Z',
+      chatHistory: [
+        {
+          id: 'msg-tool-loop',
+          timestamp: '2024-01-10T09:00:00Z',
+          type: 'user',
+          prompt: 'look it up',
+          replies: ['<think>first reasoning</think>', 'PARTIAL <think>second reasoning</think>FINAL'],
+        },
+      ],
+    },
+  ],
+});
+
 export const mockBulkExportData: BulkExportData = {
   exportVersion: '1.0',
   exportedAt: '2024-01-15T12:00:00Z',

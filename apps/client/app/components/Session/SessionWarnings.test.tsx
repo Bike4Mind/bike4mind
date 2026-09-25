@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '../../utils/themes';
 
@@ -49,5 +49,19 @@ describe('NoModelsWarning', () => {
 
     expect(screen.getByTestId('no-models-warning-text')).toHaveTextContent("You don't have access to any AI models.");
     expect(screen.getByText(/contact your administrator/i)).toBeInTheDocument();
+  });
+
+  it('offers a retry instead of the permissions message when the model list failed to load', () => {
+    const onRetry = vi.fn();
+    render(
+      <TestWrapper>
+        <NoModelsWarning show={true} loadError onRetry={onRetry} />
+      </TestWrapper>
+    );
+
+    expect(screen.getByTestId('no-models-warning-text')).toHaveTextContent("Couldn't load AI models.");
+    expect(screen.queryByText(/contact your administrator/i)).toBeNull();
+    fireEvent.click(screen.getByTestId('no-models-retry-btn'));
+    expect(onRetry).toHaveBeenCalledTimes(1);
   });
 });

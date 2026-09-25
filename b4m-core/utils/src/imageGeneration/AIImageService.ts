@@ -13,7 +13,10 @@ export interface AIImageGenerationOptions {
   user?: string;
   model?: string;
   safety_tolerance?: number;
-  size?: '256x256' | '512x512' | '1024x1024' | '1792x1024' | '1024x1792' | null;
+  // Any provider's 'WIDTHxHEIGHT' (BFL, Gemini and gpt-image-2 sizes all flow through here),
+  // so no fixed list is retyped. OpenAI sizes are validated by isSupportedImageSize in
+  // @bike4mind/common; the other adapters parse their own.
+  size?: string | null;
   // The full API-accepted set: DALL-E's 'standard'/'hd' plus the GPT-Image tiers.
   // Narrowing this to the DALL-E pair is what let callers silently drop a GPT-Image
   // tier they had already charged the user for.
@@ -35,6 +38,13 @@ export interface AIImageGenerationOptions {
   image_prompt_strength?: number;
   webhook_url?: string | null;
   webhook_secret?: string | null;
+  /**
+   * Asserts that `imagePrompt`/`referenceImages` (when URLs, not data URLs) were freshly produced
+   * by `BaseStorage.getSignedUrl` in this same request - never set from a caller- or
+   * provider-supplied string. Only OpenAIImageService reads it, to let those URLs through the
+   * self-host storage-origin exemption in `downloadImageAsBuffer`. See that function's doc comment.
+   */
+  trustConfiguredStorageOrigin?: boolean;
 }
 
 /**
@@ -50,6 +60,11 @@ export interface AIImageGenerationOptions {
 export type ImageEditOptions = Omit<AIImageGenerationOptions, 'size'> & {
   mask?: string | null;
   size?: OpenAIImageSize;
+  /**
+   * gpt-image style-anchor images (URLs or data URLs), appended after the edit source in the
+   * order given. Only OpenAIImageService.edit reads them; BFL and Gemini ignore them.
+   */
+  referenceImages?: string[];
 };
 
 /**
