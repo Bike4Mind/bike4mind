@@ -48,6 +48,7 @@ import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import { dataLakeKeys } from '@client/app/hooks/data/dataLakeKeys';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 
 /**
  * The server's own refusal text, if it sent one. The body key is `error`, per
@@ -1462,7 +1463,7 @@ export function usePurgeDataLakeDocument(dataLakeId: string | null) {
       queryClient.invalidateQueries({ queryKey: dataLakeKeys.articlesRoot });
       queryClient.invalidateQueries({ queryKey: ['file-tags'] });
       // The document is gone globally, not just from this lake, so the Files list is stale too.
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
       if (dataLakeId) {
         // Purging an under-chunked document can move the purged lake's rebuild badge, and can
         // reach recomputeLakeStats' draft -> active flip, which writes a config-history row - same
@@ -1980,7 +1981,7 @@ export function useAddFilesToLake() {
     // after a partial failure, and the client's own non-member filter (Content.tsx) reads from
     // that same cache before the next attempt.
     onSettled: (_data, _error, { lake }) => {
-      queryClient.invalidateQueries({ queryKey: ['fabFiles'] });
+      queryClient.invalidateQueries({ queryKey: fabFileKeys.all });
       invalidateLakeFileMembershipQueries(queryClient, lake.id);
     },
   });
