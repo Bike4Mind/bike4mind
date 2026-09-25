@@ -9,6 +9,7 @@
  *   app/premium-generated/premiumNavItems.generated.ts  - nav/HUD slots
  *   app/premium-generated/premiumRouteIndexing.generated.ts - robots/sitemap policy
  *   app/premium-generated/premiumNotebookSidenav.generated.ts - notebook sidenav slot
+ *   app/premium-generated/premiumReplyAccessories.generated.ts - chat reply accessory slot
  *   pages/api/<stub>.ts (per-package)                  - Next.js API stubs
  *   server/premium-generated/<stub>.ts (per-package)   - SST Lambda handler stubs
  *   server/premium-generated/premiumLlmTools.generated.ts - LLM tool contributions
@@ -305,6 +306,52 @@ export const premiumNotebookSidenav: PremiumNotebookSidenav = dynamic(
   () => import('${spec}').then(m => ({ default: m.default })),
   { ssr: false }
 );
+`
+  );
+}
+
+// --- Generate reply accessories ---
+
+// A premium package can render a component at the foot of a completed chat reply
+// (b4mContributions.replyAccessoryExport -> a module default-exporting the component).
+// Unlike the sidenav this is a list: a reply can carry one accessory per overlay, and
+// each decides for itself whether the reply is one it has anything to add to.
+function generateReplyAccessories(packages) {
+  const outPath = join(GENERATED_DIR, 'premiumReplyAccessories.generated.ts');
+  const typeImport = `import type { PremiumReplyAccessory } from '../premiumContract';`;
+
+  const contributors = packages.filter(p => p.contributions.replyAccessoryExport);
+  contributors.forEach(p =>
+    assertModuleSpecifier(p.contributions.replyAccessoryExport, p.name, 'replyAccessoryExport')
+  );
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumReplyAccessories: PremiumReplyAccessory[] = [];\n`
+    );
+    return;
+  }
+
+  const entries = contributors
+    .map(
+      p => `  // Source: ${p.name} via b4mContributions.replyAccessoryExport
+  dynamic(() => import('${p.contributions.replyAccessoryExport}').then(m => ({ default: m.default })), {
+    ssr: false,
+  })`
+    )
+    .join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}
+import dynamic from 'next/dynamic';
+${typeImport}
+
+// Lazy-loaded (ssr: false) so an overlay's bundle is fetched once, not shipped with every chat.
+export const premiumReplyAccessories: PremiumReplyAccessory[] = [
+${entries},
+];
 `
   );
 }
@@ -821,6 +868,7 @@ generateSpaRoutes(linkedPackages);
 generateNavItems(linkedPackages);
 generateRouteIndexing(linkedPackages);
 generateNotebookSidenav(linkedPackages);
+generateReplyAccessories(linkedPackages);
 generateApiStubs(linkedPackages);
 generateServerHandlerStubs(linkedPackages);
 generateLlmTools(linkedPackages);
