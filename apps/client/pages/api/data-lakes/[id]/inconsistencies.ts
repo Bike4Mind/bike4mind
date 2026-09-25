@@ -6,12 +6,14 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   dataLakeFindingRepository,
+  cacheRepository,
   fabFileRepository,
   fabFileChunkRepository,
 } from '@bike4mind/database';
 import {
   ConflictError,
   MODEL_INCONSISTENCY_RUN_LEASE_MS,
+  TooManyRequestsError,
   isLeaseHeld,
   toScanSummary,
   type IDataLakeDocument,
@@ -70,20 +72,14 @@ const modelInconsistencyRunRateLimit = rateLimit({
  *
  * Higher than the per-caller cap so a lake with several active curators is not throttled by the
  * first one to click, while still putting a hard ceiling on one lake's hourly spend.
+ *
+ * Consumed inline in `enqueueModelDetection`, AFTER `assertLakeWriteAccess`, not as middleware:
+ * middleware runs before the access check, so a caller with no rights on the lake could drain its
+ * budget and lock out the curators who do have them.
  */
 const MODEL_DETECTION_HOURLY_CAP_PER_LAKE = 6;
 
-const modelInconsistencyLakeRateLimit = rateLimit({
-  limit: () => (isDevelopment() ? Infinity : MODEL_DETECTION_HOURLY_CAP_PER_LAKE),
-  windowMs: HOUR_MS,
-  bucket: 'data-lakes/inconsistencies/model/lake',
-  // Counted per lake, not per caller. `undefined` for a malformed id falls back to the default
-  // subject, which only ever makes the limit stricter - it can never open the bucket up.
-  subject: req => {
-    const { id } = req.query as { id?: string };
-    return typeof id === 'string' && id ? `lake:${id}` : undefined;
-  },
-});
+const modelLakeRateLimitKey = (lakeId: string) => `rate-limit:lake:${lakeId}:data-lakes/inconsistencies/model/lake`;
 
 const isModelDetectorRequest = (req: Request) => req.method === 'POST' && req.query.detector === 'model';
 
@@ -180,6 +176,7 @@ async function renderStoredReport(
   if (!lake.inconsistencyReport) return null;
   const computedAt = lake.inconsistencyComputedAt ?? null;
   const findings = await dataLakeFindingRepository.listByLake(lake.id, {
+    detector: dataLakeService.INCONSISTENCY_DETECTOR,
     status: ['open', 'resolved'],
     ...(computedAt ? { seenSince: computedAt } : {}),
     // Matches what the detector would have capped a single run's findings at, so the page bound
@@ -193,6 +190,7 @@ async function renderStoredReport(
   const countsByKind = { ...lake.inconsistencyReport.countsByKind };
   if (computedAt) {
     const dismissedSinceRun = await dataLakeFindingRepository.listByLake(lake.id, {
+      detector: dataLakeService.INCONSISTENCY_DETECTOR,
       status: 'dismissed',
       seenSince: computedAt,
       resolvedSince: computedAt,
@@ -208,16 +206,14 @@ async function renderStoredReport(
 /**
  * The model-driven contradiction pass (#3057). Kept out of the blob deliberately: `inconsistencyReport`
  * / `inconsistencyComputedAt` are the lexical pass's shape (`LakeInconsistencyReport`), and GET here
- * still reads exactly that - unchanged by this branch, matching how #3039's PR left GET and
- * `GET /health` alone when it added rows. A model finding is visible via
- * `GET /api/data-lakes/:id/findings?detector=model`, the same door the lexical rows already use.
+ * reports only the lexical pass - `renderStoredReport` scopes its rows to `INCONSISTENCY_DETECTOR`.
+ * A model finding is visible via `GET /api/data-lakes/:id/findings?detector=model`, the same door
+ * the lexical rows already use.
  *
- * MUST STAY IN SYNC WITH the findings GET's detector handling. "Unchanged" above is true only while
- * that GET reads the stored blob. A change that has it render from ROWS instead must filter on
- * `detector` - `listByLake` applies one only when supplied - or a lake that has run both passes
- * returns `narrative-contradiction` rows next to a `countsByKind` the lexical pass built with
- * `'narrative-contradiction': 0`, which is the same mismatch on the detector axis that the status
- * axis already warns about.
+ * MUST STAY IN SYNC WITH `renderStoredReport`'s detector filter. `listByLake` applies one only when
+ * supplied, so dropping it would return `narrative-contradiction` rows next to a `countsByKind` the
+ * lexical pass built with `'narrative-contradiction': 0`, and let model rows take slots under the
+ * lexical findings cap.
  *
  * QUEUED, not run inline, and that is the difference between this branch working and not. The pass
  * makes up to `ceil(MODEL_INCONSISTENCY_MEMBER_SAMPLE / MODEL_INCONSISTENCY_BATCH_SIZE)` sequential
@@ -245,13 +241,25 @@ async function enqueueModelDetection(
   }
 
   // A missing queue URL is a deployment misconfiguration, so fail here rather than reporting 202 for
-  // work nothing will ever consume. Note this does NOT save the caller's hourly attempt the way the
-  // lake-memory door's equivalent ordering does: that door consumes its per-lake cap inline, after
-  // this check, whereas the cap here is the rate-limit middleware and is already spent by the time
-  // any handler code runs. Moving it would mean duplicating the bucket accounting in a middleware,
-  // which is not worth it for a fault that is the same on every attempt and visible immediately.
+  // work nothing will ever consume. Checked before the per-lake cap below, as the lake-memory door
+  // does, so a fault that repeats on every attempt does not burn the lake's hourly budget. The
+  // per-caller cap is middleware and is already spent by now; that is accepted for a fault that is
+  // the same on every attempt and visible immediately.
   const queueUrl = getSourceQueueUrl('lakeInconsistencyModelQueue');
   if (!queueUrl) throw new Error('Lake model inconsistency queue URL not found');
+
+  if (!isDevelopment()) {
+    const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      modelLakeRateLimitKey(lake.id),
+      MODEL_DETECTION_HOURLY_CAP_PER_LAKE,
+      HOUR_MS
+    );
+    if (!success) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / 1000));
+      res.setHeader('Retry-After', retryAfterSeconds);
+      throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`);
+    }
+  }
 
   await sendToQueue(queueUrl, { dataLakeId: lake.id, userId });
 
@@ -271,10 +279,9 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use((req, res, next) => {
     if (req.method !== 'POST') return next();
     if (!isModelDetectorRequest(req)) return inconsistencyRunRateLimit(req, res, next);
-    // Caller cap first: a caller already over their own budget must not consume the lake's.
-    return modelInconsistencyRunRateLimit(req, res, err =>
-      err ? next(err) : modelInconsistencyLakeRateLimit(req, res, next)
-    );
+    // Per-caller cap only; the per-lake cap is taken in `enqueueModelDetection`, after the access
+    // check, so a caller already over their own budget still never reaches the lake's.
+    return modelInconsistencyRunRateLimit(req, res, next);
   })
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
