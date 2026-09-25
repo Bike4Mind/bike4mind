@@ -1,23 +1,21 @@
+import { filterToolArtifactMarkup } from '@bike4mind/common';
+
 /**
  * Helper function to handle tool result streaming for artifact-generating tools
  * This ensures tools like recharts that generate artifacts are streamed immediately
  * rather than waiting for recursive completion calls.
+ *
+ * Only the emitters in TOOL_ARTIFACT_EMITTERS stream, and only their pinned artifact type:
+ * streamed text is parsed into reply artifacts, so any other tool's markup would render.
  */
 export async function handleToolResultStreaming(
   toolName: string,
-  toolResult: any,
+  toolResult: unknown,
   streamCallback: (results: string[]) => Promise<void>
 ): Promise<void> {
-  const resultString = toolResult.toString();
+  const filtered = filterToolArtifactMarkup(toolName, String(toolResult));
 
-  // Check if this is an artifact-generating tool that should be streamed immediately
-  const shouldStream =
-    toolName === 'recharts' ||
-    resultString.includes('<artifact') ||
-    resultString.includes('type="application/vnd.ant.') ||
-    resultString.includes('type="application/vnd.b4m.');
-
-  if (shouldStream) {
-    await streamCallback([resultString]);
+  if (filtered !== null) {
+    await streamCallback([filtered]);
   }
 }
