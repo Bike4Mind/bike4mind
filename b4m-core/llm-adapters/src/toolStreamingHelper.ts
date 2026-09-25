@@ -43,6 +43,13 @@ export interface RecursiveArtifactGuard<Cb extends LooseCompletionCallback> {
    * before the chart it introduces), records the artifact's markup as delivered, then sends it
    * straight through - never buffered, never scrubbed. */
   emitArtifact: (results: string[], info: CompletionInfo) => Promise<void>;
+  /** Record artifact markup as already delivered WITHOUT sending it to the real callback or
+   * touching the buffer - for a tool-execution path that delivers its own artifact through a
+   * different mechanism entirely (e.g. OpenAI's Responses transport, which never streams a tool
+   * artifact live and relies on server-side extraction instead). Without this, the guard would
+   * have no way to recognize the model echoing that artifact's tag back in its own synthesis
+   * text as an echo, since it was never told the artifact was delivered. */
+  markDelivered: (markup: string) => void;
   /** Call once, only from the level that created this guard, after its own recursive
    * complete() call resolves - flushes the remaining buffered reply (with any block whose
    * identifier matches an already-delivered artifact removed) to the real callback. Always
@@ -92,9 +99,12 @@ export function createRecursiveArtifactGuard<Cb extends LooseCompletionCallback>
     deliveredMarkup += results.join('');
     await cb(results, info);
   };
+  const markDelivered = (markup: string) => {
+    deliveredMarkup += markup;
+  };
   const flush = async () => {
     const cleaned = stripDeliveredArtifactBlocks(buffer, deliveredMarkup).trim();
     await cb(cleaned ? [cleaned] : [], meta);
   };
-  return { callback, emitArtifact, flush };
+  return { callback, emitArtifact, markDelivered, flush };
 }
