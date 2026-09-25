@@ -7,8 +7,8 @@ export interface McpContentHashSources {
   /**
    * Workspace directories whose code the MCP bundle carries. Must stay in sync with the
    * `b4m-core/*` entries in copyFiles in infra/mcp.ts - a path dropped here stops moving the
-   * version. That file's comment is the fuller statement of the obligation, including which
-   * copyFiles entries it deliberately does not cover.
+   * version. That file's comment is the fuller statement of the obligation, including what may be
+   * copied without being hashed.
    */
   paths: readonly string[];
   /**
