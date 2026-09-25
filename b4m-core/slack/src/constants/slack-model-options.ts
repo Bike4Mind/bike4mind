@@ -1,4 +1,4 @@
-import { buildApiKeyTable, getAvailableModels } from '@bike4mind/llm-adapters';
+import { buildApiKeyTable, getAvailableModels, PICKER_LISTING_OPTIONS } from '@bike4mind/llm-adapters';
 import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -38,11 +38,6 @@ export const BACKEND_DISPLAY_NAMES: Readonly<Record<ModelBackend, string>> = {
 
 const BACKEND_ORDER = Object.keys(BACKEND_DISPLAY_NAMES) as ModelBackend[];
 
-// views.open must land within Slack's 3s trigger_id window, so one slow backend
-// (a blackholed Ollama or IMAGE_GEN_BASE_URL host) contributes nothing rather
-// than failing the whole modal. Same deadline as the web picker.
-const PER_BACKEND_TIMEOUT_MS = 2_000;
-
 /**
  * Fetch enabled text models from all backends and return them as Slack
  * option_groups for static_select dropdowns. Lists through the same
@@ -61,11 +56,10 @@ export async function buildSlackModelOptionsFromDashboard(): Promise<{
     };
     const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
 
-    // Deprecated models are already filtered inside getAvailableModels.
-    let allModels = await getAvailableModels(buildApiKeyTable(coreKeys), {
-      includePrivate: false,
-      perBackendTimeoutMs: PER_BACKEND_TIMEOUT_MS,
-    });
+    // Deprecated models are already filtered inside getAvailableModels. The picker's
+    // per-backend deadline also keeps views.open inside Slack's 3s trigger_id window:
+    // a slow backend contributes nothing instead of failing the modal.
+    let allModels = await getAvailableModels(buildApiKeyTable(coreKeys), PICKER_LISTING_OPTIONS);
 
     // Filter to text models only (Slack chat uses text models)
     allModels = allModels.filter(m => m.type === 'text');

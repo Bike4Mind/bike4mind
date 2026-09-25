@@ -3,8 +3,11 @@ import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 
 const getAvailableModels = vi.fn();
 const findOne = vi.fn();
+// Identity, not values: the values are pinned where the constant lives.
+const { PICKER_LISTING_OPTIONS } = vi.hoisted(() => ({ PICKER_LISTING_OPTIONS: { picker: 'shared' } }));
 
 vi.mock('@bike4mind/llm-adapters', () => ({
+  PICKER_LISTING_OPTIONS,
   buildApiKeyTable: (keys: unknown) => keys,
   getAvailableModels: (...args: unknown[]) => getAvailableModels(...args),
 }));
@@ -28,15 +31,13 @@ describe('buildSlackModelOptionsFromDashboard', () => {
     findOne.mockReset().mockResolvedValue(null);
   });
 
-  it('lists through the shared fan-out with private models withheld', async () => {
+  it('lists through the shared fan-out with the picker listing options', async () => {
     getAvailableModels.mockResolvedValue([]);
 
     await buildSlackModelOptionsFromDashboard();
 
-    expect(getAvailableModels).toHaveBeenCalledWith(
-      { openai: 'sk-openai' },
-      { includePrivate: false, perBackendTimeoutMs: 2_000 }
-    );
+    expect(getAvailableModels).toHaveBeenCalledWith({ openai: 'sk-openai' }, PICKER_LISTING_OPTIONS);
+    expect(getAvailableModels.mock.calls[0][1]).toBe(PICKER_LISTING_OPTIONS);
   });
 
   it('groups every backend the fan-out returns, labeled and in display order', async () => {

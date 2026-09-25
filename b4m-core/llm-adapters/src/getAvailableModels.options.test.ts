@@ -20,7 +20,7 @@ vi.mock('./ollamaBackend', () => ({
   },
 }));
 
-const { getAvailableModels, setModelPriceRowsProvider } = await import('./index');
+const { getAvailableModels, PICKER_LISTING_OPTIONS, setModelPriceRowsProvider } = await import('./index');
 
 // A private model from the BFL listing: the includePrivate contract is observable
 // with no network. BFL is key-gated like every other keyed backend, so these cases
@@ -47,6 +47,12 @@ afterEach(() => {
 });
 
 describe('getAvailableModels options', () => {
+  it('pins the options every model picker shares', () => {
+    // The web picker and the Slack dropdowns both pass this object; the deadline
+    // also has to fit Slack's 3s trigger_id window.
+    expect(PICKER_LISTING_OPTIONS).toEqual({ perBackendTimeoutMs: 2_000, includePrivate: false });
+  });
+
   it('includes private models by default, as the settlement and agent consumers require', async () => {
     const models = await getAvailableModels(BFL_KEYS);
     expect(models.some(m => m.id === PRIVATE_MODEL)).toBe(true);
