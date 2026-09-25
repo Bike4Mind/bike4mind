@@ -17,16 +17,7 @@
  * deltas, and a section can carry several parallel calls.
  */
 
-import { capForParse } from '@bike4mind/common';
-
 export type ParsedNativeToolCall = { id: string; name: string; index: number; arguments: string };
-
-// The per-call regex is quadratic in the marker count on a section full of
-// unterminated markers, so the cap buys cost back superlinearly. Sized from the
-// measured curve rather than from headroom: ~6ms at this cap versus ~400ms at 256k,
-// and a real native tool-call section is orders of magnitude smaller. The section is
-// model output, which a prompt injection can steer, so the constant matters.
-const NATIVE_TOOL_SECTION_PARSE_CAP = 32_000;
 
 export const SECTION_BEGIN = '<|tool_calls_section_begin|>';
 export const SECTION_END = '<|tool_calls_section_end|>';
@@ -36,6 +27,7 @@ export const SECTION_END = '<|tool_calls_section_end|>';
  */
 export const CALL_BEGIN = '<|tool_call_begin|>';
 const CALL_END = '<|tool_call_end|>';
+const ARG_BEGIN = '<|tool_call_argument_begin|>';
 
 /** Cheap gate: is there any native tool-call marker in this text at all? */
 export function hasNativeToolMarker(text: string): boolean {
@@ -48,8 +40,7 @@ export function hasNativeToolMarker(text: string): boolean {
  *
  * This is how a caller meets parseNativeToolSection's section-scoping contract. It is a
  * function rather than an inline indexOf because the wrapper is optional: scoping only on
- * SECTION_BEGIN leaves the bare shape falling through to the whole message, which is the
- * exact input the cap then truncates.
+ * SECTION_BEGIN leaves the bare shape falling through to the whole message.
  */
 export function nativeToolCallsBegin(text: string): number {
   const section = text.indexOf(SECTION_BEGIN);
@@ -67,33 +58,49 @@ function splitNativeToolId(rawId: string, fallbackIndex: number): { name: string
   return { name: withoutPrefix, index: fallbackIndex };
 }
 
+const LEADING_WHITESPACE = /\s*/y;
+
+/**
+ * Each call as [rawId, args], both trimmed. Yields the same calls as the former
+ * /CB\s*([\s\S]+?)\s*AB\s*([\s\S]*?)\s*CE/g (JS trim() strips exactly the \s set),
+ * but linearly: that regex was quadratic on a section of unterminated markers. Like the
+ * regex, an id may swallow later markers when the first call is malformed.
+ */
+function scanNativeToolCalls(section: string): Array<[string, string]> {
+  const out: Array<[string, string]> = [];
+  let from = 0;
+  for (;;) {
+    const p = section.indexOf(CALL_BEGIN, from);
+    if (p === -1) break;
+    const e = p + CALL_BEGIN.length;
+    LEADING_WHITESPACE.lastIndex = e;
+    LEADING_WHITESPACE.exec(section);
+    const s = LEADING_WHITESPACE.lastIndex;
+    // The regex's first choice: all leading whitespace consumed, then a non-empty id. Its
+    // only other match gives whitespace back so the id is blank, which yields no call,
+    // and then no ARG_BEGIN past `s` has a CALL_END after it, so no later call matches.
+    const argsAt = section.indexOf(ARG_BEGIN, s + 1);
+    if (argsAt === -1) break;
+    const end = section.indexOf(CALL_END, argsAt + ARG_BEGIN.length);
+    if (end === -1) break;
+    out.push([section.slice(e, argsAt).trim(), section.slice(argsAt + ARG_BEGIN.length, end).trim()]);
+    from = end + CALL_END.length;
+  }
+  return out;
+}
+
 /**
  * Parse the calls out of ONE section's text.
  *
- * Callers must pass text already scoped to the section - `inner.slice(sectionBegin)` at
- * minimum, not a whole message. The cap below is applied to whatever arrives, and this
- * parser's output drives execution: handed a whole message, a long monologue ahead of
- * the section pushes it past the cap and every call silently disappears, or a call
- * straddling the cut leaves a parallel set partly executed. Both callers in this repo
- * (the stream below, and the non-streaming branch in moonshot.ts) slice first.
+ * Callers pass text already scoped to the section - `inner.slice(sectionBegin)` at
+ * minimum, not a whole message - so prose ahead of the section cannot be read as a
+ * call. Both callers in this repo (the stream below, and the non-streaming branch in
+ * moonshot.ts) slice first.
  */
 export function parseNativeToolSection(section: string): ParsedNativeToolCall[] {
-  if (section.length > NATIVE_TOOL_SECTION_PARSE_CAP) {
-    // Say so: this parser's output drives execution, so a truncated parse means a call
-    // set that runs in part or not at all. Without a line here that is indistinguishable
-    // from a turn where the model asked for no tools.
-    console.warn(
-      `[KimiNativeTools] tool-call section is ${section.length} chars, over the ${NATIVE_TOOL_SECTION_PARSE_CAP} parse cap; calls past the cut will not run`
-    );
-  }
-  section = capForParse(section, NATIVE_TOOL_SECTION_PARSE_CAP);
   const calls: ParsedNativeToolCall[] = [];
-  const re = /<\|tool_call_begin\|>\s*([\s\S]+?)\s*<\|tool_call_argument_begin\|>\s*([\s\S]*?)\s*<\|tool_call_end\|>/g;
-  let match: RegExpExecArray | null;
   let fallbackIndex = 0;
-  while ((match = re.exec(section)) !== null) {
-    const rawId = match[1].trim();
-    const args = match[2].trim();
+  for (const [rawId, args] of scanNativeToolCalls(section)) {
     const { name, index } = splitNativeToolId(rawId, fallbackIndex);
     if (name) calls.push({ id: rawId, name, index, arguments: args });
     fallbackIndex++;

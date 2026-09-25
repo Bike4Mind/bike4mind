@@ -496,12 +496,10 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     expect(joined).not.toContain('<|');
   });
 
-  it('non-streaming: a native tool section still parses after a monologue past the parse cap', () => {
-    // parseNativeToolSection caps its input at 32k. This is a thinking model that inlines
-    // its monologue in `content` and emits the section after it, so handing the parser the
-    // whole message put the section past the cap and dropped every call - silently: the
-    // reasoning still rendered and the finish reason did not change. The caller slices to
-    // the section first. 32k characters is ~8k tokens of reasoning, which is ordinary.
+  it('non-streaming: a native tool section still parses after a long monologue', () => {
+    // A thinking model inlines its monologue in `content` and emits the section after it.
+    // Under the former 32k parse cap this dropped every call silently. 32k characters is
+    // ~8k tokens of reasoning, which is ordinary.
     const monologue = 'I need to think about this carefully. '.repeat(1_000);
     expect(monologue.length).toBeGreaterThan(32_000);
     const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
@@ -526,21 +524,17 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     });
   });
 
-  it('non-streaming: every call in a parallel section survives a cap-length monologue', () => {
-    // The partial failure is worse than the total one: a cut inside the section leaves the
-    // calls before it parseable and the straddling one not, so the turn runs a SUBSET of
-    // what the model asked for, with nothing to signal it.
-    // The cut has to land INSIDE the second call. A monologue long enough to push the
-    // whole section past the cap only reproduces the total loss above, which is the
-    // easier half: unfixed, the parser sees no section and returns nothing either way.
-    const CAP = 32_000; // mirrors NATIVE_TOOL_SECTION_PARSE_CAP in kimiNativeTools.ts
+  it('non-streaming: every call in a parallel section survives a long monologue', () => {
+    // Running a SUBSET of a parallel call set is worse than running none, and nothing
+    // signals it. The monologue is sized so the former 32k parse cap cut inside the second call.
+    const FORMER_CAP = 32_000;
     const call = (name: string, index: number) =>
       `<|tool_call_begin|> functions.${name}:${index} <|tool_call_argument_begin|> {"q":"${name}"} <|tool_call_end|> `;
     // `<reasoning>` is stripped before the parse; the leading space and the section-begin
-    // marker around it are not, so they count toward the cap.
+    // marker around it are not, so they counted toward the cap.
     const preamble = ' '.length + ' <|tool_calls_section_begin|> '.length;
     const monologueLength =
-      CAP - preamble - call('math_evaluate', 0).length - Math.floor(call('get_weather', 1).length / 2);
+      FORMER_CAP - preamble - call('math_evaluate', 0).length - Math.floor(call('get_weather', 1).length / 2);
     expect(monologueLength).toBeGreaterThan(0);
     const monologue = 'Reasoning at length about the request. '.repeat(1_000).slice(0, monologueLength);
     const { chunk } = backend.translateChunk(ChatModels.KIMI_K2_THINKING_BEDROCK, {
@@ -560,9 +554,11 @@ describe('MoonshotBedrockBackend native tool-call tokens', () => {
     });
     const tools = chunk.choices.filter(c => c.statusEndReason === ChoiceEndReason.TOOL_USE);
     expect(tools.map(t => t.tool?.name)).toEqual(['math_evaluate', 'get_weather']);
-    // Pin that this input really does cut mid-call: handed the whole message, as the
-    // unfixed caller did, the parser returns a SUBSET rather than nothing.
+    // Handed the whole message rather than the section, the parser still returns both.
     const whole = `<reasoning> ${monologue} <|tool_calls_section_begin|> ${call('math_evaluate', 0)}${call('get_weather', 1)}<|tool_calls_section_end|></reasoning>`;
-    expect(parseNativeToolSection(whole.replace(/<\/?reasoning>/g, '')).map(c => c.name)).toEqual(['math_evaluate']);
+    expect(parseNativeToolSection(whole.replace(/<\/?reasoning>/g, '')).map(c => c.name)).toEqual([
+      'math_evaluate',
+      'get_weather',
+    ]);
   });
 });

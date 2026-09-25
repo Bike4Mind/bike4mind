@@ -4,6 +4,8 @@ import {
   nativeToolCallsBegin,
   parseNativeToolSection,
   KimiNativeToolStream,
+  SECTION_BEGIN,
+  SECTION_END,
 } from './kimiNativeTools';
 
 // Fixtures are reasoning-stripped captures from live moonshot.kimi-k2-thinking (Bedrock).
@@ -26,14 +28,142 @@ describe('parseNativeToolSection', () => {
     expect(calls).toEqual([{ id: 'search', name: 'search', index: 0, arguments: '{"q":"x"}' }]);
   });
 
-  it('completes on an oversized section of unterminated markers (input cap, no CPU pin)', () => {
-    // The per-call regex backtracks super-linearly on a section full of open markers
-    // with no matching end. The parse-cap bounds the scanned length so this returns
-    // immediately rather than pinning the shared process. (A regression blows the
-    // vitest timeout instead of hanging CI.)
-    const adversarial = '<|tool_call_begin|> '.repeat(200_000);
-    const calls = parseNativeToolSection(adversarial);
-    expect(Array.isArray(calls)).toBe(true);
+  it('completes on a large section of unterminated markers', () => {
+    const calls = parseNativeToolSection('<|tool_call_begin|> '.repeat(200_000));
+    expect(calls).toEqual([]);
+  });
+
+  it('returns every call from a section far past the size the old parse cap allowed', () => {
+    const call = (i: number) =>
+      `<|tool_call_begin|> functions.tool_${i}:${i} <|tool_call_argument_begin|> {"i":${i}} <|tool_call_end|> `;
+    let section = '';
+    let count = 0;
+    while (section.length < 100_000) section += call(count++);
+    const calls = parseNativeToolSection(section);
+    expect(calls).toHaveLength(count);
+    expect(calls[count - 1]).toEqual({
+      id: `functions.tool_${count - 1}:${count - 1}`,
+      name: `tool_${count - 1}`,
+      index: count - 1,
+      arguments: `{"i":${count - 1}}`,
+    });
+  });
+});
+
+describe('parseNativeToolSection - linear scan', () => {
+  const CB = '<|tool_call_begin|>';
+  const AB = '<|tool_call_argument_begin|>';
+  const CE = '<|tool_call_end|>';
+
+  // The regex the scanner replaced, kept as the differential oracle.
+  const OLD_RE =
+    /<\|tool_call_begin\|>\s*([\s\S]+?)\s*<\|tool_call_argument_begin\|>\s*([\s\S]*?)\s*<\|tool_call_end\|>/g;
+  // Control: lets the id be empty, so it diverges wherever an id-less call swallows the next one.
+  const CONTROL_RE =
+    /<\|tool_call_begin\|>\s*([\s\S]*?)\s*<\|tool_call_argument_begin\|>\s*([\s\S]*?)\s*<\|tool_call_end\|>/g;
+
+  const parseWith = (re: RegExp, section: string) => {
+    const calls: Array<{ id: string; name: string; index: number; arguments: string }> = [];
+    let fallbackIndex = 0;
+    for (const m of section.matchAll(re)) {
+      const id = m[1].trim();
+      const bare = id.startsWith('functions.') ? id.slice('functions.'.length) : id;
+      const colon = bare.lastIndexOf(':');
+      const parsed = colon >= 0 ? Number.parseInt(bare.slice(colon + 1), 10) : Number.NaN;
+      const name = colon >= 0 ? bare.slice(0, colon) : bare;
+      const index = colon >= 0 && !Number.isNaN(parsed) ? parsed : fallbackIndex;
+      if (name) calls.push({ id, name, index, arguments: m[2].trim() });
+      fallbackIndex++;
+    }
+    return calls;
+  };
+
+  function mulberry32(seed: number) {
+    return () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+
+  const ALPHABET = [
+    CB,
+    AB,
+    CE,
+    SECTION_BEGIN,
+    SECTION_END,
+    ' ',
+    '\n',
+    '\t',
+    '\r',
+    '\u00a0',
+    '\ufeff',
+    'a',
+    'fn:1',
+    '{}',
+  ];
+  const corpus = (() => {
+    const rand = mulberry32(2998);
+    const cases = [
+      // An unterminated first call whose ARG_BEGIN is followed only by a stray one.
+      `${CB}  ${AB} x ${CE} tail ${AB}`,
+      `${CB}${AB} x ${AB} y ${CE}`,
+      `${CB} ${AB} {} ${CE} ${CB} fn:1 ${AB} {} ${CE}`,
+    ];
+    for (let i = 0; i < 2000; i++) {
+      const len = 1 + Math.floor(rand() * 40);
+      let s = '';
+      for (let j = 0; j < len; j++) s += ALPHABET[Math.floor(rand() * ALPHABET.length)];
+      cases.push(s);
+    }
+    return cases;
+  })();
+
+  it('yields exactly what the old regex yielded across a seeded corpus', () => {
+    let withCalls = 0;
+    for (const input of corpus) {
+      const expected = parseWith(OLD_RE, input);
+      if (expected.length > 0) withCalls++;
+      expect(parseNativeToolSection(input), JSON.stringify(input)).toEqual(expected);
+    }
+    expect(withCalls).toBeGreaterThan(100);
+  });
+
+  it('control: the corpus is sharp enough to catch a near-miss regex', () => {
+    expect(
+      corpus.some(input => JSON.stringify(parseWith(CONTROL_RE, input)) !== JSON.stringify(parseWith(OLD_RE, input)))
+    ).toBe(true);
+  });
+
+  // Mirrors the assertLinearGrowth helper in b4m-core/utils/src/artifactParser.test.ts.
+  const assertLinearGrowth = (build: (n: number) => string, small: number) => {
+    const measure = (n: number) => {
+      const input = build(n);
+      const startedAt = performance.now();
+      parseNativeToolSection(input);
+      return performance.now() - startedAt;
+    };
+    const baselineMs = measure(small);
+    expect(baselineMs).toBeLessThan(500);
+    const ratio = measure(small * 2) / Math.max(baselineMs, 5);
+    expect(ratio).toBeLessThan(3);
+  };
+
+  // Sizes start at ~64k chars; the old regex took ~400ms at 256k on the first shape.
+  it('stays linear on a run of unterminated call markers', () => {
+    assertLinearGrowth(n => `${CB} `.repeat(n), 3_200);
+    assertLinearGrowth(n => `${CB} `.repeat(n), 25_600);
+  });
+
+  it('stays linear on calls that never close', () => {
+    assertLinearGrowth(n => `${CB} x ${AB}`.repeat(n), 1_300);
+    assertLinearGrowth(n => `${CB} x ${AB}`.repeat(n), 10_400);
+  });
+
+  it('stays linear on a run of argument markers after one call marker', () => {
+    assertLinearGrowth(n => CB + AB.repeat(n), 2_300);
+    assertLinearGrowth(n => CB + AB.repeat(n), 18_400);
   });
 });
 
