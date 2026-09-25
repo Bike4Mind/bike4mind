@@ -1,4 +1,4 @@
-import { DATALAKE_TAG_PREFIX } from '../constants/dataLakes';
+import { DATALAKE_TAG_PREFIX, UNCATEGORIZED_TAG_SUFFIX } from '../constants/dataLakes';
 
 /**
  * One definition of "the same tag", shared by every path that has to decide whether two tag names
@@ -79,3 +79,56 @@ export const resolveFileTagDocs = <T extends { name: string }>(
 
   return matched;
 };
+
+/**
+ * The tag labels a citation chip shows under a source's filename.
+ *
+ * A data lake member file carries two kinds of machine-authored tag beside the user's own: the
+ * `datalake:<slug>` membership meta-tag, and prefix-arm content tags built on the lake's
+ * `fileTagPrefix` (`acme:legal`, and the `acme:uncategorized` placeholder that fallbackLakeTags
+ * stamps on any member no other prefix tag covers). Both are internal addressing, so a chip that
+ * joined raw tag names showed the reader a lake tag path - #3291.
+ *
+ * Namespaced names are reduced to their LAST segment, the same label the browse tree draws for
+ * that node (buildTagTree in Files/Browser/TagView/parseTagNamespace), so the two surfaces name a
+ * category identically. Dropped entirely:
+ *  - meta-tags, folding case as isDataLakeTagName does;
+ *  - `UNCATEGORIZED_TAG_SUFFIX`, a membership placeholder rather than a topic - the same exclusion
+ *    the database topic-ranking aggregate makes, for the same reason;
+ *  - a bare `acme:`, which names no category anyone can navigate to.
+ *
+ * Deduped on the rendered label, because two lakes can each contribute a `legal`, and the reader
+ * would see the repeat with nothing to distinguish it.
+ *
+ * No lake lookup: the prefix is not needed to reduce a namespaced name to its leaf, which keeps
+ * this pure string work on the tags the chip builder already holds.
+ */
+export const citationTagLabels = (tagNames: readonly unknown[]): string[] => {
+  const labels: string[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of tagNames) {
+    if (typeof raw !== 'string') continue;
+    if (isDataLakeTagName(raw)) continue;
+    const segment = normalizeTagName(raw).split(':').pop()?.trim() ?? '';
+    if (!segment || segment.toLowerCase() === UNCATEGORIZED_TAG_SUFFIX) continue;
+    const label = segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
+    const folded = label.toLowerCase();
+    if (seen.has(folded)) continue;
+    seen.add(folded);
+    labels.push(label);
+  }
+
+  return labels;
+};
+
+/** How many labels a chip description carries before it stops reading as a hint. */
+const CITATION_TAG_LABEL_LIMIT = 4;
+
+/**
+ * The `description` a citation chip renders for a source file, or undefined when nothing survives
+ * (an absent description must leave the line off, not draw an empty one). Trimmed AFTER the filter
+ * so a file whose only visible tags are internal does not spend its budget on dropped names.
+ */
+export const citationTagDescription = (tagNames: readonly unknown[]): string | undefined =>
+  citationTagLabels(tagNames).slice(0, CITATION_TAG_LABEL_LIMIT).join(', ') || undefined;

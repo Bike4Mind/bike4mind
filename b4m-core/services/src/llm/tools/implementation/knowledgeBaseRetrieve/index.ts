@@ -1,6 +1,6 @@
 import { ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
-import { CitableSource, IFabFileDocument } from '@bike4mind/common';
+import { citationTagDescription, CitableSource, IFabFileDocument } from '@bike4mind/common';
 import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { normalizeId } from '@bike4mind/utils/normalizeId';
 import { resolveSessionLakeAccess } from '../../base/resolveSessionLakeAccess';
@@ -573,16 +573,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
 
           const citables: CitableSource[] = retrievedFiles.map((file, index) => {
             const conflictsWith = conflict.conflictsByFileId.get(file.id);
-            const fileTags = (file.tags?.map(t => t.name) || [])
-              .filter(t => !t.startsWith('datalake:')) // Hide internal meta-tags
-              .slice(0, 4) // Keep chip description concise
-              .join(', ');
             return {
               id: file.id,
               type: 'document' as const,
               title: file.fileName,
               url: `/opti?mode=datalake&article=${file.id}`,
-              description: fileTags || undefined,
+              description: citationTagDescription(file.tags?.map(t => t.name) || []),
               timestamp: new Date().toISOString(),
               status: 'complete' as const,
               metadata: {

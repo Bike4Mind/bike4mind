@@ -3371,6 +3371,27 @@ describe('search_knowledge_base max_results clamp (#1757)', () => {
       expect(citables[0]?.metadata?.fullContext).toBe('passage body 0');
     });
 
+    it('labels the chip with readable categories, never a raw lake tag path (#3291)', async () => {
+      semanticDataLakeSearchMock.mockResolvedValue({
+        results: [
+          { ...hits(1)[0], fileTags: ['datalake:my-lake', 'my-lake:uncategorized'] },
+          { ...hits(2)[1], fileTags: ['datalake:my-lake', 'my-lake:care-planning', 'onboarding'] },
+        ],
+        totalChunksSearched: 2,
+        filesInScope: 2,
+        scan,
+      });
+      const context = semanticContext();
+      await runWith({}, context);
+      const citables = emittedCitables(context);
+      // The membership meta-tag and the uncategorized placeholder leave nothing to describe, so
+      // the chip draws no description line rather than "my-lake:uncategorized".
+      expect(citables[0]?.description).toBeUndefined();
+      expect(citables[1]?.description).toBe('Care planning, Onboarding');
+      // The raw names still ride in metadata, which is attribution rather than display.
+      expect(citables[0]?.metadata?.tags).toContain('datalake:my-lake');
+    });
+
     it('anchors the file at its BEST chunk when several chunks of one file match (#3038)', async () => {
       // `ranked` is score-descending and citables dedup per file, so the surviving anchor must be
       // the top hit. Asserting the id alone would pass on either chunk if the dedup ever kept the
