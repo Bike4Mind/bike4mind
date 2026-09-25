@@ -10,6 +10,8 @@ import {
 const FROM = new Date('2026-06-01T00:00:00Z');
 const TO = new Date('2026-07-01T00:00:00Z');
 const NOW = new Date('2026-08-01T00:00:00Z');
+/** Default birth for a seeded member: before `FROM`, so it reads as a file that was already there. */
+const BORN_LONG_AGO = new Date('2026-01-01T00:00:00Z');
 
 const lake = (over: Partial<IDataLakeDocument> = {}) =>
   ({
@@ -43,6 +45,8 @@ const adapters = (
   events: ILakeMembershipChangeEventDocument[],
   over: {
     memberIds?: string[];
+    /** File birth per member id; anything unlisted was born long before the window. */
+    memberBornAt?: Record<string, Date>;
     oldestEventAt?: Date;
     findByIds?: ReturnType<typeof vi.fn>;
     limit?: number;
@@ -59,17 +63,19 @@ const adapters = (
           ? newestFirst(events).at(-1)!.createdAt
           : undefined
     );
-  const findLiveIdsByDataLakeTag = vi.fn().mockResolvedValue(over.memberIds ?? []);
+  const findLiveMembersByDataLakeTag = vi
+    .fn()
+    .mockResolvedValue((over.memberIds ?? []).map(id => ({ id, createdAt: over.memberBornAt?.[id] ?? BORN_LONG_AGO })));
   const findByIds = over.findByIds ?? vi.fn().mockResolvedValue([]);
   return {
     listByLakeSince,
     oldestEventAt,
-    findLiveIdsByDataLakeTag,
+    findLiveMembersByDataLakeTag,
     findByIds,
     adapters: {
       db: {
         lakeMembershipChangeEvents: { listByLakeSince, oldestEventAt },
-        fabFiles: { findLiveIdsByDataLakeTag } as never,
+        fabFiles: { findLiveMembersByDataLakeTag } as never,
         users: { findByIds } as never,
       },
       from: FROM,
@@ -166,6 +172,75 @@ describe('diffLakeMembership', () => {
     });
   });
 
+  describe('joins the log never saw', () => {
+    // The create doors (generate-presigned-urls-batch, fabFileService/create, the Slack lake
+    // ingest) tag a file into a lake without recording an `added` event, so the file's own birth is
+    // the only evidence of the join. Without it every upload inside the window reads as a file that
+    // sat through it, and the count is served as measured.
+    it('does not count a file uploaded INSIDE the window as having sat through it', async () => {
+      const { adapters: a } = adapters([], {
+        memberIds: ['steady', 'uploaded'],
+        memberBornAt: { uploaded: new Date('2026-06-10T00:00:00Z') },
+        oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+      });
+
+      const view = await diffLakeMembership(lake(), a);
+
+      expect(view.unchangedCount).toBe(1);
+      expect(view.addedWithoutEventCount).toBe(1);
+      expect(view.added).toEqual([]);
+    });
+
+    it('does not count a file uploaded AFTER the window as a member at `to`', async () => {
+      const { adapters: a } = adapters([], {
+        memberIds: ['steady', 'later'],
+        memberBornAt: { later: new Date('2026-07-15T00:00:00Z') },
+        oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+      });
+
+      const view = await diffLakeMembership(lake(), a);
+
+      expect(view.unchangedCount).toBe(1);
+      expect(view.addedWithoutEventCount).toBe(0);
+    });
+
+    it('reports the eventless joins even when `unchangedCount` cannot be', async () => {
+      const { adapters: a } = adapters([], {
+        memberIds: ['uploaded'],
+        memberBornAt: { uploaded: new Date('2026-06-10T00:00:00Z') },
+        oldestEventAt: undefined,
+      });
+
+      const view = await diffLakeMembership(lake(), a);
+
+      expect(view.unchangedCount).toBeUndefined();
+      expect(view.unchangedUnknownReason).toBe('window-predates-log');
+      expect(view.addedWithoutEventCount).toBe(1);
+    });
+
+    it('calls an upload-remove-readd inside the window an `added`, not an unchanged', async () => {
+      // The upload is unlogged, so the window opens on a `removed` - which alone reads as a file
+      // that was a member at `from`, making the pair look like churn back to where it started.
+      const { adapters: a } = adapters(
+        [
+          event({ fabFileId: 'churned', action: 'removed', createdAt: new Date('2026-06-20T00:00:00Z') }),
+          event({ fabFileId: 'churned', action: 'added', createdAt: new Date('2026-06-25T00:00:00Z') }),
+        ],
+        {
+          memberIds: ['churned'],
+          memberBornAt: { churned: new Date('2026-06-10T00:00:00Z') },
+          oldestEventAt: new Date('2026-05-01T00:00:00Z'),
+        }
+      );
+
+      const view = await diffLakeMembership(lake(), a);
+
+      expect(view.added.map(e => e.fabFileId)).toEqual(['churned']);
+      expect(view.removed).toEqual([]);
+      expect(view.unchangedCount).toBe(0);
+    });
+  });
+
   describe('tombstones are not members', () => {
     // A soft delete leaves the lake tags in place, so a tombstone still matches the membership
     // filter; only the live-only read keeps it out of the sat-through count.
@@ -183,14 +258,14 @@ describe('diffLakeMembership', () => {
     });
 
     it('reads LIVE members only, so a tombstone never reaches the rewind', async () => {
-      const { adapters: a, findLiveIdsByDataLakeTag } = adapters([], {
+      const { adapters: a, findLiveMembersByDataLakeTag } = adapters([], {
         memberIds: [],
         oldestEventAt: new Date('2026-05-01T00:00:00Z'),
       });
 
       await diffLakeMembership(lake(), a);
 
-      expect(findLiveIdsByDataLakeTag).toHaveBeenCalledTimes(1);
+      expect(findLiveMembersByDataLakeTag).toHaveBeenCalledTimes(1);
     });
 
     it('never counts a file that left inside the window as having sat through it', async () => {
@@ -225,7 +300,9 @@ describe('diffLakeMembership', () => {
             listByLakeSince,
             oldestEventAt: vi.fn().mockResolvedValue(new Date('2026-05-01T00:00:00Z')),
           },
-          fabFiles: { findLiveIdsByDataLakeTag: vi.fn().mockResolvedValue(['tie']) } as never,
+          fabFiles: {
+            findLiveMembersByDataLakeTag: vi.fn().mockResolvedValue([{ id: 'tie', createdAt: BORN_LONG_AGO }]),
+          } as never,
           users: { findByIds: vi.fn().mockResolvedValue([]) } as never,
         },
         from: FROM,
@@ -411,14 +488,14 @@ describe('diffLakeMembership', () => {
     });
 
     it('resolves membership against the lake scope, prefix arm included', async () => {
-      const { adapters: a, findLiveIdsByDataLakeTag } = adapters([], {
+      const { adapters: a, findLiveMembersByDataLakeTag } = adapters([], {
         memberIds: [],
         oldestEventAt: new Date('2026-05-01T00:00:00Z'),
       });
 
       await diffLakeMembership(lake(), a);
 
-      expect(findLiveIdsByDataLakeTag).toHaveBeenCalledWith({
+      expect(findLiveMembersByDataLakeTag).toHaveBeenCalledWith({
         kind: 'owned',
         datalakeTag: 'datalake:ops',
         fileTagPrefix: 'ops/',

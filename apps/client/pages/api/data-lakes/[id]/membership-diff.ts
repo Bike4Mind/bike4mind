@@ -1,5 +1,4 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { DATA_LAKE_READ_SCOPES } from '@server/dataLakes/dataLakeScopes';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { dataLakeService } from '@bike4mind/services';
 import {
@@ -46,15 +45,17 @@ const parseInstant = (raw: string | undefined, field: string): Date | undefined 
  * the membership change log, and its first consumer.
  *
  * Two gates, in the same order and for the same reasons as the config-history route next to it:
- * `assertLakeAccess` for existence + read access (denying not-found-style), then
- * `resolveCanManageLake`, since a lake's contents over time sit at the altitude of the contents
- * themselves.
+ * `assertLakeAccess` for existence + read access (denying not-found-style), then MANAGE, since a
+ * lake's contents over time sit at the altitude of the contents themselves. The manage rung is not
+ * identical: a fallback (registry) lake gates on `ctx.isAdmin` here, which config-history does not
+ * do - see the branch below.
  *
- * Internal only - no API-key contract. A public endpoint here would have to commit to the
- * `unchangedCount` absence rule as a wire guarantee, and that is worth settling against a real
- * consumer first.
+ * `auth: 'jwtOnly'` keeps this internal for real: without it `baseApi` installs the api-key chain
+ * and any key holding a data-lake read scope reaches a route with no published contract. A public
+ * endpoint here would have to commit to the `unchangedCount` absence rule as a wire guarantee, and
+ * that is worth settling against a real consumer first.
  */
-const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
+const handler = baseApi({ auth: 'jwtOnly' })
   .use(requireFeatureEnabled('EnableDataLakes'))
   .get(
     async (
@@ -105,8 +106,8 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
         from: fromAt,
         to: toAt,
         // Parsed permissively: the service clamps into [1, MAX], so a garbage ?limit= serves a page
-        // instead of a 400. `limit ?` not `limit == null ?` - a bare `?limit=` is '' and Number('')
-        // is 0, which the clamp floors to 1.
+        // instead of a 400. `limit ?` not `limit == null ?` - a bare `?limit=` arrives as '' and
+        // `Number('')` is 0, which the clamp would floor to a one-row page.
         limit: limit ? Number(limit) : undefined,
       });
 

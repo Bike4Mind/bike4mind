@@ -63,6 +63,17 @@ export interface LakeMembershipDiffView {
    */
   unchangedCount?: number;
   unchangedUnknownReason?: LakeMembershipDiffUnknownReason;
+  /**
+   * Members at `to` that joined inside the window with no event to show for it: the file-create
+   * doors (`generate-presigned-urls-batch`, `fabFileService/create`, the Slack lake ingest) tag a
+   * file into a lake without recording one, so the file's own creation time is the only evidence.
+   *
+   * They are in neither `added` (no event to attribute) nor `unchangedCount` (they did not sit
+   * through), so a non-zero value means `added` is a FLOOR on the window's intake. Reported even
+   * when `unchangedCount` is absent, since it rests on the live read rather than on log coverage;
+   * under `truncated` it may also include a join whose event fell off the tail.
+   */
+  addedWithoutEventCount: number;
   /** The lake's oldest retained event, absent when it has none. Lets a consumer caption the diff
    * with how far back the log can be believed. */
   logStartsAt?: Date;

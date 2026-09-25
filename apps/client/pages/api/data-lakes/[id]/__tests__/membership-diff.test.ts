@@ -6,11 +6,13 @@ const h = vi.hoisted(() => ({
   diffLakeMembership: vi.fn(),
   isFallbackLake: vi.fn(),
   toAccessContext: vi.fn(async () => ({ userId: 'u1', isAdmin: false, administeredOrgIds: [] })),
+  baseApiOptions: [] as unknown[],
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as sibling endpoint tests).
 vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => {
+  baseApi: (options: unknown) => {
+    h.baseApiOptions.push(options);
     const routes: Record<string, (req: unknown, res: unknown) => unknown> = {};
     const chain = Object.assign((req: { method?: string }, res: unknown) => routes[req.method ?? 'GET']?.(req, res), {
       use: () => chain,
@@ -53,6 +55,7 @@ const view = {
   to: new Date('2026-07-01T00:00:00.000Z'),
   added: [],
   removed: [],
+  addedWithoutEventCount: 0,
   truncated: false,
   generatedAt: new Date(),
   userNames: {},
@@ -212,6 +215,12 @@ describe('GET /api/data-lakes/[id]/membership-diff', () => {
       await call(req({ id: 'help', from: FROM }), res);
 
       expect(json).toHaveBeenCalledWith({ data: view });
+    });
+
+    it('installs no api-key chain, so the route stays reachable by session only', async () => {
+      // Without `auth: 'jwtOnly'` baseApi admits any key holding a data-lake read scope, which
+      // would make this a public endpoint with no published contract.
+      expect(h.baseApiOptions).toContainEqual({ auth: 'jwtOnly' });
     });
 
     it('propagates the not-found-style access denial so a lake the caller cannot see is not disclosed', async () => {

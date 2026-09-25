@@ -42,7 +42,7 @@ const userDisplayName = (u: { name?: string; username?: string } | undefined): s
 export interface DiffLakeMembershipAdapters {
   db: {
     lakeMembershipChangeEvents: Pick<ILakeMembershipChangeEventRepository, 'listByLakeSince' | 'oldestEventAt'>;
-    fabFiles: Pick<IFabFileRepository, 'findLiveIdsByDataLakeTag'>;
+    fabFiles: Pick<IFabFileRepository, 'findLiveMembersByDataLakeTag'>;
     users: Pick<IUserRepository, 'findByIds'>;
   };
   /** Exclusive lower bound of the window. */
@@ -88,6 +88,11 @@ const toEntry = (w: FileWindow): LakeMembershipDiffEntry => ({
  *    counted as a member that sat through the window.
  * The last one is why `unchangedCount` is conditional: it is a claim about files the log says
  * nothing about, and that claim only holds while the log covers the whole window.
+ *
+ * The log does not cover every join - the file-create doors record none - so each live member's own
+ * `createdAt` is the fourth fact: it keeps a file uploaded into the lake during or after the window
+ * out of the sat-through count, and surfaces it as `addedWithoutEventCount` instead of `added`,
+ * there being no event to attribute it to.
  */
 export async function diffLakeMembership(
   lake: Pick<IDataLakeDocument, 'id' | 'datalakeTag' | 'fileTagPrefix' | 'createdByUserId'>,
@@ -103,12 +108,12 @@ export async function diffLakeMembership(
   const pageSize = clampLakeMembershipDiffLimit(limit);
 
   const scope = resolveLakeMembershipScope(lake);
-  const [page, logStartsAt, memberIds] = await Promise.all([
+  const [page, logStartsAt, liveMembers] = await Promise.all([
     // One row MORE than the page, purely as a truncation probe - the same device the config
     // history uses, and here it also decides whether `unchangedCount` may be reported at all.
     db.lakeMembershipChangeEvents.listByLakeSince(lake.id, from, { limit: pageSize + 1 }),
     db.lakeMembershipChangeEvents.oldestEventAt(lake.id),
-    db.fabFiles.findLiveIdsByDataLakeTag(scope),
+    db.fabFiles.findLiveMembersByDataLakeTag(scope),
   ]);
   const truncated = page.length > pageSize;
   // Truncation drops the OLDEST rows, so the surviving newest ones still rewind today's membership
@@ -121,7 +126,8 @@ export async function diffLakeMembership(
   // Membership at the window's end: today's set, rewound through everything recorded since. The
   // EARLIEST event after `to` is what names the state at `to` - an `added` means the file was
   // absent then, a `removed` means it was present.
-  const membersAtTo = new Set(memberIds);
+  const bornAt = new Map(liveMembers.map(m => [m.id, m.createdAt.getTime()]));
+  const membersAtTo = new Set(bornAt.keys());
   const rewound = new Set<string>();
   for (const e of events) {
     if (e.createdAt.getTime() <= windowEnd.getTime()) continue;
@@ -129,6 +135,11 @@ export async function diffLakeMembership(
     rewound.add(e.fabFileId);
     if (e.action === 'added') membersAtTo.delete(e.fabFileId);
     else membersAtTo.add(e.fabFileId);
+  }
+  // The rewind can only undo joins the log recorded, so a file uploaded after the window ended
+  // survives it as a member at `to`. Its birth settles that: it did not exist yet.
+  for (const [fileId, born] of bornAt) {
+    if (born > windowEnd.getTime()) membersAtTo.delete(fileId);
   }
 
   const windows = new Map<string, FileWindow>();
@@ -142,8 +153,10 @@ export async function diffLakeMembership(
       continue;
     }
     windows.set(e.fabFileId, {
-      // The first move in the window reveals the state before it.
-      memberAtFrom: e.action === 'removed',
+      // The first move in the window reveals the state before it - unless the file was not born
+      // yet. Reachable because the create doors log nothing: an upload, remove and re-add inside
+      // the window opens on a `removed`, which alone reads as churn back to where it started.
+      memberAtFrom: e.action === 'removed' && (bornAt.get(e.fabFileId) ?? 0) <= from.getTime(),
       memberAtTo: e.action === 'added',
       last: e,
       flips: 1,
@@ -169,14 +182,21 @@ export async function diffLakeMembership(
     : !logStartsAt || logStartsAt.getTime() > from.getTime()
       ? 'window-predates-log'
       : undefined;
-  let unchangedCount: number | undefined;
-  if (!unchangedUnknownReason) {
-    unchangedCount = 0;
-    for (const fileId of membersAtTo) {
-      const w = windows.get(fileId);
-      if (!w || (w.memberAtFrom && w.memberAtTo)) unchangedCount += 1;
+  // Joins the log never saw: counted from the live read alone, so they are reported even when
+  // `unchangedCount` is not.
+  let addedWithoutEventCount = 0;
+  let satThrough = 0;
+  for (const fileId of membersAtTo) {
+    const w = windows.get(fileId);
+    if (w) {
+      if (w.memberAtFrom && w.memberAtTo) satThrough += 1;
+    } else if ((bornAt.get(fileId) ?? 0) > from.getTime()) {
+      addedWithoutEventCount += 1;
+    } else {
+      satThrough += 1;
     }
   }
+  const unchangedCount = unchangedUnknownReason ? undefined : satThrough;
 
   const userIds = new Set<string>();
   for (const entry of [...added, ...removed]) {
@@ -200,6 +220,7 @@ export async function diffLakeMembership(
     removed: withNames(removed),
     unchangedCount,
     unchangedUnknownReason,
+    addedWithoutEventCount,
     logStartsAt,
     truncated,
     generatedAt: now,

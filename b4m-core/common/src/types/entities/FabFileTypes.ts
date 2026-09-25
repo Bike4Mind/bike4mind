@@ -807,6 +807,17 @@ export type DataLakeMembershipFileCounts = {
 };
 
 /**
+ * One currently-live member of a lake. `createdAt` rides along because the membership change log
+ * does not cover every join - the file-create doors record none - so a reader reconstructing
+ * membership over time needs the file's birth to tell a member that sat through a window from one
+ * that was uploaded into it.
+ */
+export type DataLakeLiveMember = {
+  id: string;
+  createdAt: Date;
+};
+
+/**
  * Identifies a data lake for file-membership matching. The predicate itself is
  * `buildDataLakeMembershipFilter` in `@bike4mind/database`; this type lives here so
  * `IFabFileRepository` can name it without the packages depending on each other.
@@ -1923,10 +1934,10 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
   /** All member file ids (including soft-deleted), for chunk/index cleanup. */
   findIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
   /**
-   * Member file ids that are CURRENTLY live - the lake's membership as of now, which is what a
-   * reader reconstructing membership over time has to start from. Distinct from
-   * `findIdsByDataLakeTag` above because a soft delete leaves the lake tags in place, so that one
-   * keeps naming files the lake no longer holds.
+   * Members that are CURRENTLY live - the lake's membership as of now, which is what a reader
+   * reconstructing membership over time has to start from. Distinct from `findIdsByDataLakeTag`
+   * above because a soft delete leaves the lake tags in place, so that one keeps naming files the
+   * lake no longer holds.
    */
-  findLiveIdsByDataLakeTag(scope: DataLakeMembershipScope): Promise<string[]>;
+  findLiveMembersByDataLakeTag(scope: DataLakeMembershipScope): Promise<DataLakeLiveMember[]>;
 }
