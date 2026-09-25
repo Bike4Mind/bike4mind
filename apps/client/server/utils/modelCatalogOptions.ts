@@ -1,3 +1,5 @@
+import { PICKER_LISTING_OPTIONS } from '@bike4mind/llm-adapters';
+
 /**
  * getAvailableModels options shared by /api/models and any route that must observe the same
  * catalog it does. getModelCacheKey folds these fields into the module cache key, so a route
@@ -6,14 +8,11 @@
  *
  * isSelfHost is read per call because the flag is environment state, not a build-time constant.
  */
-const BACKEND_TIMEOUT_MS = 2_000;
-
 export function modelCatalogListingOptions() {
   return {
-    perBackendTimeoutMs: BACKEND_TIMEOUT_MS,
-    // The picker is the one consumer that must not see private models; every
-    // other getAvailableModels caller resolves pinned private models by id.
-    includePrivate: false,
+    // Shared with the Slack model dropdowns; the pickers are the consumers that must
+    // not see private models, while every other caller resolves them by id.
+    ...PICKER_LISTING_OPTIONS,
     isSelfHost: process.env.B4M_SELF_HOST === 'true',
   };
 }
