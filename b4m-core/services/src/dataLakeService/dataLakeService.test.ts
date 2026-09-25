@@ -3930,7 +3930,8 @@ describe('deleteDataLake - owner storage quota sync', () => {
   });
 
   it('completes the delete when the storage adjustment throws', async () => {
-    const incrementCurrentStorage = vi.fn().mockRejectedValue(new Error('storage write failed'));
+    const storageError = new Error('storage write failed');
+    const incrementCurrentStorage = vi.fn().mockRejectedValue(storageError);
     const adapters = makeAdapters([{ id: 'f1', userId: 'creator', fileSize: 100 }]);
 
     await expect(
@@ -3939,6 +3940,8 @@ describe('deleteDataLake - owner storage quota sync', () => {
         db: { ...adapters.db, users: { incrementCurrentStorage } },
       })
     ).resolves.toMatchObject({ status: 'deleted' });
+
+    expect(adapters.logger.warn).toHaveBeenCalledWith(expect.stringContaining('user creator'), storageError);
   });
 });
 
