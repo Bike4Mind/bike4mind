@@ -219,6 +219,12 @@ export class ImageEditService {
     if (questId) {
       quest = await this.db.quests.findById(questId);
       if (!quest) throw new NotFoundError('Quest not found');
+      // Same retry-to-session binding as ChatCompletionInvoke: sessionId is access-checked at the
+      // route, so a quest from another session is refused with the generic missing-quest 404.
+      if (quest.sessionId !== sessionId) {
+        Logger.globalInstance.warn(`Quest ${questId} does not belong to session ${sessionId}; refusing retry.`);
+        throw new NotFoundError('Quest not found');
+      }
       // If the quest is a retry, we need to clear out the replies and images
       quest.images = [];
       quest.replies = [];
