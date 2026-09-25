@@ -82,7 +82,7 @@ const renderPanel = (props: Partial<React.ComponentProps<typeof DataLakeResearch
         runs={[]}
         isLoading={false}
         error={null}
-        modelOptions={[{ id: 'gpt-4.1-mini', name: 'GPT-4.1 mini' }]}
+        modelOptions={[{ id: 'gpt-4.1-mini', label: 'GPT-4.1 mini' }]}
         {...spies}
         {...props}
       />
@@ -132,7 +132,7 @@ describe('DataLakeResearchPanel', () => {
 
     expect(screen.getByTestId('datalake-research-config-query').textContent).toBe('coastal erosion in Cornwall');
     expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/Up to 5 proposals/);
-    expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/0\.0500 ceiling/);
+    expect(screen.getByTestId('datalake-research-config-limits').textContent).toMatch(/\$0\.05 ceiling/);
   });
 
   it('starts a run for the configuration whose button was pressed', () => {
@@ -273,6 +273,19 @@ describe('DataLakeResearchPanel', () => {
       expect(spies.onCreate).not.toHaveBeenCalled();
     });
 
+    // toFixed(2) would seed this field with "0.00", which fails the "above $0" check and blocks
+    // Save, or rounds up and saves a ceiling other than the one that was loaded.
+    it('round-trips a sub-cent cost ceiling through Edit and Save unchanged', () => {
+      const spies = renderPanel({ configs: [config({ costCeilingMicroUsd: 4_000 })] });
+
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect((screen.getByTestId('datalake-research-cost-ceiling-input') as HTMLInputElement).value).toBe('0.004');
+      expect(screen.getByTestId('datalake-research-save-btn')).not.toBeDisabled();
+
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(spies.onUpdate).toHaveBeenCalledWith('config-1', expect.objectContaining({ costCeilingMicroUsd: 4_000 }));
+    });
+
     // undefined would mean "unchanged" and the stored value would come straight back.
     it('sends null for a cleared recency, so clearing it actually clears it', () => {
       const spies = renderPanel({ configs: [config()] });
@@ -366,6 +379,110 @@ describe('DataLakeResearchPanel', () => {
         ],
       });
       expect(screen.getByTestId('datalake-research-run-status').textContent).toBe('abandoned');
+    });
+  });
+
+  describe('form validation', () => {
+    const openFilledForm = () => {
+      const spies = renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      fireEvent.change(screen.getByTestId('datalake-research-name-input'), { target: { value: 'Weekly' } });
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'erosion' } });
+      return spies;
+    };
+
+    // The server clamps instead of refusing, so each of these used to save a config other than the
+    // one on screen: 999 results stored as 50, a $99 ceiling as $5.00, -7 days as "no limit".
+    it.each([
+      ['max-results', '999'],
+      ['max-results', '2.5'],
+      ['max-proposals', '-3'],
+      ['recency', '-7'],
+      ['min-relevance', '5'],
+      ['cost-ceiling', '99'],
+      ['cost-ceiling', '0'],
+    ])('disables Save when %s is %s', (field, value) => {
+      const spies = openFilledForm();
+      fireEvent.change(screen.getByTestId(`datalake-research-${field}-input`), { target: { value } });
+
+      expect(screen.getByTestId('datalake-research-save-btn')).toBeDisabled();
+      expect(screen.getByTestId('datalake-research-save-hint').textContent).toMatch(/highlighted fields/i);
+      fireEvent.click(screen.getByTestId('datalake-research-save-btn'));
+      expect(spies.onCreate).not.toHaveBeenCalled();
+    });
+
+    it('shows the range as the error in place of the help text', () => {
+      openFilledForm();
+      fireEvent.change(screen.getByTestId('datalake-research-max-proposals-input'), { target: { value: '-3' } });
+      expect(screen.getByText('Enter a whole number from 1 to 25.')).toBeTruthy();
+    });
+
+    it('explains a Save disabled for a missing name or question', () => {
+      renderPanel();
+      fireEvent.click(screen.getByTestId('datalake-research-new-btn'));
+      expect(screen.getByTestId('datalake-research-save-hint').textContent).toMatch(/name and what to look for/i);
+    });
+
+    it('counts the name and question against their limits', () => {
+      openFilledForm();
+      expect(screen.getByTestId('datalake-research-name-count').textContent).toBe('6/120');
+      expect(screen.getByTestId('datalake-research-query-count').textContent).toMatch(/7\/500$/);
+    });
+  });
+
+  describe('config card', () => {
+    it('pluralizes the proposal limit and shows a whole-cent ceiling as money', () => {
+      renderPanel({ configs: [config({ maxProposals: 1, costCeilingMicroUsd: 50_000 })] });
+      expect(screen.getByTestId('datalake-research-config-limits').textContent).toBe(
+        'Up to 1 proposal \u00b7 $0.05 ceiling'
+      );
+    });
+
+    it('names the model and lists the tags a run proposes', () => {
+      renderPanel({ configs: [config({ proposedTags: ['research', 'weekly'] })] });
+      expect(screen.getByTestId('datalake-research-config-model').textContent).toBe('Model: GPT-4.1 mini');
+      expect(screen.getByTestId('datalake-research-config-tags').textContent).toBe('researchweekly');
+    });
+
+    it('names the default model when the config leaves it unset', () => {
+      renderPanel({ configs: [config({ model: undefined })], defaultModelLabel: 'Default (GPT-4.1 Mini)' });
+      expect(screen.getByTestId('datalake-research-config-model').textContent).toBe('Model: Default (GPT-4.1 Mini)');
+    });
+
+    // `lastRunAt` is stamped at queue time; the history row shows the start time. One page, one clock.
+    it('reports the last run at the time its history row shows', () => {
+      const startedAt = new Date('2026-03-01T12:00:00.000Z');
+      renderPanel({
+        configs: [config({ lastRunAt: new Date('2026-03-01T11:00:00.000Z') })],
+        runs: [run({ startedAt })],
+      });
+      expect(screen.getByTestId('datalake-research-config-last-run').textContent).toBe(
+        `Last run ${startedAt.toLocaleString()}`
+      );
+    });
+
+    // A retired or filtered model must still read as the selection, or the picker shows blank while
+    // a save quietly keeps a model the manager cannot see.
+    it('keeps a saved model the picker no longer lists visible as the selection', () => {
+      renderPanel({ configs: [config({ model: 'o3-deep-research' })] });
+      expect(screen.getByTestId('datalake-research-config-model').textContent).toBe('Model: o3-deep-research');
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect(screen.getByTestId('datalake-research-model-select').textContent).toBe(
+        'o3-deep-research (not offered for research)'
+      );
+    });
+
+    it('will not run a config while its edit form holds unsaved changes', () => {
+      const spies = renderPanel({ configs: [config()] });
+      fireEvent.click(screen.getByTestId('datalake-research-edit-btn'));
+      expect(screen.getByTestId('datalake-research-run-btn')).not.toBeDisabled();
+
+      fireEvent.change(screen.getByTestId('datalake-research-query-input'), { target: { value: 'something else' } });
+      const runButton = screen.getByTestId('datalake-research-run-btn');
+      expect(runButton).toBeDisabled();
+      expect(runButton.textContent).toBe('Save changes to run');
+      fireEvent.click(runButton);
+      expect(spies.onStartRun).not.toHaveBeenCalled();
     });
   });
 });
