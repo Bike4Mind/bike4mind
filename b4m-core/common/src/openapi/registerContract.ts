@@ -67,8 +67,12 @@ function annotateInheritedName(schema: z.ZodTypeAny): z.ZodTypeAny {
 function undoCoercionForOpenApi(schema: z.ZodTypeAny): z.ZodTypeAny {
   const internals = (schema as unknown as { _zod?: { def?: Record<string, unknown> } })._zod;
   if (internals?.def?.coerce !== true) return schema;
-  const ZodCtor = schema.constructor as new (def: Record<string, unknown>) => z.ZodTypeAny;
-  const cloned = new ZodCtor({ ...internals.def, coerce: false });
+  // `.clone(def)` is zod v4's own supported rebuild path (unlike reflecting on
+  // `schema.constructor`, which assumes a `(def) => instance` signature zod doesn't
+  // promise to keep) - `_zod.def` is still fine to read, that part is documented
+  // library-author-facing internals.
+  const cloneable = schema as unknown as { clone: (def: Record<string, unknown>) => z.ZodTypeAny };
+  const cloned = cloneable.clone({ ...internals.def, coerce: false });
   return cloned.openapi(getOpenApiMetadata(schema));
 }
 
