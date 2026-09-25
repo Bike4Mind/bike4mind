@@ -270,13 +270,26 @@ export interface LLMTriageResponse {
  * LLM Error categories for proper error handling and reporting
  */
 export type LLMErrorCategory =
-  | 'TIMEOUT'
-  | 'SIZE_LIMIT'
-  | 'RATE_LIMIT'
-  | 'AUTH_ERROR'
-  | 'SERVICE_UNAVAILABLE'
-  | 'API_ERROR'
-  | 'PARSE_ERROR';
+  'TIMEOUT' | 'SIZE_LIMIT' | 'RATE_LIMIT' | 'AUTH_ERROR' | 'SERVICE_UNAVAILABLE' | 'API_ERROR' | 'PARSE_ERROR';
+
+const JSON_START = '<<<B4M_JSON_START>>>';
+const JSON_END = '<<<B4M_JSON_END>>>';
+
+/**
+ * Pull the triage JSON out of an LLM response: the unique delimiters first, then a markdown code
+ * fence for older prompts, else the raw text. The delimiters use indexOf because a lazy regex
+ * rescans to the end from every unclosed start marker; if the first start has no end after it,
+ * no later start does either, so the result is the same.
+ */
+export function extractTriageJson(responseText: string): string {
+  const start = responseText.indexOf(JSON_START);
+  const end = start === -1 ? -1 : responseText.indexOf(JSON_END, start + JSON_START.length);
+  if (end !== -1) return responseText.slice(start + JSON_START.length, end).trim();
+  // Non-greedy to stop at the first closing fence.
+  const codeBlockMatch = responseText.match(/```(?:json)?([\s\S]*?)```/);
+  if (codeBlockMatch) return codeBlockMatch[1].trim();
+  return responseText;
+}
 
 /**
  * Custom error class for categorized LLM errors
@@ -833,23 +846,7 @@ export class LiveopsTriageService {
       throw new LLMError('API_ERROR', `LLM API call failed: ${sanitizedMessage}`);
     }
 
-    // Parse JSON response - extract from delimiters with fallbacks
-    let jsonStr = responseText;
-
-    // Try new unique delimiters first (preferred)
-    const uniqueMatch = responseText.match(/<<<B4M_JSON_START>>>\s*([\s\S]*?)\s*<<<B4M_JSON_END>>>/);
-    if (uniqueMatch) {
-      jsonStr = uniqueMatch[1].trim();
-    } else {
-      // Fallback to markdown code blocks for backwards compatibility
-      // Non-greedy to stop at first closing fence (original behavior)
-      const codeBlockMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-      if (codeBlockMatch) {
-        jsonStr = codeBlockMatch[1].trim();
-      }
-      // If neither found, try parsing raw response as last resort
-      // (jsonStr remains as responseText)
-    }
+    const jsonStr = extractTriageJson(responseText);
 
     try {
       const parsed = JSON.parse(jsonStr);

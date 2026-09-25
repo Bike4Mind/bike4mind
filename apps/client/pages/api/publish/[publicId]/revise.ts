@@ -57,9 +57,9 @@ interface OpenAnnotationLean {
 }
 
 /** Strip a leading/trailing markdown code fence the model may emit despite instructions. */
-function stripFences(text: string): string {
+export function stripFences(text: string): string {
   let t = text.trim();
-  const fence = /^```[a-z]*\s*\n([\s\S]*?)\n```$/i.exec(t);
+  const fence = /^```[a-z]*[^\S\n]*\n([\s\S]*?)\n```$/i.exec(t);
   if (fence) t = fence[1].trim();
   return t;
 }

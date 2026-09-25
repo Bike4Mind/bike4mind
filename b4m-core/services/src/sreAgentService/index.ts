@@ -87,6 +87,10 @@ const DANGEROUS_PATTERNS = [
   /\bnew\s+Proxy\s*\(/,
 ];
 
+// No `\s*` ahead of the lazy bodies: every consumer trims, and the overlap was quadratic on an unclosed fence.
+export const DIAGNOSIS_BLOCK_REGEX = /```diagnosis([\s\S]*?)```/;
+export const TOOL_BLOCK_REGEX = /```tool([\s\S]*?)```/g;
+
 /** Max tool-use rounds before forcing final output */
 const MAX_TOOL_ROUNDS = 8;
 
@@ -471,7 +475,7 @@ export class SreAgentService {
 
         // Parse both tool calls and diagnosis upfront - decision matrix handles priority
         const toolCalls = this.parseToolCalls(responseContent);
-        const diagnosisMatch = responseContent.match(/```diagnosis\s*([\s\S]*?)```/);
+        const diagnosisMatch = responseContent.match(DIAGNOSIS_BLOCK_REGEX);
 
         // Fabrication detection: tool calls + diagnosis in the same response
         if (toolCalls.length > 0 && diagnosisMatch) {
@@ -1201,7 +1205,7 @@ export class SreAgentService {
    */
   private parseToolCalls(text: string): Array<{ tool: string; input: Record<string, unknown> }> {
     const toolCalls: Array<{ tool: string; input: Record<string, unknown> }> = [];
-    const toolBlockRegex = /```tool\s*([\s\S]*?)```/g;
+    const toolBlockRegex = new RegExp(TOOL_BLOCK_REGEX);
     let match;
 
     while ((match = toolBlockRegex.exec(text)) !== null) {

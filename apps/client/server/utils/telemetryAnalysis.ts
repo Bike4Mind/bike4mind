@@ -516,6 +516,20 @@ Respond in JSON format with this exact structure:
 // ─── LLM Analysis ───────────────────────────────────────────────────────────
 
 /**
+ * The JSON text of an analysis response: a markdown code fence body when present, else the span
+ * from the first '{' to the last '}' (what a greedy /\{[\s\S]*\}/ matched, without its quadratic
+ * scan over many unclosed braces), else the trimmed response.
+ */
+export function extractAnalysisJson(responseText: string): string {
+  const trimmed = responseText.trim();
+  const fence = trimmed.match(/```(?:json)?([\s\S]*?)```/);
+  if (fence) return fence[1].trim();
+  const start = trimmed.indexOf('{');
+  const end = trimmed.lastIndexOf('}');
+  return start !== -1 && end > start ? trimmed.slice(start, end + 1) : trimmed;
+}
+
+/**
  * Generate LLM-powered analysis of telemetry data.
  * Unified implementation used by both the analyze API and the auto-alert handler.
  *
@@ -584,22 +598,7 @@ export async function generateLLMAnalysis(
 
   logger.debug(`[ContextTelemetry] Raw LLM response (${responseText.length} chars): ${responseText.slice(0, 500)}`);
 
-  // Extract JSON from response (handle markdown code blocks)
-  let jsonStr = responseText.trim();
-  const jsonMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (jsonMatch) {
-    jsonStr = jsonMatch[1].trim();
-  }
-
-  // Fallback: extract bare JSON object if no code block found
-  if (!jsonMatch) {
-    const braceMatch = jsonStr.match(/\{[\s\S]*\}/);
-    if (braceMatch) {
-      jsonStr = braceMatch[0];
-    }
-  }
-
-  const parsed = JSON.parse(jsonStr);
+  const parsed = JSON.parse(extractAnalysisJson(responseText));
   const validated = LLMAnalysisSchema.safeParse(parsed);
 
   if (!validated.success) {

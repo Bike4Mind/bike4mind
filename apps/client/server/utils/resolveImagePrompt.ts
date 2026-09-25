@@ -110,7 +110,7 @@ export const buildHistoryTranscript = (recentMessages: IChatHistoryItemDocument[
 
 /** Strip ```json fences and surrounding prose, then parse the first JSON object found. */
 export const tryParseJsonObject = (raw: string): unknown => {
-  const fenced = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+  const fenced = raw.match(/```(?:json)?([\s\S]*?)```/);
   const candidate = fenced ? fenced[1] : raw;
   const start = candidate.indexOf('{');
   const end = candidate.lastIndexOf('}');

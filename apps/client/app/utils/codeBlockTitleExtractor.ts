@@ -238,7 +238,7 @@ function extractHTMLTitle(code: string): string | null {
   }
 
   // Try to find descriptive comment at the top
-  const commentMatch = code.match(/<!--\s*([^-]+?)\s*-->/);
+  const commentMatch = code.match(/<!--([^-]+?)-->/);
   if (commentMatch) {
     const comment = commentMatch[1].trim();
     if (comment.length < 50 && comment.length > 3) {
@@ -255,7 +255,7 @@ function extractHTMLTitle(code: string): string | null {
  */
 function extractCSSTitle(code: string): string | null {
   // Try to find descriptive comment at the top
-  const commentMatch = code.match(/\/\*\s*([^*]+?)\s*\*\//);
+  const commentMatch = code.match(/\/\*([^*]+?)\*\//);
   if (commentMatch) {
     const comment = commentMatch[1].trim();
     if (comment.length < 50 && comment.length > 3) {
@@ -269,6 +269,55 @@ function extractCSSTitle(code: string): string | null {
     return classMatch[1];
   }
 
+  return null;
+}
+
+const WS = /\s/;
+const LINE_TERMINATOR = /[\n\r\u2028\u2029]/;
+const FROM_TABLE = /FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/iy;
+
+/**
+ * Linear-time equivalent of /SELECT\s+.+?\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/i, returning the table
+ * name. Any regex form rescans a line from every SELECT on it, so this precomputes, right to left,
+ * the first position at or after i where a whitespace run leads into FROM <table>.
+ */
+export function findSelectFromTable(code: string): string | null {
+  const n = code.length;
+  // gapAt[i]: first index >= i opening a whitespace run that leads into FROM <table>, else -1.
+  const gapAt = new Int32Array(n + 1).fill(-1);
+  const nextBreak = new Int32Array(n + 1).fill(n);
+  const tableAfterRun = new Map<number, string | null>();
+  let runEnd = n;
+  for (let i = n - 1; i >= 0; i--) {
+    nextBreak[i] = LINE_TERMINATOR.test(code[i]) ? i : nextBreak[i + 1];
+    if (!WS.test(code[i])) {
+      runEnd = i;
+      gapAt[i] = gapAt[i + 1];
+      continue;
+    }
+    if (!tableAfterRun.has(runEnd)) {
+      FROM_TABLE.lastIndex = runEnd;
+      tableAfterRun.set(runEnd, FROM_TABLE.exec(code)?.[1] ?? null);
+    }
+    gapAt[i] = tableAfterRun.get(runEnd) ? i : gapAt[i + 1];
+  }
+  for (const select of code.matchAll(/SELECT/gi)) {
+    const afterSelect = select.index + 6;
+    if (afterSelect >= n || !WS.test(code[afterSelect])) continue;
+    let runEnd = afterSelect;
+    while (runEnd < n && WS.test(code[runEnd])) runEnd++;
+    // Like the backtracking \s+, try the body from the end of the run back to its second character,
+    // so `SELECT   FROM t` still reads t with a one-space body. Each run belongs to one SELECT.
+    for (let body = runEnd; body > afterSelect; body--) {
+      if (body >= n || LINE_TERMINATOR.test(code[body])) continue;
+      // The body runs from `body` to the gap and may not cross a line break; the gap itself may.
+      const gap = gapAt[body + 1];
+      if (gap === -1 || gap > nextBreak[body]) continue;
+      let end = gap;
+      while (WS.test(code[end])) end++;
+      return tableAfterRun.get(end) ?? null;
+    }
+  }
   return null;
 }
 
@@ -286,9 +335,9 @@ function extractSQLTitle(code: string): string | null {
   }
 
   // SELECT FROM
-  const selectMatch = code.match(/SELECT\s+.+?\s+FROM\s+([a-zA-Z_][a-zA-Z0-9_]*)/i);
-  if (selectMatch) {
-    return `Query ${selectMatch[1]}`;
+  const selectTable = findSelectFromTable(code);
+  if (selectTable) {
+    return `Query ${selectTable}`;
   }
 
   // INSERT INTO

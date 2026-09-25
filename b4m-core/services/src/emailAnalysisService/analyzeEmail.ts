@@ -52,15 +52,15 @@ function parseDeadline(deadlineStr: string | undefined): Date | undefined {
 /**
  * Extract JSON from LLM response that might contain markdown code blocks
  */
-function extractJsonFromResponse(response: string): string {
+export function extractJsonFromResponse(response: string): string {
   // Remove markdown code blocks if present
-  const jsonMatch = response.match(/```json\s*([\s\S]*?)\s*```/);
+  const jsonMatch = response.match(/```json([\s\S]*?)```/);
   if (jsonMatch) {
     return jsonMatch[1].trim();
   }
 
   // Also try just ``` blocks
-  const codeBlockMatch = response.match(/```\s*([\s\S]*?)\s*```/);
+  const codeBlockMatch = response.match(/```([\s\S]*?)```/);
   if (codeBlockMatch) {
     return codeBlockMatch[1].trim();
   }

@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import { matchExplain, matchFormula, matchSetValue } from './intentScan';
 /**
  * IntentParser
  *
@@ -315,58 +316,58 @@ Parse the input and return only valid JSON.`;
     }
 
     // Pattern: "[entity] is [amount]" or "Set [entity] to [amount]"
-    const setMatch = normalized.match(/(?:set\s+)?(.+?)\s+(?:is|to|=|equals?)\s+\$?([\d,]+(?:\.\d+)?)/i);
+    const setMatch = matchSetValue(normalized);
     if (setMatch) {
       intent = 'SET_VALUE';
       confidence = 0.85;
       entities.push({
         type: 'entity_reference',
-        value: setMatch[1],
-        position: { start: 0, end: setMatch[1].length },
+        value: setMatch[0],
+        position: { start: 0, end: setMatch[0].length },
         confidence: 0.8,
       });
       entities.push({
         type: 'amount',
-        value: setMatch[2],
-        normalizedValue: parseFloat(setMatch[2].replace(/,/g, '')),
-        position: { start: input.indexOf(setMatch[2]), end: input.indexOf(setMatch[2]) + setMatch[2].length },
+        value: setMatch[1],
+        normalizedValue: parseFloat(setMatch[1].replace(/,/g, '')),
+        position: { start: input.indexOf(setMatch[1]), end: input.indexOf(setMatch[1]) + setMatch[1].length },
         confidence: 0.9,
       });
     }
 
     // Pattern: "[output] = [input1] +/- [input2]"
-    const formulaMatch = normalized.match(/(.+?)\s*(?:=|equals?)\s*(.+?)\s*([+\-*/])\s*(.+)/i);
+    const formulaMatch = matchFormula(normalized);
     if (formulaMatch && !setMatch) {
       intent = 'CREATE_RULE';
       confidence = 0.85;
       entities.push({
         type: 'line_item_name',
-        value: formulaMatch[1].trim(),
-        position: { start: 0, end: formulaMatch[1].length },
+        value: formulaMatch[0].trim(),
+        position: { start: 0, end: formulaMatch[0].length },
         confidence: 0.85,
       });
       entities.push({
         type: 'entity_reference',
-        value: formulaMatch[2].trim(),
+        value: formulaMatch[1].trim(),
         position: {
-          start: input.indexOf(formulaMatch[2]),
-          end: input.indexOf(formulaMatch[2]) + formulaMatch[2].length,
+          start: input.indexOf(formulaMatch[1]),
+          end: input.indexOf(formulaMatch[1]) + formulaMatch[1].length,
         },
         confidence: 0.8,
       });
       entities.push({
         type: 'operation',
-        value: formulaMatch[3],
-        normalizedValue: this.normalizeOperator(formulaMatch[3]),
-        position: { start: input.indexOf(formulaMatch[3]), end: input.indexOf(formulaMatch[3]) + 1 },
+        value: formulaMatch[2],
+        normalizedValue: this.normalizeOperator(formulaMatch[2]),
+        position: { start: input.indexOf(formulaMatch[2]), end: input.indexOf(formulaMatch[2]) + 1 },
         confidence: 0.95,
       });
       entities.push({
         type: 'entity_reference',
-        value: formulaMatch[4].trim(),
+        value: formulaMatch[3].trim(),
         position: {
-          start: input.indexOf(formulaMatch[4]),
-          end: input.indexOf(formulaMatch[4]) + formulaMatch[4].length,
+          start: input.indexOf(formulaMatch[3]),
+          end: input.indexOf(formulaMatch[3]) + formulaMatch[3].length,
         },
         confidence: 0.8,
       });
@@ -386,16 +387,16 @@ Parse the input and return only valid JSON.`;
     }
 
     // Pattern: "Explain [entity]" or "How is [entity] calculated"
-    const explainMatch = normalized.match(/(?:explain|how\s+is)\s+(.+?)(?:\s+calculated)?(?:\?)?$/i);
+    const explainMatch = matchExplain(normalized);
     if (explainMatch) {
       intent = 'EXPLAIN';
       confidence = 0.85;
       entities.push({
         type: 'entity_reference',
-        value: explainMatch[1],
+        value: explainMatch[0],
         position: {
-          start: input.indexOf(explainMatch[1]),
-          end: input.indexOf(explainMatch[1]) + explainMatch[1].length,
+          start: input.indexOf(explainMatch[0]),
+          end: input.indexOf(explainMatch[0]) + explainMatch[0].length,
         },
         confidence: 0.8,
       });

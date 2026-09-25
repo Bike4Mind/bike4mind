@@ -35,6 +35,14 @@ vi.mock('@client/services/operationsModelService', () => ({
 }));
 
 import {
+  GROWTH_RATIO_CEILING,
+  SMALL_INPUT_MS_CEILING,
+  measureGrowth,
+  regexDivergences,
+  seededCorpus,
+  FENCE_PIECES,
+} from '@client/__tests__/utils/regexLinearity';
+import {
   resolveImagePrompt,
   sessionHasHistory,
   buildHistoryTranscript,
@@ -397,5 +405,28 @@ describe('resolveImagePrompt', () => {
 
     expect(result.intent).toBe('fresh');
     expect(result.rewrittenPrompt).toContain('Acme Corp');
+  });
+});
+
+describe('tryParseJsonObject - code fence regex', () => {
+  const OLD_FENCE = /```(?:json)?\s*([\s\S]*?)```/;
+  const NEW_FENCE = /```(?:json)?([\s\S]*?)```/;
+
+  // The old fence regex took about 1-2s per call at 24000.
+  it.each([
+    ['newlines after an unclosed fence', (n: number) => '```json' + '\n'.repeat(n) + 'x', 24000],
+    ['space-newline pairs after an unclosed fence', (n: number) => '```json' + ' \n'.repeat(n) + 'x', 24000],
+  ])('stays linear on %s', (_label, build, small) => {
+    const { baselineMs, ratio } = measureGrowth(tryParseJsonObject, build, small);
+    expect(baselineMs).toBeLessThan(SMALL_INPUT_MS_CEILING);
+    expect(ratio).toBeLessThan(GROWTH_RATIO_CEILING);
+  });
+
+  it('matches the old regex on every seeded input once captures are trimmed', () => {
+    const corpus = seededCorpus(2998, 3000, FENCE_PIECES);
+    expect(corpus.filter(s => NEW_FENCE.test(s)).length).toBeGreaterThan(500);
+    expect(regexDivergences(OLD_FENCE, NEW_FENCE, corpus)).toEqual([]);
+    // Control: a greedy body does diverge, so this differential can fail.
+    expect(regexDivergences(OLD_FENCE, /```(?:json)?([\s\S]*)```/, corpus).length).toBeGreaterThan(0);
   });
 });

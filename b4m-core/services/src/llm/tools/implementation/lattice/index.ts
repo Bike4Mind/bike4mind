@@ -10,6 +10,7 @@ import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { isObjectIdShaped } from '../../base/objectId';
 import { buildNewModel, isModelOwner } from '../../../../latticeService/latticeModelService';
+import { splitEquals } from '../../../../latticeService/intentScan';
 import type { ILatticeModel, LatticeEntityType, LatticeDataType, LatticeOperation } from '@bike4mind/common';
 import { escapeArtifactBodyJson, sanitizeArtifactTitle } from '../../utils/artifactEmission';
 
@@ -999,10 +1000,10 @@ function parseFormula(formula: string): {
   const normalized = formula.toLowerCase().trim();
 
   // Pattern: "X = Y + Z" or "X equals Y plus Z" (supports multi-word entity names)
-  const equalsMatch = normalized.match(/^(.+?)\s*(?:=|equals?)\s*(.+)$/i);
+  const equalsMatch = splitEquals(normalized);
 
   if (equalsMatch) {
-    const [, output, expression] = equalsMatch;
+    const [output, expression] = equalsMatch;
 
     // Detect operation type
     if (expression.includes('+') || expression.includes('plus')) {
