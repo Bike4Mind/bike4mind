@@ -46,6 +46,7 @@ import { CorrectionComposer } from './CorrectionComposer';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { feedbackSessionQueryKey, useGetFeedbackBySessionId } from '@client/app/hooks/data/feedback';
 import { isOptimisticId, SendMessageOptions } from '@client/app/utils/llm';
 import { Save as SaveIcon, Add as AddIcon } from '@mui/icons-material';
@@ -432,7 +433,7 @@ const MessageContent: React.FC<ContentProps> = memo(
         if (msg.action !== 'image_moderation_status') return;
         if (!messageData.fabFileIds?.includes(msg.fabFileId)) return;
 
-        queryClient.invalidateQueries({ queryKey: ['fabFiles', 'quest', messageData.id] });
+        queryClient.invalidateQueries({ queryKey: fabFileKeys.quest(messageData.id!) });
       });
 
       return () => {
