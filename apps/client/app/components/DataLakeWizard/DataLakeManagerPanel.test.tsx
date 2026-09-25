@@ -49,6 +49,11 @@ vi.mock('@client/app/hooks/data/googleDrive', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
+    // The recipient's pending-offer banner renders at the top of the panel. Default: no offers, so
+    // it renders nothing; a test that wants one overrides these.
+    useOwnLakeOwnershipOffers: () => ({ data: [] }),
+    useAcceptLakeOwnershipOffer: mutation,
+    useDeclineLakeOwnershipOffer: mutation,
     useArchiveDataLake: () => ({ mutate: archiveMutate, isPending: false }),
     useUnarchiveDataLake: mutation,
     useRestoreDeletedDataLake: mutation,
@@ -74,6 +79,7 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
     // Same for LakeFindingsChip: it renders a neutral chip either way, so no findings just means
     // no open-count badge.
     useDataLakeFindings: () => ({ data: undefined, isLoading: false, error: null, isForbidden: false }),
+    useScanDataLakeFindings: mutation,
     // Default: no rebuild backlog, so the "Rebuild passages" button/chips stay hidden. A test that
     // needs a backlog overrides via useUnderChunkedCount.mockReturnValue(...).
     useUnderChunkedCount: (...args: unknown[]) => useUnderChunkedCount(...(args as [string, boolean])),
@@ -190,8 +196,14 @@ vi.mock('./DataLakeArticlePanel', () => ({
   ),
 }));
 vi.mock('./DataLakeSettingsModal', () => ({
-  DataLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
-    lake ? <div data-testid="mock-settings">{lake.name}</div> : null,
+  // data-origin exposes editingLake's origin so a test can pin that DataLakeManagerPanel
+  // actually threads the lake's real origin through, rather than always seeding 'curated'.
+  DataLakeSettingsModal: ({ lake }: { lake: { name: string; origin?: string } | null }) =>
+    lake ? (
+      <div data-testid="mock-settings" data-origin={lake.origin}>
+        {lake.name}
+      </div>
+    ) : null,
 }));
 vi.mock('./FallbackLakeSettingsModal', () => ({
   FallbackLakeSettingsModal: ({ lake }: { lake: { name: string } | null }) =>
@@ -668,6 +680,20 @@ describe('DataLakeManagerPanel - management affordances gate on canManage', () =
     await user.click(screen.getByTestId('datalake-settings-btn-mine'));
 
     expect(screen.getByTestId('mock-settings')).toHaveTextContent('Mine');
+  });
+
+  // A connector-fed lake's editingLake must carry its real origin - the Drive-folder connect
+  // door refuses to bind to a curated lake, so an unrelated settings save that silently
+  // resubmitted a demoted 'curated' default would break that lake's scheduled sync.
+  it("passes the lake's real origin to the settings editor, not a demoted default", async () => {
+    useGetDataLakes.mockReturnValue({ data: [{ ...mineLake, origin: 'connector-fed' }, theirsLake], isLoading: false });
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(screen.getByTestId('datalake-manager-lake-mine'));
+    await user.click(screen.getByTestId('datalake-settings-btn-mine'));
+
+    expect(screen.getByTestId('mock-settings')).toHaveAttribute('data-origin', 'connector-fed');
   });
 
   it("flags a lake the caller does not own with the creator's name, so it can't be mistaken for their own", async () => {

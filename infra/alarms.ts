@@ -140,9 +140,7 @@ export const replSandboxUnavailableAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('ReplSandboxUnavailableAlarm')
   : undefined;
 
-export const sessionReuseRevokedAlarm = isMonitoredStage
-  ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm')
-  : undefined;
+export const sessionReuseRevokedAlarm = isMonitoredStage ? new sst.aws.SnsTopic('SessionReuseRevokedAlarm') : undefined;
 
 export const sessionRecoveredHighRateAlarm = isMonitoredStage
   ? new sst.aws.SnsTopic('SessionRecoveredHighRateAlarm')
@@ -1024,6 +1022,47 @@ if (isMonitoredStage) {
       Severity: 'Low',
     },
   });
+
+  /**
+   * Alarm: Aggregator join-coverage collapse
+   *
+   * AggregatorJoinCoverage (0-100) is the fraction of catalog model IDs that an
+   * aggregator matched during a discovery run. A sudden drop means the source
+   * changed its model-id format: the run still returns HTTP 200, so RunFailures
+   * stays zero while pricing/context-window data for unmatched models goes stale.
+   * Maximum over three consecutive 6-hour periods (18h total): a period only
+   * breaches when the best run in it is still below 50%, so a transient dip that
+   * recovers within the same period does not fire. Minimum would breach on any
+   * single bad run even after recovery.
+   *
+   * Routed to dlqAlarmTopic (Slack-subscribed) so alerts reach on-call directly.
+   *
+   * Metric emitted by: server/modelDiscovery/metrics.ts -> buildDiscoveryMetricData
+   * Namespace: Lumina5/ModelDiscovery / AggregatorJoinCoverage
+   * Dimensions: { Stage, Host: 'hosted', Aggregator } -- all three required;
+   * omitting Aggregator would watch an empty series (INSUFFICIENT_DATA forever).
+   * MUST STAY IN SYNC with the source names in sources/modelsDev.ts and sources/litellm.ts.
+   */
+  for (const aggregator of ['models.dev', 'litellm'] as const) {
+    new aws.cloudwatch.MetricAlarm(`modelDiscoveryJoinCoverage-${aggregator}`, {
+      name: `${$app.name}-${$app.stage}-model-discovery-join-coverage-${aggregator}`,
+      alarmDescription: `Model discovery aggregator ${aggregator} join coverage below 50% for 3 consecutive runs - source model-id format may have changed`,
+      comparisonOperator: 'LessThanThreshold',
+      evaluationPeriods: 3,
+      metricName: 'AggregatorJoinCoverage',
+      namespace: 'Lumina5/ModelDiscovery',
+      period: 21600, // 6 hours, the run cadence
+      statistic: 'Maximum',
+      threshold: 50,
+      treatMissingData: 'notBreaching',
+      dimensions: { Stage: $app.stage, Host: 'hosted', Aggregator: aggregator },
+      alarmActions: [dlqAlarmTopic.arn],
+      tags: {
+        Application: 'ModelDiscovery',
+        Severity: 'High',
+      },
+    });
+  }
 
   /**
    * Alarm: requests pinned to a deprecated model

@@ -1,6 +1,8 @@
 import {
   ChunkClaimLostError,
   countCodePoints,
+  DocumentDateSource,
+  FabFileSourceType,
   IFabFileChunkDocument,
   IFabFileRepository,
   IUserDocument,
@@ -95,6 +97,14 @@ export interface PreparedFabFileChunks {
   previousChunkEmbeddingModels: string[];
   /** `null` (not `undefined`) when the file has no extractable text - see the write below. */
   serverTextHash: string | null;
+  /**
+   * The document's own vintage and its provenance (#3048), or `null` for both when this pass found
+   * no plausible signal. Null rather than undefined for the same reason as `serverTextHash`: the
+   * pair is ALWAYS written, so a re-chunk of a file whose metadata has since been stripped clears
+   * the old date instead of leaving a vintage that outlives the document it described.
+   */
+  documentDate: Date | null;
+  documentDateSource: DocumentDateSource | null;
 }
 
 /**
@@ -156,6 +166,42 @@ export const prepareFabFileChunks = async (
   // trustworthy dedup input, not contentHash.
   const serverTextHash = computeServerTextHash(chunker.getExtractedText()) ?? null;
 
+  // Read off the same pass that produced the chunks, for the same reason the hash is: the decoded
+  // bytes are already in hand here and nowhere else.
+  const extractedDate = chunker.getDocumentDate();
+
+  // Precedence (#3048): a date read from a document's own bytes outranks one taken from the
+  // container that held it, so a hit here normally replaces whatever ingest captured, and a miss
+  // clears a date a previous content pass had set.
+  //
+  // A stored DRIVE_CREATED is the one exception, and it wins outright. That source is only ever
+  // set for a Google Editors file, which has no bytes of its own: what the chunker just read is a
+  // RENDITION Drive generated at ingest, whether this pass fetched it or re-read the stored copy.
+  // Nothing in it can date the document. An exported .pptx carries a docProps/core.xml whose
+  // dcterms:created is the export moment, which is exactly the ingestion-time-as-vintage answer
+  // this field exists to avoid; a Sheets .xlsx export carries no docProps/ at all and a Doc
+  // exports to bare text, so those two come back undated. Neither outcome may displace the date
+  // Drive gave us, and on the undated ones there is nothing to re-read on a later pass, so
+  // clearing it would lose the vintage permanently.
+  //
+  // The date is required alongside the source, not just the source: `documentDateSource` is never
+  // meaningful on its own (see FabFileTypes), and without this a row carrying a DRIVE_CREATED
+  // source with no date would be rewritten with that source and a null date on every pass, keeping
+  // an unattributable state alive instead of letting this pass replace it.
+  const keepsIngestVintage =
+    fabFile.documentDateSource === DocumentDateSource.DRIVE_CREATED && fabFile.documentDate != null;
+
+  // A Google Editors file (Docs/Sheets/Slides) has no bytes of its own even when it isn't already
+  // pinned above: what the chunker just read is Drive's export rendition, and any date embedded in
+  // it (e.g. a .pptx export's docProps/core.xml dcterms:created) is the export moment, not the
+  // document's. driveMd5Checksum is only ever populated for a native Drive upload (see
+  // driveClient.ts), so its absence on a GOOGLE_DRIVE row identifies an Editors file - one whose
+  // extracted date must not be trusted just because a pin never got stored (a legacy row, or a
+  // createdTime this pass couldn't read). There is nothing trustworthy to fall back to here, unlike
+  // the keepsIngestVintage case above.
+  const isUnpinnedDriveEditorsFile =
+    !keepsIngestVintage && fabFile.sourceType === FabFileSourceType.GOOGLE_DRIVE && !fabFile.driveMd5Checksum;
+
   return {
     fabFileId: fabFile.id,
     embeddingModel,
@@ -165,6 +211,16 @@ export const prepareFabFileChunks = async (
     effectivePassageTokenTarget,
     previousChunkEmbeddingModels,
     serverTextHash,
+    documentDate: keepsIngestVintage
+      ? (fabFile.documentDate ?? null)
+      : isUnpinnedDriveEditorsFile
+        ? null
+        : (extractedDate?.date ?? null),
+    documentDateSource: keepsIngestVintage
+      ? (fabFile.documentDateSource ?? null)
+      : isUnpinnedDriveEditorsFile
+        ? null
+        : (extractedDate?.source ?? null),
   };
 };
 
@@ -258,6 +314,13 @@ export const commitFabFileChunks = async (
     // stale fingerprint rather than letting it outlive its text. See the computeServerTextHash note
     // in prepareFabFileChunks.
     serverTextHash: prepared.serverTextHash,
+
+    // Always written, as a pair, for the same reason (#3048): a re-chunk of a file whose metadata
+    // was stripped - or of one replaced by a differently-dated document - must clear the old
+    // vintage rather than leave a date that no longer describes what is stored. The two move
+    // together so a date can never be left without its provenance, or vice versa.
+    documentDate: prepared.documentDate,
+    documentDateSource: prepared.documentDateSource,
 
     // Clear the convergence kill-switch stall reason, because this run is the repair it was waiting
     // for. Nothing else on the success path clears it, and the RESCUE SWEEP enqueues without a reset,

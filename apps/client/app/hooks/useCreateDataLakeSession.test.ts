@@ -50,12 +50,16 @@ describe('useCreateDataLakeSession', () => {
       await result.current();
     });
 
-    expect(apiPost).toHaveBeenCalledWith('/api/sessions/create', {
-      name: 'New Notebook',
-      forceKnowledgeRetrieval: true,
-      retrievalTags: ['datalake:research', 'datalake:legal'],
-      lakeScopeExplicit: true,
-    });
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/sessions/create',
+      {
+        name: 'New Notebook',
+        forceKnowledgeRetrieval: true,
+        retrievalTags: ['datalake:research', 'datalake:legal'],
+        lakeScopeExplicit: true,
+      },
+      { timeout: 60_000 }
+    );
     // Consumed - a scope picked for this /new must not silently apply to the next one.
     expect(usePendingLakeScope.getState().lakeTags).toEqual([]);
   });
@@ -68,10 +72,14 @@ describe('useCreateDataLakeSession', () => {
       await result.current();
     });
 
-    expect(apiPost).toHaveBeenCalledWith('/api/sessions/create', {
-      name: 'New Notebook',
-      forceKnowledgeRetrieval: true,
-    });
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/sessions/create',
+      {
+        name: 'New Notebook',
+        forceKnowledgeRetrieval: true,
+      },
+      { timeout: 60_000 }
+    );
   });
 
   it('includes knowledgeIds the caller passed, alongside a picked scope', async () => {
@@ -83,13 +91,17 @@ describe('useCreateDataLakeSession', () => {
       await result.current({ knowledgeIds: ['file-1'] });
     });
 
-    expect(apiPost).toHaveBeenCalledWith('/api/sessions/create', {
-      name: 'New Notebook',
-      forceKnowledgeRetrieval: true,
-      retrievalTags: ['datalake:research'],
-      lakeScopeExplicit: true,
-      knowledgeIds: ['file-1'],
-    });
+    expect(apiPost).toHaveBeenCalledWith(
+      '/api/sessions/create',
+      {
+        name: 'New Notebook',
+        forceKnowledgeRetrieval: true,
+        retrievalTags: ['datalake:research'],
+        lakeScopeExplicit: true,
+        knowledgeIds: ['file-1'],
+      },
+      { timeout: 60_000 }
+    );
   });
 
   it('adopts the created session and navigates off /new to the new notebook', async () => {

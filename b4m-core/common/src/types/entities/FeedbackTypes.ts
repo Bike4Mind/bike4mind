@@ -259,6 +259,12 @@ export interface OrgFeedbackMemberCount extends OrgFeedbackMember {
 export const ORG_FEEDBACK_BY_TAG_LIMIT = 50;
 
 /**
+ * Tag rows a written summary is built from: the summary worker feeds only this many to the model,
+ * and the stored-summary panel shows only this many so its table matches what the prose describes.
+ */
+export const ORG_FEEDBACK_SUMMARY_TAG_LIMIT = 20;
+
+/**
  * GET /api/organizations/:id/feedback-report. Declared here rather than beside the route so the
  * handler, the aggregate that builds it and the client hook that reads it share one shape.
  *

@@ -3,6 +3,7 @@ import { useLocation, useNavigate, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import type { ISessionDocument } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
+import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { updateAllQueryData } from '@client/app/utils/react-query';
 import { usePendingLakeScope } from '@client/app/hooks/usePendingLakeScope';
@@ -33,19 +34,23 @@ export default function useCreateDataLakeSession() {
       // Read at call time, not through a subscription: this runs inside the send handler, and a
       // scope ticked between render and send must still reach the session it grounds.
       const pendingLakeTags = usePendingLakeScope.getState().lakeTags;
-      const res = await api.post<ISessionDocument>('/api/sessions/create', {
-        name: 'New Notebook',
-        forceKnowledgeRetrieval: true,
-        // lakeScopeExplicit rides along so the server stores the choice as deliberate. Sent only
-        // when a scope was actually picked: an empty pair here would mean "grounds on no lake",
-        // which is the opposite of the unscoped session this creates by default.
-        ...(pendingLakeTags.length ? { retrievalTags: pendingLakeTags, lakeScopeExplicit: true } : {}),
-        // Files the session must be born holding (the explorer's open/attach-on-/new path):
-        // adoption rehydrates the workbench FROM the session's knowledgeIds, so a file added
-        // client-side after creation loses that race on slower adoption paths.
-        ...(extras?.knowledgeIds?.length ? { knowledgeIds: extras.knowledgeIds } : {}),
-        ...(routerProjectId ? { projectId: routerProjectId } : {}),
-      });
+      const res = await api.post<ISessionDocument>(
+        '/api/sessions/create',
+        {
+          name: 'New Notebook',
+          forceKnowledgeRetrieval: true,
+          // lakeScopeExplicit rides along so the server stores the choice as deliberate. Sent only
+          // when a scope was actually picked: an empty pair here would mean "grounds on no lake",
+          // which is the opposite of the unscoped session this creates by default.
+          ...(pendingLakeTags.length ? { retrievalTags: pendingLakeTags, lakeScopeExplicit: true } : {}),
+          // Files the session must be born holding (the explorer's open/attach-on-/new path):
+          // adoption rehydrates the workbench FROM the session's knowledgeIds, so a file added
+          // client-side after creation loses that race on slower adoption paths.
+          ...(extras?.knowledgeIds?.length ? { knowledgeIds: extras.knowledgeIds } : {}),
+          ...(routerProjectId ? { projectId: routerProjectId } : {}),
+        },
+        { timeout: SEND_REQUEST_TIMEOUT_MS }
+      );
       const created = res.data;
       queryClient.setQueryData(['sessions', created.id], created);
       updateAllQueryData(queryClient, 'sessions', 'write', created, { keysAllowedToCreate: [['sessions', 'own']] });

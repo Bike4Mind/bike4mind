@@ -234,6 +234,49 @@ describe('SelfHostWorker', () => {
     worker.stop();
   });
 
+  it('runs startup and interval ticks through the same guard and drains startup on stop', async () => {
+    vi.useFakeTimers();
+    const worker = new SelfHostWorker(mockLogger);
+    let resolveRun!: () => void;
+    const fn = vi.fn(
+      () =>
+        new Promise<void>(resolve => {
+          resolveRun = resolve;
+        })
+    );
+    worker.registerScheduledTask('recovery', 60_000, fn, { runOnStartup: true });
+    worker.start();
+    expect(fn).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    let stopped = false;
+    const stopping = worker.stop(1000).then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(stopped).toBe(false);
+    resolveRun();
+    await stopping;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a failed startup task and retries on the next interval', async () => {
+    vi.useFakeTimers();
+    const worker = new SelfHostWorker(mockLogger);
+    const fn = vi.fn().mockRejectedValueOnce(new Error('Database unavailable')).mockResolvedValue(undefined);
+    worker.registerScheduledTask('recovery', 60_000, fn, { runOnStartup: true });
+    worker.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('scheduled task "recovery" failed'), {
+      error: 'Database unavailable',
+    });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(2);
+    await worker.stop();
+  });
+
   it('does not start a scheduled task again while its previous run is still in flight', async () => {
     vi.useFakeTimers();
     const worker = new SelfHostWorker(mockLogger);

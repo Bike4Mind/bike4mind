@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { Types } from 'mongoose';
 import { parseArtifacts } from '@bike4mind/utils/artifactParser';
-import { latticeAddEntityTool, latticeSetValueTool, latticeCreateRuleTool, latticeCreateModelTool } from './index';
+import { latticeCreateModelTool, latticeAddEntityTool, latticeSetValueTool, latticeCreateRuleTool } from './index';
+import { canReadModel } from '../../../../latticeService/latticeModelService';
 
 // 24-hex id so the persistence path's `isObjectIdShaped` gate is satisfied.
 const MODEL_ID = 'a'.repeat(24);
@@ -112,6 +114,116 @@ describe('Lattice tools - owner-only object-level authz', () => {
     });
     expect(update).toHaveBeenCalledOnce();
     expect(JSON.parse(result).success).toBe(true);
+  });
+});
+
+/**
+ * These tools share `isModelOwner` with `latticeModelService.getModelForWrite` rather than
+ * comparing raw, so a same-org non-owner - who CAN now read the model over HTTP - still cannot
+ * make the subagent write to it.
+ */
+describe('Lattice tools - org sharing does not confer write authority', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const makeOrgContext = () => {
+    const orgId = new Types.ObjectId();
+    const update = vi.fn().mockResolvedValue(null);
+    const context = {
+      userId: 'colleague',
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      db: {
+        latticeModels: {
+          findById: vi.fn().mockResolvedValue({
+            id: MODEL_ID,
+            userId: 'owner',
+            organizationId: orgId.toHexString(),
+            data: { entities: [{ id: 'revenue', name: 'Revenue', attributes: [] }], relationships: [] },
+            rules: { rules: [], rulesets: [] },
+          }),
+          update,
+        },
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal tool context for this unit test
+    } as any;
+    return { context, update };
+  };
+
+  it('lattice_set_value refuses a same-org non-owner', async () => {
+    const { context, update } = makeOrgContext();
+    const result = await latticeSetValueTool.implementation(context).toolFn({
+      modelId: MODEL_ID,
+      entityName: 'Revenue',
+      attributeKey: 'value',
+      value: '999',
+    });
+    expect(update).not.toHaveBeenCalled();
+    expect(JSON.parse(result).success).toBe(false);
+  });
+});
+
+/**
+ * The create tool writes to the repository directly rather than through `createModel`, so it used
+ * to build its own document - and that document carried neither `organizationId` nor `sessionId`.
+ * Every model made the way users actually make them (by asking in chat) was therefore owner-only
+ * and missing from the session-scoped list, which no amount of fixing the read gate would show.
+ */
+describe('lattice_create_model - scoping fields a shared model cannot do without', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const SESSION_ID = 'b'.repeat(24);
+
+  const makeCreateContext = () => {
+    const create = vi.fn().mockImplementation(async (data: Record<string, unknown>) => ({ ...data, id: MODEL_ID }));
+    const orgId = new Types.ObjectId();
+    const context = {
+      userId: 'owner',
+      // An ObjectId, as it is on a hydrated `req.user` - the shape the raw comparison choked on.
+      user: { id: 'owner', organizationId: orgId },
+      sessionId: SESSION_ID,
+      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+      db: { latticeModels: { create, findById: vi.fn(), update: vi.fn() } },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- minimal tool context for this unit test
+    } as any;
+    return { context, create, orgId };
+  };
+
+  it('stamps the caller organization, normalized off an ObjectId user document', async () => {
+    const { context, create, orgId } = makeCreateContext();
+    await latticeCreateModelTool.implementation(context).toolFn({ name: 'Org Share Test' });
+    expect(create).toHaveBeenCalledOnce();
+    expect(create.mock.calls[0][0].organizationId).toBe(orgId.toHexString());
+  });
+
+  it('stamps the session it was created in, so the session-scoped list can find it', async () => {
+    const { context, create } = makeCreateContext();
+    await latticeCreateModelTool.implementation(context).toolFn({ name: 'Org Share Test' });
+    expect(create.mock.calls[0][0].sessionId).toBe(SESSION_ID);
+  });
+
+  it('produces a model a same-org colleague can read', async () => {
+    const { context, create, orgId } = makeCreateContext();
+    await latticeCreateModelTool.implementation(context).toolFn({ name: 'Org Share Test' });
+    const persisted = create.mock.calls[0][0];
+    expect(canReadModel(persisted, { id: 'colleague', organizationId: orgId })).toBe(true);
+    expect(canReadModel(persisted, { id: 'outsider', organizationId: new Types.ObjectId() })).toBe(false);
+  });
+
+  it('still persists the entities requested in the same insert', async () => {
+    const { context, create } = makeCreateContext();
+    await latticeCreateModelTool.implementation(context).toolFn({
+      name: 'Org Share Test',
+      initialData: { entities: [{ name: 'Revenue', values: [{ period: 'Q1', value: 100 }] }] },
+    });
+    expect(create.mock.calls[0][0].data.entities).toHaveLength(1);
+  });
+
+  // A harness with no session (the CLI, an agent run) must still create, just unscoped.
+  it('creates without a session id when the context carries none', async () => {
+    const { context, create } = makeCreateContext();
+    context.sessionId = undefined;
+    await latticeCreateModelTool.implementation(context).toolFn({ name: 'Unscoped' });
+    expect(create).toHaveBeenCalledOnce();
+    expect(create.mock.calls[0][0].sessionId).toBeUndefined();
   });
 });
 

@@ -6,13 +6,24 @@ import {
   dataLakeRepository,
   dataLakeAccessGrantRepository,
   dataLakeFindingRepository,
+  cacheRepository,
   fabFileRepository,
   fabFileChunkRepository,
 } from '@bike4mind/database';
-import { Request } from 'express';
+import {
+  ConflictError,
+  MODEL_INCONSISTENCY_RUN_LEASE_MS,
+  TooManyRequestsError,
+  isLeaseHeld,
+  toScanSummary,
+  type IDataLakeDocument,
+} from '@bike4mind/common';
+import { Request, Response } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { isDevelopment } from '@server/utils/config';
+import { sendToQueue } from '@server/utils/sqs';
+import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -36,6 +47,43 @@ const inconsistencyRunRateLimit = rateLimit({
 });
 
 /**
+ * Model-detection runs per caller per hour - far lower than the lexical `DETECTION_HOURLY_CAP` (20),
+ * and deliberately its own bucket rather than sharing that budget. The lexical pass costs a regex
+ * scan; this pass reads corpus content through an LLM (#3057), so its cost per run is real money,
+ * not just latency - the caller-triggered cap is this feature's primary spend control until a
+ * dollar-denominated one is worth building (see `enforceEmbeddingSpendGate` for that pattern, used
+ * today only on the embedding-ingest path).
+ */
+const MODEL_DETECTION_HOURLY_CAP = 3;
+
+const modelInconsistencyRunRateLimit = rateLimit({
+  limit: () => (isDevelopment() ? Infinity : MODEL_DETECTION_HOURLY_CAP),
+  windowMs: HOUR_MS,
+  bucket: 'data-lakes/inconsistencies/model',
+});
+
+/**
+ * Model-detection runs per LAKE per hour, enforced alongside the per-caller cap above rather than
+ * instead of it. The two bound different things and neither implies the other: the per-caller cap
+ * stops one person spending without limit, but the cost lands on the LAKE, and N curators with
+ * manage rights each get their own allowance - so the caller cap alone lets a shared lake be billed
+ * N x `MODEL_DETECTION_HOURLY_CAP` full LLM passes an hour. The lease serializes those runs; it does
+ * not limit how many of them happen.
+ *
+ * Higher than the per-caller cap so a lake with several active curators is not throttled by the
+ * first one to click, while still putting a hard ceiling on one lake's hourly spend.
+ *
+ * Consumed inline in `enqueueModelDetection`, AFTER `assertLakeWriteAccess`, not as middleware:
+ * middleware runs before the access check, so a caller with no rights on the lake could drain its
+ * budget and lock out the curators who do have them.
+ */
+const MODEL_DETECTION_HOURLY_CAP_PER_LAKE = 6;
+
+const modelLakeRateLimitKey = (lakeId: string) => `rate-limit:lake:${lakeId}:data-lakes/inconsistencies/model/lake`;
+
+const isModelDetectorRequest = (req: Request) => req.method === 'POST' && req.query.detector === 'model';
+
+/**
  * GET  /api/data-lakes/:id/inconsistencies - the last stored report (reads only, runs nothing)
  * POST /api/data-lakes/:id/inconsistencies - run cross-document inconsistency detection (#2242).
  *
@@ -44,6 +92,17 @@ const inconsistencyRunRateLimit = rateLimit({
  * any of this into an admission gate has to be argued on its own merits - deciding that ingestion
  * should refuse a document for disagreeing with a sibling makes this product the arbiter of a
  * customer's editorial judgment.
+ *
+ * NOT the only trigger any more. `lakeInconsistencySweep` runs this same pass over every active
+ * lake daily, so POST here is the "run it now" door rather than the only way a problem is ever
+ * found. The rate limit below stays for exactly that reason: the schedule is what guarantees
+ * coverage, so a caller hitting the cap has lost a fresher answer, not the answer.
+ *
+ * Findings are ROWS (`DataLakeFinding`), not a field of the response's own making: POST records
+ * them and GET reads them back, and what is stored on the LAKE is only the run's summary. That is
+ * what makes a repeating pass safe - the rows are keyed on (lakeId, detector, kind, subject), so the
+ * hundredth run over an unchanged problem updates one row instead of writing a hundredth copy, and a
+ * curator's status on it survives every one of those runs.
  *
  * The GET exists because without it every look was a write. `converge` ships its plan as a GET that
  * writes nothing precisely so that reading costs nothing; here, re-reading findings meant re-POSTing
@@ -71,24 +130,173 @@ const gateDeps = {
   db: { dataLakes: dataLakeRepository, dataLakeAccessGrants: dataLakeAccessGrantRepository },
 };
 
+/**
+ * The stored summary plus the findings that summary actually describes.
+ *
+ * `seenSince` is the load-bearing argument, and it is what keeps the response from contradicting
+ * itself. Nothing ever closes a finding the detector stops reporting - deliberately, because
+ * `status` is a curator's word and a detector retiring a row would be exactly the overwrite
+ * `recordDetected` refuses to make. So a problem someone fixed leaves an `open` row behind forever.
+ * Listing every open row beside this run's `countsByKind` would therefore ship a payload whose
+ * counts said zero next to findings it did not count - and the daily sweep makes that gap permanent
+ * and growing rather than a transient. Selecting on the summary's own date answers "what is wrong
+ * with my corpus now" exactly, mutates nothing, and leaves the retired row - status intact - on the
+ * triage surface, GET /findings.
+ *
+ * Null rather than an empty report when detection has never run: "never asked" and "asked and found
+ * nothing" are different answers and a surface has to be able to tell them apart.
+ *
+ * `status: ['open', 'resolved']`, not `'open'` alone. `countsByKind` is an exact total over every
+ * finding the run REPORTED - it has no notion of a curator's status, so it still counts a subject a
+ * curator already resolved if this run re-detected it (the row's status never reopens on
+ * re-detection; see `recordDetected`). Filtering the list to `open` only, as an earlier version of
+ * this did, could then hand back a non-zero count beside a shorter findings list than it described.
+ * Matching the two statuses `countsByKind` can actually contain - never `dismissed`, since
+ * `detectCorpusInconsistencies` drops a dismissed subject before counting it - keeps the response
+ * internally consistent instead.
+ *
+ * That leaves one gap `status` alone cannot close: a dismissal made AFTER this run stored its
+ * summary only ever touches the row (`resolveFinding` never recomputes `countsByKind`), so serving
+ * the stored count as-is would show a kind's count beside a findings list that no longer has that
+ * subject in it - the identical shape of bug this function otherwise exists to prevent. So the
+ * counts below are adjusted for exactly the rows this run reported that have since been dismissed -
+ * found by `seenSince` AND `resolvedSince` together, not either alone: `resolvedSince` alone also
+ * matches a row this run never re-detected (its `lastSeenAt` is from an older run, so it never
+ * contributed to this run's `countsByKind`), and `seenSince` alone also matches a subject a curator
+ * dismissed BEFORE this run whose `lastSeenAt` got bumped to this run's instant by a re-report
+ * (`recordDetected` never touches `status`/`resolvedAt` on update, only `lastSeenAt` via `$max`).
+ * Only `lastSeenAt >= computedAt AND resolvedAt >= computedAt` isolates "counted by this run, then
+ * dismissed after it". Never a blind recompute from the (capped) `findings` list, which would
+ * silently regress `countsByKind` from an exact total to a lower bound on any run `truncated` cut
+ * into.
+ */
+async function renderStoredReport(
+  lake: Pick<IDataLakeDocument, 'id' | 'inconsistencyReport' | 'inconsistencyComputedAt'>
+) {
+  if (!lake.inconsistencyReport) return null;
+  const computedAt = lake.inconsistencyComputedAt ?? null;
+  const findings = await dataLakeFindingRepository.listByLake(lake.id, {
+    detector: dataLakeService.INCONSISTENCY_DETECTOR,
+    status: ['open', 'resolved'],
+    ...(computedAt ? { seenSince: computedAt } : {}),
+    // Matches what the detector would have capped a single run's findings at, so the page bound
+    // cannot cut into a run the summary says was not truncated.
+    limit: dataLakeService.INCONSISTENCY_FINDINGS_CAP,
+  });
+
+  // Skipped entirely when computedAt is null (never detected): there is then no run instant to
+  // compensate relative to, and reading every dismissal ever would decrement counts that a run
+  // never reported in the first place.
+  const countsByKind = { ...lake.inconsistencyReport.countsByKind };
+  if (computedAt) {
+    const dismissedSinceRun = await dataLakeFindingRepository.listByLake(lake.id, {
+      detector: dataLakeService.INCONSISTENCY_DETECTOR,
+      status: 'dismissed',
+      seenSince: computedAt,
+      resolvedSince: computedAt,
+    });
+    for (const finding of dismissedSinceRun) {
+      if (countsByKind[finding.kind] > 0) countsByKind[finding.kind] -= 1;
+    }
+  }
+
+  return { ...lake.inconsistencyReport, countsByKind, findings, computedAt };
+}
+
+/**
+ * The model-driven contradiction pass (#3057). Kept out of the blob deliberately: `inconsistencyReport`
+ * / `inconsistencyComputedAt` are the lexical pass's shape (`LakeInconsistencyReport`), and GET here
+ * reports only the lexical pass - `renderStoredReport` scopes its rows to `INCONSISTENCY_DETECTOR`.
+ * A model finding is visible via `GET /api/data-lakes/:id/findings?detector=model`, the same door
+ * the lexical rows already use.
+ *
+ * MUST STAY IN SYNC WITH `renderStoredReport`'s detector filter. `listByLake` applies one only when
+ * supplied, so dropping it would return `narrative-contradiction` rows next to a `countsByKind` the
+ * lexical pass built with `'narrative-contradiction': 0`, and let model rows take slots under the
+ * lexical findings cap.
+ *
+ * QUEUED, not run inline, and that is the difference between this branch working and not. The pass
+ * makes up to `ceil(MODEL_INCONSISTENCY_MEMBER_SAMPLE / MODEL_INCONSISTENCY_BATCH_SIZE)` sequential
+ * LLM calls, each able to take `MODEL_CONTRADICTION_TIMEOUT_MS` twice over; this Lambda is capped at
+ * 60 seconds (`infra/web.ts`). Run
+ * here, a normal-sized lake exhausted the request with every call it had already made billed and
+ * nothing persisted - a 504, no findings, and one of three hourly attempts spent. So this door does
+ * what `POST /lake-memory` does: check the preconditions, take the cap, enqueue, return 202. The
+ * handler (`queueHandlers/lakeInconsistencyModelDetection`) gets a 10-minute budget, a DLQ and a
+ * retry, and writes findings batch by batch as it goes.
+ *
+ * The response is deliberately NOT the run's result - there is no result yet. Findings arrive at
+ * `GET /api/data-lakes/:id/findings?detector=model`, which is already the read door for these rows.
+ */
+async function enqueueModelDetection(
+  lake: Awaited<ReturnType<typeof dataLakeService.assertLakeWriteAccess>>,
+  userId: string,
+  res: Response
+) {
+  // A lease held means a run is already reading this lake. Only a fast, honest rejection for the
+  // human clicking twice - the claim that actually excludes a concurrent run is in the handler,
+  // guarded in the query, because two requests can both read "no lease" before either enqueues.
+  if (isLeaseHeld(lake.modelInconsistencyRunAt, new Date(), MODEL_INCONSISTENCY_RUN_LEASE_MS)) {
+    throw new ConflictError('A model inconsistency run is already in progress for this lake.');
+  }
+
+  // A missing queue URL is a deployment misconfiguration, so fail here rather than reporting 202 for
+  // work nothing will ever consume. Checked before the per-lake cap below, as the lake-memory door
+  // does, so a fault that repeats on every attempt does not burn the lake's hourly budget. The
+  // per-caller cap is middleware and is already spent by now; that is accepted for a fault that is
+  // the same on every attempt and visible immediately.
+  const queueUrl = getSourceQueueUrl('lakeInconsistencyModelQueue');
+  if (!queueUrl) throw new Error('Lake model inconsistency queue URL not found');
+
+  if (!isDevelopment()) {
+    const { success, expiresAt } = await cacheRepository.tryIncrementWithinLimitFixedWindow(
+      modelLakeRateLimitKey(lake.id),
+      MODEL_DETECTION_HOURLY_CAP_PER_LAKE,
+      HOUR_MS
+    );
+    if (!success) {
+      const retryAfterSeconds = Math.max(1, Math.ceil((expiresAt.getTime() - Date.now()) / 1000));
+      res.setHeader('Retry-After', retryAfterSeconds);
+      throw new TooManyRequestsError(`Rate limit exceeded. Try again in ${retryAfterSeconds} seconds.`);
+    }
+  }
+
+  await sendToQueue(queueUrl, { dataLakeId: lake.id, userId });
+
+  return res.status(202).json({ ok: true, queued: true });
+}
+
 const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
   .use(requireFeatureEnabled('EnableDataLakes'))
-  .use((req, res, next) => (req.method === 'POST' ? inconsistencyRunRateLimit(req, res, next) : next()))
+  // Gated separately from EnableDataLakes, and BEFORE the rate limiter below: a caller hitting a
+  // disabled model pass should not burn its (far lower) hourly budget on requests that were always
+  // going to 403, the same reason EnableDataLakes itself sits ahead of rate limiting.
+  .use((req, res, next) =>
+    isModelDetectorRequest(req)
+      ? requireFeatureEnabled('EnableLakeModelInconsistencyDetection')(req, res, next)
+      : next()
+  )
+  .use((req, res, next) => {
+    if (req.method !== 'POST') return next();
+    if (!isModelDetectorRequest(req)) return inconsistencyRunRateLimit(req, res, next);
+    // Per-caller cap only; the per-lake cap is taken in `enqueueModelDetection`, after the access
+    // check, so a caller already over their own budget still never reaches the lake's.
+    return modelInconsistencyRunRateLimit(req, res, next);
+  })
   .get(async (req: Request, res) => {
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps);
 
-    // Null rather than an empty report when detection has never run: "never asked" and "asked and
-    // found nothing" are different answers and a surface has to be able to tell them apart.
-    if (!lake.inconsistencyReport) return res.json(null);
-    return res.json({ ...lake.inconsistencyReport, computedAt: lake.inconsistencyComputedAt ?? null });
+    return res.json(await renderStoredReport(lake));
   })
   .post(async (req: Request, res) => {
     assertDataLakeWriteScope(req);
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeWriteAccess(id, ctx, gateDeps);
+
+    if (isModelDetectorRequest(req)) return enqueueModelDetection(lake, ctx.userId, res);
 
     // The year is passed in rather than read inside the detector so the same corpus always produces
     // the same report - a stored result an owner already reviewed has to be comparable to the next.
@@ -104,68 +312,66 @@ const handler = baseApi({ requiredScopes: DATA_LAKE_READ_SCOPES })
     // No slicing here any more. The cap moved into the detector, which allocates it PER KIND - a
     // slice at this layer would re-create the starvation that allocation exists to prevent, because
     // findings sort by kind name and one prolific kind would take the whole budget again.
-    const stored = report;
     const computedAt = new Date();
+
+    // Rows FIRST, and they are now the only place a finding is persisted. Keyed on
+    // (lakeId, detector, kind, subject), so this run updating a problem a previous run already
+    // found refreshes that row rather than minting a second one - which is what makes the scheduled
+    // sweep (`lakeInconsistencySweep`) repeatable rather than a duplicate factory.
+    //
+    // Findings a curator DISMISSED are absent from `report` (#3045) but are recorded here too, along
+    // with everything the report kept: suppressed from what a curator is shown, current in the row
+    // behind it, so the evidence under a dismissal can change into a worse contradiction without the
+    // row freezing.
+    //
+    // `computedAt` is passed as `seenAt` so a run's rows and its summary agree on one instant rather
+    // than drifting by the write's latency - and so `renderStoredReport` below can use the summary's
+    // own date to select the rows this run saw.
+    const allFindings = [...report.findings, ...suppressed];
+    const { failed } = await dataLakeService.recordLakeFindings(
+      lake.id,
+      allFindings,
+      { detector: dataLakeService.INCONSISTENCY_DETECTOR, seenAt: computedAt },
+      { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
+    );
+
+    // A run that did not record every finding does not get to date a summary, and does not get a
+    // 200. The service isolates per-finding failures into `failed` rather than throwing - so it
+    // NEVER throws for an unavailable collection, and an earlier version of this handler that
+    // merely reordered the two writes would have sailed past N failures and stamped a fresh
+    // `inconsistencyComputedAt` over zero persisted rows. That is the precise lie the ordering was
+    // supposed to prevent: `countsByKind` claiming problems a curator has no rows for.
+    //
+    // Failing instead of storing is safe to retry: `recordDetected` is an idempotent upsert, so a
+    // second attempt converges on the same rows, and the last COMPLETE run's summary stays in place
+    // and correctly dated meanwhile.
+    if (failed > 0) {
+      req.logger?.warn('Lake findings partially recorded; summary not stored', {
+        dataLakeId: lake.id,
+        failed,
+        total: allFindings.length,
+      });
+      throw new Error(`Recorded ${allFindings.length - failed} of ${allFindings.length} findings`);
+    }
+
+    // The SUMMARY only - `toScanSummary` drops the findings. Storing them here as well is what used
+    // to make this an overwritable blob with no identity per finding, and it also kept a retention
+    // obligation on the lake document that nothing could discharge: a finding carries a 240-char
+    // excerpt of each source, and the purge-time sweeps reach rows only.
+    const stored = toScanSummary(report);
     await dataLakeRepository.update({
       id: lake.id,
       inconsistencyReport: stored,
       inconsistencyComputedAt: computedAt,
     });
 
-    // Findings a curator DISMISSED are absent from `report` (#3045) - from the blob, from
-    // `countsByKind`, and so from the health summary that reads it. They are still RECORDED below,
-    // and that pairing is the whole design: suppressed from what a curator is shown, current in the
-    // row behind it. A dismissal keys on kind and subject rather than on the passages, so the
-    // evidence under one can change into a far worse contradiction, and the row is then the only
-    // place that is visible at all. `recordDetected` writes no status, so recording cannot reopen
-    // what was dismissed.
-    //
-    // Also emit each finding as a durable row (#3039). Additive for now, and ordered after the blob
-    // deliberately: the blob is still what GET here and the counts on GET /health read, so until
-    // #3040 moves those readers over, a failure in this newer path must not cost the run its report.
-    //
-    // RETENTION IS ONLY HALF DONE UNTIL THEN. The stored blob above still carries
-    // `evidence[].excerpt` on the lake document, and the purge-time sweeps added with the rows
-    // (the `deleteForPurgedDocument(s)` sweeps at both destruction doors) reach the ROWS only -
-    // nothing rewrites the blob when a document it quotes is destroyed. #3040 must carry that
-    // cleanup along with moving the readers; deleting the blob write here first would blind
-    // GET and /health.
-    //
-    // The same `computedAt` is passed as `seenAt` so a run's rows and its report agree on one
-    // instant rather than drifting by the write's latency.
-    //
-    // CAUGHT, and that is what makes the ordering above worth anything. The service already
-    // isolates per-finding failures into its `failed` count, so reaching here means something
-    // unexpected - but the blob write has already COMMITTED, and letting the throw out would hand
-    // the caller a 500 for a run whose report is sitting in the database. They would re-run a
-    // ~1000-chunk detection pass to get back a report they already have. Log and return it.
-    let failed = 0;
-    try {
-      ({ failed } = await dataLakeService.recordLakeFindings(
-        lake.id,
-        [...stored.findings, ...suppressed],
-        { detector: dataLakeService.INCONSISTENCY_DETECTOR, seenAt: computedAt },
-        { db: { dataLakeFindings: dataLakeFindingRepository }, logger: req.logger }
-      ));
-    } catch (error) {
-      failed = stored.findings.length + suppressed.length;
-      req.logger?.error('Lake findings write failed outright; returning the stored report', {
-        dataLakeId: lake.id,
-        total: stored.findings.length + suppressed.length,
-        error: error instanceof Error ? error.message : 'Unknown error',
-      });
-    }
-    // A partially-written run must not read as a clean one. Each failure is already logged with its
-    // subject by the service; this is the one line that says the RUN was partial.
-    if (failed > 0) {
-      req.logger?.warn('Lake findings partially recorded', {
-        dataLakeId: lake.id,
-        failed,
-        total: stored.findings.length + suppressed.length,
-      });
-    }
-
-    return res.json({ ...stored, computedAt });
+    // Rendered through the same helper GET uses, so "run it now" and "show me the last run" return
+    // ONE shape. Returning `report.findings` here instead would hand a caller the detector's
+    // in-memory findings - no id, no status, `evidence` where the row has `sources` - so a surface
+    // could not render both responses, and could not resolve or assign anything it had just run.
+    return res.json(
+      await renderStoredReport({ ...lake, inconsistencyReport: stored, inconsistencyComputedAt: computedAt })
+    );
   });
 
 // Matches 12 of the 14 routes in this directory, health and converge included. This handler can run

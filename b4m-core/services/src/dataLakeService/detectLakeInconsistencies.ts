@@ -24,8 +24,12 @@ export const INCONSISTENCY_MEMBER_SAMPLE = 200;
  * so the first few passages carry most of what these rules can find per byte read.
  */
 export const INCONSISTENCY_CHUNKS_PER_MEMBER = 5;
-/** Concurrent per-member chunk reads. Bounded so one lake's pass cannot saturate the pool. */
-const CHUNK_READ_CONCURRENCY = 8;
+/**
+ * Concurrent per-member chunk reads. Bounded so one lake's pass cannot saturate the pool. Exported
+ * because `detectLakeInconsistenciesModel` reads the same collection the same way and must share
+ * this bound rather than pick its own: the pool it would saturate is the same one.
+ */
+export const CHUNK_READ_CONCURRENCY = 8;
 /**
  * Findings persisted per lake. Lives here rather than in the route because the detector allocates it
  * per kind (`capPerKind`), which it can only do while it still holds every finding - a caller that

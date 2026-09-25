@@ -13,6 +13,7 @@ import { satisfiesMembershipScope } from '../../../../dataLakeService/lakeMember
 import { datalakeTagsFrom } from '../../../../dataLakeService/getDataLakePrompts';
 import {
   defangRetrievedContent,
+  documentDateClause,
   renderRetrievedContentBlock,
   toContentLabel,
 } from '../../../../dataLakeService/renderRetrievedContentBlock';
@@ -425,11 +426,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             // name and tag list are attacker-influenced too, and a newline in either would carry a
             // forged marker into the header lines. See renderRetrievedContentBlock.
             //
-            // Undated, as all three retrieval channels are: `file.createdAt` is when the file was
-            // uploaded, and heading a decade-old document with last week's date is a claim the
-            // model has no way to discount. Nothing captures the document's own date yet.
+            // Dated only from `documentDate` - the document's OWN vintage, captured at ingest
+            // (#3048) - and silently undated otherwise. Never from `file.createdAt`, which is when
+            // the file was uploaded: heading a decade-old document with last week's date is a claim
+            // the model has no way to discount (#3047).
             sections.push(
-              `### ${toContentLabel(file.fileName)} (ID: ${file.id})\n` +
+              `### ${toContentLabel(file.fileName)} (ID: ${file.id})${documentDateClause(file.documentDate)}\n` +
                 `Tags: ${toContentLabel(fileTags)}\n` +
                 `Chunks: ${chunkLabel} | Characters: ${charLabel}\n` +
                 // Deliberately a literal, not RETRIEVED_SECTION_SEPARATOR: this rule divides one

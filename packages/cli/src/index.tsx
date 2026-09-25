@@ -184,6 +184,8 @@ import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
 import { buildAgent } from './bootstrap/buildAgent.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
+import { handleSandboxNetworkCommand } from './commands/sandboxNetworkCommand.js';
+import { handleSandboxTrustDomainCommand } from './commands/sandboxTrustDomainCommand.js';
 import { runTurn } from './session/turnController.js';
 import {
   createFreshSession,
@@ -1239,7 +1241,9 @@ function CliApp() {
 
   // Tavern presence: when cc-bridge is running on this machine, announce
   // this CLI session over loopback so a sprite appears in the tavern
-  // (D14 - bridge is the sole tavern gateway). No-op if bridge absent.
+  // (D14 - bridge is the sole tavern gateway). Fail-closed: absent bridge =
+  // quiet background retry; a foreign/undeterminable port owner never gets the
+  // secret (see BridgePresence).
   //
   // Gated on the `features.tavern` toggle: with Tavern off we never probe the
   // bridge, so a stale `~/.b4m/cc-bridge.json` (left over from a past session
@@ -3337,13 +3341,16 @@ function CliApp() {
         }
         state.sandboxOrchestrator.setMode('auto-allow');
         state.permissionManager?.setSandboxState('auto-allow', state.sandboxOrchestrator.isActive());
-        // Start network proxy if enabled
+        // Start the network proxy through the single lifecycle owner so it fails
+        // closed (no runtime network-on without a running proxy) if enabled.
         const sandboxCfg = state.sandboxOrchestrator.getConfig();
         if (sandboxCfg.network.enabled) {
-          await state.sandboxOrchestrator.startProxy();
+          const on = await state.sandboxOrchestrator.setNetworkEnabled(true);
           const pm = state.sandboxOrchestrator.getProxyManager();
-          if (pm?.isRunning()) {
+          if (on && pm?.isRunning()) {
             console.log(`🌐 Network proxy started on port ${pm.getPort()}`);
+          } else {
+            console.log('⚠️  Network filtering requested but the proxy failed to start; egress disabled');
           }
         }
         // Persist ONLY the sandbox field. Spreading the merged effective config
@@ -3358,7 +3365,10 @@ function CliApp() {
           console.log('Sandbox not initialized');
           break;
         }
-        await state.sandboxOrchestrator.stopProxy();
+        // Route through the single lifecycle owner so the persisted state stays
+        // honest: this clears config.network.enabled and tears the proxy down,
+        // rather than leaving network.enabled: true on disk for a later boot to load.
+        await state.sandboxOrchestrator.setNetworkEnabled(false);
         state.sandboxOrchestrator.setMode('disabled');
         state.permissionManager?.setSandboxState('disabled', false);
         await state.configStore.saveSandboxConfig(state.sandboxOrchestrator.getConfig());
@@ -3387,34 +3397,27 @@ function CliApp() {
         break;
       }
 
+      case 'sandbox:network': {
+        console.log(
+          await handleSandboxNetworkCommand(
+            {
+              orchestrator: state.sandboxOrchestrator,
+              configStore: state.configStore,
+              permissionManager: state.permissionManager,
+            },
+            args[0]
+          )
+        );
+        break;
+      }
+
       case 'sandbox:trust-domain': {
-        if (!state.sandboxOrchestrator) {
-          console.log('Sandbox not initialized');
-          break;
-        }
-        if (args.length === 0) {
-          console.log('Usage: /sandbox:trust-domain <domain> [...]');
-          break;
-        }
-        const proxyMgr = state.sandboxOrchestrator.getProxyManager();
-        if (!proxyMgr) {
-          console.log('Network proxy not initialized');
-          break;
-        }
-        for (const domain of args) {
-          proxyMgr.addAllowedDomain(domain);
-          console.log(`  Added: ${domain}`);
-        }
-        // Persist ONLY the sandbox field (no repo-merged config laundering).
-        const currentSandboxConfig = state.sandboxOrchestrator.getConfig();
-        await state.configStore.saveSandboxConfig({
-          ...currentSandboxConfig,
-          network: {
-            ...currentSandboxConfig.network,
-            allowedDomains: proxyMgr.getAllowedDomains(),
-          },
-        });
-        console.log(`Trusted ${args.length} domain(s)`);
+        console.log(
+          await handleSandboxTrustDomainCommand(
+            { orchestrator: state.sandboxOrchestrator, configStore: state.configStore },
+            args
+          )
+        );
         break;
       }
 

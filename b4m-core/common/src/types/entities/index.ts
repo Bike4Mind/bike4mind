@@ -93,6 +93,7 @@ export * from './QuestCapabilityTypes';
 export * from './SystemPromptTypes';
 export * from './DataLakeTypes';
 export * from './DataLakeAccessGrantTypes';
+export * from './DataLakeOwnershipOfferTypes';
 export * from './LakeAccessEventTypes';
 export * from './LakeConfigChangeEventTypes';
 export * from './LakeMembershipChangeEventTypes';

@@ -2,6 +2,7 @@ import {
   ExtractedArtifact,
   CurationArtifactType as ArtifactType,
   stripSearchResultCardFences,
+  type CitableSource,
 } from '@bike4mind/common';
 
 /**
@@ -148,7 +149,7 @@ function generateConversationSection(messages: any[], options: MarkdownGenerator
     const reply = message.questMasterReply || message.reply || (message.replies && message.replies[0]);
     if (reply) {
       lines.push(`### ${index + 1}. Assistant${showTimestamp ? ` (${timestamp})` : ''}\n`);
-      lines.push(cleanMessageContent(reply));
+      lines.push(cleanMessageContent(reply, message.promptMeta?.citables));
       lines.push('');
     }
   });
@@ -389,7 +390,7 @@ function formatArtifactTypeLabel(type: ArtifactType): string {
 /**
  * Helper: Clean message content (remove artifact tags, normalize whitespace)
  */
-function cleanMessageContent(content: string): string {
+function cleanMessageContent(content: string, citables?: CitableSource[]): string {
   // Remove <artifact> tags (already extracted)
   let cleaned = content.replace(/<artifact\s+.*?>([\s\S]*?)<\/artifact>/gi, '');
 
@@ -398,7 +399,7 @@ function cleanMessageContent(content: string): string {
 
   // Raw model-authored card JSON, not transcript prose - the artifactExtractor skips this fence
   // for the same reason, but the transcript body here is generated independently of it.
-  cleaned = stripSearchResultCardFences(cleaned);
+  cleaned = stripSearchResultCardFences(cleaned, citables);
 
   // Normalize whitespace
   cleaned = cleaned.trim();

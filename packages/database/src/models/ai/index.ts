@@ -9,6 +9,7 @@ export * from './AgentOpsSettingsModel';
 export * from './CodeAgentEventModel';
 export * from './DataLakeModel';
 export * from './DataLakeAccessGrantModel';
+export * from './DataLakeOwnershipOfferModel';
 export * from './DataLakeHealthSnapshotModel';
 export * from './EmbeddingCacheModel';
 export * from './LakeAccessEventModel';

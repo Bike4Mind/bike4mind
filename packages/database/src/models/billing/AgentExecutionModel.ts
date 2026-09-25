@@ -390,6 +390,14 @@ export interface IAgentExecution {
    */
   failureReason?: 'abandoned';
 
+  /**
+   * Set when the abandoned-sweep's post-abandonment quest settlement fails for
+   * this execution. The execution is already terminal at that point, so
+   * `findStaleActiveIds` can never select it again - this is the only way a
+   * later tick can find it and retry. Cleared on a successful settle.
+   */
+  questSettlementFailedAt?: Date;
+
   // Permission state
   approvedTools: string[];
   deniedTools: string[];
@@ -758,6 +766,7 @@ const AgentExecutionSchema = new mongoose.Schema(
       required: false,
     },
     failureReason: { type: String },
+    questSettlementFailedAt: { type: Date },
 
     // Permission state
     approvedTools: { type: [String], default: [] },
@@ -828,6 +837,9 @@ AgentExecutionSchema.index({ sessionId: 1, status: 1 }); // Find active executio
 AgentExecutionSchema.index({ questId: 1 }); // Lookup by quest
 AgentExecutionSchema.index({ status: 1, createdAt: 1 }); // Find pending/running
 AgentExecutionSchema.index({ status: 1, updatedAt: 1 }); // listStuck + findStaleActiveIds (abandoned-sweep)
+// findFailedQuestSettlementIds (abandoned-sweep retry pass). Sparse: only executions whose
+// settlement failed carry this field, so a dense index would mostly index nulls.
+AgentExecutionSchema.index({ questSettlementFailedAt: 1 }, { sparse: true });
 // Subagent lookup + child-snapshot replay. `findChildExecutions` does
 // `.find({ parentExecutionId }).sort({ createdAt: 1 })`; the compound index lets
 // MongoDB serve the sort from the index instead of an in-memory sort on every
@@ -1246,7 +1258,8 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * Transition the given executions to `failed` + `failureReason: 'abandoned'`.
    * Only executions still in a sweepable active status are flipped, so a
    * concurrent natural completion / explicit abort wins the race and we
-   * don't clobber its terminal state.
+   * don't clobber its terminal state. A supplied cutoff also preserves active work
+   * that refreshed its heartbeat after candidate selection.
    *
    * Uses per-doc `findOneAndUpdate` (status-guarded) so the returned array
    * reflects only the docs we actually wrote to - callers can safely emit a
@@ -1257,7 +1270,7 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * thousands of stale docs would otherwise hammer the connection pool on the
    * first sweep.
    */
-  async markAbandoned(ids: string[]): Promise<Array<{ id: string; userId: string }>> {
+  async markAbandoned(ids: string[], olderThan?: Date): Promise<Array<{ id: string; userId: string }>> {
     if (ids.length === 0) return [];
     const CHUNK_SIZE = 200;
     const now = new Date();
@@ -1269,7 +1282,11 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
         chunk.map(id =>
           this.model
             .findOneAndUpdate(
-              { _id: new mongoose.Types.ObjectId(id), status: { $in: this.sweepableStatuses } },
+              {
+                _id: new mongoose.Types.ObjectId(id),
+                status: { $in: this.sweepableStatuses },
+                ...(olderThan ? { updatedAt: { $lt: olderThan } } : {}),
+              },
               {
                 $set: {
                   status: 'failed',
@@ -1288,6 +1305,50 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       }
     }
     return results;
+  }
+
+  /**
+   * Stamp executions whose post-abandonment quest settlement failed, so the
+   * abandoned-sweep's retry pass can find them again by `questSettlementFailedAt`
+   * rather than by status - these executions are already terminal.
+   */
+  async markQuestSettlementFailed(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany(
+      { _id: { $in: ids.map(id => new mongoose.Types.ObjectId(id)) } },
+      { $set: { questSettlementFailedAt: new Date() } }
+    );
+  }
+
+  /** Clear the retry marker once a later pass settles the execution's quest. */
+  async clearQuestSettlementFailed(ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.model.updateMany(
+      { _id: { $in: ids.map(id => new mongoose.Types.ObjectId(id)) } },
+      { $unset: { questSettlementFailedAt: '' } }
+    );
+  }
+
+  /**
+   * Executions carrying an unresolved settlement-retry marker, oldest first so
+   * a permanently-failing one surfaces instead of being crowded out by newer
+   * candidates. Bounded by `limit` - the retry pass runs every tick, so a
+   * capped scan self-corrects on the next run rather than needing to be exact.
+   *
+   * `olderThan` excludes markers written by the caller's own current pass, so
+   * a failure only becomes retry-eligible on a later tick - the same
+   * candidate-selection race guard `findStaleActiveIds`/`markAbandoned` use.
+   */
+  async findFailedQuestSettlementIds(opts: {
+    limit: number;
+    olderThan: Date;
+  }): Promise<Array<{ id: string; failedAt: Date }>> {
+    const docs = await this.model
+      .find({ questSettlementFailedAt: { $exists: true, $lt: opts.olderThan } }, { _id: 1, questSettlementFailedAt: 1 })
+      .sort({ questSettlementFailedAt: 1 })
+      .limit(opts.limit)
+      .lean<Array<{ _id: mongoose.Types.ObjectId; questSettlementFailedAt: Date }>>();
+    return docs.map(d => ({ id: d._id.toString(), failedAt: d.questSettlementFailedAt }));
   }
 
   async updateStatus(id: string, status: AgentExecutionStatus): Promise<void> {
@@ -1405,6 +1466,21 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     gates: { v1: boolean; v2: boolean; v2OptInLookupFailed: boolean }
   ): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { resolvedMementoGates: gates } });
+  }
+
+  async restoreRejectedResume(
+    id: string,
+    state: {
+      status: 'awaiting_permission' | 'paused';
+      pendingPermission?: IPendingPermission;
+      pendingGate?: IPendingGate;
+    }
+  ): Promise<boolean> {
+    const result = await this.model.updateOne(
+      { _id: id, status: 'continuing', abortedAt: { $exists: false } },
+      { $set: state }
+    );
+    return result.modifiedCount > 0;
   }
 
   /**

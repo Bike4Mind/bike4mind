@@ -13,7 +13,10 @@ export interface AIImageGenerationOptions {
   user?: string;
   model?: string;
   safety_tolerance?: number;
-  size?: '256x256' | '512x512' | '1024x1024' | '1792x1024' | '1024x1792' | null;
+  // Any provider's 'WIDTHxHEIGHT' (BFL, Gemini and gpt-image-2 sizes all flow through here),
+  // so no fixed list is retyped. OpenAI sizes are validated by isSupportedImageSize in
+  // @bike4mind/common; the other adapters parse their own.
+  size?: string | null;
   // The full API-accepted set: DALL-E's 'standard'/'hd' plus the GPT-Image tiers.
   // Narrowing this to the DALL-E pair is what let callers silently drop a GPT-Image
   // tier they had already charged the user for.

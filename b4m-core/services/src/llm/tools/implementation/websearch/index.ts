@@ -1,9 +1,15 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolDefinition, ToolContext } from '../../base/types';
 import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
-import { CitableSource, signImageUrl, isPlaceholderImageSigningSecret } from '@bike4mind/common';
+import {
+  CitableSource,
+  googleMapsSearchUrl,
+  isPlaceholderImageSigningSecret,
+  signImageUrl,
+  type WebSearchPlace,
+} from '@bike4mind/common';
 import { resolveWebSearchProvider, type WebSearchImageResult, type WebSearchProviderResult } from './providers';
-import { WEB_SEARCH_CARDS_PROMPT } from '../../../prompts';
+import { WEB_SEARCH_CARDS_PROMPT, WEB_SEARCH_MAP_PROMPT } from '../../../prompts';
 
 /** Config `generateTools()` threads in for this tool alone - see toolGenerators.ts's `config` arg. */
 export interface WebSearchToolConfig {
@@ -40,6 +46,13 @@ export interface WebSearchParams {
    * output is byte-for-byte what it was before this parameter existed.
    */
   include_images?: boolean;
+  /**
+   * Opt in to a place search with provider coordinates, so the model can show the places on a
+   * `b4m_map` inline map. Off by default, with the same byte-for-byte guarantee as include_images.
+   */
+  include_places?: boolean;
+  /** A reference place the user named ("my hotel, the citizenM"), located and shown distinctly. */
+  anchor_location?: string;
 }
 
 // One stray thumbnail among text hits is not a picture answer, so images reach the model only once
@@ -62,6 +75,13 @@ export function shouldIncludeImages(
   // card-worthy cluster as a single picture.
   const organicImageCount = results.reduce((sum, r) => sum + (r.images?.length ?? 0), 0);
   return organicImageCount + imageResults.length >= MIN_IMAGE_RESULTS;
+}
+
+// One pin is a point, not a map: the widget earns its space only when there is something to compare.
+const MIN_PLACE_RESULTS = 2;
+
+export function shouldIncludePlaces(places: WebSearchPlace[], includePlaces?: boolean): boolean {
+  return !!includePlaces && places.length >= MIN_PLACE_RESULTS;
 }
 
 /** The image pool, rendered for the model as one line per picture. `imageUrlSigningSecret` signs
@@ -88,6 +108,57 @@ export function formatImageResults(images: WebSearchImageResult[], imageUrlSigni
       );
     }),
   ].join('\n');
+}
+
+function describePlace(place: WebSearchPlace): string {
+  const rating =
+    place.rating !== undefined
+      ? `${place.rating}${place.reviews !== undefined ? ` (${place.reviews} reviews)` : ''}`
+      : undefined;
+  return [place.name, rating, place.category, place.address]
+    .filter((part): part is string => !!part)
+    .map(stripNewlines)
+    .join(' - ');
+}
+
+export function formatPlaceResults(places: WebSearchPlace[], anchor?: WebSearchPlace): string {
+  return [
+    'Places found for this search (each has a map location; refer to it by its id):',
+    '',
+    ...places.map((place, index) => `${index + 1}. ${describePlace(place)}\n   id: ${stripNewlines(place.id)}`),
+    ...(anchor
+      ? [
+          '',
+          'Anchor location (the place the user named):',
+          `${describePlace(anchor)}\n   id: ${stripNewlines(anchor.id)}`,
+        ]
+      : []),
+  ].join('\n');
+}
+
+/**
+ * A place as a citable, carrying the place itself in `metadata.place` - the only thing the map
+ * widget reads pins from. The thumbnail is signed for /api/search-image, or dropped when the
+ * deploy cannot sign (it would only ever render as a failed tile).
+ */
+function placeCitable(place: WebSearchPlace, imageUrlSigningSecret: string, canSignImages: boolean): CitableSource {
+  const { thumbnail, ...rest } = place;
+  return {
+    id: `place:${place.id}`,
+    type: 'web_url',
+    title: place.name,
+    url: googleMapsSearchUrl(place.name, place.id),
+    description: [place.category, place.address].filter(Boolean).join(' - ') || undefined,
+    timestamp: new Date().toISOString(),
+    status: 'complete',
+    metadata: {
+      sourceSystem: 'web_search',
+      place: {
+        ...rest,
+        ...(thumbnail && canSignImages ? { thumbnail: signImageUrl(thumbnail, imageUrlSigningSecret) } : {}),
+      },
+    },
+  };
 }
 
 interface WebSearchResult {
@@ -128,7 +199,19 @@ export async function performWebSearch(
 
     // Only on a visual query: this is a second paid provider call, so it stays behind the model's
     // own `include_images` flag and never runs on an ordinary search.
-    const imageResults = wantsImages ? ((await provider.searchImages?.(params.query)) ?? []) : [];
+    const anchorQuery = params.include_places ? params.anchor_location?.trim() : undefined;
+    // Only on a location query: each is another paid provider call, behind the model's own flag.
+    const [imageResults, placeResults, anchorResults] = await Promise.all([
+      wantsImages ? provider.searchImages?.(params.query) : undefined,
+      params.include_places ? provider.searchPlaces?.(params.query) : undefined,
+      anchorQuery ? provider.searchPlaces?.(anchorQuery, 1) : undefined,
+    ]).then(all => all.map(result => result ?? []) as [WebSearchImageResult[], WebSearchPlace[], WebSearchPlace[]]);
+    const anchor = anchorResults[0];
+    const places = placeResults.filter(place => place.id !== anchor?.id);
+    const withPlaces = shouldIncludePlaces(places, params.include_places);
+    if (placeResults.length) {
+      Logger.globalInstance.log(`WebSearch Tool: ${provider.name} found ${placeResults.length} places`);
+    }
     if (imageResults.length) {
       Logger.globalInstance.log(`🖼️ WebSearch Tool: ${provider.name} found ${imageResults.length} images`);
     }
@@ -153,6 +236,11 @@ export async function performWebSearch(
         ...(withImages && result.thumbnail ? { thumbnail: result.thumbnail, images: result.images } : {}),
       },
     }));
+    if (withPlaces) {
+      for (const place of anchor ? [anchor, ...places] : places) {
+        citables.push(placeCitable(place, imageUrlSigningSecret, canSignImages));
+      }
+    }
 
     const formattedResults = results
       .map((result, index) => {
@@ -178,12 +266,18 @@ export async function performWebSearch(
     // return zero organic hits but a real image cluster (the dedicated image search runs
     // independently of the organic search), and that image cluster - plus the cards prompt telling
     // the model how to use it - must not be thrown away just because there's no prose to go with it.
+    const placeSection = withPlaces ? `\n${formatPlaceResults(places, anchor)}\n` : '';
     const baseText = formattedResults
       ? `Here's what I found from searching the web:\n\n${formattedResults}`
-      : imageSection
+      : imageSection || placeSection
         ? "Here's what I found from searching the web:\n"
         : 'No results found from web search.';
-    const formattedOutput = baseText + imageSection + (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '');
+    const formattedOutput =
+      baseText +
+      imageSection +
+      placeSection +
+      (withImages ? `\n${WEB_SEARCH_CARDS_PROMPT}` : '') +
+      (withPlaces ? `\n${WEB_SEARCH_MAP_PROMPT}` : '');
 
     return { formattedResults: formattedOutput, citables };
   } catch (error) {
@@ -241,6 +335,16 @@ export const webSearchTool: ToolDefinition = {
             type: 'boolean',
             description:
               'Set true whenever the answer is about things worth SEEING - products, watches, gear, places, buildings, plants, animals, people, cars, art, food, anything with a look. Decide this yourself from the subject matter: the user will NOT ask for pictures, and an answer that describes a physical object without showing it is a worse answer. Adds a set of attributed images so you can illustrate your reply with a b4m_cards block. Leave unset only for genuinely non-visual questions - code, math, definitions, policy - where images would be junk tokens.',
+          },
+          include_places: {
+            type: 'boolean',
+            description:
+              'Set true when the answer is a set of PLACES the user would want to see on a map - restaurants, bars, cafes, shops, hotels, attractions, things to do in or near somewhere. Decide this yourself: the user will not ask for a map. Adds places with map locations so you can show them with a b4m_map block. Leave unset for anything that is not about physical locations.',
+          },
+          anchor_location: {
+            type: 'string',
+            description:
+              'With include_places: the reference place the user named that results should be near, as a searchable name with its city, e.g. "citizenM Copenhagen Radhuspladsen". Shown distinctly on the map. Omit when the user named none.',
           },
         },
         required: ['query'],

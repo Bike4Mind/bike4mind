@@ -175,10 +175,9 @@ export const getModelBackend = (model: ModelInfo): string => {
 
   const modelName = model.name.toLowerCase();
   const modelId = model.id.toLowerCase();
-  const modelDescription = model.description?.toLowerCase();
 
   // OpenAI models
-  if (isOpenAIModel(modelName) || modelDescription?.includes('OpenAI')) {
+  if (isOpenAIModel(modelName)) {
     return 'OpenAI';
   }
 

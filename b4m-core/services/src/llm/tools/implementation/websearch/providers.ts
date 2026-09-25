@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import type { WebSearchPlace } from '@bike4mind/common';
 import {
   GetEffectiveApiKeyAdapters,
   getSerperKey,
@@ -62,6 +63,13 @@ export interface WebSearchProvider {
    * question answered in prose.
    */
   searchImages?(query: string, limit?: number): Promise<WebSearchImageResult[]>;
+  /**
+   * Place search with provider coordinates, for a query the model flagged as location-based. The
+   * inline map pins come ONLY from here, never from coordinates the model writes. Optional, and
+   * failures resolve to [] - a missing map degrades the reply to prose, it never fails the search.
+   * `thumbnail` is the provider's raw URL; the caller signs it before it reaches the model.
+   */
+  searchPlaces?(query: string, limit?: number): Promise<WebSearchPlace[]>;
 }
 
 /**
@@ -94,6 +102,65 @@ const SEARCH_TIMEOUT_MS = 60_000;
 const MAX_IMAGES_PER_RESULT = 4;
 // Enough to build a card row from without flooding the model's context with URLs.
 const DEFAULT_IMAGE_RESULTS = 12;
+// A useful map's worth of pins; each costs the model a few lines of context.
+const DEFAULT_PLACE_RESULTS = 10;
+
+function finiteNumber(value: unknown): number | undefined {
+  const n = typeof value === 'string' && value.trim() ? Number(value) : value;
+  return typeof n === 'number' && Number.isFinite(n) ? n : undefined;
+}
+
+function optionalText(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/** A normalized place, or undefined when the entry has no name, id, or usable coordinates. */
+function toPlace(fields: {
+  id: unknown;
+  name: unknown;
+  lat: unknown;
+  lng: unknown;
+  rating?: unknown;
+  reviews?: unknown;
+  category?: unknown;
+  address?: unknown;
+  thumbnail?: unknown;
+}): WebSearchPlace | undefined {
+  const id = optionalText(fields.id);
+  const name = optionalText(fields.name);
+  const lat = finiteNumber(fields.lat);
+  const lng = finiteNumber(fields.lng);
+  if (!id || !name || lat === undefined || lng === undefined) return undefined;
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return undefined;
+  const rating = finiteNumber(fields.rating);
+  const reviews = finiteNumber(fields.reviews);
+  const category = optionalText(fields.category);
+  const address = optionalText(fields.address);
+  const thumbnail = safeImageUrl(fields.thumbnail);
+  return {
+    id,
+    name,
+    lat,
+    lng,
+    ...(rating !== undefined ? { rating } : {}),
+    ...(reviews !== undefined ? { reviews } : {}),
+    ...(category ? { category } : {}),
+    ...(address ? { address } : {}),
+    ...(thumbnail ? { thumbnail } : {}),
+  };
+}
+
+function dedupePlaces(places: (WebSearchPlace | undefined)[], limit: number): WebSearchPlace[] {
+  const seen = new Set<string>();
+  const result: WebSearchPlace[] = [];
+  for (const place of places) {
+    if (!place || seen.has(place.id)) continue;
+    seen.add(place.id);
+    result.push(place);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
 
 /**
  * Only absolute https URLs are usable: the client reads these through /api/search-image, whose
@@ -310,6 +377,79 @@ async function serpApiImageSearch(
   }
 }
 
+/** An entry of the `google_maps` engine's `local_results`, or its single-match `place_results`. */
+interface SerpApiMapsPlace {
+  title?: string;
+  place_id?: string;
+  gps_coordinates?: { latitude?: unknown; longitude?: unknown };
+  rating?: unknown;
+  reviews?: unknown;
+  type?: string;
+  address?: string;
+  thumbnail?: string;
+}
+
+interface SerpApiMapsResponse {
+  local_results?: SerpApiMapsPlace[];
+  place_results?: SerpApiMapsPlace;
+}
+
+function fromSerpApiMapsPlace(entry: SerpApiMapsPlace | undefined): WebSearchPlace | undefined {
+  if (!entry) return undefined;
+  return toPlace({
+    id: entry.place_id,
+    name: entry.title,
+    lat: entry.gps_coordinates?.latitude,
+    lng: entry.gps_coordinates?.longitude,
+    rating: entry.rating,
+    reviews: entry.reviews,
+    category: entry.type,
+    address: entry.address,
+    thumbnail: entry.thumbnail,
+  });
+}
+
+/**
+ * SerpAPI's `google_maps` engine. A separate paid call, so it runs ONLY when the model set
+ * `include_places`. A query naming one specific place (the anchor lookup) comes back as a single
+ * `place_results` object rather than a `local_results` list, so both are read.
+ */
+async function serpApiPlaceSearch(
+  adapters: GetEffectiveApiKeyAdapters,
+  query: string,
+  limit: number
+): Promise<WebSearchPlace[]> {
+  const apiKey = await getSerperKey(adapters);
+  if (!apiKey) return [];
+
+  const url = new URL('https://serpapi.com/search');
+  url.search = new URLSearchParams({
+    engine: 'google_maps',
+    type: 'search',
+    api_key: apiKey,
+    q: query,
+    hl: 'en',
+  }).toString();
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
+    if (!response.ok) {
+      Logger.globalInstance.error('WebSearch Tool: SerpAPI place search failed', { status: response.status });
+      return [];
+    }
+    const data = (await response.json()) as SerpApiMapsResponse;
+    const local = Array.isArray(data.local_results) ? data.local_results : [];
+    return dedupePlaces([fromSerpApiMapsPlace(data.place_results), ...local.map(fromSerpApiMapsPlace)], limit);
+  } catch (error) {
+    Logger.globalInstance.error('WebSearch Tool: SerpAPI place search request failed:', error);
+    return [];
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 /** Hostname of a URL, or the URL itself when it will not parse. */
 function safeHost(url: string): string {
   try {
@@ -323,6 +463,7 @@ export function createSerpApiProvider(adapters: GetEffectiveApiKeyAdapters): Web
   return {
     name: 'serpapi',
     searchImages: (query, limit) => serpApiImageSearch(adapters, query, limit ?? DEFAULT_IMAGE_RESULTS),
+    searchPlaces: (query, limit) => serpApiPlaceSearch(adapters, query, limit ?? DEFAULT_PLACE_RESULTS),
     async search(query, numResults, options) {
       const data = await serpApiSearch(adapters, query, numResults, options);
       const organic = Array.isArray(data.organic_results) ? data.organic_results : [];
@@ -375,6 +516,38 @@ function parseSearxngResults(data: unknown, numResults: number): WebSearchProvid
 }
 
 /**
+ * Map-category SearXNG results (its OpenStreetMap/Photon engines) carry `latitude`/`longitude`
+ * and an `osm` {type, id}; anything without coordinates is not a place and is skipped.
+ */
+function parseSearxngPlaces(data: unknown, limit: number): WebSearchPlace[] {
+  if (typeof data !== 'object' || data === null) return [];
+  const results = (data as { results?: unknown }).results;
+  if (!Array.isArray(results)) return [];
+  return dedupePlaces(
+    results.map(item => {
+      if (typeof item !== 'object' || item === null) return undefined;
+      const record = item as Record<string, unknown>;
+      const osm = record.osm as { type?: unknown; id?: unknown } | undefined;
+      const osmId = osm && (typeof osm.id === 'number' || typeof osm.id === 'string') ? osm.id : undefined;
+      const id = osmId !== undefined && typeof osm?.type === 'string' ? `${osm.type}/${osmId}` : record.url;
+      const address = record.address as { name?: unknown; road?: unknown; locality?: unknown } | undefined;
+      const addressText = address
+        ? [address.road, address.locality].filter((part): part is string => typeof part === 'string').join(', ')
+        : undefined;
+      return toPlace({
+        id,
+        name: record.title,
+        lat: record.latitude,
+        lng: record.longitude,
+        address: addressText,
+        thumbnail: record.img_src ?? record.thumbnail,
+      });
+    }),
+    limit
+  );
+}
+
+/**
  * SearXNG provider. Calls the admin-configured JSON search endpoint (trusted config, so NOT subject
  * to the SSRF guard). Any transport/parse failure (including the abort timeout) resolves to [] so a
  * flaky local instance degrades to "no results" instead of throwing, matching how search is best-
@@ -383,6 +556,28 @@ function parseSearxngResults(data: unknown, numResults: number): WebSearchProvid
 export function createSearxngProvider(baseUrl: string): WebSearchProvider {
   return {
     name: 'searxng',
+    async searchPlaces(query, limit) {
+      const url = new URL(`${baseUrl.replace(/\/+$/, '')}/search`);
+      url.search = new URLSearchParams({ q: query, format: 'json', language: 'en', categories: 'map' }).toString();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+      try {
+        const response = await fetch(url.toString(), { method: 'GET', signal: controller.signal });
+        if (!response.ok) {
+          Logger.globalInstance.error('WebSearch Tool: SearXNG place search error', {
+            status: response.status,
+            statusText: response.statusText,
+          });
+          return [];
+        }
+        return parseSearxngPlaces(await response.json(), limit ?? DEFAULT_PLACE_RESULTS);
+      } catch (error) {
+        Logger.globalInstance.error('WebSearch Tool: SearXNG place search failed:', error);
+        return [];
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    },
     async search(query, numResults, options) {
       const limit = numResults && numResults > 0 ? numResults : DEFAULT_NUM_RESULTS;
       const trimmed = baseUrl.replace(/\/+$/, '');

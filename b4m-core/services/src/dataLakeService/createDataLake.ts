@@ -166,8 +166,9 @@ export const createDataLake = async (
   const slug = await disambiguateSlug(db, params.slug.toLowerCase(), organizationId);
   const datalakeTag = buildDatalakeTag(slug, organizationId);
 
-  // Lakes start in 'draft' and stay invisible to Discover and to retrieval until they have a
-  // member file, at which point `recomputeLakeStats` flips them to 'active' (one-way).
+  // Lakes start in 'draft' and stay invisible to Discover and retrieval until published via
+  // `promoteDataLake` - nothing else moves them out of draft, so the client reads `status` off
+  // this response to disclose that (#3222).
   try {
     const dataLake = await db.dataLakes.create({
       name: params.name,
@@ -177,6 +178,9 @@ export const createDataLake = async (
       datalakeTag,
       requiredUserTag: params.requiredUserTag,
       requiredEntitlement: params.requiredEntitlement ? normalizeEntitlementKey(params.requiredEntitlement) : undefined,
+      // Undefined falls through to the Mongoose schema default ('curated'); see the schema comment
+      // on CreateDataLakeRequestInput for why only the caller's own request may set this here.
+      origin: params.origin,
       createdByUserId: userId,
       organizationId,
       status: 'draft',

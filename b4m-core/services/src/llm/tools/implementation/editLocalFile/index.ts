@@ -20,6 +20,25 @@ interface EditLocalFileParams {
    * Exact matches are deterministic and ignore it.
    */
   confirmedFuzzyHash?: string;
+  /**
+   * Internal, NOT part of the tool schema. The gate's already-resolved span (see
+   * {@link resolveEditLocalFile}), paired with the content hash it was resolved
+   * against. The write path still reads the file fresh - the file can change between
+   * the gate and the write with no permission prompt involved (another tool call, a
+   * formatter, a watcher), so the read itself can never be safely skipped - but when
+   * the fresh hash still matches `contentHash`, it reuses `resolvedEdit` instead of
+   * re-running resolveEdit()'s string-matching pass. Injected by the CLI permission
+   * layer, which strips any caller-supplied value before conditionally re-adding its
+   * own - this file does not rely on that alone: a caller reaching this tool directly
+   * (not through the CLI wrapper) can supply anything here, so reuse is trusted only
+   * once it's independently verified both against the real bytes AND against this same
+   * call's own `old_string`/`new_string` (see {@link isResolvedEditConsistent});
+   * anything else falls back to a genuine `resolveEdit()`.
+   */
+  gateSnapshot?: {
+    contentHash: string;
+    resolvedEdit: ResolvedEdit;
+  };
 }
 
 interface EditLocalFileResult {
@@ -36,7 +55,7 @@ interface DiffResult {
 }
 
 /** The span of the file to replace and what to replace it with. */
-interface ResolvedEdit {
+export interface ResolvedEdit {
   startIndex: number;
   matchedText: string;
   replacement: string;
@@ -141,6 +160,36 @@ function resolveEdit(currentContent: string, old_string: string, new_string: str
   };
 }
 
+/**
+ * Defense in depth for a reused `gateSnapshot.resolvedEdit`: confirm the span is the
+ * real bytes at that offset in `currentContent`, that it actually corresponds to THIS
+ * call's `old_string`/`new_string`, AND that `old_string` is unique in the content -
+ * matching bytes and matching old_string/new_string alone still don't rule out a
+ * caller pointing a genuine occurrence's startIndex at one of SEVERAL matches, which
+ * `resolveEdit()` would reject as ambiguous. Only the exact-match case can be verified
+ * this cheaply; a fuzzy-resolved span's matchedText legitimately differs from
+ * old_string, so its provenance can't be checked without re-running the matcher -
+ * reuse is refused for it and the caller falls back to a genuine resolveEdit().
+ */
+function isResolvedEditConsistent(
+  currentContent: string,
+  edit: ResolvedEdit,
+  old_string: string,
+  new_string: string
+): boolean {
+  const bytesMatch =
+    edit.startIndex >= 0 &&
+    edit.startIndex + edit.matchedText.length <= currentContent.length &&
+    currentContent.slice(edit.startIndex, edit.startIndex + edit.matchedText.length) === edit.matchedText;
+  if (!bytesMatch || edit.strategy) return false;
+  if (edit.matchedText !== old_string || edit.replacement !== new_string) return false;
+  // Same uniqueness contract resolveEdit() enforces (occurrences > 1 -> ambiguous,
+  // rejected) - without it a caller could point a real occurrence's span at any one of
+  // several matches and skip that rejection entirely.
+  const occurrences = currentContent.split(old_string).length - 1;
+  return occurrences === 1;
+}
+
 /** A preview of the REAL span an edit will replace (not the model's typed old_string). */
 function formatSpanPreview(filePath: string, matchedText: string, replacement: string): string {
   const { diff } = generateDiff(matchedText, replacement);
@@ -160,6 +209,12 @@ export interface EditPlan {
   strategy?: FuzzyStrategy;
   /** Diff of the real matched span -> replacement, for the permission preview. */
   diffPreview: string;
+  /**
+   * The span resolved from `contentHash`'s bytes. Handed back to the write path as
+   * `gateSnapshot` (see {@link EditLocalFileParams}) so a call doesn't pay for a
+   * second resolveEdit() pass when the file hasn't changed since.
+   */
+  resolvedEdit: ResolvedEdit;
 }
 
 /**
@@ -187,11 +242,12 @@ export async function resolveEditLocalFile(
     contentHash: sha256(currentContent),
     strategy: resolved.strategy,
     diffPreview: formatSpanPreview(filePath, resolved.matchedText, resolved.replacement),
+    resolvedEdit: resolved,
   };
 }
 
 async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: string[]): Promise<EditLocalFileResult> {
-  const { path: filePath, old_string, new_string, confirmedFuzzyHash } = params;
+  const { path: filePath, old_string, new_string, confirmedFuzzyHash, gateSnapshot } = params;
 
   // Validate path is within allowed directories (cwd is always included)
   const resolvedPath = assertPathAllowed(filePath, allowedDirectories, 'edit');
@@ -201,15 +257,31 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
     throw new Error(`File not found: ${filePath}`);
   }
 
+  // The file can change between the gate's resolve and this write with no permission
+  // prompt involved at all (another tool call, a formatter, a watcher) - see the
+  // TOCTOU regression test this guards. The read can never be safely skipped, so it
+  // always happens here, same as before this file's gateSnapshot reuse existed.
   const currentContent = await fs.readFile(resolvedPath, 'utf-8');
   const currentHash = sha256(currentContent);
-  const resolved = resolveEdit(currentContent, old_string, new_string);
+
+  // Reuse the gate's already-resolved span only when the file hasn't changed since,
+  // AND the span/replacement are verified to actually be old_string/new_string's own
+  // exact match against the real bytes (isResolvedEditConsistent) - the hash match
+  // alone binds the snapshot to this content, but says nothing about whether the span
+  // was genuinely resolveEdit()'s output rather than an arbitrary caller-chosen span.
+  // This is what skips the redundant resolveEdit() string-matching pass.
+  const resolved =
+    gateSnapshot &&
+    gateSnapshot.contentHash === currentHash &&
+    isResolvedEditConsistent(currentContent, gateSnapshot.resolvedEdit, old_string, new_string)
+      ? gateSnapshot.resolvedEdit
+      : resolveEdit(currentContent, old_string, new_string);
 
   // A fuzzy fallback can write a wider span than old_string names, so it must be
   // confirmed against the exact bytes present. Refuse unless the caller approved
   // THIS content hash; the CLI re-prompts on this and retries bound to the hash.
-  // Exact matches are deterministic and need no confirmation. Verified here,
-  // against the same read that writes below, so there is no gate -> write window.
+  // Exact matches are deterministic and need no confirmation. Verified here, against
+  // the same read that writes below, so there is no gate -> write window.
   if (resolved.strategy && confirmedFuzzyHash !== currentHash) {
     throw new FuzzyEditConfirmationRequiredError(
       resolvedPath,

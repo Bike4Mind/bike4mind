@@ -1,6 +1,8 @@
 // Signup conversion tracking: fires the GA4 `sign_up` event and the Reddit
-// `SignUp` conversion once per new account, stamped with acquisition
-// attribution so ad-driven signups are measurable end-to-end.
+// `SignUp` / Meta `CompleteRegistration` conversions once per new account,
+// stamped with acquisition attribution so ad-driven signups are measurable
+// end-to-end. The two ad platforms name this conversion differently; both mean
+// "an account was created".
 //
 // Attribution comes from the shared first-party cookies - see
 // attributionCookies.ts for that contract. The paid counterpart to this file is
@@ -8,10 +10,11 @@
 //
 // Callers are responsible for once-per-signup semantics (the password flow's
 // success block runs once; the OAuth flow's isNewUser hash param is cleared
-// on read). GA4 consent mode and the deferred Reddit pixel handle consent -
-// this function is safe to call regardless of consent state.
+// on read). GA4 consent mode and the deferred ad pixels handle consent - this
+// function is safe to call regardless of consent state.
 
 import { attributionParams } from './attributionCookies';
+import { trackMetaEvent } from './metaPixel';
 import { trackRedditEvent } from './redditPixel';
 
 declare function gtag(...args: unknown[]): void;
@@ -30,4 +33,5 @@ export function trackSignupConversion(method: string): void {
   }
 
   trackRedditEvent('SignUp');
+  trackMetaEvent('CompleteRegistration');
 }

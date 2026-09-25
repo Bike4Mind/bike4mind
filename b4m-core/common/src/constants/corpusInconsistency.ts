@@ -31,6 +31,14 @@ export const INCONSISTENCY_KINDS = [
   'relationship-conflict',
   /** Dated claims that have silently become false, grouped by the year they expired in. */
   'expired-claim',
+  /**
+   * Two documents state incompatible claims in ordinary prose, caught by READING them rather than
+   * by any pattern above (#3057). Never produced by `detectCorpusInconsistencies` - it is pure and
+   * LLM-free by design (see the module doc) - so this kind exists in the shared vocabulary but
+   * never appears in that function's own `countsByKind`. Only `detectLakeInconsistenciesModel`
+   * produces it.
+   */
+  'narrative-contradiction',
 ] as const;
 
 /**
@@ -102,8 +110,12 @@ export interface InconsistencyFinding {
   documentCount: number;
 }
 
-/** Longest excerpt carried per finding. Enough to judge a claim, short enough to render in a list. */
-const EXCERPT_MAX = 240;
+/**
+ * Longest excerpt carried per finding. Enough to judge a claim, short enough to render in a list.
+ * Exported so `LakeContradictionReadingService` (#3057) can hold the model to the same bound when it
+ * asks for a quote, rather than trusting `excerpt()` alone to trim an unbounded response after the fact.
+ */
+export const EXCERPT_MAX = 240;
 
 /**
  * Documents quoted per finding.
@@ -131,12 +143,20 @@ function sentences(text: string): string[] {
     .filter(Boolean);
 }
 
-function excerpt(sentence: string): string {
+/** Exported so `detectLakeInconsistenciesModel` (#3057) bounds a model-quoted excerpt the same way. */
+export function excerpt(sentence: string): string {
   return sentence.length <= EXCERPT_MAX ? sentence : `${sentence.slice(0, EXCERPT_MAX - 3)}...`;
 }
 
-/** Grouping key: case-folded, punctuation-stripped, whitespace-collapsed. */
-function normalizeSubject(raw: string): string {
+/**
+ * Grouping key: case-folded, punctuation-stripped, whitespace-collapsed.
+ *
+ * Exported for `detectLakeInconsistenciesModel` (#3057): a model's free-text subject phrasing can
+ * drift between runs, and this is the same normalization the lexical rules rely on to key a
+ * finding - reusing it is what gives a model-found contradiction a shot at landing on the same
+ * `recordLakeFindings` row across re-detections instead of minting a duplicate every run.
+ */
+export function normalizeSubject(raw: string): string {
   return raw
     .toLowerCase()
     .replace(/[^a-z0-9\s%.-]/g, ' ')
@@ -542,6 +562,27 @@ export interface LakeInconsistencyReport extends CorpusInconsistencyReport {
 }
 
 /**
+ * What the LAKE DOCUMENT stores about a detection run: everything the run reported about ITSELF,
+ * and none of what it found.
+ *
+ * The findings are rows now (`DataLakeFindingTypes`), so storing them here as well would be a
+ * second copy with no identity - the exact overwritable blob the findings model replaced. It would
+ * also keep a retention obligation on the lake: a finding carries a 240-char `excerpt` of each
+ * source, and the purge-time sweeps reach rows only, so a blob quoting a destroyed document had
+ * nothing to clean it up.
+ *
+ * The run-level flags stay here rather than moving onto every row, because they describe the PASS
+ * and not any one problem: `sampled` and `memberCount` are properties of what was read, and
+ * `countsByKind` is the EXACT per-kind total, which the capped row set cannot reconstruct. That is
+ * what `computeLakeHealth` renders as its counts-only, read-gated view.
+ */
+export type LakeInconsistencyScanSummary = Omit<LakeInconsistencyReport, 'findings'>;
+
+/** Drop a run's findings, keeping only what the run reports about itself. */
+export const toScanSummary = ({ findings, ...summary }: LakeInconsistencyReport): LakeInconsistencyScanSummary =>
+  summary;
+
+/**
  * Run every rule over a corpus.
  *
  * `nowYear` is injected rather than read from the clock so a report is reproducible - a test, and a
@@ -581,6 +622,9 @@ export function detectCorpusInconsistencies(
     'metric-disagreement': 0,
     'relationship-conflict': 0,
     'expired-claim': 0,
+    // Never produced here - see the kind's own doc comment. Present so the Record type stays
+    // exhaustive over the full shared vocabulary rather than only this detector's slice of it.
+    'narrative-contradiction': 0,
   };
   for (const finding of findings) countsByKind[finding.kind] += 1;
 

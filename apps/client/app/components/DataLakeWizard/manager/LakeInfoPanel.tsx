@@ -195,6 +195,7 @@ export function LakeInfoPanel({
             variant="soft"
             color="primary"
             startDecorator={<ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />}
+            aria-label={`Start chat with ${lake.name}`}
             data-testid={`datalake-startchat-btn-${lake.id}`}
             loading={startingChat}
             onClick={async () => {
@@ -222,6 +223,7 @@ export function LakeInfoPanel({
                 variant="soft"
                 color="primary"
                 startDecorator={<AddIcon sx={{ fontSize: 16 }} />}
+                aria-label={`Add files to ${lake.name}`}
                 data-testid={`datalake-addfiles-btn-${lake.id}`}
                 onClick={() => openWizardForLake(toWizardTargetLake(lake))}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -233,6 +235,7 @@ export function LakeInfoPanel({
                 variant="outlined"
                 color="neutral"
                 startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+                aria-label={`Settings for ${lake.name}`}
                 data-testid={`datalake-settings-btn-${lake.id}`}
                 onClick={onOpenSettings}
                 sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -316,6 +319,7 @@ export function LakeInfoPanel({
               variant="outlined"
               color="neutral"
               startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
+              aria-label={`Settings for ${lake.name}`}
               data-testid={`datalake-fallback-settings-btn-${lake.id}`}
               onClick={onOpenFallbackSettings}
               sx={{ flexShrink: 0, fontSize: '13px' }}
@@ -548,6 +552,20 @@ export function LakeInfoPanel({
               data-testid={`datalake-armcounts-chip-${lake.id}`}
             >
               {armCounts.metaCount} by lake tag, {armCounts.prefixOnlyCount} by content prefix
+            </Chip>
+          )}
+          {/* The DECLARATION (who may fill this lake), distinct from the Drive chip below it, which
+              reports whether a folder is actually attached. A lake can be connector-fed with no
+              connection yet. */}
+          {lake.origin === 'connector-fed' && (
+            <Chip
+              size="sm"
+              variant="soft"
+              color="neutral"
+              sx={{ fontSize: '11px' }}
+              data-testid={`datalake-origin-chip-${lake.id}`}
+            >
+              Connector-fed
             </Chip>
           )}
           {/* Attached-source marker: this panel is where a user comes to inspect or delete a lake,

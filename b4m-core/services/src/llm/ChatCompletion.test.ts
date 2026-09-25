@@ -52,6 +52,7 @@ import { SkillsFeature } from './features/SkillsFeature';
 import { LakeMemoryFeature } from './ChatCompletionFeatures';
 import type { ISkill, IDataLakeDocument } from '@bike4mind/common';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
+import { INCOMPLETE_ANSWER_NOTICE, TRUNCATED_ANSWER_NOTICE } from './earlyStopStamp';
 
 vi.mock('@bike4mind/llm-adapters', async importOriginal => {
   const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
@@ -315,8 +316,8 @@ describe('ChatCompletionProcess', () => {
       (service as any).getEntitlements = getEnt;
       (service as any).entitlementsResolved = false;
       (service as any).entitlementKeys = [];
-      expect(await service.resolveEntitlementKeys()).toEqual(['product:pro']);
-      expect(await service.resolveEntitlementKeys()).toEqual(['product:pro']);
+      expect(await service.resolveEntitlementKeys()).toEqual({ keys: ['product:pro'], resolved: true });
+      expect(await service.resolveEntitlementKeys()).toEqual({ keys: ['product:pro'], resolved: true });
       expect(getEnt).toHaveBeenCalledTimes(1);
     });
 
@@ -325,7 +326,9 @@ describe('ChatCompletionProcess', () => {
       (service as any).entitlementsResolved = false;
       (service as any).entitlementKeys = [];
       (service as any).logger = { warn: vi.fn() };
-      await expect(service.resolveEntitlementKeys()).resolves.toEqual([]);
+      // The degraded `[]` and the flag that says so come back as ONE value: a consumer building a
+      // lake-access context cannot take the keys and leave the completeness signal behind.
+      await expect(service.resolveEntitlementKeys()).resolves.toEqual({ keys: [], resolved: false });
       expect((service as any).logger.warn).toHaveBeenCalled();
     });
 
@@ -333,7 +336,7 @@ describe('ChatCompletionProcess', () => {
       (service as any).getEntitlements = undefined;
       (service as any).entitlementsResolved = false;
       (service as any).entitlementKeys = [];
-      expect(await service.resolveEntitlementKeys()).toEqual([]);
+      expect(await service.resolveEntitlementKeys()).toEqual({ keys: [], resolved: true });
     });
 
     // #3155 (review): `entitlementsResolved` only flips AFTER the await, so two callers racing
@@ -350,8 +353,8 @@ describe('ChatCompletionProcess', () => {
 
       const [first, second] = await Promise.all([service.resolveEntitlementKeys(), service.resolveEntitlementKeys()]);
 
-      expect(first).toEqual(['product:pro']);
-      expect(second).toEqual(['product:pro']);
+      expect(first).toEqual({ keys: ['product:pro'], resolved: true });
+      expect(second).toEqual({ keys: ['product:pro'], resolved: true });
       expect(getEnt).toHaveBeenCalledTimes(1);
     });
   });
@@ -520,37 +523,37 @@ describe('ChatCompletionProcess', () => {
   // invariant, not just an assignment: getAccessibleDataLakeAccess memoizes per turn, so a capture
   // that ran after the first consumer would freeze an access set with the lake missing - and the
   // whole re-check below it would then be pinning behaviour nothing reaches.
-  describe('per-turn pre-authorized capture', () => {
-    const wireMinimalTurn = () => {
-      mockedGetLlmByModel.mockReturnValue({
-        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
-          await cb(['Hi!']);
-        }),
-        getModelInfo: vi.fn().mockResolvedValue([]),
-        currentModel: ChatModels.GPT4,
-      } as any); // any: minimal backend shape, as elsewhere in this file
-      mockedGetAvailableModels.mockResolvedValue([
-        {
-          id: ChatModels.GPT4,
-          type: 'text',
-          name: 'GPT-4',
-          backend: ModelBackend.OpenAI,
-          max_tokens: 100,
-          contextWindow: 1000,
-          can_stream: false,
-          pricing: {},
-          supportsImageVariation: false,
-        },
-      ] as any); // any: minimal model shape, as elsewhere in this file
-      mockedBuildAndSortMessages.mockResolvedValue({
-        messages: [{ role: 'user', content: 'Hello' }],
-        messageTruncation: null,
-      } as any); // any: minimal message shape, as elsewhere in this file
-      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
-      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
-      return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
-    };
+  const wireMinimalTurn = () => {
+    mockedGetLlmByModel.mockReturnValue({
+      complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+        await cb(['Hi!']);
+      }),
+      getModelInfo: vi.fn().mockResolvedValue([]),
+      currentModel: ChatModels.GPT4,
+    } as any); // any: minimal backend shape, as elsewhere in this file
+    mockedGetAvailableModels.mockResolvedValue([
+      {
+        id: ChatModels.GPT4,
+        type: 'text',
+        name: 'GPT-4',
+        backend: ModelBackend.OpenAI,
+        max_tokens: 100,
+        contextWindow: 1000,
+        can_stream: false,
+        pricing: {},
+        supportsImageVariation: false,
+      },
+    ] as any); // any: minimal model shape, as elsewhere in this file
+    mockedBuildAndSortMessages.mockResolvedValue({
+      messages: [{ role: 'user', content: 'Hello' }],
+      messageTruncation: null,
+    } as any); // any: minimal message shape, as elsewhere in this file
+    mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+    mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+    return { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+  };
 
+  describe('per-turn pre-authorized capture', () => {
     it('captures the session ids onto the turn', async () => {
       mockSession.userId = 'user1';
       mockSession.preauthorizedLakeIds = ['managed'];
@@ -587,6 +590,65 @@ describe('ChatCompletionProcess', () => {
       await service.process({ body, logger: mockLogger });
 
       expect((service as any).turnPreauthorizedLakeIds).toBeUndefined();
+    });
+  });
+
+  describe('a user stop', () => {
+    it('landing before processing starts is honoured instead of saving running over it', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const complete = vi.fn();
+      mockedGetLlmByModel.mockReturnValue({ complete, getModelInfo: vi.fn(), currentModel: ChatModels.GPT4 } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'stopped' });
+      const sendStatusUpdate = vi.spyOn(service as any, 'sendStatusUpdate');
+
+      await service.process({ body, logger: mockLogger });
+
+      expect(complete).not.toHaveBeenCalled();
+      expect(mockDb.quests.update).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'running' }));
+      expect(sendStatusUpdate).toHaveBeenLastCalledWith(
+        expect.objectContaining({ status: 'stopped' }),
+        null,
+        expect.anything()
+      );
+    });
+
+    it('that aborts the request before the first chunk ends the quest stopped, not with an error reply', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const abort = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(abort),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus
+        .mockResolvedValueOnce({ id: 'quest1', status: 'running' })
+        .mockResolvedValue({ id: 'quest1', status: 'stopped' });
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'stopped', type: 'message' });
+      expect(JSON.stringify(lastSave.replies ?? [])).not.toContain('interrupted');
+    });
+
+    it('does not apply to an abort the user did not ask for', async () => {
+      mockSession.userId = 'user1';
+      const body = wireMinimalTurn();
+      const abort = Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockRejectedValue(abort),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any); // any: minimal backend shape
+      mockDb.quests.findByIdWithStatus.mockResolvedValue({ id: 'quest1', status: 'running' });
+
+      await service.process({ body, logger: mockLogger });
+
+      const lastSave = mockDb.quests.update.mock.calls.at(-1)?.[0];
+      expect(lastSave).toMatchObject({ status: 'done', type: 'error' });
+      expect(lastSave.replies.join('')).toContain('The request was interrupted');
     });
   });
 
@@ -1200,6 +1262,197 @@ describe('ChatCompletionProcess', () => {
           type: 'message',
         })
       );
+    });
+
+    it('keeps a user-stopped quest as stopped when the aborted backend resolves normally', async () => {
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => {
+          await cb(['Partial']);
+          // A user Stop persists 'stopped'; the cancellation watcher sees it and aborts.
+          mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal.aborted) return resolve();
+            opts.abortSignal.addEventListener('abort', () => resolve());
+            setTimeout(resolve, 3000);
+          });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 1000,
+          can_stream: false,
+          pricing: {},
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue({
+        messages: [{ role: 'user', content: 'Hello' }],
+        messageTruncation: null,
+      });
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const statuses = mockDb.quests.update.mock.calls.map(([arg]: [{ status?: string } | undefined]) => arg?.status);
+      expect(statuses.length).toBeGreaterThan(0);
+      expect(statuses.at(-1)).toBe('stopped');
+      expect(mockQuest.status).toBe('stopped');
+    });
+
+    describe('incomplete answer notice', () => {
+      type Emit = (chunks: string[], info?: Record<string, unknown>) => Promise<void>;
+
+      function setupTurn(run: (cb: Emit, opts: { abortSignal: AbortSignal }) => Promise<void>) {
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_model, _messages, opts, cb) => run(cb, opts)),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 1000,
+            can_stream: false,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue({
+          messages: [{ role: 'user', content: 'Hello' }],
+          messageTruncation: null,
+        });
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+      }
+
+      const runTurn = () =>
+        service.process({
+          body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+          logger: mockLogger,
+        });
+
+      // Mirrors the Anthropic backend: the preamble streams, toolsUsed grows once the
+      // tool-calling stream ends, and the next iteration streams against the grown array.
+      async function toolLoop(cb: Emit, finalIteration: string[], stopReason = 'end_turn') {
+        const toolsUsed: Array<Record<string, unknown>> = [];
+        await cb(["I'll pull current figures first."], { toolsUsed });
+        toolsUsed.push({ name: 'web_search', arguments: '{"q":"figures"}', id: 't1' });
+        await cb(['<think>checking results</think>'], { toolsUsed });
+        toolsUsed.push({ name: 'web_fetch', arguments: '{"url":"x"}', id: 't2' });
+        for (const chunk of finalIteration) await cb([chunk], { toolsUsed });
+        await cb([], { toolsUsed, stopReason });
+      }
+
+      it('appends a notice when the final tool-loop iteration emits only thinking', async () => {
+        setupTurn(cb => toolLoop(cb, ['<think>', 'more reasoning', '</think>']));
+
+        await runTurn();
+
+        expect(mockQuest.status).toBe('done');
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+        // Visible text only: the client reads thinking from reply as well as replies.
+        expect(mockQuest.reply).toBe(`I'll pull current figures first.\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+        expect(mockLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('[IncompleteAnswer]'),
+          expect.objectContaining({ questId: 'quest1', stopReason: 'end_turn' })
+        );
+      });
+
+      it('adds no notice when the tool loop ends with a real answer', async () => {
+        setupTurn(cb => toolLoop(cb, ['<think>ok</think>', 'Here are the figures.']));
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+        expect(mockQuest.replies.join('')).toContain('Here are the figures.');
+      });
+
+      it('adds no notice when a tool delivered an attachment and the model wrote no caption', async () => {
+        setupTurn(async cb => {
+          const toolsUsed = [{ name: 'image_generation', arguments: '{"prompt":"a cat"}', id: 't1' }];
+          // What applyQuestStatusChanges does when the tool calls statusUpdate({ images }).
+          mockQuest.images = [...(mockQuest.images ?? []), 'generated/cat.png'];
+          await cb(['<think>done</think>'], { toolsUsed });
+          await cb([], { toolsUsed, stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('adds no notice when a tool left a pendingAction for the user and wrote no text', async () => {
+        setupTurn(async cb => {
+          const toolsUsed = [{ name: 'image_generation', arguments: '{"prompt":"a cat"}', id: 't1' }];
+          // What the image tool's model-picker statusUpdate({ pendingAction }) does.
+          mockQuest.pendingAction = { tool: 'image_generation', params: { prompt: 'a cat' }, ts: Date.now() };
+          await cb(['<think>picker shown</think>'], { toolsUsed });
+          await cb([], { toolsUsed, stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('still adds the notice when the pendingAction is left over from an earlier turn', async () => {
+        mockQuest.pendingAction = { tool: 'image_generation', params: { prompt: 'old' }, ts: 1 };
+        setupTurn(cb => toolLoop(cb, ['<think>', 'more reasoning', '</think>']));
+
+        await runTurn();
+
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${INCOMPLETE_ANSWER_NOTICE}`);
+      });
+
+      it('adds no notice to a stopped turn', async () => {
+        setupTurn(async (cb, opts) => {
+          const toolsUsed = [{ name: 'web_search', arguments: '{}', id: 't1' }];
+          await cb(['<think>thinking</think>'], { toolsUsed });
+          mockDb.quests.findByIdWithStatus.mockResolvedValue({ ...mockQuest, status: 'stopped' });
+          await new Promise<void>(resolve => {
+            if (opts.abortSignal.aborted) return resolve();
+            opts.abortSignal.addEventListener('abort', () => resolve());
+            setTimeout(resolve, 3000);
+          });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.status).toBe('stopped');
+        expect(mockQuest.replies.join('')).not.toContain(INCOMPLETE_ANSWER_NOTICE);
+      });
+
+      it('appends the truncation notice on max_tokens with no final text', async () => {
+        setupTurn(cb => toolLoop(cb, ['<think>', 'long reasoning'], 'max_tokens'));
+
+        await runTurn();
+
+        expect(mockQuest.replies.at(-1)).toBe(`\n\n${TRUNCATED_ANSWER_NOTICE}`);
+      });
+
+      it('adds no notice to a plain answer with no tool calls', async () => {
+        setupTurn(async cb => {
+          await cb(['Hi!'], { toolsUsed: [] });
+          await cb([], { toolsUsed: [], stopReason: 'end_turn' });
+        });
+
+        await runTurn();
+
+        expect(mockQuest.replies).toEqual(['Hi!']);
+      });
     });
 
     // Every other test in this file mocks messageTruncation: null, which never exercises the
@@ -5260,6 +5513,67 @@ describe('ChatCompletionProcess', () => {
       expect(mockDb.quests.update).toHaveBeenCalledWith(
         expect.objectContaining({
           reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
+
+    it('overwrites a stale partial replies[] with the error message, not just reply (#3223)', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      // extractReplies (client) prefers a non-empty replies[] over reply, so a lingering
+      // partial entry from before the failure (e.g. an unclosed '<think>' left by a killed
+      // stream) would otherwise outrank this error message and render a blank turn.
+      mockQuest.replies = ['<think>'];
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('stream timeout - idle for too long, overloaded backend');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply: 'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          replies: ['The AI service is currently experiencing high demand. Please try again in a few minutes.'],
+          type: 'error',
+          status: 'done',
+        })
+      );
+    });
+
+    it('keeps visible partial answer text ahead of the error instead of discarding it', async () => {
+      setupTimeoutMocks();
+      mockedShouldTriggerFallback.mockReturnValue(false);
+      // A real answer streamed before the failure - must survive alongside the error, not be
+      // replaced by it, so the user doesn't lose text they already watched arrive.
+      mockQuest.replies = ['Here is what I found so far'];
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('stream timeout - idle for too long, overloaded backend');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reply:
+            'Here is what I found so farThe AI service is currently experiencing high demand. Please try again in a few minutes.',
+          replies: [
+            'Here is what I found so far',
+            'The AI service is currently experiencing high demand. Please try again in a few minutes.',
+          ],
           type: 'error',
           status: 'done',
         })

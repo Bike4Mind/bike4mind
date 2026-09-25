@@ -397,3 +397,33 @@ describe('startAgentExecution', () => {
     );
   });
 });
+
+describe('container startup transport', () => {
+  it('preserves the prompt and execution ID when a queued ACK is lost', async () => {
+    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+    const accepted: Record<string, unknown>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url, request) => {
+        accepted.push(JSON.parse(request.body));
+        throw new TypeError('connection closed after enqueue');
+      })
+    );
+    try {
+      const result = await startAgentExecution(input({ userId: 'lost-ack' }), logger);
+      expect(result).toMatchObject({
+        ok: false,
+        executionId: 'exec1',
+        message: expect.stringContaining('could not be confirmed'),
+      });
+      expect(result).toMatchObject({ message: expect.stringContaining('exec1') });
+      expect(accepted).toHaveLength(1);
+      expect(accepted[0].executionId).toBe('exec1');
+      expect(mockQuestDeleteOne).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+});

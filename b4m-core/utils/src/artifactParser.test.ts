@@ -116,6 +116,36 @@ describe('convertCodeBlocksToArtifacts - HTML promotion', () => {
     const { artifacts } = promote('We were discussing how to structure a document in this chat.');
     expect(artifacts).toHaveLength(0);
   });
+
+  it('sanitizes < > and " from the title of a bare HTML document', () => {
+    const { artifacts } = promote(
+      '<!DOCTYPE html><html><head><title>Attack <script>"xss"</title></head><body></body></html>'
+    );
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].title).toBe('Attack scriptxss');
+  });
+
+  it('sanitizes < > and " from the title of a fenced full HTML document', () => {
+    const { artifacts } = promote(
+      '```html\n<!DOCTYPE html><html><head><title>A "test" <page></title></head><body></body></html>\n```'
+    );
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].title).toBe('A test page');
+  });
+
+  it('sanitizes < > and " from the title of a fenced HTML fragment', () => {
+    const { artifacts } = promote(
+      '```html\n<div><h1>Hello</h1></div>\n<title>Bad<>Title"</title>\n```'
+    );
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].title).toBe('BadTitle');
+  });
+
+  it('falls back to HTML Snippet when a fenced fragment has no title tag', () => {
+    const { artifacts } = promote('```html\n<div class="card"><p>hello</p></div>\n```');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].title).toBe('HTML Snippet');
+  });
 });
 
 /**
@@ -173,7 +203,7 @@ describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
     expect(converted).toContain('send_email');
   });
 
-  it('strips quotes from a model-controlled title so the artifact attribute is not truncated', () => {
+  it('sanitizes < > and " from a model-controlled title so the artifact attribute is not corrupted', () => {
     const html = '<!DOCTYPE html><html><head><title>Fish "Nemo" Tank</title></head><body><h1>Hi</h1></body></html>';
     const { artifacts } = promote('```json\n' + buildHtmlCall(html) + '\n```');
     expect(artifacts).toHaveLength(1);

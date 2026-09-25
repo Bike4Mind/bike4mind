@@ -623,49 +623,9 @@ ${stripArtifactTagsFromRawBody(String(toolOutput.content))}
     });
   }
 
-  // Fallback: If no patterns matched, try a more aggressive approach.
-  // Currently unreachable: fallbackPattern's capture starts with a greedy [^"]*, which
-  // swallows the backslash of the first \" pair, so the alternation that was meant to walk
-  // escaped quotes never engages and the capture always ends at the payload's first quote.
-  // JSON.parse then fails at every escaping depth. Kept (and hardened alongside the live
-  // branches above) because a fix to that pattern would reach this body interpolation.
-  if (processedContent === content && hasTargetType) {
-    // Look for the basic structure: "result":"{ ... "type":"mermaid" ... }"
-    const fallbackPattern = /"result":\s*"([^"]*(?:\\"[^"]*)*)"[^}]*\}/g;
-    let fallbackMatch;
-
-    while ((fallbackMatch = fallbackPattern.exec(content)) !== null) {
-      const resultContent = fallbackMatch[1];
-
-      // Check if this result contains our target types
-      if (/(?:rechart|recharts|mermaid)/.test(resultContent)) {
-        // Try to reconstruct the JSON by unescaping
-        let reconstructed = resultContent;
-        try {
-          // Simple unescaping for the most common cases
-          reconstructed = reconstructed.replace(/\\"/g, '"').replace(/\\n/g, '\n');
-
-          // Try to parse as JSON
-          const toolOutput = JSON.parse(reconstructed);
-
-          if (toolOutput.type === 'mermaid' && toolOutput.content) {
-            const identifier = `mermaid-${Date.now()}`;
-            const title = sanitizeToolOutputTitle(toolOutput.metadata?.title || 'Mermaid Diagram') || 'Mermaid Diagram';
-
-            const artifactSyntax = `<artifact identifier="${identifier}" type="application/vnd.ant.mermaid" title="${title}">
-${stripArtifactTagsFromRawBody(String(toolOutput.content))}
-</artifact>`;
-
-            // Replace the original match with artifact syntax
-            processedContent = processedContent.replace(fallbackMatch[0], artifactSyntax);
-          }
-        } catch (parseError) {
-          console.warn('🔧 Fallback JSON parsing failed:', parseError);
-        }
-      }
-    }
-  }
-
+  // Deliberately no tail fallback below this loop. The one that used to sit here could
+  // not capture an escaped quote, so it never promoted anything, and its scan was
+  // quadratic on a payload that carried no closing brace.
   return processedContent;
 }
 
@@ -752,7 +712,7 @@ ${codeContent.trim()}
 
   content = content.replace(htmlCodeBlockRegex, (match, codeContent) => {
     if (!hasFullHtmlDocument(codeContent)) return match;
-    const title = extractHTMLTitle(codeContent) || 'HTML Page';
+    const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
 
     return `<artifact identifier="${identifier}" type="text/html" title="${title}">
@@ -768,7 +728,7 @@ ${codeContent.trim()}
   content = content.replace(htmlFragmentFenceRegex, (match, codeContent) => {
     // Require at least one HTML tag so a mislabeled fence of plain text is left alone.
     if (!/<[a-z][a-z0-9]*[\s/>]/i.test(codeContent)) return match;
-    const title = extractHTMLTitle(codeContent) || 'HTML Snippet';
+    const title = sanitizeHTMLTitle(extractHTMLTitle(codeContent), 'HTML Snippet');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
     return `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${codeContent.trim()}
@@ -910,7 +870,7 @@ function toolCallJsonToArtifact(candidate: string): string | null {
   );
   if (!html) return null;
 
-  const title = extractHTMLTitle(html) || 'HTML Page';
+  const title = sanitizeHTMLTitle(extractHTMLTitle(html), 'HTML Page');
   const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
   return `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${html.trim()}
@@ -965,7 +925,7 @@ function promoteBareHtmlDocument(content: string): string {
     if (fences % 2 === 1 || artifactOpens > artifactCloses) continue;
 
     const doc = content.slice(start, end);
-    const title = extractHTMLTitle(doc) || 'HTML Page';
+    const title = sanitizeHTMLTitle(extractHTMLTitle(doc), 'HTML Page');
     const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
     out += content.slice(copiedTo, start);
     out += `<artifact identifier="${identifier}" type="text/html" title="${title}">
@@ -996,17 +956,18 @@ function extractComponentName(code: string): string | null {
   return null;
 }
 
-/**
- * Extracts title from HTML content, minus any double quote. Every caller interpolates
- * the result into title="...", and the artifact attribute parser (ATTRIBUTE_REGEX) has
- * no escape mechanism, so an embedded " in this model-controlled text would truncate
- * the attribute and leave the rest of the title to be read as further attributes.
- * Apostrophes are safe inside a double-quoted value and are kept.
- */
 function extractHTMLTitle(code: string): string | null {
   const titleMatch = code.match(/<title>(.*?)<\/title>/i);
-  if (!titleMatch) return null;
-  return titleMatch[1].replace(/[<>"]/g, '') || null;
+  return titleMatch ? titleMatch[1] : null;
+}
+
+// Strip <, >, and " before interpolating a document-controlled title into title="...".
+// Some artifact attribute parsers are not quote-aware, so any of these characters would
+// corrupt or prematurely close the tag. Falls back to `fallback` when stripping empties
+// the string (e.g. a title that was only quotes).
+function sanitizeHTMLTitle(raw: string | null, fallback: string): string {
+  const sanitized = (raw ?? '').replace(/[<>"]/g, '').trim();
+  return sanitized || fallback;
 }
 
 /**

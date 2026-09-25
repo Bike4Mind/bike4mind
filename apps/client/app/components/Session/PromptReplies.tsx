@@ -62,13 +62,14 @@ import {
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
-import { extractReplies } from '@client/app/utils/replyUtils';
+import { extractReplies, extractThinking } from '@client/app/utils/replyUtils';
 import DeepResearchProgress from '../GenAI/DeepResearchProgress';
 import PromptEnhancementBanner from './PromptEnhancementBanner';
 import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor';
 import CitableSources from './CitableSources';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
+import ReplyAccessories from './ReplyAccessories';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
@@ -77,6 +78,9 @@ import { getReplyTruncationState } from '@client/app/utils/replyTruncation';
 
 import SearchResultCards from './SearchResultCards';
 import { SEARCH_RESULT_CARDS_LANGUAGE } from './parseSearchResultCards';
+import LocationMap from './LocationMap';
+import { LOCATION_MAP_LANGUAGE, placesFromCitables } from './parseLocationMap';
+import type { WebSearchPlace } from '@bike4mind/common';
 
 // Artifact system (extracted modules)
 import ArtifactRenderer from './artifacts/ArtifactRenderer';
@@ -123,6 +127,16 @@ export const ReplyCompleteContext = createContext(false);
 const SearchResultCardsInReply: FC<{ content: string }> = ({ content }) => {
   const replyComplete = useContext(ReplyCompleteContext);
   return <SearchResultCards content={content} replyComplete={replyComplete} />;
+};
+
+// The web_search places of the reply being rendered, keyed by place id - the only source of map
+// pins. Context for the same identity-stability reason as ReplyCompleteContext above.
+export const ReplyPlacesContext = createContext<ReadonlyMap<string, WebSearchPlace>>(new Map());
+
+const LocationMapInReply: FC<{ content: string }> = ({ content }) => {
+  const replyComplete = useContext(ReplyCompleteContext);
+  const placesById = useContext(ReplyPlacesContext);
+  return <LocationMap content={content} placesById={placesById} replyComplete={replyComplete} />;
 };
 
 // Markdown `code` component: handles inline artifacts in code blocks. The
@@ -192,6 +206,11 @@ export const createCodeComponent = (syntaxTheme: PrismStyle) => {
     // Model-authored image cards for a visual web_search answer, placed inline by the model.
     if (language === SEARCH_RESULT_CARDS_LANGUAGE) {
       return <SearchResultCardsInReply content={codeContent} />;
+    }
+
+    // Model-placed inline map of a location web_search's places.
+    if (language === LOCATION_MAP_LANGUAGE) {
+      return <LocationMapInReply content={codeContent} />;
     }
 
     // Recharts inline rendering
@@ -520,9 +539,11 @@ const PromptReplies: FC<PromptReplyProps> = ({
 
   const replies = useMemo(() => extractReplies(messageData), [messageData]);
 
-  const thoughts = useMemo(() => {
-    return (messageData.replies || []).filter(Boolean).filter(r => r.startsWith('<think>'));
-  }, [messageData.replies]);
+  // extractThinking walks every thinking block across every reply slot (see
+  // appendStreamedChunk: a tool-using turn reopens thinking inside the slot that already
+  // holds the partial answer), so ThoughtBubbles gets parsed reasoning text rather than a
+  // whole slot with the answer and raw <think> markers still in it.
+  const thought = useMemo(() => extractThinking(messageData), [messageData]);
 
   const generatedImagesUrl = `${cdnUrl}/generated`;
   // quest.images carries every file a tool generated this turn, but not all of them are
@@ -580,7 +601,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
         errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={messageData.questMasterReply || replies[0]}
-        thought={thoughts[0]}
+        thought={thought}
         images={images}
         generatedFiles={generatedFiles}
         videos={videos}
@@ -1251,6 +1272,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const replyTheme = useTheme();
   const syntaxTheme = useMemo(() => getMarkdownSyntaxTheme(replyTheme.palette.mode), [replyTheme.palette.mode]);
   const codeComponent = useMemo(() => createCodeComponent(syntaxTheme), [syntaxTheme]);
+  const placesById = useMemo(() => placesFromCitables(promptMeta?.citables), [promptMeta?.citables]);
 
   const cleanReply = useMemo(() => {
     return omitBetweenTags(reply || '', '<think>', '</think>');
@@ -1516,6 +1538,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           {/* Repeated rather than hoisted above the branch: the suggestions read as part of
               the reply, so they follow whichever body this view rendered. Edit mode is the
               one body they are deliberately left out of. */}
+          {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
           {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
         </>
       ) : (
@@ -1741,50 +1764,56 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                           // reading typography or land in the `> *` measure rules.
                           <div className="b4m-md">
                             <ReplyCompleteContext.Provider value={!!completed}>
-                              <ReactMarkdown
-                                components={{
-                                  ...markdownComponents,
-                                  code: codeComponent,
-                                  img: ({ alt, src, title }) => {
-                                    if (!src) {
-                                      return null;
-                                    }
+                              <ReplyPlacesContext.Provider value={placesById}>
+                                <ReactMarkdown
+                                  components={{
+                                    ...markdownComponents,
+                                    code: codeComponent,
+                                    img: ({ alt, src, title }) => {
+                                      if (!src) {
+                                        return null;
+                                      }
 
-                                    const srcStr = typeof src === 'string' ? src : '';
-                                    if (
-                                      srcStr.startsWith('/mnt/') ||
-                                      srcStr.startsWith('/tmp/') ||
-                                      srcStr.startsWith('file://') ||
-                                      srcStr.startsWith('sandbox:') ||
-                                      srcStr.includes('/mnt/data/')
-                                    ) {
-                                      return null;
-                                    }
+                                      const srcStr = typeof src === 'string' ? src : '';
+                                      if (
+                                        srcStr.startsWith('/mnt/') ||
+                                        srcStr.startsWith('/tmp/') ||
+                                        srcStr.startsWith('file://') ||
+                                        srcStr.startsWith('sandbox:') ||
+                                        srcStr.includes('/mnt/data/')
+                                      ) {
+                                        return null;
+                                      }
 
-                                    return (
-                                      <ImageContainer
-                                        src={srcStr}
-                                        index={0}
-                                        totalImages={1}
-                                        images={[srcStr]}
-                                        onSendMessage={onSendMessage}
-                                      />
-                                    );
-                                  },
-                                  a: link,
-                                }}
-                                remarkPlugins={[remarkGfmNoSingleTilde, [remarkMath, { singleDollarTextMath: false }]]}
-                                rehypePlugins={[rehypeKatex]}
-                                remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
-                              >
-                                {mathReadyContent}
-                              </ReactMarkdown>
+                                      return (
+                                        <ImageContainer
+                                          src={srcStr}
+                                          index={0}
+                                          totalImages={1}
+                                          images={[srcStr]}
+                                          onSendMessage={onSendMessage}
+                                        />
+                                      );
+                                    },
+                                    a: link,
+                                  }}
+                                  remarkPlugins={[
+                                    remarkGfmNoSingleTilde,
+                                    [remarkMath, { singleDollarTextMath: false }],
+                                  ]}
+                                  rehypePlugins={[rehypeKatex]}
+                                  remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
+                                >
+                                  {mathReadyContent}
+                                </ReactMarkdown>
+                              </ReplyPlacesContext.Provider>
                             </ReplyCompleteContext.Provider>
                           </div>
                         )}
                       </>
                     )}
 
+                    {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
                     {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
                   </Typography>
                 </Box>

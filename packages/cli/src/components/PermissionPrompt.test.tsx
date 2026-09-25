@@ -25,6 +25,14 @@ describe('escapeTerminalControlChars', () => {
     expect(escaped).toContain('\\x1b');
   });
 
+  it('escapes Unicode bidi overrides and isolates that reorder displayed glyphs', () => {
+    const spoof = 'allow\u202edeled'; // U+202E (RLO) makes the tail render reversed
+    const escaped = escapeTerminalControlChars(spoof);
+    expect(escaped).not.toContain('\u202e');
+    expect(escaped).toContain('\\u202e');
+    expect(escapeTerminalControlChars('a\u2066b')).toContain('\\u2066'); // isolate boundary
+  });
+
   it('leaves ordinary text, tabs and newlines intact', () => {
     const text = 'line one\n\tindented\nline two';
     expect(escapeTerminalControlChars(text)).toBe(text);
@@ -51,5 +59,14 @@ describe('PermissionPrompt Arguments block', () => {
     const frame = stripAnsi(lastFrame() ?? '');
     expect(frame).toContain('\\x1b');
     expect(frame).not.toContain('\x1b');
+  });
+
+  it('escapes a bidi override in the rendered args', () => {
+    const { lastFrame } = render(
+      <PermissionPrompt toolName="create_file" args={'safe\u202eSPOOFED'} canBeTrusted onResponse={() => {}} />
+    );
+    const frame = stripAnsi(lastFrame() ?? '');
+    expect(frame).toContain('\\u202e');
+    expect(frame).not.toContain('\u202e');
   });
 });

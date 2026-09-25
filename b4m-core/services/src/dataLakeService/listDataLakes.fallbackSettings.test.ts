@@ -47,6 +47,20 @@ describe('listDataLakes / listAllDataLakes - canManageSettings flag for fallback
     expect(result.find(l => l.id === 'opti-knowledge')?.canManageSettings).toBe(false);
   });
 
+  it('stamps a curated origin on a fallback lake, which the registry entry itself does not carry', async () => {
+    const db = {
+      dataLakes: {
+        findIdsCreatedBy: vi.fn().mockResolvedValue([]),
+        findAccessible: vi.fn(),
+        find: vi.fn().mockResolvedValue([]),
+      },
+    };
+    const result = await listAllDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+    // Not just "not connector-fed": an undefined here is what made the client's `?? default`
+    // load-bearing, and it disagreed with resolveFallbackLake's hardcoded 'curated'.
+    expect(result.find(l => l.id === 'opti-knowledge')?.origin).toBe('curated');
+  });
+
   it('canManageSettings === canManage for a DB lake (both true for the owner, both false for a stranger)', async () => {
     const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
     const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });

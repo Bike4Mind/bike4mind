@@ -121,6 +121,7 @@ import EnsureQuestCorrectsIndex from './20260917000200_ensure-quest-corrects-ind
 import EnsureFeedbackOrgCreatedAtIndex from './20260918000000_ensure-feedback-org-createdat-index';
 import EnsureUserOrganizationIdIndex from './20260918010000_ensure-user-organizationid-index';
 import EnsureDataLakeFindingIndexes from './20260921000000_ensure-data-lake-finding-indexes';
+import BackfillDataLakeOrigin from './20260921000100_backfill-data-lake-origin';
 // Renumbered from 20260922000000 to 20260921100000 to resolve an id collision with
 // EnsureOAuthGrantClientUserIndex below, which merged into main first, and to keep this id
 // below the fail-closed backfill's, which must stay the highest id on disk (see its own test).
@@ -131,6 +132,11 @@ import EnsureDataLakeFindingIndexes from './20260921000000_ensure-data-lake-find
 // environment's stale `20260922000000` row from the migrations collection so it reruns as the
 // OAuthGrant migration.
 import EnsureDataLakeCorpusActionIndexes from './20260921100000_ensure-data-lake-corpus-action-indexes';
+// Renamed from 20260922000000 to 20260921120000 to resolve an id collision with
+// EnsureOAuthGrantClientUserIndex below, which merged into main first, and to keep this id below
+// BackfillOAuthClientTokenEndpointAuthMethod's - that migration's own test asserts it has the
+// highest id on disk, since its fail-closed throw must not block anything queued after it.
+import EnsureDataLakeInconsistencyScanIndex from './20260921120000_ensure-data-lake-inconsistency-scan-index';
 import EnsureOAuthGrantClientUserIndex from './20260922000000_ensure-oauthgrant-client-user-index';
 // Fail-closed backfill: intentionally sorts LAST so its throw blocks only itself (see its docstring).
 import BackfillOAuthClientTokenEndpointAuthMethod from './20260922000001_backfill-oauthclient-token-endpoint-auth-method';
@@ -247,7 +253,9 @@ const coreMigrations: MigrationFile[] = [
   EnsureFeedbackOrgCreatedAtIndex,
   EnsureUserOrganizationIdIndex,
   EnsureDataLakeFindingIndexes,
+  BackfillDataLakeOrigin,
   EnsureDataLakeCorpusActionIndexes,
+  EnsureDataLakeInconsistencyScanIndex,
   EnsureOAuthGrantClientUserIndex,
   // Fail-closed backfill: kept last so its throw (when un-audited rows exist) blocks only itself.
   BackfillOAuthClientTokenEndpointAuthMethod,

@@ -273,14 +273,15 @@ export async function computeLakeMemoryHealth(
 }
 
 /**
- * Project the stored report down to COUNTS for the health response. Null means "never run", which a
- * surface must not render as "clean".
+ * Project the stored scan summary down to COUNTS for the health response. Null means "never run",
+ * which a surface must not render as "clean".
  *
- * Deliberately drops `findings` entirely - both the excerpts and the `subject`, which for a
- * relationship conflict is an organization name lifted straight out of a member document. GET /health
- * is read-gated and redacts nothing, so anything prose-shaped attached here reaches every reader of
- * the lake, including public ones. Projecting rather than redacting means there is nothing for a
- * future caller to forget to strip.
+ * Nothing prose-shaped may pass through here. GET /health is read-gated and redacts nothing, so an
+ * excerpt - or a `subject`, which for a relationship conflict is an organization name lifted
+ * straight out of a member document - would reach every reader of the lake, including public ones.
+ * The findings live in `DataLakeFinding` rows behind a manage gate and are not on the lake document
+ * to leak; this stays an explicit field-by-field projection anyway, so a field added to the stored
+ * summary has to be admitted here deliberately rather than riding along.
  */
 function storedInconsistency(
   lake: Pick<IDataLakeDocument, 'inconsistencyReport' | 'inconsistencyComputedAt'>

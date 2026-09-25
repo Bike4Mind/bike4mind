@@ -29,3 +29,27 @@ export function scopeTagCountsToLakes(tagCounts: TagCount[], lakes: TagScopeLake
   // tree and double its count.
   return tagCounts.filter(tc => lakes.some(lake => tc.tag.startsWith(lake.fileTagPrefix)));
 }
+
+/**
+ * Adds a zero-count entry for every lake with no tagged files, so buildTagTree gives it a root
+ * node instead of omitting it entirely - a tree built purely from tag counts has nothing to seed
+ * a branch from otherwise (#3234).
+ *
+ * The seed tag is the prefix itself (trailing colon stripped, matching buildTagTree's own
+ * colon-split), so a nested prefix like "acme:legal:" seeds "acme:legal" rather than a bare
+ * "acme" that would misfile under a sibling lake sharing that first segment.
+ *
+ * Guards a lake with no usable prefix (empty string, or the field missing entirely) rather than
+ * trusting the type - reachable only through malformed/legacy data, since a real lake's
+ * `fileTagPrefix` is validated non-empty at create time.
+ */
+export function seedEmptyLakeTags(tagCounts: TagCount[], lakes: TagScopeLake[]): TagCount[] {
+  const seeded: TagCount[] = [];
+  for (const lake of lakes) {
+    const prefix = typeof lake.fileTagPrefix === 'string' ? lake.fileTagPrefix.replace(/:+$/, '') : '';
+    if (!prefix) continue;
+    const hasContent = tagCounts.some(tc => tc.tag === prefix || tc.tag.startsWith(`${prefix}:`));
+    if (!hasContent) seeded.push({ tag: prefix, count: 0 });
+  }
+  return seeded.length > 0 ? [...tagCounts, ...seeded] : tagCounts;
+}

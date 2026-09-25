@@ -1,4 +1,5 @@
 import { api } from '@client/app/contexts/ApiContext';
+import { SEND_REQUEST_TIMEOUT_MS } from '@client/app/utils/requestTimeouts';
 import {
   IChatHistoryItem,
   IChatHistoryItemDocument,
@@ -155,13 +156,11 @@ export const generateNewSession = async (
   projectId?: string,
   lastUsedModel?: string
 ) => {
-  const response = await api.post<ISessionDocument>(`/api/sessions/create`, {
-    name,
-    knowledgeIds,
-    agentIds,
-    projectId,
-    lastUsedModel,
-  });
+  const response = await api.post<ISessionDocument>(
+    `/api/sessions/create`,
+    { name, knowledgeIds, agentIds, projectId, lastUsedModel },
+    { timeout: SEND_REQUEST_TIMEOUT_MS }
+  );
   return response.data;
 };
 

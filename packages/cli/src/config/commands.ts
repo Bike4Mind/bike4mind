@@ -180,6 +180,11 @@ export const COMMANDS: CommandDefinition[] = [
     args: '<auto-allow|permissions>',
   },
   {
+    name: 'sandbox:network',
+    description: 'Toggle sandbox network egress (off is fail-closed default)',
+    args: '<on|off>',
+  },
+  {
     name: 'sandbox:trust-domain',
     description: 'Add domain(s) to the network proxy allowlist',
     args: '<domain> [...]',

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { BadRequestError } from '@bike4mind/utils';
-import { DATA_LAKE_STATUSES } from '@bike4mind/common';
+import { DATA_LAKE_STATUSES, DocumentDateSource } from '@bike4mind/common';
 
 // Passthrough the wrapper so we drive the raw handler directly.
 vi.mock('@server/queueHandlers/utils', () => ({
@@ -52,6 +52,7 @@ const h = vi.hoisted(() => ({
   finalizeBatchIfComplete: vi.fn(),
   sendToQueue: vi.fn(),
   assertLakeAdmission: vi.fn(),
+  assertCanWriteDataLakeTags: vi.fn(),
   // Bypasses the real AdminSettingsCache singleton, which would otherwise persist whatever the
   // first call in this file resolved across every later test that shares the same test process.
   getSettingsMap: vi.fn(),
@@ -125,10 +126,17 @@ vi.mock('@bike4mind/services', () => ({
       claims.metaTagNames.length > 0 || claims.prefixArmLakes.length > 0,
     recomputeLakeStats: h.recomputeLakeStats,
     assertLakeAdmission: h.assertLakeAdmission,
+    assertCanWriteDataLakeTags: h.assertCanWriteDataLakeTags,
   },
   fabFilesService: { deleteFabFile: h.deleteFabFile },
 }));
-vi.mock('@bike4mind/fab-pipeline', () => ({ FabFileChunkSearchIndex: {} }));
+// The heavy barrel stays stubbed, but acceptDocumentDate is kept REAL: driveDocumentVintage routes
+// its candidate through it on purpose, so a stub here would fake away the plausibility window and
+// let this suite pass on a vintage the ingest would actually refuse.
+vi.mock('@bike4mind/fab-pipeline', async importOriginal => ({
+  FabFileChunkSearchIndex: {},
+  acceptDocumentDate: (await importOriginal<typeof import('@bike4mind/fab-pipeline')>()).acceptDocumentDate,
+}));
 vi.mock('@bike4mind/db-core', () => ({ selfHostOpenSearchEnabled: () => false }));
 vi.mock('@server/managers/fabFileManager', () => ({ createFabFile: h.createFabFile }));
 vi.mock('@server/auth/ability', () => ({ default: () => ({}) }));
@@ -293,6 +301,9 @@ describe('driveLakeIngest consumer', () => {
     // admission gate to its happy-path default so a later test's own rejection can't leak forward into
     // whichever test runs next in file order.
     h.assertLakeAdmission.mockResolvedValue(undefined);
+    // Same leak risk as assertLakeAdmission above: reset the origin gate to its happy-path default
+    // so one test's rejection cannot bleed into whichever test runs next in file order.
+    h.assertCanWriteDataLakeTags.mockResolvedValue(undefined);
     // Empty map -> MaxFileSize falls back to its coded default (30 MB), and a permissive user ->
     // checkStorageLimit falls back to its 1000 MB default too - both well above every fixture's
     // byte size below, so neither new gate fires unless a test overrides it.
@@ -387,6 +398,55 @@ describe('driveLakeIngest consumer', () => {
         expect.anything()
       );
     }
+  });
+
+  // driveDocumentVintage has its own unit tests, but nothing pinned that this dispatch actually
+  // SPREADS it into the create payload (#3048). Dropping the spread loses the vintage for every
+  // Drive-authored file silently - the ingest succeeds and the passage header just renders undated.
+  it('carries the Drive vintage pair into createFabFile for a Drive-authored file', async () => {
+    h.walkFolder.mockResolvedValue([
+      {
+        id: 'd1',
+        name: 'Quarterly review',
+        mimeType: 'application/vnd.google-apps.document',
+        relativePath: 'Quarterly review',
+        createdTime: '2019-03-04T09:15:00.000Z',
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    expect(h.createFabFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        driveFileId: 'd1',
+        documentDate: new Date('2019-03-04T09:15:00.000Z'),
+        documentDateSource: DocumentDateSource.DRIVE_CREATED,
+      }),
+      expect.anything()
+    );
+  });
+
+  // The Editors gate, asserted at the dispatch rather than only on the helper: for an uploaded
+  // binary `createdTime` is the UPLOAD time, which is exactly the ingestion-time-as-vintage
+  // mistake this field exists to avoid. Its real vintage comes from chunking its own metadata.
+  it('sends no vintage for an uploaded binary, whose createdTime is only its upload time', async () => {
+    h.walkFolder.mockResolvedValue([
+      {
+        id: 'd1',
+        name: 'scan.pdf',
+        mimeType: 'application/pdf',
+        relativePath: 'scan.pdf',
+        createdTime: '2019-03-04T09:15:00.000Z',
+      },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    const payload = h.createFabFile.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.documentDate).toBeUndefined();
+    expect(payload.documentDateSource).toBeUndefined();
   });
 
   it('skips an oversized file before fetching it and counts it into skippedFiles', async () => {
@@ -2022,6 +2082,62 @@ describe('driveLakeIngest consumer', () => {
     expect(h.batchCreate).not.toHaveBeenCalled();
   });
 
+  // The origin gate (unattended writes into a curated lake). Mirrors the three admission tests
+  // above exactly, because both sit in the same try/catch and must be handled identically.
+  it('gates the lake once per sync, against the connecting user as a synthetic admin actor', async () => {
+    h.walkFolder.mockResolvedValue([
+      { id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' },
+      { id: 'd2', name: 'b.txt', mimeType: 'text/plain', relativePath: 'b.txt' },
+    ]);
+    h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+    await run();
+
+    // Once, not per candidate: the lake and the owner-to-be are the same for every file.
+    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledTimes(1);
+    expect(h.assertCanWriteDataLakeTags).toHaveBeenCalledWith(
+      { userId: 'user1', isAdmin: true },
+      ['lake-tag'],
+      expect.objectContaining({
+        db: expect.objectContaining({
+          dataLakes: expect.anything(),
+          adminSettings: expect.anything(),
+          scopedSettings: expect.anything(),
+        }),
+        unattended: true,
+      })
+    );
+  });
+
+  it('refuses the whole sync cleanly on an origin refusal - no batch, no retry spiral', async () => {
+    // A refusal is deterministic (same origin, same policy on every retry), so rethrowing it would
+    // spin this message to the DLQ. Recorded as guidance and returned, like the admission refusal.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.assertCanWriteDataLakeTags.mockRejectedValue(new BadRequestError('"Lake" is curated'));
+
+    await run();
+
+    expect(h.batchCreate).not.toHaveBeenCalled();
+    expect(h.createFabFile).not.toHaveBeenCalled();
+    expect(h.fetchDriveFileContent).not.toHaveBeenCalled();
+    expect(h.releaseSyncClaim).toHaveBeenCalledWith('conn1', 'token-claim', expect.stringContaining('is curated'));
+    // The try wraps both the admission and origin gates, so the reason must go on the log line
+    // too - without it, on-call cannot tell which gate refused without querying the connection.
+    expect(logger.warn).toHaveBeenCalledWith(
+      '[driveLakeIngest] data lake refused this sync at admission or authorization',
+      expect.objectContaining({ reason: expect.stringContaining('is curated') })
+    );
+  });
+
+  it('lets a non-origin failure from the gate reach SQS for retry', async () => {
+    // Only a BadRequestError is a verdict; a settings-store outage is transient and must retry.
+    h.walkFolder.mockResolvedValue([{ id: 'd1', name: 'a.txt', mimeType: 'text/plain', relativePath: 'a.txt' }]);
+    h.assertCanWriteDataLakeTags.mockRejectedValue(new Error('settings store unreachable'));
+
+    await expect(run()).rejects.toThrow('settings store unreachable');
+    expect(h.batchCreate).not.toHaveBeenCalled();
+  });
+
   describe('incremental sync (#2396)', () => {
     const withCursor = (overrides: Record<string, unknown> = {}) =>
       h.connFindById.mockResolvedValue({
@@ -2106,6 +2222,42 @@ describe('driveLakeIngest consumer', () => {
       expect(h.updateSyncCursor).toHaveBeenCalledWith('conn1', 'cursor-1', expect.any(Date), {
         fullWalk: false,
       });
+    });
+
+    // The full-walk arm pins this too, but the two arms reach createFabFile through different
+    // Drive reads: the changes feed has its own field list and its own DriveFile mapping, so
+    // `createdTime` can fall out of the incremental path alone and leave every file a re-sync
+    // brings in undated, with the full-walk test still green.
+    it('carries the Drive vintage pair into createFabFile on the incremental arm too', async () => {
+      withCursor();
+      h.listChanges.mockResolvedValue({
+        changes: [
+          {
+            fileId: 'd1',
+            removed: false,
+            file: {
+              id: 'd1',
+              name: 'Quarterly review',
+              mimeType: 'application/vnd.google-apps.document',
+              parents: ['FOLDER'],
+              createdTime: '2019-03-04T09:15:00.000Z',
+            },
+          },
+        ],
+        newStartPageToken: 'cursor-1',
+      });
+      h.fetchDriveFileContent.mockResolvedValue(okBytes());
+
+      await run();
+
+      expect(h.createFabFile).toHaveBeenCalledWith(
+        expect.objectContaining({
+          driveFileId: 'd1',
+          documentDate: new Date('2019-03-04T09:15:00.000Z'),
+          documentDateSource: DocumentDateSource.DRIVE_CREATED,
+        }),
+        expect.anything()
+      );
     });
 
     it('ignores a changed file that does not resolve under the connected root (Drive-wide feed, folder-scoped lake)', async () => {

@@ -40,12 +40,15 @@ export function createAttachmentLakeAccess(user: IUserDocument, logger: Logger):
           dataLakeTagPrefixes: scope.dataLakeTagPrefixes,
         };
       } catch (err) {
-        // Degrade to today's ownership-only behaviour. Widening on error is never correct here,
-        // and neither is failing the run.
+        // Degrade to ownership-only. Widening on error is never correct here, and neither is
+        // failing every caller outright - so the buckets stay empty and `resolutionFailed` carries
+        // the reason, letting a consumer that would otherwise SUBSTITUTE a different file (and bill
+        // for it) fail closed instead. Returning a bare `{}` made an outage indistinguishable from
+        // "this caller reaches no lakes"; see AttachmentLakeAccess.resolutionFailed.
         logger.warn('[AttachmentLakeAccess] Resolution failed; falling back to ownership-only', {
           error: err instanceof Error ? err.message : String(err),
         });
-        return {};
+        return { resolutionFailed: true };
       }
     })());
 }

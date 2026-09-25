@@ -342,3 +342,108 @@ describe('webSearchTool.implementation(...).toolFn - signature threading through
     vi.unstubAllGlobals();
   });
 });
+
+describe('performWebSearch - place handling', () => {
+  const organic = [{ title: 'Guide', link: 'https://guide.com', snippet: 'best dinners' }];
+  const mapsPlace = (id: string, name: string) => ({
+    title: name,
+    place_id: id,
+    gps_coordinates: { latitude: 55.68, longitude: 12.59 },
+    rating: 4.5,
+    reviews: 100,
+    type: 'Restaurant',
+    thumbnail: `https://lh5.googleusercontent.com/${id}.jpg`,
+  });
+
+  // Routes each SerpAPI engine to its own canned body, so the organic, place, and anchor lookups
+  // can be told apart the way the real provider sees them.
+  const stubSerpApi = (places: unknown[], anchor?: unknown) => {
+    const fetchStub = vi.fn(async (input: string) => {
+      const url = new URL(input);
+      const body =
+        url.searchParams.get('engine') !== 'google_maps'
+          ? { organic_results: organic }
+          : anchor && url.searchParams.get('q') === 'citizenM Copenhagen'
+            ? { place_results: anchor }
+            : { local_results: places };
+      return { ok: true, status: 200, statusText: 'OK', json: async () => body, text: async () => '' } as Response;
+    });
+    vi.stubGlobal('fetch', fetchStub);
+    return fetchStub;
+  };
+
+  const useSerpApi = () => {
+    mockGetSerperKey.mockResolvedValue('serp-key');
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetProvider.mockResolvedValue('serpapi');
+  };
+
+  it('makes no place call and leaves the output untouched when include_places is unset', async () => {
+    useSerpApi();
+    const fetchStub = stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')]);
+
+    const result = await performWebSearch(mockAdapters, { query: 'dinner', anchor_location: 'citizenM Copenhagen' });
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(result.formattedResults).not.toContain('b4m_map');
+    expect(result.formattedResults).not.toContain('Places found');
+    expect(result.citables.every(c => !c.metadata?.place)).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it('lists places by id with the map prompt, and stores the coordinates only on the citables', async () => {
+    useSerpApi();
+    stubSerpApi([mapsPlace('ChIJa', 'Barr'), mapsPlace('ChIJb', 'Kadeau')]);
+
+    const result = await performWebSearch(mockAdapters, { query: 'dinner', include_places: true }, TEST_SECRET);
+
+    expect(result.formattedResults).toContain('1. Barr - 4.5 (100 reviews) - Restaurant\n   id: ChIJa');
+    expect(result.formattedResults).toContain('```b4m_map');
+    expect(result.formattedResults).not.toContain('55.68');
+    const place = result.citables.find(c => c.id === 'place:ChIJa')?.metadata?.place;
+    expect(place).toMatchObject({ id: 'ChIJa', name: 'Barr', lat: 55.68, lng: 12.59 });
+    expect(verifyImageUrlSignature(place!.thumbnail!, TEST_SECRET)).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it('locates the anchor separately and lists it apart from the results', async () => {
+    useSerpApi();
+    stubSerpApi(
+      [mapsPlace('ChIJcm', 'citizenM'), mapsPlace('ChIJa', 'Barr'), mapsPlace('ChIJb', 'Kadeau')],
+      mapsPlace('ChIJcm', 'citizenM')
+    );
+
+    const result = await performWebSearch(mockAdapters, {
+      query: 'dinner',
+      include_places: true,
+      anchor_location: 'citizenM Copenhagen',
+    });
+
+    expect(result.formattedResults).toContain('Anchor location (the place the user named):\ncitizenM');
+    // The anchor is not also listed as a numbered result.
+    expect(result.formattedResults).not.toMatch(/\d\. citizenM/);
+    expect(result.citables.filter(c => c.id === 'place:ChIJcm')).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
+  it('drops place thumbnails when the deploy cannot sign image URLs', async () => {
+    useSerpApi();
+    stubSerpApi([mapsPlace('ChIJa', 'A'), mapsPlace('ChIJb', 'B')]);
+
+    const result = await performWebSearch(mockAdapters, { query: 'q', include_places: true });
+
+    expect(result.citables.find(c => c.id === 'place:ChIJa')?.metadata?.place?.thumbnail).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  it('withholds the map when fewer than two places came back', async () => {
+    useSerpApi();
+    stubSerpApi([mapsPlace('ChIJa', 'A')]);
+
+    const result = await performWebSearch(mockAdapters, { query: 'q', include_places: true });
+
+    expect(result.formattedResults).not.toContain('b4m_map');
+    expect(result.citables.every(c => !c.metadata?.place)).toBe(true);
+    vi.unstubAllGlobals();
+  });
+});

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ImageModels } from '../models';
+import { ImageModels, LEGACY_DALL_E_3_MODEL_ID } from '../models';
 import { OPENAI_GPT_IMAGE_1_IMAGE_SIZES, OPENAI_GPT_IMAGE_2_IMAGE_SIZES } from '../schemas/openai';
 import {
   fallbackImageSize,
@@ -80,8 +80,30 @@ describe('isSupportedImageSize', () => {
     expect(isSupportedImageSize(ImageModels.GPT_IMAGE_2, '0x1024')).toBe(false);
   });
 
-  it('measures a non-GPT-Image model against the legacy dall-e list', () => {
-    // 1024x1024 appears twice: the list concatenates both dall-e tiers, which overlap on it.
+  it('measures dall-e-2 against its own tier, not the union of both dall-e tiers', () => {
+    for (const size of ['256x256', '512x512', '1024x1024']) {
+      expect(isSupportedImageSize(ImageModels.DALL_E_2, size)).toBe(true);
+    }
+    // The heart of the split: these are dall-e-3 sizes. Before the tiers were separated both
+    // returned true here, and the unsupported value went on to 400 at OpenAI.
+    expect(isSupportedImageSize(ImageModels.DALL_E_2, '1792x1024')).toBe(false);
+    expect(isSupportedImageSize(ImageModels.DALL_E_2, '1024x1792')).toBe(false);
+    expect(isSupportedImageSize(ImageModels.DALL_E_2, '1024x1536')).toBe(false);
+  });
+
+  it('measures dall-e-3 against its own tier, for callers holding a persisted size', () => {
+    for (const size of ['1024x1024', '1792x1024', '1024x1792']) {
+      expect(isSupportedImageSize(LEGACY_DALL_E_3_MODEL_ID, size)).toBe(true);
+    }
+    // The mirror of the case above: dall-e-2's small squares are not dall-e-3 sizes.
+    expect(isSupportedImageSize(LEGACY_DALL_E_3_MODEL_ID, '256x256')).toBe(false);
+    expect(isSupportedImageSize(LEGACY_DALL_E_3_MODEL_ID, '512x512')).toBe(false);
+  });
+
+  it('falls back to the union of both tiers for a legacy id matching neither', () => {
+    // Deliberately loose: an id we cannot place in a tier is left for OpenAI to reject
+    // rather than coerced against a tier it may not belong to.
+    // 1024x1024 appears twice - the list concatenates two tiers that overlap on it.
     expect([...OPENAI_LEGACY_IMAGE_SIZES]).toEqual([
       '256x256',
       '512x512',
@@ -91,9 +113,9 @@ describe('isSupportedImageSize', () => {
       '1024x1792',
     ]);
     for (const size of OPENAI_LEGACY_IMAGE_SIZES) {
-      expect(isSupportedImageSize(ImageModels.DALL_E_2, size)).toBe(true);
+      expect(isSupportedImageSize('dall-e-legacy-unknown', size)).toBe(true);
     }
-    expect(isSupportedImageSize(ImageModels.DALL_E_2, '1024x1536')).toBe(false);
+    expect(isSupportedImageSize('dall-e-legacy-unknown', '1024x1536')).toBe(false);
   });
 });
 
@@ -102,10 +124,14 @@ describe('fallbackImageSize', () => {
     expect(fallbackImageSize(ImageModels.GPT_IMAGE_2)).toBe('1024x1024');
     expect(fallbackImageSize(ImageModels.GPT_IMAGE_1_5)).toBe('1024x1024');
     expect(fallbackImageSize(ImageModels.DALL_E_2)).toBe('1024x1024');
+    expect(fallbackImageSize(LEGACY_DALL_E_3_MODEL_ID)).toBe('1024x1024');
   });
 
   it('always returns a size its own model actually supports', () => {
-    for (const model of [ImageModels.GPT_IMAGE_2, ImageModels.GPT_IMAGE_1_5, ImageModels.DALL_E_2]) {
+    // Guards the coercion paths: every tier's fallback has to survive its own validator,
+    // or generate() would replace an unsupported size with another unsupported size.
+    const models = [ImageModels.GPT_IMAGE_2, ImageModels.GPT_IMAGE_1_5, ImageModels.DALL_E_2, LEGACY_DALL_E_3_MODEL_ID];
+    for (const model of models) {
       expect(isSupportedImageSize(model, fallbackImageSize(model))).toBe(true);
     }
   });

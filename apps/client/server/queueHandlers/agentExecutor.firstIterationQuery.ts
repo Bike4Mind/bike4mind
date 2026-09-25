@@ -24,7 +24,7 @@ export const MAX_PREAMBLE_FILES = 25;
 
 /**
  * The tool that turns a `fabFileId` from the preamble into content. A run whose toolbelt omits
- * it cannot read an attached file at all, because this module injects metadata only - so the
+ * it cannot read any attached file that content materialization did not inline - so the
  * preamble must not tell the agent to use a tool it was never given. An orchestration profile
  * may legitimately omit it to keep a loop on task (see `agentExecutor.optiProfile.ts`), and the
  * agent path does not union `session.enabledTools`, so the omission is invisible from here
@@ -55,15 +55,10 @@ type PreambleFile = Pick<
  * Note the split between the two zero-chunk arms. "Try again shortly" is honest ONLY while
  * chunking is actually in flight; saying it about a stalled file is what cost that hour.
  */
-function unreadableReason(file: PreambleFile, inlinedFileIds: ReadonlySet<string>): string | null {
-  // Content materialization (see `agentExecutor.attachmentContent.ts`) already put this file in
-  // front of the agent, so chunk state says nothing about whether it can be read - it is right
-  // there in the message. Checked first: a chunkless file that WAS inlined is exactly the case the
-  // chunk-state arms below would get backwards.
-  if (inlinedFileIds.has(file.id)) return null;
-  // No agent code path builds an image message block (verified across the executor and the
-  // agents package), so an image is metadata and nothing else here regardless of the toolbelt or
-  // the model's own vision support. Says WHY, so the agent does not report it as its own defect.
+function unreadableReason(file: PreambleFile): string | null {
+  // Only called for a file materialization did NOT inline (an inlined image already arrived as an
+  // image block). The reader tool serves stored text chunks only, so a non-inlined image is
+  // metadata and nothing else. Says WHY, so the agent does not report it as its own defect.
   if (isImageAttachment(file.mimeType)) {
     return 'NOT READABLE: this run cannot open images, only their file names';
   }
@@ -72,6 +67,61 @@ function unreadableReason(file: PreambleFile, inlinedFileIds: ReadonlySet<string
     return 'NOT READABLE YET: indexing is in progress, so there is no stored text to read yet';
   }
   return 'NOT READABLE: no indexed text exists for this file and none is being produced, so waiting will not help';
+}
+
+/** How much of a file content materialization (`agentExecutor.attachmentContent.ts`) put in the message. */
+type InlineDelivery = 'full' | 'partial' | 'none';
+
+const NO_READER_REASON = 'NOT READABLE: this run has no file-reading tool';
+
+/**
+ * The mark for a file whose content is already in the message. Without it the header pointed the
+ * agent at `CONTENT_READ_TOOL` for every file, so a small inlined HTML file still got a knowledge-
+ * base round trip even when the user said "it's attached, just use it". Only 'full' may say there
+ * is nothing more to fetch - saying so of an excerpt or a truncated head would be false (#1163).
+ */
+function inlinedMark(delivery: InlineDelivery, canRead: boolean): string | null {
+  if (delivery === 'full') return 'CONTENT INCLUDED IN FULL below - use it directly';
+  if (delivery === 'none') return null;
+  return canRead
+    ? `PARTIAL CONTENT INCLUDED below - use ${CONTENT_READ_TOOL} only for what is not shown`
+    : 'PARTIAL CONTENT INCLUDED below - the rest cannot be opened in this run';
+}
+
+const METADATA_ONLY_HEADER =
+  '[ATTACHED FILES - METADATA ONLY. This run has no file-reading tool, so their contents are ' +
+  'NOT available to you. Do not claim to have read or analyzed them, and do not offer an ' +
+  'analysis as though you had. Name the files, state plainly that you cannot open them in ' +
+  'this run, and ask the user to paste the contents or retry with file access enabled.]';
+
+/**
+ * Never names a tool the run lacks. The all-full arm names none at all: nothing is left to fetch,
+ * and naming the reader there is what invited the redundant call in the first place.
+ */
+function preambleHeader(canRead: boolean, deliveries: readonly InlineDelivery[]): string {
+  const allFull = deliveries.every(d => d === 'full');
+  const anyInlined = deliveries.some(d => d !== 'none');
+  if (allFull) {
+    return (
+      '[ATTACHED FILES - The full content of every file listed here is included below in this ' +
+      'message. Work from that content directly; do not use any tool to fetch or search for these ' +
+      'files again.]'
+    );
+  }
+  if (!canRead) {
+    return anyInlined
+      ? '[ATTACHED FILES - This run has no file-reading tool. Only the content included below in ' +
+          'this message is available to you; do not claim to have read any other file.]'
+      : METADATA_ONLY_HEADER;
+  }
+  const includedClause = deliveries.includes('full')
+    ? `A file marked CONTENT INCLUDED IN FULL is already below in this message: use that content ` +
+      `and do not call ${CONTENT_READ_TOOL} on it. For the others, use`
+    : 'Use';
+  return (
+    `[ATTACHED FILES - ${includedClause} these fabFileId values with ${CONTENT_READ_TOOL} to access ` +
+    'content. Use the exact filename and fabFileId provided.]'
+  );
 }
 
 /**
@@ -115,11 +165,10 @@ interface FabFileAccessibleRepo {
  * nothing to return and narrates its own guess: production runs told the user a stalled file was
  * "still indexing" across an hour, and reported an unviewable image as a missing OCR capability.
  *
- * Mirrors the pattern in `ServerSubagentOrchestrator` (`taskWithFiles`) - we
- * inject metadata, not content, so the agent decides what to read instead of
- * burning context on files it may not need. Content materialization (parity
- * with `chat_completion.buildDataSources`) is a heavier follow-up that needs
- * an embedding factory in the executor.
+ * Content itself is inlined separately, after this preamble, by `agentExecutor.attachmentContent.ts`.
+ * `inlinedFileIds` / `fullyInlinedFileIds` come from that step: an inlined file is never marked
+ * unreadable, and a fully inlined one is marked as already present so the agent does not fetch it
+ * again. When every listed file is fully inlined the header drops the reader instruction entirely.
  *
  * `scope` is the access filter spread onto the Mongo query inside
  * `getAccessibleFiles`. Pass a CASL `accessibleBy(...).ofType(FabFile)` filter
@@ -144,6 +193,8 @@ export async function buildFirstIterationQuery(
   availableToolNames: readonly string[],
   /** Ids whose content was already inlined into this run's first message; never marked unreadable. */
   inlinedFileIds: readonly string[] = [],
+  /** Subset of `inlinedFileIds` whose ENTIRE content is present - see `MaterializedAttachments`. */
+  fullyInlinedFileIds: readonly string[] = [],
   /** The attachment door's lake arms - see `maybeBuildFirstIterationQuery`'s `lakeAccess`. */
   lakeAccess?: AttachmentLakeAccess
 ): Promise<string> {
@@ -191,18 +242,27 @@ export async function buildFirstIterationQuery(
   const canRead = availableToolNames.includes(CONTENT_READ_TOOL);
   const canSearch = availableToolNames.includes(CONTENT_SEARCH_TOOL);
 
-  // Only meaningful when a reader exists: without one the whole preamble already says NOTHING is
-  // readable, and a per-file reason there would just contradict the header.
   const inlined = new Set(inlinedFileIds);
-  const unreadable = canRead
-    ? listed.map(f => ({ file: f, reason: unreadableReason(f, inlined) })).filter(entry => entry.reason !== null)
-    : [];
-  const unreadableById = new Map(unreadable.map(entry => [entry.file.id, entry.reason as string]));
+  const fullyInlined = new Set(fullyInlinedFileIds);
+  const deliveryOf = (id: string): InlineDelivery =>
+    fullyInlined.has(id) ? 'full' : inlined.has(id) ? 'partial' : 'none';
+  const anyInlined = listed.some(f => deliveryOf(f.id) !== 'none');
+  const allFull = listed.every(f => deliveryOf(f.id) === 'full');
+
+  // Chunk state says nothing about an inlined file - it is right there in the message - so only a
+  // non-inlined file is classified. With no reader and nothing inlined, the METADATA ONLY header
+  // already says nothing is readable and a per-file reason would just contradict it.
+  const unreadable = listed.flatMap(f => {
+    if (deliveryOf(f.id) !== 'none') return [];
+    const reason = canRead ? unreadableReason(f) : anyInlined ? NO_READER_REASON : null;
+    return reason ? [{ file: f, reason }] : [];
+  });
+  const unreadableById = new Map(unreadable.map(entry => [entry.file.id, entry.reason]));
 
   const fileLines = listed.map(f => {
     const line = `  - "${escapePreambleFilename(f.fileName)}" (${f.mimeType || 'unknown'}) -> fabFileId: ${f.id}`;
-    const reason = unreadableById.get(f.id);
-    return reason ? `${line}  [${reason}]` : line;
+    const mark = inlinedMark(deliveryOf(f.id), canRead) ?? unreadableById.get(f.id);
+    return mark ? `${line}  [${mark}]` : line;
   });
 
   const hiddenCount = files.length - MAX_PREAMBLE_FILES;
@@ -214,7 +274,7 @@ export async function buildFirstIterationQuery(
 
   // Loud on purpose: an attachment the run cannot open is a silent dead end for the user, and
   // the cause is always a profile tool list rather than anything wrong with the file.
-  if (!canRead) {
+  if (!canRead && !allFull) {
     logger.warn('[FileContext] Files are attached but this run has no content-reading tool', {
       resolved: files.length,
       contentReadTool: CONTENT_READ_TOOL,
@@ -235,21 +295,19 @@ export async function buildFirstIterationQuery(
     });
   }
 
-  const header = canRead
-    ? `[ATTACHED FILES - Use these fabFileId values with ${CONTENT_READ_TOOL} to access content. ` +
-      'Use the exact filename and fabFileId provided.]'
-    : '[ATTACHED FILES - METADATA ONLY. This run has no file-reading tool, so their contents are ' +
-      'NOT available to you. Do not claim to have read or analyzed them, and do not offer an ' +
-      'analysis as though you had. Name the files, state plainly that you cannot open them in ' +
-      'this run, and ask the user to paste the contents or retry with file access enabled.]';
+  const header = preambleHeader(
+    canRead,
+    listed.map(f => deliveryOf(f.id))
+  );
 
   // Only when SOME file is readable and some is not - the all-unreadable case is already covered
   // by the header above, and repeating the instruction there would just be noise.
+  const noReadCall = canRead ? `do not call ${CONTENT_READ_TOOL} on it, ` : '';
   const unreadableTrailer =
     unreadable.length === 0
       ? ''
-      : `\n[Any file marked NOT READABLE above cannot be opened in this run: do not call ` +
-        `${CONTENT_READ_TOOL} on it, do not claim to have read it, and do not describe or infer its ` +
+      : `\n[Any file marked NOT READABLE above cannot be opened in this run: ${noReadCall}` +
+        `do not claim to have read it, and do not describe or infer its ` +
         `contents from its file name. Say plainly which file you cannot read and give the reason ` +
         `shown. Do not tell the user to wait unless the reason says indexing is in progress.]`;
 
@@ -280,6 +338,8 @@ export async function maybeBuildFirstIterationQuery(
     availableToolNames: readonly string[];
     /** See `buildFirstIterationQuery`. */
     inlinedFileIds?: readonly string[];
+    /** See `buildFirstIterationQuery`. */
+    fullyInlinedFileIds?: readonly string[];
     /**
      * A THUNK, not an awaited value: this call site is UNgated (the gate below lives inside this
      * function), so an awaited value here would force the resolution on every iteration instead of
@@ -300,6 +360,7 @@ export async function maybeBuildFirstIterationQuery(
     args.scope,
     args.availableToolNames,
     args.inlinedFileIds ?? [],
+    args.fullyInlinedFileIds ?? [],
     await args.lakeAccess?.()
   );
 }

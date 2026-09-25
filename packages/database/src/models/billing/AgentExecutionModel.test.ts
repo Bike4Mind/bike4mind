@@ -36,6 +36,29 @@ function makeBaseExecution(overrides: Partial<Parameters<typeof agentExecutionRe
 describe('AgentExecutionRepository', () => {
   setupMongoTest();
 
+  describe('restoreRejectedResume', () => {
+    it('atomically restores the paused marker after a definitive dispatch rejection', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ status: 'continuing' }));
+      const permission = { toolName: 'web_search', toolInput: {}, requestedAt: new Date() };
+      expect(
+        await agentExecutionRepository.restoreRejectedResume(execution.id, {
+          status: 'awaiting_permission',
+          pendingPermission: permission,
+        })
+      ).toBe(true);
+      const restored = await agentExecutionRepository.findById(execution.id);
+      expect(restored?.status).toBe('awaiting_permission');
+      expect(restored?.pendingPermission?.toolName).toBe('web_search');
+    });
+    it('does not overwrite a claimed or aborted execution', async () => {
+      for (const status of ['running', 'aborted'] as const) {
+        const execution = await agentExecutionRepository.create(makeBaseExecution({ status }));
+        expect(await agentExecutionRepository.restoreRejectedResume(execution.id, { status: 'paused' })).toBe(false);
+        expect((await agentExecutionRepository.findById(execution.id))?.status).toBe(status);
+      }
+    });
+  });
+
   describe('countActiveByUserId', () => {
     it('counts top-level executions in any active status', async () => {
       const userId = new mongoose.Types.ObjectId().toString();
@@ -1168,6 +1191,71 @@ describe('AgentExecutionRepository', () => {
       const ids = await agentExecutionRepository.findStaleActiveIds({ olderThan: cutoff });
 
       expect(ids).toEqual([stale.id]);
+    });
+  });
+
+  describe('quest settlement retry marker', () => {
+    it('markQuestSettlementFailed stamps a timestamp the retry pass can find', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ status: 'failed' }));
+
+      await agentExecutionRepository.markQuestSettlementFailed([execution.id]);
+
+      const after = await AgentExecutionModel.findById(execution.id);
+      expect(after?.questSettlementFailedAt).toBeInstanceOf(Date);
+    });
+
+    it('clearQuestSettlementFailed removes the marker', async () => {
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ status: 'failed' }));
+      await agentExecutionRepository.markQuestSettlementFailed([execution.id]);
+
+      await agentExecutionRepository.clearQuestSettlementFailed([execution.id]);
+
+      const after = await AgentExecutionModel.findById(execution.id);
+      expect(after?.questSettlementFailedAt).toBeUndefined();
+    });
+
+    it('findFailedQuestSettlementIds returns only markers older than the cutoff, oldest first', async () => {
+      const older = await agentExecutionRepository.create(makeBaseExecution({ status: 'failed' }));
+      const newer = await agentExecutionRepository.create(makeBaseExecution({ status: 'failed' }));
+      const unmarked = await agentExecutionRepository.create(makeBaseExecution({ status: 'failed' }));
+
+      await AgentExecutionModel.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(older.id) },
+        { $set: { questSettlementFailedAt: new Date(Date.now() - 2 * 60 * 60 * 1000) } }
+      );
+      await AgentExecutionModel.collection.updateOne(
+        { _id: new mongoose.Types.ObjectId(newer.id) },
+        { $set: { questSettlementFailedAt: new Date(Date.now() - 1 * 60 * 60 * 1000) } }
+      );
+
+      const cutoff = new Date();
+      const results = await agentExecutionRepository.findFailedQuestSettlementIds({ limit: 10, olderThan: cutoff });
+
+      expect(results.map(r => r.id)).toEqual([older.id, newer.id]);
+      expect(results.map(r => r.id)).not.toContain(unmarked.id);
+    });
+
+    it('findFailedQuestSettlementIds excludes a marker not yet older than the cutoff', async () => {
+      // Guards the candidate-selection race: a marker from the caller's own
+      // current tick must not be retried again in the same pass.
+      const execution = await agentExecutionRepository.create(makeBaseExecution({ status: 'failed' }));
+      const cutoff = new Date(Date.now() - 60 * 60 * 1000);
+      await agentExecutionRepository.markQuestSettlementFailed([execution.id]);
+
+      const results = await agentExecutionRepository.findFailedQuestSettlementIds({ limit: 10, olderThan: cutoff });
+
+      expect(results).toEqual([]);
+    });
+
+    it('findFailedQuestSettlementIds respects the limit', async () => {
+      const executions = await Promise.all(
+        Array.from({ length: 3 }, () => agentExecutionRepository.create(makeBaseExecution({ status: 'failed' })))
+      );
+      await agentExecutionRepository.markQuestSettlementFailed(executions.map(e => e.id));
+
+      const results = await agentExecutionRepository.findFailedQuestSettlementIds({ limit: 2, olderThan: new Date() });
+
+      expect(results).toHaveLength(2);
     });
   });
 

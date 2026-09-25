@@ -224,6 +224,31 @@ describe('ConfigStore folder-trust gate', () => {
     expect(onDisk.preferences.theme).toBe('dark'); // global's, not the repo's
   });
 
+  it('saveSandboxConfig detaches the stored sandbox from the caller object (no live aliasing)', async () => {
+    const store = new ConfigStore(globalConfigPath);
+    await store.load();
+
+    // Callers pass the orchestrator's LIVE config object. If saveSandboxConfig
+    // aliased it into globalConfig instead of cloning, a later unrelated save()
+    // would serialize whatever the in-memory sandbox state has since mutated to.
+    const live = {
+      ...DEFAULT_SANDBOX_CONFIG,
+      enabled: true,
+      mode: 'auto-allow' as const,
+      network: { ...DEFAULT_SANDBOX_CONFIG.network, enabled: false, allowedDomains: [] as string[] },
+    };
+    await store.saveSandboxConfig(live);
+
+    // Mutate the caller's object AFTER the save, then trigger an unrelated save.
+    live.network.enabled = true;
+    live.network.allowedDomains.push('evil.com');
+    await store.save({ defaultModel: 'user-picked-model' });
+
+    const onDisk = JSON.parse(await fs.readFile(globalConfigPath, 'utf-8'));
+    expect(onDisk.sandbox.network.enabled).toBe(false); // the state at save time, not the mutation
+    expect(onDisk.sandbox.network.allowedDomains).not.toContain('evil.com');
+  });
+
   it('a merged-config save (the fixed /model path) writes the user model but no repo data', async () => {
     const store = new ConfigStore(globalConfigPath);
     await store.load();
