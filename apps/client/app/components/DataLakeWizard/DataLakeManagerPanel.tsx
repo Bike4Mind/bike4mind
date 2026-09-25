@@ -221,6 +221,10 @@ export default function DataLakeManagerPanel() {
               dataLakeId={activeLake.id}
               lakeName={activeLake.name}
               canManage={activeLake.canManage}
+              // WIDER than canManage on purpose - see DataLakeArticlePanel's canRebuild. The same
+              // flag LakeInfoPanel lights the whole-lake "Rebuild passages" button with, so the
+              // per-file and whole-lake repairs agree on who may run them.
+              canRebuild={activeLake.canRebuild}
               // Narrower than canManage on purpose - see DataLakeArticlePanel's canPurge. `isOwn` is
               // the DTO's effective-owner flag (grant-aware), and it is false for an admin acting on
               // someone else's lake, whom the service does allow. The FILE-ownership conjunct is the

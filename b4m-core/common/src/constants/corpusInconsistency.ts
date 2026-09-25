@@ -31,6 +31,14 @@ export const INCONSISTENCY_KINDS = [
   'relationship-conflict',
   /** Dated claims that have silently become false, grouped by the year they expired in. */
   'expired-claim',
+  /**
+   * Two documents state incompatible claims in ordinary prose, caught by READING them rather than
+   * by any pattern above (#3057). Never produced by `detectCorpusInconsistencies` - it is pure and
+   * LLM-free by design (see the module doc) - so this kind exists in the shared vocabulary but
+   * never appears in that function's own `countsByKind`. Only `detectLakeInconsistenciesModel`
+   * produces it.
+   */
+  'narrative-contradiction',
 ] as const;
 
 /**
@@ -102,8 +110,12 @@ export interface InconsistencyFinding {
   documentCount: number;
 }
 
-/** Longest excerpt carried per finding. Enough to judge a claim, short enough to render in a list. */
-const EXCERPT_MAX = 240;
+/**
+ * Longest excerpt carried per finding. Enough to judge a claim, short enough to render in a list.
+ * Exported so `LakeContradictionReadingService` (#3057) can hold the model to the same bound when it
+ * asks for a quote, rather than trusting `excerpt()` alone to trim an unbounded response after the fact.
+ */
+export const EXCERPT_MAX = 240;
 
 /**
  * Documents quoted per finding.
@@ -131,12 +143,20 @@ function sentences(text: string): string[] {
     .filter(Boolean);
 }
 
-function excerpt(sentence: string): string {
+/** Exported so `detectLakeInconsistenciesModel` (#3057) bounds a model-quoted excerpt the same way. */
+export function excerpt(sentence: string): string {
   return sentence.length <= EXCERPT_MAX ? sentence : `${sentence.slice(0, EXCERPT_MAX - 3)}...`;
 }
 
-/** Grouping key: case-folded, punctuation-stripped, whitespace-collapsed. */
-function normalizeSubject(raw: string): string {
+/**
+ * Grouping key: case-folded, punctuation-stripped, whitespace-collapsed.
+ *
+ * Exported for `detectLakeInconsistenciesModel` (#3057): a model's free-text subject phrasing can
+ * drift between runs, and this is the same normalization the lexical rules rely on to key a
+ * finding - reusing it is what gives a model-found contradiction a shot at landing on the same
+ * `recordLakeFindings` row across re-detections instead of minting a duplicate every run.
+ */
+export function normalizeSubject(raw: string): string {
   return raw
     .toLowerCase()
     .replace(/[^a-z0-9\s%.-]/g, ' ')
@@ -602,6 +622,9 @@ export function detectCorpusInconsistencies(
     'metric-disagreement': 0,
     'relationship-conflict': 0,
     'expired-claim': 0,
+    // Never produced here - see the kind's own doc comment. Present so the Record type stays
+    // exhaustive over the full shared vocabulary rather than only this detector's slice of it.
+    'narrative-contradiction': 0,
   };
   for (const finding of findings) countsByKind[finding.kind] += 1;
 

@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mermaid from 'mermaid';
-import { Box, IconButton, Stack, Tab, TabList, TabPanel, Tabs, Typography, useTheme, Textarea } from '@mui/joy';
+import { Box, IconButton, Stack, TabPanel, Tabs, Typography, useTheme, Textarea } from '@mui/joy';
+import ArtifactModeTabs from '@client/app/components/common/ArtifactModeTabs';
 import { Code, Download, ContentCopy } from '@mui/icons-material';
 import ErrorIcon from '@mui/icons-material/Error';
 import { useSnackbar } from '@client/app/contexts/SnackbarContext';
@@ -12,7 +13,20 @@ interface MermaidChartProps {
   onChartChange?: (newDefinition: string) => void;
   readOnly?: boolean;
   className?: string;
+  /**
+   * Drop the tab strip and toolbar and render the diagram alone. For the inline artifact
+   * card, whose job is to say what the artifact is: switching to source and exporting are
+   * the viewer's affordances, and a card carrying its own set duplicated the card's row.
+   */
+  chromeless?: boolean;
 }
+
+/**
+ * How many frames to keep re-checking a zero-width container before leaving it to the
+ * ResizeObserver. A few frames covers the common case (a container that has not been laid
+ * out yet on first paint) without spinning for a chart that is display:none indefinitely.
+ */
+const ZERO_WIDTH_RETRY_FRAMES = 30;
 
 const MermaidChart: React.FC<MermaidChartProps> = ({
   chartDefinition,
@@ -21,6 +35,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
   onChartChange,
   readOnly = true,
   className,
+  chromeless = false,
 }) => {
   const theme = useTheme();
   const { showSnackbar } = useSnackbar();
@@ -37,6 +52,10 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       // PNG export serializes the inline <svg> that render() returns (see handleExportPNG),
       // which 'strict' leaves in place - only 'sandbox' (iframe-wrapped output) would break it.
       securityLevel: 'strict',
+      // Without this, a parse failure draws mermaid's error diagram into the temporary
+      // container it appends to <body> and throws before its own cleanup runs. The
+      // component renders its own error state below, so the built-in one is pure litter.
+      suppressErrorRendering: true,
     });
   }, [theme.palette.mode]);
 
@@ -45,16 +64,47 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
     if (activeTab !== 'chart' || !elementRef.current) return;
 
     let cancelled = false;
+    let retryFrame: number | null = null;
+    let retriesLeft = ZERO_WIDTH_RETRY_FRAMES;
+    let rendering = false;
     const container = elementRef.current;
 
     const renderChart = async () => {
       if (cancelled || !elementRef.current) return;
-      // Don't render into a zero-size container - wait for ResizeObserver to retry
-      if (elementRef.current.offsetWidth === 0 && typeof process !== 'undefined' && process.env.NODE_ENV !== 'test')
+      // Two entry points reach this - the initial call and the ResizeObserver below - and
+      // mermaid.render is async, so without this guard a container that gains width mid
+      // render starts a second one over the top of the first.
+      if (rendering) return;
+      // Don't render into a zero-size container, and retry on the next frame rather than
+      // waiting for a resize that may never come. The observer below only fires on a LATER
+      // size change, so a card whose container measures 0 on first paint and is never
+      // resized again stayed blank until something else moved the layout - opening the
+      // artifact viewer, say, which is how this surfaced.
+      //
+      // Bounded, because a chart under a display:none ancestor never gains width: an
+      // unbounded retry would read layout every frame for the life of the component. Once
+      // the budget is spent the observer is the only thing left waiting, which is the right
+      // tool for a container that becomes visible much later.
+      if (elementRef.current.offsetWidth === 0 && typeof process !== 'undefined' && process.env.NODE_ENV !== 'test') {
+        if (retriesLeft <= 0) return;
+        retriesLeft--;
+        retryFrame = requestAnimationFrame(() => {
+          retryFrame = null;
+          renderChart();
+        });
         return;
+      }
+      rendering = true;
+      // Unique per render: mermaid injects a temporary element under this id, so two
+      // charts sharing one collide - and the same diagram routinely mounts twice at once
+      // (the inline card and the artifact viewer). The loser rendered nothing until some
+      // later re-render happened to find the id free, which is why closing the viewer
+      // appeared to "fix" a blank card. Matches TavernArtifactRenderer, which already
+      // generates a unique id.
+      const renderId = 'mermaid-chart-' + Math.random().toString(36).slice(2);
       try {
         setError(null);
-        const { svg } = await mermaid.render('mermaid-chart', localDefinition);
+        const { svg } = await mermaid.render(renderId, localDefinition);
         if (cancelled || !elementRef.current) return;
 
         elementRef.current.innerHTML = '';
@@ -81,6 +131,17 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
       } catch (err) {
         console.error('Mermaid chart rendering error:', err);
         if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to render chart');
+        // mermaid removes its temp container itself on success, but throws before doing so
+        // on a parse error. A fixed id used to mean the next render swept the orphan; with
+        // a unique id per render nothing would, and invalid model-written mermaid is common.
+        //
+        // Error path only, and never by renderId alone: the svg mermaid RETURNS also carries
+        // that id, so once it is in the container, removing by id deletes the chart itself.
+        document.getElementById('d' + renderId)?.remove();
+        const stray = document.getElementById(renderId);
+        if (stray?.parentElement === document.body) stray.remove();
+      } finally {
+        rendering = false;
       }
     };
 
@@ -90,6 +151,8 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
     const observer = new ResizeObserver(entries => {
       const entry = entries[0];
       if (entry && entry.contentRect.width > 0 && !container.querySelector('svg')) {
+        // The frame budget above may already be spent; a real size change earns a fresh one.
+        retriesLeft = ZERO_WIDTH_RETRY_FRAMES;
         renderChart();
       }
     });
@@ -97,6 +160,7 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
 
     return () => {
       cancelled = true;
+      if (retryFrame !== null) cancelAnimationFrame(retryFrame);
       observer.disconnect();
     };
   }, [theme.palette.mode, localDefinition, activeTab]);
@@ -220,47 +284,47 @@ const MermaidChart: React.FC<MermaidChartProps> = ({
         onChange={(_, v) => setActiveTab(v as 'chart' | 'source')}
         sx={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
-          <TabList>
-            <Tab value="chart" data-testid="mermaid-chart-tab">
-              Chart
-            </Tab>
-            <Tab value="source" data-testid="mermaid-source-tab">
-              Source
-            </Tab>
-          </TabList>
+        {!chromeless && (
+          <Box sx={{ display: 'flex', alignItems: 'center', borderBottom: 1, borderColor: 'divider' }}>
+            <ArtifactModeTabs
+              previewValue="chart"
+              codeValue="source"
+              previewTestId="mermaid-chart-tab"
+              codeTestId="mermaid-source-tab"
+            />
 
-          {/* Actions */}
-          <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
-            <IconButton
-              size="sm"
-              variant="soft"
-              onClick={handleCopyDefinition}
-              title="Copy chart definition"
-              data-testid="mermaid-copy-definition-btn"
-            >
-              <Code />
-            </IconButton>
-            <IconButton
-              size="sm"
-              variant="soft"
-              onClick={handleCopy}
-              title={activeTab === 'source' ? 'Copy source code' : 'Copy as PNG'}
-              data-testid="mermaid-copy-btn"
-            >
-              <ContentCopy />
-            </IconButton>
-            <IconButton
-              size="sm"
-              variant="soft"
-              onClick={handleExportPNG}
-              title="Download as PNG"
-              data-testid="mermaid-download-btn"
-            >
-              <Download />
-            </IconButton>
+            {/* Actions */}
+            <Box sx={{ ml: 'auto', display: 'flex', gap: 1 }}>
+              <IconButton
+                size="sm"
+                variant="soft"
+                onClick={handleCopyDefinition}
+                title="Copy chart definition"
+                data-testid="mermaid-copy-definition-btn"
+              >
+                <Code />
+              </IconButton>
+              <IconButton
+                size="sm"
+                variant="soft"
+                onClick={handleCopy}
+                title={activeTab === 'source' ? 'Copy source code' : 'Copy as PNG'}
+                data-testid="mermaid-copy-btn"
+              >
+                <ContentCopy />
+              </IconButton>
+              <IconButton
+                size="sm"
+                variant="soft"
+                onClick={handleExportPNG}
+                title="Download as PNG"
+                data-testid="mermaid-download-btn"
+              >
+                <Download />
+              </IconButton>
+            </Box>
           </Box>
-        </Box>
+        )}
 
         <TabPanel value="chart" sx={{ flex: 1, overflow: 'hidden', p: 1, height: 0 }}>
           {error ? (

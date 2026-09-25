@@ -24,6 +24,12 @@ export interface TestEmailResult {
   error?: string;
 }
 
+export const SMTP_DNS_TIMEOUT_MS = 5_000;
+export const SMTP_CONNECTION_TIMEOUT_MS = 10_000;
+export const SMTP_GREETING_TIMEOUT_MS = 10_000;
+/** Inactivity, not total: resets on every SMTP exchange, so a slow-but-live server still completes. */
+export const SMTP_SOCKET_TIMEOUT_MS = 15_000;
+
 export class MailService {
   defaultFrom = Config.MAIL_FROM;
   // Account-tied support address from the SUPPORT_EMAIL secret; no brand fallback.
@@ -46,6 +52,13 @@ export class MailService {
       },
       secure: port === 465,
       requireTLS: port === 587,
+      // nodemailer's defaults (2 min connect, 30s greeting, 10 min socket idle) all outlive the 60s
+      // web Lambda (infra/web.ts), and every route awaits sendEmail inline, so a stalled SMTP host
+      // would 504 a request whose work had already committed. Keep the whole send well under that.
+      dnsTimeout: SMTP_DNS_TIMEOUT_MS,
+      connectionTimeout: SMTP_CONNECTION_TIMEOUT_MS,
+      greetingTimeout: SMTP_GREETING_TIMEOUT_MS,
+      socketTimeout: SMTP_SOCKET_TIMEOUT_MS,
     });
 
     this.validateConfig();

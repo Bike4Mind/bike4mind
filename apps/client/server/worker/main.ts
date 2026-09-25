@@ -19,6 +19,7 @@ import { isDiscoveryDriver, startDiscoveryOnStartup } from '@server/modelDiscove
 import { runStuckBatchSweep } from '@server/cron/dataLakeBatchReconcile';
 import { SelfHostWorker } from './selfHostWorker';
 import { registerAbandonedExecutionSweep } from './abandonedExecutionSweep';
+import { registerQuestTimeoutSweep } from './questTimeoutSweep';
 import { dispatchSelfHostEvent } from './eventDispatch';
 import { runChunkRescueSweep, runStrandedVectorizeRescue } from './chunkRescueSweep';
 import { runModerationRescueSweep } from '@server/s3/moderationRescueSweep';
@@ -71,6 +72,7 @@ async function main() {
 
   const worker = new SelfHostWorker(bootLogger);
   registerAbandonedExecutionSweep(worker);
+  registerQuestTimeoutSweep(worker);
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,

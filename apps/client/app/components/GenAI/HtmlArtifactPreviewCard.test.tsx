@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -39,6 +39,10 @@ vi.mock('@tanstack/react-query', () => ({
 }));
 
 vi.mock('@client/app/utils/filesAPICalls', () => ({ createFabFileOnServerWithUpload: vi.fn() }));
+vi.mock('@client/app/contexts/UserSettingsContext', () => ({
+  // The card reads maxVisibleLines/autoCollapseContent to bound a long source body.
+  useUserSettings: () => ({ settings: { autoCollapseContent: true, maxVisibleLines: 25 } }),
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
 import HtmlArtifactPreviewCard from './HtmlArtifactPreviewCard';
@@ -78,38 +82,33 @@ describe('HtmlArtifactPreviewCard', () => {
     }
   );
 
-  it('shows no raw-source teaser once the card is collapsed', () => {
+  // A card no longer folds: the render is bounded by its own cap and the viewer is where a
+  // reader goes for more, so there is no collapsed state left to hide the body - and with it
+  // goes the raw-source teaser, which was DOCTYPE boilerplate identical on every artifact.
+  it('has no fold control and always shows its render', () => {
     render(
       <TestWrapper>
         <HtmlArtifactPreviewCard artifact={artifact} />
       </TestWrapper>
     );
-    fireEvent.click(screen.getByTestId('html-artifact-toggle-btn'));
-    expect(screen.queryByTestId('inline-artifact-preview')).not.toBeInTheDocument();
-    // The teaser was the first three lines of the file -- DOCTYPE boilerplate on every artifact.
+    expect(screen.queryByTestId('html-artifact-toggle-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('inline-artifact-preview')).toBeInTheDocument();
     expect(screen.queryByTestId('html-artifact-source')).not.toBeInTheDocument();
     expect(screen.queryByText(/DOCTYPE/)).not.toBeInTheDocument();
   });
 
-  it('shows source when the code segment of the preview toggle is selected', () => {
+  // The card no longer flips between the render and the source: switching views is the
+  // viewer's job, where ArtifactModeTabs gives every renderable type the same Preview/Code
+  // strip and there is room to read either. The two tests that drove the old inline toggle
+  // are gone with it; this one pins the card to the render alone.
+  it('offers no inline view toggle - the card shows the render only', () => {
     render(
       <TestWrapper>
         <HtmlArtifactPreviewCard artifact={artifact} />
       </TestWrapper>
     );
-    fireEvent.click(screen.getByTestId('view-mode-code'));
-    expect(screen.queryByTestId('inline-artifact-preview')).not.toBeInTheDocument();
-    expect(screen.getByText(new RegExp(SENTINEL))).toBeInTheDocument();
-  });
-
-  it('returns to the rendered preview when the preview segment is selected', () => {
-    render(
-      <TestWrapper>
-        <HtmlArtifactPreviewCard artifact={artifact} />
-      </TestWrapper>
-    );
-    fireEvent.click(screen.getByTestId('view-mode-code'));
-    fireEvent.click(screen.getByTestId('view-mode-preview'));
+    expect(screen.queryByTestId('view-mode-code')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('view-mode-preview')).not.toBeInTheDocument();
     expect(screen.getByTestId('inline-artifact-preview')).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(SENTINEL))).not.toBeInTheDocument();
   });

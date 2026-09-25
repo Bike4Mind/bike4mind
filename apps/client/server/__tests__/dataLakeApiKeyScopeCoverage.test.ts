@@ -30,6 +30,13 @@ const MUTATING_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 const READ_ONLY_POST_ROUTES = new Set(['semantic-search.ts', 'rlm-answer.ts', 'compute-sync-delta.ts']);
 
 /**
+ * Routes with no published contract that API keys must never reach at all, so they need no scope
+ * - listed by hand (not inferred from `auth: 'jwtOnly'`) so each exemption is a reviewed claim
+ * rather than something a route silently opts into by omission.
+ */
+const JWT_ONLY_ROUTES = new Set(['[id]/membership-diff.ts']);
+
+/**
  * Routes whose gate must be pinned to a SPECIFIC constant, not merely "some DATA_LAKE_ constant".
  * Without this, reverting a spend route's gate from DATA_LAKE_QUERY_SCOPES back to
  * DATA_LAKE_READ_SCOPES still passes every other check here - the generic regex below only cares
@@ -86,6 +93,17 @@ describe('data-lake routes declare an API-key scope gate', () => {
 
   it.each(files.map(f => [path.relative(ROUTES_DIR, f), f]))('%s', (rel, file) => {
     const source = readFileSync(file, 'utf8');
+
+    // jwt-only routes are unreachable by API keys, so they need no scope; this per-file
+    // test IS the sanity check - if the route loses `auth: 'jwtOnly'` this case fails.
+    if (JWT_ONLY_ROUTES.has(rel)) {
+      expect(source, `${rel} must stay declared as baseApi({ auth: 'jwtOnly' })`).toContain(
+        "baseApi({ auth: 'jwtOnly' })"
+      );
+      expect(source).not.toContain('requiredScopes');
+      expect(source).not.toContain('ApiKeyScope.ADMIN');
+      return;
+    }
 
     const gate = source.match(/baseApi\(\{ requiredScopes: (DATA_LAKE_[A-Z_]+) \}\)/);
     expect(gate, 'route must declare requiredScopes from @server/dataLakes/dataLakeScopes').not.toBeNull();

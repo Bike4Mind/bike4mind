@@ -15,6 +15,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const h = vi.hoisted(() => ({
   sessionUpdate: vi.fn(),
+  userFindById: vi.fn(),
   questFindOne: vi.fn(),
   getOperationsModel: vi.fn(),
   llmComplete: vi.fn(),
@@ -37,9 +38,9 @@ vi.mock('@server/utils/eventBus', () => ({
 vi.mock('@bike4mind/database', () => ({
   sessionRepository: {
     findById: vi.fn(async () => h.session),
-    update: h.sessionUpdate,
+    updateWithUpdateAccess: h.sessionUpdate,
   },
-  userRepository: { findById: vi.fn(async (id: string) => ({ id, isAdmin: false })) },
+  userRepository: { findById: h.userFindById },
   questRepository: { findOne: h.questFindOne },
 }));
 
@@ -58,9 +59,9 @@ const OWNER = 'user-owner';
 
 const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), updateMetadata: vi.fn() };
 
-const run = () =>
+const run = (properties: Record<string, unknown> = { sessionId: SESSION_ID, userId: OWNER }) =>
   (handler as unknown as (event: unknown, logger: unknown) => Promise<void>)(
-    { event: 'session.tag', properties: { sessionId: SESSION_ID, userId: OWNER } },
+    { event: 'session.tag', properties },
     logger
   );
 
@@ -75,6 +76,8 @@ describe('sessionTagging', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     h.completionText = [];
+    h.userFindById.mockImplementation(async (id: string) => ({ id, isAdmin: false }));
+    h.sessionUpdate.mockImplementation(async (_user: unknown, data: unknown) => data);
     h.questFindOne.mockResolvedValue({ id: 'quest-1', prompt: 'How do pulsars form?' });
     h.llmComplete.mockImplementation(
       async (
@@ -109,7 +112,7 @@ describe('sessionTagging', () => {
     await run();
 
     expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
-    const written = h.sessionUpdate.mock.calls[0][0];
+    const written = h.sessionUpdate.mock.calls[0][1];
     // `BaseModel.update` throws without it (b4m-core/db-core/src/models/BaseModel.ts), and the
     // repository is mocked here, so nothing else in this file would catch a dropped id.
     expect(written.id).toBe(SESSION_ID);
@@ -120,6 +123,64 @@ describe('sessionTagging', () => {
     expect(written.tagLastAttemptAt).toBeNull();
   });
 
+  describe('write-time access re-check', () => {
+    const SHAREE = 'user-sharee';
+
+    it('re-checks the owner when the job names no requester (spider, summarization)', async () => {
+      h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+
+      await run({ sessionId: SESSION_ID });
+
+      expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
+      expect(h.sessionUpdate.mock.calls[0][0]).toMatchObject({ id: OWNER });
+      expect(h.sessionUpdate.mock.calls[0][2]).toBeUndefined();
+    });
+
+    it('re-checks the requester, not the billed owner, for a sharee-triggered job', async () => {
+      h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+
+      await run({ sessionId: SESSION_ID, requesterId: SHAREE });
+
+      expect(h.userFindById).toHaveBeenCalledWith(SHAREE);
+      expect(h.sessionUpdate.mock.calls[0][0]).toMatchObject({ id: SHAREE });
+      // tag.ts admits a global-write sharee via CASL, so the re-check must too.
+      expect(h.sessionUpdate.mock.calls[0][2]).toEqual({ includeGlobalWrite: true });
+      // Billing stays on the owner.
+      expect(h.recordUsage).toHaveBeenCalledWith(
+        expect.objectContaining({ user: expect.objectContaining({ id: OWNER }) })
+      );
+    });
+
+    it('re-checks the requester on the no-usable-tags attempt stamp too', async () => {
+      h.completionText = ['not json'];
+
+      await run({ sessionId: SESSION_ID, requesterId: SHAREE });
+
+      expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
+      expect(h.sessionUpdate.mock.calls[0][0]).toMatchObject({ id: SHAREE });
+      expect(h.sessionUpdate.mock.calls[0][1]).toHaveProperty('tagLastAttemptAt');
+      expect(h.sessionUpdate.mock.calls[0][2]).toEqual({ includeGlobalWrite: true });
+    });
+
+    it('drops the job before any spend when the requester no longer exists', async () => {
+      h.userFindById.mockImplementation(async (id: string) => (id === SHAREE ? null : { id, isAdmin: false }));
+
+      await expect(run({ sessionId: SESSION_ID, requesterId: SHAREE })).resolves.toBeUndefined();
+
+      expectNoOperationalSpend();
+      expect(h.sessionUpdate).not.toHaveBeenCalled();
+    });
+
+    it('warns and resolves when the write no longer matches (share revoked or session deleted)', async () => {
+      h.completionText = ['[{"name": "pulsars", "strength": 9}]'];
+      h.sessionUpdate.mockResolvedValue(null);
+
+      await expect(run({ sessionId: SESSION_ID, requesterId: SHAREE })).resolves.toBeUndefined();
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('no longer writable'));
+    });
+  });
+
   // A blank element is dropped, not allowed to normalize into an empty-named tag: one bad element
   // must not make the completion look usable and stamp `taggedAt`.
   it('keeps a usable tag when a sibling name is whitespace-only', async () => {
@@ -128,7 +189,7 @@ describe('sessionTagging', () => {
     await run();
 
     expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
-    const written = h.sessionUpdate.mock.calls[0][0];
+    const written = h.sessionUpdate.mock.calls[0][1];
     expect(written.id).toBe(SESSION_ID);
     expect(written.tags).toEqual([{ name: 'pulsars', strength: 9 }]);
     expect(written.taggedAt).toBeInstanceOf(Date);
@@ -150,7 +211,7 @@ describe('sessionTagging', () => {
     await run();
 
     expect(h.sessionUpdate).toHaveBeenCalledTimes(1);
-    const written = h.sessionUpdate.mock.calls[0][0];
+    const written = h.sessionUpdate.mock.calls[0][1];
     expect(written.id).toBe(SESSION_ID);
     expect(written.tagLastAttemptAt).toBeInstanceOf(Date);
     // Re-adding either of these is the regression this case exists to catch: a stamp makes one bad

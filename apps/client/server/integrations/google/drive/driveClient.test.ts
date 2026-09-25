@@ -74,6 +74,37 @@ describe('listFolderChildren', () => {
     expect(files.map(f => f.id)).toEqual(['1', '2']);
   });
 
+  // The whole drive_created vintage source (#3048) rests on this one mapping plus the `fields`
+  // entry that makes Drive return it. Both are asserted here, so dropping either goes red.
+  it('carries createdTime through to the returned DriveFile, and asks Drive for it', async () => {
+    const { drive, list } = mockDrive([
+      {
+        files: [
+          {
+            id: '1',
+            name: 'notes.gdoc',
+            mimeType: 'application/vnd.google-apps.document',
+            createdTime: '2019-03-04T09:15:00.000Z',
+            modifiedTime: '2021-06-06T00:00:00.000Z',
+          },
+        ],
+      },
+    ]);
+
+    const files = await listFolderChildren(drive, 'FOLDER_X');
+
+    expect(list.mock.calls[0][0].fields).toContain('createdTime');
+    expect(files).toEqual([
+      {
+        id: '1',
+        name: 'notes.gdoc',
+        mimeType: 'application/vnd.google-apps.document',
+        createdTime: '2019-03-04T09:15:00.000Z',
+        modifiedTime: '2021-06-06T00:00:00.000Z',
+      },
+    ]);
+  });
+
   it('skips entries missing id/name/mimeType', async () => {
     const { drive } = mockDrive([
       {
@@ -342,6 +373,44 @@ describe('listChanges', () => {
         fileId: '1',
         removed: false,
         file: { id: '1', name: 'a.txt', mimeType: 'text/plain', parents: ['ROOT'], trashed: true },
+      },
+    ]);
+  });
+
+  // The incremental arm of the same mapping: a re-synced file has to arrive carrying the vintage
+  // the full walk would have given it, or a lake's Drive files lose their dates on the next change.
+  it('carries createdTime through to the returned DriveFile, and asks Drive for it', async () => {
+    const { drive, list } = mockChangesDrive([
+      {
+        changes: [
+          {
+            fileId: '1',
+            removed: false,
+            file: {
+              id: '1',
+              name: 'notes.gdoc',
+              mimeType: 'application/vnd.google-apps.document',
+              createdTime: '2019-03-04T09:15:00.000Z',
+            },
+          },
+        ],
+        newStartPageToken: 'p2',
+      },
+    ]);
+
+    const { changes } = await listChanges(drive, 'p1');
+
+    expect(list.mock.calls[0][0].fields).toContain('createdTime');
+    expect(changes).toEqual([
+      {
+        fileId: '1',
+        removed: false,
+        file: {
+          id: '1',
+          name: 'notes.gdoc',
+          mimeType: 'application/vnd.google-apps.document',
+          createdTime: '2019-03-04T09:15:00.000Z',
+        },
       },
     ]);
   });
