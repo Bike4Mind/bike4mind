@@ -12,6 +12,7 @@ import { getClientIp } from '@server/utils/ip';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
 import { createHash } from 'crypto';
 import { decideScopeGate, parseStagedScopes, SCOPE_STAGING_ENV_VAR } from '@server/middlewares/apiKeyScopeGate';
+import { assertAccountStateUsable } from '@server/cli/auth';
 
 /** Staging is irrelevant to a route that declares no gate; reuse one empty set. */
 const NO_STAGED_SCOPES: ReadonlySet<string> = new Set<string>();
@@ -122,18 +123,11 @@ export const apiKeyAuth = (requiredScopes?: ApiKeyScope[], alsoRequiredScopes?: 
       }
 
       const user = await User.findById(validation.userId);
-      if (!user || user.isBanned) {
+      if (!user) {
         throw new UnauthorizedError('User not found or banned');
       }
-      if (user.disputePending) {
-        throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
-      }
-      // Block API-key access for accounts suspended for repeated content-policy violations.
-      if (user.moderation?.status === 'suspended') {
-        throw new ForbiddenError(
-          'Your account is suspended for repeated content-policy violations. Please contact support to appeal.'
-        );
-      }
+      // The same gate the JWT/CLI/WebSocket surfaces use, so the two cannot drift.
+      assertAccountStateUsable(user);
 
       req.user = user;
       req.apiKeyInfo = {
