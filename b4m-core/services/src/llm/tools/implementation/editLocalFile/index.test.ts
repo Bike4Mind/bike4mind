@@ -3,12 +3,17 @@ import { promises, existsSync } from 'fs';
 import { mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { createHash } from 'crypto';
 import {
   editLocalFileTool,
   resolveEditLocalFile,
   FuzzyEditConfirmationRequiredError,
   isFuzzyEditConfirmationRequired,
 } from './index';
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content, 'utf-8').digest('hex');
+}
 
 // Silent logger; the tool only touches context.logger and context.allowedDirectories.
 const logger = { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn() };
@@ -128,23 +133,28 @@ describe('editLocalFile: the write path reuses the gate-resolved span, but alway
   it('applies the gateSnapshot span instead of re-resolving old_string/new_string when the hash still matches', async () => {
     const dir = await freshDir('b4m-reuse-');
     const file = join(dir, 'note.txt');
-    await writeFile(file, 'hello world\n');
+    const content = 'hello world\nhello world\n';
+    await writeFile(file, content);
     const tool = editTool([dir]);
 
-    const plan = await resolveEditLocalFile({ path: file, old_string: 'hello world', new_string: 'hi world' }, [dir]);
-
-    // A fresh resolveEdit() on this old_string/new_string pair would produce a
-    // different replacement - passing the ORIGINAL resolvedEdit alongside a matching
-    // contentHash proves the write reused it rather than re-resolving from scratch.
+    // Two occurrences of old_string: a fresh resolveEdit() would throw "ambiguous
+    // match". A gateSnapshot pinned to the second occurrence, with a matchedText/
+    // replacement that are this call's own old_string/new_string verbatim, proves
+    // the write reused the snapshot's span (skipping resolveEdit's own ambiguity
+    // check) rather than re-resolving from scratch.
+    const secondOccurrenceIndex = 'hello world\n'.length;
     const message = await tool.toolFn({
       path: file,
       old_string: 'hello world',
-      new_string: 'this replacement would land if it were re-resolved',
-      gateSnapshot: { contentHash: plan.contentHash, resolvedEdit: plan.resolvedEdit },
+      new_string: 'hi world',
+      gateSnapshot: {
+        contentHash: sha256(content),
+        resolvedEdit: { startIndex: secondOccurrenceIndex, matchedText: 'hello world', replacement: 'hi world' },
+      },
     });
 
     expect(message).toContain('File edited successfully');
-    expect(await readFile(file, 'utf-8')).toBe('hi world\n');
+    expect(await readFile(file, 'utf-8')).toBe('hello world\nhi world\n');
   });
 
   it('still reads the file fresh and re-resolves when the gateSnapshot hash no longer matches (TOCTOU)', async () => {
@@ -196,5 +206,34 @@ describe('editLocalFile: the write path reuses the gate-resolved span, but alway
     // old_string/new_string.
     expect(message).toContain('File edited successfully');
     expect(await readFile(file, 'utf-8')).toBe('hi world\n');
+  });
+
+  it("rejects a forged gateSnapshot whose span/replacement do not correspond to this call's old_string/new_string (direct-call bypass)", async () => {
+    const dir = await freshDir('b4m-forged-snapshot-');
+    const file = join(dir, 'note.txt');
+    const content = 'hello world\n';
+    await writeFile(file, content);
+    const tool = editTool([dir]);
+
+    // A real contentHash for real, currently-present bytes ('hello world' at index 0
+    // passes the real-bytes check) - but old_string here is 'absent', which never
+    // matched anything: this snapshot was never produced by resolving old_string/
+    // new_string. A caller hitting this tool directly (bypassing the CLI wrapper's
+    // gateSnapshot stripping) could forge exactly this to write arbitrary content at
+    // an arbitrary offset with no old_string match at all.
+    const forgedSnapshot = {
+      contentHash: sha256(content),
+      resolvedEdit: { startIndex: 0, matchedText: 'hello world', replacement: 'unexpected' },
+    };
+
+    await expect(
+      tool.toolFn({
+        path: file,
+        old_string: 'absent',
+        new_string: 'does not matter',
+        gateSnapshot: forgedSnapshot,
+      })
+    ).rejects.toThrow(/not found/i);
+    expect(await readFile(file, 'utf-8')).toBe(content);
   });
 });
