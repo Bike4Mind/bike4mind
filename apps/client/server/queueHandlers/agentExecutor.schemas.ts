@@ -29,6 +29,12 @@ export const StartExecutionSchema = z.object({
   // is built from admin `orchestrationDefaults`.
   agentId: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
+  // Marks `enabledTools` as the user's AMBIENT chat picks rather than a pinned selection, so
+  // `pickEffectiveEnabledTools` unions it onto the resolved profile instead of replacing it.
+  // Set only by the interactive chat dispatch; the public REST contract has no such field
+  // because a headless caller's explicit tool list IS its permission approval
+  // (`startAgentExecution` builds `approvedTools` from it).
+  enabledToolsAreAmbient: z.boolean().optional(),
   // Defense-in-depth: WebSocket layer enforces the same hard ceiling (see
   // agentExecute.ts). Lambda re-validates here in case the executor is invoked
   // through another path. The HARD ceiling stays at 100 to bound runaway runs;

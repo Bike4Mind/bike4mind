@@ -189,6 +189,7 @@ const gatedLake = {
   systemPrompt: '',
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
+  origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
   canManage: true,
@@ -205,6 +206,7 @@ const openLake = {
   systemPrompt: '',
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
+  origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
   canManage: true,
@@ -221,6 +223,7 @@ const entitlementGatedLake = {
   systemPrompt: '',
   preferredSystemPromptId: '',
   groundingMode: 'retrieve' as const,
+  origin: 'curated' as const,
   requiredPassageTokenTarget: null,
   lakeMemoryEnabled: false,
   canManage: true,
@@ -713,6 +716,82 @@ describe('DataLakeSettingsModal \u2014 grounding mode', () => {
 
     expect(updateMutate).toHaveBeenCalledTimes(1);
     expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('groundingMode');
+  });
+});
+
+describe('DataLakeSettingsModal - origin', () => {
+  // Seeded to the non-default value so the seed assertion proves it reads the lake, not the fallback.
+  const connectorFedLake = { ...openLake, id: 'lake-origin-1', origin: 'connector-fed' as const };
+
+  beforeEach(() => {
+    updateMutate.mockReset();
+  });
+
+  it('renders the select for an editor and seeds it from the lake', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={connectorFedLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    const button = screen.getByTestId('datalake-settings-origin-button');
+    expect(button).toBeInTheDocument();
+    expect(button).toHaveTextContent('Connector-fed');
+  });
+
+  it('seeds Curated when the lake carries no origin (pre-existing lake)', () => {
+    const { origin: _origin, ...lakeWithoutOrigin } = connectorFedLake;
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={lakeWithoutOrigin} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-origin-button')).toHaveTextContent('Curated');
+  });
+
+  it('sends the chosen origin when an editor changes it', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-origin-button'));
+    await user.click(screen.getByTestId('datalake-settings-origin-connector-fed'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ origin: 'connector-fed' });
+  });
+
+  it('does not render the select for a non-editor', () => {
+    const readerLake = { ...connectorFedLake, id: 'lake-origin-2', canManage: false };
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-modal')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-settings-origin-select')).not.toBeInTheDocument();
+    expect(screen.queryByText('Origin')).not.toBeInTheDocument();
+  });
+
+  it('never sends origin from a non-editor save', async () => {
+    const readerLake = { ...connectorFedLake, id: 'lake-origin-3', canManage: false };
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={readerLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('origin');
   });
 });
 

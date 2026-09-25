@@ -63,9 +63,13 @@ function shareWordmarkHtml(): string {
 }
 
 /**
- * Soft sign-up gate overlay injected into published artifact pages (variants 1b desktop +
- * 1c mobile). Returns null when WEBSITE_URL is not configured -- the gate links to the
- * marketing site signup flow, so without it there is nothing to link to.
+ * Dismissible sign-up prompt card injected into published artifact pages, offered only to
+ * an anonymous visitor at a plain public link (see `signupPrompt` on `renderViewerPage`) --
+ * never a share-link holder or a signed-in viewer, both of whom already have full access.
+ * It sits in the normal page flow after the content, not over it: the content above it is
+ * already fully delivered, so this invites the visitor to make their own rather than
+ * pretending to withhold anything. Links to the marketing site signup flow when configured,
+ * falling back to the app's own /register so it still renders on a self-hosted deployment.
  *
  * Pure inline CSS + an HTML checkbox-trick dismiss (no JS) so it passes the same
  * `script-src 'none'` CSP constraint as the share footer.
@@ -82,29 +86,19 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
   // avoids a second <style> tag and keeps the page valid. Prefixed b4m-gate-* / b4m-* to
   // avoid collisions with the artifact's own styles.
   const styles = [
-    '@keyframes b4m-gateup{from{transform:translateY(100%)}to{transform:translateY(0)}}',
-    // Checkbox-trick dismiss: checking the hidden input hides both overlay and panel.
-    '#b4m-gate-dismiss:checked~#b4m-gate-ol,#b4m-gate-dismiss:checked~#b4m-gate-panel{display:none!important}',
-    // Lock scroll while gate is visible (no JS needed -- :has() is CSP-safe).
-    'body:has(#b4m-gate-dismiss:not(:checked)){overflow:hidden}',
-    // Blur + gradient overlay (desktop: bottom 56% of viewport).
-    '#b4m-gate-ol{position:fixed;left:0;right:0;bottom:0;height:56%;',
-    'backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);',
-    'background:linear-gradient(to bottom,rgba(255,255,255,0) 0%,rgba(255,255,255,.6) 26%,rgba(255,255,255,.92) 60%);',
-    'mask-image:linear-gradient(to bottom,transparent 0%,black 30%);',
-    '-webkit-mask-image:linear-gradient(to bottom,transparent 0%,black 30%);',
-    'pointer-events:none;z-index:100}',
-    // White bottom panel (desktop: 1b).
-    '#b4m-gate-panel{position:fixed;left:0;right:0;bottom:0;background:#fff;',
-    'border-top:1px solid rgba(11,21,36,.1);border-radius:20px 20px 0 0;padding:30px 40px 26px;',
-    'z-index:101;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;',
-    'animation:b4m-gateup .5s cubic-bezier(.2,.8,.2,1) both;box-shadow:0 -8px 40px rgba(11,21,36,.12)}',
+    '@keyframes b4m-gatein{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}',
+    // Checkbox-trick dismiss: checking the hidden input hides the card.
+    '#b4m-gate-dismiss:checked~#b4m-gate-panel{display:none!important}',
+    // In-flow card, not a fixed overlay -- it sits after the content (which is already
+    // fully rendered above it) and never covers or blocks anything.
+    '#b4m-gate-panel{position:relative;margin:2rem auto 0;max-width:860px;background:#fff;',
+    'border:1px solid rgba(11,21,36,.1);border-radius:20px;padding:30px 40px 26px;',
+    'font-family:ui-sans-serif,system-ui,-apple-system,sans-serif;',
+    'animation:b4m-gatein .4s ease both;box-shadow:0 8px 40px rgba(11,21,36,.1)}',
     // Layout.
     '.b4m-gate-inner{display:flex;align-items:center;gap:40px;max-width:860px;margin:0 auto}',
     '.b4m-gate-left{flex:1;min-width:0;text-align:left}',
     '.b4m-gate-right{flex:0 0 340px;display:flex;flex-direction:column;align-items:stretch;gap:12px}',
-    // Drag handle (hidden on desktop, shown on mobile via media query).
-    '.b4m-gate-handle{display:none}',
     // Typography.
     '.b4m-gate-title{margin:12px 0 6px;font-size:22px;font-weight:700;line-height:1.25;color:#0B1524}',
     '.b4m-gate-body{margin:0;font-size:14px;line-height:1.55;color:#5b6878}',
@@ -124,9 +118,7 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
     '.b4m-dismiss-label:hover{color:#0B1524;border-color:rgba(11,21,36,.3)}',
     // Mobile overrides (1c).
     '@media(max-width:600px){',
-    '#b4m-gate-ol{height:60%}',
-    '#b4m-gate-panel{border-radius:24px 24px 0 0;padding:0 22px 28px}',
-    '.b4m-gate-handle{display:block;width:38px;height:4px;background:rgba(11,21,36,.14);border-radius:2px;margin:10px auto 4px}',
+    '#b4m-gate-panel{border-radius:20px;padding:22px 22px 26px}',
     '.b4m-gate-inner{flex-direction:column;align-items:stretch;gap:16px}',
     '.b4m-gate-right{flex:none;width:100%;flex-direction:column;align-items:stretch}',
     '.b4m-gate-title{font-size:18px;margin:14px 0 6px}',
@@ -135,12 +127,10 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
     '}',
     // Dark mode overrides.
     '@media(prefers-color-scheme:dark){',
-    '#b4m-gate-ol{background:linear-gradient(to bottom,rgba(0,0,0,0) 0%,rgba(0,0,0,.6) 26%,rgba(0,0,0,.92) 60%);mask-image:linear-gradient(to bottom,transparent 0%,black 30%);-webkit-mask-image:linear-gradient(to bottom,transparent 0%,black 30%)}',
-    '#b4m-gate-panel{background:#0d1829;border-top-color:rgba(255,255,255,.1);box-shadow:0 -8px 40px rgba(0,0,0,.4)}',
+    '#b4m-gate-panel{background:#0d1829;border-color:rgba(255,255,255,.1);box-shadow:0 8px 40px rgba(0,0,0,.4)}',
     '.b4m-gate-title{color:#e6e6f0}',
     '.b4m-gate-body{color:#94a3b8}',
     '.b4m-credits-num{color:#29D3F5}',
-    '.b4m-gate-handle{background:rgba(255,255,255,.2)}',
     '.b4m-credits-label{color:#94a3b8}',
     '.b4m-dismiss-label{color:#94a3b8;border-color:rgba(255,255,255,.15)}',
     '.b4m-dismiss-label:hover{color:#e6e6f0;border-color:rgba(255,255,255,.3)}',
@@ -148,15 +138,15 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
   ].join('');
 
   const html = [
-    // Hidden checkbox -- sibling to the overlay and panel so the CSS ~ selector can reach them.
+    // Hidden checkbox -- sibling to the panel so the CSS ~ selector can reach it.
     '<input type="checkbox" id="b4m-gate-dismiss" style="display:none">',
-    '<div id="b4m-gate-ol" aria-hidden="true"></div>',
-    '<div id="b4m-gate-panel" role="dialog" aria-label="Sign up to continue reading">',
-    '<div class="b4m-gate-handle" aria-hidden="true"></div>',
+    // A non-modal region, not a dialog: it neither covers the content above it nor
+    // implies there's more to unlock. `aria-label` matches the visible title below.
+    `<div id="b4m-gate-panel" role="region" aria-label="Create a free ${brandName} account">`,
     '<div class="b4m-gate-inner">',
     '<div class="b4m-gate-left">',
     gateIconHtml(),
-    `<h2 class="b4m-gate-title">Read the rest with a free account</h2>`,
+    `<h2 class="b4m-gate-title">Like this? Make your own with a free ${brandName} account</h2>`,
     `<p class="b4m-gate-body">Create a free ${brandName} account to explore this artifact and build your own \u2014 no credit card required.</p>`,
     '</div>',
     '<div class="b4m-gate-right">',
@@ -165,7 +155,7 @@ export function buildSignupGateHtml(): { styles: string; html: string } {
     '<span class="b4m-credits-label">free credits</span>',
     '</div>',
     `<a href="${signupHref}" class="b4m-cta-btn">Create free account</a>`,
-    '<label for="b4m-gate-dismiss" class="b4m-dismiss-label">No, I like my walled garden</label>',
+    '<label for="b4m-gate-dismiss" class="b4m-dismiss-label">No thanks</label>',
     '</div>',
     '</div>',
     '</div>',

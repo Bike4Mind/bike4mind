@@ -176,8 +176,13 @@ describe('formatDocumentDate', () => {
   });
 });
 
+/**
+ * No caller today - the three retrieval channels all render undated, because the only timestamp a
+ * FabFile carries is its upload time and the seam exists to forbid exactly that input. Kept under
+ * test so the formatting contract is already pinned when a real authored date does arrive.
+ */
 describe('documentDateClause', () => {
-  it('renders the clause all three retrieval channels append', () => {
+  it('renders the clause a retrieval channel would append', () => {
     expect(documentDateClause(new Date('2026-08-14T09:30:00.000Z'))).toBe(' - dated 2026-08-14');
   });
 

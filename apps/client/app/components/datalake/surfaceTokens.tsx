@@ -40,6 +40,9 @@ export interface DataLakeSurfaceCopy {
    * the viewer can manage the lake, and that button - not this sentence - is the call to action.
    */
   lakeEmptyTitle: string;
+  /** Plural counterpart, for a scope naming several lakes. */
+  lakesEmptyTitle: string;
+  lakesEmptyHint: string;
   lakeEmptyHint: string;
   /**
    * Lakes exist but NONE of them hold a file, so the all-lakes view has no tree at all. Distinct
@@ -57,6 +60,13 @@ export interface DataLakeSurfaceCopy {
   createLabel: string;
   /** Lake-picker row that clears the lake scope and browses every reachable lake at once. */
   allLakesLabel: string;
+  /**
+   * The picker trigger and scope strip for a session scoped to NO lake - an empty
+   * `retrievalTags` the caller marked deliberate. Reachable only over the public API
+   * (SessionUpdateRequestSchema), never by picking in this menu, but it grounds retrieval on
+   * nothing and so must never borrow the all-lakes label.
+   */
+  noLakesLabel: string;
   /** Label for the shared manage-knowledge affordance (`ManageKnowledgeButton`). */
   manageLabel: string;
 }
@@ -79,6 +89,8 @@ export const DEFAULT_DATA_LAKE_SURFACE_TOKENS: DataLakeSurfaceTokens = {
     zeroTitle: 'Nothing here yet',
     zeroHint: `Create your first ${DATA_LAKE.toLowerCase()} to turn your files into searchable knowledge.`,
     lakeEmptyTitle: 'This lake has no files yet',
+    lakesEmptyTitle: 'These lakes have no files yet',
+    lakesEmptyHint: 'Nothing has been added to the data lakes you selected.',
     lakeEmptyHint: 'Nothing has been added to this lake yet.',
     allLakesEmptyTitle: 'No files yet',
     allLakesEmptyHint: `Pick a ${DATA_LAKE.toLowerCase()} from the picker above and add files to make them searchable.`,
@@ -86,6 +98,7 @@ export const DEFAULT_DATA_LAKE_SURFACE_TOKENS: DataLakeSurfaceTokens = {
     lakesErrorHint: 'Something went wrong reading the list. Retry - nothing has been lost.',
     createLabel: `Create ${DATA_LAKE.toLowerCase()}`,
     allLakesLabel: `All ${DATA_LAKES.toLowerCase()}`,
+    noLakesLabel: `No ${DATA_LAKES.toLowerCase()}`,
     manageLabel: 'Manage lakes',
   },
 };

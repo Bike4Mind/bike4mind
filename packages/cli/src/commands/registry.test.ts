@@ -18,9 +18,12 @@ function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
     configStore: {
       get: vi.fn(async () => ({ apiConfig: undefined })),
       getAdditionalDirectories: vi.fn(async () => [] as string[]),
+      getProjectRealPath: vi.fn(() => null),
+      isProjectTrusted: vi.fn(() => false),
     } as unknown as CommandContext['configStore'],
     customCommandStore: {
       getAllCommands: vi.fn(() => []),
+      getModelReachableCommands: vi.fn(() => []),
     } as unknown as CommandContext['customCommandStore'],
     permissionManager: {
       getTrustedTools: vi.fn(() => [] as string[]),
@@ -54,7 +57,7 @@ describe('command registry dispatch', () => {
   it('routes /help to the help handler and lists custom commands', async () => {
     const ctx = makeContext({
       customCommandStore: {
-        getAllCommands: vi.fn(() => [
+        getModelReachableCommands: vi.fn(() => [
           { name: 'deploy', description: 'ship it', source: 'project', argumentHint: '<env>' },
         ]),
       } as unknown as CommandContext['customCommandStore'],
@@ -127,7 +130,8 @@ describe('command registry dispatch', () => {
     const handled = await dispatch('trusted', [], ctx);
 
     expect(handled).toBe(true);
-    expect(logSpy).toHaveBeenCalledWith('Permission manager not initialized');
+    const output = logSpy.mock.calls.map((c: unknown[]) => c[0]).join('\n');
+    expect(output).toContain('Permission manager not initialized');
   });
 
   it('routes the workflow-view commands to their stores', async () => {

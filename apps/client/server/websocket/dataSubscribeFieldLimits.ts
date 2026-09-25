@@ -1,10 +1,17 @@
-import { ORGANIZATION_OWNER_ONLY_FIELDS, ORGANIZATION_SECRET_FIELDS } from '@bike4mind/common';
+import {
+  ORGANIZATION_OWNER_ONLY_FIELDS,
+  ORGANIZATION_SECRET_FIELDS,
+  OWNER_ONLY_PROMPT_META_PROJECTION_PATHS,
+} from '@bike4mind/common';
 
 /**
  * Per-collection Mongo projection exclusions for the WS data-subscribe handler.
  *
- * quests: a quest's promptMeta.functionCalls[].returnValue can hold verbatim tool output
- * (private corpus chunks, file contents - see redactFunctionCallsForViewer in @bike4mind/common).
+ * quests: a quest's promptMeta can hold verbatim owner-corpus text - functionCalls[].returnValue
+ * (tool output, file contents) and citables[].metadata.fullContext (the retrieved passage behind a
+ * citation chip). The excluded paths come from OWNER_ONLY_PROMPT_META_PROJECTION_PATHS in
+ * @bike4mind/common, the same lists redactPromptMetaForViewer enforces on the REST paths, so the
+ * next owner-only promptMeta field cannot close one transport and leave the other open.
  * This subscription's scope is broader than the sharing-based read check elsewhere (it admits
  * any isGlobalRead session via accessibleBy), so it is stripped at the query-projection level
  * here rather than trusting every future subscriber to redact it themselves. `isQuestOwner` skips
@@ -38,7 +45,7 @@ export function resolveFieldLimits(
     return { password: false, stripeCustomerId: false, resetPasswordToken: false };
   }
   if (collectionName === questCollectionName && !isQuestOwner) {
-    return { 'promptMeta.functionCalls.returnValue': false, 'promptMeta.functionCalls.error': false };
+    return Object.fromEntries(OWNER_ONLY_PROMPT_META_PROJECTION_PATHS.map(path => [path, false]));
   }
   if (collectionName === organizationCollectionName) {
     const excluded = [...ORGANIZATION_SECRET_FIELDS, ...(isPlatformAdmin ? [] : ORGANIZATION_OWNER_ONLY_FIELDS)];

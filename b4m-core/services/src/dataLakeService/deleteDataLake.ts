@@ -5,6 +5,7 @@ import type {
   IDataLakeBatchRepository,
   IFabFileRepository,
   IFabFileChunkRepository,
+  IUserRepository,
 } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { canManageLake, type ManageActor } from './manageRule';
@@ -12,37 +13,45 @@ import { loadActiveLakeGrants } from './authorizeLakeManage';
 import { lakeConfigWriteStamp } from './lakeConfigWriteStamp';
 import { diffLakeConfig } from './diffLakeConfig';
 import { recordLakeConfigChange, type LakeConfigAuditAdapters } from './recordLakeConfigChange';
+import { recordLakeMembershipChange, type LakeMembershipAuditAdapters } from './recordLakeMembershipChange';
 import { lakeMembershipScope } from './lakeMembershipScope';
 import { warnOnPrefixCollision } from './tagPrefixCollision';
 import {
   bestEffortIndexRemove,
   bestEffortSetDriveConnectionEnabled,
+  bestEffortAdjustOwnerStorage,
+  groupStorageDeltaByOwner,
   type RetrievalIndexPort,
   type DriveConnectionEnablePort,
 } from './ports';
 
-interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters {
+interface DeleteDataLakeAdapters extends LakeConfigAuditAdapters, LakeMembershipAuditAdapters {
   // The event repo is REQUIRED here, unlike the optional shape LakeConfigAuditAdapters carries
   // for recomputeLakeStats: every caller of this service is an API route (there is exactly one
   // per service), so nothing is spared by making it optional and a route that forgot to wire it
   // would go dark silently - the one failure mode an audit must not have. Required here turns
   // that into a compile error.
-  db: LakeConfigAuditAdapters['db'] & {
-    lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
-    dataLakes: Pick<
-      IDataLakeRepository,
-      'findById' | 'settleLifecycleStatus' | 'find' | 'claimFilesDeletedAt' | 'claimDeleting'
-    >;
-    dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
-    batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
-    fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
-    // REQUIRED, not optional: `retrievalIndex` is itself optional (a host without self-host
-    // OpenSearch wires neither), but a host that DOES wire `retrievalIndex` must wire this half
-    // too, or an archive/unarchive cycle leaves a stale confirm no later step ever clears (see
-    // bestEffortIndexRemove's docblock). Making it optional here let all three doors go unwired
-    // silently and compile clean; this turns a missing door into a compile error instead.
-    fabFileChunks: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>;
-  };
+  db: LakeConfigAuditAdapters['db'] &
+    LakeMembershipAuditAdapters['db'] & {
+      lakeConfigChangeEvents: NonNullable<LakeConfigAuditAdapters['db']['lakeConfigChangeEvents']>;
+      dataLakes: Pick<
+        IDataLakeRepository,
+        'findById' | 'settleLifecycleStatus' | 'find' | 'claimFilesDeletedAt' | 'claimDeleting'
+      >;
+      dataLakeAccessGrants: Pick<IDataLakeAccessGrantRepository, 'listByLake'>;
+      batches: Pick<IDataLakeBatchRepository, 'findActiveByDataLakeId' | 'markTerminalIfActive'>;
+      fabFiles: Pick<IFabFileRepository, 'softDeleteByDataLakeTag' | 'findIdsByDataLakeTag'>;
+      // REQUIRED, not optional: `retrievalIndex` is itself optional (a host without self-host
+      // OpenSearch wires neither), but a host that DOES wire `retrievalIndex` must wire this half
+      // too, or an archive/unarchive cycle leaves a stale confirm no later step ever clears (see
+      // bestEffortIndexRemove's docblock). Making it optional here let all three doors go unwired
+      // silently and compile clean; this turns a missing door into a compile error instead.
+      fabFileChunks: Pick<IFabFileChunkRepository, 'clearRetrievalIndexConfirmedByFabFileIds'>;
+      // REQUIRED for the same reason as the rest of this list: a route that forgot to wire it would
+      // silently keep every soft-deleted file's bytes counted against its owner's storage quota
+      // forever, correctable only via the admin recalculate-storage endpoint.
+      users: Pick<IUserRepository, 'incrementCurrentStorage'>;
+    };
   retrievalIndex?: RetrievalIndexPort;
   /** Disable the lake's Drive connection so the hourly poll stops enqueueing it. See ports.ts. */
   disableDriveConnection?: DriveConnectionEnablePort;
@@ -148,7 +157,21 @@ export const deleteDataLake = async (
 
   await warnOnPrefixCollision(db, existing, logger);
   const scope = lakeMembershipScope(existing);
-  await db.fabFiles.softDeleteByDataLakeTag(scope, stamp);
+  const swept = await db.fabFiles.softDeleteByDataLakeTag(scope, stamp);
+  // Every swept file leaves every lake read, which is a membership departure no per-file delete
+  // door saw. Without it the restore side's `added` rows stand alone and a reader replaying the
+  // log has those files never having left. Recorded off the ids the sweep itself stamped, so a
+  // file some other door deleted in the same moment is not claimed twice, and recorded HERE rather
+  // than after the settle below: the soft delete has already landed, and the steps in between can
+  // throw.
+  for (const { id: fabFileId } of swept) {
+    const leave = { actor, lake: existing, fabFileId, action: 'removed' as const, origin: 'person' as const };
+    await recordLakeMembershipChange(leave, { db, logger });
+  }
+  // Grouped by owner, not the lake's creator: a swept file may belong to any contributor (see
+  // groupStorageDeltaByOwner). Off the same swept set as the membership log above, so a re-run
+  // after a crash only debits files THIS attempt actually took out of the counted set.
+  await bestEffortAdjustOwnerStorage(db.users, groupStorageDeltaByOwner(swept, -1), logger);
   // Not softDeleteByDataLakeTag's return: it reports only the files this call flipped, so a re-run
   // after a crashed attempt would hand the index an empty set. findIdsByDataLakeTag sees
   // soft-deleted members too and stays stable across re-runs.

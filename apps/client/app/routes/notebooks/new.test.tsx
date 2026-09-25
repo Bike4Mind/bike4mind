@@ -1,15 +1,21 @@
-import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render } from '@testing-library/react';
 
 // Controlled at call time by the router mock.
 let mockSearch: Record<string, unknown> = {};
 
-const { mockNavigate, mockSetQuestLaunchIntent, mockConsumeTrusted, mockSetPreparingQuest } = vi.hoisted(() => ({
+const { mockNavigate, mockSetQuestLaunchIntent, mockConsumeTrusted, mockSetPreparingQuest, reset } = vi.hoisted(() => ({
   mockNavigate: vi.fn(),
   mockSetQuestLaunchIntent: vi.fn(),
   mockConsumeTrusted: vi.fn(() => false),
   mockSetPreparingQuest: vi.fn(),
+  reset: {
+    setCurrentSession: vi.fn(),
+    setCurrentSessionId: vi.fn(),
+    setWorkBenchAgents: vi.fn(),
+    clearAllSessions: vi.fn(),
+    setSessionLayout: vi.fn(),
+  },
 }));
 
 vi.mock('@tanstack/react-router', () => ({
@@ -18,16 +24,15 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 
 vi.mock('@client/app/contexts/SessionsContext', () => ({
-  useSessions: () => ({ setCurrentSession: vi.fn(), setCurrentSessionId: vi.fn(), setWorkBenchAgents: vi.fn() }),
-  useWorkBenchActions: () => ({ clearAllSessions: vi.fn() }),
+  useSessions: () => ({
+    setCurrentSession: reset.setCurrentSession,
+    setCurrentSessionId: reset.setCurrentSessionId,
+    setWorkBenchAgents: reset.setWorkBenchAgents,
+  }),
+  useWorkBenchActions: () => ({ clearAllSessions: reset.clearAllSessions }),
 }));
 
-vi.mock('@client/app/components/Session/SessionContainer', () => ({ default: () => <div /> }));
-vi.mock('@client/app/components/Session/NotebookFilepondProvider', () => ({
-  NotebookFilepondProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}));
-vi.mock('@client/app/components/datalake/DataLakeChatSurface', () => ({ default: () => <div /> }));
-vi.mock('@client/app/hooks/useSessionLayout', () => ({ setSessionLayout: vi.fn() }));
+vi.mock('@client/app/hooks/useSessionLayout', () => ({ setSessionLayout: reset.setSessionLayout }));
 vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: vi.fn() }));
 vi.mock('@client/app/hooks/useQuestPreparation', () => ({
   useQuestPreparation: () => ({ setPreparingQuest: mockSetPreparingQuest, isPreparingQuest: false }),
@@ -83,5 +88,28 @@ describe('NewNotebookPage quest launch', () => {
     render(<NewNotebookPage />);
 
     expect(mockSetQuestLaunchIntent).not.toHaveBeenCalled();
+  });
+});
+
+describe('NewNotebookPage reset', () => {
+  // The notebook shell mounts this component on every entry to /new (shell.test.tsx), so its
+  // mount is what New Chat from a notebook relies on to clear the previous notebook.
+  it('clears the current session, workbench and layout when it mounts', () => {
+    render(<NewNotebookPage />);
+
+    expect(reset.clearAllSessions).toHaveBeenCalledTimes(1);
+    expect(reset.setWorkBenchAgents).toHaveBeenCalledWith([]);
+    expect(reset.setCurrentSession).toHaveBeenCalledWith(null);
+    expect(reset.setCurrentSessionId).toHaveBeenCalledWith(null);
+    expect(reset.setSessionLayout).toHaveBeenCalledWith({ layout: 'hide' });
+  });
+
+  it('keeps the layout for an article deep link', () => {
+    mockSearch = { article: 'file-1' };
+
+    render(<NewNotebookPage />);
+
+    expect(reset.setCurrentSessionId).toHaveBeenCalledWith(null);
+    expect(reset.setSessionLayout).not.toHaveBeenCalled();
   });
 });

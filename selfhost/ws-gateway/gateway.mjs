@@ -111,7 +111,10 @@ const wss = new WebSocketServer({ server });
 wss.on('connection', async (ws, req) => {
   const connectionId = crypto.randomUUID();
   const url = new URL(req.url || '/', 'http://localhost');
-  const token = url.searchParams.get('token') || undefined;
+  // Browser clients authenticate with a single-use `?ticket=` (never a raw JWT in the URL);
+  // the CLI uses the sec-websocket-protocol header instead. Forward the ticket verbatim - the
+  // app's $connect handler burns it. Do NOT read `?token=`: no credential travels there anymore.
+  const ticket = url.searchParams.get('ticket') || undefined;
   const secWebSocketProtocol = req.headers['sec-websocket-protocol'];
 
   async function handleFrame(raw) {
@@ -151,7 +154,7 @@ wss.on('connection', async (ws, req) => {
   // Delegate authentication + Connection-row creation to the app ($connect logic).
   const resp = await callApp('connect', {
     connectionId,
-    token,
+    ticket,
     headers: secWebSocketProtocol ? { 'sec-websocket-protocol': secWebSocketProtocol } : {},
   });
   if (!resp || !resp.ok) {

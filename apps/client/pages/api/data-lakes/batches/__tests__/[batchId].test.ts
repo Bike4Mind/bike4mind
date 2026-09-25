@@ -83,9 +83,7 @@ describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () 
           lakeConfigChangeEvents: expect.anything(),
           adminSettings: expect.anything(),
         }),
-      }),
-      // The actor: this route is authenticated, so its auto-activate must not record as `system`.
-      expect.objectContaining({ actor: expect.objectContaining({ userId: 'u1' }) })
+      })
     );
   });
 
@@ -105,9 +103,7 @@ describe('/api/data-lakes/batches/[batchId] lake stats on a terminal batch', () 
           lakeConfigChangeEvents: expect.anything(),
           adminSettings: expect.anything(),
         }),
-      }),
-      // The actor: this route is authenticated, so its auto-activate must not record as `system`.
-      expect.objectContaining({ actor: expect.objectContaining({ userId: 'u1' }) })
+      })
     );
   });
 

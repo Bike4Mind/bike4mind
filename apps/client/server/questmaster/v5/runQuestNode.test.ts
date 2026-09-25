@@ -201,3 +201,37 @@ describe('runQuestNode turn linkage (#1867)', () => {
     expect(create.mock.calls[0][0]).toMatchObject({ linkedQuestId: 'q1' });
   });
 });
+
+describe('container V5 transport', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    cleanupStaleActive.mockResolvedValue([]);
+    countActiveByUserId.mockResolvedValue(0);
+    claimForRun.mockResolvedValue(node({ status: 'in_progress' }));
+    questCreate.mockResolvedValue({ id: 'q1' });
+    create.mockResolvedValue({ id: 'exec-1' });
+    questUpdateOne.mockResolvedValue(undefined);
+    setExecution.mockResolvedValue(node({ status: 'in_progress', execution: { agentExecutionId: 'exec-1' } }));
+    lambdaSend.mockResolvedValue(undefined);
+    findUnfinishedByAgentExecutionIds.mockResolvedValue([]);
+  });
+  it.each([202, 503])('uses HTTP and keeps claimed state when response is %s', async status => {
+    vi.stubEnv('AGENT_EXECUTOR_SERVICE', 'http://agentexecutor:8080');
+    vi.stubEnv('AGENT_EXECUTOR_INTERNAL_SECRET', 'test-secret');
+    const fetch = vi.fn().mockResolvedValue(new Response('', { status }));
+    vi.stubGlobal('fetch', fetch);
+    try {
+      const run = runQuestNode({ node: node(), graph: graph(), userId: 'u1', model: 'gpt-x', logger });
+      if (status === 202) await expect(run).resolves.toMatchObject({ executionId: 'exec-1' });
+      else await expect(run).rejects.toThrow(/could not be confirmed/);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(lambdaSend).not.toHaveBeenCalled();
+      expect(markFailed).not.toHaveBeenCalled();
+      expect(questDeleteOne).not.toHaveBeenCalled();
+      expect(updateStatus).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    }
+  });
+});

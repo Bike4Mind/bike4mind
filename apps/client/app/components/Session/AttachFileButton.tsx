@@ -48,6 +48,7 @@ import { useShallow } from 'zustand/react/shallow';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useGetSessionAgents } from '@client/app/hooks/data/agents';
 import CountBadge from '@client/app/components/common/CountBadge';
+import { fabFileKeys } from '@client/app/hooks/data/fabFileKeys';
 import { ensureGoogleDrivePickerStyles } from '@client/app/utils/googleDrivePickerStyles';
 
 import { ATTACH_SCOPE_MODES, type AttachScopeMode } from '@bike4mind/common';
@@ -237,7 +238,7 @@ const AttachFileButton = ({
             }
 
             // Optimistically add to file browser cache
-            queryClient.setQueriesData({ queryKey: ['fabFiles'] }, (oldData: any) => {
+            queryClient.setQueriesData({ queryKey: fabFileKeys.all }, (oldData: any) => {
               if (!oldData?.pages?.[0]?.data) return oldData;
               return {
                 ...oldData,

@@ -38,6 +38,8 @@ vi.mock('@client/app/hooks/useDocumentTitle', () => ({ useDocumentTitle: () => u
 vi.mock('@tanstack/react-router', () => ({
   useParams: () => ({ id: 'org1' }),
   useSearch: () => ({}),
+  // The page writes the selected tab to the URL; nothing here clicks a tab, so it only has to exist.
+  useNavigate: () => vi.fn(),
 }));
 
 // The route imports eight sibling panels; mocking them keeps this test to the two chips it pins.

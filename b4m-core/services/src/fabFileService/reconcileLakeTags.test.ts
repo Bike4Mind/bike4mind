@@ -33,6 +33,7 @@ const makeAdapters = (
       findById: vi.fn().mockResolvedValue({ id: 'f1', userId: 'owner', tags: storedTags }),
       pullTagsByFabFileId: vi.fn().mockResolvedValue(1),
       pushTagsByFabFileId: vi.fn().mockResolvedValue(1),
+      pushTagReturningPriorState: vi.fn().mockResolvedValue({ userId: 'owner', tags: [] }),
       computeDataLakeStats: vi.fn().mockResolvedValue({ fileCount: 4, totalSizeBytes: 40, totalChunkedChars: 0 }),
     },
     dataLakes: {

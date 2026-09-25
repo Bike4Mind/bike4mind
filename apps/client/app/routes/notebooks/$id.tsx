@@ -1,7 +1,4 @@
 import { useNavigate, useParams } from '@tanstack/react-router';
-import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
-import SessionContainer from '@client/app/components/Session/SessionContainer';
-import DataLakeChatSurface from '@client/app/components/datalake/DataLakeChatSurface';
 import { useGetSession } from '@client/app/hooks/data/sessions';
 import { useDocumentTitle } from '@client/app/hooks/useDocumentTitle';
 import { useEffect, useRef } from 'react';
@@ -62,11 +59,8 @@ const NotebookPage = () => {
   // Mark session as viewed when user opens it (clears unread proactive message badge)
   useMarkSessionViewed(id);
 
-  return (
-    <NotebookFilepondProvider>
-      <DataLakeChatSurface chat={<SessionContainer currentSessionId={id} isLoading={!id || session.isPending} />} />
-    </NotebookFilepondProvider>
-  );
+  // The chat itself is the notebook shell's (shell.tsx), shared with /new.
+  return null;
 };
 
 export default NotebookPage;
