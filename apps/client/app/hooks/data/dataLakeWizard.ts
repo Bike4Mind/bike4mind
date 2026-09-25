@@ -149,6 +149,9 @@ export function useBatchUpload() {
         updateUploadProgress,
         setStep,
         setRecoverableLake,
+        onBatchCreated: () => {
+          queryClient.invalidateQueries({ queryKey: dataLakeKeys.activeBatches });
+        },
         onUploadComplete: () => {
           queryClient.invalidateQueries({ queryKey: dataLakeKeys.list });
           // First lake unlocks the 'datalakes' nav slot; first file unlocks 'files'.

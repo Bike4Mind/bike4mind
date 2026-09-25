@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Typography } from '@mui/joy';
+import { Box } from '@mui/joy';
 import type { MermaidArtifact } from '@bike4mind/common';
 import MermaidChart from '@client/app/components/Charts/MermaidChart';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
@@ -18,8 +18,6 @@ const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
     createdAt: new Date(),
     updatedAt: new Date(),
   };
-
-  const lineCount = artifact.content.split('\n').length;
 
   return (
     <Box key={index} data-testid={`artifact-preview-mermaid-${artifactId}`}>
@@ -41,14 +39,16 @@ const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
           mimeType: 'text/plain',
           successMessage: 'Saved diagram as file',
         })}
-        actions={{ copy: true, save: true, codeToggle: true }}
+        actions={{ copy: true, save: true }}
         defaultRenderedView
-        stats={
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            {lineCount} lines
-          </Typography>
-        }
-        renderPreview={() => <MermaidChart chartDefinition={artifact.content} readOnly />}
+        renderPreview={() => (
+          // Bounded like the react/html inline renders. Without a cap the card took whatever
+          // height the rendered SVG asked for, so re-rendering it - which opening and closing
+          // the viewer triggers - could leave the card standing at full diagram height.
+          <Box sx={{ height: '240px', overflow: 'auto' }}>
+            <MermaidChart chartDefinition={artifact.content} readOnly chromeless />
+          </Box>
+        )}
       />
     </Box>
   );

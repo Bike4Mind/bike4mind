@@ -1,5 +1,5 @@
 import React from 'react';
-import { Chip, Stack, Typography } from '@mui/joy';
+import { Chip, Stack } from '@mui/joy';
 import { type ReactArtifact } from '@bike4mind/common';
 import InlineArtifactPreview from './InlineArtifactPreview';
 import ArtifactPreviewCard from './ArtifactPreviewCard';
@@ -11,10 +11,10 @@ interface ReactArtifactPreviewCardProps {
 
 const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ artifact, onExpand }) => {
   const dependencies = artifact.metadata?.dependencies || [];
-  const lineCount = artifact.content.split('\n').length;
 
   return (
     <ArtifactPreviewCard
+      sourceLanguage="tsx"
       artifactId={artifact.id}
       artifactType="react"
       mimeType="application/vnd.ant.react"
@@ -32,20 +32,7 @@ const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ art
         mimeType: 'text/typescript',
         successMessage: 'Saved React component as TypeScript file',
       })}
-      actions={{ copy: true, save: true, codeToggle: true }}
-      defaultRenderedView={false}
-      stats={
-        <>
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            {lineCount} lines
-          </Typography>
-          {dependencies.length > 0 && (
-            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-              {dependencies.length} {dependencies.length === 1 ? 'dependency' : 'dependencies'}
-            </Typography>
-          )}
-        </>
-      }
+      actions={{ copy: true, save: true }}
       extra={
         dependencies.length > 0 ? (
           <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap', gap: 0.5 }}>
@@ -66,7 +53,7 @@ const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ art
         <InlineArtifactPreview
           artifact={artifact}
           type="react"
-          maxHeight={400}
+          maxHeight={240}
           onError={error => console.error('[ReactArtifactPreviewCard] Preview error:', error)}
         />
       )}
