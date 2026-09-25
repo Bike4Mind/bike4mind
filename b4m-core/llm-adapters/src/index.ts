@@ -308,6 +308,17 @@ export interface GetAvailableModelsOptions {
 }
 
 /**
+ * Listing options every user-facing model picker passes (the web picker via
+ * /api/models, the Slack model dropdowns). Shared so they stay on one cache slot:
+ * getModelCacheKey folds perBackendTimeoutMs into the key, so a picker with a
+ * different deadline could observe a different list.
+ */
+export const PICKER_LISTING_OPTIONS = {
+  perBackendTimeoutMs: 2_000,
+  includePrivate: false,
+} as const satisfies GetAvailableModelsOptions;
+
+/**
  * Deadline for the catalog and price reads. Deliberately NOT tied to
  * `perBackendTimeoutMs`: that option is opt-in and only the picker route passes
  * it, while a stalled DB read hurts the callers that omit it (chat turns) most.
