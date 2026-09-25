@@ -198,3 +198,50 @@ describe('CitableSources conflict badge', () => {
     expect(screen.getByText('Q3 Revenue.pdf')).toBeInTheDocument();
   });
 });
+
+/**
+ * Chips render full-width and stack, so a tooltip left on Joy's default `bottom` opens over the
+ * next chip - for the conflict badge, often the source its own text names (#3290).
+ */
+describe('CitableSources badge tooltips open above the chip', () => {
+  // Joy opens on mouseover behind a 100ms enterDelay, so the popper has to be awaited.
+  const openTooltip = (testId: string) => {
+    fireEvent.mouseOver(screen.getByTestId(testId));
+    return screen.findByRole('tooltip');
+  };
+
+  it('opens the conflict tooltip above, clear of the chip below it', async () => {
+    render(
+      <TestWrapper>
+        <CitableSources
+          citables={[
+            {
+              id: 'file-a',
+              type: 'document',
+              title: 'Q3 Revenue.pdf',
+              url: '/opti?mode=datalake&article=file-a',
+              status: 'complete',
+              metadata: { sourceSystem: 'knowledge_base', conflictsWith: ['file-b'] },
+            },
+            {
+              id: 'file-b',
+              type: 'document',
+              title: 'Annual Report.pdf',
+              url: '/opti?mode=datalake&article=file-b',
+              status: 'complete',
+              metadata: { sourceSystem: 'knowledge_base' },
+            },
+          ]}
+        />
+      </TestWrapper>
+    );
+
+    expect(await openTooltip('citable-conflict-badge')).toHaveAttribute('data-popper-placement', 'top');
+  });
+
+  it('opens the truncation tooltip above too', async () => {
+    renderWith({ sourceSystem: 'web_fetch', contentLength: 50000, truncated: true, cap: 50000 });
+
+    expect(await openTooltip('citable-truncated-badge')).toHaveAttribute('data-popper-placement', 'top');
+  });
+});

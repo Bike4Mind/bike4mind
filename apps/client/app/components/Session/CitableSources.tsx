@@ -238,9 +238,12 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
               </Typography>
             )}
           </Typography>
+          {/* Chips are full-width and stack, so a default bottom tooltip lands on the next
+              chip - which for the conflict badge is often the very source it names. */}
           {isTruncated && (
             <Tooltip
               size="sm"
+              placement="top"
               title={`Content truncated${
                 truncationCap ? ` at ${truncationCap.toLocaleString()} chars` : ''
               } - the model saw a partial read of this source`}
@@ -252,7 +255,7 @@ const CitableSourceItem: FC<{ source: CitableSource; conflictingTitles: string[]
             </Tooltip>
           )}
           {conflictTooltip && (
-            <Tooltip size="sm" title={conflictTooltip}>
+            <Tooltip size="sm" placement="top" title={conflictTooltip}>
               <ConflictIcon
                 data-testid="citable-conflict-badge"
                 // The Tooltip only names the conflict to a reader who can hover it. titleAccess is
