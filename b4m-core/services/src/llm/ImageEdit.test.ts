@@ -439,6 +439,7 @@ describe('ImageEditService.process mask access (#3069)', () => {
       lakeAccess?: Record<string, unknown>;
       withResolver?: boolean;
       failLakeAccess?: boolean;
+      fabFileIds?: string[];
     } = {}
   ) => {
     const reachable = opts.reachable ?? ((ids: string[]) => ids.map(id => (id === 'mask1' ? maskFile : null)));
@@ -490,7 +491,7 @@ describe('ImageEditService.process mask access (#3069)', () => {
         prompt: 'make it blue',
         model: opts.model ?? ImageModels.GPT_IMAGE_1_5,
         image: 'https://example.invalid/source.png',
-        fabFileIds: ['mask1'],
+        fabFileIds: opts.fabFileIds ?? ['mask1'],
       } as never,
       logger: silentLogger,
     });
@@ -533,12 +534,22 @@ describe('ImageEditService.process mask access (#3069)', () => {
     expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
   });
 
-  it('never presigns a mask that belongs to another user', async () => {
-    const { getSignedUrl } = await run({ reachable: () => [] });
+  it('never presigns a mask that belongs to another user, and fails rather than editing without it', async () => {
+    const { getSignedUrl, quest } = await run({ reachable: () => [] });
 
     expect(getSignedUrl).not.toHaveBeenCalled();
-    // No mask reached the provider either - the alpha channel is the payload of this leak.
-    expect(editSpy.mock.calls[0][2].mask).toBeNull();
+    // Nothing reached the provider at all - the alpha channel is the payload of this leak.
+    expect(editSpy).not.toHaveBeenCalled();
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('mask1');
+    expect(quest.reply).toContain('not accessible');
+  });
+
+  it('names every unresolved id, so the caller knows which workbench file to remove', async () => {
+    const { quest } = await run({ fabFileIds: ['ghost-a', 'ghost-b'], reachable: () => [] });
+
+    expect(quest.reply).toContain('ghost-a');
+    expect(quest.reply).toContain('ghost-b');
   });
 
   it("fails a fill edit rather than inpainting with someone else's mask", async () => {
@@ -546,7 +557,8 @@ describe('ImageEditService.process mask access (#3069)', () => {
 
     expect(editSpy).not.toHaveBeenCalled();
     expect(quest.type).toBe('error');
-    expect(quest.reply).toContain('Mask image not found');
+    // Fails at the access gate now, ahead of the fill path's own missing-mask check.
+    expect(quest.reply).toContain('not accessible');
   });
 
   it("keeps deleting the caller's own mask, and stops handing the cleanup ids it cannot reach", async () => {
@@ -565,9 +577,6 @@ describe('ImageEditService.process mask access (#3069)', () => {
   });
 
   it('fails the quest instead of substituting a mask when lake access cannot be determined', async () => {
-    // The mask slot is positional: with [lakeOnlyMask, ownMask] a silent drop of the first
-    // promotes the second, so the edit would run on an input the caller did not name and still
-    // bill for it. An outage must not look like a deny.
     const { quest, deleteFabFile } = await run({
       failLakeAccess: true,
       reachable: () => [], // nothing resolves by ownership, so an id genuinely goes missing
@@ -581,6 +590,38 @@ describe('ImageEditService.process mask access (#3069)', () => {
     expect(deleteFabFile).not.toHaveBeenCalled();
   });
 
+  it('never sends the second mask to the provider when the first one cannot be resolved', async () => {
+    // The substitution this guards, with both ids actually present rather than described: the
+    // caller's list is [lakeOnlyMask, ownBrushedMask] and only the second resolves. The mask slot
+    // is positional - `fabFiles.find(first image)` - so dropping the first silently promotes the
+    // second, and the edit renders and bills on an input the caller never chose. Asserted on the
+    // provider payload, because "which bytes reached the provider" is the whole claim.
+    const ownMask = { ...maskFile, id: 'own-mask', filePath: 'masks/own.png' };
+    const { quest, getSignedUrl } = await run({
+      fabFileIds: ['lake-only-mask', 'own-mask'],
+      reachable: ids => ids.map(id => (id === 'own-mask' ? ownMask : null)),
+    });
+
+    expect(editSpy).not.toHaveBeenCalled();
+    // The substitute was never even presigned, let alone sent as an alpha channel.
+    expect(getSignedUrl).not.toHaveBeenCalledWith('masks/own.png');
+    expect(quest.type).toBe('error');
+    expect(quest.reply).toContain('lake-only-mask');
+  });
+
+  it("sends the caller's own mask when every id in a two-id list resolves", async () => {
+    // The control for the case above: same two-id shape, both reachable, so the positional pick
+    // still happens normally and the guard is not just failing everything with two ids.
+    const ownMask = { ...maskFile, id: 'own-mask', filePath: 'masks/own.png' };
+    const { getSignedUrl, quest } = await run({
+      fabFileIds: ['mask1', 'own-mask'],
+      reachable: ids => ids.map(id => (id === 'own-mask' ? ownMask : maskFile)),
+    });
+
+    expect(getSignedUrl).toHaveBeenCalledWith('masks/mask1.png');
+    expect(quest.reply).toBe('stop-after-dispatch');
+  });
+
   it('still runs when the lake resolver fails but every requested id resolves by ownership', async () => {
     // A lake outage must not break edits that never needed the lake arms.
     const { quest, getSignedUrl } = await run({ failLakeAccess: true });
@@ -591,9 +632,12 @@ describe('ImageEditService.process mask access (#3069)', () => {
   });
 
   it('degrades rather than stranding the quest when the lake resolver itself rejects', async () => {
-    // This resolution sits above the try/catch that owns the quest's terminal write, so an
-    // unhandled rejection would leave status 'running' for the check-timeout reaper instead of
-    // failing cleanly. The run must reach dispatch on the ownership arms alone.
+    // This resolution used to sit above the try/catch that owns the quest's terminal write, where
+    // an unhandled rejection escaped `process` with no terminal write at all. Not a 'running' row
+    // for the check-timeout reaper either: `status = 'running'` is only in memory until
+    // startQuestHeartbeat persists it, and that runs inside the try - so the quest kept whatever
+    // status it was enqueued with and nothing would ever have reclaimed it. The run must reach
+    // dispatch on the ownership arms alone.
     const { findAccessibleInIds, quest } = await run({ failLakeAccess: true });
 
     // Empty buckets (never widened) but flagged, so the guard above can tell an outage from a deny.

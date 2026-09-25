@@ -125,6 +125,21 @@ describe('draft lake, attachment scope', () => {
     expect(found.map(f => f.id)).toEqual([lakeFileId]);
   });
 
+  it('returns a populated `id` on every hit', async () => {
+    // Load-bearing for ImageEdit's strict mask check, which diffs the ids it asked for against
+    // the ids that came back and fails the edit on any shortfall. `toObject()` drops virtuals
+    // unless the schema opts in, so if `id` ever came back undefined that diff would report
+    // EVERY id as unresolved and every edit would fail. Asserted here, against a real server,
+    // rather than left to a mock that hands back plain objects.
+    const arms = await attachmentArmsFor([READER_TAG]);
+
+    const found = await fabFileRepository.findAccessibleInIds([lakeFileId], { userId: READER }, arms);
+
+    expect(found).toHaveLength(1);
+    expect(typeof found[0].id).toBe('string');
+    expect(found[0].id).toBe(lakeFileId);
+  });
+
   it('still withholds the published lake from a reader without its required tag', async () => {
     // Guards the control above from proving too much: publishing opens the status gate, not the
     // requiredUserTag gate, so a tag-less caller must still get nothing.

@@ -467,12 +467,8 @@ export class ImageEditService {
           })
         : undefined;
 
-      // Access-scoped: a caller-supplied mask id the caller cannot reach is dropped here, never
-      // presigned and never fed to a provider as an alpha channel. Lenient on a genuine deny (a
-      // dropped id yields no mask rather than an error), matching
-      // ImageGenerationService.selectInputImage; the anchor lookup below is the strict one. The
-      // `finally` cleanup reads this same list, so an unreachable id also stops reaching
-      // deleteFabFile - which already refused it.
+      // Access-scoped: a caller-supplied mask id the caller cannot reach is never presigned and
+      // never fed to a provider as an alpha channel.
       const requestedFabFileIds = [...new Set(fabFileIds ?? [])];
       fabFiles = await this.db.fabFiles.findAccessibleInIds(
         requestedFabFileIds,
@@ -480,14 +476,32 @@ export class ImageEditService {
         lakeAccess
       );
 
-      // Leniency is only safe when a drop MEANS "you may not have this". If lake resolution failed
-      // we cannot tell that from "we could not check", and the mask slot is positional: dropping
-      // the caller's first image silently promotes the next one, so the edit would run on a
-      // different input and still bill. Fail before dispatch instead. Gated on an id actually
-      // going missing, so a lake outage cannot break edits whose inputs all resolve by ownership.
-      if (lakeAccess?.resolutionFailed && fabFiles.length < requestedFabFileIds.length) {
-        throw new InternalServerError(
-          'Could not verify access to the attached files because the data-lake lookup failed. The edit was not run - please try again.'
+      // STRICT, like the anchor lookup below and unlike ImageGenerationService.selectInputImage:
+      // an id that does not resolve fails the edit rather than being dropped.
+      //
+      // Dropping is not neutral here, because the mask slot is positional - `fabFiles.find(first
+      // image)` further down. Losing the caller's first image silently promotes the next one, so
+      // the edit runs on an input they never chose, renders a different picture, and bills for it.
+      // Generation can afford leniency because its dropped candidates are guesses (carry-forward,
+      // a stray attachment); every id here was put in the request by the client on the caller's
+      // behalf, and a draft-lake file the workbench itself admitted is exactly the case that
+      // reaches this (#3279).
+      //
+      // The `finally` cleanup reads the same list, so an unresolved id also stops reaching
+      // deleteFabFile - which already refused it.
+      const resolvedIds = new Set(fabFiles.map(file => file.id));
+      const unresolvedIds = requestedFabFileIds.filter(id => !resolvedIds.has(id));
+      if (unresolvedIds.length > 0) {
+        // Separated because the remedies differ: a deny is the caller's to clear, an outage is
+        // ours and is worth retrying. Flattening them would send someone off auditing a share
+        // that is fine.
+        if (lakeAccess?.resolutionFailed) {
+          throw new InternalServerError(
+            'Could not verify access to the attached files because the data-lake lookup failed. The edit was not run - please try again.'
+          );
+        }
+        throw new BadRequestError(
+          `Attached file ${unresolvedIds.join(', ')} was not found or is not accessible. Remove it from the workbench and try again.`
         );
       }
 
