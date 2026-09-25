@@ -9,6 +9,15 @@ import {
   type PromptScenario,
   type PromptResult,
 } from './ai-latency-helpers';
+import {
+  assertBudgetConfig,
+  textStreamBudgetMs,
+  completedResult,
+  incompleteResult,
+  isLatencyObservation,
+  mergeResults,
+  gatedAverageSec,
+} from './ai-latency-budget';
 
 // Normalizes to NFKC and strips invisible Unicode chars (zero-width joiners, soft hyphens,
 // non-breaking spaces) before matching - innerText-scraped AI text can differ invisibly and break a plain .includes().
@@ -36,6 +45,7 @@ export function createAiLatencySuite({
   resultsFilename,
   disableSmartTools = false,
 }: AiLatencySuiteOptions) {
+  assertBudgetConfig(prompts);
   const selectedPrompts = pickDeterministic(prompts, 3, dailySeed);
   const collectedResults: PromptResult[] = [];
   // Resolved on the first prompt against the live AI Settings modal, then reused for the
@@ -52,8 +62,14 @@ export function createAiLatencySuite({
   // it completes: a LATER prompt that times out makes Playwright recycle the worker, which resets
   // this module's in-memory state - an afterAll that knew only in-memory results would then clobber
   // the file with a partial (or empty) set (the observed `results: []`). Reading the file back and
-  // merging by id keeps each write monotonic. Safe without locking because the AI-latency suites run
-  // serially (PW_WORKERS=1 in e2e-ai-latency.yml), so there is never a concurrent writer.
+  // merging by id keeps each write monotonic.
+  //
+  // NOT safe against a concurrent writer, and there can be one: the matrix job runs with
+  // PW_WORKERS=3 (e2e-ai-latency.yml) against `fullyParallel: true`, so two prompts of the same
+  // spec can read-modify-write this file at once and the later write wins with a stale prior set.
+  // The window is the JSON round trip, so in practice prompts minutes apart rarely collide - but a
+  // lost update silently drops a row, and dropping an `incomplete` row reads as a healthy cell.
+  // Serializing the latency job (or one file per prompt) is the real fix and is tracked separately.
   function persistResults(model: string, newResults: PromptResult[]) {
     fs.mkdirSync(resultsDir, { recursive: true });
 
@@ -67,19 +83,8 @@ export function createAiLatencySuite({
       // First prompt (no file yet) or an unreadable/partial file - start from an empty set.
     }
 
-    // Dedupe by id, last write wins so a retry's result supersedes the original.
-    const results = [...new Map([...priorResults, ...newResults].map(r => [r.id, r])).values()];
-
-    // The gated latency average must stay text-streaming-only. Image/artifact prompts measure a
-    // much longer, different thing (deliverable generation, which for artifacts runs during the
-    // stream), so fold only the text prompts into the average - otherwise the workflow's
-    // AVG > thresholdSec check would go red on generation time and mask real streaming regressions.
-    // Any 3-of-N pick includes at least one text prompt, but guard the empty case anyway.
-    const gatedResults = results.filter(r => !r.measuresDeliverable);
-    const averageResponseTimeSec =
-      gatedResults.length > 0
-        ? Math.round((gatedResults.reduce((sum, r) => sum + r.responseTimeSec, 0) / gatedResults.length) * 1000) / 1000
-        : 0;
+    const results = mergeResults(priorResults, newResults);
+    const averageResponseTimeSec = gatedAverageSec(results);
 
     // Never downgrade an already-resolved model back to 'unknown' (a recycled worker starts fresh).
     const output = {
@@ -110,26 +115,40 @@ export function createAiLatencySuite({
       // separate, much longer measurement, so latency and streaming rate below are taken over the
       // stream window only and the render/settle tail is recorded separately as renderTimeMs.
       let streamEndMs: number;
-      if (scenario.expectsImage) {
-        // The image is tool-produced around the stream (the stop button can hide only once
-        // generation finishes; city-no-cars streams no caption, textlen 0), so the send needs the
-        // image-generation budget, not just the render wait - a short send budget would throw
-        // before the render budget is ever used. Do not gate on the text container (it only mounts
-        // with the image); assert the image as the success signal.
-        await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.IMAGE_GENERATION);
-        streamEndMs = Date.now();
-        imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
-      } else {
-        // An artifact is likewise generated around the stream, so an artifact prompt needs the
-        // image-generation budget for the send; plain text keeps the standard streaming budget.
-        const sendBudget = scenario.generatesArtifact ? TIMEOUTS.IMAGE_GENERATION : TIMEOUTS.AI_RESPONSE;
-        await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
-        streamEndMs = Date.now();
-        // Streaming completing does not mean the artifact resolved; wait out the placeholders so
-        // the scrape below reads the finished reply, not "Generating artifact..."/"Loading artifact...".
-        if (scenario.generatesArtifact) {
-          await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION);
+      try {
+        if (scenario.expectsImage) {
+          // The image is tool-produced around the stream (the stop button can hide only once
+          // generation finishes; city-no-cars streams no caption, textlen 0), so the send needs the
+          // image-generation budget, not just the render wait - a short send budget would throw
+          // before the render budget is ever used. Do not gate on the text container (it only mounts
+          // with the image); assert the image as the success signal.
+          await chatPage.sendImageMessageAndWaitForResponse(scenario.prompt, TIMEOUTS.IMAGE_GENERATION);
+          streamEndMs = Date.now();
+          imageAsserted = await chatPage.tryWaitForImageResponse(TIMEOUTS.IMAGE_GENERATION);
+        } else {
+          // An artifact is likewise generated around the stream, so an artifact prompt needs the
+          // image-generation budget for the send; plain text takes the derived streaming budget
+          // (see textStreamBudgetMs in ai-latency-budget.ts).
+          const sendBudget = scenario.generatesArtifact
+            ? TIMEOUTS.IMAGE_GENERATION
+            : textStreamBudgetMs(thresholdSec, scenario);
+          await chatPage.sendMessageAndWaitForResponse(scenario.prompt, sendBudget);
+          streamEndMs = Date.now();
+          // Streaming completing does not mean the artifact resolved; wait out the placeholders so
+          // the scrape below reads the finished reply, not "Generating artifact..."/"Loading artifact...".
+          if (scenario.generatesArtifact) {
+            await chatPage.waitForArtifactSettled(TIMEOUTS.IMAGE_GENERATION);
+          }
         }
+      } catch (err: unknown) {
+        // Recording is narrowed to a blown streaming budget; see isLatencyObservation for why a
+        // send-ready or mount flake must not be stamped as one.
+        if (isLatencyObservation(err)) {
+          const result = incompleteResult(scenario, Date.now() - startMs);
+          collectedResults.push(result);
+          persistResults(resolvedModel, [result]);
+        }
+        throw err;
       }
       const settleEndMs = Date.now();
 
@@ -141,10 +160,6 @@ export function createAiLatencySuite({
 
       const allTexts = await chatPage.aiResponseRoot.allInnerTexts();
       const responseText = allTexts.join('\n');
-
-      const responseTimeSec = responseTimeMs / 1000;
-      const responseRateCharsPerSec =
-        responseText.length > 0 && responseTimeSec > 0 ? Math.round(responseText.length / responseTimeSec) : 0;
 
       // An image prompt's only trustworthy signal is the rendered image. Its keyword list is
       // generic prose ("here", "picture", "generated") that a refusal or any description also
@@ -180,23 +195,7 @@ export function createAiLatencySuite({
           .toBeTruthy();
       }
 
-      const result: PromptResult = {
-        id: scenario.id,
-        prompt: scenario.prompt,
-        response: responseText,
-        responseTimeMs,
-        responseTimeSec: Math.round(responseTimeSec * 1000) / 1000,
-        responseRateCharsPerSec,
-        // Time spent rendering the image / settling the artifact after the stream ended. 0 for
-        // plain text prompts. Kept as its own field so "this artifact took N seconds to mount"
-        // stays visible without polluting the streaming latency/rate above.
-        renderTimeMs,
-        renderTimeSec: Math.round(renderTimeMs) / 1000,
-        // Even measured stream-only, an artifact prompt's stream window runs for minutes, so flag
-        // image/artifact prompts to keep them out of the gated latency average - it must stay a
-        // text-streaming signal that still catches a real text regression.
-        measuresDeliverable: Boolean(scenario.expectsImage || scenario.generatesArtifact),
-      };
+      const result = completedResult(scenario, { response: responseText, responseTimeMs, renderTimeMs });
       collectedResults.push(result);
       // Persist immediately so this prompt's numbers survive a later prompt's timeout/worker recycle.
       persistResults(resolvedModel, [result]);
