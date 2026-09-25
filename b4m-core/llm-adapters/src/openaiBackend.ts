@@ -2172,14 +2172,29 @@ export class OpenAIBackend implements ICompletionBackend {
       { parallel: parallelEnabled, maxConcurrency: options.maxParallelTools }
     );
 
+    // This path never streams a tool's artifact live (unlike the chat-completions paths above,
+    // which push it through handleToolResultStreaming) - the client renders it via a separate
+    // services-layer extraction from the recorded tool result instead. The guard still needs to
+    // know an artifact was delivered THAT way, or it can't recognize the model reconstructing the
+    // same tag from the tool call's own arguments (it retains them in context) as an echo when it
+    // shows up in the synthesis reply below - so markDelivered records the markup without
+    // re-sending it. See the streaming branch above for why the shared artifactGuard exists.
+    const inheritedArtifactGuard = options._internal?.artifactGuard;
+    let artifactGuard = inheritedArtifactGuard;
+
     for (let i = 0; i < batchOutcomes.length; i++) {
       const outcome = batchOutcomes[i];
       const r = resolved[i];
       if (outcome.ok) {
+        const rawResult = outcome.result.result.toString();
+        if (TOOL_ARTIFACT_EMITTERS.has(r.name)) {
+          if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(callback);
+          artifactGuard.markDelivered(rawResult);
+        }
         // This path never streams, but an emitter's artifact still reaches the user via tool_result
         // extraction in services sharedToolBuilder; strip it so GPT cannot echo a second copy.
         const resultStr = stripToolArtifactMarkup(
-          outcome.result.result.toString(),
+          rawResult,
           TOOL_ARTIFACT_EMITTERS.has(r.name) ? ARTIFACT_DELIVERED_PLACEHOLDER : ARTIFACT_REMOVED_PLACEHOLDER
         );
         recordToolResult(toolsUsed, { id: r.callId, name: r.name }, resultStr, true);
@@ -2215,11 +2230,15 @@ export class OpenAIBackend implements ICompletionBackend {
           accumInputTokens: accumInputTokens + inputTokens,
           accumOutputTokens: accumOutputTokens + outputTokens,
           accumCacheReadTokens: accumCacheReadTokens + cachedTokensFromStream,
+          artifactGuard,
         },
       },
-      callback,
+      artifactGuard?.callback ?? callback,
       toolsUsed
     );
+
+    // See the streaming branch above for why only a guard this level created is flushed.
+    if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
   }
 }
 
