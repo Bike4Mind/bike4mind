@@ -60,9 +60,13 @@ describe('executeResearchRun', () => {
     expect(ports.search).toHaveBeenCalledWith('coastal erosion', 7, 30);
   });
 
-  it('proposes a cleared candidate with its run provenance and advisory confidence', async () => {
+  it('proposes a cleared candidate with its run provenance, advisory confidence and rationale', async () => {
     const { ports, calls } = makePorts();
-    (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValue({ relevance: 0.82, costMicroUsd: 500 });
+    (ports.judge as ReturnType<typeof vi.fn>).mockResolvedValue({
+      relevance: 0.82,
+      rationale: 'directly about coastal erosion',
+      costMicroUsd: 500,
+    });
 
     const result = await executeResearchRun(levers(), 'run-1', ports);
 
@@ -74,6 +78,7 @@ describe('executeResearchRun', () => {
       text: 'body text',
       proposedTags: ['research'],
       confidence: 0.82,
+      rationale: 'directly about coastal erosion',
       provenance: { producer: RESEARCH_RUN_PRODUCER, runId: 'run-1', query: 'coastal erosion', retrievedAt: NOW },
     });
     expect(result.totals.proposed).toBe(1);

@@ -69,6 +69,7 @@ import { extractCodeBlockTitle } from '@client/app/utils/codeBlockTitleExtractor
 import CitableSources from './CitableSources';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import NavigationButtons from './NavigationButtons';
+import ReplyAccessories from './ReplyAccessories';
 import AttachmentNotices from './AttachmentNotices';
 import { NotebookExecutionButtons } from './NotebookExecutionButtons';
 import type { UiSideEffect } from '@bike4mind/common';
@@ -1537,6 +1538,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
           {/* Repeated rather than hoisted above the branch: the suggestions read as part of
               the reply, so they follow whichever body this view rendered. Edit mode is the
               one body they are deliberately left out of. */}
+          {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
           {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
         </>
       ) : (
@@ -1811,6 +1813,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                       </>
                     )}
 
+                    {completed && <ReplyAccessories questId={messageId} sessionId={currentSessionId ?? undefined} />}
                     {navSuggestions && <NavigationButtons navigationIntents={navSuggestions} />}
                   </Typography>
                 </Box>

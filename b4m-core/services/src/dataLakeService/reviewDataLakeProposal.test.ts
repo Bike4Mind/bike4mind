@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AccessContext, IDataLakeDocument, IDataLakeProposalDocument } from '@bike4mind/common';
 import { FabFileSourceType } from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, NotFoundError } from '@bike4mind/utils';
-import { approveDataLakeProposal, declineDataLakeProposal } from './reviewDataLakeProposal';
+import { approveDataLakeProposal, declineDataLakeProposal, restoreDataLakeProposal } from './reviewDataLakeProposal';
 import { assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 
 const OWNER = 'owner-1';
@@ -291,6 +291,73 @@ describe('declineDataLakeProposal', () => {
     await declineDataLakeProposal('prop-1', ctx(), {}, deps);
 
     expect(claimForReview).toHaveBeenCalled();
+  });
+});
+
+describe('restoreDataLakeProposal', () => {
+  const declined = () => proposal({ status: 'declined', excerpt: null, declineReason: 'paywalled' });
+  const restoreAdapters = (
+    over: {
+      found?: IDataLakeProposalDocument | null;
+      latest?: IDataLakeProposalDocument | null;
+      result?: Awaited<ReturnType<typeof restoreDataLakeProposal>> | 'not_declined' | 'pending_exists';
+    } = {}
+  ) => {
+    const found = over.found === undefined ? declined() : over.found;
+    const restoreDeclined = vi.fn(async () =>
+      over.result === 'not_declined' || over.result === 'pending_exists'
+        ? ({ restored: false, reason: over.result } as const)
+        : ({ restored: true, proposal: { ...(found as IDataLakeProposalDocument), status: 'pending' } } as const)
+    );
+    return {
+      deps: {
+        db: {
+          dataLakeProposals: {
+            findById: vi.fn(async () => found),
+            findLatestBySourceKey: vi.fn(async () => (over.latest === undefined ? found : over.latest)),
+            restoreDeclined,
+          },
+          dataLakes: { findById: vi.fn(async () => lake()) },
+        },
+      },
+      restoreDeclined,
+    };
+  };
+
+  it('returns a declined proposal to the pending queue', async () => {
+    const { deps, restoreDeclined } = restoreAdapters();
+
+    const result = await restoreDataLakeProposal('prop-1', ctx(), deps);
+
+    expect(restoreDeclined).toHaveBeenCalledWith('prop-1');
+    expect(result.status).toBe('pending');
+  });
+
+  it('refuses a proposal that is not declined', async () => {
+    const { deps, restoreDeclined } = restoreAdapters({ found: proposal() });
+
+    await expect(restoreDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(BadRequestError);
+    expect(restoreDeclined).not.toHaveBeenCalled();
+  });
+
+  it('refuses a tombstone a later proposal for the same source has superseded', async () => {
+    const { deps, restoreDeclined } = restoreAdapters({ latest: proposal({ id: 'prop-2', status: 'approved' }) });
+
+    await expect(restoreDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(/proposed again/);
+    expect(restoreDeclined).not.toHaveBeenCalled();
+  });
+
+  it('refuses when the source already has a pending proposal', async () => {
+    const { deps } = restoreAdapters({ result: 'pending_exists' });
+
+    await expect(restoreDataLakeProposal('prop-1', ctx(), deps)).rejects.toThrow(/already waiting/);
+  });
+
+  it('refuses a caller who cannot manage the lake, as a 403', async () => {
+    const { deps, restoreDeclined } = restoreAdapters();
+
+    await expect(restoreDataLakeProposal('prop-1', ctx({ userId: 'stranger' }), deps)).rejects.toThrow(ForbiddenError);
+    expect(restoreDeclined).not.toHaveBeenCalled();
   });
 });
 

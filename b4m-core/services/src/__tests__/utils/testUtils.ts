@@ -161,6 +161,7 @@ export const createMockFabFileRepository = (): IFabFileRepository => ({
   hardDeleteByIds: vi.fn(),
   hardDeleteOneById: vi.fn(),
   findIdsByDataLakeTag: vi.fn(),
+  findLiveMembersByDataLakeTag: vi.fn(),
   findByUserId: vi.fn(),
   sumFileSizeByUserId: vi.fn(),
 });

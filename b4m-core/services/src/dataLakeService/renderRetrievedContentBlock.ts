@@ -102,9 +102,9 @@ export { toSingleLine as toContentLabel };
  * on it put 34 older rows above 14 newer ones, because every vectorization and tag write rewrites
  * it. `createdAt` at least holds still, but it is upload time, not authorship.
  *
- * No field captures a real authored date yet, so nothing currently calls this. It is kept as the
- * single formatting seam the channels share, so that whatever captures that date wires it in one
- * place rather than three, and so the rule above sits where the next caller will read it.
+ * `FabFile.documentDate` (#3048) is that real authored date, and is the ONLY thing callers pass
+ * here. It is absent on most files by design - no source offered a vintage - and every channel
+ * renders undated in that case rather than substituting a row timestamp.
  *
  * Emitted as a UTC `YYYY-MM-DD`. Digits and separators only is the point: unlike the file name
  * beside it, the result cannot carry a newline or forge one of the markers `defangRetrievedContent`
@@ -126,11 +126,14 @@ export function formatDocumentDate(value: Date | string | null | undefined): str
 /**
  * The date clause as it appears in a passage header, or '' when there is no usable date.
  *
- * Shares `formatDocumentDate`'s contract and its current caller count of zero: the three channels
- * that head retrieved content for the model - the search tool, the retrieve tool and forced
- * retrieval - all render undated until a real authored date exists to pass. When one does, they
+ * Shares `formatDocumentDate`'s contract. All three channels that head retrieved content for the
+ * model - the search tool, the retrieve tool and forced retrieval - now pass `FabFile.documentDate`
+ * here (#3048), and each renders undated whenever that is absent, which stays the common case. They
  * append this rather than writing the separator and wording out three times, for the same reason
  * `defangRetrievedContent` is shared: three copies of a literal is three chances to drift.
+ *
+ * Only ever given a date captured from a real source signal. Passing `createdAt`/`updatedAt` here
+ * would reintroduce #3047 with the formatting merely centralised.
  *
  * Appended AFTER each channel's existing parenthetical, never folded into it. Both header shapes
  * are load-bearing: `defangRetrievedContent` matches on their leading tokens, and the forced arm's

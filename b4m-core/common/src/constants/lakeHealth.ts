@@ -635,21 +635,50 @@ export type LakeHealthApiResponse = Omit<LakeHealthReport, 'affectedMembers'> & 
  * than the Lambda's own 10-minute timeout (infra/queues.ts), so a healthy in-flight run is never
  * stolen; short enough that a crashed run (which never released its lease) is reclaimable on the
  * next attempt without a reconciler.
+ *
+ * KNOWN GAP, deliberately left as-is here: this value also exceeds its queue's 12-minute visibility
+ * timeout, so a crashed extraction's redelivery loses its claim to the dead lease and is dropped as
+ * a duplicate. See {@link MODEL_INCONSISTENCY_RUN_LEASE_MS} below for the full failure mode and the
+ * ordering invariant it now holds. Changing this one moves the lake-memory pass's retry behaviour
+ * and belongs in its own change, not as a side effect of the model pass's.
  */
 export const LAKE_MEMORY_EXTRACTION_LEASE_MS = 15 * 60_000;
 
 /**
- * Whether a lake-memory extraction lease is still in force at `now`. `at` is the lake's
- * `lakeMemoryExtractionAt` - `null`/`undefined` means no run currently holds it (either none ever
- * has, or the last one released cleanly in its `finally`); a stamp older than the lease window is a
- * crashed run's STALE lease, which reads as not-held here for the same reason
- * `claimLakeMemoryExtraction` would let a new run reclaim it.
+ * How long a model-inconsistency run's lease (#3057) is honored. Its own constant rather than a reuse
+ * of the lake-memory window: the two passes run on separate queues with separate handler timeouts, so
+ * tuning one must not silently move the other.
+ *
+ * MUST sit strictly between the handler's Lambda timeout and its queue's visibility timeout
+ * (infra/queues.ts: 10 minutes and 12 minutes). Longer than the Lambda so a healthy in-flight run is
+ * never stolen; SHORTER THAN THE VISIBILITY TIMEOUT so a crashed run is actually retryable. A lease
+ * outliving visibility silently destroys the retry: SQS redelivers at 12 minutes, the redelivered
+ * attempt loses its claim to the dead run's still-live lease, logs "another run holds the lease" and
+ * drops the message as a duplicate. Both retries fall inside that window, `retry: 2` is consumed by
+ * phantoms, and the DLQ never sees the failure - the run is lost with a log line blaming a
+ * concurrent run that does not exist.
  */
-export function isLeaseHeld(at: Date | string | null | undefined, now: Date): boolean {
+export const MODEL_INCONSISTENCY_RUN_LEASE_MS = 11 * 60_000;
+
+/**
+ * Whether a per-lake run lease is still in force at `now`. `at` is the lease stamp (the lake's
+ * `lakeMemoryExtractionAt`, or `modelInconsistencyRunAt` for the model pass) - `null`/`undefined`
+ * means no run currently holds it (either none ever has, or the last one released cleanly in its
+ * `finally`); a stamp older than `leaseMs` is a crashed run's STALE lease, which reads as not-held
+ * here for the same reason the matching `claim*` call would let a new run reclaim it.
+ *
+ * `leaseMs` defaults to the lake-memory window so existing callers keep their exact behaviour; the
+ * model pass passes {@link MODEL_INCONSISTENCY_RUN_LEASE_MS} rather than duplicating this logic.
+ */
+export function isLeaseHeld(
+  at: Date | string | null | undefined,
+  now: Date,
+  leaseMs: number = LAKE_MEMORY_EXTRACTION_LEASE_MS
+): boolean {
   if (!at) return false;
   const claimedAt = at instanceof Date ? at : new Date(at);
   if (Number.isNaN(claimedAt.getTime())) return false;
-  return claimedAt.getTime() >= now.getTime() - LAKE_MEMORY_EXTRACTION_LEASE_MS;
+  return claimedAt.getTime() >= now.getTime() - leaseMs;
 }
 
 /** The six lake-memory states: the issue's five plus `building`, which the extraction lease makes observable. */

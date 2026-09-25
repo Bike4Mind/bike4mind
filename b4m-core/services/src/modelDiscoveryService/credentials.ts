@@ -20,7 +20,7 @@ const ELEVENLABS_SETTING: IAdminSettings['settingName'] = 'elevenLabsServerApiKe
  * setting that exists for a different purpose. Unlike `envKey`, this is NOT
  * gated on B4M_SELF_HOST - hosted is the case it exists for.
  */
-const DISCOVERY_ENV_KEYS = {
+export const DISCOVERY_ENV_KEYS = {
   openai: 'OPENAI_API_KEY',
   anthropic: 'ANTHROPIC_API_KEY',
   gemini: 'GEMINI_API_KEY',

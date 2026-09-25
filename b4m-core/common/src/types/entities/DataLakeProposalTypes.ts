@@ -27,6 +27,9 @@ export type DataLakeProposalStatus = (typeof DATA_LAKE_PROPOSAL_STATUSES)[number
 /** Longest excerpt a producer may attach. Enough to judge a source by, far short of storing it. */
 export const DATA_LAKE_PROPOSAL_EXCERPT_MAX_CHARS = 4000;
 
+/** Longest relevance rationale kept: the judge is asked for one sentence, this bounds a runaway one. */
+export const DATA_LAKE_PROPOSAL_RATIONALE_MAX_CHARS = 500;
+
 /** How many tags a producer may propose for one candidate. */
 export const DATA_LAKE_PROPOSAL_MAX_TAGS = 20;
 
@@ -81,13 +84,22 @@ export interface IDataLakeProposal {
    * both sides is never read as "the same" - see `proposeDataLakeContent`.
    */
   textHash?: string | null;
-  /** Tags the producer suggests for the admitted file. Advisory - the reviewer's lake decides. */
+  /**
+   * Tags the producer suggests. Shown to the reviewer as suggestions only and NEVER stamped on the
+   * admitted file - see approveDataLakeProposal for why only the lake's own tag is applied.
+   */
   proposedTags: string[];
   /**
    * The producer's own 0..1 confidence in the candidate. ADVISORY DISPLAY ONLY. Nothing in this
-   * system may gate, sort-out or auto-approve on it; there is no threshold lever, by design.
+   * system may gate, filter out or auto-approve on it; there is no threshold lever, by design.
+   * Ordering the review list by it is fine - every proposal still needs its own human decision.
    */
   confidence?: number | null;
+  /**
+   * The producer's one-line reason for `confidence` (the relevance judge's rationale). Advisory,
+   * like the score. Cleared on decline with the excerpt: it is written from the candidate material.
+   */
+  rationale?: string | null;
   provenance: DataLakeProposalProvenance;
   /**
    * Set when this source has been ruled on before and came back with materially different text.
@@ -115,9 +127,18 @@ export interface CreateDataLakeProposalInput {
   textHash?: string;
   proposedTags: string[];
   confidence?: number;
+  rationale?: string;
   provenance: DataLakeProposalProvenance;
   priorDisposition?: DataLakeProposalStatus;
 }
+
+/**
+ * What `restoreDeclined` reports. `pending_exists` means a newer proposal for the same source already
+ * holds the lake's one pending slot for it, so restoring would open the same question twice.
+ */
+export type RestoreDataLakeProposalResult =
+  | { restored: true; proposal: IDataLakeProposalDocument }
+  | { restored: false; reason: 'not_declined' | 'pending_exists' };
 
 /**
  * What `createProposal` reports. `created: false` is the LOST side of a create race: a concurrent
@@ -163,6 +184,13 @@ export interface IDataLakeProposalRepository extends IBaseRepository<IDataLakePr
    * Never a read-then-write.
    */
   claimForReview(id: string, input: ReviewDataLakeProposalInput): Promise<IDataLakeProposalDocument | null>;
+  /**
+   * Atomically move a DECLINED proposal back to pending, clearing the reviewer stamp and reason and
+   * marking `priorDisposition: 'declined'` (unless one is already set) so the card says it was ruled
+   * on before. The excerpt and
+   * rationale stay gone - a decline stripped them, and restoring does not re-fetch the source.
+   */
+  restoreDeclined(id: string): Promise<RestoreDataLakeProposalResult>;
   /** Record the file an approval admitted, once the ingestion door has created it. */
   recordAdmission(id: string, fabFileId: string): Promise<void>;
   /**
