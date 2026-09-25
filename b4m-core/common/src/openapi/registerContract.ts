@@ -80,20 +80,23 @@ function undoCoercionForOpenApi(schema: z.ZodTypeAny): z.ZodTypeAny {
  * Apply {@link undoCoercionForOpenApi} across a `pathParams`/`queryParams` object
  * schema's fields. Structural rather than plain `z.ZodObject` access for the same
  * reason as {@link annotateInheritedName}: shape values widen to `$ZodType`, which
- * does not carry `.extend()`'s precise return type - cast back to `T` at the end,
- * since `.extend()` on a `ZodObject` always yields another `ZodObject`.
+ * does not carry `.safeExtend()`'s precise return type - cast back to `T` at the end,
+ * since `.safeExtend()` on a `ZodObject` always yields another `ZodObject`. `.safeExtend()`
+ * rather than `.extend()`: zod 4 refuses to overwrite keys with `.extend()` on an object
+ * that carries a `.refine()` (e.g. a `from <= to` range check), and throws at spec
+ * generation instead - `.safeExtend()` is the same override, minus that restriction.
  */
 function withAccurateCoercedParams<T extends z.ZodObject<z.ZodRawShape>>(objectSchema: T | undefined): T | undefined {
   const shapeAndExtend = objectSchema as unknown as
-    | { shape?: Record<string, z.ZodTypeAny>; extend?: (shape: Record<string, z.ZodTypeAny>) => z.ZodTypeAny }
+    | { shape?: Record<string, z.ZodTypeAny>; safeExtend?: (shape: Record<string, z.ZodTypeAny>) => z.ZodTypeAny }
     | undefined;
-  if (!shapeAndExtend?.shape || !shapeAndExtend.extend) return objectSchema;
+  if (!shapeAndExtend?.shape || !shapeAndExtend.safeExtend) return objectSchema;
   const overrides: Record<string, z.ZodTypeAny> = {};
   for (const [key, fieldSchema] of Object.entries(shapeAndExtend.shape)) {
     const fixed = undoCoercionForOpenApi(fieldSchema);
     if (fixed !== fieldSchema) overrides[key] = fixed;
   }
-  return Object.keys(overrides).length > 0 ? (shapeAndExtend.extend(overrides) as T) : objectSchema;
+  return Object.keys(overrides).length > 0 ? (shapeAndExtend.safeExtend(overrides) as T) : objectSchema;
 }
 
 /**
