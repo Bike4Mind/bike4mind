@@ -576,7 +576,9 @@ export function DataLakeResearchPanel({
                 onChange={e => setField('proposedTags')(e.target.value)}
                 slotProps={{ input: { 'data-testid': 'datalake-research-tags-input' } }}
               />
-              <FormHelperText>Suggested on each proposal. You can still change them when you approve.</FormHelperText>
+              <FormHelperText>
+                Shown on each proposal as suggestions only. Approving applies the lake tag, not these.
+              </FormHelperText>
             </FormControl>
 
             <Stack direction="row" spacing={1}>

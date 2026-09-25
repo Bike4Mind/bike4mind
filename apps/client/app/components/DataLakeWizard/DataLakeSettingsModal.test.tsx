@@ -1177,6 +1177,22 @@ describe('DataLakeSettingsModal - Proposals tab visibility', () => {
     expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (0)');
   });
 
+  it('shows the tab when only declined proposals exist, so they can be restored', () => {
+    useDataLakeProposalsMock.mockImplementation(((_id: unknown, status: unknown) => ({
+      data: status === 'declined' ? [queued({ status: 'declined' })] : [],
+      isLoading: false,
+      isForbidden: false,
+      error: null,
+    })) as never);
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={manageableLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-settings-tab-proposals')).toHaveTextContent('Proposals (0)');
+  });
+
   it('never fetches the queue for a caller who cannot manage the lake', () => {
     withQueue([queued()]);
     render(

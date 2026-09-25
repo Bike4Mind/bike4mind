@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { IDataLakeProposalDocument } from '@bike4mind/common';
-import { DATA_LAKE_PROPOSAL_EXCERPT_MAX_CHARS } from '@bike4mind/common';
+import { DATA_LAKE_PROPOSAL_EXCERPT_MAX_CHARS, DATA_LAKE_PROPOSAL_RATIONALE_MAX_CHARS } from '@bike4mind/common';
 import { computeServerTextHash } from './admissionContract';
 import { proposeDataLakeContent, type ProposalCandidate } from './proposeDataLakeContent';
 
@@ -291,5 +291,15 @@ describe('proposeDataLakeContent', () => {
     await proposeDataLakeContent(LAKE, candidate({ confidence: 7 }), deps);
 
     expect(createProposal.mock.calls[0][0].confidence).toBeUndefined();
+  });
+
+  it('stores the rationale trimmed and bounded, and drops a blank one', async () => {
+    const { deps, createProposal } = adapters();
+
+    await proposeDataLakeContent(LAKE, candidate({ rationale: `  ${'x'.repeat(600)}  ` }), deps);
+    await proposeDataLakeContent(LAKE, candidate({ rationale: '   ' }), deps);
+
+    expect(createProposal.mock.calls[0][0].rationale).toBe('x'.repeat(DATA_LAKE_PROPOSAL_RATIONALE_MAX_CHARS));
+    expect(createProposal.mock.calls[1][0].rationale).toBeUndefined();
   });
 });

@@ -1,9 +1,27 @@
-import React, { useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, Divider, Input, Link, Stack, Typography } from '@mui/joy';
+import React, { useMemo, useState } from 'react';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Divider,
+  Input,
+  Link,
+  Option,
+  Select,
+  Stack,
+  ToggleButtonGroup,
+  Typography,
+} from '@mui/joy';
 import type { IDataLakeProposalDocument } from '@bike4mind/common';
 import { RESEARCH_RUN_PRODUCER } from '@bike4mind/common';
 
+export type ProposalsView = 'pending' | 'declined';
+type ProposalSort = 'relevance' | 'newest';
+
 export interface DataLakeProposalsPanelProps {
+  /** The rows for the current `view` - pending proposals, or declined tombstones. */
   proposals: IDataLakeProposalDocument[] | undefined;
   isLoading: boolean;
   error: unknown;
@@ -17,7 +35,65 @@ export interface DataLakeProposalsPanelProps {
   failure?: { proposalId: string; message: string };
   onApprove: (proposalId: string) => void;
   onDecline: (proposalId: string, reason?: string) => void;
+  view?: ProposalsView;
+  /** Absent, the panel shows the pending queue only, with no way to switch to declined. */
+  onViewChange?: (view: ProposalsView) => void;
+  onRestore?: (proposalId: string) => void;
+  /**
+   * `canonicalSourceKey`s of the current pending queue, used only in the declined view: a declined
+   * row whose source has a newer pending proposal is a tombstone too, the same as an older declined
+   * row a later decline superseded - restoring it hits the server's `pending_exists` refusal. The
+   * server remains the guard for the later-approved case; this only prevents the guaranteed error.
+   */
+  pendingCanonicalSourceKeys?: ReadonlySet<string>;
 }
+
+/** Past this, an excerpt is collapsed until the reviewer asks for the rest. */
+const EXCERPT_PREVIEW_CHARS = 280;
+
+function ProposalExcerpt({ excerpt }: { excerpt: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const collapsible = excerpt.length > EXCERPT_PREVIEW_CHARS;
+  const shown = collapsible && !expanded ? `${excerpt.slice(0, EXCERPT_PREVIEW_CHARS).trimEnd()}\u2026` : excerpt;
+  return (
+    <Box sx={{ bgcolor: 'background.level1', borderRadius: 'sm', p: 1 }} data-testid="datalake-proposal-excerpt">
+      <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 0.5 }}>
+        {/* Framed as untrusted on purpose: this is text the source wrote, shown to a
+            human deciding whether to admit it. It is never HTML and never instructions. */}
+        Excerpt from the source - not yet reviewed
+      </Typography>
+      <Typography
+        level="body-xs"
+        sx={{
+          whiteSpace: 'pre-wrap',
+          // The char cut alone still lets a run of short lines push the actions off screen.
+          ...(collapsible && !expanded
+            ? { display: '-webkit-box', WebkitLineClamp: 4, WebkitBoxOrient: 'vertical', overflow: 'hidden' }
+            : {}),
+        }}
+        data-testid="datalake-proposal-excerpt-text"
+      >
+        {shown}
+      </Typography>
+      {collapsible && (
+        <Button
+          size="sm"
+          variant="plain"
+          sx={{ mt: 0.5, px: 0.5, minHeight: 0 }}
+          onClick={() => setExpanded(v => !v)}
+          data-testid="datalake-proposal-excerpt-toggle"
+        >
+          {expanded ? 'Show less' : 'Show more'}
+        </Button>
+      )}
+    </Box>
+  );
+}
+
+// Array.prototype.sort is stable, so ties (and unscored rows, which sink) keep the server's
+// newest-first order.
+const sortProposals = (proposals: IDataLakeProposalDocument[], sort: ProposalSort): IDataLakeProposalDocument[] =>
+  sort === 'newest' ? proposals : [...proposals].sort((a, b) => (b.confidence ?? -1) - (a.confidence ?? -1));
 
 /**
  * `producer` is deliberately free-form so a new producer needs no schema change, which means this
@@ -35,8 +111,9 @@ const formatRetrieved = (value: Date | string | undefined): string => {
 /**
  * The human half of the acquisition queue (#1671): one lake's pending proposals, each approved or
  * declined explicitly. There is no bulk-approve and no auto-approve control, deliberately - the
- * decision this panel exists to capture is per-source, and a confidence score is shown only as
- * context a reviewer may weigh, never as a lever anything acts on.
+ * decision this panel exists to capture is per-source, and the relevance score is shown (and may
+ * order the list) only as context a reviewer may weigh, never as a lever anything acts on. Declined
+ * tombstones have their own view, where one can be restored to the queue.
  *
  * Pure/presentational - all data and mutations arrive via props - so it needs no
  * QueryClientProvider in tests.
@@ -49,12 +126,80 @@ export function DataLakeProposalsPanel({
   failure,
   onApprove,
   onDecline,
+  view = 'pending',
+  onViewChange,
+  onRestore,
+  pendingCanonicalSourceKeys,
 }: DataLakeProposalsPanelProps) {
   const [decliningId, setDecliningId] = useState<string | null>(null);
   const [reason, setReason] = useState('');
+  const [sort, setSort] = useState<ProposalSort>('relevance');
+  const declinedView = view === 'declined';
+  // The declined list is newest first, so a later occurrence of a source is a superseded tombstone
+  // the server will refuse to restore (see restoreDataLakeProposal). A source that instead came back
+  // as a still-pending proposal is the same refusal (`pending_exists`) under a different cause, so it
+  // is folded into the same set.
+  const supersededIds = useMemo(() => {
+    const seen = new Set<string>();
+    const superseded = new Set<string>();
+    if (declinedView) {
+      for (const p of proposals ?? []) {
+        if (seen.has(p.canonicalSourceKey) || pendingCanonicalSourceKeys?.has(p.canonicalSourceKey)) {
+          superseded.add(p.id);
+        }
+        seen.add(p.canonicalSourceKey);
+      }
+    }
+    return superseded;
+  }, [proposals, declinedView, pendingCanonicalSourceKeys]);
+  const sorted = useMemo(
+    () => (proposals && !declinedView ? sortProposals(proposals, sort) : proposals),
+    [proposals, sort, declinedView]
+  );
+
+  const controls =
+    onViewChange || !declinedView ? (
+      <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap', rowGap: 1 }}>
+        {onViewChange && (
+          <ToggleButtonGroup
+            size="sm"
+            value={view}
+            onChange={(_e, value) => value && onViewChange(value as ProposalsView)}
+            data-testid="datalake-proposals-view-toggle"
+          >
+            <Button value="pending" data-testid="datalake-proposals-view-pending">
+              Waiting for review
+            </Button>
+            <Button value="declined" data-testid="datalake-proposals-view-declined">
+              Declined
+            </Button>
+          </ToggleButtonGroup>
+        )}
+        {!declinedView && (
+          <Select
+            size="sm"
+            value={sort}
+            onChange={(_e, value) => value && setSort(value)}
+            sx={{ ml: 'auto', minWidth: '10rem' }}
+            aria-label="Sort proposals"
+            data-testid="datalake-proposals-sort"
+          >
+            <Option value="relevance">Most relevant first</Option>
+            <Option value="newest">Newest first</Option>
+          </Select>
+        )}
+      </Stack>
+    ) : null;
+
+  const withControls = (node: React.ReactNode) => (
+    <Stack spacing={2}>
+      {controls}
+      {node}
+    </Stack>
+  );
 
   if (isLoading) {
-    return (
+    return withControls(
       <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }} data-testid="datalake-proposals-loading">
         <CircularProgress size="sm" />
       </Box>
@@ -62,35 +207,51 @@ export function DataLakeProposalsPanel({
   }
 
   if (error) {
-    return (
+    return withControls(
       <Alert color="danger" size="sm" data-testid="datalake-proposals-error">
         Could not load proposals for this data lake. Try again shortly.
       </Alert>
     );
   }
 
-  if (!proposals?.length) {
-    return (
-      <Stack spacing={1} data-testid="datalake-proposals-empty">
-        <Typography level="body-sm">Nothing is waiting for review.</Typography>
-        <Typography level="body-xs" textColor="text.tertiary">
-          Proposals arrive when a research run finds sources for this lake. Set one up and run it from the Research tab;
-          anything it finds lands here first, and nothing reaches the lake until you approve it.
-        </Typography>
-      </Stack>
+  if (!sorted?.length) {
+    // Reachable now: the tab stays put for as long as the modal is open, so finishing the last
+    // decision lands here instead of silently bouncing the reviewer into the Settings form.
+    return withControls(
+      declinedView ? (
+        <Stack spacing={1} data-testid="datalake-proposals-empty">
+          <Typography level="body-sm">Nothing has been declined for this lake.</Typography>
+        </Stack>
+      ) : (
+        <Stack spacing={1} data-testid="datalake-proposals-empty">
+          <Typography level="body-sm">Nothing is waiting for review.</Typography>
+          <Typography level="body-xs" textColor="text.tertiary">
+            Proposals arrive when a research run finds sources for this lake. Set one up and run it from the Research
+            tab; anything it finds lands here first, and nothing reaches the lake until you approve it.
+          </Typography>
+        </Stack>
+      )
     );
   }
 
-  return (
+  return withControls(
     <Stack spacing={2} data-testid="datalake-proposals-list">
-      {/* What the two buttons actually DO. Approving is a live outbound fetch that can take a few
+      {/* What the buttons actually DO. Approving is a live outbound fetch that can take a few
           seconds and can fail on a dead link, and declining is remembered - neither is guessable from
           a button label, and a reviewer meeting this queue for the first time has no other cue. */}
-      <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposals-help">
-        Approving fetches the page now and adds it to this lake, chunked like any other file. Declining is remembered,
-        so the same source is not proposed again unless its content changes.
-      </Typography>
-      {proposals.map(proposal => {
+      {declinedView ? (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposals-help">
+          Restoring puts a proposal back in the review queue. The excerpt is not kept after a decline, so open the
+          source to judge it again.
+        </Typography>
+      ) : (
+        <Typography level="body-xs" textColor="text.tertiary" data-testid="datalake-proposals-help">
+          Approving fetches the page now and adds it to this lake, chunked like any other file and tagged with the lake
+          tag only - suggested tags are not applied. Declining is remembered, so the same source is not proposed again
+          unless its content changes.
+        </Typography>
+      )}
+      {sorted.map(proposal => {
         const busy = pendingProposalId === proposal.id;
         return (
           <Box
@@ -100,7 +261,7 @@ export function DataLakeProposalsPanel({
           >
             <Stack spacing={1}>
               <Stack direction="row" spacing={1} sx={{ alignItems: 'center', flexWrap: 'wrap' }}>
-                <Typography level="title-sm" sx={{ flex: 1, minWidth: '12rem' }}>
+                <Typography level="title-sm" sx={{ flex: 1, minWidth: '12rem' }} data-testid="datalake-proposal-title">
                   {proposal.title}
                 </Typography>
                 {proposal.priorDisposition === 'declined' && (
@@ -120,10 +281,16 @@ export function DataLakeProposalsPanel({
                 )}
                 {typeof proposal.confidence === 'number' && (
                   <Chip size="sm" variant="soft" data-testid="datalake-proposal-confidence">
-                    {`Confidence ${Math.round(proposal.confidence * 100)}%`}
+                    {`Relevance ${Math.round(proposal.confidence * 100)}%`}
                   </Chip>
                 )}
               </Stack>
+
+              {proposal.rationale && (
+                <Typography level="body-xs" data-testid="datalake-proposal-rationale">
+                  {`Why it was proposed: ${proposal.rationale}`}
+                </Typography>
+              )}
 
               {/* `break-all`, not `break-word`: a producer-supplied URL is one long unbroken token, so
                   word-level breaking leaves it overflowing the card - observed on a real seeded
@@ -145,8 +312,16 @@ export function DataLakeProposalsPanel({
                 {` \u00b7 retrieved ${formatRetrieved(proposal.provenance.retrievedAt)}`}
               </Typography>
 
-              {proposal.proposedTags.length > 0 && (
-                <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+              {!declinedView && proposal.proposedTags.length > 0 && (
+                <Stack
+                  direction="row"
+                  spacing={0.5}
+                  sx={{ flexWrap: 'wrap', alignItems: 'center' }}
+                  data-testid="datalake-proposal-tags"
+                >
+                  <Typography level="body-xs" textColor="text.tertiary">
+                    Suggested tags (not applied):
+                  </Typography>
                   {proposal.proposedTags.map(tag => (
                     <Chip key={tag} size="sm" variant="outlined" data-testid="datalake-proposal-tag">
                       {tag}
@@ -155,20 +330,13 @@ export function DataLakeProposalsPanel({
                 </Stack>
               )}
 
-              {proposal.excerpt && (
-                <Box
-                  sx={{ bgcolor: 'background.level1', borderRadius: 'sm', p: 1 }}
-                  data-testid="datalake-proposal-excerpt"
-                >
-                  <Typography level="body-xs" textColor="text.tertiary" sx={{ mb: 0.5 }}>
-                    {/* Framed as untrusted on purpose: this is text the source wrote, shown to a
-                        human deciding whether to admit it. It is never HTML and never instructions. */}
-                    Excerpt from the source - not yet reviewed
-                  </Typography>
-                  <Typography level="body-xs" sx={{ whiteSpace: 'pre-wrap' }}>
-                    {proposal.excerpt}
-                  </Typography>
-                </Box>
+              {proposal.excerpt && <ProposalExcerpt excerpt={proposal.excerpt} />}
+
+              {declinedView && (
+                <Typography level="body-xs" data-testid="datalake-proposal-decline-record">
+                  {`Declined ${formatRetrieved(proposal.reviewedAt ?? undefined)}`}
+                  {proposal.declineReason ? `: ${proposal.declineReason}` : ' with no reason given'}
+                </Typography>
               )}
 
               {failure?.proposalId === proposal.id && !busy && (
@@ -179,7 +347,33 @@ export function DataLakeProposalsPanel({
 
               <Divider />
 
-              {decliningId === proposal.id ? (
+              {declinedView ? (
+                onRestore && (
+                  <Stack direction="row" spacing={1}>
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      color="neutral"
+                      loading={busy}
+                      disabled={supersededIds.has(proposal.id)}
+                      onClick={() => onRestore(proposal.id)}
+                      data-testid="datalake-proposal-restore-btn"
+                    >
+                      Restore to queue
+                    </Button>
+                    {supersededIds.has(proposal.id) && (
+                      <Typography
+                        level="body-xs"
+                        textColor="text.tertiary"
+                        sx={{ alignSelf: 'center' }}
+                        data-testid="datalake-proposal-superseded"
+                      >
+                        This source was proposed again later.
+                      </Typography>
+                    )}
+                  </Stack>
+                )
+              ) : decliningId === proposal.id ? (
                 <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
                   <Input
                     size="sm"
