@@ -2042,8 +2042,6 @@ export class AnthropicBackend implements ICompletionBackend {
             );
 
             if (guard) await guard.flush();
-
-            return;
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             // Include thinking blocks for Anthropic extended thinking
@@ -2431,8 +2429,6 @@ export class AnthropicBackend implements ICompletionBackend {
             );
 
             if (guard) await guard.flush();
-
-            return;
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             // Include thinking blocks for Anthropic extended thinking
