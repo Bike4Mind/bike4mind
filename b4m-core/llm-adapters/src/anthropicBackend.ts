@@ -1913,17 +1913,17 @@ export class AnthropicBackend implements ICompletionBackend {
                   }
             );
 
-            // The real, top-level callback - pinned through every recursion level via
-            // _internal.artifactCallback, never the recursive-buffer guard below - so a tool
-            // streamed from a CHAINED call deeper in this turn always reaches the client
-            // directly instead of landing in a buffer built to catch a DIFFERENT round's echo.
-            const artifactCallback = options._internal?.artifactCallback ?? cb;
+            // The single shared guard for this whole recursive chain - reused unchanged if an
+            // earlier level already created one, so a CHAINED tool's artifact and any text
+            // buffered ahead of it (at any depth) stay in one true generation order. See
+            // createRecursiveArtifactGuard.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
 
             // Track artifact streaming: Anthropic tends to echo raw <artifact> markup back in
             // its final reply after seeing it in the tool result, and the reply parser would
             // render that echo as a second, empty card - strip it from history (below) and,
             // as a backstop, from the recursive completion's buffered text (after the loop).
-            let anyArtifactWasStreamed = false;
             // Inject results in original order (required by Anthropic API)
             for (const outcome of outcomes) {
               // Anthropic API requires a tool_use_id; generate a fallback if the model omitted one.
@@ -1948,8 +1948,13 @@ export class AnthropicBackend implements ICompletionBackend {
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
                   thisToolHadArtifact = true;
-                  anyArtifactWasStreamed = true;
-                  await artifactCallback(results, { inputTokens: 0, outputTokens: 0, toolsUsed, ...artifactInfo });
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(cb);
+                  await artifactGuard.emitArtifact(results, {
+                    inputTokens: 0,
+                    outputTokens: 0,
+                    toolsUsed,
+                    ...artifactInfo,
+                  });
                 });
 
                 // Strip artifact markup from every tool result, not only the ones that streamed,
@@ -2007,13 +2012,6 @@ export class AnthropicBackend implements ICompletionBackend {
               totalToolsUsed: toolsUsed.length,
             });
 
-            // If any artifact was already streamed, buffer the recursive response and strip
-            // any duplicate artifact markup the model echoes back in it before ever reaching
-            // the client. A genuinely NEW artifact from a chained tool call in this same
-            // recursive turn bypasses this guard entirely via artifactCallback above, so it
-            // is never at risk of being deleted alongside the echo this guard exists to catch.
-            const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(cb) : undefined;
-
             // Keep tools available for all tool types to enable chaining
             // (e.g., web_search -> web_search, web_search -> web_fetch)
             // The MAX_TOOL_CALLS limit prevents infinite loops
@@ -2034,14 +2032,17 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens || 0),
-                  artifactCallback,
+                  artifactGuard,
                 },
               },
-              guard?.callback ?? cb,
+              artifactGuard?.callback ?? cb,
               toolsUsed
             );
 
-            if (guard) await guard.flush();
+            // Only the level that created the guard (none inherited on entry) flushes it -
+            // an inherited guard belongs to an ancestor, which flushes it after this whole
+            // subtree (including this call) has fully resolved.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             // Include thinking blocks for Anthropic extended thinking
@@ -2316,11 +2317,10 @@ export class AnthropicBackend implements ICompletionBackend {
                   }
             );
 
-            // See the streaming branch above for why artifactCallback exists.
-            const artifactCallback = options._internal?.artifactCallback ?? cb;
+            // See the streaming branch above for why the shared artifactGuard exists.
+            const inheritedArtifactGuard = options._internal?.artifactGuard;
+            let artifactGuard = inheritedArtifactGuard;
 
-            // See the streaming branch above for why anyArtifactWasStreamed exists.
-            let anyArtifactWasStreamed = false;
             // Inject results in original order (required by Anthropic API)
             for (const outcome of outcomesNS) {
               // Anthropic API requires a tool_use_id; generate a fallback if the model omitted one.
@@ -2343,8 +2343,8 @@ export class AnthropicBackend implements ICompletionBackend {
                 // For tools that return artifacts (like recharts), stream the result directly
                 await handleToolResultStreaming(outcome.name, outcome.result, async (results, artifactInfo) => {
                   thisToolHadArtifact = true;
-                  anyArtifactWasStreamed = true;
-                  await artifactCallback(results, { toolsUsed, ...artifactInfo });
+                  if (!artifactGuard) artifactGuard = createRecursiveArtifactGuard(cb);
+                  await artifactGuard.emitArtifact(results, { toolsUsed, ...artifactInfo });
                 });
 
                 // Strip artifact markup from every tool result, not only the ones that streamed,
@@ -2398,10 +2398,6 @@ export class AnthropicBackend implements ICompletionBackend {
             // Add newline separator before recursive call to ensure proper markdown rendering
             await cb(['\n\n'], { toolsUsed });
 
-            // See the streaming branch above for why this buffers and strips instead of
-            // passing cb straight through.
-            const guard = anyArtifactWasStreamed ? createRecursiveArtifactGuard(cb) : undefined;
-
             // Keep tools available for all tool types to enable chaining
             // The MAX_TOOL_CALLS limit prevents infinite loops
             // Carry this turn's tokens forward so the terminal recursive call
@@ -2421,14 +2417,15 @@ export class AnthropicBackend implements ICompletionBackend {
                   // Cache tokens are billed per API call - accumulate like input/output.
                   accumCacheReadTokens: accumCacheReadTokens + (usageWithCacheNS?.cache_read_input_tokens || 0),
                   accumCacheWriteTokens: accumCacheWriteTokens + (usageWithCacheNS?.cache_creation_input_tokens || 0),
-                  artifactCallback,
+                  artifactGuard,
                 },
               },
-              guard?.callback ?? cb,
+              artifactGuard?.callback ?? cb,
               toolsUsed
             );
 
-            if (guard) await guard.flush();
+            // See the streaming branch above for why only a guard this level created is flushed.
+            if (!inheritedArtifactGuard && artifactGuard) await artifactGuard.flush();
           } else {
             // New behavior: just pass tool calls through callback, don't execute
             // Include thinking blocks for Anthropic extended thinking
